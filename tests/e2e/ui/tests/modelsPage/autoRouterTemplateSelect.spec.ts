@@ -23,6 +23,8 @@ async function boxes(trigger: Locator, options: Locator) {
   return triggerBox && optionsBox ? { triggerBox, optionsBox } : null;
 }
 
+const clippedPopup = (page: PlaywrightPage) => page.locator('[data-slot="select-content"]');
+
 function pollOptionsOpenBelowTrigger(trigger: Locator, options: Locator) {
   return expect.poll(async () => {
     const box = await boxes(trigger, options);
@@ -50,10 +52,9 @@ test.describe("Auto Router template select anchoring", () => {
     await trigger.scrollIntoViewIfNeeded();
 
     await trigger.click();
-    const options = page.getByRole("listbox");
-    await expect(options).toBeVisible();
+    await expect(page.getByRole("listbox")).toBeVisible();
 
-    await pollOptionsOpenBelowTrigger(trigger, options).toBe(true);
+    await pollOptionsOpenBelowTrigger(trigger, clippedPopup(page)).toBe(true);
   });
 
   test("keeps the trigger uncovered when the options open with no room below it", async ({ page }) => {
@@ -62,9 +63,8 @@ test.describe("Auto Router template select anchoring", () => {
     await trigger.scrollIntoViewIfNeeded();
 
     await trigger.click();
-    const options = page.getByRole("listbox");
-    await expect(options).toBeVisible();
+    await expect(page.getByRole("listbox")).toBeVisible();
 
-    await pollOptionsCoverTrigger(trigger, options).toBe(false);
+    await pollOptionsCoverTrigger(trigger, clippedPopup(page)).toBe(false);
   });
 });
