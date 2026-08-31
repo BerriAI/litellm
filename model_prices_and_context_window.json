@@ -9858,7 +9858,7 @@
         "max_tokens": 163840,
         "mode": "chat",
         "output_cost_per_token": 1.68e-06,
-        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-deepseek-v3-2-and-deepseek-v3-2-speciale-in-microsoft-foundry/4477549",
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/deepseek/",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
@@ -9873,7 +9873,7 @@
         "max_tokens": 163840,
         "mode": "chat",
         "output_cost_per_token": 1.68e-06,
-        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-deepseek-v3-2-and-deepseek-v3-2-speciale-in-microsoft-foundry/4477549",
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/deepseek/",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
@@ -9889,7 +9889,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 5.4e-06,
-        "source": "https://techcommunity.microsoft.com/blog/machinelearningblog/deepseek-r1-improved-performance-higher-limits-and-transparent-pricing/4386367",
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/deepseek/",
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
@@ -9901,7 +9901,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 4.56e-06,
-        "source": "https://techcommunity.microsoft.com/blog/machinelearningblog/announcing-deepseek-v3-on-azure-ai-foundry-and-github/4390438",
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/deepseek/",
         "supports_tool_choice": true
     },
     "azure_ai/deepseek-v3-0324": {
@@ -9913,7 +9913,7 @@
         "max_tokens": 8192,
         "mode": "chat",
         "output_cost_per_token": 4.56e-06,
-        "source": "https://techcommunity.microsoft.com/blog/machinelearningblog/announcing-deepseek-v3-on-azure-ai-foundry-and-github/4390438",
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/deepseek/",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -9932,6 +9932,7 @@
         "supports_tool_choice": true
     },
     "azure_ai/deepseek-v4-pro": {
+        "cache_read_input_token_cost": 1.45e-07,
         "deprecation_date": "2028-02-20",
         "input_cost_per_token": 1.74e-06,
         "litellm_provider": "azure_ai",
@@ -9942,10 +9943,12 @@
         "output_cost_per_token": 3.48e-06,
         "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/deepseek/",
         "supports_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
     "azure_ai/deepseek-v4-flash": {
+        "cache_read_input_token_cost": 2.8e-08,
         "deprecation_date": "2028-02-20",
         "input_cost_per_token": 1.9e-07,
         "litellm_provider": "azure_ai",
@@ -9956,6 +9959,7 @@
         "output_cost_per_token": 5.1e-07,
         "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/deepseek/",
         "supports_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
@@ -10164,6 +10168,7 @@
         "supports_tool_choice": true
     },
     "azure_ai/kimi-k2.5": {
+        "cache_read_input_token_cost": 1e-07,
         "deprecation_date": "2027-01-26",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "azure_ai",
@@ -10172,13 +10177,15 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 3e-06,
-        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/kimi-k2-5-now-in-microsoft-foundry/4492321",
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/kimi/",
         "supports_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true
     },
     "azure_ai/kimi-k2.6": {
+        "cache_read_input_token_cost": 1.6e-07,
         "deprecation_date": "2027-04-16",
         "input_cost_per_token": 9.5e-07,
         "litellm_provider": "azure_ai",
@@ -10187,7 +10194,7 @@
         "max_tokens": 262144,
         "mode": "chat",
         "output_cost_per_token": 4e-06,
-        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-kimi-k2-6-in-microsoft-foundry/4513125",
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/kimi/",
         "supported_modalities": [
             "text",
             "image"
@@ -10196,6 +10203,7 @@
             "text"
         ],
         "supports_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -10303,6 +10311,45 @@
         "mode": "chat",
         "output_cost_per_token": 3e-07,
         "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "azure_ai/DeepSeek-V4-Flash-0731": {
+        "cache_read_input_token_cost": 2.8e-08,
+        "deprecation_date": "2028-02-20",
+        "input_cost_per_token": 1.9e-07,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 5.1e-07,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/deepseek/",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "azure_ai/kimi-k2.7-code": {
+        "cache_read_input_token_cost": 1.9e-07,
+        "input_cost_per_token": 9.5e-07,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/kimi/",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
