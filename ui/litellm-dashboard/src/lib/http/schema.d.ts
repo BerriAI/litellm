@@ -9700,6 +9700,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/openai/v1/responses/input_tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Responses Input Tokens
+         * @description Count the input tokens of a Responses API request without calling the model.
+         *
+         *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/input-tokens
+         *
+         *     ```bash
+         *     curl -X POST http://localhost:4000/v1/responses/input_tokens     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *         "model": "gpt-4o",
+         *         "input": "Hello, how are you?"
+         *     }'
+         *     ```
+         *
+         *     Returns: `{"object": "response.input_tokens", "input_tokens": <count>}`
+         */
+        post: operations["responses_input_tokens_openai_v1_responses_input_tokens_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/openai/v1/responses/{response_id}": {
         parameters: {
             query?: never;
@@ -12619,6 +12650,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/responses/input_tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Responses Input Tokens
+         * @description Count the input tokens of a Responses API request without calling the model.
+         *
+         *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/input-tokens
+         *
+         *     ```bash
+         *     curl -X POST http://localhost:4000/v1/responses/input_tokens     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *         "model": "gpt-4o",
+         *         "input": "Hello, how are you?"
+         *     }'
+         *     ```
+         *
+         *     Returns: `{"object": "response.input_tokens", "input_tokens": <count>}`
+         */
+        post: operations["responses_input_tokens_responses_input_tokens_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/responses/{response_id}": {
         parameters: {
             query?: never;
@@ -15505,7 +15567,7 @@ export interface paths {
          *     Use this if if you want different teams to have different success/failure callbacks
          *
          *     Parameters:
-         *     - callback_name (Literal["langfuse", "langsmith", "gcs"], required): The name of the callback to add
+         *     - callback_name (str, required): The name of the callback to add, e.g. "langfuse", "langsmith", "gcs", "newrelic". The value is validated against the callbacks that support team-scoped credentials
          *     - callback_type (Literal["success", "failure", "success_and_failure"], required): The type of callback to add. One of:
          *         - "success": Callback for successful LLM calls
          *         - "failure": Callback for failed LLM calls
@@ -15521,6 +15583,8 @@ export interface paths {
          *         - langsmith_api_key: The API key for the Langsmith callback
          *         - langsmith_project: The project for the Langsmith callback
          *         - langsmith_base_url: The base URL for the Langsmith callback
+         *         - newrelic_api_key: The ingest license key for the team's New Relic account; routes both LLM/agent traces and cost metrics to that account. Requires the proxy to run with LITELLM_OTEL_V2=true, otherwise this callback is rejected with a 400
+         *         - newrelic_region: The New Relic region for the team's account ("us" or "eu"), riding the team's own key
          *
          *     Example curl:
          *     ```
@@ -16210,6 +16274,11 @@ export interface paths {
          *
          *     Meant to optimize querying spend data for analytics for a user.
          *
+         *     Reads daily spend records that only ever accumulate and are never affected by budget
+         *     resets. Their total can legitimately exceed the `spend` field returned by
+         *     `/v2/user/info`, which is a running budget counter that every budget reset sets back
+         *     to zero (or to the overage above `max_budget` when `budget_rollover` is enabled).
+         *
          *     Returns:
          *     (by date)
          *     - spend
@@ -16241,6 +16310,11 @@ export interface paths {
          * Get User Daily Activity Aggregated
          * @description Aggregated analytics for a user's daily activity without pagination.
          *     Returns the same response shape as the paginated endpoint with page metadata set to single-page.
+         *
+         *     Reads daily spend records that only ever accumulate and are never affected by budget
+         *     resets. Their total can legitimately exceed the `spend` field returned by
+         *     `/v2/user/info`, which is a running budget counter that every budget reset sets back
+         *     to zero (or to the overage above `max_budget` when `budget_rollover` is enabled).
          */
         get: operations["get_user_daily_activity_aggregated_user_daily_activity_aggregated_get"];
         put?: never;
@@ -19182,6 +19256,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/responses/input_tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Responses Input Tokens
+         * @description Count the input tokens of a Responses API request without calling the model.
+         *
+         *     Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/input-tokens
+         *
+         *     ```bash
+         *     curl -X POST http://localhost:4000/v1/responses/input_tokens     -H "Content-Type: application/json"     -H "Authorization: Bearer sk-1234"     -d '{
+         *         "model": "gpt-4o",
+         *         "input": "Hello, how are you?"
+         *     }'
+         *     ```
+         *
+         *     Returns: `{"object": "response.input_tokens", "input_tokens": <count>}`
+         */
+        post: operations["responses_input_tokens_v1_responses_input_tokens_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/responses/{response_id}": {
         parameters: {
             query?: never;
@@ -21003,6 +21108,14 @@ export interface paths {
          *
          *     This is the v2 replacement for /user/info, designed to avoid the "god endpoint" problem
          *     where the old endpoint loaded all keys and teams into memory.
+         *
+         *     Note on `spend`: this is the user's running budget counter, which the budget reset job
+         *     resets whenever `budget_reset_at` elapses (see `budget_duration`): to zero by default,
+         *     or to the overage above `max_budget` when `budget_rollover` is enabled. It is NOT
+         *     lifetime or per-period historical spend. For historical spend over a date range, use
+         *     `/user/daily/activity` or `/user/daily/activity/aggregated`, which read daily spend
+         *     records that only ever accumulate and are never reset. The two values are expected to
+         *     diverge once a budget reset has occurred within the queried period.
          *
          *     Access control:
          *     - Proxy admins can query any user
@@ -38418,6 +38531,8 @@ export interface components {
             input_cost_per_character?: number | null;
             /** Input Cost Per Token */
             input_cost_per_token?: number | null;
+            /** Internal Router Model */
+            internal_router_model?: boolean | null;
             /** Output Cost Per Character */
             output_cost_per_character?: number | null;
             /** Output Cost Per Token */
@@ -51474,6 +51589,26 @@ export interface operations {
             };
         };
     };
+    responses_input_tokens_openai_v1_responses_input_tokens_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     get_response_openai_v1_responses__response_id__get: {
         parameters: {
             query?: never;
@@ -54419,6 +54554,26 @@ export interface operations {
         };
     };
     compact_response_responses_compact_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    responses_input_tokens_responses_input_tokens_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -62841,6 +62996,26 @@ export interface operations {
         };
     };
     compact_response_v1_responses_compact_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    responses_input_tokens_v1_responses_input_tokens_post: {
         parameters: {
             query?: never;
             header?: never;
