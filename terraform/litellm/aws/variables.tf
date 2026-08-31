@@ -120,9 +120,9 @@ variable "tasks_in_public_subnets" {
     inbound from the ALB's security group and nothing else, so the proxy stays
     reachable through the load balancer alone. This trades the NAT gateway's
     ~$33/month for a task ENI that is directly addressable but firewalled,
-    which suits a single-user or dev stack rather than an HA one. Only applies
-    when the module creates the VPC, since a caller-supplied VPC brings its own
-    routing.
+    which suits a single-user or dev stack rather than an HA one. Ignored when
+    `vpc_id` is set, since a caller-supplied VPC brings its own routing and the
+    module creates no NAT gateway there to save.
   EOT
   type        = bool
   default     = false
@@ -537,9 +537,9 @@ variable "proxy_config" {
     chart's `gateway.config.proxy_config` value. Uploaded to S3 under
     `config/litellm-config.yaml` in the stack's bucket; gateway and backend
     container entrypoints download it to /tmp/litellm-config.yaml at task
-    start (CONFIG_FILE_PATH is set automatically). The S3 object's etag is
-    wired into the task definition, so editing this value produces a new
-    task-def revision and a rolling redeploy.
+    start (CONFIG_FILE_PATH is set automatically). A hash of this value is
+    wired into the task definition, so editing it produces a new task-def
+    revision and a rolling redeploy.
 
     Example:
       proxy_config = {
@@ -588,6 +588,11 @@ variable "bedrock_model_arns" {
   EOT
   type        = list(string)
   default     = []
+
+  validation {
+    condition     = alltrue([for a in var.bedrock_model_arns : can(regex("^arn:aws[a-z-]*:bedrock:", a))])
+    error_message = "Every bedrock_model_arns entry must be a Bedrock ARN starting with arn:aws:bedrock:. A bare \"*\" would let the task role invoke every Bedrock resource in the account, including other teams' provisioned throughput and private imported models; wildcard within an ARN instead, e.g. arn:aws:bedrock:*::foundation-model/anthropic.*."
+  }
 }
 
 variable "enable_bedrock_mantle" {

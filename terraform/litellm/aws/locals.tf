@@ -35,9 +35,13 @@ locals {
 
   # Without a NAT gateway the tasks need a public IP of their own to reach
   # GHCR, Secrets Manager, and the LLM providers. Ingress is unchanged either
-  # way: aws_security_group.tasks admits the ALB group and nothing else.
-  task_subnet_ids = var.tasks_in_public_subnets ? local.public_subnet_ids : local.private_subnet_ids
-  nat_enabled     = local.create_vpc && !var.tasks_in_public_subnets
+  # way: aws_security_group.tasks admits the ALB group and nothing else, though
+  # entries in var.additional_task_security_group_ids are unioned on top.
+  # Inert on a caller-supplied VPC, which brings its own routing and where the
+  # module creates no NAT gateway to save in the first place.
+  public_tasks    = local.create_vpc && var.tasks_in_public_subnets
+  task_subnet_ids = local.public_tasks ? local.public_subnet_ids : local.private_subnet_ids
+  nat_enabled     = local.create_vpc && !local.public_tasks
 
   task_security_group_ids = concat([aws_security_group.tasks.id], var.additional_task_security_group_ids)
 

@@ -323,7 +323,7 @@ resource "aws_ecs_service" "gateway" {
   network_configuration {
     subnets          = local.task_subnet_ids
     security_groups  = local.task_security_group_ids
-    assign_public_ip = var.tasks_in_public_subnets
+    assign_public_ip = local.public_tasks
   }
 
   load_balancer {
@@ -428,7 +428,7 @@ resource "aws_ecs_service" "backend" {
   network_configuration {
     subnets          = local.task_subnet_ids
     security_groups  = local.task_security_group_ids
-    assign_public_ip = var.tasks_in_public_subnets
+    assign_public_ip = local.public_tasks
   }
 
   load_balancer {
@@ -508,7 +508,7 @@ resource "aws_ecs_service" "ui" {
   network_configuration {
     subnets          = local.task_subnet_ids
     security_groups  = local.task_security_group_ids
-    assign_public_ip = var.tasks_in_public_subnets
+    assign_public_ip = local.public_tasks
   }
 
   load_balancer {

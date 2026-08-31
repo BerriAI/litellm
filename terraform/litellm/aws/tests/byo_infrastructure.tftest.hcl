@@ -10,6 +10,14 @@ mock_provider "aws" {
       json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
     }
   }
+
+  # check.provider_region_matches_var_region compares this against var.region,
+  # and a generated placeholder would trip it on every run below.
+  mock_data "aws_region" {
+    defaults = {
+      name = "us-east-1"
+    }
+  }
 }
 mock_provider "random" {}
 
@@ -85,6 +93,37 @@ run "tasks_in_public_subnets_replaces_the_nat_gateway" {
       aws_ecs_service.gateway.network_configuration[0].subnets == toset(["subnet-module-public"]),
     ])
     error_message = "The gateway must land in the public subnets with a public IP, which is the only egress left once the NAT gateway is gone."
+  }
+
+  # The private subnets stay for Aurora and ElastiCache, so the route table is
+  # still created. That it carries no default route is not assertable here:
+  # `route` is computed, so it is unknown until apply.
+  assert {
+    condition     = length(aws_route_table.private) == 1
+    error_message = "The private route table must survive for Aurora and ElastiCache even with no NAT gateway to route to."
+  }
+}
+
+# The flag buys nothing on a caller-supplied VPC, where the module creates no NAT
+# gateway to begin with, so it must not quietly relocate the tasks into subnets
+# the caller did not nominate for public exposure.
+run "tasks_in_public_subnets_is_inert_on_a_caller_supplied_vpc" {
+  command = plan
+
+  variables {
+    vpc_id                  = "vpc-00000000000000001"
+    public_subnet_ids       = ["subnet-pub-a", "subnet-pub-b"]
+    private_subnet_ids      = ["subnet-priv-a", "subnet-priv-b"]
+    tasks_in_public_subnets = true
+    create_database         = false
+  }
+
+  assert {
+    condition = alltrue([
+      aws_ecs_service.gateway.network_configuration[0].assign_public_ip == false,
+      aws_ecs_service.gateway.network_configuration[0].subnets == toset(["subnet-priv-a", "subnet-priv-b"]),
+    ])
+    error_message = "tasks_in_public_subnets must be ignored when vpc_id is set, leaving the tasks in the caller's private subnets with no public IP."
   }
 }
 
@@ -282,6 +321,22 @@ run "redis_less_single_process_gateway_is_not_flagged" {
     condition     = local.max_gateway_processes == 1
     error_message = "One task with one worker is a single process, which is the supported way to run without Redis."
   }
+}
+
+# The mocked provider sits in us-east-1, so asking for a stack in us-west-2 is
+# the mismatch that silently builds resources in one region with ARNs naming
+# another.
+run "provider_region_other_than_var_region_is_flagged" {
+  command = plan
+
+  variables {
+    region = "us-west-2"
+    azs    = ["us-west-2a", "us-west-2b"]
+  }
+
+  expect_failures = [
+    check.provider_region_matches_var_region,
+  ]
 }
 
 run "no_database_and_no_redis_drops_the_schema_migration" {

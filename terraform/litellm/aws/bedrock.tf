@@ -3,8 +3,6 @@
 # gateway_extra_secrets entry. The region comes from AWS_REGION /
 # AWS_REGION_NAME, already in every task's env (see locals.shared_env in ecs.tf).
 
-data "aws_region" "current" {}
-
 data "aws_iam_policy_document" "bedrock_invoke" {
   count = local.bedrock_policy_enabled ? 1 : 0
 
@@ -52,8 +50,8 @@ resource "aws_iam_policy" "bedrock_invoke" {
   # why. Fail at plan time instead.
   lifecycle {
     precondition {
-      condition     = data.aws_region.current.name == var.region
-      error_message = "Provider region ${data.aws_region.current.name} != var.region ${var.region}. Export AWS_REGION=${var.region} (the Makefile does this from dev.tfvars)."
+      condition     = !var.enable_bedrock_mantle || data.aws_region.current.name == var.region
+      error_message = "Provider region ${data.aws_region.current.name} != var.region ${var.region}, which would pin enable_bedrock_mantle's aws:RequestedRegion condition to the wrong region. Export AWS_REGION=${var.region} before running Terraform."
     }
   }
 }
