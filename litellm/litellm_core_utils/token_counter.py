@@ -693,6 +693,26 @@ def _count_document_tokens(
     )
 
 
+def _count_file_tokens(
+    file_value: object,
+    count_function: TokenCounterFunction,
+    use_default_image_token_count: bool,
+) -> int:
+    """An OpenAI `file` block is the chat-completions spelling of a document, so it prices like one."""
+    if not isinstance(file_value, Mapping):
+        return 0
+    filename: Final = file_value.get("filename")
+    file_data: Final = file_value.get("file_data")
+    name_tokens: Final = count_function(filename) if isinstance(filename, str) and filename else 0
+    if not isinstance(file_data, str) or not file_data:
+        return name_tokens
+    return name_tokens + calculate_img_tokens(
+        data=file_data,
+        mode="auto",
+        use_default_image_token_count=use_default_image_token_count,
+    )
+
+
 def _count_anthropic_content(
     content: Mapping[str, Any],
     count_function: TokenCounterFunction,
@@ -778,6 +798,12 @@ def _count_content_list(
                     use_default_image_token_count,
                     default_token_count,
                 )
+            elif c["type"] == "file":
+                num_tokens += _count_file_tokens(
+                    c.get("file"),
+                    count_function,
+                    use_default_image_token_count,
+                )
             elif c["type"] in ("tool_use", "tool_result"):
                 num_tokens += _count_anthropic_content(
                     c,
@@ -807,7 +833,7 @@ def _count_content_list(
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
-                    f"(text, image_url, image, document, tool_use, tool_result, thinking, tool_reference)."
+                    f"(text, image_url, image, document, file, tool_use, tool_result, thinking, tool_reference)."
                 )
         return num_tokens
     except Exception as e:

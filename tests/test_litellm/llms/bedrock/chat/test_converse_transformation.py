@@ -957,6 +957,28 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools():
     assert fields["tools"][0]["type"] == "computer_20250124"
 
 
+def test_config_blocks_do_not_leak_into_inference_config():
+    """Regression: inferenceConfig was built before the config blocks were popped, so a dead
+    nested copy of each block (guardrailConfig, performanceConfig, serviceTier) rode inside
+    inferenceConfig alongside the real top-level one."""
+    data = AmazonConverseConfig()._transform_request_helper(
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        system_content_blocks=[],
+        optional_params={
+            "maxTokens": 100,
+            "guardrailConfig": {"guardrailIdentifier": "gr-id", "guardrailVersion": "DRAFT"},
+            "performanceConfig": {"latency": "optimized"},
+            "serviceTier": {"type": "priority"},
+        },
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert data["inferenceConfig"] == {"maxTokens": 100}
+    assert data["guardrailConfig"] == {"guardrailIdentifier": "gr-id", "guardrailVersion": "DRAFT"}
+    assert data["performanceConfig"] == {"latency": "optimized"}
+    assert data["serviceTier"] == {"type": "priority"}
+
+
 def test_parallel_tool_calls_config_kept_for_sonnet_5(monkeypatch):
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
@@ -2853,17 +2875,11 @@ def test_guarded_text_guardrail_config_preserved():
         headers={},
     )
 
-    # GuardrailConfig should be present at top level
     assert "guardrailConfig" in result
     assert result["guardrailConfig"]["guardrailIdentifier"] == "gr-abc123"
 
-    # GuardrailConfig should also be in inferenceConfig
     assert "inferenceConfig" in result
-    assert "guardrailConfig" in result["inferenceConfig"]
-    assert (
-        result["inferenceConfig"]["guardrailConfig"]["guardrailIdentifier"]
-        == "gr-abc123"
-    )
+    assert "guardrailConfig" not in result["inferenceConfig"]
 
 
 def test_auto_convert_last_user_message_to_guarded_text():
