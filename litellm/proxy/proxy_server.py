@@ -9894,7 +9894,7 @@ class ProxyStartupEvent:
                 _scheduled_user_spend_alerts,
                 "interval",
                 seconds=user_spend_check_interval,
-                next_run_time=datetime.now() + timedelta(seconds=10 + random.randint(0, 60)),
+                next_run_time=datetime.now(timezone.utc) + timedelta(seconds=10 + random.randint(0, 60)),
                 id=USER_SPEND_ALERTS_JOB_ID,
                 replace_existing=True,
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
