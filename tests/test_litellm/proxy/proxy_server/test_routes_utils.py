@@ -9,7 +9,7 @@ Pins (PR2):
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -122,6 +122,35 @@ def test_supported_openai_params_happy_path(client, auth_as, patched_supported_p
     assert normalize(response.json()) == {
         "supported_openai_params": ["max_tokens", "temperature", "top_p"],
     }
+
+
+def test_supported_openai_params_resolves_router_alias(client, auth_as, monkeypatch):
+    """A router ``model_name`` alias unknown to the cost map (e.g. ``claude-opus-4-6-cached``) resolves via the router's underlying ``litellm_params.model`` instead of 400ing."""
+    router = MagicMock()
+    router.get_model_list.return_value = [
+        {"model_name": "claude-opus-4-6-cached", "litellm_params": {"model": "anthropic/claude-opus-4-6"}}
+    ]
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    seen = []
+
+    def _get_llm_provider(model):
+        seen.append(model)
+        return (model, "anthropic", None, None)
+
+    monkeypatch.setattr(litellm, "get_llm_provider", _get_llm_provider)
+    monkeypatch.setattr(
+        litellm,
+        "get_supported_openai_params",
+        lambda model, custom_llm_provider=None: ["max_tokens"],
+    )
+
+    with auth_as():
+        response = client.get("/utils/supported_openai_params", params={"model": "claude-opus-4-6-cached"})
+
+    assert response.status_code == 200
+    assert response.json() == {"supported_openai_params": ["max_tokens"]}
+    router.get_model_list.assert_called_once_with(model_name="claude-opus-4-6-cached")
+    assert seen == ["anthropic/claude-opus-4-6"]
 
 
 def test_supported_openai_params_invalid_model(client, auth_as, monkeypatch):

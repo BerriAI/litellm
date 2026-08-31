@@ -12478,11 +12478,14 @@ async def supported_openai_params(model: str):
         --header 'Authorization: Bearer sk-1234'
     ```
     """
+    global llm_router
     try:
-        model, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+        deployments: Final = llm_router.get_model_list(model_name=model) if llm_router is not None else None
+        model_to_map: Final = deployments[0]["litellm_params"]["model"] if deployments else model
+        litellm_model, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model_to_map)
         return {
             "supported_openai_params": litellm.get_supported_openai_params(
-                model=model, custom_llm_provider=custom_llm_provider
+                model=litellm_model, custom_llm_provider=custom_llm_provider
             )
         }
     except Exception:
