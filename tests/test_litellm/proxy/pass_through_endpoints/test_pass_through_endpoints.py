@@ -20,6 +20,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    _derive_passthrough_model_from_target_url,
     _registered_pass_through_routes,
     create_pass_through_route,
     initialize_pass_through_endpoints,
@@ -4335,6 +4336,199 @@ async def test_pass_through_request_upstream_error_body_stays_buffered():
     finally:
         cleanup()
         await fake_client.aclose()
+
+
+@pytest.mark.parametrize(
+    "target_url, expected",
+    [
+        ("https://fal.run/fal-ai/flux/schnell", "fal-ai/flux/schnell"),
+        # query params / fragments are per-request noise, not model identity
+        ("https://fal.run/fal-ai/nano-banana-2/edit?key=abc#frag", "fal-ai/nano-banana-2/edit"),
+        ("https://fal.run/fal-ai/flux/schnell/", "fal-ai/flux/schnell"),
+        # no path -> host keeps the record readable and distinguishable
+        ("https://fal.run", "fal.run"),
+        ("https://fal.run/", "fal.run"),
+        ("", None),
+        # urlparse raises lazily on invalid netlocs; helper must swallow it
+        ("http://[::1:80/bad", None),
+    ],
+)
+def test_derive_passthrough_model_from_target_url(target_url, expected):
+    """The URL -> model derivation is deterministic: target path, then host,
+    then None (caller falls back to "unknown")."""
+    assert _derive_passthrough_model_from_target_url(target_url) == expected
+
+
+def _passthrough_model_client_request(body: bytes) -> MagicMock:
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = "http://localhost:4000/my-fal/fal-ai/flux/schnell"
+    mock_request.body = AsyncMock(return_value=body)
+    mock_request.headers = Headers({})
+    mock_request.query_params = QueryParams({})
+    return mock_request
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_body_without_model_logs_target_path_as_model():
+    """
+    Regression (issue #30932): a generic pass-through request whose body has no
+    ``model`` field (fal.ai, Modal, ComfyUI-style upstreams carry the model in
+    the URL path) used to log model="unknown" to Langfuse/SpendLogs, making all
+    endpoints of one pass-through target indistinguishable. The logging object
+    must instead surface the target URL path as the model identifier.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    request_body = {"prompt": "test", "num_images": 1}
+    upstream_stream = _RecordingUpstreamByteStream((b'{"images": []}',))
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        _FakeUpstreamTransport(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            stream=upstream_stream,
+        ),
+        timeout=314.0,
+    )
+    try:
+        with ExitStack() as stack:
+            _, mock_success_handler = _enter_relay_logging_mocks(stack, dict(request_body))
+
+            await pass_through_request(
+                request=_passthrough_model_client_request(json.dumps(request_body).encode()),
+                target="https://fal.run/fal-ai/flux/schnell",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-relay-test"),
+                timeout=314.0,
+            )
+
+            mock_success_handler.assert_called_once()
+            logging_obj = mock_success_handler.call_args.kwargs["logging_obj"]
+            assert logging_obj.model == "fal-ai/flux/schnell"
+            assert logging_obj.model_call_details["model"] == "fal-ai/flux/schnell"
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_body_model_wins_over_target_path():
+    """A body that does carry a ``model`` field keeps using it - the URL-derived
+    fallback only applies when the body has no model."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    request_body = {"model": "flux-schnell-v2", "prompt": "test"}
+    upstream_stream = _RecordingUpstreamByteStream((b'{"images": []}',))
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        _FakeUpstreamTransport(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            stream=upstream_stream,
+        ),
+        timeout=315.0,
+    )
+    try:
+        with ExitStack() as stack:
+            _, mock_success_handler = _enter_relay_logging_mocks(stack, dict(request_body))
+
+            await pass_through_request(
+                request=_passthrough_model_client_request(json.dumps(request_body).encode()),
+                target="https://fal.run/fal-ai/flux/schnell",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-relay-test"),
+                timeout=315.0,
+            )
+
+            mock_success_handler.assert_called_once()
+            logging_obj = mock_success_handler.call_args.kwargs["logging_obj"]
+            assert logging_obj.model == "flux-schnell-v2"
+            assert logging_obj.model_call_details["model"] == "flux-schnell-v2"
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_provider_route_keeps_unknown_sentinel():
+    """Provider-specific routes (Anthropic/OpenAI/Vertex) must keep the
+    ``unknown`` sentinel when the body has no model: their logging handlers
+    compare against it to decide whether to recover the model from response
+    chunks / litellm_params, so the URL fallback is generic-endpoints only."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    upstream_stream = _RecordingUpstreamByteStream((b'{"type": "message"}',))
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        _FakeUpstreamTransport(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            stream=upstream_stream,
+        ),
+        timeout=316.0,
+    )
+    try:
+        with ExitStack() as stack:
+            _, mock_success_handler = _enter_relay_logging_mocks(stack, {"max_tokens": 10})
+
+            await pass_through_request(
+                request=_passthrough_model_client_request(b'{"max_tokens": 10}'),
+                target="https://api.anthropic.com/v1/messages",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-relay-test"),
+                timeout=316.0,
+            )
+
+            mock_success_handler.assert_called_once()
+            logging_obj = mock_success_handler.call_args.kwargs["logging_obj"]
+            assert logging_obj.model_call_details["model"] == "unknown"
+    finally:
+        cleanup()
+        await fake_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_streaming_body_without_model_logs_target_path_as_model():
+    """Streaming requests share the same logging object, so a body without a
+    ``model`` field must surface the same URL-derived identifier as the
+    non-streaming path instead of "unknown"."""
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.PassThroughStreamingHandler.chunk_processor"
+            ) as mock_chunk_processor:
+                mock_proxy_logging.pre_call_hook = AsyncMock(return_value={"prompt": "test", "stream": True})
+                mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+
+                upstream_response = MagicMock()
+                upstream_response.status_code = 200
+                upstream_response.headers = {}
+                upstream_response.raise_for_status = MagicMock()
+
+                async_client = MagicMock()
+                async_client.build_request = MagicMock(return_value=MagicMock())
+                async_client.send = AsyncMock(return_value=upstream_response)
+                mock_get_client.return_value = MagicMock(client=async_client)
+
+                async def _empty_chunks(*args, **kwargs):
+                    return
+                    yield  # pragma: no cover
+
+                mock_chunk_processor.return_value = _empty_chunks()
+
+                await pass_through_request(
+                    request=_passthrough_model_client_request(b'{"prompt": "test", "stream": true}'),
+                    target="https://fal.run/fal-ai/flux/schnell",
+                    custom_headers={},
+                    user_api_key_dict=MagicMock(),
+                    stream=True,
+                )
+
+                mock_chunk_processor.assert_called_once()
+                logging_obj = mock_chunk_processor.call_args.kwargs["litellm_logging_obj"]
+                assert logging_obj.model == "fal-ai/flux/schnell"
+                assert logging_obj.model_call_details["model"] == "fal-ai/flux/schnell"
 
 
 _PARTIAL_RELAY_WARNING_MARKER = "ended before upstream body was fully relayed"
