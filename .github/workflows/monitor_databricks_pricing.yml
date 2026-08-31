@@ -1,0 +1,56 @@
+name: Monitor Databricks Pricing (deepseek/glm/kimi)
+
+on:
+  schedule:
+    - cron: "0 2 * * *" # daily 02:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  monitor-db-pricing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run monitor
+        id: monitor
+        run: |
+          python .github/workflows/monitor_databricks_pricing.py | tee /tmp/monitor_out.txt
+          if grep -q '^NO_CHANGE' /tmp/monitor_out.txt; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open PR if changed
+        if: steps.monitor.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="monitor-dbx-pricing-$(date +'%Y-%m-%d')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
+          git commit -m "chore(model_prices): refresh Databricks Foundation Model Serving rates
+
+Automated daily monitor detected changed DBU rates on
+https://www.databricks.com/product/pricing/foundation-model-serving
+Updated entries: databricks/databricks-deepseek-v4-*"
+          git push origin "$BRANCH"
+          gh pr create --repo "${{ github.repository }}" \
+            --base litellm_internal_staging \
+            --head "$BRANCH" \
+            --title "chore(model_prices): refresh Databricks Foundation Model Serving rates" \
+            --body "Automated daily check of the Databricks Foundation Model Serving pricing page detected rate changes. Updated model_prices_and_context_window.json and packaged backup for monitored models." || true
