@@ -3555,6 +3555,7 @@ all_litellm_params = (
         "provider_specific_header",
         "prompt_version",
         "api_base",
+        "ssl_verify",
         "force_timeout",
         "logger_fn",
         "verbose",

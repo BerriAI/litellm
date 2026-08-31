@@ -2447,6 +2447,75 @@ class TestIsRequestBodySafeBlocksRivaUseSsl:
         )
 
 
+class TestIsRequestBodySafeBlocksSslVerify:
+    """``ssl_verify`` configures TLS trust for the outbound provider connection.
+    A caller-supplied ``false`` disables certificate verification on a
+    connection the admin pinned, and a string value reaches
+    ``os.path.exists()`` as a local-file oracle, so it is rejected as a
+    request-body param unless the admin opted in proxy-wide or
+    per-deployment, same as ``use_ssl`` above."""
+
+    def test_ssl_verify_false_in_request_body_is_rejected(self):
+        with pytest.raises(ValueError, match="ssl_verify"):
+            is_request_body_safe(
+                request_body={
+                    "model": "openai/gpt-3.5-turbo",
+                    "ssl_verify": False,
+                },
+                general_settings={},
+                llm_router=None,
+                model="openai/gpt-3.5-turbo",
+            )
+
+    def test_ssl_verify_path_in_request_body_is_rejected(self):
+        with pytest.raises(ValueError, match="ssl_verify"):
+            is_request_body_safe(
+                request_body={
+                    "model": "openai/gpt-3.5-turbo",
+                    "ssl_verify": "/etc/passwd",
+                },
+                general_settings={},
+                llm_router=None,
+                model="openai/gpt-3.5-turbo",
+            )
+
+    def test_admin_opt_in_proxy_wide_allows_ssl_verify(self):
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "openai/gpt-3.5-turbo",
+                    "ssl_verify": "/opt/app/certs/ca.crt",
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="openai/gpt-3.5-turbo",
+            )
+            is True
+        )
+
+    def test_admin_opt_in_per_deployment_allows_ssl_verify(self, monkeypatch):
+        from litellm.proxy.auth import auth_utils
+
+        monkeypatch.setattr(
+            auth_utils,
+            "_allow_model_level_clientside_configurable_parameters",
+            lambda model, param, request_body_value, llm_router: param == "ssl_verify",
+        )
+
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "openai/gpt-3.5-turbo",
+                    "ssl_verify": "/opt/app/certs/ca.crt",
+                },
+                general_settings={},
+                llm_router=None,
+                model="openai/gpt-3.5-turbo",
+            )
+            is True
+        )
+
+
 class TestIsRequestBodySafeBlocksBedrockTags:
     """``bedrock_tags`` lands as AWS resource tags on Bedrock batch jobs
     created with the proxy's AWS identity, so a caller-supplied value can

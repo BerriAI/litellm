@@ -311,6 +311,11 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # the request away from the admin's pinned configuration.
     "nvcf_function_id",
     "use_ssl",
+    # TLS trust decision for the outbound provider connection. A caller-supplied
+    # value downgrades or disables certificate verification on a connection the
+    # admin pinned, and a string value reaches os.path.exists() as a local-file
+    # oracle. Deployment-level config only, same as ``use_ssl`` above.
+    "ssl_verify",
     # Per-deployment opt-in that hands the whole call to the Rust core. It is a
     # deployment decision, not a request one: the Rust path uses its own client
     # rather than the one the deployment configured, and reports no post_call,
