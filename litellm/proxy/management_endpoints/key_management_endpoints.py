@@ -19,13 +19,13 @@ import re
 import secrets
 import traceback
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
-from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeVar, cast
 
 import fastapi
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -155,6 +155,7 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
+    import prisma
     from prisma import Prisma
     from prisma import models as prisma_models
 
@@ -180,6 +181,14 @@ class _UserRowLike(Protocol):
 
 class _TxTables(Protocol):
     litellm_proxymodeltable: TableActions[object]
+
+
+class _ModelParamsUpdate(TypedDict):
+    litellm_params: ReadOnly["prisma.Json"]
+
+
+class _ModelRowWhere(TypedDict):
+    model_id: ReadOnly[str]
 
 
 class _ConfigTableActions(Protocol):
@@ -271,12 +280,6 @@ class _EnvVarsParam(Protocol):
 
 def _env_vars_param_value(param: _EnvVarsParam) -> Mapping[str, str] | None:
     return param.param_value
-
-
-def _tx_tables_context(
-    open_tx: Callable[[], AbstractAsyncContextManager[_TxTables]],
-) -> AbstractAsyncContextManager[_TxTables]:
-    return open_tx()
 
 
 async def _check_custom_key_allowed(custom_key_value: str | None) -> None:
@@ -4484,27 +4487,29 @@ async def _rotate_master_key(
     if models:
         decrypted_models: Final = proxy_config.decrypt_model_list_from_db(new_models=models)
         verbose_proxy_logger.debug("ABLE TO DECRYPT MODELS - len(decrypted_models): %s", len(decrypted_models))
-        new_models: Final[list[dict[str, object]]] = []
-        for model in decrypted_models:
-            new_model = await _add_model_to_db(
-                model_params=Deployment(**model),
-                user_api_key_dict=user_api_key_dict,
-                prisma_client=prisma_client,
-                new_encryption_key=new_master_key,
-                should_create_model_in_db=False,
-            )
-            if new_model:
-                _dumped = dict[str, object](_as_object_dict(new_model.model_dump(exclude_none=True)))
-                _dumped["litellm_params"] = prisma.Json(_dumped["litellm_params"])
-                _dumped["model_info"] = prisma.Json(_dumped["model_info"])
-                new_models.append(_dumped)
-        verbose_proxy_logger.debug("Resetting proxy model table")
-        async with _tx_tables_context(prisma_client.db.tx) as tx:
-            await tx.litellm_proxymodeltable.delete_many()
-            verbose_proxy_logger.debug("Creating %s models", len(new_models))
-            await tx.litellm_proxymodeltable.create_many(
-                data=new_models,
-            )
+        reencrypted_models: Final = tuple(
+            [
+                reencrypted
+                for model in decrypted_models
+                if (
+                    reencrypted := await _add_model_to_db(
+                        model_params=Deployment(**model),
+                        user_api_key_dict=user_api_key_dict,
+                        prisma_client=prisma_client,
+                        new_encryption_key=new_master_key,
+                        should_create_model_in_db=False,
+                    )
+                )
+            ]
+        )
+        verbose_proxy_logger.debug("Re-encrypting litellm_params on %s model rows", len(reencrypted_models))
+        async with prisma_client.db.tx(timeout=timedelta(minutes=2)) as tx_ctx:
+            tx: Final[_TxTables] = tx_ctx
+            for reencrypted_model in reencrypted_models:
+                await tx.litellm_proxymodeltable.update_many(
+                    data=_ModelParamsUpdate(litellm_params=prisma.Json(reencrypted_model.litellm_params)),
+                    where=_ModelRowWhere(model_id=reencrypted_model.model_id),
+                )
         await publish_config_change(redis_cache=coordination_redis_cache(), object_type="litellm_proxymodeltable")
     # 3. process config table
     try:
