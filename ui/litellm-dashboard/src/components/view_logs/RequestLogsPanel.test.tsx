@@ -171,6 +171,26 @@ describe("RequestLogsPanel", () => {
       expect(within(row("req-llm") as HTMLElement).getByText("3")).toBeInTheDocument();
     });
 
+    it("keeps server composition when a page contains only the representative row", async () => {
+      const user = userEvent.setup();
+      const representativeOverrides: Partial<LogEntry> = {
+        request_id: "req-representative",
+        session_id: "sess-grouped",
+        session_total_count: 5,
+        session_llm_count: 4,
+        session_mcp_count: 1,
+        session_agent_count: 0,
+        session_cache_hit_count: 2,
+      };
+      const representative = logEntry(representativeOverrides);
+      respondWith([representative]);
+      renderPanel();
+
+      const badge = await screen.findByLabelText("5 calls");
+      await user.hover(badge);
+      expect(await screen.findByText("5 calls: 4 LLM, 1 MCP, 2 cache hits")).toBeInTheDocument();
+    });
+
     it("leaves single-call rows untouched", async () => {
       respondWith([
         logEntry({ request_id: "req-solo-a", session_id: "sess-a", session_total_count: 1 }),

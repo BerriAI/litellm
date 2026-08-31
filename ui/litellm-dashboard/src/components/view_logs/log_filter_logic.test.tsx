@@ -122,6 +122,7 @@ describe("useLogFilterLogic", () => {
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
       expect(lastCallParams()).toMatchObject({ page: 3, page_size: 25 });
+      expect(lastCallParams()?.params).toMatchObject({ group_by_session: true });
     });
 
     it("passes start_date, end_date, sort_by, and sort_order", async () => {

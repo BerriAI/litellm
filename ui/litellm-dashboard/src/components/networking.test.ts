@@ -539,12 +539,28 @@ describe("uiSpendLogsCall exclude_internal_health_checks serialization", () => {
     expect(lastUrl(mockFetch).searchParams.get("exclude_internal_health_checks")).toBe("true");
   });
 
+  it("appends group_by_session=true for session-aware pagination", async () => {
+    const mockFetch = mockOkFetch();
+
+    await callWith({ group_by_session: true });
+
+    expect(lastUrl(mockFetch).searchParams.get("group_by_session")).toBe("true");
+  });
+
   it("omits exclude_internal_health_checks when the toggle is off", async () => {
     const mockFetch = mockOkFetch();
 
     await callWith({ exclude_internal_health_checks: false });
 
     expect(lastUrl(mockFetch).searchParams.has("exclude_internal_health_checks")).toBe(false);
+  });
+
+  it("omits group_by_session when it is false", async () => {
+    const mockFetch = mockOkFetch();
+
+    await callWith({ group_by_session: false });
+
+    expect(lastUrl(mockFetch).searchParams.has("group_by_session")).toBe(false);
   });
 
   it("omits exclude_internal_health_checks when the param is absent", async () => {

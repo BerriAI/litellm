@@ -190,9 +190,9 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         const sessionComposition = log.session_id ? sessionCompositionById[log.session_id] : undefined;
         return {
           ...log,
-          session_llm_count: sessionComposition?.llm ?? undefined,
-          session_mcp_count: sessionComposition?.mcp ?? undefined,
-          session_agent_count: sessionComposition?.agent ?? undefined,
+          session_llm_count: log.session_llm_count ?? sessionComposition?.llm ?? undefined,
+          session_mcp_count: log.session_mcp_count ?? sessionComposition?.mcp ?? undefined,
+          session_agent_count: log.session_agent_count ?? sessionComposition?.agent ?? undefined,
         };
       })
       .filter((log) => {

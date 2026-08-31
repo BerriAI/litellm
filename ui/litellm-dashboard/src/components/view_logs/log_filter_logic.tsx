@@ -169,6 +169,7 @@ export function useLogFilterLogic({
           team_id: getFilterValue(columnFilters, LOG_FILTER_IDS.TEAM_ID),
           request_id: getFilterValue(columnFilters, LOG_FILTER_IDS.REQUEST_ID),
           session_id: getFilterValue(columnFilters, LOG_FILTER_IDS.SESSION_ID),
+          group_by_session: true,
           user_id: userIdFilter,
           end_user: getFilterValue(columnFilters, LOG_FILTER_IDS.END_USER),
           status_filter: getFilterValue(columnFilters, LOG_FILTER_IDS.STATUS),

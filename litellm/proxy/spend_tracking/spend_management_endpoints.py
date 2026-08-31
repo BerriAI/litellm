@@ -2229,6 +2229,11 @@ async def ui_view_spend_logs(
         default=None,
         description="Filter spend logs by session_id (partial string match)",
     ),
+    group_by_session: bool = fastapi.Query(
+        default=False,
+        description="Return one representative row per session for dashboard pagination",
+        include_in_schema=False,
+    ),
     team_id: str | None = fastapi.Query(
         default=None,
         description="Filter spend logs by team_id",
@@ -2310,6 +2315,7 @@ async def ui_view_spend_logs(
     from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
 
     is_v2: Final = "/spend/logs/v2" in get_request_route(request)
+    is_grouped_by_session: Final = group_by_session is True and not is_v2
 
     # Validate sort_by and sort_order
     valid_sort_fields: Final = {
@@ -2637,10 +2643,15 @@ async def ui_view_spend_logs(
         else:
             _order_expr = order_column
 
+        grouped_order_expr: Final = "session_total_spend" if order_column == "spend" else _order_expr
+        session_group_expr: Final = "COALESCE('session:' || NULLIF(session_id, ''), 'request:' || request_id)"
+        # Grouped mode must deduplicate the filtered window before this limit;
+        # the cap bounds the reported group count, not the raw rows scanned.
+        count_selection: Final = f"SELECT DISTINCT {session_group_expr}" if is_grouped_by_session else "SELECT 1"
         count_query: Final = f"""
             SELECT COUNT(*) AS total_count
             FROM (
-                SELECT 1
+                {count_selection}
                 FROM "LiteLLM_SpendLogs"
                 WHERE {" AND ".join(sql_conditions)}
                 LIMIT ${p}
@@ -2653,8 +2664,7 @@ async def ui_view_spend_logs(
         total_is_capped: Final = raw_total > SPEND_LOGS_PAGINATION_COUNT_CAP
         total_records: Final = SPEND_LOGS_PAGINATION_COUNT_CAP if total_is_capped else raw_total
 
-        sql_query: Final = f"""
-            SELECT
+        select_columns: Final = """
                 request_id, call_type, api_key, spend, total_tokens,
                 prompt_tokens, completion_tokens, "startTime", "endTime",
                 "completionStartTime", model, model_id, model_group,
@@ -2663,11 +2673,53 @@ async def ui_view_spend_logs(
                 organization_id, end_user, requester_ip_address,
                 session_id, status, mcp_namespaced_tool_name, agent_id,
                 COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms
+        """
+        ungrouped_query: Final = f"""
+            SELECT {select_columns}
             FROM "LiteLLM_SpendLogs"
             WHERE {" AND ".join(sql_conditions)}
             ORDER BY {_order_expr} {_sql_dir}{_nulls_clause}
             LIMIT ${p} OFFSET ${p + 1}
         """
+        grouped_query: Final = f"""
+            WITH filtered_rows AS (
+                SELECT {select_columns},
+                    (COUNT(*) OVER session_window)::int AS session_total_count,
+                    COALESCE(SUM(spend) OVER session_window, 0)::double precision AS session_total_spend,
+                    (COUNT(*) FILTER (
+                        WHERE call_type NOT IN ('call_mcp_tool', 'list_mcp_tools', 'asend_message')
+                    ) OVER session_window)::int AS session_llm_count,
+                    (COUNT(*) FILTER (
+                        WHERE call_type IN ('call_mcp_tool', 'list_mcp_tools')
+                    ) OVER session_window)::int AS session_mcp_count,
+                    (COUNT(*) FILTER (
+                        WHERE call_type = 'asend_message'
+                    ) OVER session_window)::int AS session_agent_count,
+                    (COUNT(*) FILTER (
+                        WHERE call_type IN ('call_mcp_tool', 'list_mcp_tools')
+                    ) OVER session_window)::int AS mcp_tool_call_count,
+                    COALESCE(SUM(spend) FILTER (
+                        WHERE call_type IN ('call_mcp_tool', 'list_mcp_tools')
+                    ) OVER session_window, 0)::double precision AS mcp_tool_call_spend,
+                    (COUNT(*) FILTER (
+                        WHERE LOWER(cache_hit) = 'true'
+                    ) OVER session_window)::int AS session_cache_hit_count
+                FROM "LiteLLM_SpendLogs"
+                WHERE {" AND ".join(sql_conditions)}
+                WINDOW session_window AS (PARTITION BY {session_group_expr})
+            ),
+            session_rows AS (
+                SELECT DISTINCT ON ({session_group_expr}) *
+                FROM filtered_rows
+                ORDER BY {session_group_expr},
+                    CASE WHEN call_type IN ('call_mcp_tool', 'list_mcp_tools') THEN 1 ELSE 0 END,
+                    {_order_expr} {_sql_dir}{_nulls_clause}, request_id
+            )
+            SELECT * FROM session_rows
+            ORDER BY {grouped_order_expr} {_sql_dir}{_nulls_clause}, {session_group_expr}
+            LIMIT ${p} OFFSET ${p + 1}
+        """
+        sql_query: Final = grouped_query if is_grouped_by_session else ungrouped_query
         sql_params.extend([page_size, skip])
 
         data: Final = await prisma_client.db.query_raw(sql_query, *sql_params)
@@ -2686,7 +2738,7 @@ async def ui_view_spend_logs(
             page,
             page_size,
             total_pages,
-            enrich_session_counts=not is_v2,
+            enrich_session_counts=not is_v2 and not is_grouped_by_session,
             total_is_capped=total_is_capped,
         )
     except Exception as e:
@@ -4074,8 +4126,8 @@ async def _build_ui_spend_logs_response(
     fetches the total number of logs in each referenced session.  Rows without
     a ``session_id`` default to ``1``.
 
-    When ``enrich_session_counts`` is ``False`` (v2 endpoint), rows are
-    serialised without the extra query.
+    When ``enrich_session_counts`` is ``False`` (v2 or pre-enriched grouped
+    rows), data is returned without the extra queries.
 
     Args:
         prisma_client: The connected Prisma client instance.

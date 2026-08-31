@@ -2024,6 +2024,7 @@ interface UiSpendLogsParams {
   team_id?: string;
   request_id?: string;
   session_id?: string;
+  group_by_session?: boolean;
   user_id?: string;
   end_user?: string;
   status_filter?: string;

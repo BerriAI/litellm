@@ -36,6 +36,30 @@ function TruncatedText({ value }: { value: string | undefined }) {
   return <CellTooltip content={display} trigger={<span className="max-w-[15ch] truncate block">{display}</span>} />;
 }
 
+interface SessionCallsTooltipInput {
+  sessionCount: number;
+  sessionLlmCount: number;
+  sessionAgentCount: number;
+  sessionMcpCount: number;
+  cacheHitCount: number;
+}
+
+function getSessionCallsTooltip({
+  sessionCount,
+  sessionLlmCount,
+  sessionAgentCount,
+  sessionMcpCount,
+  cacheHitCount,
+}: SessionCallsTooltipInput): string {
+  const compositionParts = [
+    sessionLlmCount > 0 && `${sessionLlmCount} LLM`,
+    sessionAgentCount > 0 && `${sessionAgentCount} Agent`,
+    sessionMcpCount > 0 && `${sessionMcpCount} MCP`,
+  ].filter(Boolean);
+  const cacheHitPart = cacheHitCount > 0 ? `${cacheHitCount} cache ${cacheHitCount === 1 ? "hit" : "hits"}` : null;
+  return `${sessionCount} calls: ${[...compositionParts, cacheHitPart].filter(Boolean).join(", ")}`;
+}
+
 export const getRequestLogsTableColumns = ({
   onKeyHashClick,
   onSessionClick,
@@ -50,7 +74,7 @@ export const getRequestLogsTableColumns = ({
   },
   {
     id: "type",
-    header: "Type",
+    header: "Calls",
     size: 90,
     enableSorting: false,
     meta: { skeleton: "badge" },
@@ -63,12 +87,17 @@ export const getRequestLogsTableColumns = ({
       const sessionAgentCount = log.session_agent_count ?? (isAgent ? sessionCount : 0);
       const sessionMcpCount = log.session_mcp_count ?? (isMcp ? sessionCount : 0);
 
-      if (isMcp) return <McpBadge />;
-      if (isAgent && sessionCount <= 1) return <AgentBadge />;
-      if (sessionCount <= 1) return <LlmBadge />;
+      if (sessionCount <= 1) {
+        if (isMcp) return <McpBadge />;
+        if (isAgent) return <AgentBadge />;
+        return <LlmBadge />;
+      }
 
       const sessionTypeBadge = (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-info/10 text-info border border-info/20 rounded-full text-[11px] font-medium whitespace-nowrap">
+        <span
+          aria-label={`${sessionCount} calls`}
+          className="inline-flex items-center gap-1 px-2 py-0.5 bg-info/10 text-info border border-info/20 rounded-full text-[11px] font-medium whitespace-nowrap"
+        >
           <SparkleIcon />
           <span>{sessionCount}</span>
           {sessionAgentCount > 0 && (
@@ -86,13 +115,15 @@ export const getRequestLogsTableColumns = ({
         </span>
       );
 
-      const tooltipParts = [
-        sessionLlmCount > 0 && `${sessionLlmCount} LLM`,
-        sessionAgentCount > 0 && `${sessionAgentCount} Agent`,
-        sessionMcpCount > 0 && `${sessionMcpCount} MCP`,
-        log.session_cache_hit_count != null && `${log.session_cache_hit_count} cache hit`,
-      ].filter(Boolean);
-      return <CellTooltip content={tooltipParts.join(" • ")} trigger={sessionTypeBadge} />;
+      const cacheHitCount = log.session_cache_hit_count || 0;
+      const tooltipInput: SessionCallsTooltipInput = {
+        sessionCount,
+        sessionLlmCount,
+        sessionAgentCount,
+        sessionMcpCount,
+        cacheHitCount,
+      };
+      return <CellTooltip content={getSessionCallsTooltip(tooltipInput)} trigger={sessionTypeBadge} />;
     },
   },
   {

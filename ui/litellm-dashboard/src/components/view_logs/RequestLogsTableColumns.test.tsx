@@ -75,6 +75,27 @@ describe("Cost column", () => {
   });
 });
 
+describe("Calls column", () => {
+  it("shows the call count for a multi-call MCP-only session", async () => {
+    const user = userEvent.setup();
+    renderRows([
+      logEntry({
+        request_id: "req-mcp-session",
+        call_type: "call_mcp_tool",
+        session_id: "sess-mcp",
+        session_total_count: 3,
+        session_llm_count: 0,
+        session_mcp_count: 3,
+        session_agent_count: 0,
+      }),
+    ]);
+
+    const badge = screen.getByLabelText("3 calls");
+    await user.hover(badge);
+    expect(await screen.findByText("3 calls: 3 MCP")).toBeInTheDocument();
+  });
+});
+
 describe("row action cells", () => {
   it("reports the key hash through the injected dependency rather than a row field", async () => {
     const user = userEvent.setup();
@@ -99,6 +120,7 @@ describe("sortable headers", () => {
   it("exposes sort controls only for the backend-sortable fields", () => {
     renderRows([logEntry({})]);
 
+    expect(screen.getByText("Calls")).toBeInTheDocument();
     for (const field of ["startTime", "spend", "request_duration_ms", "ttft_ms", "model", "total_tokens"]) {
       expect(screen.getByTestId(`sort-trigger-${field}`)).toBeInTheDocument();
     }

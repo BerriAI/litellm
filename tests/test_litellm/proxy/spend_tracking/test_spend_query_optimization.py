@@ -216,14 +216,29 @@ def _make_ui_spend_logs_mock(count_total, page_rows):
     return mock_prisma
 
 
+@pytest.mark.parametrize(
+    "group_by_session, count_selection, grouped_page",
+    [
+        (False, "SELECT 1", False),
+        (
+            True,
+            "SELECT DISTINCT COALESCE('session:' || NULLIF(session_id, ''), 'request:' || request_id)",
+            True,
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_spend_logs_ui_uses_bounded_count_not_full_scan(monkeypatch):
+async def test_spend_logs_ui_uses_capped_count_query(
+    monkeypatch: pytest.MonkeyPatch,
+    group_by_session: bool,
+    count_selection: str,
+    grouped_page: bool,
+):
     """
-    /spend/logs/ui must compute its pagination total with a bounded
-    `SELECT COUNT(*) FROM (SELECT 1 ... LIMIT $cap+1)` so it never scans the
-    whole time window of a huge LiteLLM_SpendLogs table (Aurora ACU spike,
-    LIT-4119). It must also avoid the unbounded prisma `.count()` /
-    `COUNT(*) OVER ()` full-window count that reads every matching row.
+    /spend/logs/ui must compute its pagination total in a capped subquery and
+    keep the count out of the page query. Raw-log mode can stop after cap+1
+    rows; grouped mode must deduplicate the filtered window before applying
+    the cap so its reported total counts visible session rows.
     """
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.spend_tracking.spend_management_endpoints import (
@@ -251,6 +266,7 @@ async def test_spend_logs_ui_uses_bounded_count_not_full_scan(monkeypatch):
         end_date="2026-02-16 23:59:59",
         page=1,
         page_size=50,
+        group_by_session=group_by_session,
         sort_by="startTime",
         sort_order="desc",
         user_api_key_dict=auth,
@@ -262,18 +278,20 @@ async def test_spend_logs_ui_uses_bounded_count_not_full_scan(monkeypatch):
     count_sql = count_call[0][0]
     assert "COUNT(*) OVER ()" not in count_sql
     assert "LIMIT" in count_sql and "FROM (" in count_sql, (
-        "the total must come from a bounded subquery count, not a full-window "
-        f"scan. SQL was:\n{count_sql}"
+        f"the total must come from a capped subquery count. SQL was:\n{count_sql}"
     )
+    assert count_selection in count_sql
     assert count_call[0][-1] == SPEND_LOGS_PAGINATION_COUNT_CAP + 1, (
-        "the bounded count must probe at most cap+1 rows"
+        "the count result must contain at most cap+1 rows or groups"
     )
 
     page_sql = mock_prisma.db.query_raw.call_args_list[1][0][0]
     assert "COUNT(*) OVER ()" not in page_sql, (
-        "the page query must not carry a window count that forces a full-window "
-        f"scan. SQL was:\n{page_sql}"
+        f"the page query must not carry a window count that forces a full-window scan. SQL was:\n{page_sql}"
     )
+    assert ("WITH filtered_rows AS" in page_sql) is grouped_page
+    assert ("OVER session_window" in page_sql) is grouped_page
+    assert ("DISTINCT ON (COALESCE('session:'" in page_sql) is grouped_page
 
     assert response["total"] == 137
     assert response["total_is_capped"] is False
@@ -281,6 +299,39 @@ async def test_spend_logs_ui_uses_bounded_count_not_full_scan(monkeypatch):
 
     for row in response["data"]:
         assert "total_count" not in row, "the window-function helper column must be stripped before serialising rows"
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_ui_grouped_cost_sort_uses_session_total(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        ui_view_spend_logs,
+    )
+
+    mock_prisma = _make_ui_spend_logs_mock(count_total=2, page_rows=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+    request = MagicMock()
+    request.url.path = "/spend/logs/ui"
+
+    await ui_view_spend_logs(
+        request=request,
+        start_date="2026-02-16 00:00:00",
+        end_date="2026-02-16 23:59:59",
+        page=1,
+        page_size=50,
+        group_by_session=True,
+        sort_by="spend",
+        sort_order="desc",
+        user_api_key_dict=auth,
+    )
+
+    page_sql = mock_prisma.db.query_raw.call_args_list[1][0][0]
+    outer_query = page_sql.split("SELECT * FROM session_rows", maxsplit=1)[1]
+    assert "ORDER BY session_total_spend DESC" in outer_query
 
 
 @pytest.mark.asyncio

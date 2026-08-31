@@ -168,6 +168,28 @@ def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=No
                         If provided, adds litellm_teamtable to db.
     """
 
+    def visible_group_key(log):
+        return ("session", log["session_id"]) if log.get("session_id") else ("request", log["request_id"])
+
+    def build_grouped_row(members):
+        mcp_members = [member for member in members if member.get("call_type") in {"call_mcp_tool", "list_mcp_tools"}]
+        agent_members = [member for member in members if member.get("call_type") == "asend_message"]
+        representative = min(
+            members,
+            key=lambda member: member.get("call_type") in {"call_mcp_tool", "list_mcp_tools"},
+        )
+        return {
+            **representative,
+            "session_total_count": len(members),
+            "session_total_spend": sum(float(member.get("spend") or 0.0) for member in members),
+            "session_llm_count": len(members) - len(mcp_members) - len(agent_members),
+            "session_mcp_count": len(mcp_members),
+            "session_agent_count": len(agent_members),
+            "mcp_tool_call_count": len(mcp_members),
+            "mcp_tool_call_spend": sum(float(member.get("spend") or 0.0) for member in mcp_members),
+            "session_cache_hit_count": sum(str(member.get("cache_hit")).lower() == "true" for member in members),
+        }
+
     class MockDB:
         async def count(self, *args, **kwargs):
             return len(filter_fn(kwargs.get("where", {})))
@@ -185,16 +207,24 @@ def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=No
         async def query_raw(self, sql_query, *params):
             if query_observer is not None:
                 query_observer(sql_query, params)
-            if "mcp_tool_call_count" in sql_query:
+            is_grouped_page = "WITH filtered_rows AS" in sql_query
+            if "mcp_tool_call_count" in sql_query and not is_grouped_page:
                 return []
             filtered = filter_fn(_reconstruct_ui_where_from_sql(sql_query, params))
-            total = len(filtered)
-            if "COUNT(*)" in sql_query:
+            group_keys = dict.fromkeys(visible_group_key(log) for log in filtered)
+            grouped_rows = [
+                build_grouped_row([log for log in filtered if visible_group_key(log) == group_key])
+                for group_key in group_keys
+            ]
+            is_grouped_count = "SELECT DISTINCT COALESCE('session:'" in sql_query
+            total = len(grouped_rows) if is_grouped_count else len(filtered)
+            if "SELECT COUNT(*) AS total_count" in sql_query:
                 cap_plus_one = params[-1]
                 return [{"total_count": min(total, cap_plus_one)}]
             page_size = params[-2] if len(params) >= 2 else 50
             skip = params[-1] if len(params) >= 1 else 0
-            return [row for row in filtered[skip : skip + page_size]]
+            page_rows = grouped_rows if is_grouped_page else filtered
+            return [row for row in page_rows[skip : skip + page_size]]
 
     class MockPrismaClient:
         def __init__(self):
@@ -1464,8 +1494,11 @@ async def test_ui_view_spend_logs_internal_user_scoped_without_user_id(
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
+@pytest.mark.parametrize("group_by_session", [False, True])
 @pytest.mark.asyncio
-async def test_ui_view_spend_logs_explicit_user_filter_cannot_escape_own_scope(client, monkeypatch):
+async def test_ui_view_spend_logs_explicit_user_filter_cannot_escape_own_scope(
+    client, monkeypatch, group_by_session: bool
+):
     caller_log = {
         "id": "log1",
         "request_id": "req1",
@@ -1500,6 +1533,7 @@ async def test_ui_view_spend_logs_explicit_user_filter_cannot_escape_own_scope(c
             "/spend/logs/ui",
             params={
                 "user_id": "someone-else@example.com",
+                "group_by_session": group_by_session,
                 "start_date": start_date,
                 "end_date": end_date,
             },
@@ -1508,7 +1542,9 @@ async def test_ui_view_spend_logs_explicit_user_filter_cannot_escape_own_scope(c
 
         assert response.status_code == 200
         assert response.json()["data"] == []
-        page_sql, page_params = next((sql, params) for sql, params in observed_queries if "SELECT\n" in sql)
+        page_sql, page_params = next(
+            (sql, params) for sql, params in observed_queries if "LIMIT $" in sql and "OFFSET $" in sql
+        )
         assert page_sql.count('"user" = $') == 2
         assert page_params[2:4] == ("someone-else@example.com", "caller@example.com")
     finally:
@@ -1801,6 +1837,101 @@ async def test_ui_view_spend_logs_pagination(client, monkeypatch):
         assert data["total"] == 25
         assert len(data["data"]) == 10
         assert data["page"] == 2
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_group_by_session_paginates_visible_rows(
+    client, monkeypatch
+):
+    now = datetime.datetime.now(timezone.utc).isoformat()
+    mock_spend_logs = [
+        {
+            "id": f"log-{session_index}-{message_index}",
+            "request_id": f"req-{session_index}-{message_index}",
+            "session_id": f"session-{session_index:02d}",
+            "call_type": ("call_mcp_tool" if session_index == 0 and message_index == 0 else "acompletion"),
+            "api_key": ("sk-other-test-key" if session_index == 0 and message_index == 0 else "sk-test-key"),
+            "startTime": now,
+            "model": "gpt-4",
+        }
+        for session_index in range(26)
+        for message_index in range(2)
+    ] + [
+        {
+            "id": f"standalone-log-{index}",
+            "request_id": ("session-00" if index == 0 else f"standalone-req-{index}"),
+            "session_id": None if index == 0 else "",
+            "call_type": "acompletion",
+            "api_key": "sk-test-key",
+            "startTime": now,
+            "model": "gpt-4",
+        }
+        for index in range(2)
+    ]
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, lambda where: mock_spend_logs),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+    try:
+        start_date, end_date = _default_date_range()
+        common_params = {
+            "page_size": 25,
+            "group_by_session": True,
+            "start_date": start_date,
+            "end_date": end_date,
+        }
+        first_response = client.get(
+            "/spend/logs/ui",
+            params={**common_params, "page": 1},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        second_response = client.get(
+            "/spend/logs/ui",
+            params={**common_params, "page": 2},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        v2_response = client.get(
+            "/spend/logs/v2",
+            params={**common_params, "page": 1, "page_size": 100},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert first_response.status_code == 200
+        assert second_response.status_code == 200
+        assert v2_response.status_code == 200
+        first_page = first_response.json()
+        second_page = second_response.json()
+        first_group_ids = {
+            (f"session:{row['session_id']}" if row.get("session_id") else f"request:{row['request_id']}")
+            for row in first_page["data"]
+        }
+        second_group_ids = {
+            (f"session:{row['session_id']}" if row.get("session_id") else f"request:{row['request_id']}")
+            for row in second_page["data"]
+        }
+        all_rows = first_page["data"] + second_page["data"]
+        assert first_page["total"] == 28
+        assert first_page["total_pages"] == 2
+        assert len(first_page["data"]) == 25
+        assert len(second_page["data"]) == 3
+        assert first_group_ids.isdisjoint(second_group_ids)
+        assert {"request:session-00", "request:standalone-req-1"}.issubset(first_group_ids | second_group_ids)
+        assert next(row for row in all_rows if row.get("session_id") == "session-00")["request_id"] == "req-0-1"
+        assert all(row["session_total_count"] == 2 for row in all_rows if row.get("session_id"))
+        assert all(row["session_total_count"] == 1 for row in all_rows if not row.get("session_id"))
+        mixed_key_session = next(row for row in all_rows if row.get("session_id") == "session-00")
+        assert mixed_key_session["session_llm_count"] == 1
+        assert mixed_key_session["session_mcp_count"] == 1
+        assert mixed_key_session["session_agent_count"] == 0
+        assert v2_response.json()["total"] == len(mock_spend_logs)
+        assert len(v2_response.json()["data"]) == len(mock_spend_logs)
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
