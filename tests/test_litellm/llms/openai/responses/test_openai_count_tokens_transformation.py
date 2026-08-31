@@ -323,6 +323,80 @@ def test_messages_to_responses_input_keeps_user_image_alongside_an_assistant_tur
     ]
 
 
+def test_messages_to_responses_input_preserves_inline_files():
+    """An inline file must survive the round trip, or the count silently drops the file.
+
+    A small PDF is worth 36 tokens to OpenAI's counting API; dropping it left the same
+    request counting 13, the text-only total.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Summarize this file."},
+                {
+                    "type": "file",
+                    "file": {"filename": "report.pdf", "file_data": "data:application/pdf;base64,JVBERi0="},
+                },
+            ],
+        }
+    ]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items == [
+        {
+            "role": "user",
+            "content": (
+                {"type": "input_text", "text": "Summarize this file."},
+                {
+                    "type": "input_file",
+                    "filename": "report.pdf",
+                    "file_data": "data:application/pdf;base64,JVBERi0=",
+                },
+            ),
+        }
+    ]
+
+
+def test_messages_to_responses_input_drops_a_file_with_no_inline_data():
+    """OpenAI rejects `file_data` without a `filename`, and a rejected request loses the whole count."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Summarize this file."},
+                {"type": "file", "file": {"file_data": "data:application/pdf;base64,JVBERi0="}},
+                {"type": "file", "file": {"file_id": "file-abc123"}},
+            ],
+        }
+    ]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items == [{"role": "user", "content": "Summarize this file."}]
+
+
+def test_messages_to_responses_input_assistant_file_block_is_dropped():
+    """A file part is illegal inside an assistant turn, so it must not reach the provider."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Here it is"},
+                {
+                    "type": "file",
+                    "file": {"filename": "report.pdf", "file_data": "data:application/pdf;base64,JVBERi0="},
+                },
+            ],
+        }
+    ]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items == [{"role": "assistant", "content": "Here it is"}]
+
+
 def test_validate_request_valid():
     """Test that valid requests pass validation."""
     config = OpenAICountTokensConfig()
