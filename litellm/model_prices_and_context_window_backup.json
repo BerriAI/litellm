@@ -55046,5 +55046,55 @@
         "max_tokens": 40960,
         "mode": "embedding",
         "source": "https://docs.fireworks.ai/serverless/pricing"
+    },
+    "zai/glm-5.2": {
+        "cache_creation_input_token_cost": 0,
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "zai",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://docs.z.ai/guides/overview/pricing",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "together_ai/Qwen/Qwen3.8-Flash": {
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 1000000,
+        "max_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 4.7e-07,
+        "source": "https://docs.together.ai/docs/serverless-models"
+    },
+    "cerebras/gemma-4-31b": {
+        "input_cost_per_token": 9.9e-07,
+        "litellm_provider": "cerebras",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 40960,
+        "max_tokens": 40960,
+        "mode": "chat",
+        "output_cost_per_token": 1.49e-06,
+        "source": "https://api.cerebras.ai/public/v1/models/gemma-4-31b",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "elevenlabs/scribe_v2": {
+        "input_cost_per_second": 6.11e-05,
+        "litellm_provider": "elevenlabs",
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://elevenlabs.io/pricing/api",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
     }
 }
