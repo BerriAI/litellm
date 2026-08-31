@@ -15,6 +15,14 @@ azs = ["us-west-2a", "us-west-2b"]
 # only allows a group you already have, attach it here as well; the
 # `task_security_group_id` output names the module's own group.
 # additional_task_security_group_ids = ["sg-0123456789abcdef0"]
+#
+# Drop the NAT gateway (~$33/month) by running the tasks in the public subnets
+# with a public IP for egress. Ingress is unchanged, the tasks security group
+# still admits only the ALB, but the task ENI becomes directly addressable, so
+# this suits a dev or single-user stack rather than an HA one. Ignored when
+# `vpc_id` is set, and rejected when a database is enabled because the schema
+# migration runs in the private subnets.
+# tasks_in_public_subnets = true
 
 # Data stores: Aurora Postgres and ElastiCache Redis are created by default.
 # Set create_* = false to point at your own, passing a connection string
@@ -130,10 +138,21 @@ env    = "stage"
 # and no gateway_extra_secrets entry: list the ARNs the proxy may invoke and
 # reference them in proxy_config as `bedrock/<model id>`. A cross-region
 # inference profile needs both the profile ARN and the foundation-model ARN.
+# Every entry must be a Bedrock ARN; a bare "*" is rejected at plan time.
 # bedrock_model_arns = [
 #   "arn:aws:bedrock:*:111122223333:inference-profile/us.anthropic.*",
 #   "arn:aws:bedrock:*::foundation-model/anthropic.*",
 # ]
+
+# OpenAI models hosted on Bedrock authorize against bedrock-mantle:CreateInference
+# rather than bedrock:InvokeModel, so they need this instead of an ARN above.
+# enable_bedrock_mantle = true
+
+# Creates the service role Bedrock assumes to read model weights out of models/
+# in the stack bucket for `aws bedrock create-model-import-job`. The import is a
+# one-off CLI call, not a Terraform resource; reference the result in
+# proxy_config as `bedrock/openai/<imported-model-arn>`.
+# enable_bedrock_custom_model_import = true
 
 # ---------- OpenTelemetry v2 ----------
 # OTel is gated on otel_endpoint: empty (default) and nothing is added to
