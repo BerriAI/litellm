@@ -35321,8 +35321,17 @@ export interface components {
             last_error?: string | null;
             /** @description Stratified verdicts; detail endpoint only */
             results?: components["schemas"]["ShadowEvalResult"] | null;
-            /** Router Name */
-            router_name: string;
+            /**
+             * Router Name
+             * @description The first router, kept for callers that predate router_names; derived so the
+             *     two fields can never disagree.
+             */
+            readonly router_name: string;
+            /**
+             * Router Names
+             * @description Every auto-router this job runs as a shadow arm. Multi-router jobs sample one slice of traffic and judge every arm against the same real responses
+             */
+            router_names: string[];
             /** Shadow Percentage */
             shadow_percentage: number;
             /**
@@ -35410,6 +35419,12 @@ export interface components {
              * @description Sliced by the model that served the real arm: the keys' incumbent models in forward mode, and in reverse the models the router itself picked
              */
             by_current_model: components["schemas"]["ShadowEvalSlice"][];
+            /**
+             * By Router
+             * @description One slice per router arm, grouped on the router name. Every arm of a multi-router job is judged against the same real responses over the same sampled requests, so these slices compare routers head-to-head: like-for-like win rates and spends on identical traffic. Verdicts from before arm stamping existed count toward the job's own router
+             * @default []
+             */
+            by_router: components["schemas"]["ShadowEvalSlice"][];
             /** By Tier */
             by_tier: components["schemas"]["ShadowEvalSlice"][];
             /**
@@ -35423,13 +35438,13 @@ export interface components {
             overall_tie_rate_pct: number;
             /**
              * Sampled Real Spend
-             * @description USD the real arm billed across all judged turns, cache-served turns excluded
+             * @description USD the real arm billed across all judged turns, cache-served turns excluded. A judged turn is one (request, router arm) verdict, so a multi-router job counts the real response once per arm it was judged against; per-router comparisons read by_router
              * @default 0
              */
             sampled_real_spend: number;
             /**
              * Sampled Shadow Spend
-             * @description USD the shadow arm billed across the same turns, judge excluded, like for like
+             * @description USD the shadow arms billed across the same turns, judge excluded, like for like
              * @default 0
              */
             sampled_shadow_spend: number;
@@ -35723,15 +35738,21 @@ export interface components {
             judge_model: string;
             /**
              * Max Budget
-             * @description Per-target USD budget for the eval's own overhead, the shadow-arm and judge calls, priced with the same figures the spend pipeline bills. EACH scoped target samples until its recorded eval spend reaches this, so a job over N targets spends at most about N times max_budget; in-flight samples can overshoot the cap by one sampling cache window
+             * @description Per-target USD budget for the eval's own overhead, the shadow-arm and judge calls, priced with the same figures the spend pipeline bills. EACH scoped target samples until its recorded eval spend reaches this, so a job over N targets spends at most about N times max_budget; in-flight samples can overshoot the cap by one sampling cache window. Every router arm draws from the same per-target budget, so a multi-router job reaches it proportionally sooner
              * @default 10
              */
             max_budget: number;
             /**
              * Router Name
-             * @description The auto-router under evaluation, in either direction
+             * @description The auto-router under evaluation, in either direction: the single-router spelling of router_names. Provide exactly one of the two fields
              */
-            router_name: string;
+            router_name?: string | null;
+            /**
+             * Router Names
+             * @description The auto-routers under evaluation, at most 4. Every sampled request runs through every router listed and each arm is judged independently against the same real response, so routers compare head-to-head on identical traffic. More than one router requires direction 'forward'. After validation this field always carries the full deduplicated set, whichever spelling the caller used
+             * @default []
+             */
+            router_names: string[];
             /**
              * Shadow Percentage
              * @description Percentage of each target's requests to duplicate through the router
