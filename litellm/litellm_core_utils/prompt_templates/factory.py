@@ -1266,9 +1266,9 @@ def _is_valid_thought_signature(signature: str) -> bool:
     try:
         padding = "=" * (-len(signature) % 4)
         base64.b64decode(signature + padding, validate=True)
-        return True
     except (binascii.Error, ValueError):
         return False
+    return True
 
 
 def get_thought_signature_from_tool(tool: Mapping[str, object]) -> str | None:

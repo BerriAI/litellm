@@ -322,6 +322,18 @@ def test_is_valid_thought_signature_tolerates_missing_padding():
     assert _is_valid_thought_signature(encoded) is True
 
 
+def test_is_valid_thought_signature_scope_is_syntactic():
+    """The extractor validates the wire encoding, not semantic integrity: a
+    client normalizer that keeps standard base64 characters produces a value
+    that still decodes even though Vertex will reject it as an unauthenticated
+    signature. Callers that need semantic verification have to compare against
+    the provider-issued signature; the ID-embedded fallback can only catch
+    encoding damage. Documented so future readers understand issue #37849's
+    guarantee is bounded."""
+    decodable_but_wrong = base64.b64encode(b"not-the-real-signature").decode("ascii")
+    assert _is_valid_thought_signature(decodable_but_wrong) is True
+
+
 def test_get_thought_signature_drops_client_mangled_id_suffix():
     """When the segment after ``__thought__`` isn't valid base64, the extractor
     must return ``None`` so the caller can either fall back to the dummy
