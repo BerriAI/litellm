@@ -225,6 +225,11 @@ async def _save_vector_store_to_db_from_rag_ingest(
         if key not in excluded_keys and value is not None:
             provider_specific_params[key] = value
 
+    embedding_config: Final = ingest_options.get("embedding")
+    embedding_model: Final = embedding_config.get("model") if embedding_config else None
+    if custom_llm_provider == "s3_vectors" and isinstance(embedding_model, str) and embedding_model:
+        provider_specific_params["embedding_model"] = embedding_model
+
     # Build file metadata entry using helper
     file_entry: Final = _build_file_metadata_entry(
         response=response,

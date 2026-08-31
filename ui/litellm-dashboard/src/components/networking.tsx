@@ -5805,12 +5805,19 @@ export const ragIngestCall = async (
     const formData = new FormData();
     formData.append("file", file);
 
+    const vectorStoreParams = { ...(providerSpecificParams ?? {}) };
+    const s3EmbeddingModel = customLlmProvider === "s3_vectors" ? vectorStoreParams.embedding_model : undefined;
+    if (customLlmProvider === "s3_vectors") {
+      delete vectorStoreParams.embedding_model;
+    }
+
     const ingestOptions: any = {
       ingest_options: {
+        ...(typeof s3EmbeddingModel === "string" && s3EmbeddingModel && { embedding: { model: s3EmbeddingModel } }),
         vector_store: {
           custom_llm_provider: customLlmProvider,
           ...(vectorStoreId && { vector_store_id: vectorStoreId }),
-          ...(providerSpecificParams && providerSpecificParams),
+          ...vectorStoreParams,
         },
       },
     };
