@@ -29,6 +29,12 @@ pub async fn run_generation(
 ) -> CoreResult<ImagesResponseEnum> {
     let start = Instant::now();
 
+    if !key_object.has_route_access(crate::constants::IMAGES_ROUTE_PATH_GENERATIONS) {
+        return Err(CoreError::Auth(
+            "API key does not have access to this route".to_string(),
+        ));
+    }
+
     let model = body
         .get("model")
         .and_then(Value::as_str)
@@ -355,6 +361,12 @@ pub async fn run_edit(
     hashed_token: &HashedToken,
 ) -> CoreResult<ImagesResponseEnum> {
     let start = Instant::now();
+
+    if !key_object.has_route_access(crate::constants::IMAGES_ROUTE_PATH_EDITS) {
+        return Err(CoreError::Auth(
+            "API key does not have access to this route".to_string(),
+        ));
+    }
 
     let model = body
         .get("model")

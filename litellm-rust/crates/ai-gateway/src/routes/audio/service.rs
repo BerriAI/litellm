@@ -31,6 +31,12 @@ pub async fn run_speech(
 ) -> CoreResult<AudioResponseEnum> {
     let start = Instant::now();
 
+    if !key_object.has_route_access(crate::constants::AUDIO_ROUTE_PATH_SPEECH) {
+        return Err(CoreError::Auth(
+            "API key does not have access to this route".to_string(),
+        ));
+    }
+
     let model = body
         .get("model")
         .and_then(Value::as_str)
@@ -325,6 +331,12 @@ pub async fn run_transcription(
     hashed_token: &HashedToken,
 ) -> CoreResult<AudioResponseEnum> {
     let start = Instant::now();
+
+    if !key_object.has_route_access(crate::constants::AUDIO_ROUTE_PATH_TRANSCRIPTIONS) {
+        return Err(CoreError::Auth(
+            "API key does not have access to this route".to_string(),
+        ));
+    }
 
     let model = body
         .get("model")

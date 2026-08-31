@@ -10452,25 +10452,31 @@ async def chat_completion(
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     data: Final = await _read_request_body(request=request)
 
-    # Try sidecar Rust gateway first
-    try:
-        from litellm.proxy.rust_gateway_integration import route_to_rust
-        rust_headers = {
-            "Authorization": request.headers.get("Authorization", ""),
-            "Content-Type": "application/json",
-        }
-        rust_response = route_to_rust("POST", "/v1/chat/completions", rust_headers, data)
+    # Try sidecar Rust gateway first (skip when guardrails are configured,
+    # since the Rust sidecar does not run Python-side guardrails)
+    if not getattr(litellm, "guardrail_name_config_map", {}):
+        try:
+            from litellm.proxy.rust_gateway_integration import route_to_rust
+            rust_headers = {
+                "Authorization": request.headers.get("Authorization", ""),
+                "Content-Type": "application/json",
+            }
+            rust_response = await asyncio.to_thread(
+                route_to_rust, "POST", "/v1/chat/completions", rust_headers, data
+            )
+            if rust_response is not None:
+                return rust_response
+        except Exception as e:
+            verbose_proxy_logger.debug(f"Sidecar Rust gateway routing failed: {e}")
+
+    # Try PyO3 Rust bridge (skip when guardrails are configured,
+    # since the PyO3 bridge does not run Python-side guardrails)
+    if not getattr(litellm, "guardrail_name_config_map", {}):
+        from litellm.rust_bridge.pipeline import process_request as rust_process_request
+
+        rust_response = rust_process_request("/v1/chat/completions", data)
         if rust_response is not None:
             return rust_response
-    except Exception as e:
-        verbose_proxy_logger.debug(f"Sidecar Rust gateway routing failed: {e}")
-
-    # Try PyO3 Rust bridge
-    from litellm.rust_bridge.pipeline import process_request as rust_process_request
-
-    rust_response = rust_process_request("/v1/chat/completions", data)
-    if rust_response is not None:
-        return rust_response
 
     if user_api_key_dict is not None:
         if not isinstance(data.get("metadata"), dict):

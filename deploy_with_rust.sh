@@ -102,5 +102,4 @@ exec python -m litellm \
     --config "$LITELLM_CONFIG" \
     --host "$LITELLM_HOST" \
     --port "$LITELLM_PORT" \
-    --workers "$LITELLM_WORKERS" \
-    --detailed_debug
+    --workers "$LITELLM_WORKERS"

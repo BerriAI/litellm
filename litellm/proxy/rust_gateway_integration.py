@@ -58,8 +58,8 @@ class RustGatewayManager:
             self.process = subprocess.Popen(
                 [self.binary_path],
                 env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
             verbose_logger.info(f"Rust gateway started on {self.host}:{self.port}")
             

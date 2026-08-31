@@ -29,6 +29,12 @@ pub async fn run(
 ) -> CoreResult<MessagesResponse> {
     let start = Instant::now();
 
+    if !key_object.has_route_access(crate::constants::MESSAGES_ROUTE_PATH) {
+        return Err(CoreError::Auth(
+            "API key does not have access to this route".to_string(),
+        ));
+    }
+
     let model = body
         .get("model")
         .and_then(Value::as_str)
@@ -49,7 +55,26 @@ pub async fn run(
         )));
     }
 
-    // Check budget
+    // Check budget against live Redis spend counter (avoids stale cache)
+    if let Some(max_budget) = key_object.max_budget {
+        if let Some(ref redis) = state.redis {
+            let mut key_buf = [0u8; 256];
+            let spend_key_str = spend_key(&mut key_buf, "key", hashed_token.as_hex_str());
+            match redis.incr_by_float(spend_key_str, 0.0).await {
+                Ok(live_spend) if live_spend >= max_budget => {
+                    return Err(CoreError::Auth(format!(
+                        "API key has exceeded its budget limit of ${max_budget:.2} (${live_spend:.2} spent)"
+                    )));
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    crate::hardening::log_degradation("redis", "key_budget_check", &e.to_string());
+                }
+            }
+        }
+    }
+
+    // Fallback: check cached spend (used when Redis is unavailable)
     if !key_object.is_within_budget() {
         return Err(CoreError::Auth(format!(
             "API key has exceeded its budget limit of ${:.2}",
@@ -278,14 +303,23 @@ pub async fn run(
                             .await;
 
                         if let Some(ref redis) = state.redis {
-                            crate::auth::rate_limit::check_token_limits(
+                            let within_tpm = crate::auth::rate_limit::check_token_limits(
                                 redis,
                                 key_object,
                                 hashed_token.as_hex_str(),
-                                0,
+                                input_tokens,
                                 output_tokens,
                             )
                             .await;
+                            if !within_tpm {
+                                tracing::warn!(
+                                    hashed_token = %hashed_token.as_hex_str(),
+                                    input_tokens = input_tokens,
+                                    output_tokens = output_tokens,
+                                    event = "tpm_limit_exceeded_post_request",
+                                    "audit: actual token usage exceeded TPM limit after reconciliation"
+                                );
+                            }
                         }
 
                         let duration = start.elapsed().as_secs_f64();
@@ -416,7 +450,7 @@ async fn record_streaming_spend_estimate(
     state: &AppState,
     model: &str,
     body: &Value,
-    _key_object: &Arc<KeyObject>,
+    key_object: &Arc<KeyObject>,
     hashed_token: &HashedToken,
 ) {
     let prompt_tokens = estimate_prompt_tokens(body);
@@ -441,7 +475,12 @@ async fn record_streaming_spend_estimate(
     let cost = match cost_calculator::calculate_cost(&cost_request) {
         Ok(response) => response.total_cost_usd(),
         Err(ref e) => {
-            tracing::warn!(error = %e, "cost calculation failed, spend not tracked");
+            tracing::error!(
+                model = model,
+                error = %e,
+                event = "cost_calculation_failed",
+                "pricing data missing for model, streaming spend will not be tracked"
+            );
             return;
         }
     };
@@ -453,6 +492,22 @@ async fn record_streaming_spend_estimate(
             entity_id: hex.to_string(),
             cost,
         });
+
+        if let Some(ref user_id) = key_object.user_id {
+            worker.record_update(SpendUpdateItem {
+                entity_type: EntityType::User,
+                entity_id: user_id.clone(),
+                cost,
+            });
+        }
+
+        if let Some(ref team_id) = key_object.team_id {
+            worker.record_update(SpendUpdateItem {
+                entity_type: EntityType::Team,
+                entity_id: team_id.clone(),
+                cost,
+            });
+        }
     }
 
     if let Some(ref redis) = state.redis {
@@ -529,8 +584,13 @@ async fn record_spend(
     let cost = match cost_calculator::calculate_cost(&cost_request) {
         Ok(response) => response.total_cost_usd(),
         Err(ref e) => {
-            tracing::warn!(error = %e, "cost calculation failed, spend not tracked");
-            0.0
+            tracing::error!(
+                model = model,
+                error = %e,
+                event = "cost_calculation_failed",
+                "pricing data missing for model, spend will not be tracked"
+            );
+            return;
         }
     };
 

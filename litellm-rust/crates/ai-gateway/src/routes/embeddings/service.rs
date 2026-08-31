@@ -27,6 +27,12 @@ pub async fn run(
 ) -> CoreResult<EmbeddingsResponseEnum> {
     let start = Instant::now();
 
+    if !key_object.has_route_access(crate::constants::EMBEDDINGS_ROUTE_PATH) {
+        return Err(CoreError::Auth(
+            "API key does not have access to this route".to_string(),
+        ));
+    }
+
     let model = body
         .get("model")
         .and_then(Value::as_str)

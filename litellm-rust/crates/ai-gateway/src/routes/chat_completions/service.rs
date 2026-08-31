@@ -280,6 +280,12 @@ pub async fn run(
     let start = Instant::now();
     let request_id = next_request_id();
 
+    if !key_object.has_route_access(crate::constants::CHAT_COMPLETIONS_ROUTE_PATH) {
+        return Err(CoreError::Auth(
+            "API key does not have access to this route".to_string(),
+        ));
+    }
+
     let model = body
         .get("model")
         .and_then(Value::as_str)
