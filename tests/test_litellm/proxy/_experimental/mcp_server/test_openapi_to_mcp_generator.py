@@ -85,9 +85,7 @@ class TestCreateToolFunction:
 
             # Verify URL was constructed correctly
             call_args = async_client.get.call_args
-            assert "repository-id" in str(call_args[0][0]) or "test-repo" in str(
-                call_args[0][0]
-            )
+            assert "repository-id" in str(call_args[0][0]) or "test-repo" in str(call_args[0][0])
 
     @pytest.mark.asyncio
     async def test_leading_digit_parameter(self):
@@ -420,6 +418,167 @@ class TestBuildInputSchema:
         # Required should include original names
         assert "repository-id" in schema["required"]
 
+    def test_preserves_array_items_for_repeatable_query_params(self):
+        """#29715: array-of-string query parameters must carry their
+        `items` keyword through to the MCP schema. Without it, downstream
+        consumers (CrewAI etc.) emit `items: {}` and OpenAI rejects the
+        tool schema."""
+        operation = {
+            "parameters": [
+                {
+                    "name": "domain",
+                    "in": "query",
+                    "required": True,
+                    "description": "Repeatable query parameter",
+                    "schema": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                }
+            ]
+        }
+
+        schema = build_input_schema(operation)
+
+        domain = schema["properties"]["domain"]
+        assert domain["type"] == "array"
+        assert domain["items"] == {"type": "string"}
+        assert domain["description"] == "Repeatable query parameter"
+
+    def test_preserves_enum_format_default_on_parameters(self):
+        """#29715: enum/format/default and similar JSON Schema keywords
+        must round-trip into the MCP schema."""
+        operation = {
+            "parameters": [
+                {
+                    "name": "status",
+                    "in": "query",
+                    "schema": {
+                        "type": "string",
+                        "enum": ["open", "closed"],
+                        "default": "open",
+                    },
+                },
+                {
+                    "name": "created_at",
+                    "in": "query",
+                    "schema": {
+                        "type": "string",
+                        "format": "date-time",
+                    },
+                },
+            ]
+        }
+
+        schema = build_input_schema(operation)
+
+        status = schema["properties"]["status"]
+        assert status["enum"] == ["open", "closed"]
+        assert status["default"] == "open"
+        created = schema["properties"]["created_at"]
+        assert created["format"] == "date-time"
+
+    def test_preserves_nested_object_properties_and_required(self):
+        """#29715: an inline object parameter must keep its `properties`
+        and `required` so downstream validators see the full shape."""
+        operation = {
+            "parameters": [
+                {
+                    "name": "filter",
+                    "in": "query",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "min": {"type": "integer"},
+                            "max": {"type": "integer"},
+                        },
+                        "required": ["min"],
+                    },
+                }
+            ]
+        }
+
+        schema = build_input_schema(operation)
+
+        f = schema["properties"]["filter"]
+        assert f["properties"]["min"] == {"type": "integer"}
+        assert f["properties"]["max"] == {"type": "integer"}
+        assert f["required"] == ["min"]
+
+    def test_parameter_description_overrides_schema_description(self):
+        """OpenAPI 3 places the description on the parameter object; let it
+        win over a schema-level description when both are present."""
+        operation = {
+            "parameters": [
+                {
+                    "name": "q",
+                    "in": "query",
+                    "description": "from parameter",
+                    "schema": {
+                        "type": "string",
+                        "description": "from schema",
+                    },
+                }
+            ]
+        }
+
+        schema = build_input_schema(operation)
+        assert schema["properties"]["q"]["description"] == "from parameter"
+
+    def test_parameter_falls_back_to_schema_description(self):
+        """If only the schema has a description, surface that instead of an
+        empty string."""
+        operation = {
+            "parameters": [
+                {
+                    "name": "q",
+                    "in": "query",
+                    "schema": {
+                        "type": "string",
+                        "description": "from schema only",
+                    },
+                }
+            ]
+        }
+
+        schema = build_input_schema(operation)
+        assert schema["properties"]["q"]["description"] == "from schema only"
+
+    def test_preserves_request_body_required_and_additional_props(self):
+        """#29715 (requestBody half): the body schema must keep `required`,
+        `additionalProperties`, and other top-level JSON Schema keywords —
+        not just `properties`."""
+        operation = {
+            "requestBody": {
+                "required": True,
+                "description": "Create user",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "email": {"type": "string"},
+                                "tags": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                            },
+                            "required": ["email"],
+                            "additionalProperties": False,
+                        }
+                    }
+                },
+            }
+        }
+
+        schema = build_input_schema(operation)
+        body = schema["properties"]["body"]
+        assert body["properties"]["email"] == {"type": "string"}
+        assert body["properties"]["tags"]["items"] == {"type": "string"}
+        assert body["required"] == ["email"]
+        assert body["additionalProperties"] is False
+        assert body["description"] == "Create user"
+
 
 class TestExtractParameters:
     """Test parameter extraction from OpenAPI operations."""
@@ -432,9 +591,7 @@ class TestExtractParameters:
                 {"name": "filter", "in": "query"},
                 {"name": "data", "in": "body"},
             ],
-            "requestBody": {
-                "content": {"application/json": {"schema": {"type": "object"}}}
-            },
+            "requestBody": {"content": {"application/json": {"schema": {"type": "object"}}}},
         }
 
         path_params, query_params, body_params = extract_parameters(operation)
@@ -635,7 +792,6 @@ class TestGetBaseUrl:
 
         base_url = get_base_url(spec, spec_path)
         assert base_url == "https://production.example.com"
-
 
     def test_fallback_with_nested_path(self):
         """Test fallback with deeply nested spec path."""
@@ -864,9 +1020,7 @@ class TestResolveOperationParams:
             ],
         }
         path_item = {"parameters": path_level_params, "get": operation}
-        result = resolve_operation_params(
-            operation, path_item, {"parameters": component_params}
-        )
+        result = resolve_operation_params(operation, path_item, {"parameters": component_params})
         names = [p["name"] for p in result["parameters"]]
         assert "owner" in names
         assert "repo" in names
@@ -969,22 +1123,16 @@ class TestRegisterToolsFromOpenAPI:
             }
         }
 
-        openapi_to_mcp_generator.register_tools_from_openapi(
-            spec, base_url="https://api.example.com"
-        )
+        openapi_to_mcp_generator.register_tools_from_openapi(spec, base_url="https://api.example.com")
 
         assert registered, "expected at least one registered tool"
         anthropic_re = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
         for name in registered:
-            assert anthropic_re.match(
-                name
-            ), f"tool name {name!r} violates ^[a-zA-Z0-9_-]+$"
+            assert anthropic_re.match(name), f"tool name {name!r} violates ^[a-zA-Z0-9_-]+$"
         assert "actions_download-job-logs-for-workflow-run" in registered
         assert "pulls_list-files" in registered
 
-    def test_missing_operation_id_uses_sanitized_method_path_fallback(
-        self, monkeypatch
-    ):
+    def test_missing_operation_id_uses_sanitized_method_path_fallback(self, monkeypatch):
         import re
 
         from litellm.proxy._experimental.mcp_server import openapi_to_mcp_generator
@@ -1007,15 +1155,11 @@ class TestRegisterToolsFromOpenAPI:
                 }
             }
         }
-        openapi_to_mcp_generator.register_tools_from_openapi(
-            spec, base_url="https://api.example.com"
-        )
+        openapi_to_mcp_generator.register_tools_from_openapi(spec, base_url="https://api.example.com")
 
         assert registered
         for name in registered:
-            assert re.match(
-                r"^[a-zA-Z0-9_-]+$", name
-            ), f"fallback tool name {name!r} not sanitized"
+            assert re.match(r"^[a-zA-Z0-9_-]+$", name), f"fallback tool name {name!r} not sanitized"
 
 
 class TestRequestExtraHeaders:
@@ -1171,9 +1315,7 @@ class TestRequestExtraHeaders:
             async_client = _create_mock_client("get", "secure-data")
             mock_client.return_value = async_client
 
-            extra_token = _request_extra_headers.set(
-                {"Authorization": "Bearer extra", "X-TOKEN": "token-value"}
-            )
+            extra_token = _request_extra_headers.set({"Authorization": "Bearer extra", "X-TOKEN": "token-value"})
             auth_token = _request_auth_header.set("Bearer byok-credential")
             try:
                 result = await func()
@@ -1301,7 +1443,9 @@ class TestUpstreamStatusIsClassified:
 
     @pytest.mark.asyncio
     async def test_401_raises_the_reauth_signal_carrying_the_challenge(self):
-        tool, client = self._tool(401, text='{"error":"invalid_token"}', headers={"www-authenticate": 'Bearer realm="x"'})
+        tool, client = self._tool(
+            401, text='{"error":"invalid_token"}', headers={"www-authenticate": 'Bearer realm="x"'}
+        )
         with patch(GET_ASYNC_CLIENT_TARGET, return_value=client):
             with pytest.raises(MCPUpstreamAuthError) as exc:
                 await tool()
