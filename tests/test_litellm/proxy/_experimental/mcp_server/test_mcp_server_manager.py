@@ -10915,7 +10915,9 @@ class TestKeyAttachedGuardrailsReachTheMCPPreCallHook:
             return None
 
         with (
-            patch("litellm.proxy.utils._premium_user_check"),
+            patch(  # test-quality-ok: enterprise licensing is orthogonal to the metadata propagation under test
+                "litellm.proxy.utils._premium_user_check"
+            ),
             patch.object(proxy_logging_obj, "pre_call_hook", side_effect=capture_pre_call_hook),
         ):
             await MCPServerManager().pre_call_tool_check(
