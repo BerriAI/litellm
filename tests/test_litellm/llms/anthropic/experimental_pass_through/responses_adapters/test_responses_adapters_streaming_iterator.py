@@ -4,9 +4,13 @@ Tests for AnthropicResponsesStreamWrapper
 """
 
 import asyncio
+import json
 import os
 import sys
 from types import SimpleNamespace
+
+import litellm
+from litellm.exceptions import MidStreamFallbackError
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
@@ -32,6 +36,43 @@ def _drain_async(events: list) -> list:
         return [chunk async for chunk in wrapper]
 
     return asyncio.run(_run())
+
+
+def _drain_sse(events: list) -> list[tuple[str, dict]]:
+    async def _gen():
+        for event in events:
+            yield event
+
+    async def _run() -> list[bytes]:
+        wrapper = AnthropicResponsesStreamWrapper(responses_stream=_gen(), model="m")
+        return [chunk async for chunk in wrapper.async_anthropic_sse_wrapper()]
+
+    frames = asyncio.run(_run())
+    return [
+        (
+            frame.decode().split("\n", maxsplit=1)[0].removeprefix("event: "),
+            json.loads(frame.decode().split("\n", maxsplit=2)[1].removeprefix("data: ")),
+        )
+        for frame in frames
+    ]
+
+
+def _response(
+    *,
+    status: str,
+    output: list[object] | None = None,
+    incomplete_reason: str | None = None,
+    error_message: str | None = None,
+) -> SimpleNamespace:
+    incomplete_details = SimpleNamespace(reason=incomplete_reason) if incomplete_reason is not None else None
+    error = SimpleNamespace(message=error_message) if error_message is not None else None
+    return SimpleNamespace(
+        status=status,
+        output=output or [],
+        incomplete_details=incomplete_details,
+        error=error,
+        usage=None,
+    )
 
 
 class TestMessageStartEmittedExactlyOnce:
@@ -112,7 +153,7 @@ class TestReasoningItemWithoutSummaryText:
         ]
 
     def test_reasoning_without_summary_emits_no_thinking_block(self):
-        chunks = _drain_async(self._gpt_turn(reasoning_summary_deltas=[]))
+        chunks = _process_all(self._gpt_turn(reasoning_summary_deltas=[]))
 
         assert not [
             c for c in chunks if c["type"] == "content_block_start" and c["content_block"]["type"] == "thinking"
@@ -133,7 +174,7 @@ class TestReasoningItemWithoutSummaryText:
         ]
 
     def test_reasoning_with_summary_text_still_emits_a_thinking_block(self):
-        chunks = _drain_async(self._gpt_turn(reasoning_summary_deltas=["Weigh", "ing options"]))
+        chunks = _process_all(self._gpt_turn(reasoning_summary_deltas=["Weigh", "ing options"]))
 
         assert [(c["type"], c.get("index")) for c in chunks[1:]] == [
             ("content_block_start", 0),
@@ -207,7 +248,7 @@ class TestToolUseBlockClosedExactlyOnce:
         assert stops == [0]
 
     def test_tool_turn_event_order(self):
-        chunks = _drain_async(self._chat_completions_bridge_tool_turn())
+        chunks = _process_all(self._chat_completions_bridge_tool_turn())
 
         assert [(c["type"], c.get("index")) for c in chunks] == [
             ("message_start", None),
@@ -222,6 +263,17 @@ class TestToolUseBlockClosedExactlyOnce:
             "name": "get_weather",
             "input": {},
         }
+
+    def test_duplicate_known_output_item_done_emits_one_content_block_stop(self):
+        chunks = _process_all(
+            [
+                {"type": "response.output_item.added", "item": {"type": "message", "id": "m1"}},
+                {"type": "response.output_item.done", "item": {"type": "message", "id": "m1"}},
+                {"type": "response.output_item.done", "item": {"type": "message", "id": "m1"}},
+            ]
+        )
+
+        assert [chunk["type"] for chunk in chunks] == ["content_block_start", "content_block_stop"]
 
 
 class TestProcessEventTextDeltaWithoutOutputItemAdded:
@@ -308,3 +360,372 @@ class TestResponseCompletedUsage:
             "cache_creation_input_tokens": 10,
             "cache_read_input_tokens": 4004,
         }
+
+
+class TestTerminalResponses:
+    def test_response_failed_emits_one_anthropic_error_not_a_completion(self):
+        frames = _drain_sse(
+            [
+                {
+                    "type": "response.failed",
+                    "response": _response(status="failed", error_message="upstream failed"),
+                }
+            ]
+        )
+
+        assert [event_type for event_type, _ in frames] == ["message_start", "error"]
+        assert frames[-1][1]["error"]["type"] == "api_error"
+        assert frames[-1][1]["error"]["message"] == "upstream failed"
+
+    def test_completed_response_with_an_open_block_emits_error_not_message_stop(self):
+        frames = _drain_sse(
+            [
+                {"type": "response.created"},
+                {"type": "response.output_item.added", "item": {"type": "message", "id": "m1"}},
+                {"type": "response.output_text.delta", "item_id": "m1", "delta": "partial"},
+                {
+                    "type": "response.completed",
+                    "response": _response(status="completed", output=[SimpleNamespace(type="message")]),
+                },
+            ]
+        )
+
+        assert [event_type for event_type, _ in frames][-1] == "error"
+        assert not [event_type for event_type, _ in frames if event_type == "message_stop"]
+
+    def test_events_after_a_terminal_response_are_ignored(self):
+        frames = _drain_sse(
+            [
+                {
+                    "type": "response.completed",
+                    "response": _response(status="completed"),
+                },
+                {"type": "response.output_text.delta", "item_id": "m1", "delta": "late"},
+            ]
+        )
+
+        assert [event_type for event_type, _ in frames] == ["message_start", "message_delta", "message_stop"]
+
+    def test_completed_response_with_unfinalized_function_call_emits_error(self):
+        frames = _drain_sse(
+            [
+                {"type": "response.created"},
+                {
+                    "type": "response.output_item.added",
+                    "item": {"type": "function_call", "id": "call_1", "call_id": "call_1", "name": "lookup"},
+                },
+                {"type": "response.function_call_arguments.delta", "item_id": "call_1", "delta": '{"id":'},
+                {"type": "response.output_item.done", "item": {"type": "function_call", "id": "call_1"}},
+                {
+                    "type": "response.completed",
+                    "response": _response(
+                        status="completed", output=[SimpleNamespace(type="function_call", id="call_1")]
+                    ),
+                },
+            ]
+        )
+
+        assert [event_type for event_type, _ in frames][-1] == "error"
+        assert not [event_type for event_type, _ in frames if event_type == "message_stop"]
+
+    def test_completed_event_with_incomplete_status_requires_safe_max_tokens_completion(self):
+        response = _response(
+            status="incomplete",
+            incomplete_reason="max_output_tokens",
+            output=[SimpleNamespace(type="message", id="m1")],
+        )
+        chunks = _drain_async(
+            [
+                {"type": "response.created"},
+                {"type": "response.output_item.added", "item": {"type": "message", "id": "m1"}},
+                {"type": "response.output_text.delta", "item_id": "m1", "delta": "partial"},
+                {"type": "response.output_item.done", "item": {"type": "message", "id": "m1"}},
+                {"type": "response.completed", "response": response},
+            ]
+        )
+
+        assert [chunk["type"] for chunk in chunks][-2:] == ["message_delta", "message_stop"]
+        assert chunks[-2]["delta"]["stop_reason"] == "max_tokens"
+
+    def test_completed_event_with_unsafe_incomplete_status_emits_error(self):
+        frames = _drain_sse(
+            [
+                {
+                    "type": "response.completed",
+                    "response": _response(status="incomplete", incomplete_reason="max_output_tokens"),
+                }
+            ]
+        )
+
+        assert [event_type for event_type, _ in frames] == ["message_start", "error"]
+        assert not [event_type for event_type, _ in frames if event_type == "message_stop"]
+
+    def test_empty_incomplete_response_emits_error_not_max_tokens_completion(self):
+        frames = _drain_sse(
+            [
+                {
+                    "type": "response.incomplete",
+                    "response": _response(status="incomplete", incomplete_reason="max_output_tokens"),
+                }
+            ]
+        )
+
+        assert [event_type for event_type, _ in frames] == ["message_start", "error"]
+        assert not [event_type for event_type, _ in frames if event_type in {"message_delta", "message_stop"}]
+
+    def test_completed_text_before_max_output_tokens_is_a_safe_max_tokens_completion(self):
+        response = _response(
+            status="incomplete",
+            incomplete_reason="max_output_tokens",
+            output=[SimpleNamespace(type="message", id="m1")],
+        )
+        chunks = _drain_async(
+            [
+                {"type": "response.created"},
+                {"type": "response.output_item.added", "item": {"type": "message", "id": "m1"}},
+                {"type": "response.output_text.delta", "item_id": "m1", "delta": "partial"},
+                {"type": "response.output_item.done", "item": {"type": "message", "id": "m1"}},
+                {"type": "response.incomplete", "response": response},
+            ]
+        )
+
+        assert [chunk["type"] for chunk in chunks] == [
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "content_block_stop",
+            "message_delta",
+            "message_stop",
+        ]
+        assert chunks[-2]["delta"]["stop_reason"] == "max_tokens"
+
+    def test_text_without_added_item_before_max_output_tokens_is_a_safe_max_tokens_completion(self):
+        response = _response(
+            status="incomplete",
+            incomplete_reason="max_output_tokens",
+            output=[SimpleNamespace(type="message", id="m1")],
+        )
+        chunks = _drain_async(
+            [
+                {"type": "response.created"},
+                {"type": "response.output_text.delta", "item_id": "m1", "delta": "partial"},
+                {"type": "response.output_item.done", "item": {"type": "message", "id": "m1"}},
+                {"type": "response.incomplete", "response": response},
+            ]
+        )
+
+        assert [chunk["type"] for chunk in chunks][-2:] == ["message_delta", "message_stop"]
+        assert chunks[-2]["delta"]["stop_reason"] == "max_tokens"
+
+    def test_closed_reasoning_without_a_summary_is_a_safe_max_tokens_completion(self):
+        response = _response(
+            status="incomplete",
+            incomplete_reason="max_output_tokens",
+            output=[SimpleNamespace(type="reasoning", id="rs_1")],
+        )
+        chunks = _drain_async(
+            [
+                {"type": "response.created"},
+                {"type": "response.output_item.added", "item": {"type": "reasoning", "id": "rs_1"}},
+                {"type": "response.output_item.done", "item": {"type": "reasoning", "id": "rs_1"}},
+                {"type": "response.incomplete", "response": response},
+            ]
+        )
+
+        assert [chunk["type"] for chunk in chunks] == ["message_start", "message_delta", "message_stop"]
+        assert chunks[-2]["delta"]["stop_reason"] == "max_tokens"
+
+    def test_closed_function_call_with_finalized_json_is_a_safe_max_tokens_completion(self):
+        response = _response(
+            status="incomplete",
+            incomplete_reason="max_output_tokens",
+            output=[SimpleNamespace(type="function_call", id="call_1")],
+        )
+        chunks = _drain_async(
+            [
+                {"type": "response.created"},
+                {
+                    "type": "response.output_item.added",
+                    "item": {"type": "function_call", "id": "call_1", "call_id": "call_1", "name": "lookup"},
+                },
+                {"type": "response.function_call_arguments.delta", "item_id": "call_1", "delta": '{"id": 1}'},
+                {
+                    "type": "response.function_call_arguments.done",
+                    "item_id": "call_1",
+                    "arguments": '{"id": 1}',
+                },
+                {"type": "response.output_item.done", "item": {"type": "function_call", "id": "call_1"}},
+                {"type": "response.incomplete", "response": response},
+            ]
+        )
+
+        assert [chunk["type"] for chunk in chunks] == [
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "content_block_stop",
+            "message_delta",
+            "message_stop",
+        ]
+        assert chunks[-2]["delta"]["stop_reason"] == "max_tokens"
+
+    def test_closed_function_call_with_scalar_json_emits_error(self):
+        frames = _drain_sse(
+            [
+                {"type": "response.created"},
+                {
+                    "type": "response.output_item.added",
+                    "item": {"type": "function_call", "id": "call_1", "call_id": "call_1", "name": "lookup"},
+                },
+                {"type": "response.function_call_arguments.delta", "item_id": "call_1", "delta": "1"},
+                {"type": "response.function_call_arguments.done", "item_id": "call_1", "arguments": "1"},
+                {"type": "response.output_item.done", "item": {"type": "function_call", "id": "call_1"}},
+                {
+                    "type": "response.incomplete",
+                    "response": _response(
+                        status="incomplete",
+                        incomplete_reason="max_output_tokens",
+                        output=[SimpleNamespace(type="function_call", id="call_1")],
+                    ),
+                },
+            ]
+        )
+
+        assert [event_type for event_type, _ in frames][-1] == "error"
+        assert not [event_type for event_type, _ in frames if event_type == "message_stop"]
+
+    def test_closed_function_call_with_mismatched_finalized_json_emits_error(self):
+        frames = _drain_sse(
+            [
+                {"type": "response.created"},
+                {
+                    "type": "response.output_item.added",
+                    "item": {"type": "function_call", "id": "call_1", "call_id": "call_1", "name": "lookup"},
+                },
+                {"type": "response.function_call_arguments.delta", "item_id": "call_1", "delta": '{"id": 1}'},
+                {
+                    "type": "response.function_call_arguments.done",
+                    "item_id": "call_1",
+                    "arguments": '{"id": 2}',
+                },
+                {"type": "response.output_item.done", "item": {"type": "function_call", "id": "call_1"}},
+                {
+                    "type": "response.incomplete",
+                    "response": _response(
+                        status="incomplete",
+                        incomplete_reason="max_output_tokens",
+                        output=[SimpleNamespace(type="function_call", id="call_1")],
+                    ),
+                },
+            ]
+        )
+
+        assert [event_type for event_type, _ in frames][-1] == "error"
+        assert not [event_type for event_type, _ in frames if event_type == "message_stop"]
+
+    def test_closed_function_call_without_finalized_json_emits_error(self):
+        frames = _drain_sse(
+            [
+                {"type": "response.created"},
+                {
+                    "type": "response.output_item.added",
+                    "item": {"type": "function_call", "id": "call_1", "call_id": "call_1", "name": "lookup"},
+                },
+                {"type": "response.function_call_arguments.delta", "item_id": "call_1", "delta": '{"id":'},
+                {"type": "response.output_item.done", "item": {"type": "function_call", "id": "call_1"}},
+                {
+                    "type": "response.incomplete",
+                    "response": _response(
+                        status="incomplete",
+                        incomplete_reason="max_output_tokens",
+                        output=[SimpleNamespace(type="function_call", id="call_1")],
+                    ),
+                },
+            ]
+        )
+
+        assert [event_type for event_type, _ in frames][-1] == "error"
+        assert not [event_type for event_type, _ in frames if event_type == "message_stop"]
+
+    def test_incomplete_tool_call_emits_error_not_tool_use_completion(self):
+        frames = _drain_sse(
+            [
+                {"type": "response.created"},
+                {
+                    "type": "response.output_item.added",
+                    "item": {"type": "function_call", "id": "call_1", "call_id": "call_1", "name": "lookup"},
+                },
+                {"type": "response.function_call_arguments.delta", "item_id": "call_1", "delta": '{"id":'},
+                {
+                    "type": "response.incomplete",
+                    "response": _response(
+                        status="incomplete",
+                        incomplete_reason="max_output_tokens",
+                        output=[SimpleNamespace(type="function_call")],
+                    ),
+                },
+            ]
+        )
+
+        assert [event_type for event_type, _ in frames][-1] == "error"
+        assert not [
+            payload
+            for event_type, payload in frames
+            if event_type == "message_delta" and payload["delta"]["stop_reason"] == "tool_use"
+        ]
+
+    def test_silent_eof_emits_one_terminal_error(self):
+        frames = _drain_sse([{"type": "response.created"}])
+
+        assert [event_type for event_type, _ in frames] == ["message_start", "error"]
+        assert frames[-1][1]["error"]["type"] == "api_error"
+
+    def test_upstream_api_error_propagates_to_router(self):
+        upstream_error = litellm.APIError(
+            status_code=500,
+            message="upstream failed",
+            llm_provider="openai",
+            model="m",
+        )
+
+        async def _gen():
+            raise upstream_error
+            yield None
+
+        async def _run() -> None:
+            wrapper = AnthropicResponsesStreamWrapper(responses_stream=_gen(), model="m")
+            async for _ in wrapper:
+                pass
+
+        try:
+            asyncio.run(_run())
+        except litellm.APIError as error:
+            assert error is upstream_error
+        else:
+            raise AssertionError("expected APIError to propagate")
+
+    def test_midstream_fallback_error_propagates_to_router(self):
+        upstream_error = MidStreamFallbackError(
+            message="upstream failed",
+            model="m",
+            llm_provider="openai",
+            generated_content="",
+            is_pre_first_chunk=True,
+        )
+
+        async def _gen():
+            raise upstream_error
+            yield None
+
+        async def _run() -> None:
+            wrapper = AnthropicResponsesStreamWrapper(responses_stream=_gen(), model="m")
+            async for _ in wrapper:
+                pass
+
+        try:
+            asyncio.run(_run())
+        except MidStreamFallbackError as error:
+            assert error is upstream_error
+            assert error.is_pre_first_chunk
+        else:
+            raise AssertionError("expected MidStreamFallbackError to propagate")
