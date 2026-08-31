@@ -71,7 +71,8 @@ def get_workload_identity_bearer_token(config: OpenAIWorkloadIdentityConfig) -> 
 def _targets_openai_api(api_base: str | None) -> bool:
     if api_base is None:
         return True
-    return urlparse(api_base).hostname == _OPENAI_API_HOST
+    parsed: Final = urlparse(api_base)
+    return parsed.scheme == "https" and parsed.hostname == _OPENAI_API_HOST
 
 
 @lru_cache(maxsize=16)

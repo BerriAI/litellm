@@ -69,6 +69,9 @@ class TestResolveConfig:
     def test_openai_api_base_allows(self, wif_env: OpenAIWorkloadIdentityConfig) -> None:
         assert resolve_openai_workload_identity_config(api_key=None, api_base="https://api.openai.com/v1") == wif_env
 
+    def test_plaintext_http_api_base_disables(self, wif_env: OpenAIWorkloadIdentityConfig) -> None:
+        assert resolve_openai_workload_identity_config(api_key=None, api_base="http://api.openai.com/v1") is None
+
     def test_foreign_env_base_url_disables(
         self, wif_env: OpenAIWorkloadIdentityConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
