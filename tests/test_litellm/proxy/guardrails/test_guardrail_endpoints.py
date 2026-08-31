@@ -889,7 +889,10 @@ async def test_bedrock_guardrail_make_api_request_passes_api_key():
     mock_response.status_code = 200
     mock_response.json.return_value = {"action": "NONE", "outputs": []}
 
-    test_request_data = {"api_key": "test-api-key-789"}
+    test_request_data = {
+        "model": "bedrock/test-model",
+        "api_key": "test-api-key-789",
+    }
 
     with (
         patch.object(

@@ -10,7 +10,6 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
 from unittest.mock import MagicMock, AsyncMock, patch
 
-
 @pytest.mark.asyncio
 async def test_bedrock_guardrails_pii_masking():
     # Create proper mock objects

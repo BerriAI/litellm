@@ -396,6 +396,52 @@ async def test_request_uses_checks_path_and_body():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "expected_auth_prefix"),
+    [
+        ("nvidia_nim/test-model", "AWS4-HMAC-SHA256"),
+        ("bedrock/test-model", "Bearer bedrock-key"),
+        ("amazon.nova-lite-v1:0", "Bearer bedrock-key"),
+    ],
+)
+async def test_request_scopes_api_key_to_bedrock_provider(
+    model: str, expected_auth_prefix: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    g = BedrockGuardrail(checks=CONTENT_FILTER_CHECKS)
+    request_data = {
+        "model": model,
+        "api_key": "bedrock-key",
+    }
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+    mock_post = AsyncMock(
+        return_value=_mock_http_response(200, {"results": {}})
+    )
+
+    with (
+        patch.object(
+            g,
+            "_load_credentials",
+            return_value=(mock_credentials, "us-east-1"),
+        ),
+        patch.object(g.async_handler, "post", new=mock_post),
+    ):
+        result = await g.make_bedrock_api_request(
+            source="INPUT",
+            messages=[{"role": "user", "content": "hello"}],
+            request_data=request_data,
+        )
+
+    assert result == BedrockGuardrailResponse()
+    assert mock_post.await_args.kwargs["headers"]["Authorization"].startswith(
+        expected_auth_prefix
+    )
+
+
+@pytest.mark.asyncio
 async def test_empty_messages_passes_without_api_call():
     g = BedrockGuardrail(checks=CONTENT_FILTER_CHECKS)
     creds, prep, post_patch, post = _patched(g, _mock_http_response(200, {}))
