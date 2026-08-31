@@ -25,7 +25,7 @@ export const KeyTypeSelect = ({
   onChange,
 }: {
   id: string;
-  value: string;
+  value?: string;
   onChange: (value: string) => void;
 }) => (
   <Select

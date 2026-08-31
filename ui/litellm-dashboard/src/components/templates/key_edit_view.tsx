@@ -30,6 +30,7 @@ import {
   currentValuePlaceholder,
   keyTypeFromRoutes,
   modelSentinelOptions,
+  normalizeKeyEditRoutePayload,
   parseAllowedRoutes,
 } from "./keyEditFieldNormalizers";
 import { KeyTypeSelect, labelWithHint } from "./KeyEditViewControls";
@@ -213,30 +214,7 @@ export function KeyEditView({
     try {
       setIsKeySaving(true);
 
-      // Parse allowed_routes from comma-separated string to array
-      if (typeof values.allowed_routes === "string") {
-        const trimmedInput = values.allowed_routes.trim();
-        if (trimmedInput === "") {
-          values.allowed_routes = [];
-        } else {
-          values.allowed_routes = trimmedInput
-            .split(",")
-            .map((route: string) => route.trim())
-            .filter((route: string) => route.length > 0);
-        }
-      }
-      // If it's already an array (shouldn't happen, but handle it), keep as is
-
-      // Backend rejects non-empty allowed_routes from non-admins, so re-sending
-      // an unchanged value 403s a team admin. Set compare tolerates reorder.
-      const originalRoutesSet = new Set<string>(Array.isArray(keyData.allowed_routes) ? keyData.allowed_routes : []);
-      const submittedRoutesSet = new Set<string>(Array.isArray(values.allowed_routes) ? values.allowed_routes : []);
-      const allowedRoutesUnchanged =
-        originalRoutesSet.size === submittedRoutesSet.size &&
-        [...submittedRoutesSet].every((r) => originalRoutesSet.has(r));
-      if (allowedRoutesUnchanged) {
-        delete values.allowed_routes;
-      }
+      values = normalizeKeyEditRoutePayload(values, keyData.allowed_routes);
 
       if (neverExpire) {
         values.duration = null;

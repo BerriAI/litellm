@@ -14,8 +14,8 @@ import inspect
 
 from litellm.proxy._types import (
     GenerateKeyRequest,
-    NewUserRequest,
     LiteLLM_BudgetTable,
+    LiteLLMKeyType,
     LiteLLM_OrganizationTable,
     LiteLLM_ProjectTableCachedObj,
     LiteLLM_TeamTableCachedObj,
@@ -23,6 +23,7 @@ from litellm.proxy._types import (
     LiteLLM_VerificationToken,
     LitellmUserRoles,
     Member,
+    NewUserRequest,
     ProxyException,
     ResetSpendRequest,
     UpdateKeyRequest,
@@ -4177,6 +4178,7 @@ async def test_generate_key_foreign_org_with_mismatched_team_still_enforces_memb
     mock_generate_key = AsyncMock(
         return_value={
             "key": "sk-test-key",
+            "token_id": "tok-1",
             "expires": None,
             "user_id": "alice",
             "team_id": "team-1",
@@ -11597,6 +11599,107 @@ def _make_regenerate_existing_key():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_type",
+    [
+        LiteLLMKeyType.DEFAULT,
+        LiteLLMKeyType.LLM_API,
+        LiteLLMKeyType.READ_ONLY,
+    ],
+)
+async def test_execute_virtual_key_regeneration_rejects_preset_over_custom_routes(
+    key_type,
+):
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _execute_virtual_key_regeneration,
+    )
+
+    existing_key = _make_regenerate_existing_key()
+    existing_key.allowed_routes = ["/custom/admin-defined-route"]
+    mock_prisma_client = _make_regenerate_mock_prisma()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=existing_key,
+            hashed_api_key="abc123",
+            key="abc123",
+            data=RegenerateKeyRequest(key_type=key_type),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                user_id="user-1",
+            ),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "allowed_routes" in str(exc_info.value.detail)
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_regenerate_rejects_route_transition_before_recording_deletion():
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        regenerate_key_fn,
+    )
+
+    existing_key = _make_regenerate_existing_key()
+    existing_key.allowed_routes = ["/custom/admin-defined-route"]
+    mock_repo = MagicMock()
+    mock_repo.table.find_unique = AsyncMock(return_value=existing_key)
+    persist_deleted_mock = AsyncMock()
+    execute_mock = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: module-global proxy setting for test
+        patch("litellm.proxy.proxy_server.master_key", None),  # test-quality-ok: module-global proxy setting for test
+        patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),  # test-quality-ok: module-global prisma client for test
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),  # test-quality-ok: module-global proxy logger for test
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),  # test-quality-ok: module-global user key cache for test
+        patch("litellm.proxy.proxy_server.hash_token", lambda token: "hashed-old"),  # test-quality-ok: module-global token hasher for test
+        patch(  # test-quality-ok: repository dependency isolation for test
+            "litellm.proxy.management_endpoints.key_management_endpoints.VerificationTokenRepository",
+            return_value=mock_repo,
+        ),
+        patch(  # test-quality-ok: team permission checks isolation for test
+            "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: token modification authorization isolation for test
+            "litellm.proxy.management_endpoints.key_management_endpoints.can_modify_verification_token",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch(  # test-quality-ok: verify deletion persistence is not called before validation
+            "litellm.proxy.management_endpoints.key_management_endpoints._persist_deleted_verification_tokens",
+            persist_deleted_mock,
+        ),
+        patch(  # test-quality-ok: verify regeneration execution is not called before validation
+            "litellm.proxy.management_endpoints.key_management_endpoints._execute_virtual_key_regeneration",
+            execute_mock,
+        ),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await regenerate_key_fn(
+                key="sk-old",
+                data=RegenerateKeyRequest(key_type=LiteLLMKeyType.LLM_API),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                    user_id="user-1",
+                ),
+            )
+
+    assert exc_info.value.code == "403"
+    assert "allowed_routes" in str(exc_info.value.message)
+    persist_deleted_mock.assert_not_awaited()
+    execute_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_execute_virtual_key_regeneration_rejects_over_limit_duration(monkeypatch):
     """Regenerate must reject durations exceeding upperbound_key_generate_params.duration."""
     from litellm.proxy._types import RegenerateKeyRequest
@@ -12083,6 +12186,294 @@ class TestAllowedRoutesCallerPermission:
                 )
         assert str(exc_info.value.code) == "403"
         assert "allowed_routes" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("key_type", "expected_routes"),
+        [
+            (LiteLLMKeyType.DEFAULT, []),
+            (LiteLLMKeyType.LLM_API, ["llm_api_routes"]),
+            (LiteLLMKeyType.READ_ONLY, ["info_routes"]),
+        ],
+    )
+    async def test_non_admin_update_key_accepts_empty_routes_with_safe_key_type(
+        self,
+        key_type: LiteLLMKeyType,
+        expected_routes: list[str],
+    ):
+        from types import SimpleNamespace
+
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_update_key_data,
+            prepare_key_update_data,
+        )
+
+        data = UpdateKeyRequest(
+            key="sk-test",
+            allowed_routes=[],
+            key_type=key_type,
+        )
+        existing_key = SimpleNamespace(
+            created_by="internal-user-123",
+            key_alias=None,
+            max_budget=None,
+            metadata={},
+            organization_id=None,
+            project_id=None,
+            team_id=None,
+            token="hashed-key",
+            user_id="internal-user-123",
+        )
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="internal-user-123",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        await _validate_update_key_data(
+            data=data,
+            existing_key_row=existing_key,
+            user_api_key_dict=user_api_key_dict,
+            llm_router=None,
+            premium_user=True,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+        )
+
+        update_data = await prepare_key_update_data(
+            data=data,
+            existing_key_row=existing_key,
+        )
+        assert update_data["key_type"] == key_type.value
+        assert update_data["allowed_routes"] == expected_routes
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("key_type", "existing_routes"),
+        [
+            (LiteLLMKeyType.DEFAULT, ["llm_api_routes"]),
+            (LiteLLMKeyType.LLM_API, ["info_routes"]),
+            (LiteLLMKeyType.READ_ONLY, ["llm_api_routes"]),
+        ],
+    )
+    async def test_non_admin_update_key_accepts_key_type_only_over_safe_preset(
+        self,
+        key_type: LiteLLMKeyType,
+        existing_routes: list[str],
+    ):
+        from types import SimpleNamespace
+
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_update_key_data,
+        )
+
+        res = await _validate_update_key_data(
+            data=UpdateKeyRequest(key="sk-test", key_type=key_type),
+            existing_key_row=SimpleNamespace(
+                allowed_routes=existing_routes,
+                max_budget=None,
+                team_id=None,
+                user_id="internal-user-123",
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="internal-user-123",
+                user_role=LitellmUserRoles.INTERNAL_USER,
+            ),
+            llm_router=None,
+            premium_user=True,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+        )
+        assert res is None
+
+    @pytest.mark.asyncio
+    async def test_non_admin_update_key_rejects_empty_routes_with_management_key_type(
+        self,
+    ):
+        from types import SimpleNamespace
+
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_update_key_data,
+        )
+
+        data = UpdateKeyRequest(
+            key="sk-test",
+            allowed_routes=[],
+            key_type=LiteLLMKeyType.MANAGEMENT,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _validate_update_key_data(
+                data=data,
+                existing_key_row=SimpleNamespace(
+                    max_budget=None,
+                    user_id="internal-user-123",
+                ),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id="internal-user-123",
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                ),
+                llm_router=None,
+                premium_user=True,
+                prisma_client=None,
+                user_api_key_cache=MagicMock(),
+            )
+        assert exc_info.value.status_code == 403
+        assert "allowed_routes" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "key_type",
+        [
+            LiteLLMKeyType.DEFAULT,
+            LiteLLMKeyType.LLM_API,
+            LiteLLMKeyType.READ_ONLY,
+        ],
+    )
+    async def test_non_admin_update_key_rejects_preset_over_custom_routes(
+        self, key_type
+    ):
+        from types import SimpleNamespace
+
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_update_key_data,
+        )
+
+        data = UpdateKeyRequest(
+            key="sk-test",
+            allowed_routes=[],
+            key_type=key_type,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _validate_update_key_data(
+                data=data,
+                existing_key_row=SimpleNamespace(
+                    allowed_routes=["/custom/admin-defined-route"],
+                    max_budget=None,
+                    user_id="internal-user-123",
+                ),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id="internal-user-123",
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                ),
+                llm_router=None,
+                premium_user=True,
+                prisma_client=None,
+                user_api_key_cache=MagicMock(),
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "allowed_routes" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_regenerate_key_omitting_key_type_preserves_classification(self):
+        from types import SimpleNamespace
+
+        from litellm.proxy._types import RegenerateKeyRequest
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            prepare_key_update_data,
+        )
+
+        data = RegenerateKeyRequest(key="sk-test")
+        assert "key_type" not in data.model_fields_set
+
+        update_data = await prepare_key_update_data(
+            data=data,
+            existing_key_row=SimpleNamespace(
+                metadata={},
+                team_id=None,
+            ),
+        )
+
+        assert "key_type" not in update_data
+        assert "allowed_routes" not in update_data
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "data",
+        [
+            pytest.param(
+                UpdateKeyRequest(
+                    key="sk-test",
+                    key_type=LiteLLMKeyType.DEFAULT,
+                    allowed_routes=None,
+                ),
+                id="explicit-null",
+            ),
+            pytest.param(
+                UpdateKeyRequest(
+                    key="sk-test",
+                    key_type=LiteLLMKeyType.DEFAULT,
+                ),
+                id="omitted",
+            ),
+        ],
+    )
+    async def test_update_key_default_type_clears_existing_preset_routes(
+        self,
+        data: UpdateKeyRequest,
+    ):
+        from types import SimpleNamespace
+
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            prepare_key_update_data,
+        )
+
+        update_data = await prepare_key_update_data(
+            data=data,
+            existing_key_row=SimpleNamespace(
+                metadata={},
+                team_id=None,
+            ),
+        )
+
+        assert update_data["key_type"] == "default"
+        assert update_data["allowed_routes"] == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "key_type",
+        [
+            LiteLLMKeyType.DEFAULT,
+            LiteLLMKeyType.LLM_API,
+            LiteLLMKeyType.READ_ONLY,
+        ],
+    )
+    async def test_non_admin_update_key_rejects_preset_over_custom_routes_without_allowed_routes(
+        self,
+        key_type,
+    ):
+        from types import SimpleNamespace
+
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _validate_update_key_data,
+        )
+
+        data = UpdateKeyRequest(
+            key="sk-test",
+            key_type=key_type,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _validate_update_key_data(
+                data=data,
+                existing_key_row=SimpleNamespace(
+                    allowed_routes=["/custom/admin-defined-route"],
+                    max_budget=None,
+                    user_id="internal-user-123",
+                ),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id="internal-user-123",
+                    user_role=LitellmUserRoles.INTERNAL_USER,
+                ),
+                llm_router=None,
+                premium_user=True,
+                prisma_client=None,
+                user_api_key_cache=MagicMock(),
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "allowed_routes" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
     async def test_non_admin_regenerate_key_explicit_empty_allowed_routes_rejected(self):
@@ -13635,6 +14026,18 @@ async def test_ghsa_q775_ui_session_token_team_key_exempt_from_budget_ceiling():
         patch("litellm.proxy.proxy_server.llm_router", None),
         patch("litellm.proxy.proxy_server.premium_user", False),
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
+        patch(  # test-quality-ok: isolate key generation helper for budget validation check
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            AsyncMock(
+                return_value={
+                    "key": "sk-test",
+                    "token_id": "tok-1",
+                    "expires": None,
+                    "user_id": "user-1",
+                    "team_id": "team-abc",
+                }
+            ),
+        ),
     ):
         try:
             await _common_key_generation_helper(

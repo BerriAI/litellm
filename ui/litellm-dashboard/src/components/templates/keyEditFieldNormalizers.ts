@@ -10,13 +10,20 @@ export const canonicalBudgetDuration = (duration: string | null | undefined): st
   duration ? WORD_FORM_BUDGET_DURATIONS[duration] ?? duration : null;
 
 // Determine the key_type display value from allowed_routes
-export const keyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): string => {
-  if (!allowedRoutes || allowedRoutes.length === 0) return "default";
-  if (allowedRoutes.includes("llm_api_routes")) return "llm_api";
-  if (allowedRoutes.includes("management_routes")) return "management";
-  if (allowedRoutes.includes("info_routes")) return "read_only";
-  return "default";
+const KEY_TYPE_BY_PRESET_ROUTE: Record<string, string> = {
+  llm_api_routes: "llm_api",
+  management_routes: "management",
+  info_routes: "read_only",
 };
+
+export const exactKeyTypePresetFromRoutes = (allowedRoutes: string[] | null | undefined): string | undefined => {
+  if (!allowedRoutes || allowedRoutes.length === 0) return "default";
+  if (allowedRoutes.length !== 1) return undefined;
+  return KEY_TYPE_BY_PRESET_ROUTE[allowedRoutes[0]];
+};
+
+export const keyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): string | undefined =>
+  exactKeyTypePresetFromRoutes(allowedRoutes);
 
 export const parseAllowedRoutes = (value: unknown): string[] =>
   typeof value === "string" && value.trim() !== ""
@@ -42,4 +49,46 @@ export const currentValuePlaceholder = (
 ): string => {
   if (!premiumUser) return premiumHint;
   return Array.isArray(current) && current.length > 0 ? `Current: ${current.join(", ")}` : emptyHint;
+};
+
+export type KeyEditRoutePayload = {
+  allowed_routes?: string[] | string | null;
+  key_type?: string;
+  [key: string]: unknown;
+};
+
+export const normalizeKeyEditRoutePayload = (
+  values: KeyEditRoutePayload,
+  originalAllowedRoutes: string[] | null | undefined,
+): KeyEditRoutePayload => {
+  const normalized = { ...values };
+
+  if (typeof normalized.allowed_routes === "string") {
+    normalized.allowed_routes = normalized.allowed_routes
+      .split(",")
+      .map((route) => route.trim())
+      .filter(Boolean);
+  }
+
+  const originalRoutes = new Set(originalAllowedRoutes ?? []);
+  const submittedRoutes = new Set(Array.isArray(normalized.allowed_routes) ? normalized.allowed_routes : []);
+  const routesUnchanged =
+    originalRoutes.size === submittedRoutes.size && [...submittedRoutes].every((route) => originalRoutes.has(route));
+
+  if (routesUnchanged) {
+    delete normalized.allowed_routes;
+    return normalized;
+  }
+
+  const preset = exactKeyTypePresetFromRoutes(
+    Array.isArray(normalized.allowed_routes) ? normalized.allowed_routes : undefined,
+  );
+  if (preset) {
+    normalized.key_type = preset;
+    delete normalized.allowed_routes;
+  } else {
+    delete normalized.key_type;
+  }
+
+  return normalized;
 };

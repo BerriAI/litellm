@@ -623,7 +623,19 @@ def common_key_access_checks(
 router: Final = APIRouter()
 
 
-def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
+def _key_type_allowed_routes(
+    key_type: LiteLLMKeyType | None,
+) -> tuple[str, ...] | None:
+    if key_type == LiteLLMKeyType.LLM_API:
+        return ("llm_api_routes",)
+    if key_type == LiteLLMKeyType.MANAGEMENT:
+        return ("management_routes",)
+    if key_type == LiteLLMKeyType.READ_ONLY:
+        return ("info_routes",)
+    return None
+
+
+def handle_key_type(data: GenerateKeyRequest | UpdateKeyRequest, data_json: dict) -> dict:
     """
     Handle the key type.
     """
@@ -632,12 +644,9 @@ def handle_key_type(data: GenerateKeyRequest, data_json: dict) -> dict:
         data_json.pop("key_type", None)
         return data_json
     data_json["key_type"] = key_type.value
-    if key_type == LiteLLMKeyType.LLM_API:
-        data_json["allowed_routes"] = ["llm_api_routes"]
-    elif key_type == LiteLLMKeyType.MANAGEMENT:
-        data_json["allowed_routes"] = ["management_routes"]
-    elif key_type == LiteLLMKeyType.READ_ONLY:
-        data_json["allowed_routes"] = ["info_routes"]
+    allowed_routes: Final = _key_type_allowed_routes(key_type)
+    if allowed_routes is not None:
+        data_json["allowed_routes"] = list(allowed_routes)
     return data_json
 
 
@@ -691,7 +700,7 @@ def _validate_caller_can_change_key_ownership(
 
 
 def _check_allowed_routes_caller_permission(
-    allowed_routes: list | None,
+    allowed_routes: Sequence[str] | None,
     user_api_key_dict: UserAPIKeyAuth,
     *,
     allowed_routes_was_provided: bool = False,
@@ -731,6 +740,37 @@ def _check_allowed_routes_caller_permission(
             )
         },
     )
+
+
+def _check_key_type_transition_against_existing_routes(
+    data: BaseModel | None,
+    existing_key_row: LiteLLM_VerificationToken,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Keep non-admin key-type presets from replacing custom route restrictions."""
+    if (
+        data is None
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        or "key_type" not in data.model_fields_set
+        or data.key_type
+        not in (
+            LiteLLMKeyType.DEFAULT,
+            LiteLLMKeyType.LLM_API,
+            LiteLLMKeyType.READ_ONLY,
+        )
+    ):
+        return
+    existing_allowed_routes: Final = tuple(getattr(existing_key_row, "allowed_routes", None) or ())
+    if existing_allowed_routes not in (
+        (),
+        ("llm_api_routes",),
+        ("info_routes",),
+    ):
+        _check_allowed_routes_caller_permission(
+            allowed_routes=existing_allowed_routes,
+            user_api_key_dict=user_api_key_dict,
+            allowed_routes_was_provided=True,
+        )
 
 
 def _check_permissions_caller_permission(
@@ -2079,6 +2119,10 @@ async def prepare_key_update_data(
     existing_key_row: LiteLLM_VerificationToken,
 ):
     data_json: Final[dict] = data.model_dump(exclude_unset=True)
+    if "key_type" in data.model_fields_set:
+        handle_key_type(data, data_json)
+        if data.key_type == LiteLLMKeyType.DEFAULT and data_json.get("allowed_routes") is None:
+            data_json["allowed_routes"] = []
     data_json.pop("key", None)
     data_json.pop("new_key", None)
     data_json.pop("grace_period", None)  # Request-only param, not a DB column
@@ -2532,11 +2576,52 @@ async def _validate_update_key_data(
     validate_budget_duration(data.budget_duration)
 
     _is_proxy_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    existing_allowed_routes: Final = tuple(getattr(existing_key_row, "allowed_routes", None) or ())
+    default_key_type_clears_routes: Final = (
+        "key_type" in data.model_fields_set
+        and data.key_type == LiteLLMKeyType.DEFAULT
+        and "allowed_routes" not in data.model_fields_set
+    )
+    derived_allowed_routes: Final = _key_type_allowed_routes(data.key_type)
+    target_allowed_routes: Final = (
+        tuple(data.allowed_routes or ())
+        if "allowed_routes" in data.model_fields_set
+        else (() if default_key_type_clears_routes else derived_allowed_routes)
+    )
+    safe_key_type_transition: Final = (
+        target_allowed_routes
+        in (
+            (),
+            ("llm_api_routes",),
+            ("info_routes",),
+        )
+        and "key_type" in data.model_fields_set
+        and data.key_type
+        in (
+            LiteLLMKeyType.DEFAULT,
+            LiteLLMKeyType.LLM_API,
+            LiteLLMKeyType.READ_ONLY,
+        )
+        and existing_allowed_routes
+        in (
+            (),
+            ("llm_api_routes",),
+            ("info_routes",),
+        )
+    )
 
     _check_allowed_routes_caller_permission(
         allowed_routes=data.allowed_routes,
         user_api_key_dict=user_api_key_dict,
-        allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
+        allowed_routes_was_provided=(
+            ("allowed_routes" in data.model_fields_set or default_key_type_clears_routes)
+            and not safe_key_type_transition
+        ),
+    )
+    _check_allowed_routes_caller_permission(
+        allowed_routes=derived_allowed_routes,
+        user_api_key_dict=user_api_key_dict,
+        allow_safe_presets=safe_key_type_transition,
     )
     _check_passthrough_routes_caller_permission(
         data=data,
@@ -2788,6 +2873,7 @@ async def update_key_fn(
     Parameters:
     - key: Optional[str] - The key to update. Either key or key_alias must be provided.
     - key_alias: Optional[str] - User-friendly key alias. If key is omitted, also identifies the key to update (must match exactly one key, same as /key/delete's key_aliases)
+    - key_type: Optional[LiteLLMKeyType] - Access preset to apply to the key.
     - user_id: Optional[str] - User ID associated with key
     - team_id: Optional[str] - Team ID associated with key
     - agent_id: Optional[str] - The agent id associated with the key.
@@ -4790,7 +4876,11 @@ async def _execute_virtual_key_regeneration(
         existing_key_row=key_in_db,
         user_api_key_dict=user_api_key_dict,
     )
-
+    _check_key_type_transition_against_existing_routes(
+        data=data,
+        existing_key_row=key_in_db,
+        user_api_key_dict=user_api_key_dict,
+    )
     # Apply the same membership rule used on /key/update: when the caller
     # asks to point the regenerated key at a different organization_id,
     # require they are a member of (or proxy admin over) the target org.
@@ -5089,6 +5179,15 @@ async def regenerate_key_fn(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"error": "You are not authorized to regenerate this key"},
             )
+
+        # Validate the requested route transition before recording the old
+        # key as deleted. A rejected regeneration must not leave historical
+        # deletion state for a key that remains active.
+        _check_key_type_transition_against_existing_routes(
+            data=data,
+            existing_key_row=_key_in_db,
+            user_api_key_dict=user_api_key_dict,
+        )
 
         if data is not None and (data.access_group_ids or data.object_permission is not None):
             regenerate_team_table: LiteLLM_TeamTableCachedObj | None = None
