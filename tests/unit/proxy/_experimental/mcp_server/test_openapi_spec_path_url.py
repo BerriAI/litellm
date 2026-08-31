@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 import httpx
 import pytest
@@ -33,7 +33,7 @@ class _FakeAsyncHTTPHandler:
 
 def test_load_openapi_spec_supports_http_url(monkeypatch: pytest.MonkeyPatch) -> None:
     url = "http://example.local/openapi.json"
-    expected: Dict[str, Any] = {
+    expected: dict[str, Any] = {
         "openapi": "3.0.0",
         "info": {"title": "Test API", "version": "1.0.0"},
         "paths": {},
@@ -44,7 +44,7 @@ def test_load_openapi_spec_supports_http_url(monkeypatch: pytest.MonkeyPatch) ->
     resp = httpx.Response(status_code=200, json=expected, request=req)
 
     calls = {"get_async_httpx_client": 0}
-    handler_holder: Dict[str, Any] = {}
+    handler_holder: dict[str, Any] = {}
 
     def fake_get_async_httpx_client(*args, **kwargs):
         calls["get_async_httpx_client"] += 1
@@ -56,9 +56,7 @@ def test_load_openapi_spec_supports_http_url(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(gen, "get_async_httpx_client", fake_get_async_httpx_client)
 
     # Bypass SSRF validation in test (example.local doesn't resolve)
-    monkeypatch.setattr(
-        gen, "async_safe_get", lambda client, url, **kw: client.get(url)
-    )
+    monkeypatch.setattr(gen, "async_safe_get", lambda client, url, **kw: client.get(url))
 
     # Fail loudly if someone reintroduces direct httpx.get()
     def boom(*args, **kwargs):
@@ -73,10 +71,35 @@ def test_load_openapi_spec_supports_http_url(monkeypatch: pytest.MonkeyPatch) ->
     assert handler_holder["handler"].calls == 1
 
 
-def test_load_openapi_spec_supports_local_file_path(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    expected: Dict[str, Any] = {
+def test_load_openapi_spec_supports_yaml_http_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    url = "http://example.local/openapi.yaml"
+    yaml_spec = """
+openapi: 3.0.0
+info:
+  title: YAML API
+  version: 1.0.0
+paths: {}
+"""
+    expected: dict[str, Any] = {
+        "openapi": "3.0.0",
+        "info": {"title": "YAML API", "version": "1.0.0"},
+        "paths": {},
+    }
+
+    req = httpx.Request("GET", url)
+    resp = httpx.Response(status_code=200, text=yaml_spec, request=req)
+
+    def fake_get_async_httpx_client(*args, **kwargs):
+        return _FakeAsyncHTTPHandler(resp, expected_url=url)
+
+    monkeypatch.setattr(gen, "get_async_httpx_client", fake_get_async_httpx_client)
+    monkeypatch.setattr(gen, "async_safe_get", lambda client, url, **kw: client.get(url))
+
+    assert gen.load_openapi_spec(url) == expected
+
+
+def test_load_openapi_spec_supports_local_file_path(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    expected: dict[str, Any] = {
         "openapi": "3.0.0",
         "info": {"title": "Local API", "version": "1.0.0"},
         "paths": {},
@@ -90,9 +113,7 @@ def test_load_openapi_spec_supports_local_file_path(
 
     # For local files, shared client must NOT be used.
     def boom_client(*args, **kwargs):
-        raise AssertionError(
-            "get_async_httpx_client() must not be called for local file paths"
-        )
+        raise AssertionError("get_async_httpx_client() must not be called for local file paths")
 
     monkeypatch.setattr(gen, "get_async_httpx_client", boom_client)
 
