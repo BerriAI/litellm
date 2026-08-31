@@ -60,6 +60,10 @@ describe("CacheSettings advanced settings round-trip", () => {
       namespace: "prod-ns",
       ttl: 300,
       max_connections: 50,
+      // semantic caching is off, so its fields are cleared explicitly
+      similarity_threshold: null,
+      redis_semantic_cache_embedding_model: null,
+      semantic_cache_scope: null,
     });
   });
 
