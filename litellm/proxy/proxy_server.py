@@ -2849,9 +2849,9 @@ async def increment_spend_counters(
 async def _reconcile_budget_reservation_for_counter_update(
     budget_reservation: dict | None,
     response_cost: float | None,
-) -> set[str]:
+) -> Mapping[str, None]:
     if budget_reservation is None:
-        return set()
+        return MappingProxyType({})
 
     from litellm.proxy.spend_tracking.budget_reservation import (
         invalidate_budget_reservation_counters,
@@ -2875,7 +2875,7 @@ async def _reconcile_budget_reservation_for_counter_update(
             verbose_proxy_logger.exception(
                 "Failed to invalidate reserved counters after reservation reconciliation failed"
             )
-        return set()
+        return MappingProxyType({})
     return reconciled_counter_keys
 
 
@@ -2883,7 +2883,7 @@ async def _increment_end_user_and_tag_spend_counters(
     end_user_id: str | None,
     tags: list[str] | None,
     response_cost: float,
-    reserved_counter_keys: set[str],
+    reserved_counter_keys: Collection[str],
 ) -> None:
     if end_user_id is not None:
         await _init_and_increment_unreserved_spend_counter(
@@ -2912,7 +2912,7 @@ async def _increment_end_user_and_tag_spend_counters(
 async def _increment_model_access_group_spend_counters(
     model_access_groups: Sequence[object],
     response_cost: float,
-    reserved_counter_keys: set[str],
+    reserved_counter_keys: Collection[str],
 ) -> None:
     """Charge the model access groups that authorized this request.
 
@@ -2939,7 +2939,7 @@ async def _increment_model_access_group_spend_counters(
 async def _increment_org_spend_counter(
     org_id: str | None,
     response_cost: float,
-    reserved_counter_keys: set[str],
+    reserved_counter_keys: Collection[str],
 ) -> None:
     if org_id is None:
         return
@@ -2956,7 +2956,7 @@ async def _init_and_increment_unreserved_spend_counter(
     counter_key: str,
     source_cache_key: str | list[str],
     increment: float,
-    reserved_counter_keys: set[str],
+    reserved_counter_keys: Collection[str],
 ) -> None:
     if counter_key in reserved_counter_keys:
         return

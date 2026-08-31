@@ -11325,7 +11325,11 @@ async def test_window_spend_row_is_enqueued_even_when_the_counter_was_reserved()
     }
 
     original_reconcile = br.reconcile_budget_reservation
-    br.reconcile_budget_reservation = AsyncMock(return_value=None)
+    br.reconcile_budget_reservation = AsyncMock(
+        return_value=types.MappingProxyType(
+            {entry["counter_key"]: None for entry in reservation["entries"]}
+        )
+    )
     try:
         with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
             await increment_spend_counters(

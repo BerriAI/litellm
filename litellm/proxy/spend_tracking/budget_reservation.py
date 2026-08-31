@@ -280,11 +280,13 @@ async def reconcile_budget_reservation(
     budget_reservation: dict | None,
     actual_cost: float | None,
     finalize: bool = True,
-) -> set[str]:
+) -> Mapping[str, None]:
     if not budget_reservation:
-        return set()
+        return MappingProxyType({})
     if budget_reservation.get("finalized") is True:
-        return get_reserved_counter_keys(budget_reservation=budget_reservation)
+        return MappingProxyType(
+            {counter_key: None for counter_key in get_reserved_counter_keys(budget_reservation=budget_reservation)}
+        )
 
     reserved_cost: Final = float(budget_reservation.get("reserved_cost") or 0.0)
     actual: Final = float(actual_cost or 0.0)
@@ -811,20 +813,22 @@ async def _set_reserved_entries_actual_cost(
     actual_cost: float,
     default_reserved_cost: float,
     reseed_on_inconsistent: bool = True,
-) -> set[str]:
-    return {
-        counter_key
-        for entry in entries
-        if (
-            counter_key := await _set_reserved_entry_actual_cost(
-                entry=entry,
-                actual_cost=actual_cost,
-                default_reserved_cost=default_reserved_cost,
-                reseed_on_inconsistent=reseed_on_inconsistent,
+) -> Mapping[str, None]:
+    return MappingProxyType(
+        {
+            counter_key: None
+            for entry in entries
+            if (
+                counter_key := await _set_reserved_entry_actual_cost(
+                    entry=entry,
+                    actual_cost=actual_cost,
+                    default_reserved_cost=default_reserved_cost,
+                    reseed_on_inconsistent=reseed_on_inconsistent,
+                )
             )
-        )
-        is not None
-    }
+            is not None
+        }
+    )
 
 
 async def _set_reserved_entry_actual_cost(
