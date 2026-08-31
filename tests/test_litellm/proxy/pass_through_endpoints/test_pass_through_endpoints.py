@@ -4490,45 +4490,53 @@ async def test_pass_through_request_streaming_body_without_model_logs_target_pat
     """Streaming requests share the same logging object, so a body without a
     ``model`` field must surface the same URL-derived identifier as the
     non-streaming path instead of "unknown"."""
-    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
-        with patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
-        ) as mock_get_client:
-            with patch(
-                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.PassThroughStreamingHandler.chunk_processor"
-            ) as mock_chunk_processor:
-                mock_proxy_logging.pre_call_hook = AsyncMock(return_value={"prompt": "test", "stream": True})
-                mock_proxy_logging.post_call_failure_hook = AsyncMock()
-                mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+    from litellm.proxy._types import UserAPIKeyAuth
 
-                upstream_response = MagicMock()
-                upstream_response.status_code = 200
-                upstream_response.headers = {}
-                upstream_response.raise_for_status = MagicMock()
-
-                async_client = MagicMock()
-                async_client.build_request = MagicMock(return_value=MagicMock())
-                async_client.send = AsyncMock(return_value=upstream_response)
-                mock_get_client.return_value = MagicMock(client=async_client)
-
-                async def _empty_chunks(*args, **kwargs):
-                    return
-                    yield  # pragma: no cover
-
-                mock_chunk_processor.return_value = _empty_chunks()
-
-                await pass_through_request(
-                    request=_passthrough_model_client_request(b'{"prompt": "test", "stream": true}'),
-                    target="https://fal.run/fal-ai/flux/schnell",
-                    custom_headers={},
-                    user_api_key_dict=MagicMock(),
-                    stream=True,
+    upstream_stream = _RecordingUpstreamByteStream((MESSAGE_START_SSE_FRAME,))
+    fake_client, cleanup = _inject_fake_passthrough_client(
+        _FakeUpstreamTransport(
+            status_code=200,
+            headers={"content-type": "text/event-stream"},
+            stream=upstream_stream,
+        ),
+        timeout=317.0,
+    )
+    try:
+        with ExitStack() as stack:
+            mock_proxy_logging = stack.enter_context(
+                patch("litellm.proxy.proxy_server.proxy_logging_obj")  # test-quality-ok: read at call time
+            )
+            mock_proxy_logging.pre_call_hook = AsyncMock(return_value={"prompt": "test", "stream": True})
+            mock_proxy_logging.post_call_failure_hook = AsyncMock()
+            mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+            mock_chunk_processor = stack.enter_context(
+                patch(  # test-quality-ok: stream-boundary capture point for the asserted logging object; no seam exists
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.PassThroughStreamingHandler.chunk_processor"
                 )
+            )
 
-                mock_chunk_processor.assert_called_once()
-                logging_obj = mock_chunk_processor.call_args.kwargs["litellm_logging_obj"]
-                assert logging_obj.model == "fal-ai/flux/schnell"
-                assert logging_obj.model_call_details["model"] == "fal-ai/flux/schnell"
+            async def _empty_chunks(*args, **kwargs):
+                return
+                yield  # pragma: no cover
+
+            mock_chunk_processor.return_value = _empty_chunks()
+
+            await pass_through_request(
+                request=_passthrough_model_client_request(b'{"prompt": "test", "stream": true}'),
+                target="https://fal.run/fal-ai/flux/schnell",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-relay-test"),
+                stream=True,
+                timeout=317.0,
+            )
+
+            mock_chunk_processor.assert_called_once()
+            logging_obj = mock_chunk_processor.call_args.kwargs["litellm_logging_obj"]
+            assert logging_obj.model == "fal-ai/flux/schnell"
+            assert logging_obj.model_call_details["model"] == "fal-ai/flux/schnell"
+    finally:
+        cleanup()
+        await fake_client.aclose()
 
 
 _PARTIAL_RELAY_WARNING_MARKER = "ended before upstream body was fully relayed"
