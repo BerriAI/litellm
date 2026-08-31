@@ -5258,6 +5258,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/gigachat/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Gigachat Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/gigachat)
+         */
+        get: operations["gigachat_proxy_route_gigachat__endpoint__get"];
+        /**
+         * Gigachat Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/gigachat)
+         */
+        put: operations["gigachat_proxy_route_gigachat__endpoint__put"];
+        /**
+         * Gigachat Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/gigachat)
+         */
+        post: operations["gigachat_proxy_route_gigachat__endpoint__post"];
+        /**
+         * Gigachat Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/gigachat)
+         */
+        delete: operations["gigachat_proxy_route_gigachat__endpoint__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Gigachat Proxy Route
+         * @description [Docs](https://docs.litellm.ai/docs/pass_through/gigachat)
+         */
+        patch: operations["gigachat_proxy_route_gigachat__endpoint__patch"];
+        trace?: never;
+    };
     "/global/activity": {
         parameters: {
             query?: never;
@@ -34283,6 +34319,13 @@ export interface components {
             /** @description Quality vs cost weights for adaptive selection (used when adaptive=True) */
             adaptive_weights?: components["schemas"]["AdaptiveRouterWeights"];
             /**
+             * Classification Mode
+             * @description When to run the complexity classifier. 'every_request' (the default) classifies every inference request, including the tool-result continuation turns of an agentic loop. 'user_turn' classifies only requests whose newest turn is a new human ask and replays the session's held routing decision on continuation turns, which cuts classifier spend and eliminates mid-loop model switches. Continuations with no held decision to replay (no resolvable session_id, expired pin, fresh restart) still classify. Unlike session_affinity, a new human ask always re-classifies, so a session can still move tiers between asks. Suppressed when plugins are configured, for the same reason session_affinity is: a replayed decision would bypass the plugin pipeline.
+             * @default every_request
+             * @enum {string}
+             */
+            classification_mode: "every_request" | "user_turn";
+            /**
              * Classification Prompt
              * @description Replaces the opening instructions of the LLM classifier rubric (the judging-criteria prose) for a custom tier set. The per-tier bullets and the trust-boundary paragraph telling the classifier to ignore tier requests embedded in quoted caller text are always appended after it and cannot be overridden. Requires tier_definitions; a built-in-tier router customizes its prompt via classifier_llm_config.system_prompt or classification_rubric instead.
              */
@@ -35554,7 +35597,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "session_affinity_pin" | "session_affinity_escalation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
@@ -46546,6 +46589,161 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    gigachat_proxy_route_gigachat__endpoint__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    gigachat_proxy_route_gigachat__endpoint__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    gigachat_proxy_route_gigachat__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    gigachat_proxy_route_gigachat__endpoint__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    gigachat_proxy_route_gigachat__endpoint__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

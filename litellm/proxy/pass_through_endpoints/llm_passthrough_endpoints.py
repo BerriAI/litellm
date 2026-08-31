@@ -6,6 +6,8 @@ Provider-specific Pass-Through Endpoints
 Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 """
 
+from __future__ import annotations
+
 import hmac
 import json
 import os
@@ -28,6 +30,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.handle_jwt import JWTHandler
@@ -51,6 +54,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     create_websocket_passthrough_route,
     websocket_passthrough_request,
 )
+from litellm.proxy.utils import ProxyLogging as ProxyLoggingType
 from litellm.proxy.utils import is_known_model
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_proxy_admin_for_vector_store_index_management,
@@ -71,13 +75,17 @@ from litellm.utils import ProviderConfigManager
 from .passthrough_endpoint_router import PassthroughEndpointRouter
 
 if TYPE_CHECKING:
+    from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
     from litellm.router import Router
+
+    ProxyConfig = _ProxyConfig  # rebind-ok: conditional type alias
+else:
+    ProxyConfig = Any  # rebind-ok: runtime fallback
 
 vertex_llm_base: Final = VertexBase()
 router: Final = APIRouter()
 openai_passthrough_router: Final = APIRouter()
 default_vertex_config: Final = None
-
 passthrough_endpoint_router: Final = PassthroughEndpointRouter()
 
 
@@ -510,8 +518,14 @@ async def milvus_proxy_route(
     request_body: Final = await get_request_body(request)
 
     # check collectionName
-    collection_name: Final = cast(str | None, request_body.get("collectionName"))
-    extra_headers = {}
+    _raw_collection_name: Final = request_body.get("collectionName")
+    if _raw_collection_name is not None and not isinstance(_raw_collection_name, str):
+        raise HTTPException(
+            status_code=400,
+            detail=f"collectionName must be a string. Got {type(_raw_collection_name).__name__}",
+        )
+    collection_name: str | None = _raw_collection_name  # rebind-ok: locally scoped conversion
+    extra_headers = {}  # mutable-ok: dict for extra headers; rebind-ok: reassigned later from credentials
     base_target_url: str | None = None
     if not collection_name:
         raise HTTPException(
@@ -1288,7 +1302,7 @@ def _resolve_vertex_model_from_router(
         vertex_location: Current vertex location (may be from URL)
 
     Returns:
-        Tuple of (encoded_endpoint, endpoint, vertex_project, vertex_location)
+        tuple of (encoded_endpoint, endpoint, vertex_project, vertex_location)
         with resolved values from router config
     """
     if not llm_router:
@@ -1717,7 +1731,7 @@ def get_vertex_ai_allowed_incoming_headers(request: Request) -> dict:
 
 
 def get_vertex_pass_through_handler(
-    call_type: Literal["discovery", "aiplatform"],
+    call_type: Literal["discovery", "aiplatform"],  # noqa: UP037
 ) -> BaseVertexAIPassThroughHandler:
     if call_type == "discovery":
         return VertexAIDiscoveryPassThroughHandler()
@@ -1741,7 +1755,7 @@ def _override_vertex_params_from_router_credentials(
         vertex_location: Current vertex location (from URL)
 
     Returns:
-        Tuple of (vertex_project, vertex_location) with overridden values if applicable
+        tuple of (vertex_project, vertex_location) with overridden values if applicable
     """
     if router_credentials is None:
         return vertex_project, vertex_location
@@ -1906,12 +1920,12 @@ async def _prepare_vertex_auth_headers(
             authenticated them is stripped on the credential-less branch
 
     Returns:
-        Tuple containing:
+        tuple containing:
             - headers: dict - Authentication headers to use
-            - base_target_url: Optional[str] - Updated base target URL
+            - base_target_url: str | None - Updated base target URL
             - headers_passed_through: bool - Whether headers were passed through from request
-            - vertex_project: Optional[str] - Updated vertex project ID
-            - vertex_location: Optional[str] - Updated vertex location
+            - vertex_project: str | None - Updated vertex project ID
+            - vertex_location: str | None - Updated vertex location
     """
     vertex_llm_base: Final = VertexBase()
     headers_passed_through = False
@@ -2150,8 +2164,6 @@ async def vertex_discovery_proxy_route(
     Target url: `https://discoveryengine.googleapis.com`
     """
     import re
-
-    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 
     # Extract vector store ID from endpoint if present (e.g., dataStores/test-litellm-app_1761094730750)
     vector_store_credentials: LiteLLM_ManagedVectorStore | None = None
@@ -2559,7 +2571,7 @@ def _vertex_publisher_model_suffix(model: str) -> str:
     return f"{VERTEX_PUBLISHER_MODEL_PREFIX}{model.rsplit('/', 1)[-1]}"
 
 
-def _get_llm_router() -> "Router | None":
+def _get_llm_router() -> Router | None:
     from litellm.proxy.proxy_server import llm_router
 
     return llm_router
@@ -2599,7 +2611,7 @@ def _resolve_vertex_live_credentials(
 def _build_vertex_live_setup_model_rewriter(
     vertex_project: str | None,
     vertex_location: str | None,
-    llm_router: "Router | None",
+    llm_router: Router | None,
 ) -> Callable[[str], str] | None:
     """
     Rewrite the ``setup`` frame's model into the full Vertex resource path the Live API requires.
@@ -2619,7 +2631,7 @@ def _build_vertex_live_setup_model_rewriter(
     return rewrite
 
 
-def _resolve_alias_to_upstream_model(setup_model: str, llm_router: "Router | None") -> str:
+def _resolve_alias_to_upstream_model(setup_model: str, llm_router: Router | None) -> str:
     """
     The Live SDK wraps whatever the caller typed as ``models/<name>``, so a gateway alias arrives prefixed
     """
@@ -2807,6 +2819,238 @@ def create_generic_websocket_passthrough_endpoint(
         _forward_headers=forward_headers,
         cost_per_request=cost_per_request,
     )
+
+
+@router.api_route(
+    "/gigachat/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],  # mutable-ok: FastAPI route methods
+    tags=["Gigachat Pass-through", "pass-through"],  # mutable-ok: FastAPI route tags
+)
+async def gigachat_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> Response:
+    """
+    [Docs](https://docs.litellm.ai/docs/pass_through/gigachat)
+    """
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    ## check for streaming
+    request_body: Final[dict[str, object]] = await get_request_body(request)
+    is_router_model = False  # rebind-ok: conditionally set to True when model uses router
+
+    raw_model: Final = request_body.get("model")
+    model: Final = raw_model if isinstance(raw_model, str) else None
+    if model:
+        is_router_model = is_passthrough_request_using_router_model(
+            request_body, llm_router
+        )  # rebind-ok: conditionally set to True
+    elif any(word in endpoint for word in ("completions", "embeddings")):
+        raise HTTPException(
+            status_code=400, detail={"error": "Model is required in request body"}
+        )  # mutable-ok: HTTPException detail dict
+
+    # If router model, use dedicated router passthrough handler
+    # This uses the same common processing path as non-router models
+    if model and is_router_model and llm_router:
+        return await handle_gigachat_passthrough_router_model(
+            model=model,
+            endpoint=endpoint,
+            request=request,
+            request_body=request_body,
+            fastapi_response=fastapi_response,
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+
+    verbose_proxy_logger.debug(
+        "Gigachat passthrough: Using direct Gigachat model '%s' for endpoint '%s'", model, endpoint
+    )
+
+    from litellm.llms.gigachat.authenticator import get_access_token
+    from litellm.llms.gigachat.utils import GIGACHAT_BASE_URL
+
+    base_target_url: Final = get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
+    request_path: Final = httpx.URL(endpoint).path
+    encoded_endpoint: Final = request_path if request_path.startswith("/") else f"/{request_path}"
+
+    base_url: Final = httpx.URL(base_target_url)
+    updated_url: Final = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
+    )
+
+    is_streaming_request: Final = await is_streaming_request_fn(request)
+
+    endpoint_func: Final = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(updated_url),
+        custom_headers={"Authorization": f"Bearer {get_access_token()}"},
+        is_streaming_request=is_streaming_request,
+    )
+    return await endpoint_func(
+        request,
+        fastapi_response,
+        user_api_key_dict,
+    )
+
+
+async def handle_gigachat_passthrough_router_model(
+    model: str,
+    endpoint: str,
+    request: Request,
+    request_body: dict,
+    fastapi_response: Response,
+    llm_router: litellm.Router,
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLoggingType,
+    general_settings: dict,
+    proxy_config: ProxyConfig,
+    select_data_generator: Callable,
+    user_model: str | None,
+    user_temperature: float | None,
+    user_request_timeout: float | None,
+    user_max_tokens: int | None,
+    user_api_base: str | None,
+    version: str | None,
+) -> Response | StreamingResponse:
+    """
+    Handle Gigachat passthrough for router models (models defined in config.yaml).
+
+    Uses the same common processing path as non-router models to ensure
+    metadata and hooks are properly initialized.
+
+    Args:
+        model: The router model name (e.g., "gigachat/gigachat-2")
+        endpoint: The Gigachat endpoint path (e.g., "/chat/completions")
+        request: The FastAPI request object
+        request_body: The parsed request body
+        llm_router: The LiteLLM router instance
+        user_api_key_dict: The user API key authentication dictionary
+        proxy_logging_obj: Proxy logging
+        general_settings: Proxy general settings
+        proxy_config: Proxy config
+        select_data_generator: Select data generator function
+        (additional args for common processing)
+
+    Returns:
+        Response or StreamingResponse depending on endpoint type
+    """
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    # Detect streaming based on request body
+    is_streaming: Final = request_body.get("stream", False)  # pyright: ignore[reportUnknownVariableType]  # request_body is dict[Unknown, Unknown]
+
+    data: dict[str, Any] = await _read_request_body(
+        request=request
+    )  # mutable-ok: mutated in place by proxy pipeline; pyright: ignore[reportExplicitAny]  # Any needed for proxy pipeline
+    if user_api_key_dict is not None:
+        auth_metadata: Final = {
+            metadata_key: value
+            for metadata_key, value in (
+                ("user_api_key_user_id", getattr(user_api_key_dict, "user_id", None)),
+                ("user_api_key_team_id", getattr(user_api_key_dict, "team_id", None)),
+                ("user_api_key_org_id", getattr(user_api_key_dict, "org_id", None)),
+                ("agent_id", getattr(user_api_key_dict, "agent_id", None)),
+            )
+            if value is not None
+        }
+        existing_metadata: Final = data.get("metadata")
+        data["metadata"] = {
+            **(existing_metadata if isinstance(existing_metadata, dict) else {}),
+            **auth_metadata,
+        }
+
+    verbose_proxy_logger.debug(
+        "Gigachat router passthrough: model='%s', endpoint='%s', streaming=%s", model, endpoint, is_streaming
+    )
+
+    # Use the common processing path (same as non-router models)
+    # This ensures all metadata, hooks, and logging are properly initialized
+
+    data["model"] = model
+    data["method"] = request.method
+    data["endpoint"] = endpoint
+    data["json"] = request_body
+    data["custom_llm_provider"] = "gigachat"
+
+    # Remove sensitive keys from data
+    keys: Final = [  # mutable-ok: list of keys to remove from data
+        "gigachat_auth_url",
+        "gigachat_access_token",
+        "gigachat_scope",
+        "api_base",
+        "api_key",
+    ]
+    for key in keys:
+        data.pop(key, None)
+
+    client: Final = get_async_httpx_client(
+        llm_provider=LlmProviders.GIGACHAT,
+        params={  # mutable-ok: httpx client params
+            "timeout": httpx.Timeout(timeout=600.0, connect=5.0),
+        },
+    )
+
+    data["client"] = client
+    base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+
+    # Use the common passthrough processing to handle metadata and hooks
+    # This also handles all response formatting (streaming/non-streaming) and exceptions
+    try:
+        result = await base_llm_response_processor.base_passthrough_process_llm_request(  # rebind-ok: assigned once in try block
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=model,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:  # noqa: BLE001 # Safe catch-all for handle exception
+        # Use common exception handling
+        raise await base_llm_response_processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    else:
+        if isinstance(result, StreamingResponse):
+            if result.headers.get("Content-Type") is None:
+                result.headers["Content-Type"] = "text/event-stream; charset=utf-8"
+
+        return result
 
 
 @router.api_route(

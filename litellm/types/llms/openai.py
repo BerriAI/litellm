@@ -2162,6 +2162,42 @@ class OpenAIRealtimeDoneEvent(TypedDict):
     type: Literal["response.done"]
 
 
+class OpenAIRealtimeInputAudioBufferSpeechEvent(TypedDict):
+    type: ReadOnly[Literal["input_audio_buffer.speech_started", "input_audio_buffer.speech_stopped"]]
+    event_id: ReadOnly[str]
+    item_id: ReadOnly[str]
+
+
+class OpenAIRealtimeInputAudioTranscriptionDelta(TypedDict):
+    type: ReadOnly[Literal["conversation.item.input_audio_transcription.delta"]]
+    event_id: ReadOnly[str]
+    item_id: ReadOnly[str]
+    content_index: ReadOnly[int]
+    delta: ReadOnly[str]
+
+
+class OpenAIRealtimeInputAudioTranscriptionCompleted(TypedDict):
+    type: ReadOnly[Literal["conversation.item.input_audio_transcription.completed"]]
+    event_id: ReadOnly[str]
+    item_id: ReadOnly[str]
+    content_index: ReadOnly[int]
+    transcript: ReadOnly[str]
+
+
+class OpenAIRealtimeUsageTokenDetails(TypedDict):
+    audio_tokens: ReadOnly[int]
+    text_tokens: ReadOnly[int]
+    cached_tokens: NotRequired[ReadOnly[int]]
+
+
+class OpenAIRealtimeResponseUsage(TypedDict):
+    input_tokens: ReadOnly[int]
+    output_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+    input_token_details: NotRequired[ReadOnly[OpenAIRealtimeUsageTokenDetails]]
+    output_token_details: NotRequired[ReadOnly[OpenAIRealtimeUsageTokenDetails]]
+
+
 class OpenAIRealtimeEventTypes(Enum):
     SESSION_CREATED = "session.created"
     # Beta delta event names
@@ -2199,6 +2235,9 @@ OpenAIRealtimeEvents = (
     | OpenAIRealtimeOutputItemDone
     | OpenAIRealtimeFunctionCallArgumentsDone
     | OpenAIRealtimeDoneEvent
+    | OpenAIRealtimeInputAudioBufferSpeechEvent
+    | OpenAIRealtimeInputAudioTranscriptionDelta
+    | OpenAIRealtimeInputAudioTranscriptionCompleted
 )
 
 OpenAIRealtimeStreamList = list[OpenAIRealtimeEvents]
