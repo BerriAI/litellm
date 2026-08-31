@@ -151,6 +151,29 @@ def test_vercel_transform_skips_rows_without_token_pricing_or_limits(sync_module
     assert transformed["vercel_ai_gateway/good-chat"]["output_cost_per_token"] == 2e-06
 
 
+def test_sync_replaces_friendli_entries_so_dropped_cache_pricing_does_not_survive(sync_module):
+    local = {
+        "friendliai/zai-org/GLM-Test": {
+            "litellm_provider": "friendliai",
+            "cache_read_input_token_cost": 3e-08,
+            "supports_prompt_caching": True,
+        }
+    }
+    uncached_model = _reasoning_model(pricing={"input": "0.00000014", "output": "0.0000004"})
+    remote = sync_module.transform_friendli_data([uncached_model], local)
+    sync_module.sync_local_data_with_remote(local, remote, replace_keys=frozenset(remote))
+    synced = local["friendliai/zai-org/GLM-Test"]
+    assert "cache_read_input_token_cost" not in synced
+    assert synced["supports_prompt_caching"] is False
+
+
+def test_sync_still_merges_entries_outside_replace_keys(sync_module):
+    local = {"openrouter/some-model": {"input_cost_per_token": 1e-06, "supports_vision": True}}
+    remote = {"openrouter/some-model": {"input_cost_per_token": 2e-06}}
+    sync_module.sync_local_data_with_remote(local, remote)
+    assert local["openrouter/some-model"] == {"input_cost_per_token": 2e-06, "supports_vision": True}
+
+
 def test_transform_inherits_allowlisted_keys_from_base_model_entry(sync_module):
     local = {
         "zhipuai/glm-test": {
