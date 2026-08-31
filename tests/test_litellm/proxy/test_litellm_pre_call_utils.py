@@ -6507,6 +6507,70 @@ async def test_add_litellm_data_to_request_redacts_oauth_header_from_logging_cop
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_to_request_dual_headers_keeps_oauth_forwardable_and_virtual_key_private():
+    """Claude Code (Desktop 3P tab) sends `authorization: Bearer sk-ant-oat...`
+    plus the LiteLLM virtual key in `x-api-key`; proxy auth consumes `x-api-key`
+    (#29190). The OAuth token must stay scoped for Anthropic passthrough, and the
+    consumed virtual key must NOT be forwarded upstream even with
+    `forward_llm_provider_auth_headers` enabled."""
+    virtual_key = "sk-litellm-virtual-key-lit29190"
+    request_mock = _make_request_mock(
+        "/v1/messages",
+        {
+            "content-type": "application/json",
+            "anthropic-version": "2023-06-01",
+            "authorization": _OAUTH_TOKEN,
+            "x-api-key": virtual_key,
+        },
+    )
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "anthropic-claude", "messages": [{"role": "user", "content": "hello"}]},
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"forward_llm_provider_auth_headers": True},
+        version="test-version",
+    )
+
+    from litellm.litellm_core_utils.get_provider_specific_headers import (
+        ProviderSpecificHeaderUtils,
+    )
+
+    anthropic_headers = ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        provider_specific_header=updated["provider_specific_header"],
+        custom_llm_provider="anthropic",
+    )
+    assert anthropic_headers["authorization"] == _OAUTH_TOKEN
+    assert virtual_key not in json.dumps(updated["provider_specific_header"], default=repr)
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_oauth_authorization_without_x_api_key_stays_consumed():
+    """Without an `x-api-key`, the Authorization header (even OAuth-shaped) is
+    still the auth credential and is not forwarded — existing behavior."""
+    request_mock = _make_request_mock(
+        "/v1/messages",
+        {
+            "content-type": "application/json",
+            "anthropic-version": "2023-06-01",
+            "authorization": _OAUTH_TOKEN,
+        },
+    )
+
+    updated = await add_litellm_data_to_request(
+        data={"model": "anthropic-claude", "messages": [{"role": "user", "content": "hello"}]},
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"forward_llm_provider_auth_headers": True},
+        version="test-version",
+    )
+
+    assert "sk-ant-oat01" not in json.dumps(updated.get("provider_specific_header"), default=repr)
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_keeps_every_forwarded_credential_out_of_logging_copies():
     """Credentials kept for transport must not survive anywhere under proxy_server_request."""
     secrets = {

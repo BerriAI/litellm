@@ -1741,13 +1741,23 @@ async def add_litellm_data_to_request(
         forward_llm_auth = getattr(litellm, "forward_llm_provider_auth_headers", False)
     # Determine which header was used for authentication
     # This enables forwarding provider keys (e.g., x-api-key) when they weren't used for LiteLLM auth
+    from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+
     authenticated_with_header = None
     if "x-litellm-api-key" in request.headers:
         # If x-litellm-api-key is present, it was used for auth
         authenticated_with_header = "x-litellm-api-key"
     elif "authorization" in request.headers:
-        # Authorization header was used for auth
-        authenticated_with_header = "authorization"
+        if is_anthropic_oauth_key(request.headers.get("authorization")) and request.headers.get("x-api-key"):
+            # Authorization carries an upstream Anthropic OAuth token
+            # (`sk-ant-oat*`), so `user_api_key_auth.get_api_key` authenticated
+            # with `x-api-key` instead (see #29190). Mirror that here so the
+            # OAuth token stays forwardable to Anthropic and the LiteLLM
+            # virtual key in `x-api-key` is not forwarded upstream.
+            authenticated_with_header = "x-api-key"
+        else:
+            # Authorization header was used for auth
+            authenticated_with_header = "authorization"
     else:
         # x-api-key or another header was used for auth
         authenticated_with_header = "x-api-key"

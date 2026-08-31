@@ -647,6 +647,7 @@ def get_api_key(
     Returns:
         Tuple[Optional[str], Optional[str]]: Tuple of the api_key and the passed_in_key
     """
+    from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
     from litellm.proxy.auth.route_checks import RouteChecks
     from litellm.proxy.common_utils.http_parsing_utils import (
         _safe_get_request_query_params,
@@ -658,8 +659,24 @@ def get_api_key(
         passed_in_key = custom_litellm_key_header
         api_key = _get_bearer_token_or_received_api_key(custom_litellm_key_header)
     elif isinstance(api_key, str) and len(api_key) > 0:
-        passed_in_key = api_key
-        api_key = _get_bearer_token(api_key=api_key)
+        bearer_api_key = _get_bearer_token(api_key=api_key)
+        if (
+            is_anthropic_oauth_key(bearer_api_key)
+            and isinstance(anthropic_api_key_header, str)
+            and len(anthropic_api_key_header) > 0
+        ):
+            # The Authorization header carries an upstream Anthropic OAuth token
+            # (`sk-ant-oat*`), which is never a LiteLLM credential. Clients like
+            # the Claude Code tab in Claude Desktop send that session token
+            # alongside the user's LiteLLM virtual key in `x-api-key` — use
+            # `x-api-key` for proxy auth instead of failing the OAuth token's
+            # lookup. The OAuth token itself stays on the request for the
+            # provider passthrough handling in litellm_pre_call_utils.
+            passed_in_key = anthropic_api_key_header
+            api_key = anthropic_api_key_header
+        else:
+            passed_in_key = api_key
+            api_key = bearer_api_key
     elif isinstance(azure_api_key_header, str):
         passed_in_key = azure_api_key_header
         api_key = azure_api_key_header

@@ -68,6 +68,87 @@ def test_get_api_key():
     ) == (api_key, passed_in_key)
 
 
+_ANTHROPIC_OAUTH_BEARER = "Bearer sk-ant-oat01-fake-claude-desktop-session-token"
+
+
+def _get_api_key_result(
+    api_key=None,
+    anthropic_api_key_header=None,
+    custom_litellm_key_header=None,
+    route="/v1/messages",
+):
+    return get_api_key(
+        custom_litellm_key_header=custom_litellm_key_header,
+        api_key=api_key,
+        azure_api_key_header=None,
+        anthropic_api_key_header=anthropic_api_key_header,
+        google_ai_studio_api_key_header=None,
+        azure_apim_header=None,
+        pass_through_endpoints=None,
+        route=route,
+        request=MagicMock(),
+    )
+
+
+def test_get_api_key_prefers_x_api_key_over_anthropic_oauth_authorization():
+    """Claude Code (the Claude Desktop 3P tab) sends its Anthropic OAuth session
+    token in `Authorization` alongside the user's LiteLLM virtual key in
+    `x-api-key`. `sk-ant-oat*` is an upstream credential, never a LiteLLM key —
+    proxy auth must use `x-api-key`. Regression test for #29190."""
+    litellm_key = "sk-my-litellm-virtual-key"
+    assert _get_api_key_result(
+        api_key=_ANTHROPIC_OAUTH_BEARER,
+        anthropic_api_key_header=litellm_key,
+    ) == (litellm_key, litellm_key)
+
+
+def test_get_api_key_authorization_still_wins_over_x_api_key_for_regular_keys():
+    """A regular bearer key in `Authorization` keeps precedence over `x-api-key`."""
+    assert _get_api_key_result(
+        api_key="Bearer sk-regular-litellm-key",
+        anthropic_api_key_header="sk-some-other-key",
+    ) == ("sk-regular-litellm-key", "Bearer sk-regular-litellm-key")
+
+
+def test_get_api_key_oauth_authorization_without_x_api_key_unchanged():
+    """With no `x-api-key` fallback available, the OAuth bearer is still treated
+    as the (failing) auth credential — existing behavior preserved."""
+    assert _get_api_key_result(api_key=_ANTHROPIC_OAUTH_BEARER) == (
+        "sk-ant-oat01-fake-claude-desktop-session-token",
+        _ANTHROPIC_OAUTH_BEARER,
+    )
+
+
+def test_get_api_key_oauth_authorization_with_empty_x_api_key_unchanged():
+    """An empty `x-api-key` is not a usable fallback credential."""
+    assert _get_api_key_result(
+        api_key=_ANTHROPIC_OAUTH_BEARER,
+        anthropic_api_key_header="",
+    ) == (
+        "sk-ant-oat01-fake-claude-desktop-session-token",
+        _ANTHROPIC_OAUTH_BEARER,
+    )
+
+
+def test_get_api_key_x_api_key_only_unchanged():
+    """`x-api-key` alone keeps working (Claude Code CLI / Cowork tab)."""
+    litellm_key = "sk-my-litellm-virtual-key"
+    assert _get_api_key_result(anthropic_api_key_header=litellm_key) == (
+        litellm_key,
+        litellm_key,
+    )
+
+
+def test_get_api_key_custom_litellm_key_header_still_supersedes_oauth_handling():
+    """`x-litellm-api-key` keeps top precedence even when the OAuth + x-api-key
+    combination is present."""
+    assert _get_api_key_result(
+        api_key=_ANTHROPIC_OAUTH_BEARER,
+        anthropic_api_key_header="sk-my-litellm-virtual-key",
+        custom_litellm_key_header="Bearer sk-custom-header-key",
+    ) == ("sk-custom-header-key", "Bearer sk-custom-header-key")
+
+
 def test_route_requires_auth_despite_public_for_metrics(monkeypatch):
     monkeypatch.setattr(litellm, "require_auth_for_metrics_endpoint", True)
 
@@ -1515,6 +1596,76 @@ async def test_master_key_auth_sets_via_virtual_key_marker():
 
         assert isinstance(result, UserAPIKeyAuth)
         assert result.via_virtual_key is True
+        assert result.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS
+    finally:
+        for attr, val in _original_values.items():
+            setattr(_proxy_server_mod, attr, val)
+
+
+@pytest.mark.asyncio
+async def test_auth_builder_dual_headers_authenticates_via_x_api_key_when_authorization_is_anthropic_oauth():
+    """End-to-end regression test for #29190: `Authorization: Bearer sk-ant-oat...`
+    (the Claude Desktop session's Anthropic OAuth token) together with a valid
+    LiteLLM key in `x-api-key` must authenticate via `x-api-key` instead of
+    failing the OAuth token's virtual-key lookup."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    master_key = "sk-master-key"
+
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.delete_cache = MagicMock()
+
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = (
+        AsyncMock()
+    )
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    _attrs_to_set = {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": mock_cache,
+        "proxy_logging_obj": mock_proxy_logging_obj,
+        "master_key": master_key,
+        "general_settings": {},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+    _original_values = {
+        attr: getattr(_proxy_server_mod, attr, None) for attr in _attrs_to_set
+    }
+    try:
+        for attr, val in _attrs_to_set.items():
+            setattr(_proxy_server_mod, attr, val)
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/v1/messages")
+
+        result = await _user_api_key_auth_builder(
+            request=request,
+            api_key=_ANTHROPIC_OAUTH_BEARER,
+            azure_api_key_header="",
+            anthropic_api_key_header=master_key,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={},
+        )
+
+        assert isinstance(result, UserAPIKeyAuth)
+        assert result.user_role == LitellmUserRoles.PROXY_ADMIN
         assert result.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS
     finally:
         for attr, val in _original_values.items():
