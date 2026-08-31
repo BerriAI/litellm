@@ -5570,6 +5570,37 @@ async def test_pass_through_request_survives_malformed_team_logging_metadata():
 
 
 @pytest.mark.asyncio
+async def test_pass_through_request_survives_env_reference_in_deprecated_callback_settings():
+    """LIT-5152 fail-open: the deprecated ``callback_settings`` team metadata skips
+    AddTeamCallback validation, so an ``os.environ/`` callback var would otherwise
+    blow up inside ``Logging.__init__`` and fail the request; the passthrough must
+    instead succeed without dynamic callbacks."""
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_id="test-team",
+        team_metadata={
+            "callback_settings": {
+                "success_callback": ["langfuse"],
+                "failure_callback": ["langfuse"],
+                "callback_vars": {
+                    "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY",
+                    "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY",
+                    "langfuse_host": "https://langfuse.example.test",
+                },
+            }
+        },
+    )
+
+    status_code, logging_obj = await _drive_passthrough_request_and_capture_logging(user_api_key_dict)
+
+    assert status_code == 200
+    assert logging_obj is not None
+    assert not logging_obj.dynamic_success_callbacks
+    assert not logging_obj.dynamic_failure_callbacks
+    assert not logging_obj.standard_callback_dynamic_params.get("langfuse_public_key")
+
+
+@pytest.mark.asyncio
 async def test_resolve_team_callback_wiring_fails_open_on_operational_error():
     """LIT-5152 fail-open: an operational error while resolving callback metadata
     (e.g. team config lookup hitting a dead secret manager) must not raise; the

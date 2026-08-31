@@ -48,6 +48,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
 )
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_no_callback_env_reference
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -779,15 +780,20 @@ def _resolve_team_callback_wiring(
     (read by initialize_standard_callback_dynamic_params) and also stamped on
     the proxy-owned trusted-vars field (read by get_trusted_callback_params).
 
-    Fails open: a callback resolution error is logged at error level and the
-    request proceeds without dynamic callbacks, since a broken logging config
-    must not fail the customer's upstream call (and the websocket is already
-    accepted by the time this runs on that path).
+    Fails open: a callback resolution or validation error is logged at error
+    level and the request proceeds without dynamic callbacks, since a broken
+    logging config must not fail the customer's upstream call (and the
+    websocket is already accepted by the time this runs on that path). The
+    env-reference check runs here because the deprecated callback_settings
+    branch skips AddTeamCallback validation, and Logging.__init__ would
+    otherwise reject the vars mid-request.
     """
     try:
         callback_settings_obj: Final = _get_dynamic_logging_metadata(
             user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
         )
+        for param, value in ((callback_settings_obj.callback_vars if callback_settings_obj else None) or {}).items():
+            validate_no_callback_env_reference(param, value, source="key/team callback metadata")
     except Exception:  # noqa: BLE001 - a broken logging config must never fail the passthrough request
         verbose_proxy_logger.exception(
             "%s: failed to resolve team logging callbacks, continuing without them",
