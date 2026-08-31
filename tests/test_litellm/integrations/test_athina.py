@@ -1,13 +1,8 @@
 import datetime
 import json
-import os
-import sys
 import unittest
 from unittest.mock import ANY, MagicMock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 
 from litellm.integrations.athina import AthinaLogger
 

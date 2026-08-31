@@ -1,11 +1,11 @@
 import { useState } from "react";
-import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
 import AuditLogsPanel from "./AuditLogsPanel";
 import RequestLogsPanel from "./RequestLogsPanel";
-import { AntDLoadingSpinner } from "../ui/AntDLoadingSpinner";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -34,8 +34,8 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
 
   if (!accessToken || !token || !userRole || !userID) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <AntDLoadingSpinner size="large" />
+      <div role="status" aria-busy="true" aria-label="Loading" className="flex h-64 items-center justify-center">
+        <UiLoadingSpinner className="size-8 text-primary" />
       </div>
     );
   }
@@ -78,19 +78,21 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
   };
 
   return (
-    <div className="w-full p-6 overflow-x-hidden box-border">
-      <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(tabs[index].id)}>
-        <TabList>
+    <div className="box-border w-full overflow-x-hidden p-6">
+      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as LogsTabId)}>
+        <TabsList variant="line">
           {tabs.map((tab) => (
-            <Tab key={tab.id}>{tab.label}</Tab>
+            <TabsTrigger key={tab.id} value={tab.id} className="flex-none">
+              {tab.label}
+            </TabsTrigger>
           ))}
-        </TabList>
-        <TabPanels>
-          {tabs.map((tab) => (
-            <TabPanel key={tab.id}>{renderPanel(tab.id)}</TabPanel>
-          ))}
-        </TabPanels>
-      </TabGroup>
+        </TabsList>
+        {tabs.map((tab) => (
+          <TabsContent key={tab.id} value={tab.id} keepMounted>
+            {renderPanel(tab.id)}
+          </TabsContent>
+        ))}
+      </Tabs>
     </div>
   );
 }

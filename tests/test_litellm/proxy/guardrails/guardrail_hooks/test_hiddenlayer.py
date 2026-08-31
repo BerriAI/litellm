@@ -1,5 +1,6 @@
 import os
-import sys
+import threading
+import time
 import uuid
 from typing import List, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -7,8 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 from httpx import Request, Response
+import requests
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm import ModelResponse
@@ -16,6 +17,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy.guardrails.guardrail_hooks.hiddenlayer.hiddenlayer import (
     HiddenlayerGuardrail,
     HiddenlayerGuardrailV2,
+    _get_jwt,
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.types.utils import (
@@ -26,13 +28,12 @@ from litellm.types.utils import (
 )
 
 
-def test_hiddenlayer_config_saas():
+def test_hiddenlayer_config_saas(monkeypatch: pytest.MonkeyPatch):
     """Test Hiddenlayer SaaS configuration with init_guardrails_v2."""
-    litellm.set_verbose = True
-    litellm.guardrail_name_config_map = {}
+    monkeypatch.setattr(litellm, "guardrail_name_config_map", {})
 
     # Set environment variables for testing
-    os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+    monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
 
     init_guardrails_v2(
         all_guardrails=[
@@ -50,8 +51,6 @@ def test_hiddenlayer_config_saas():
     )
 
     # Clean up
-    if "HIDDENLAYER_API_BASE" in os.environ:
-        del os.environ["HIDDENLAYER_API_BASE"]
 
 
 class TestHiddenlayerGuardrail:
@@ -71,9 +70,9 @@ class TestHiddenlayerGuardrail:
             if key in os.environ:
                 del os.environ[key]
 
-    def test_initialization(self):
+    def test_initialization(self, monkeypatch: pytest.MonkeyPatch):
         """Test successful initialization with default values."""
-        os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+        monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
 
         guardrail = HiddenlayerGuardrail(
             guardrail_name="hiddenlayer", event_hook="pre_call", default_on=True
@@ -84,19 +83,18 @@ class TestHiddenlayerGuardrail:
         assert guardrail.guardrail_name == "hiddenlayer"
         assert guardrail.event_hook == "pre_call"
 
-    def test_initialization_fails_when_api_key_missing(self):
+    def test_initialization_fails_when_api_key_missing(self, monkeypatch: pytest.MonkeyPatch):
         """Test that initialization fails when API key is not set."""
         # Ensure API key is not set
-        if "HIDDENLAYER_CLIENT_SECRET" in os.environ:
-            del os.environ["HIDDENLAYER_CLIENT_SECRET"]
+        monkeypatch.delenv("HIDDENLAYER_CLIENT_SECRET", raising=False)
 
         with pytest.raises(RuntimeError):
             HiddenlayerGuardrail(guardrail_name="hiddenlayer", event_hook="pre_call")
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_request_no_violations(self):
+    async def test_apply_guardrail_request_no_violations(self, monkeypatch: pytest.MonkeyPatch):
         """Test apply_guardrail for request with no violations detected."""
-        os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+        monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
 
         # Setup guardrail
         guardrail = HiddenlayerGuardrail(
@@ -151,9 +149,9 @@ class TestHiddenlayerGuardrail:
         assert call_args.args[0] == f"{guardrail.api_base}/detection/v1/interactions"
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_request_with_violations(self):
+    async def test_apply_guardrail_request_with_violations(self, monkeypatch: pytest.MonkeyPatch):
         """Test apply_guardrail for request with violations detected."""
-        os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+        monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
 
         # Setup guardrail
         guardrail = HiddenlayerGuardrail(
@@ -209,9 +207,9 @@ class TestHiddenlayerGuardrail:
         assert "Blocked by Hiddenlayer" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_response_no_violations(self):
+    async def test_apply_guardrail_response_no_violations(self, monkeypatch: pytest.MonkeyPatch):
         """Test apply_guardrail for response with no violations detected."""
-        os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+        monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
 
         # Setup guardrail
         guardrail = HiddenlayerGuardrail(
@@ -279,10 +277,10 @@ class TestHiddenlayerGuardrail:
         mock_post.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_response_with_violations(self):
+    async def test_apply_guardrail_response_with_violations(self, monkeypatch: pytest.MonkeyPatch):
         """Test apply_guardrail for response with violations detected."""
 
-        os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+        monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
 
         # Setup guardrail
         guardrail = HiddenlayerGuardrail(
@@ -348,10 +346,10 @@ class TestHiddenlayerGuardrail:
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_api_error_handling(self):
+    async def test_apply_guardrail_api_error_handling(self, monkeypatch: pytest.MonkeyPatch):
         """Test handling of API errors in apply_guardrail."""
         # Set required API key
-        os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+        monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
 
         guardrail = HiddenlayerGuardrail(
             guardrail_name="hiddenlayer", event_hook="pre_call", default_on=True
@@ -391,10 +389,10 @@ class TestHiddenlayerGuardrail:
             assert result == inputs
 
     @pytest.mark.asyncio
-    async def test_validate_with_call_hiddenlayer_method(self):
+    async def test_validate_with_call_hiddenlayer_method(self, monkeypatch: pytest.MonkeyPatch):
         """Test the _validate_with_guard_server internal method."""
         # Set required API key
-        os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+        monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
 
         guardrail = HiddenlayerGuardrail(
             guardrail_name="hiddenlayer", event_hook="pre_call", default_on=True
@@ -433,9 +431,9 @@ class TestHiddenlayerGuardrail:
             )
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_request_with_image(self):
+    async def test_apply_guardrail_request_with_image(self, monkeypatch: pytest.MonkeyPatch):
         """Test apply_guardrail sends multimodal content (image) to HiddenLayer v1."""
-        os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+        monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
 
         guardrail = HiddenlayerGuardrail(
             guardrail_name="hiddenlayer", event_hook="pre_call", default_on=True
@@ -498,9 +496,9 @@ class TestHiddenlayerGuardrail:
         assert result is not None
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_redact_with_image_content(self):
+    async def test_apply_guardrail_redact_with_image_content(self, monkeypatch: pytest.MonkeyPatch):
         """Test that REDACT action with multimodal content extracts text properly into inputs['texts']."""
-        os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+        monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
 
         guardrail = HiddenlayerGuardrail(
             guardrail_name="hiddenlayer", event_hook="pre_call", default_on=True
@@ -570,12 +568,11 @@ class TestHiddenlayerGuardrail:
         assert config_model.__name__ == "HiddenlayerGuardrailConfigModel"
 
 
-def test_hiddenlayer_config_v2():
+def test_hiddenlayer_config_v2(monkeypatch: pytest.MonkeyPatch):
     """Test HiddenLayer V2 configuration with init_guardrails_v2."""
-    litellm.set_verbose = True
-    litellm.guardrail_name_config_map = {}
+    monkeypatch.setattr(litellm, "guardrail_name_config_map", {})
 
-    os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+    monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
 
     init_guardrails_v2(
         all_guardrails=[
@@ -593,8 +590,6 @@ def test_hiddenlayer_config_v2():
         config_file_path="",
     )
 
-    if "HIDDENLAYER_API_BASE" in os.environ:
-        del os.environ["HIDDENLAYER_API_BASE"]
 
 
 class TestHiddenlayerGuardrailV2:
@@ -612,9 +607,9 @@ class TestHiddenlayerGuardrailV2:
             if key in os.environ:
                 del os.environ[key]
 
-    def test_initialization(self):
+    def test_initialization(self, monkeypatch: pytest.MonkeyPatch):
         """Test successful initialization with default values."""
-        os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+        monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
 
         guardrail = HiddenlayerGuardrailV2(
             guardrail_name="hiddenlayer", event_hook="pre_call", default_on=True
@@ -624,18 +619,17 @@ class TestHiddenlayerGuardrailV2:
         assert guardrail.guardrail_name == "hiddenlayer"
         assert guardrail.event_hook == "pre_call"
 
-    def test_initialization_fails_when_api_key_missing(self):
+    def test_initialization_fails_when_api_key_missing(self, monkeypatch: pytest.MonkeyPatch):
         """Test that initialization fails when API key is not set for SaaS."""
-        if "HIDDENLAYER_CLIENT_SECRET" in os.environ:
-            del os.environ["HIDDENLAYER_CLIENT_SECRET"]
+        monkeypatch.delenv("HIDDENLAYER_CLIENT_SECRET", raising=False)
 
         with pytest.raises(RuntimeError):
             HiddenlayerGuardrailV2(guardrail_name="hiddenlayer", event_hook="pre_call")
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_request_no_violations(self):
+    async def test_apply_guardrail_request_no_violations(self, monkeypatch: pytest.MonkeyPatch):
         """Test apply_guardrail for request with no violations detected."""
-        os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+        monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
 
         guardrail = HiddenlayerGuardrailV2(
             guardrail_name="hiddenlayer", event_hook="pre_call", default_on=True
@@ -691,9 +685,9 @@ class TestHiddenlayerGuardrailV2:
         assert "detection/v2/request-evaluations" in call_args.args[0]
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_request_with_violations(self):
+    async def test_apply_guardrail_request_with_violations(self, monkeypatch: pytest.MonkeyPatch):
         """Test apply_guardrail for request with violations detected (block via header)."""
-        os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+        monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
 
         guardrail = HiddenlayerGuardrailV2(
             guardrail_name="hiddenlayer", event_hook="pre_call", default_on=True
@@ -751,9 +745,9 @@ class TestHiddenlayerGuardrailV2:
         assert "Blocked by Hiddenlayer" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_response_no_violations(self):
+    async def test_apply_guardrail_response_no_violations(self, monkeypatch: pytest.MonkeyPatch):
         """Test apply_guardrail for response with no violations detected."""
-        os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+        monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
 
         guardrail = HiddenlayerGuardrailV2(
             guardrail_name="hiddenlayer", event_hook="post_call", default_on=True
@@ -816,9 +810,9 @@ class TestHiddenlayerGuardrailV2:
         assert "detection/v2/response-evaluations" in call_args.args[0]
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_response_with_violations(self):
+    async def test_apply_guardrail_response_with_violations(self, monkeypatch: pytest.MonkeyPatch):
         """Test apply_guardrail for response with violations detected (block via header)."""
-        os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+        monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
 
         guardrail = HiddenlayerGuardrailV2(
             guardrail_name="hiddenlayer", event_hook="post_call", default_on=True
@@ -863,9 +857,9 @@ class TestHiddenlayerGuardrailV2:
         assert "Blocked by Hiddenlayer" in str(exc_info.value.detail)
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_response_with_tool_calls(self):
+    async def test_apply_guardrail_response_with_tool_calls(self, monkeypatch: pytest.MonkeyPatch):
         """Test apply_guardrail for response containing tool calls."""
-        os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+        monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
 
         guardrail = HiddenlayerGuardrailV2(
             guardrail_name="hiddenlayer", event_hook="post_call", default_on=True
@@ -924,9 +918,9 @@ class TestHiddenlayerGuardrailV2:
         assert "detection/v2/response-evaluations" in call_args.args[0]
 
     @pytest.mark.asyncio
-    async def test_call_hiddenlayer_uses_correct_endpoints(self):
+    async def test_call_hiddenlayer_uses_correct_endpoints(self, monkeypatch: pytest.MonkeyPatch):
         """Test that _call_hiddenlayer uses the v2 request/response evaluation endpoints."""
-        os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+        monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
 
         guardrail = HiddenlayerGuardrailV2(
             guardrail_name="hiddenlayer", event_hook="pre_call", default_on=True
@@ -959,9 +953,9 @@ class TestHiddenlayerGuardrailV2:
             assert "detection/v2/response-evaluations" in mock_post.call_args.args[0]
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_request_with_image(self):
+    async def test_apply_guardrail_request_with_image(self, monkeypatch: pytest.MonkeyPatch):
         """Test apply_guardrail sends multimodal content (image) to HiddenLayer v2."""
-        os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+        monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
 
         guardrail = HiddenlayerGuardrailV2(
             guardrail_name="hiddenlayer", event_hook="pre_call", default_on=True
@@ -1030,9 +1024,9 @@ class TestHiddenlayerGuardrailV2:
         assert texts == ["how much is on this receipt?"]
 
     @pytest.mark.asyncio
-    async def test_apply_guardrail_request_with_image_multimodal_response(self):
+    async def test_apply_guardrail_request_with_image_multimodal_response(self, monkeypatch: pytest.MonkeyPatch):
         """Test that new_texts extraction handles multimodal content (list) returned by HiddenLayer v2."""
-        os.environ["HIDDENLAYER_API_BASE"] = "https://my.hiddenlayer"
+        monkeypatch.setenv("HIDDENLAYER_API_BASE", "https://my.hiddenlayer")
 
         guardrail = HiddenlayerGuardrailV2(
             guardrail_name="hiddenlayer", event_hook="pre_call", default_on=True
@@ -1098,3 +1092,47 @@ class TestHiddenlayerGuardrailV2:
         config_model = HiddenlayerGuardrailV2.get_config_model()
         assert config_model is not None
         assert config_model.__name__ == "HiddenlayerGuardrailConfigModel"
+
+
+@pytest.fixture
+def hanging_auth_server():
+    """A server that accepts the connection and never answers, so only a timeout ends the call."""
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from socketserver import ThreadingMixIn
+
+    stop: threading.Event = threading.Event()
+
+    class SilentRequestHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self):
+            stop.wait(timeout=30)
+
+        def log_message(self, format, *args):
+            pass
+
+    class ThreadedServer(ThreadingMixIn, HTTPServer):
+        daemon_threads = True
+
+    server = ThreadedServer(("127.0.0.1", 0), SilentRequestHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        stop.set()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_get_jwt_gives_up_at_the_timeout_instead_of_blocking_the_event_loop(hanging_auth_server):
+    """
+    `_get_jwt` runs synchronously inside `_call_hiddenlayer`, so an auth host that
+    accepts and never answers used to park the whole worker's event loop.
+    """
+    started = time.monotonic()
+    with pytest.raises(requests.exceptions.Timeout):
+        _get_jwt(auth_url=hanging_auth_server, api_id="id", api_key="secret", timeout=1)
+
+    assert time.monotonic() - started < 10

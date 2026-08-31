@@ -65,13 +65,16 @@ async def test_async_streaming_429_raises():
         return mock_response
 
     chunks = []
-    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+    async def _drain():
         async for chunk in _async_streaming(
             response=response_coro(),
             litellm_logging_obj=_make_mock_logging_obj(),
             provider_config=MagicMock(),
         ):
             chunks.append(chunk)
+
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        await _drain()
 
     assert exc_info.value.response.status_code == 429
     assert len(chunks) == 0

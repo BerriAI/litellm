@@ -1,7 +1,5 @@
 import asyncio
 import json
-import os
-import sys
 from litellm._uuid import uuid
 from typing import Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,7 +8,6 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../../"))  # Adds the parent directory to the system path
 
 
 @pytest.mark.asyncio
@@ -992,3 +989,77 @@ def test_build_budget_write_data_clears_reset_at_with_null_duration():
     data = build_budget_write_data({"budget_duration": None}, "admin-1")
     assert data["budget_duration"] is None
     assert data["budget_reset_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_organization_daily_activity_non_admin_without_org_admin_role_sees_nothing(
+    monkeypatch,
+):
+    """A caller who is ORG_ADMIN of no organization must resolve to an EMPTY id
+    list, never to None. None means "no entity filter" downstream, i.e. every
+    organization's spend, so the natural simplification of falling back to None
+    on an empty membership set turns a scoping rule into a proxy-wide leak. The
+    organization-alias lookup must be scoped by that same empty list rather than
+    reading the whole table.
+    """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import organization_endpoints
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        get_organization_daily_activity,
+    )
+
+    mock_prisma_client = AsyncMock()
+    org_table_find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_organizationtable.find_many = org_table_find_many
+    mock_prisma_client.db.litellm_organizationmembership.find_many = AsyncMock(return_value=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.organization_endpoints._user_has_admin_view",
+        lambda _: False,
+    )
+
+    get_daily_activity_mock = AsyncMock(return_value=MagicMock(name="SpendAnalyticsPaginatedResponse"))
+    monkeypatch.setattr(organization_endpoints, "get_daily_activity", get_daily_activity_mock)
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="no-orgs-user")
+    await get_organization_daily_activity(
+        organization_ids=None,
+        start_date="2024-04-01",
+        end_date="2024-04-30",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=10,
+        exclude_organization_ids=None,
+        user_api_key_dict=auth,
+    )
+
+    assert get_daily_activity_mock.call_args.kwargs["entity_id"] == []
+    assert org_table_find_many.call_args.kwargs["where"] == {"organization_id": {"in": []}}
+
+
+@pytest.mark.asyncio
+async def test_find_member_if_email_missing_row_raises_documented_400():
+    """A user_email lookup that matches nothing returns None instead of raising, so the
+    only failure the surrounding try/except models is never entered. Without an explicit
+    None guard the next line dereferences None and /organization/member_add answers with
+    an AttributeError-driven 500 rather than the documented 400.
+    """
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        find_member_if_email,
+    )
+
+    prisma_client = AsyncMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await find_member_if_email("missing@example.com", prisma_client)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == {
+        "error": (
+            "Unique user not found for user_email=missing@example.com. Potential duplicate OR "
+            "non-existent user_email in LiteLLM_UserTable. Use 'user_id' instead."
+        )
+    }

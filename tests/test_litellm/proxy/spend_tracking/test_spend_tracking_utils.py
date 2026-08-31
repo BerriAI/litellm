@@ -1,19 +1,12 @@
 import asyncio
 import datetime
 import json
-import os
-import sys
 from datetime import timezone
-from typing import Any, cast
+from typing import Any, Final, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
-
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
-
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
@@ -29,15 +22,17 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_response_for_spend_logs_payload,
     _get_spend_logs_metadata,
     _get_vector_store_request_for_spend_logs_payload,
-    _hash_api_key_for_spend_log,
     _is_master_key,
+    _redact_logged_api_key,
     _redact_prompt_leaks_in_error_string,
     _sanitize_error_information_for_spend_logs,
     _sanitize_guardrail_information_for_spend_logs,
     _sanitize_request_body_for_spend_logs_payload,
     _should_store_prompts_and_responses_in_spend_logs,
     get_logging_payload,
+    get_spend_logs_id,
 )
+from litellm.proxy.utils import hash_token
 from litellm.types.utils import (
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
@@ -121,6 +116,30 @@ def test_get_logging_payload_maps_openai_cache_write_tokens_to_cache_creation_in
 
     assert additional_usage_values["cache_creation_input_tokens"] == 800
     assert additional_usage_values["prompt_tokens_details"]["cache_write_tokens"] == 800
+
+
+def test_get_logging_payload_maps_nested_cache_creation_input_tokens():
+    """
+    Regression (LIT-5757): DashScope nests cache_creation_input_tokens inside
+    prompt_tokens_details; SpendLogs must record it as cache_creation_input_tokens.
+    """
+    additional_usage_values: Final = _get_additional_usage_values_for_usage(
+        litellm.Usage(
+            prompt_tokens=2059,
+            completion_tokens=31,
+            total_tokens=2090,
+            prompt_tokens_details={
+                "cached_tokens": 0,
+                "text_tokens": 2059,
+                "cache_type": "ephemeral",
+                "cache_creation_input_tokens": 2048,
+                "cache_creation": {"ephemeral_5m_input_tokens": 2048},
+            },
+        )
+    )
+
+    assert additional_usage_values["cache_creation_input_tokens"] == 2048
+    assert additional_usage_values["prompt_tokens_details"]["cache_write_tokens"] == 2048
 
 
 def test_get_logging_payload_preserves_anthropic_cache_creation_input_tokens():
@@ -863,8 +882,6 @@ def test_get_logging_payload_api_key_preserved_when_standard_logging_payload_is_
     assert payload["model"] == "openai/gpt-4.1"
     assert payload["user"] == "test_user"
 
-    print(f"✅ Test passed! api_key preserved: {payload['api_key']}")
-
 
 @pytest.mark.asyncio
 @patch("litellm.proxy.proxy_server.master_key", "sk-master-key")
@@ -1011,18 +1028,6 @@ async def test_api_key_preserved_through_failure_hook_to_database():
     # Verify other fields
     assert payload.get("model") == "gpt-3.5-turbo"
     assert payload.get("user") == "test_user"
-
-    print("\n" + "=" * 80)
-    print("✅ CRITICAL E2E TEST PASSED")
-    print("=" * 80)
-    print(f"Token: {data['token']}")
-    print(f"Payload api_key: {payload_api_key}")
-    print(f"Match: {data['token'] == payload_api_key}")
-    print("=" * 80)
-    print("Production incident bug is FIXED and protected:")
-    print("- Failed requests preserve api_key through entire flow")
-    print("- Both SpendLogs AND DailyUserSpend will have correct api_key")
-    print("=" * 80 + "\n")
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)
@@ -1562,6 +1567,38 @@ def test_sanitize_guardrail_information_redacts_prompt_fields_when_flag_false(
         "evaluated_input": "Say hi in 3 words",
         "verdict": "allow",
     }
+
+
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+def test_sanitize_guardrail_information_preserves_guardrail_usage_when_flag_false(
+    mock_should_store,
+):
+    """
+    LIT-5650 regression: provider-reported billable usage counters live in
+    guardrail_usage, a sibling of guardrail_response, precisely so the
+    default spend-log redaction cannot drop them. The response blob (which
+    also embeds a usage copy) must still be redacted wholesale.
+    """
+    mock_should_store.return_value = False
+    guardrail_info = [
+        {
+            "guardrail_name": "bedrock-guard",
+            "guardrail_status": "guardrail_intervened",
+            "guardrail_response": {
+                "action": "GUARDRAIL_INTERVENED",
+                "outputs": [{"text": "Sorry, the model cannot answer this question."}],
+                "usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 1},
+            },
+            "guardrail_usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 1, "wordPolicyUnits": 0},
+        }
+    ]
+
+    result = _sanitize_guardrail_information_for_spend_logs(guardrail_info)
+
+    assert result is not None
+    entry = result[0]
+    assert entry["guardrail_response"] == REDACTED_BY_LITELM_STRING
+    assert entry["guardrail_usage"] == {"topicPolicyUnits": 1, "contentPolicyUnits": 1, "wordPolicyUnits": 0}
 
 
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
@@ -2534,6 +2571,219 @@ def test_sanitize_error_information_redacts_pydantic_assignment_form(
     assert REDACTED_BY_LITELM_STRING in sanitized["error_message"]
 
 
+# ── _redact_logged_api_key unit tests ──────────────────────────────────────
+
+
+def test_redact_logged_api_key_none_returns_none():
+    assert _redact_logged_api_key(None) is None
+
+
+def test_redact_logged_api_key_empty_string_returns_none():
+    assert _redact_logged_api_key("") is None
+
+
+def test_redact_logged_api_key_sk_key_is_hashed():
+    raw = "sk-1234secret"
+    result = _redact_logged_api_key(raw)
+    assert result == hash_token(raw)
+    assert result is not None
+    assert not result.startswith("sk-")
+    assert len(result) == 64
+
+
+def test_redact_logged_api_key_bearer_sk_equals_sk_hash():
+    raw = "sk-1234secret"
+    result_plain = _redact_logged_api_key(raw)
+    result_bearer = _redact_logged_api_key(f"Bearer {raw}")
+    assert result_bearer == result_plain
+
+
+def test_redact_logged_api_key_bearer_case_insensitive():
+    raw = "sk-1234secret"
+    result_lower = _redact_logged_api_key(f"bearer {raw}")
+    result_upper = _redact_logged_api_key(f"BEARER {raw}")
+    expected = hash_token(raw)
+    assert result_lower == expected
+    assert result_upper == expected
+
+
+def test_redact_logged_api_key_non_sk_raw_key_is_hashed():
+    raw = "anthropic-raw-key-xyz"
+    result = _redact_logged_api_key(raw)
+    assert result is not None
+    assert result != raw
+    assert len(result) == 64
+    assert result == hash_token(raw)
+
+
+def test_redact_logged_api_key_already_valid_sha256_passes_through_with_flag():
+    already_hashed = hash_token("sk-some-key")
+    assert len(already_hashed) == 64
+    result = _redact_logged_api_key(already_hashed, already_redacted=True)
+    assert result == already_hashed
+    assert hash_token(already_hashed) != result  # no double-hash
+
+
+def test_redact_logged_api_key_sha256_without_flag_is_hashed():
+    already_hashed = hash_token("sk-some-key")
+    assert len(already_hashed) == 64
+    result = _redact_logged_api_key(already_hashed)
+    assert result is not None
+    assert result != already_hashed
+    assert len(result) == 64
+    assert result == hash_token(already_hashed)
+
+
+def test_redact_logged_api_key_long_opaque_token_is_hashed():
+    raw = "x1" * 450
+    assert len(raw) == 900
+    result = _redact_logged_api_key(raw)
+    assert result is not None
+    assert result != raw
+    assert raw not in result
+    assert len(result) == 64
+    assert result == hash_token(raw)
+
+
+def test_redact_logged_api_key_hashed_jwt_passes_through():
+    jwt_hash = "hashed-jwt-" + "a" * 64
+    result = _redact_logged_api_key(jwt_hash, already_redacted=True)
+    assert result == jwt_hash
+
+
+def test_redact_logged_api_key_hashed_jwt_shape_without_provenance_is_hashed():
+    lookalike = "hashed-jwt-" + "a" * 64
+    result = _redact_logged_api_key(lookalike)
+    assert result == hash_token(lookalike)
+    assert result != lookalike
+
+
+def test_redact_logged_api_key_hashed_jwt_trailing_newline_is_hashed():
+    trailing = "hashed-jwt-" + "a" * 64 + "\n"
+    result = _redact_logged_api_key(trailing, already_redacted=True)
+    assert result == hash_token(trailing)
+    assert result != trailing
+
+
+def test_redact_logged_api_key_hashed_jwt_short_suffix_is_hashed():
+    short_jwt = "hashed-jwt-tooshort"
+    result = _redact_logged_api_key(short_jwt)
+    assert result is not None
+    assert result != short_jwt
+    assert len(result) == 64
+    assert result == hash_token(short_jwt)
+
+
+def test_redact_logged_api_key_master_key_alias_passes_through():
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+    result = _redact_logged_api_key(LITELLM_PROXY_MASTER_KEY_ALIAS, already_redacted=True)
+    assert result == LITELLM_PROXY_MASTER_KEY_ALIAS
+
+
+def test_redact_logged_api_key_master_key_alias_without_provenance_is_hashed():
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+    result = _redact_logged_api_key(LITELLM_PROXY_MASTER_KEY_ALIAS)
+    assert result == hash_token(LITELLM_PROXY_MASTER_KEY_ALIAS)
+    assert result != LITELLM_PROXY_MASTER_KEY_ALIAS
+
+
+def test_get_spend_logs_metadata_keeps_master_key_alias_readable():
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+    meta = _get_spend_logs_metadata(
+        {
+            "user_api_key": LITELLM_PROXY_MASTER_KEY_ALIAS,
+            "user_api_key_hash": LITELLM_PROXY_MASTER_KEY_ALIAS,
+        }
+    )
+    assert meta["user_api_key"] == LITELLM_PROXY_MASTER_KEY_ALIAS
+
+
+def test_redact_logged_api_key_bearer_only_returns_none():
+    # "bearer " with nothing after stripping is equivalent to no key
+    assert _redact_logged_api_key("bearer ") is None
+    assert _redact_logged_api_key("Bearer ") is None
+    assert _redact_logged_api_key("BEARER ") is None
+
+
+# ── _get_spend_logs_metadata key-hash invariant tests ─────────────────────
+
+
+def test_get_spend_logs_metadata_sk_key_hashed():
+    raw = "sk-1234secret"
+    meta = _get_spend_logs_metadata({"user_api_key": raw})
+    assert meta["user_api_key"] == hash_token(raw)
+    assert meta["user_api_key"] is not None
+    result = meta["user_api_key"]
+    assert result is not None
+    assert not result.startswith("sk-")
+    assert len(result) == 64
+
+
+def test_get_spend_logs_metadata_bearer_sk_key_hashed_same_as_plain():
+    raw = "sk-1234secret"
+    meta_plain = _get_spend_logs_metadata({"user_api_key": raw})
+    meta_bearer = _get_spend_logs_metadata({"user_api_key": f"Bearer {raw}"})
+    assert meta_bearer["user_api_key"] == meta_plain["user_api_key"]
+
+
+def test_get_spend_logs_metadata_non_sk_raw_key_hashed():
+    raw = "anthropic-raw-key-xyz"
+    meta = _get_spend_logs_metadata({"user_api_key": raw})
+    result = meta["user_api_key"]
+    assert result is not None
+    assert result != raw
+    assert len(result) == 64
+
+
+def test_get_spend_logs_metadata_already_hashed_unchanged_with_provenance():
+    already_hashed = hash_token("sk-some-key")
+    meta = _get_spend_logs_metadata(
+        {"user_api_key": already_hashed, "user_api_key_hash": already_hashed}
+    )
+    assert meta["user_api_key"] == already_hashed
+    assert hash_token(already_hashed) != meta["user_api_key"]  # no double-hash
+
+
+def test_get_spend_logs_metadata_already_hashed_no_provenance_is_rehashed():
+    already_hashed = hash_token("sk-some-key")
+    meta = _get_spend_logs_metadata({"user_api_key": already_hashed})
+    assert meta["user_api_key"] != already_hashed
+    assert meta["user_api_key"] == hash_token(already_hashed)
+
+
+def test_get_spend_logs_metadata_provenance_bypass_requires_hash_match():
+    already_hashed = hash_token("sk-some-key")
+    different_hash = hash_token("sk-other-key")
+    meta = _get_spend_logs_metadata(
+        {"user_api_key": already_hashed, "user_api_key_hash": different_hash}
+    )
+    assert meta["user_api_key"] == hash_token(already_hashed)
+
+
+def test_get_spend_logs_metadata_hashed_jwt_unchanged():
+    jwt_hash = "hashed-jwt-" + "b" * 64
+    meta = _get_spend_logs_metadata({"user_api_key": jwt_hash, "user_api_key_hash": jwt_hash})
+    assert meta["user_api_key"] == jwt_hash
+
+
+def test_get_spend_logs_metadata_hashed_jwt_shape_without_provenance_is_hashed():
+    lookalike = "hashed-jwt-" + "b" * 64
+    meta = _get_spend_logs_metadata({"user_api_key": lookalike})
+    assert meta["user_api_key"] == hash_token(lookalike)
+    assert meta["user_api_key"] != lookalike
+
+
+def test_get_spend_logs_metadata_none_key_is_none():
+    meta = _get_spend_logs_metadata({"user_api_key": None})
+    assert meta["user_api_key"] is None
+
+
+# ── get_logging_payload key-hash invariant tests ───────────────────────────
+
+
 def test_get_logging_payload_uses_recovered_combined_usage_on_failure():
     """A request that fails mid-stream has no usable response_obj usage, but the
     streaming handler recovers the usage from the chunks already delivered and
@@ -2690,44 +2940,107 @@ def test_get_logging_payload_cache_hit_keeps_raw_litellm_call_id():
     assert json.loads(payload["metadata"])["litellm_call_id"] != payload["request_id"]
 
 
-class TestHashApiKeyForSpendLog:
+class TestSpendLogKeyRedaction:
     """Regression: plaintext API keys with Bearer prefix were stored in
     SpendLogs for failed requests (LIT-4121)"""
 
     def test_bearer_prefixed_sk_key_is_hashed(self):
         raw = "Bearer sk-WLi4iRn4JmbVlTaYw12IOA"
-        result = _hash_api_key_for_spend_log(raw)
+        result = _redact_logged_api_key(raw)
+        assert result is not None
         assert not result.startswith("Bearer")
         assert not result.startswith("sk-")
         assert len(result) == 64
 
     def test_bare_sk_key_is_hashed(self):
         raw = "sk-WLi4iRn4JmbVlTaYw12IOA"
-        result = _hash_api_key_for_spend_log(raw)
+        result = _redact_logged_api_key(raw)
+        assert result is not None
         assert not result.startswith("sk-")
         assert len(result) == 64
 
     def test_bearer_lowercase_is_handled(self):
         raw = "bearer sk-WLi4iRn4JmbVlTaYw12IOA"
-        result = _hash_api_key_for_spend_log(raw)
+        result = _redact_logged_api_key(raw)
+        assert result is not None
         assert not result.startswith("bearer")
         assert not result.startswith("sk-")
         assert len(result) == 64
 
     def test_already_hashed_key_unchanged(self):
         hashed = "bcfe8173f5447f10be0e7fb37aaa8b97829d5c9e0498232152f9d123456789ab"
-        assert _hash_api_key_for_spend_log(hashed) == hashed
+        assert _redact_logged_api_key(hashed, already_redacted=True) == hashed
 
-    def test_bearer_prefixed_non_sk_key_strips_prefix(self):
+    def test_bearer_prefixed_non_sk_key_is_hashed(self):
         raw = "Bearer some-other-token-format"
-        result = _hash_api_key_for_spend_log(raw)
-        assert result == "some-other-token-format"
+        result = _redact_logged_api_key(raw)
+        assert result == hash_token("some-other-token-format")
+        assert result is not None
         assert not result.startswith("Bearer")
 
     def test_bearer_and_bare_produce_same_hash(self):
         bare = "sk-WLi4iRn4JmbVlTaYw12IOA"
         bearer = "Bearer sk-WLi4iRn4JmbVlTaYw12IOA"
-        assert _hash_api_key_for_spend_log(bare) == _hash_api_key_for_spend_log(bearer)
+        assert _redact_logged_api_key(bare) == _redact_logged_api_key(bearer)
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_non_sk_raw_key_both_fields_hashed():
+    raw = "anthropic-raw-key-xyz"
+    kwargs = {
+        "model": "openai/gpt-4.1",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "call_type": "acompletion",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": raw,
+                "user_api_key_user_id": "test_user",
+                "user_api_key_team_id": "test_team",
+            }
+        },
+    }
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=Exception("error"),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["api_key"] != raw
+    assert len(payload["api_key"]) == 64
+
+    parsed_meta = json.loads(payload["metadata"])
+    assert parsed_meta["user_api_key"] != raw
+    assert parsed_meta["user_api_key"] is not None
+    assert len(parsed_meta["user_api_key"]) == 64
+
+
+def test_get_logging_payload_keeps_master_key_alias_readable():
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+    kwargs = {
+        "model": "openai/gpt-4.1",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "call_type": "acompletion",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": LITELLM_PROXY_MASTER_KEY_ALIAS,
+                "user_api_key_hash": LITELLM_PROXY_MASTER_KEY_ALIAS,
+                "user_api_key_user_id": "test_user",
+            }
+        },
+    }
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=Exception("error"),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["api_key"] == LITELLM_PROXY_MASTER_KEY_ALIAS
+    parsed_meta = json.loads(payload["metadata"])
+    assert parsed_meta["user_api_key"] == LITELLM_PROXY_MASTER_KEY_ALIAS
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)
@@ -2959,3 +3272,687 @@ def test_user_traffic_carries_no_internal_call_origin():
     )
     metadata = json.loads(payload["metadata"])
     assert metadata["internal_call_origin"] is None
+
+
+def _spend_log_for_call_type(
+    call_type: str, internal_call_origin: str | None = None, background: bool | None = None
+) -> dict:
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    return cast(
+        dict,
+        get_logging_payload(
+            kwargs={
+                "model": "gpt-4o",
+                "call_type": call_type,
+                "response_cost": 0.0,
+                "litellm_params": {
+                    "metadata": {
+                        "user_api_key": "test-key",
+                        "internal_call_origin": internal_call_origin,
+                    }
+                },
+            },
+            response_obj=ResponsesAPIResponse(
+                id="resp_lit5602",
+                created_at=1234567890,
+                model="gpt-4o",
+                output=[],
+                usage={"input_tokens": 4000, "output_tokens": 2000, "total_tokens": 6000},
+                background=background,
+            ),
+            start_time=datetime.datetime.now(timezone.utc),
+            end_time=datetime.datetime.now(timezone.utc),
+        ),
+    )
+
+
+def test_spend_log_for_response_retrieval_does_not_replay_the_created_responses_tokens():
+    """A retrieved response carries the usage of the call that created it, so counting it again
+    bills the same tokens twice. Regression test for LIT-5602."""
+    payload = _spend_log_for_call_type("aget_responses")
+
+    assert payload["prompt_tokens"] == 0
+    assert payload["completion_tokens"] == 0
+    assert payload["total_tokens"] == 0
+    assert payload["spend"] == 0.0
+
+
+def test_spend_log_for_background_response_cost_poll_counts_tokens():
+    """The poller's read is where a background job's usage first shows up, so dropping it there
+    leaves the job unbilled forever."""
+    payload = _spend_log_for_call_type("aget_responses", internal_call_origin="background_response_cost_poll")
+
+    assert payload["total_tokens"] == 6000
+
+
+def test_spend_log_for_background_response_retrieval_counts_tokens():
+    """A background create answers queued carrying no usage, so its retrieval is the first and only
+    place the job's tokens are ever visible. Zeroing that read bills the whole job nothing on any
+    proxy that is not running the enterprise cost poller."""
+    payload = _spend_log_for_call_type("aget_responses", background=True)
+
+    assert payload["total_tokens"] == 6000
+
+
+def test_spend_log_for_foreground_response_retrieval_still_counts_nothing():
+    """Guards the test above against a blanket exemption: an explicit background=false read was
+    already billed by its create and must stay at zero."""
+    payload = _spend_log_for_call_type("aget_responses", background=False)
+
+    assert payload["total_tokens"] == 0
+
+
+def test_spend_log_for_response_creation_still_counts_tokens():
+    """Guards the test above: the same response object must still be counted on the create path."""
+    payload = _spend_log_for_call_type("aresponses")
+
+    assert payload["total_tokens"] == 6000
+
+
+REDACTED_RESPONSE_PLACEHOLDER: Final = {"text": "redacted-by-litellm"}
+CONSTANT_ID_FROM_HASHED_PLACEHOLDER: Final = "00fcbef15a3b0097e14b0ca016ed30a0"
+
+
+@pytest.mark.parametrize("call_type", ["aretrieve_batch", "acreate_file"])
+def test_get_spend_logs_id_stays_unique_when_the_response_is_a_redaction_placeholder(call_type):
+    """request_id is the LiteLLM_SpendLogs primary key and the flush inserts with
+    skip_duplicates, so two calls must never derive the same id from identical response
+    content. Message redaction replaces every body it cannot redact with one fixed
+    placeholder, which is what a batch and a file body both become, so hashing the
+    response collapsed all of them onto a single id and silently dropped every row
+    after the first."""
+    suffix = "_batch_cost" if call_type == "aretrieve_batch" else ""
+    first = get_spend_logs_id(call_type, dict(REDACTED_RESPONSE_PLACEHOLDER), {"litellm_call_id": "call-id-1"})
+    second = get_spend_logs_id(call_type, dict(REDACTED_RESPONSE_PLACEHOLDER), {"litellm_call_id": "call-id-2"})
+
+    assert first == f"call-id-1{suffix}"
+    assert second == f"call-id-2{suffix}"
+    assert first != second
+    assert first != CONSTANT_ID_FROM_HASHED_PLACEHOLDER
+    assert second != CONSTANT_ID_FROM_HASHED_PLACEHOLDER
+
+
+@pytest.mark.parametrize("call_type", ["aretrieve_batch", "acreate_file"])
+def test_get_spend_logs_id_prefers_the_response_id_for_batch_and_file_calls(call_type):
+    """A batch or file response that survives redaction carries its own id, so the row
+    keys off that rather than the per-call id."""
+    expected = "batch_abc123_batch_cost" if call_type == "aretrieve_batch" else "batch_abc123"
+    assert get_spend_logs_id(call_type, {"id": "batch_abc123"}, {"litellm_call_id": "call-id-1"}) == expected
+
+
+def test_get_logging_payload_gives_redacted_batch_and_file_rows_distinct_request_ids():
+    """End to end at the payload level: a batch retrieve and a file create whose bodies
+    were both flattened to the same redaction placeholder must still produce two
+    insertable rows, each carrying its own spend."""
+    payloads = [
+        get_logging_payload(
+            kwargs={
+                "call_type": call_type,
+                "model": model,
+                "litellm_call_id": call_id,
+                "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            },
+            response_obj=dict(REDACTED_RESPONSE_PLACEHOLDER),
+            start_time=datetime.datetime.now(timezone.utc),
+            end_time=datetime.datetime.now(timezone.utc),
+        )
+        for call_type, model, call_id in (
+            ("aretrieve_batch", "global.anthropic.claude-haiku-4-5-20251001-v1:0", "call-id-batch"),
+            ("acreate_file", "vertex_ai/gemini-2.5-flash", "call-id-file"),
+        )
+    ]
+    request_ids = [payload["request_id"] for payload in payloads]
+
+    assert request_ids == ["call-id-batch_batch_cost", "call-id-file"]
+    assert len(set(request_ids)) == len(request_ids)
+    assert CONSTANT_ID_FROM_HASHED_PLACEHOLDER not in request_ids
+
+
+@pytest.mark.parametrize("call_type", ["aretrieve_batch", "acreate_file"])
+def test_get_spend_logs_id_keys_off_batch_identity_when_the_body_was_redacted(call_type):
+    """Retrieving one batch twice must produce one row, not two. Redaction strips the id
+    off the response body, so the identity has to come from the standard logging payload,
+    which is built from the unredacted response and keeps it. Falling through to the
+    per-call id here would write a second row carrying the same batch's full cost and
+    overstate spend by a multiple of how often the caller polled."""
+    standard_logging_object = {"id": "batch_abc123"}
+    first = get_spend_logs_id(
+        call_type,
+        dict(REDACTED_RESPONSE_PLACEHOLDER),
+        {"litellm_call_id": "call-id-1", "standard_logging_object": standard_logging_object},
+    )
+    second = get_spend_logs_id(
+        call_type,
+        dict(REDACTED_RESPONSE_PLACEHOLDER),
+        {"litellm_call_id": "call-id-2", "standard_logging_object": standard_logging_object},
+    )
+
+    expected = "batch_abc123_batch_cost" if call_type == "aretrieve_batch" else "batch_abc123"
+    assert first == second == expected
+    assert first != CONSTANT_ID_FROM_HASHED_PLACEHOLDER
+
+
+def test_get_spend_logs_id_separates_distinct_batches_whose_bodies_were_both_redacted():
+    """The flip side of idempotency: two different batches must not share a row just
+    because redaction flattened both bodies to the same placeholder."""
+    ids = [
+        get_spend_logs_id(
+            "aretrieve_batch",
+            dict(REDACTED_RESPONSE_PLACEHOLDER),
+            {"litellm_call_id": f"call-id-{index}", "standard_logging_object": {"id": batch_id}},
+        )
+        for index, batch_id in enumerate(("batch_first", "batch_second"))
+    ]
+
+    assert ids == ["batch_first_batch_cost", "batch_second_batch_cost"]
+
+
+def test_get_spend_logs_id_prefers_the_response_id_over_the_standard_logging_id():
+    """An unredacted response keeps deciding its own row key, so cache-hit ids and every
+    other call type behave exactly as they did before."""
+    assert (
+        get_spend_logs_id(
+            "acompletion",
+            {"id": "chatcmpl-from-response"},
+            {"litellm_call_id": "call-id-1", "standard_logging_object": {"id": "id-from-standard-payload"}},
+        )
+        == "chatcmpl-from-response"
+    )
+
+
+def test_batch_cost_row_does_not_collide_with_the_batch_creation_row():
+    """Creating a batch writes a row keyed by the batch's own id, so keying the cost row
+    the same way makes the insert a duplicate of it. request_id is the primary key and the
+    flush skips duplicates, so the cost row is dropped with no error and the batch is
+    billed nothing. Observed against a live proxy: the poller computed and flushed the
+    cost, and the only row carrying that id was the acreate_batch row written when the
+    batch was submitted."""
+    batch_id = "bGl0ZWxsbV9wcm94eTttb2RlbF9pZDphYmM7bGxtX2JhdGNoX2lkOnh5eg"
+
+    creation_row_id = get_spend_logs_id("acreate_batch", {"id": batch_id}, {"litellm_call_id": "call-create"})
+    cost_row_id = get_spend_logs_id(
+        "aretrieve_batch",
+        dict(REDACTED_RESPONSE_PLACEHOLDER),
+        {"litellm_call_id": "call-poller", "standard_logging_object": {"id": batch_id}},
+    )
+
+    assert creation_row_id == batch_id
+    assert cost_row_id != creation_row_id
+    assert cost_row_id == f"{batch_id}_batch_cost"
+
+
+def test_batch_cost_row_id_is_stable_across_repeated_accounting():
+    """The cost row stays keyed to the batch, so accounting the same batch twice collapses
+    to one row instead of billing it twice."""
+    standard_logging_object = {"id": "batch_same"}
+    ids = [
+        get_spend_logs_id(
+            "aretrieve_batch",
+            dict(REDACTED_RESPONSE_PLACEHOLDER),
+            {"litellm_call_id": f"call-{index}", "standard_logging_object": standard_logging_object},
+        )
+        for index in range(2)
+    ]
+
+    assert ids[0] == ids[1] == "batch_same_batch_cost"
+
+
+def _make_failed_request_standard_logging_payload() -> StandardLoggingPayload:
+    base: Final = _make_standard_logging_payload_with_usage_object(usage_object={})
+    return cast(
+        StandardLoggingPayload,
+        {
+            **base,
+            "status": "failure",
+            "call_type": "aresponses",
+            "model_id": "mid-123",
+            "model_group": "group-x",
+            "api_base": "https://api.openai.com/v1/responses",
+            "custom_llm_provider": "openai",
+        },
+    )
+
+
+def test_get_logging_payload_failed_request_falls_back_to_standard_logging_payload():
+    """Failed-request kwargs from the proxy failure hook carry no deployment info
+    (LIT-5795), so the attribution columns must come from the failure-time
+    standard_logging_object."""
+    payload = get_logging_payload(
+        kwargs={
+            "model": "group-x",
+            "litellm_params": {"metadata": {"user_api_key": "test-key", "status": "failure"}},
+            "standard_logging_object": _make_failed_request_standard_logging_payload(),
+        },
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["model_id"] == "mid-123"
+    assert payload["model_group"] == "group-x"
+    assert payload["api_base"] == "https://api.openai.com/v1/responses"
+    assert payload["custom_llm_provider"] == "openai"
+
+
+def test_get_logging_payload_request_kwargs_win_over_standard_logging_payload():
+    payload = get_logging_payload(
+        kwargs={
+            "model": "group-y",
+            "custom_llm_provider": "anthropic",
+            "litellm_params": {
+                "api_base": "https://kwargs.example.com",
+                "metadata": {
+                    "user_api_key": "test-key",
+                    "model_group": "kwargs-group",
+                    "model_info": {"id": "kwargs-mid"},
+                },
+            },
+            "standard_logging_object": _make_failed_request_standard_logging_payload(),
+        },
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["model_id"] == "kwargs-mid"
+    assert payload["model_group"] == "kwargs-group"
+    assert payload["api_base"] == "https://kwargs.example.com"
+    assert payload["custom_llm_provider"] == "anthropic"
+
+
+def test_get_logging_payload_failed_request_without_standard_logging_payload_leaves_fields_empty():
+    payload = get_logging_payload(
+        kwargs={
+            "model": "group-x",
+            "litellm_params": {"metadata": {"user_api_key": "test-key", "status": "failure"}},
+        },
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["model_id"] == ""
+    assert payload["model_group"] == ""
+    assert payload["api_base"] == ""
+    assert payload["custom_llm_provider"] == ""
+
+
+class _ModelRouterSpendLogKwargs(TypedDict):
+    model: ReadOnly[str]
+    litellm_params: ReadOnly[dict[str, dict[str, str]]]
+    standard_logging_object: ReadOnly[StandardLoggingPayload]
+
+
+def _model_router_spend_log_kwargs(slp_model: str | None) -> _ModelRouterSpendLogKwargs:
+    standard_logging_payload: Final = cast(
+        StandardLoggingPayload,
+        {
+            "model": slp_model,
+            "metadata": {},
+            "model_map_information": StandardLoggingModelInformation(
+                model_map_key="azure_ai/model_router", model_map_value=None
+            ),
+        },
+    )
+    return {
+        "model": "azure_ai/model_router/model-router",
+        "litellm_params": {"metadata": {"user_api_key": "sk-test-key"}},
+        "standard_logging_object": standard_logging_payload,
+    }
+
+
+def test_get_logging_payload_uses_standard_logging_payload_model():
+    payload = get_logging_payload(
+        kwargs=_model_router_spend_log_kwargs(slp_model="azure_ai/gpt-5-mini"),
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["model"] == "azure_ai/gpt-5-mini"
+
+
+def test_get_logging_payload_falls_back_to_kwargs_model_when_slp_model_missing():
+    payload = get_logging_payload(
+        kwargs=_model_router_spend_log_kwargs(slp_model=None),
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    assert payload["model"] == "azure_ai/model_router/model-router"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_empty_key_slp_none_is_empty_string_not_none_literal():
+    kwargs = {
+        "model": "openai/gpt-4.1",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "call_type": "acompletion",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_user_id": "test_user",
+            }
+        },
+    }
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=Exception("error"),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["api_key"] == "", (
+        f"Expected empty string but got {payload['api_key']!r}; "
+        "dropping _redact_logged_api_key's 'or \"\"' guard would yield 'None' here"
+    )
+
+
+def test_get_spend_logs_metadata_sibling_fields_preserved():
+    raw = "anthropic-raw-key-xyz"
+    meta = _get_spend_logs_metadata(
+        {
+            "user_api_key": raw,
+            "user_api_key_alias": "my-alias",
+            "user_api_key_team_id": "team-123",
+        }
+    )
+    assert meta["user_api_key"] == hash_token(raw)
+    assert meta["user_api_key_alias"] == "my-alias"
+    assert meta["user_api_key_team_id"] == "team-123"
+
+
+def test_redact_logged_api_key_partial_sha256_is_hashed():
+    partial_hex = "a" * 63
+    result = _redact_logged_api_key(partial_hex)
+    assert result is not None
+    assert result != partial_hex
+    assert len(result) == 64
+    assert result == hash_token(partial_hex)
+
+
+def test_redact_logged_api_key_bearer_already_hashed_passes_through_with_flag():
+    already_hashed = hash_token("sk-some-key")
+    assert len(already_hashed) == 64
+    result = _redact_logged_api_key(f"Bearer {already_hashed}", already_redacted=True)
+    assert result == already_hashed
+    assert hash_token(already_hashed) != result
+
+
+def test_redact_logged_api_key_bearer_sha256_without_flag_is_hashed():
+    already_hashed = hash_token("sk-some-key")
+    assert len(already_hashed) == 64
+    result = _redact_logged_api_key(f"Bearer {already_hashed}")
+    assert result is not None
+    assert result != already_hashed
+    assert result == hash_token(already_hashed)
+
+
+def test_autorouter_savings_flow_from_logging_payload_into_spend_log_metadata():
+    """The figure the logging path computed is what the spend writer reads back, so it
+    is threaded from the StandardLoggingPayload like cost_breakdown, never re-derived."""
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+            "standard_logging_object": {"autorouter_savings": 0.42, "metadata": {}, "model_map_information": None},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-ar-savings", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["autorouter_savings"] == 0.42
+
+
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+def test_caller_forged_autorouter_savings_is_discarded(bucket):
+    """The raw request bucket is client-writable and _get_spend_logs_metadata projects
+    every SpendLogsMetadata key from it, so the logging payload's value must overwrite
+    unconditionally or a caller could report savings the router never produced."""
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {bucket: {"user_api_key": "test-key", "autorouter_savings": 999.0}},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-forged-savings", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["autorouter_savings"] is None
+
+
+def test_get_logging_payload_includes_fallback_info_in_spend_logs_metadata():
+    """
+    Test that fallback info (attempted_fallbacks, original_model_group) from metadata
+    is included in the spend logs metadata JSON.
+    """
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test-key",
+                "attempted_fallbacks": 2,
+                "original_model_group": "azure-gpt-fallback",
+            }
+        },
+        "standard_logging_object": StandardLoggingPayload(
+            id="test-fallback-123",
+            call_type="completion",
+            stream=False,
+            response_cost=0.001,
+            status="success",
+            total_tokens=100,
+            prompt_tokens=50,
+            completion_tokens=50,
+            startTime=1234567890.0,
+            endTime=1234567891.0,
+            completionStartTime=None,
+            model_map_information=StandardLoggingModelInformation(
+                model_map_key="gpt-3.5-turbo", model_map_value=None
+            ),
+            model="gpt-3.5-turbo",
+            model_id="model-123",
+            model_group="openai",
+            custom_llm_provider="openai",
+            api_base="https://api.openai.com",
+            metadata=StandardLoggingMetadata(
+                user_api_key_hash="test_hash",
+                user_api_key_alias=None,
+                user_api_key_team_id=None,
+                user_api_key_org_id=None,
+                user_api_key_user_id=None,
+                user_api_key_team_alias=None,
+                spend_logs_metadata=None,
+                requester_ip_address=None,
+                requester_metadata=None,
+                user_api_key_end_user_id=None,
+            ),
+            cache_hit=False,
+            cache_key=None,
+            saved_cache_cost=0.0,
+            request_tags=[],
+            end_user=None,
+            requester_ip_address=None,
+            messages=[],
+            response={},
+            error_str=None,
+            model_parameters={},
+            hidden_params=StandardLoggingHiddenParams(
+                model_id="model-123",
+                cache_key=None,
+                api_base="https://api.openai.com",
+                response_cost="0.001",
+                litellm_overhead_time_ms=None,
+                additional_headers=None,
+                batch_models=None,
+                litellm_model_name=None,
+                usage_object=None,
+            ),
+        ),
+    }
+
+    response_obj = {
+        "id": "test-response-retry",
+        "choices": [{"message": {"content": "Hello!"}}],
+        "usage": {
+            "total_tokens": 100,
+            "prompt_tokens": 50,
+            "completion_tokens": 50,
+        },
+    }
+
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    metadata = json.loads(payload["metadata"])
+
+    assert (
+        metadata.get("attempted_fallbacks") == 2
+    ), f"Expected attempted_fallbacks=2, got {metadata.get('attempted_fallbacks')}"
+    assert (
+        metadata.get("original_model_group") == "azure-gpt-fallback"
+    ), f"Expected original_model_group=azure-gpt-fallback, got {metadata.get('original_model_group')}"
+
+
+def test_get_logging_payload_handles_missing_fallback_info_gracefully():
+    """
+    Test that fallback fields are None when not present in metadata (backward compatibility).
+    """
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test-key",
+            }
+        },
+        "standard_logging_object": StandardLoggingPayload(
+            id="test-no-fallback-456",
+            call_type="completion",
+            stream=False,
+            response_cost=0.001,
+            status="success",
+            total_tokens=100,
+            prompt_tokens=50,
+            completion_tokens=50,
+            startTime=1234567890.0,
+            endTime=1234567891.0,
+            completionStartTime=None,
+            model_map_information=StandardLoggingModelInformation(
+                model_map_key="gpt-3.5-turbo", model_map_value=None
+            ),
+            model="gpt-3.5-turbo",
+            model_id="model-123",
+            model_group="openai",
+            custom_llm_provider="openai",
+            api_base="https://api.openai.com",
+            metadata=StandardLoggingMetadata(
+                user_api_key_hash="test_hash",
+                user_api_key_alias=None,
+                user_api_key_team_id=None,
+                user_api_key_org_id=None,
+                user_api_key_user_id=None,
+                user_api_key_team_alias=None,
+                spend_logs_metadata=None,
+                requester_ip_address=None,
+                requester_metadata=None,
+                user_api_key_end_user_id=None,
+            ),
+            cache_hit=False,
+            cache_key=None,
+            saved_cache_cost=0.0,
+            request_tags=[],
+            end_user=None,
+            requester_ip_address=None,
+            messages=[],
+            response={},
+            error_str=None,
+            model_parameters={},
+            hidden_params=StandardLoggingHiddenParams(
+                model_id="model-123",
+                cache_key=None,
+                api_base="https://api.openai.com",
+                response_cost="0.001",
+                litellm_overhead_time_ms=None,
+                additional_headers=None,
+                batch_models=None,
+                litellm_model_name=None,
+                usage_object=None,
+            ),
+        ),
+    }
+
+    response_obj = {
+        "id": "test-response-no-fallback",
+        "choices": [{"message": {"content": "Hello!"}}],
+        "usage": {
+            "total_tokens": 100,
+            "prompt_tokens": 50,
+            "completion_tokens": 50,
+        },
+    }
+
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    metadata = json.loads(payload["metadata"])
+
+    assert (
+        metadata.get("attempted_fallbacks") is None
+    ), "attempted_fallbacks should be None when not provided"
+    assert (
+        metadata.get("original_model_group") is None
+    ), "original_model_group should be None when not provided"
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+def test_injected_cache_breakpoints_survive_into_spend_log_metadata(bucket):
+    """The injection marker only gates savings if it reaches the spend-log row.
+
+    _get_spend_logs_metadata projects onto SpendLogsMetadata.__annotations__, so an
+    undeclared key is dropped silently. Both buckets are covered because chat routes
+    stamp metadata while /v1/messages routes stamp litellm_metadata, and
+    record_gateway_injection writes into whichever the request carries.
+    """
+    payload = get_logging_payload(
+        kwargs={
+            "model": "claude-sonnet-5",
+            "litellm_params": {
+                bucket: {
+                    "user_api_key": "test-key",
+                    "litellm_gateway_injected_cache": "dep-of-this-row",
+                }
+            },
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-injected", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["litellm_gateway_injected_cache"] == "dep-of-this-row"
+
+
+def test_passthrough_caching_carries_no_injection_marker():
+    """The negative class the gate depends on: a request whose cache_control the client
+    supplied must read as unmarked, not merely unlabelled by accident."""
+    payload = get_logging_payload(
+        kwargs={
+            "model": "claude-sonnet-5",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-passthrough", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["litellm_gateway_injected_cache"] is None

@@ -536,12 +536,14 @@ class StraikerGuardrail(CustomGuardrail):
         request_data: dict,
         input_type: Literal["request", "response"],
         message: str,
+        blocked_content: bool = False,
     ) -> NoReturn:
         if input_type == "request":
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name or GUARDRAIL_NAME,
                 message=message,
                 should_wrap_with_default_message=False,
+                blocked_content=blocked_content,
             )
         raise ModifyResponseException(
             message=message,
@@ -623,6 +625,7 @@ class StraikerGuardrail(CustomGuardrail):
                 request_data=request_data,
                 input_type=input_type,
                 message=parsed.blocked_reason or DEFAULT_BLOCK_MESSAGE,
+                blocked_content=True,
             )
         if parsed.action == "GUARDRAIL_INTERVENED":
             is_streamed_response: Final = input_type == "response" and _is_streamed_request(request_data)
@@ -631,6 +634,7 @@ class StraikerGuardrail(CustomGuardrail):
                     request_data=request_data,
                     input_type=input_type,
                     message=parsed.blocked_reason or DEFAULT_BLOCK_MESSAGE,
+                    blocked_content=True,
                 )
             return self._intervened_inputs(inputs, parsed)
         return inputs

@@ -19,12 +19,9 @@ to 0 when the only update we saw was the cursor, allowing the
 text-based fallback to estimate from the real completion text.
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from litellm.types.utils import (

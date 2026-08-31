@@ -1,14 +1,10 @@
 #### What this tests ####
 # This tests litellm router
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import logging
-import os
 
 
 import litellm
@@ -256,20 +252,17 @@ async def test_error_from_tag_routing():
         enable_tag_filtering=True,
     )
 
-    try:
+    from litellm.types.router import RouterErrors
+
+    with pytest.raises(
+        Exception, match=RouterErrors.no_deployments_with_tag_routing.value
+    ):
         await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "Tell me a joke."}],
             metadata={"tags": ["paid"]},
             mock_response="Tell me a joke.",
         )
-
-        pytest.fail("this should have failed - expected it to fail")
-    except Exception as e:
-        from litellm.types.router import RouterErrors
-
-        assert RouterErrors.no_deployments_with_tag_routing.value in str(e)
-        pass
 
 
 def test_tag_routing_with_list_of_tags():
@@ -421,6 +414,33 @@ def test_get_tags_from_request_kwargs_various_inputs():
 
     # No relevant keys present
     assert _get_tags_from_request_kwargs({"foo": "bar"}) == []
+
+
+@pytest.mark.parametrize(
+    "request_kwargs",
+    [
+        {"metadata": "not-a-dict"},
+        {"litellm_metadata": "not-a-dict"},
+        {"litellm_metadata": ["not", "a", "dict"]},
+        {"litellm_params": "not-a-dict"},
+        {"litellm_params": {"metadata": "not-a-dict"}},
+        {"metadata": {"tags": "free"}},
+        {"metadata": {"tags": {"free": "paid"}}},
+    ],
+)
+def test_get_tags_from_request_kwargs_reads_no_tags_from_a_non_dict_shape(request_kwargs):
+    """Metadata and `tags` are request-controlled, so a client can send either as a
+    string, a list or null. Every shape that cannot hold string tags reads as untagged
+    instead of raising, because callers run on the hot request path."""
+    from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
+
+    assert _get_tags_from_request_kwargs(request_kwargs) == []
+
+
+def test_get_tags_from_request_kwargs_keeps_only_string_tags():
+    from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
+
+    assert _get_tags_from_request_kwargs({"metadata": {"tags": ["free", 7, None, "paid"]}}) == ["free", "paid"]
 
 
 # --- _split_tags unit tests ---
@@ -629,7 +649,7 @@ async def test_negation_all_excluded_raises():
         enable_tag_filtering=True,
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
         await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "hi"}],
@@ -672,7 +692,7 @@ async def test_negation_ban_only_cannot_escape_default_pool():
     # Sending only "!default" must NOT route to the paid deployment.
     # The base pool for ban-only is the default pool; banning the only
     # default deployment should raise rather than falling through to paid.
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
         await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "hi"}],
@@ -942,7 +962,7 @@ async def test_negation_exhausts_entire_fallback_chain():
         enable_tag_filtering=True,
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
         await router.acompletion(
             model="primary",
             messages=[{"role": "user", "content": "hi"}],
@@ -1692,7 +1712,7 @@ async def test_required_and_unmatched_raises_by_default():
         enable_tag_filtering=True,
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
         await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "hi"}],
@@ -1724,7 +1744,7 @@ async def test_required_and_combined_with_positive_unmatched_raises_by_default()
         enable_tag_filtering=True,
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
         await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "hi"}],
@@ -1946,7 +1966,7 @@ async def test_negation_combined_with_positive_unmatched_raises_by_default():
         enable_tag_filtering=True,
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
         await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "hi"}],
@@ -2104,7 +2124,7 @@ async def test_mixed_constraint_survivor_unmatched_by_positive_tag_raises_by_def
         enable_tag_filtering=True,
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
         await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "hi"}],
@@ -2197,7 +2217,7 @@ async def test_allow_fail_open_denied_when_request_includes_unknown_tag():
         enable_tag_filtering=True,
     )
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
         await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "hi"}],
@@ -2511,7 +2531,7 @@ async def test_plain_tag_exhaustion_with_universal_default_tag_raises_by_default
         "litellm.router._async_get_cooldown_deployments",
         new=AsyncMock(return_value=["quality-high-1", "quality-high-2"]),
     ):
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
             await router.acompletion(
                 model="gpt-4",
                 messages=[{"role": "user", "content": "hi"}],
@@ -2740,7 +2760,7 @@ async def test_allow_fail_open_raises_when_inherited_constraint_alone_is_unsatis
     # allow_fail_open unset.
     router = _eu_region_router()
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
         await router.acompletion(
             model="chat",
             messages=[{"role": "user", "content": "hi"}],
@@ -2810,3 +2830,320 @@ def test_update_router_config_schema_includes_tag_routing_prefix():
 
     config = UpdateRouterConfig(tag_routing_prefix="route:")
     assert config.model_dump(exclude_none=True)["tag_routing_prefix"] == "route:"
+
+
+# --- issue #36621: the request tags that selected a tagged pre-routing strategy
+# (e.g. an auto_router marker) are consumed by that selection and must not
+# re-apply to the routed tier's model group; key/team-inherited constraints
+# must keep applying there ---
+
+
+class _RewriteToTierStrategy:
+    def __init__(self, rewrite_to: str):
+        self.rewrite_to = rewrite_to
+
+    async def async_pre_routing_hook(
+        self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+    ):
+        from litellm.types.router import PreRoutingHookResponse
+
+        return PreRoutingHookResponse(model=self.rewrite_to, messages=messages)
+
+
+def _tagged_marker_router(tier_tags=None):
+    from litellm.types.router import TaggedPreRoutingStrategy
+
+    tier_params = {"model": "gemini/gemini-3.6-flash"}
+    if tier_tags is not None:
+        tier_params["tags"] = tier_tags
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt4o",
+                "litellm_params": {"model": "openai/gpt-4o"},
+                "model_info": {"id": "plain-gpt4o"},
+            },
+            {
+                "model_name": "gemini-flash",
+                "litellm_params": tier_params,
+                "model_info": {"id": "tier-gemini-flash"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+    router.auto_routers = {
+        "gpt4o": [TaggedPreRoutingStrategy(tags=("route",), strategy=_RewriteToTierStrategy("gemini-flash"))]
+    }
+    return router
+
+
+@pytest.mark.asyncio()
+async def test_router_selecting_tag_is_not_reapplied_to_the_routed_tier():
+    # The exact request the auto-router exists to serve: tags=["route"] selects
+    # the tagged marker, the strategy rewrites to gemini-flash, and the untagged
+    # tier deployment must serve it instead of 401ing on the already-spent tag.
+    router = _tagged_marker_router()
+
+    response = await router.acompletion(
+        model="gpt4o",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        metadata={"tags": ["route"], "inherited_tags": []},
+        mock_response="Paris",
+    )
+
+    assert response._hidden_params["model_id"] == "tier-gemini-flash"
+
+
+@pytest.mark.asyncio()
+async def test_router_selecting_tag_is_consumed_on_litellm_metadata_shaped_requests():
+    # /v1/messages (and other litellm_metadata endpoints) store proxy metadata,
+    # including x-litellm-tags header tags, under "litellm_metadata"; consumption
+    # must read and stamp that same bucket instead of only "metadata".
+    router = _tagged_marker_router()
+
+    deployment = await router.async_get_available_deployment(
+        model="gpt4o",
+        request_kwargs={"litellm_metadata": {"tags": ["route"], "inherited_tags": []}},
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+    )
+
+    assert deployment["model_info"]["id"] == "tier-gemini-flash"
+
+
+def test_consumed_request_tags_stamp_names_the_routed_group_and_spent_tags_only_on_a_tag_match():
+    from litellm.types.router import ConsumedRequestTagsStamp, PreRoutingHookResponse
+
+    router = _tagged_marker_router()
+    strategy = router.auto_routers["gpt4o"][0]
+    rewrite = PreRoutingHookResponse(model="gemini-flash", messages=None)
+
+    consumed = router._consumed_request_tags_stamp(
+        selected_strategy=strategy, pre_routing_hook_response=rewrite, request_tags=["route"]
+    )
+    unmatched = router._consumed_request_tags_stamp(
+        selected_strategy=strategy, pre_routing_hook_response=rewrite, request_tags=["other"]
+    )
+
+    assert consumed == ConsumedRequestTagsStamp(model_group="gemini-flash", tags=("route",))
+    assert unmatched is None
+
+
+@pytest.mark.asyncio()
+async def test_tagged_request_direct_to_plain_group_still_rejected():
+    # Sent straight to the tier, no router selection consumed the tag, so strict
+    # tag filtering must reject exactly as before.
+    router = _tagged_marker_router()
+
+    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
+        await router.acompletion(
+            model="gemini-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["route"], "inherited_tags": []},
+            mock_response="hi",
+        )
+
+    from litellm.types.router import RouterErrors
+
+    assert RouterErrors.no_deployments_with_tag_routing.value in str(exc_info.value)
+
+
+@pytest.mark.asyncio()
+async def test_caller_forged_consumption_stamp_is_neutralized_by_the_hook():
+    # A caller pre-loading the stamp in metadata must not unlock a plain group:
+    # the pre-routing hook writes-or-clears the stamp on every attempt, and this
+    # group has no registered strategy, so the forged value is cleared before
+    # tag filtering runs.
+    router = _tagged_marker_router()
+
+    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
+        await router.acompletion(
+            model="gemini-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={
+                "tags": ["route"],
+                "inherited_tags": [],
+                "_consumed_request_tags": {"model_group": "gemini-flash", "tags": ["route"]},
+            },
+            mock_response="hi",
+        )
+
+    from litellm.types.router import RouterErrors
+
+    assert RouterErrors.no_deployments_with_tag_routing.value in str(exc_info.value)
+
+
+@pytest.mark.asyncio()
+async def test_inherited_constraint_still_applies_to_the_routed_tier():
+    # &region:eu comes from key/team policy (present in inherited_tags):
+    # consuming the router-selecting "route" tag must not also discard the
+    # inherited requirement, so a tier without the tag still raises...
+    with pytest.raises(Exception, match='Not allowed to access model due to tags configuration\\.') as exc_info:
+        await _tagged_marker_router().acompletion(
+            model="gpt4o",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["route", "&region:eu"], "inherited_tags": ["&region:eu"]},
+            mock_response="hi",
+        )
+
+    from litellm.types.router import RouterErrors
+
+    assert RouterErrors.no_deployments_with_tag_routing.value in str(exc_info.value)
+
+    # ...and a tier carrying it serves the request even though it lacks "route".
+    response = await _tagged_marker_router(tier_tags=["region:eu"]).acompletion(
+        model="gpt4o",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"tags": ["route", "&region:eu"], "inherited_tags": ["&region:eu"]},
+        mock_response="hi",
+    )
+
+    assert response._hidden_params["model_id"] == "tier-gemini-flash"
+
+
+def test_request_tags_after_router_consumption_scopes_to_the_stamped_group():
+    from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
+    from litellm.router_strategy.tag_based_routing import _request_tags_after_router_consumption
+    from litellm.types.router import ConsumedRequestTagsStamp
+
+    metadata = {
+        "tags": ["route", "&region:eu"],
+        "inherited_tags": ["&region:eu"],
+        CONSUMED_REQUEST_TAGS_METADATA_KEY: ConsumedRequestTagsStamp(model_group="gemini-flash", tags=("route",)),
+    }
+    assert _request_tags_after_router_consumption(metadata, "gemini-flash") == ("&region:eu",)
+    assert _request_tags_after_router_consumption(metadata, "other-group") == ["route", "&region:eu"]
+
+
+def test_request_tags_after_router_consumption_drops_only_the_consumed_tags():
+    from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY
+    from litellm.router_strategy.tag_based_routing import _request_tags_after_router_consumption
+    from litellm.types.router import ConsumedRequestTagsStamp
+
+    fully_consumed = {
+        "tags": ["route"],
+        CONSUMED_REQUEST_TAGS_METADATA_KEY: ConsumedRequestTagsStamp(model_group="gemini-flash", tags=("route",)),
+    }
+    assert _request_tags_after_router_consumption(fully_consumed, "gemini-flash") is None
+
+    partially_consumed = {
+        "tags": ["route", "deploy:us"],
+        "inherited_tags": [],
+        CONSUMED_REQUEST_TAGS_METADATA_KEY: ConsumedRequestTagsStamp(model_group="gemini-flash", tags=("route",)),
+    }
+    assert _request_tags_after_router_consumption(partially_consumed, "gemini-flash") == ("deploy:us",)
+
+
+@pytest.mark.asyncio()
+async def test_non_router_tags_still_pick_the_matching_tier_deployment():
+    # tags=["route", "deploy:us"]: "route" picks the router and is spent there,
+    # but "deploy:us" must keep constraining deployment choice inside the routed
+    # group instead of being dropped with it.
+    from litellm.types.router import TaggedPreRoutingStrategy
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt4o",
+                "litellm_params": {"model": "openai/gpt-4o"},
+                "model_info": {"id": "plain-gpt4o"},
+            },
+            {
+                "model_name": "gemini-flash",
+                "litellm_params": {"model": "gemini/gemini-3.6-flash", "tags": ["deploy:us"]},
+                "model_info": {"id": "tier-gemini-flash-us"},
+            },
+            {
+                "model_name": "gemini-flash",
+                "litellm_params": {"model": "gemini/gemini-3.6-flash", "tags": ["deploy:eu"]},
+                "model_info": {"id": "tier-gemini-flash-eu"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+    router.auto_routers = {
+        "gpt4o": [TaggedPreRoutingStrategy(tags=("route",), strategy=_RewriteToTierStrategy("gemini-flash"))]
+    }
+
+    response = await router.acompletion(
+        model="gpt4o",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"tags": ["route", "deploy:us"], "inherited_tags": []},
+        mock_response="hi",
+    )
+
+    assert response._hidden_params["model_id"] == "tier-gemini-flash-us"
+
+
+def _chat_completions_request_mock():
+    from unittest.mock import MagicMock
+
+    from fastapi import Request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    return request_mock
+
+
+def _team_a_and_default_router():
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.4-mini",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "mock", "tags": ["team-a"]},
+                "model_info": {"id": "team-a-deployment"},
+            },
+            {
+                "model_name": "gpt-5.4-mini",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "mock", "tags": ["default"]},
+                "model_info": {"id": "default-deployment"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize(
+    "team_metadata,body_extra",
+    [
+        ({"tags": ["team-a"]}, {}),
+        ({}, {"tags": ["team-a"]}),
+    ],
+    ids=["team-tags", "body-tags"],
+)
+async def test_chat_request_carrying_litellm_metadata_still_routes_on_proxy_merged_tags(team_metadata, body_extra):
+    from unittest.mock import MagicMock
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    router = _team_a_and_default_router()
+    data = {
+        "model": "gpt-5.4-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "litellm_metadata": {"trace_id": "abc"},
+        **body_extra,
+    }
+
+    request_kwargs = await add_litellm_data_to_request(
+        data=data,
+        request=_chat_completions_request_mock(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", metadata={}, team_metadata=team_metadata),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    deployment = await router.async_get_available_deployment(
+        model="gpt-5.4-mini",
+        request_kwargs=request_kwargs,
+        messages=request_kwargs["messages"],
+    )
+
+    assert deployment["model_info"]["id"] == "team-a-deployment"

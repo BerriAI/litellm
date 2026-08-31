@@ -9,7 +9,7 @@ import threading
 import time
 from collections.abc import AsyncIterable, Callable, Iterable, Mapping
 from http.cookiejar import CookieJar, DefaultCookiePolicy
-from typing import TYPE_CHECKING, Any, Final, Optional, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, TypeAlias, TypedDict
 
 import certifi
 import httpx
@@ -933,11 +933,83 @@ class AsyncHTTPHandler:
         response.raise_for_status()
         return response
 
+    # Strong references to finalizer-scheduled client-close tasks. A bare
+    # create_task() result may be garbage-collected before it runs, leaving
+    # the underlying aiohttp session unclosed ("Unclosed client session").
+    # Mirrors LiteLLMAiohttpTransport._background_close_tasks.
+    _finalizer_close_tasks: ClassVar[set["asyncio.Task[None]"]] = set()  # mutable-ok: strong refs for pending closes
+
+    @classmethod
+    def _on_finalizer_close_done(cls, task: "asyncio.Task[None]") -> None:
+        cls._finalizer_close_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc: Final = task.exception()
+        if exc is not None:
+            verbose_logger.debug("Error closing client at finalization: %s", exc)
+
+    def _aiohttp_session_bound_elsewhere(self, loop: asyncio.AbstractEventLoop) -> bool:
+        """True when the wrapped aiohttp session is bound to a loop other than
+        ``loop`` — awaiting ``aclose()`` here would touch that loop's internals."""
+        from litellm.llms.custom_httpx.aiohttp_transport import (
+            LiteLLMAiohttpTransport,
+        )
+
+        transport: Final = getattr(self._client, "_transport", None)
+        if not isinstance(transport, LiteLLMAiohttpTransport):
+            return False
+        session: Final = transport.client
+        if not isinstance(session, ClientSession) or session.closed:
+            return False
+        return getattr(session, "_loop", None) is not loop
+
+    def _dispose_wrapped_aiohttp_session(self) -> None:
+        """Dispose the wrapped aiohttp session when ``aclose()`` cannot run here.
+
+        Finalization either has no running loop, or a loop the session is not
+        bound to. Delegating to the transport's lifecycle-aware disposal picks
+        the safe path per session state (async close on its own loop, threadsafe
+        handoff to a loop running elsewhere, or the synchronous connector
+        teardown that flips the flags ``ClientSession.__del__`` checks), so no
+        "Unclosed client session" / "Unclosed connector" warnings fire at
+        garbage collection.
+        """
+        from litellm.llms.custom_httpx.aiohttp_transport import (
+            LiteLLMAiohttpTransport,
+        )
+
+        transport: Final = getattr(self._client, "_transport", None)
+        if not isinstance(transport, LiteLLMAiohttpTransport):
+            return
+        # A shared session (e.g. the proxy's) is never this handler's to close.
+        if not getattr(transport, "_owns_session", False):
+            return
+        session: Final = transport.client
+        if isinstance(session, ClientSession) and not session.closed:
+            transport._close_recycled_session(session)  # pyright: ignore[reportPrivateUsage]  # deliberate reuse of the transport's lifecycle-aware disposal; an async close can never run in this context
+
     def __del__(self) -> None:
         try:
             if not _handler_may_close_client(sys.getrefcount(self._client), self._owns_client):
                 return
-            asyncio.get_running_loop().create_task(self._client.aclose())
+            try:
+                loop: Final = asyncio.get_running_loop()
+            except RuntimeError:
+                # No running loop at finalization time (worker threads after
+                # their loop closed, interpreter/worker shutdown, GC in a
+                # sync context). An async close can never run here.
+                self._dispose_wrapped_aiohttp_session()
+                return
+            if self._aiohttp_session_bound_elsewhere(loop):
+                # GC ran on a live loop (e.g. the app's) but the session
+                # belongs to another, possibly dead, loop — awaiting aclose()
+                # here is the cross-loop path the transport refuses.
+                self._dispose_wrapped_aiohttp_session()
+                return
+            task: Final = loop.create_task(self._client.aclose())
+            cls: Final = type(self)
+            cls._finalizer_close_tasks.add(task)
+            task.add_done_callback(cls._on_finalizer_close_done)
         except Exception:
             pass
 

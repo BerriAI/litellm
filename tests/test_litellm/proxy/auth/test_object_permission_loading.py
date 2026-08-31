@@ -2,13 +2,10 @@
 Test that object_permission is automatically loaded when fetching keys and teams.
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,

@@ -2,20 +2,17 @@
 Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation.py)
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
-from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 
 
 class TestOpenAIGPTConfig:
@@ -809,3 +806,172 @@ class TestCacheControlPreservationForCustomEndpoint:
             headers={},
         )
         assert all("cache_control" not in m for m in body["messages"])
+
+
+class TestToolMessageImageHoisting:
+    """transform_request moves tool-message images into a following user message
+    (OpenAI-compatible APIs only accept text in role:"tool" messages)."""
+
+    DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+    HOISTED_USER_CONTENT = [
+        {"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+        {"type": "image_url", "image_url": {"url": DATA_URI}},
+    ]
+
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    def _messages_with_image_part_in_tool(self):
+        return [
+            {"role": "user", "content": "read the screenshot"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [{"type": "image_url", "image_url": {"url": self.DATA_URI}}],
+            },
+        ]
+
+    def test_transform_request_hoists_image_part_from_tool_message(self):
+        request = self.config.transform_request(
+            model="gpt-5.4-mini",
+            messages=self._messages_with_image_part_in_tool(),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        result = request["messages"]
+        assert [m.get("role") for m in result] == ["user", "assistant", "tool", "user"]
+        tool_message = result[2]
+        assert isinstance(tool_message["content"], str)
+        assert "image" in tool_message["content"]
+        assert result[3]["content"] == self.HOISTED_USER_CONTENT
+
+    @pytest.mark.asyncio
+    async def test_async_transform_request_hoists_image_part_from_tool_message(self):
+        request = await self.config.async_transform_request(
+            model="gpt-5.4-mini",
+            messages=self._messages_with_image_part_in_tool(),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        result = request["messages"]
+        assert [m.get("role") for m in result] == ["user", "assistant", "tool", "user"]
+        assert result[3]["content"] == self.HOISTED_USER_CONTENT
+
+
+class TestToolReferenceStripping:
+    """transform_request drops tool_reference parts from tool messages: OpenAI's
+    chat API rejects them, and the reference names an already-declared tool
+    rather than carrying content (#37462 round trip)."""
+
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    def _messages_with_tool_reference(self, extra_parts=()):
+        return [
+            {"role": "user", "content": "load the WebFetch tool"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "ToolSearch", "arguments": "{}"}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [*extra_parts, {"type": "tool_reference", "tool_name": "WebFetch"}],
+            },
+        ]
+
+    def test_transform_request_keeps_text_and_drops_reference(self):
+        request = self.config.transform_request(
+            model="gpt-4.1",
+            messages=self._messages_with_tool_reference(extra_parts=({"type": "text", "text": "loaded"},)),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        tool_message = request["messages"][2]
+        assert tool_message["content"] == [{"type": "text", "text": "loaded"}]
+        assert tool_message["tool_call_id"] == "call_1"
+
+    def test_transform_request_reference_only_keeps_tool_message_with_empty_text(self):
+        request = self.config.transform_request(
+            model="gpt-4.1",
+            messages=self._messages_with_tool_reference(),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert [m.get("role") for m in request["messages"]] == ["user", "assistant", "tool"]
+        assert request["messages"][2]["content"] == ""
+
+    @pytest.mark.asyncio
+    async def test_async_transform_request_drops_reference(self):
+        request = await self.config.async_transform_request(
+            model="gpt-4.1",
+            messages=self._messages_with_tool_reference(),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert request["messages"][2]["content"] == ""
+
+
+class TestOpenAIPromptCacheBreakpointChatPath:
+    """Chat-path shape for OpenAI explicit prompt caching (#37509)."""
+
+    EXPLICIT = {"mode": "explicit"}
+
+    def test_prompt_cache_options_travels_in_extra_body(self):
+        optional_params = litellm.get_optional_params(
+            model="gpt-5.6", custom_llm_provider="openai", prompt_cache_options=self.EXPLICIT
+        )
+        assert optional_params["extra_body"]["prompt_cache_options"] == self.EXPLICIT
+        assert "prompt_cache_options" not in optional_params
+
+    def test_prompt_cache_options_is_not_a_supported_chat_param(self):
+        assert "prompt_cache_options" not in OpenAIGPT5Config().get_supported_openai_params("gpt-5.6")
+        assert "prompt_cache_options" not in OpenAIGPTConfig().get_supported_openai_params("gpt-4.1")
+
+    def test_block_breakpoint_survives_transform_request(self):
+        request = OpenAIGPT5Config().transform_request(
+            model="gpt-5.6",
+            messages=[
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "sys",
+                            "prompt_cache_breakpoint": self.EXPLICIT,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                },
+                {"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}]},
+            ],
+            optional_params={"extra_body": {"prompt_cache_options": self.EXPLICIT}},
+            litellm_params={},
+            headers={},
+        )
+        assert request["messages"][0]["content"] == [
+            {"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}
+        ]
+        assert request["messages"][1]["content"] == [{"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}]
+        assert request["extra_body"] == {"prompt_cache_options": self.EXPLICIT}
+        assert "prompt_cache_options" not in request

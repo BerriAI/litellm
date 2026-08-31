@@ -6,6 +6,7 @@ Admins use the management endpoints to read and update input_policy / output_pol
 """
 
 import uuid
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Final
 
@@ -13,6 +14,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ToolDiscoveryQueueItem
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ToolRepository
 from litellm.types.tool_management import (
     LiteLLM_ToolTableRow,
@@ -20,7 +22,23 @@ from litellm.types.tool_management import (
 )
 
 if TYPE_CHECKING:
+    from prisma import models as prisma_db_models
+
     from litellm.proxy.utils import PrismaClient
+
+
+def _tool_table_actions(prisma_client: "PrismaClient") -> "TableActions[prisma_db_models.LiteLLM_ToolTable]":
+    table: Final[TableActions[prisma_db_models.LiteLLM_ToolTable]] = ToolRepository(prisma_client).table
+    return table
+
+
+def _object_permission_table_actions(
+    prisma_client: "PrismaClient",
+) -> "TableActions[prisma_db_models.LiteLLM_ObjectPermissionTable]":
+    table: Final[TableActions[prisma_db_models.LiteLLM_ObjectPermissionTable]] = ObjectPermissionRepository(
+        prisma_client
+    ).table
+    return table
 
 
 def _row_to_model(row: dict | Any) -> LiteLLM_ToolTableRow:
@@ -87,7 +105,7 @@ async def batch_upsert_tools(
         if not data:
             return
         now: Final = datetime.now(timezone.utc)
-        table: Final = ToolRepository(prisma_client).table
+        table: Final = _tool_table_actions(prisma_client)
         for item in data:
             tool_name = item.get("tool_name", "")
             origin = item.get("origin") or "user_defined"
@@ -132,8 +150,8 @@ async def list_tools(
 ) -> list[LiteLLM_ToolTableRow]:
     """Return all tools, optionally filtered by input_policy."""
     try:
-        where: Final = {"input_policy": input_policy} if input_policy is not None else {}
-        rows: Final = await ToolRepository(prisma_client).table.find_many(
+        where: Final[Mapping[str, str]] = {"input_policy": input_policy} if input_policy is not None else {}
+        rows: Final = await _tool_table_actions(prisma_client).find_many(
             where=where,
             order={"created_at": "desc"},
         )
@@ -149,7 +167,7 @@ async def get_tool(
 ) -> LiteLLM_ToolTableRow | None:
     """Return a single tool row by tool_name."""
     try:
-        row: Final = await ToolRepository(prisma_client).table.find_unique(
+        row: Final = await _tool_table_actions(prisma_client).find_unique(
             where={"tool_name": tool_name},
         )
         if row is None:
@@ -172,7 +190,7 @@ async def update_tool_policy(
         _updated_by: Final = updated_by or "system"
         now: Final = datetime.now(timezone.utc)
 
-        create_data: Final[dict] = {
+        create_data: Final[dict[str, object]] = {
             "tool_id": str(uuid.uuid4()),
             "tool_name": tool_name,
             "input_policy": input_policy or "untrusted",
@@ -182,7 +200,7 @@ async def update_tool_policy(
             "created_at": now,
             "updated_at": now,
         }
-        update_data: Final[dict] = {
+        update_data: Final[dict[str, object]] = {
             "updated_by": _updated_by,
             "updated_at": now,
         }
@@ -191,7 +209,7 @@ async def update_tool_policy(
         if output_policy is not None:
             update_data["output_policy"] = output_policy
 
-        await ToolRepository(prisma_client).table.upsert(
+        await _tool_table_actions(prisma_client).upsert(
             where={"tool_name": tool_name},
             data={
                 "create": create_data,
@@ -214,7 +232,7 @@ async def get_tools_by_names(
     if not tool_names:
         return {}
     try:
-        rows: Final = await ToolRepository(prisma_client).table.find_many(
+        rows: Final = await _tool_table_actions(prisma_client).find_many(
             where={"tool_name": {"in": tool_names}},
         )
         return {
@@ -239,7 +257,7 @@ async def list_overrides_for_tool(
     """
     out: Final[list[ToolPolicyOverrideRow]] = []
     try:
-        perms: Final = await ObjectPermissionRepository(prisma_client).table.find_many(
+        perms: Final = await _object_permission_table_actions(prisma_client).find_many(
             where={"blocked_tools": {"has": tool_name}},
             include={
                 "verification_tokens": True,
@@ -302,7 +320,7 @@ class ToolPolicyRegistry:
         try:
             tools: Final = await call_with_db_reconnect_retry(
                 prisma_client,
-                lambda: ToolRepository(prisma_client).table.find_many(),
+                lambda: _tool_table_actions(prisma_client).find_many(),
                 reason="sync_tool_policy_from_db_tools_lookup_failure",
             )
             self._tool_input_policies = {
@@ -314,7 +332,7 @@ class ToolPolicyRegistry:
 
             perms: Final = await call_with_db_reconnect_retry(
                 prisma_client,
-                lambda: ObjectPermissionRepository(prisma_client).table.find_many(),
+                lambda: _object_permission_table_actions(prisma_client).find_many(),
                 reason="sync_tool_policy_from_db_perms_lookup_failure",
             )
             self._blocked_tools_by_op_id = {}
@@ -352,7 +370,7 @@ class ToolPolicyRegistry:
         """
         if not tool_names:
             return {}
-        blocked: Final[set] = set()
+        blocked: Final[set[str]] = set()
         for op_id in (object_permission_id, team_object_permission_id):
             if op_id and op_id.strip():
                 blocked.update(self._blocked_tools_by_op_id.get(op_id.strip(), []))
@@ -385,7 +403,7 @@ async def add_tool_to_object_permission_blocked(
     if not object_permission_id or not tool_name:
         return False
     try:
-        row: Final = await ObjectPermissionRepository(prisma_client).table.find_unique(
+        row: Final = await _object_permission_table_actions(prisma_client).find_unique(
             where={"object_permission_id": object_permission_id},
         )
         if row is None:
@@ -394,7 +412,7 @@ async def add_tool_to_object_permission_blocked(
         if tool_name in current:
             return True
         current.append(tool_name)
-        await ObjectPermissionRepository(prisma_client).table.update(
+        await _object_permission_table_actions(prisma_client).update(
             where={"object_permission_id": object_permission_id},
             data={"blocked_tools": current},
         )
@@ -413,7 +431,7 @@ async def remove_tool_from_object_permission_blocked(
     if not object_permission_id or not tool_name:
         return False
     try:
-        row: Final = await ObjectPermissionRepository(prisma_client).table.find_unique(
+        row: Final = await _object_permission_table_actions(prisma_client).find_unique(
             where={"object_permission_id": object_permission_id},
         )
         if row is None:
@@ -422,7 +440,7 @@ async def remove_tool_from_object_permission_blocked(
         if tool_name not in current:
             return False
         current = [t for t in current if t != tool_name]
-        await ObjectPermissionRepository(prisma_client).table.update(
+        await _object_permission_table_actions(prisma_client).update(
             where={"object_permission_id": object_permission_id},
             data={"blocked_tools": current},
         )

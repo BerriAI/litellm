@@ -1,6 +1,4 @@
 import asyncio
-import os
-import sys
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,13 +6,9 @@ import pytest
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
 from litellm.proxy._types import LiteLLM_BudgetTableFull
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 
@@ -748,8 +742,9 @@ async def test_service_logger_keys_failure():
     ) = proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args
     event_metadata = kwargs.get("event_metadata", {})
     assert event_metadata.get("num_keys_found") == len(keys)
-    keys_found_str = event_metadata.get("keys_found", "")
-    assert "key1" in keys_found_str
+    # the row payload is deliberately absent: serializing every found row on the
+    # event loop is what blocked auth on the sweeping pod
+    assert "keys_found" not in event_metadata
     # Success hook should not be called.
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()
 
@@ -866,8 +861,7 @@ async def test_service_logger_users_failure():
     ) = proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args
     event_metadata = kwargs.get("event_metadata", {})
     assert event_metadata.get("num_users_found") == len(users)
-    users_found_str = event_metadata.get("users_found", "")
-    assert "user1" in users_found_str
+    assert "users_found" not in event_metadata
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()
 
 
@@ -983,8 +977,7 @@ async def test_service_logger_teams_failure():
     ) = proxy_logging_obj.service_logging_obj.async_service_failure_hook.call_args
     event_metadata = kwargs.get("event_metadata", {})
     assert event_metadata.get("num_teams_found") == len(teams)
-    teams_found_str = event_metadata.get("teams_found", "")
-    assert "team1" in teams_found_str
+    assert "teams_found" not in event_metadata
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()
 
 
@@ -1113,8 +1106,8 @@ async def test_service_logger_endusers_failure():
     event_metadata = kwargs.get("event_metadata", {})
     assert event_metadata.get("num_budgets_found") == len(budgets)
     assert event_metadata.get("num_endusers_found") == len(endusers)
-    endusers_found_str = event_metadata.get("endusers_found", "")
-    assert "user1" in endusers_found_str
+    assert "endusers_found" not in event_metadata
+    assert "budgets_found" not in event_metadata
     proxy_logging_obj.service_logging_obj.async_service_success_hook.assert_not_called()
 
 

@@ -24,6 +24,7 @@ from itertools import groupby
 from typing import TYPE_CHECKING, Final, NamedTuple
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 
 if TYPE_CHECKING:
@@ -180,11 +181,18 @@ def build_autorouter_turn_transaction(
 
     The routing_decision record is what says a request was auto-routed at all, so a
     request without one (including the auto-router's own classifier sub-calls) never
-    reaches the rollup. Failed requests served nothing and are excluded. Cache facts
-    are derived from the payload's own usage record through the savings owner, never
-    handed in beside it.
+    reaches the rollup. Internal sub-calls that DO carry one (a shadow eval's duplicate
+    of a request through the router) are excluded by their internal_call_origin stamp:
+    they are not traffic a user sent, so counting them would manufacture sessions and
+    savings in the adoption metrics. Failed requests served nothing and are excluded.
+    The classifier's charge still lands here exactly once, via the decision's own
+    classifier_cost folded into this turn's spend: the excluded classifier row is how
+    it was billed, the decision is how it is attributed. Cache facts are derived from
+    the payload's own usage record through the savings owner, never handed in beside it.
     """
     if payload.get("status") != "success":
+        return None
+    if metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
         return None
     routing_decision: Final = metadata.get("routing_decision")
     if not isinstance(routing_decision, Mapping) or not routing_decision:
@@ -198,9 +206,12 @@ def build_autorouter_turn_transaction(
     turn_at: Final = _turn_time_utc(str(payload.get("startTime") or ""))
     if turn_at is None:
         return None
+    from litellm.proxy.spend_tracking.savings import classifier_cost_from_decision
+
     usage_object_raw: Final = metadata.get("usage_object")
     cache: Final = turn_cache_facts(usage_object_raw if isinstance(usage_object_raw, Mapping) else None)
     tier_raw: Final = routing_decision.get("tier")
+    classifier_cost: Final = classifier_cost_from_decision(routing_decision)
     return AutoRouterTurnTransaction(
         api_key=api_key,
         session_id=_bounded_session_id(session_id),
@@ -210,7 +221,7 @@ def build_autorouter_turn_transaction(
         model=model,
         turn_at=turn_at,
         total_tokens=int(payload.get("prompt_tokens") or 0) + int(payload.get("completion_tokens") or 0),
-        spend=float(payload.get("spend") or 0.0),
+        spend=float(payload.get("spend") or 0.0) + (classifier_cost or 0.0),
         saved_spend=saved_spend,
         covered=cache.covered,
         cache_hit=cache.read_tokens > 0,

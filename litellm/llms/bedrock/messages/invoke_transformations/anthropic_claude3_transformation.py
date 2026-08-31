@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
@@ -33,9 +34,13 @@ from litellm.llms.bedrock.common_utils import (
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
+    normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     pop_bedrock_invoke_output_config_format,
-    remove_custom_field_from_tools,
+)
+from litellm.llms.bedrock.request_metadata import (
+    bedrock_request_metadata_headers,
+    merge_bedrock_invoke_headers,
 )
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
@@ -89,7 +94,8 @@ class AmazonAnthropicClaudeMessagesConfig(
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict, str | None]:
-        return headers, api_base
+        owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
+        return merge_bedrock_invoke_headers(headers, (), metadata_headers, owned_names), api_base
 
     def sign_request(
         self,
@@ -749,11 +755,9 @@ class AmazonAnthropicClaudeMessagesConfig(
                     model,
                 )
 
-        # 5b. Remove `custom` field from tools (Bedrock doesn't support it)
-        # Claude Code sends `custom: {defer_loading: true}` on tool definitions,
-        # which causes Bedrock to reject the request with "Extra inputs are not permitted"
+        # 5b. Hoist `custom.defer_loading` then drop `custom` (Bedrock doesn't support it)
         # Ref: https://github.com/BerriAI/litellm/issues/22847
-        remove_custom_field_from_tools(anthropic_messages_request)
+        normalize_custom_field_on_tools(anthropic_messages_request)
         normalize_tool_input_schema_types_for_bedrock_invoke(anthropic_messages_request)
         ensure_bedrock_anthropic_messages_tool_names(anthropic_messages_request)
 
@@ -838,8 +842,15 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         patched_stream: Final = self._promote_message_stop_usage(completion_stream)
 
-        async for chunk in handler.async_sse_wrapper(patched_stream):
-            yield chunk
+        sse_stream: Final = handler.async_sse_wrapper(patched_stream)
+        try:
+            async for chunk in sse_stream:
+                yield chunk
+        finally:
+            # Close the inner generator deterministically so a client disconnect
+            # (GeneratorExit here) reaches async_sse_wrapper's partial-spend logging
+            # now instead of at garbage collection. See LIT-5839.
+            await sse_stream.aclose()
 
     @staticmethod
     def _merge_message_start_cache_into_delta_usage(
@@ -958,13 +969,32 @@ class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
         Bedrock returns usage metrics using camelCase keys. Convert these to
         the Anthropic `/v1/messages` specification so callers receive a
         consistent response shape when streaming.
+
+        Token counts already present in the chunk's own Anthropic usage block
+        win over the invocationMetrics-derived ones, and cache token fields
+        (``cache_read_input_tokens`` / ``cache_creation_input_tokens`` on
+        ``message_stop.usage``, or ``cacheReadInputTokenCount`` /
+        ``cacheWriteInputTokenCount`` inside the invocation metrics) are
+        preserved: ``invocationMetrics.inputTokenCount`` excludes cache reads
+        and writes, so replacing the whole usage block with input/output counts
+        alone drops the cache breakdown, ``_promote_message_stop_usage`` has
+        nothing left to promote, and cache tokens end up billed at $0.
         """
         amazon_bedrock_invocation_metrics: Final = chunk_data.pop("amazon-bedrock-invocationMetrics", {})
         if amazon_bedrock_invocation_metrics:
-            anthropic_usage: Final = {}
-            if "inputTokenCount" in amazon_bedrock_invocation_metrics:
-                anthropic_usage["input_tokens"] = amazon_bedrock_invocation_metrics["inputTokenCount"]
-            if "outputTokenCount" in amazon_bedrock_invocation_metrics:
-                anthropic_usage["output_tokens"] = amazon_bedrock_invocation_metrics["outputTokenCount"]
-            chunk_data["usage"] = anthropic_usage
+            existing_usage: Final = chunk_data.get("usage")
+            preserved_usage: Final = existing_usage if isinstance(existing_usage, dict) else MappingProxyType({})
+            metrics_usage: Final = MappingProxyType(
+                {
+                    anthropic_key: amazon_bedrock_invocation_metrics[metrics_key]
+                    for anthropic_key, metrics_key in (
+                        ("input_tokens", "inputTokenCount"),
+                        ("output_tokens", "outputTokenCount"),
+                        ("cache_read_input_tokens", "cacheReadInputTokenCount"),
+                        ("cache_creation_input_tokens", "cacheWriteInputTokenCount"),
+                    )
+                    if metrics_key in amazon_bedrock_invocation_metrics
+                }
+            )
+            chunk_data["usage"] = {**metrics_usage, **preserved_usage}
         return chunk_data

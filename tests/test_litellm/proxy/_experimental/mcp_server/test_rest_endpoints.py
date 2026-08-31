@@ -1,8 +1,12 @@
 import asyncio
 import json
+import sys
 from datetime import datetime
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock
+
+if sys.version_info < (3, 11):  # BaseExceptionGroup is a builtin only from 3.11
+    from exceptiongroup import BaseExceptionGroup
 
 import httpx
 import pytest
@@ -792,7 +796,7 @@ class TestListToolsRestAPI:
             return admitted_auth
 
         monkeypatch.setattr(
-            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
             fake_reload,
         )
 
@@ -908,7 +912,7 @@ class TestListToolsRestAPI:
             return ["toolset-tool-1"]
 
         monkeypatch.setattr(
-            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._reload_admitted_user",
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
             record_reload,
         )
         monkeypatch.setattr(

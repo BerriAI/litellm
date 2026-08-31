@@ -16,8 +16,8 @@ logic.
 """
 
 import json
-from collections.abc import Mapping
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Final
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -29,7 +29,7 @@ from litellm.types.llms.openai import (
 _MAX_ARGUMENTS_LEN: Final = 1_000_000
 
 
-def extract_custom_tool_names(tools: list[Any] | None) -> set[str]:
+def extract_custom_tool_names(tools: Sequence[object] | None) -> set[str]:
     """Extract names of tools originally defined as ``type: "custom"``."""
     if not tools:
         return set()
@@ -73,7 +73,7 @@ def build_tool_call_item_kwargs(
     arguments_or_input: str,
     status: str,
     custom_tool_names: set[str],
-) -> dict[str, Any]:
+) -> dict[str, str]:
     """Build kwargs for an output item dict that is either a ``function_call``
     or a ``custom_tool_call`` depending on whether *name* is in
     *custom_tool_names*.
@@ -86,7 +86,7 @@ def build_tool_call_item_kwargs(
     """
     custom: Final = is_custom_tool_call(name, custom_tool_names)
     item_type: Final = "custom_tool_call" if custom else "function_call"
-    kwargs: Final[dict[str, Any]] = {
+    kwargs: Final[dict[str, str]] = {
         "type": item_type,
         "id": call_id,
         "call_id": call_id,
@@ -111,7 +111,7 @@ class _CustomToolFormat(BaseModel):
 _ALLOWED_CALLERS_ADAPTER: Final = TypeAdapter(list[str] | None)
 
 
-def _validated_allowed_callers(value: object) -> list[str] | None:
+def validated_allowed_callers(value: object) -> list[str] | None:
     try:
         return _ALLOWED_CALLERS_ADAPTER.validate_python(value, strict=True)
     except ValidationError as exc:
@@ -143,7 +143,7 @@ def convert_custom_tool_to_function_tool(tool: Mapping[str, object]) -> ChatComp
     name: Final = raw_name if isinstance(raw_name, str) else ""
     raw_description: Final = tool.get("description")
     description = (raw_description if isinstance(raw_description, str) else "") + _grammar_suffix(tool.get("format"))
-    allowed_callers: Final = _validated_allowed_callers(tool.get("allowed_callers"))
+    allowed_callers: Final = validated_allowed_callers(tool.get("allowed_callers"))
     function_chunk: Final = ChatCompletionToolParamFunctionChunk(
         name=name,
         description=description,

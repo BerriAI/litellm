@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from "react";
-import { Form, Select, Spin, Input, Slider } from "antd";
 import {
   guardrail_provider_map,
   populateGuardrailProviders,
@@ -7,13 +6,31 @@ import {
   shouldRenderContentFilterConfigSettings,
 } from "./guardrail_info_helpers";
 import { getGuardrailProviderSpecificParams } from "@/components/networking";
+import { MultiSelect } from "@/components/shared/MultiSelect";
+import { PasswordInput } from "@/components/shared/PasswordInput";
 import NumericalInput from "@/components/shared/numerical_input";
+import { FieldGroup } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import {
+  asStringArray,
+  asText,
+  GuardrailField,
+  labelWithHint,
+  readRecord,
+  requiredRule,
+  type GuardrailFieldControlProps,
+  type GuardrailFormControl,
+} from "./GuardrailFormField";
 
 interface GuardrailProviderFieldsProps {
   selectedProvider: string | null;
+  control: GuardrailFormControl;
   accessToken?: string | null;
   providerParams?: ProviderParamsResponse | null;
-  value?: Record<string, any> | null;
+  value?: Record<string, unknown> | null;
 }
 
 interface ProviderParam {
@@ -35,8 +52,142 @@ interface ProviderParamsResponse {
   [provider: string]: { [key: string]: ProviderParam };
 }
 
+const BOOLEAN_ITEMS = [
+  { label: "True", value: true },
+  { label: "False", value: false },
+];
+
+const isSecretKey = (fieldKey: string): boolean =>
+  fieldKey.includes("password") || fieldKey.includes("secret") || fieldKey.includes("key");
+
+interface ProviderFieldInputProps {
+  descriptor: ProviderParam;
+  fieldKey: string;
+  control: GuardrailFieldControlProps;
+}
+
+const ProviderFieldInput: React.FC<ProviderFieldInputProps> = ({ descriptor, fieldKey, control }) => {
+  const { id, value, onChange, onBlur, ref, name, ...aria } = control;
+
+  if (descriptor.type === "select" && descriptor.options) {
+    return (
+      <Select
+        items={descriptor.options.map((option) => ({ label: option, value: option }))}
+        value={asText(value) || null}
+        onValueChange={(next: string | null) => onChange(next)}
+      >
+        <SelectTrigger id={id} className="w-full" {...aria}>
+          <SelectValue placeholder={descriptor.description} />
+        </SelectTrigger>
+        <SelectContent>
+          {descriptor.options.map((option) => (
+            <SelectItem key={option} value={option}>
+              {option}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    );
+  }
+
+  if (descriptor.type === "multiselect" && descriptor.options) {
+    return (
+      <MultiSelect
+        id={id}
+        options={descriptor.options.map((option) => ({ label: option, value: option }))}
+        value={asStringArray(value)}
+        onValueChange={onChange}
+        placeholder={descriptor.description}
+      />
+    );
+  }
+
+  if (descriptor.type === "bool" || descriptor.type === "boolean") {
+    return (
+      <Select
+        items={BOOLEAN_ITEMS}
+        value={typeof value === "boolean" ? value : null}
+        onValueChange={(next: boolean | null) => onChange(next)}
+      >
+        <SelectTrigger id={id} className="w-full" {...aria}>
+          <SelectValue placeholder={descriptor.description} />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={true}>True</SelectItem>
+          <SelectItem value={false}>False</SelectItem>
+        </SelectContent>
+      </Select>
+    );
+  }
+
+  if (descriptor.type === "percentage" && descriptor.min != null && descriptor.max != null) {
+    return (
+      <div className="w-full">
+        <Slider
+          id={id}
+          min={descriptor.min}
+          max={descriptor.max}
+          step={descriptor.step ?? 0.1}
+          value={typeof value === "number" ? value : descriptor.min}
+          onValueChange={(next: number | readonly number[]) => onChange(Array.isArray(next) ? next[0] : next)}
+          onBlur={onBlur}
+        />
+        <div className="mt-1 flex justify-between text-xs text-muted-foreground">
+          <span>0%</span>
+          <span>50%</span>
+          <span>100%</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (descriptor.type === "number") {
+    return (
+      <NumericalInput
+        id={id}
+        name={name}
+        step={1}
+        placeholder={descriptor.description}
+        value={asText(value)}
+        onChange={onChange}
+        onBlur={onBlur}
+        {...aria}
+      />
+    );
+  }
+
+  if (isSecretKey(fieldKey)) {
+    return (
+      <PasswordInput
+        id={id}
+        name={name}
+        ref={ref}
+        placeholder={descriptor.description}
+        value={asText(value)}
+        onChange={onChange}
+        onBlur={onBlur}
+        {...aria}
+      />
+    );
+  }
+
+  return (
+    <Input
+      id={id}
+      name={name}
+      ref={ref}
+      placeholder={descriptor.description}
+      value={asText(value)}
+      onChange={onChange}
+      onBlur={onBlur}
+      {...aria}
+    />
+  );
+};
+
 const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
   selectedProvider,
+  control,
   accessToken,
   providerParams: providerParamsProp = null,
   value = null,
@@ -87,12 +238,17 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
 
   // Show loading state
   if (loading) {
-    return <Spin tip="Loading provider parameters..." />;
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <UiLoadingSpinner className="size-4" />
+        Loading provider parameters...
+      </div>
+    );
   }
 
   // Show error state
   if (error) {
-    return <div className="text-red-500">{error}</div>;
+    return <div className="text-destructive">{error}</div>;
   }
 
   // Get the provider key matching the selected provider in the guardrail_provider_map
@@ -119,10 +275,11 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
   const isContentFilterProvider = shouldRenderContentFilterConfigSettings(selectedProvider);
 
   // Convert object to array of entries and render fields
-  const renderFields = (fields: { [key: string]: ProviderParam }, parentKey = "", parentValue?: any) => {
+  const renderFields = (fields: { [key: string]: ProviderParam }, parentKey = "", parentValue?: unknown) => {
     return Object.entries(fields).map(([fieldKey, field]) => {
-      const fullFieldKey = parentKey ? `${parentKey}.${fieldKey}` : fieldKey;
-      const fieldValue = parentValue ? parentValue[fieldKey] : value?.[fieldKey];
+      // ":" keeps nested children out of the submitted object graph: nothing binds the parent
+      const fullFieldKey = parentKey ? `${parentKey}:${fieldKey}` : fieldKey;
+      const fieldValue = parentValue ? readRecord(parentValue, fieldKey) : value?.[fieldKey];
       // Skip ui_friendly_name - it's metadata for the UI dropdown, not a user configuration field
       if (fieldKey === "ui_friendly_name") {
         return null;
@@ -143,9 +300,9 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
         return (
           <div key={fullFieldKey}>
             <div className="mb-2 font-medium">{fieldKey}</div>
-            <div className="ml-4 border-l-2 border-gray-200 pl-4">
+            <FieldGroup className="ml-4 border-l-2 border-border pl-4">
               {renderFields(field.fields, fullFieldKey, fieldValue)}
-            </div>
+            </FieldGroup>
           </div>
         );
       }
@@ -154,64 +311,21 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
         fieldValue !== undefined ? fieldValue : field.default_value ?? (field.type === "percentage" ? 0.5 : undefined);
 
       return (
-        <Form.Item
+        <GuardrailField
           key={fullFieldKey}
+          control={control}
           name={fullFieldKey}
-          label={fieldKey}
-          tooltip={field.description}
-          rules={field.required ? [{ required: true, message: `${fieldKey} is required` }] : undefined}
-          initialValue={resolvedInitialValue}
+          label={labelWithHint(fieldKey, field.description)}
+          rules={field.required ? requiredRule(`${fieldKey} is required`) : undefined}
+          defaultValue={resolvedInitialValue}
         >
-          {field.type === "select" && field.options ? (
-            <Select placeholder={field.description} defaultValue={fieldValue || field.default_value}>
-              {field.options.map((option) => (
-                <Select.Option key={option} value={option}>
-                  {option}
-                </Select.Option>
-              ))}
-            </Select>
-          ) : field.type === "multiselect" && field.options ? (
-            <Select mode="multiple" placeholder={field.description} defaultValue={fieldValue || field.default_value}>
-              {field.options.map((option) => (
-                <Select.Option key={option} value={option}>
-                  {option}
-                </Select.Option>
-              ))}
-            </Select>
-          ) : field.type === "bool" || field.type === "boolean" ? (
-            <Select placeholder={field.description}>
-              <Select.Option value={true}>True</Select.Option>
-              <Select.Option value={false}>False</Select.Option>
-            </Select>
-          ) : field.type === "percentage" && field.min != null && field.max != null ? (
-            <Slider
-              min={field.min}
-              max={field.max}
-              step={field.step ?? 0.1}
-              marks={{
-                [field.min]: "0%",
-                [(field.min + field.max) / 2]: "50%",
-                [field.max]: "100%",
-              }}
-            />
-          ) : field.type === "number" ? (
-            <NumericalInput
-              step={1}
-              width={400}
-              placeholder={field.description}
-              defaultValue={fieldValue !== undefined ? Number(fieldValue) : undefined}
-            />
-          ) : fieldKey.includes("password") || fieldKey.includes("secret") || fieldKey.includes("key") ? (
-            <Input.Password placeholder={field.description} defaultValue={fieldValue || ""} />
-          ) : (
-            <Input placeholder={field.description} defaultValue={fieldValue || ""} />
-          )}
-        </Form.Item>
+          {(fieldControl) => <ProviderFieldInput descriptor={field} fieldKey={fieldKey} control={fieldControl} />}
+        </GuardrailField>
       );
     });
   };
 
-  return <>{renderFields(providerFields)}</>;
+  return <FieldGroup>{renderFields(providerFields)}</FieldGroup>;
 };
 
 export default GuardrailProviderFields;

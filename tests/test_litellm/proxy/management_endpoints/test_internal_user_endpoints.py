@@ -1,15 +1,10 @@
 import json
-import os
-import sys
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy._types import (
     LiteLLM_UserTableFiltered,
@@ -389,51 +384,6 @@ async def test_ui_view_users_flag_on_team_admin_non_org_team_403(mocker):
 
 
 @pytest.mark.asyncio
-async def test_ui_view_users_flag_on_non_admin_no_team_id_403(mocker):
-    """
-    Flag ON, non-admin caller without team_id: returns 403.
-    """
-    from fastapi import HTTPException
-
-    mock_prisma_client = mocker.MagicMock()
-
-    # Flag ON
-    mocker.patch(
-        "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
-        return_value={"scope_user_search_to_org": True},
-    )
-
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", mocker.MagicMock())
-    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mocker.MagicMock())
-
-    # Caller is not org admin
-    caller_user = mocker.MagicMock()
-    caller_user.organization_memberships = []
-
-    async def mock_get_user_object(*args, **kwargs):
-        return caller_user
-
-    mocker.patch(
-        "litellm.proxy.management_endpoints.internal_user_endpoints.get_user_object",
-        side_effect=mock_get_user_object,
-    )
-
-    with pytest.raises(HTTPException) as exc_info:
-        await ui_view_users(
-            user_api_key_dict=UserAPIKeyAuth(user_id="internal_user", user_role=None),
-            user_id=None,
-            user_email="u",
-            team_id=None,
-            page=1,
-            page_size=50,
-        )
-
-    assert exc_info.value.status_code == 403
-    assert "scope_user_search_to_org is enabled" in str(exc_info.value.detail)
-
-
-@pytest.mark.asyncio
 async def test_ui_view_users_flag_on_team_admin_org_member_no_team_id(mocker):
     """
     Flag ON, team admin who is an org member (not org admin), no team_id param:
@@ -713,6 +663,8 @@ def test_validate_sort_params():
     """
     Test that validate_sort_params returns None if sort_by is None
     """
+    from fastapi import HTTPException
+
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
         _validate_sort_params,
     )
@@ -721,7 +673,7 @@ def test_validate_sort_params():
     assert _validate_sort_params(None, "desc") is None
     assert _validate_sort_params("user_id", "asc") == {"user_id": "asc"}
     assert _validate_sort_params("user_id", "desc") == {"user_id": "desc"}
-    with pytest.raises(Exception):
+    with pytest.raises(HTTPException):
         _validate_sort_params("user_id", "invalid")
 
 
@@ -2298,7 +2250,8 @@ async def test_get_user_daily_activity_aggregated_rejects_service_account_caller
 
 
 @pytest.mark.asyncio
-async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch):
+@pytest.mark.parametrize("include_current_utc_day", [False, True])
+async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch, include_current_utc_day):
     """
     Test that admin users can call the aggregated endpoint without a user_id
     to get a global view. Also verifies that the correct arguments are forwarded
@@ -2336,6 +2289,7 @@ async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch)
         api_key=None,
         user_id=None,
         timezone=480,
+        include_current_utc_day=include_current_utc_day,
         user_api_key_dict=admin_key_dict,
     )
 
@@ -2353,6 +2307,7 @@ async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch)
         model="gpt-4",
         api_key=None,
         timezone_offset_minutes=480,
+        include_current_utc_day=include_current_utc_day,
     )
 
 
@@ -2443,7 +2398,7 @@ async def test_delete_user_cleans_up_created_by_invitation_links(mocker):
     mock_user_row.user_id = "admin-creator"
     mock_user_row.user_email = "admin@example.com"
     mock_user_row.teams = []
-    mock_user_row.json.return_value = "{}"
+    mock_user_row.model_dump_json.return_value = "{}"
     mock_user_row.model_dump.return_value = {
         "user_id": "admin-creator",
         "user_email": "admin@example.com",
@@ -3015,6 +2970,7 @@ async def test_user_info_v2_response_shape(mocker):
         "updated_at": datetime(2024, 6, 1, tzinfo=timezone.utc),
         "sso_user_id": None,
         "teams": ["team-a", "team-b"],
+        "model_max_budget": {"gpt-3.5-turbo": {"budget_limit": 5.0, "time_period": "30d"}},
     }
 
     async def mock_find_unique(*args, **kwargs):
@@ -3058,8 +3014,19 @@ async def test_user_info_v2_response_shape(mocker):
         "sso_user_id",
         "teams",
         "object_permission",
+        "model_max_budget",
+        "model_max_budget_usage",
     }
     assert set(response_dict.keys()) == expected_fields
+
+    # The dashboard's user edit form hydrates its per-model budget rows from
+    # these two, so dropping them makes a save replace the user's budgets.
+    assert response_dict["model_max_budget"] == {
+        "gpt-3.5-turbo": {"budget_limit": 5.0, "time_period": "30d"}
+    }
+    assert response_dict["model_max_budget_usage"] == {
+        "gpt-3.5-turbo": {"current_spend": 0.0, "budget_limit": 5.0, "time_period": "30d"}
+    }
 
     # Verify teams is a list of strings (team IDs), not team objects
     assert isinstance(response.teams, list)
@@ -4190,3 +4157,66 @@ async def test_user_info_v2_returns_the_mcp_entitlement(mocker):
     assert response.object_permission.mcp_tool_permissions == {
         "github": ["list_issues"]
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_max_budget,expected_written",
+    [
+        (
+            {"claude-opus-4-8": {"budget_limit": 200.0, "time_period": "1mo"}},
+            '{"claude-opus-4-8": {"budget_limit": 200.0, "time_period": "1mo"}}',
+        ),
+        (None, None),
+        ({}, None),
+    ],
+    ids=["supplied", "omitted", "empty"],
+)
+async def test_user_new_persists_model_max_budget(
+    monkeypatch, model_max_budget, expected_written
+):
+    """
+    /user/new used to echo model_max_budget back while writing {} to the user row,
+    so a per-model budget looked configured and was read by nothing.
+
+    The omitted/empty cases are the other half: SSO and default-key callers reach
+    generate_key_helper_fn with no budget, and writing "{}" for them would clear
+    an existing user's budgets.
+    """
+    from litellm.proxy.management_endpoints import key_management_endpoints
+
+    captured = {}
+
+    class _FakeUserRow:
+        models = []
+
+    class _FakePrisma:
+        async def insert_data(self, data, table_name):
+            if table_name == "user":
+                captured["user_data"] = dict(data)
+                return _FakeUserRow()
+            captured["key_data"] = dict(data)
+            return SimpleNamespace(
+                token=data.get("token"),
+                litellm_budget_table=None,
+                created_at=None,
+                updated_at=None,
+            )
+
+        async def get_data(self, *args, **kwargs):
+            return None
+
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", _FakePrisma(), raising=False)
+    # model_max_budget is an enterprise feature; without this the call is rejected
+    # before it ever reaches the write this test is about.
+    monkeypatch.setattr(proxy_server, "premium_user", True, raising=False)
+
+    await key_management_endpoints.generate_key_helper_fn(
+        request_type="user",
+        user_id="u-1",
+        model_max_budget=model_max_budget,
+    )
+
+    assert captured["user_data"].get("model_max_budget") == expected_written

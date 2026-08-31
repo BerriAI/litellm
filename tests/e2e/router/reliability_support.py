@@ -47,6 +47,7 @@ def chat_override(
     content: str,
     override: RouterSettingsOverride | None = None,
     stream: bool = False,
+    cache: dict[str, bool] | None = {"no-cache": True},
 ) -> StreamingResponse:
     """POST /chat/completions with an optional per-request router_settings_override,
     returning the raw outcome so tests read status, body, and reliability headers."""
@@ -56,22 +57,48 @@ def chat_override(
         json=ReliabilityChatBody(
             model=model,
             messages=[ChatMessage(role="user", content=content)],
-            max_tokens=16,
+            max_tokens=512,
             stream=stream,
             router_settings_override=override,
+            cache=cache,
         ),
         stream=stream,
     )
 
 
+def _parsed(resp: StreamingResponse) -> ChatResponse | None:
+    try:
+        return ChatResponse.model_validate_json(resp.body)
+    except ValidationError:
+        return None
+
+
 def content_of(resp: StreamingResponse) -> str | None:
     """The assistant message content of a successful chat response, or None when the
     body is not a success shape (an error body, or an elided streamed body)."""
-    try:
-        parsed = ChatResponse.model_validate_json(resp.body)
-    except ValidationError:
-        return None
-    if not parsed.choices:
+    parsed = _parsed(resp)
+    if parsed is None or not parsed.choices:
         return None
     message = parsed.choices[0].message
     return message.content if message is not None else None
+
+
+def finish_reason_of(resp: StreamingResponse) -> str | None:
+    parsed = _parsed(resp)
+    if parsed is None or not parsed.choices:
+        return None
+    return parsed.choices[0].finish_reason
+
+
+def completion_tokens_of(resp: StreamingResponse) -> int | None:
+    parsed = _parsed(resp)
+    if parsed is None or parsed.usage is None:
+        return None
+    return parsed.usage.completion_tokens
+
+
+def reasoning_tokens_of(resp: StreamingResponse) -> int | None:
+    parsed = _parsed(resp)
+    if parsed is None or parsed.usage is None or parsed.usage.completion_tokens_details is None:
+        return None
+    return parsed.usage.completion_tokens_details.reasoning_tokens

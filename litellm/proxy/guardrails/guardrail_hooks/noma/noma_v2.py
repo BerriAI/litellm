@@ -36,6 +36,13 @@ _AIDR_SCAN_ENDPOINT: Final = "/litellm/guardrail"
 _INTERVENED_INPUT_FIELDS: Final = ("texts", "images", "tools", "tool_calls")
 _DEFAULT_API_BASE_HOSTNAME: Final = urlparse(_DEFAULT_API_BASE).hostname
 
+_KEYS_DUPLICATING_SCAN_INPUTS: Final = ("messages", "input")
+_LOGGING_KEYS_DUPLICATING_SCAN_INPUTS: Final = _KEYS_DUPLICATING_SCAN_INPUTS + (
+    "additional_args",
+    "standard_logging_object",
+    "original_response",
+)
+
 
 class _Action(str, enum.Enum):
     BLOCKED = "BLOCKED"
@@ -131,9 +138,20 @@ class NomaV2Guardrail(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"],
         application_id: str | None,
     ) -> dict:
-        payload_request_data: Final = self._sanitize_payload_for_transport(request_data)
+        payload_request_data: Final = self._sanitize_payload_for_transport(
+            {key: value for key, value in request_data.items() if key not in _KEYS_DUPLICATING_SCAN_INPUTS}
+        )
         if logging_obj is not None:
-            payload_request_data["litellm_logging_obj"] = getattr(logging_obj, "model_call_details", None)
+            model_call_details: Final = getattr(logging_obj, "model_call_details", None)
+            payload_request_data["litellm_logging_obj"] = (
+                {
+                    key: value
+                    for key, value in model_call_details.items()
+                    if key not in _LOGGING_KEYS_DUPLICATING_SCAN_INPUTS
+                }
+                if isinstance(model_call_details, dict)
+                else model_call_details
+            )
 
         payload: Final[dict[str, Any]] = {
             "inputs": inputs,

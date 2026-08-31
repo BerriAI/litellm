@@ -3,13 +3,10 @@ Unit tests for the MCPClient class - critical functionality only.
 """
 
 import base64
-import os
-import sys
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
 
 # Add the project root to the path
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm.experimental_mcp_client.client as mcp_client_module
 from litellm.experimental_mcp_client.client import MCPClient

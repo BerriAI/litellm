@@ -14,15 +14,13 @@ here is purely the dispatch logic that lives in ``main.py``.
 
 from __future__ import annotations
 
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm  # noqa: E402
+import openai
 
 ASYNC_INVOKE_ARN = "arn:aws:bedrock:us-west-2:123456789012:async-invoke/abc123def456"
 MIJ_ARN = "arn:aws:bedrock:us-west-2:123456789012:model-invocation-job/abc1234567"
@@ -134,7 +132,7 @@ def test_unrelated_bedrock_arn_falls_through_to_provider_config(mock_handlers):
     # Use a plausible-but-unsupported Bedrock ARN family.
     unrelated_arn = "arn:aws:bedrock:us-west-2:123456789012:provisioned-model/xyz"
 
-    with pytest.raises(Exception):
+    with pytest.raises(litellm.BadRequestError):
         # Will raise because no provider_config exists for this path —
         # that's fine, we just need to assert neither bedrock handler ran
         # before the failure.
@@ -152,7 +150,7 @@ def test_non_bedrock_id_skips_bedrock_dispatch_entirely(mock_handlers):
     block — they belong to other providers' retrieve flows."""
     async_invoke, mij, _ = mock_handlers
 
-    with pytest.raises(Exception):
+    with pytest.raises(openai.OpenAIError):
         litellm.retrieve_batch(
             batch_id="batch_abc123",
             custom_llm_provider="openai",
