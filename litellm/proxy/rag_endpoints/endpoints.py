@@ -219,16 +219,18 @@ async def _save_vector_store_to_db_from_rag_ingest(
 
     # Extract provider-specific params from vector_store_config to save as litellm_params
     # This ensures params like aws_region_name, embedding_model, etc. are available for search
-    provider_specific_params: Final = {}
     excluded_keys: Final = {"custom_llm_provider", "vector_store_id"}
-    for key, value in vector_store_config.items():
-        if key not in excluded_keys and value is not None:
-            provider_specific_params[key] = value
-
     embedding_config: Final = ingest_options.get("embedding")
     embedding_model: Final = embedding_config.get("model") if embedding_config else None
-    if custom_llm_provider == "s3_vectors" and isinstance(embedding_model, str) and embedding_model:
-        provider_specific_params["embedding_model"] = embedding_model
+    s3_embedding_params: Final = (
+        {"embedding_model": embedding_model}
+        if custom_llm_provider == "s3_vectors" and isinstance(embedding_model, str) and embedding_model
+        else {}
+    )
+    provider_specific_params: Final = {
+        **{key: value for key, value in vector_store_config.items() if key not in excluded_keys and value is not None},
+        **s3_embedding_params,
+    }
 
     # Build file metadata entry using helper
     file_entry: Final = _build_file_metadata_entry(
