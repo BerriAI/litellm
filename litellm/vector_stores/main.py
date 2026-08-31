@@ -436,6 +436,7 @@ def search(
         vector_store_provider_config: Final = ProviderConfigManager.get_provider_vector_stores_config(
             provider=litellm.LlmProviders(custom_llm_provider),
             api_type=api_type,
+            transport=litellm_params.milvus_transport,
         )
 
         if vector_store_provider_config is None:

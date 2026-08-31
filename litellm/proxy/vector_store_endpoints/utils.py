@@ -21,6 +21,24 @@ from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
 
+MILVUS_ADMIN_CONFIGURED_CONNECTION: Final = "_litellm_admin_configured_milvus_grpc"
+MILVUS_GRPC_CONNECTION_FIELDS: Final = frozenset(
+    {
+        "api_base",
+        "api_key",
+        "milvus_transport",
+        "milvus_db_name",
+        "milvus_partition_names",
+    }
+)
+MILVUS_MANAGED_CONFIGURATION_FIELDS: Final = MILVUS_GRPC_CONNECTION_FIELDS | frozenset(
+    {
+        "litellm_embedding_config",
+        "litellm_embedding_model",
+        "milvus_text_field",
+    }
+)
+
 
 def _normalize_litellm_params(
     vector_store: LiteLLM_ManagedVectorStore,
@@ -44,6 +62,38 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
     )
 
 
+def normalize_vector_store_provider(custom_llm_provider: object) -> str | None:
+    if not isinstance(custom_llm_provider, str) or not custom_llm_provider:
+        return None
+    if "/" not in custom_llm_provider:
+        return custom_llm_provider
+    try:
+        _, provider, _, _ = litellm.get_llm_provider(model=custom_llm_provider)
+        return provider
+    except Exception:
+        return custom_llm_provider.split("/", 1)[0]
+
+
+def strip_client_milvus_trust_marker(
+    litellm_params: object,
+) -> dict[str, Any]:  # mutable-ok: caller input is copied before removing server-owned state
+    sanitized: Final = (
+        dict(litellm_params)  # mutable-ok: authorization requires an isolated mutable copy
+        if isinstance(litellm_params, dict)
+        else {}  # mutable-ok: absent parameters normalize to an empty mutable mapping
+    )
+    sanitized.pop(MILVUS_ADMIN_CONFIGURED_CONNECTION, None)
+    return sanitized
+
+
+def is_milvus_grpc_connection(custom_llm_provider: object, litellm_params: object) -> bool:
+    return (
+        normalize_vector_store_provider(custom_llm_provider) == "milvus"
+        and isinstance(litellm_params, dict)
+        and litellm_params.get("milvus_transport") == "grpc"
+    )
+
+
 def assert_proxy_admin_for_vector_store_index_management(
     user_api_key_dict: UserAPIKeyAuth,
     *,
@@ -56,6 +106,74 @@ def assert_proxy_admin_for_vector_store_index_management(
         status_code=403,
         detail=(f"Only proxy admins can {operation} vector store indexes. Contact your LiteLLM administrator."),
     )
+
+
+def assert_proxy_admin_for_user_supplied_vector_store_connection(
+    custom_llm_provider: object,
+    litellm_params: object,
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    managed: bool = False,
+) -> None:
+    if not is_milvus_grpc_connection(custom_llm_provider, litellm_params):
+        return
+    if managed:
+        if isinstance(litellm_params, dict) and litellm_params.get(MILVUS_ADMIN_CONFIGURED_CONNECTION) is True:
+            return
+        raise HTTPException(
+            status_code=403,
+            detail="This managed Milvus gRPC connection must be re-saved by a proxy admin before it can be used.",
+        )
+    if _is_proxy_admin(user_api_key_dict):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Only proxy admins can configure vector store connections. Contact your LiteLLM administrator.",
+    )
+
+
+def prepare_milvus_connection_for_persistence(
+    *,
+    custom_llm_provider: object,
+    litellm_params: object,
+    user_api_key_dict: UserAPIKeyAuth,
+    existing_custom_llm_provider: object | None = None,
+    existing_litellm_params: object | None = None,
+) -> dict[str, Any]:  # mutable-ok: persistence requires a serializable effective-connection dict
+    supplied: Final = strip_client_milvus_trust_marker(litellm_params)
+    existing: Final = (
+        dict(existing_litellm_params)  # mutable-ok: authorization compares an isolated persisted-connection copy
+        if isinstance(existing_litellm_params, dict)
+        else {}  # mutable-ok: absent persisted parameters normalize to an empty mutable mapping
+    )
+    effective: Final = {  # mutable-ok: the server marker is applied to the persisted effective connection
+        **existing,
+        **supplied,
+    }
+    previous_is_grpc: Final = is_milvus_grpc_connection(existing_custom_llm_provider, existing)
+    effective_is_grpc: Final = is_milvus_grpc_connection(custom_llm_provider, effective)
+    is_create: Final = existing_custom_llm_provider is None
+    provider_changed: Final = not is_create and custom_llm_provider != existing_custom_llm_provider
+    connection_changed: Final = any(
+        existing.get(field) != effective.get(field) for field in MILVUS_GRPC_CONNECTION_FIELDS
+    )
+    missing_marker: Final = effective_is_grpc and existing.get(MILVUS_ADMIN_CONFIGURED_CONNECTION) is not True
+
+    if (previous_is_grpc or effective_is_grpc) and (
+        is_create or provider_changed or connection_changed or missing_marker
+    ):
+        if not _is_proxy_admin(user_api_key_dict):
+            raise HTTPException(
+                status_code=403,
+                detail="Only proxy admins can configure vector store connections. Contact your LiteLLM administrator.",
+            )
+
+    if effective_is_grpc:
+        if _is_proxy_admin(user_api_key_dict) or existing.get(MILVUS_ADMIN_CONFIGURED_CONNECTION) is True:
+            effective[MILVUS_ADMIN_CONFIGURED_CONNECTION] = True
+    else:
+        effective.pop(MILVUS_ADMIN_CONFIGURED_CONNECTION, None)
+    return effective
 
 
 def _suffix_after_index_name(request_path: str, index_name: str) -> str | None:

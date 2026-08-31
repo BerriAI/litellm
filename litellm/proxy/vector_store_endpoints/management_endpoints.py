@@ -31,8 +31,10 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.vector_store_endpoints.utils import (
+    MILVUS_ADMIN_CONFIGURED_CONNECTION,
     can_user_access_vector_store,
     filter_listable_vector_stores,
+    prepare_milvus_connection_for_persistence,
 )
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
@@ -96,6 +98,8 @@ def _redact_sensitive_litellm_params(litellm_params: Any, _depth: int = 0) -> An
         return litellm_params
     out: Final[dict[str, Any]] = {}
     for k, v in litellm_params.items():
+        if k == MILVUS_ADMIN_CONFIGURED_CONNECTION:
+            continue
         if _LITELLM_PARAMS_MASKER.is_sensitive_key(k):
             out[k] = REDACTED_BY_LITELM_STRING
         elif isinstance(v, dict):
@@ -103,6 +107,34 @@ def _redact_sensitive_litellm_params(litellm_params: Any, _depth: int = 0) -> An
         else:
             out[k] = v
     return out
+
+
+def _validated_litellm_params(
+    litellm_params: dict[str, Any],
+) -> dict[str, Any]:  # mutable-ok: persistence validation returns a serializable parameter dict
+    from litellm.types.router import GenericLiteLLMParams
+
+    trusted: Final = litellm_params.get(MILVUS_ADMIN_CONFIGURED_CONNECTION) is True
+    validated: Final = GenericLiteLLMParams(**litellm_params).model_dump(exclude_none=True)
+    if trusted:
+        validated[MILVUS_ADMIN_CONFIGURED_CONNECTION] = True
+    return validated
+
+
+def _litellm_params_dict(
+    litellm_params: object,
+) -> dict[str, Any]:  # mutable-ok: update authorization merges a copy of persisted parameters
+    if isinstance(litellm_params, dict):
+        return dict(litellm_params)  # mutable-ok: callers require an isolated copy for effective-connection merging
+    if isinstance(litellm_params, str):
+        try:
+            parsed: Final = json.loads(litellm_params)
+            if isinstance(parsed, dict):
+                return dict(parsed)  # mutable-ok: parsed persistence data must be copied before merging
+            return {}  # mutable-ok: non-object persistence data normalizes to an empty mutable mapping
+        except (TypeError, ValueError):
+            return {}  # mutable-ok: invalid persisted parameters normalize to an empty mutable mapping
+    return {}  # mutable-ok: absent persisted parameters normalize to an empty mutable mapping
 
 
 async def _fetch_and_authorize_vector_store(
@@ -175,8 +207,6 @@ async def create_vector_store_in_db(
     Raises:
         HTTPException: If vector store already exists or database error occurs
     """
-    from litellm.types.router import GenericLiteLLMParams
-
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
 
@@ -219,7 +249,7 @@ async def create_vector_store_in_db(
     # query through the router at request time, so the credentials stay
     # on the deployment and never reach the database.
     if litellm_params:
-        litellm_params_dict: Final = GenericLiteLLMParams(**litellm_params).model_dump(exclude_none=True)
+        litellm_params_dict: Final = _validated_litellm_params(litellm_params)
         data_to_create["litellm_params"] = safe_dumps(litellm_params_dict)
     else:
         # Provide empty dict if no litellm_params provided
@@ -275,6 +305,12 @@ async def new_vector_store(
                 detail="vector_store_id and custom_llm_provider are required",
             )
 
+        prepared_litellm_params: Final = prepare_milvus_connection_for_persistence(
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=vector_store.get("litellm_params"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
         # Extract and validate metadata
         metadata: Final = vector_store.get("vector_store_metadata")
         validated_metadata: dict | None = None
@@ -288,7 +324,7 @@ async def new_vector_store(
             vector_store_name=vector_store.get("vector_store_name"),
             vector_store_description=vector_store.get("vector_store_description"),
             vector_store_metadata=validated_metadata,
-            litellm_params=vector_store.get("litellm_params"),
+            litellm_params=prepared_litellm_params,
             litellm_credential_name=vector_store.get("litellm_credential_name"),
             team_id=user_api_key_dict.team_id,
             user_id=user_api_key_dict.user_id,
@@ -306,6 +342,8 @@ async def new_vector_store(
             "message": f"Vector store {vector_store.get('vector_store_id')} created successfully",
             "vector_store": response_vs,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception("Error creating vector store: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -582,7 +620,6 @@ async def update_vector_store(
     await check_feature_access_for_user(user_api_key_dict, "vector_stores")
 
     from litellm.proxy.proxy_server import prisma_client
-    from litellm.types.router import GenericLiteLLMParams
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
@@ -594,10 +631,22 @@ async def update_vector_store(
         # Per-store access control: anyone authenticated who passes the
         # premium-feature gate could otherwise update *any* vector store —
         # including stores belonging to other teams.
-        await _fetch_and_authorize_vector_store(
+        existing_vector_store: Final = await _fetch_and_authorize_vector_store(
             vector_store_id=vector_store_id,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
+        )
+
+        existing_litellm_params: Final = _litellm_params_dict(existing_vector_store.get("litellm_params"))
+        effective_provider: Final = update_data.get("custom_llm_provider") or existing_vector_store.get(
+            "custom_llm_provider"
+        )
+        effective_litellm_params: Final = prepare_milvus_connection_for_persistence(
+            custom_llm_provider=effective_provider,
+            litellm_params=update_data.get("litellm_params"),
+            user_api_key_dict=user_api_key_dict,
+            existing_custom_llm_provider=existing_vector_store.get("custom_llm_provider"),
+            existing_litellm_params=existing_litellm_params,
         )
 
         # Handle metadata serialization
@@ -606,13 +655,11 @@ async def update_vector_store(
 
         # Handle litellm_params if provided. As with the create path, the
         # embedding-config auto-resolve previously persisted cleartext
-        # credentials into the row; each search now embeds the query
-        # through the router at request time, so this row only ever stores
-        # the user-supplied ``litellm_embedding_model`` reference.
-        if "litellm_params" in update_data:
-            _input_litellm_params: Final[dict] = update_data.get("litellm_params", {}) or {}
-            litellm_params_dict: Final = GenericLiteLLMParams(**_input_litellm_params).model_dump(exclude_none=True)
-            update_data["litellm_params"] = safe_dumps(litellm_params_dict)
+        # credentials into the row; each search embeds the query through
+        # the router at request time, so this row only ever stores the
+        # user-supplied ``litellm_embedding_model`` reference.
+        if "litellm_params" in update_data or effective_litellm_params != existing_litellm_params:
+            update_data["litellm_params"] = safe_dumps(_validated_litellm_params(effective_litellm_params))
 
         # Update in database
         updated: Final = await _vector_store_table(prisma_client).update(
