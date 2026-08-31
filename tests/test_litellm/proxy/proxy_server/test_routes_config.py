@@ -1069,6 +1069,41 @@ def test_get_config_callbacks_deduplicates_configured_and_runtime(client, auth_a
     assert {callback["name"] for callback in callbacks} == {"langfuse"}
 
 
+def test_get_config_callbacks_lists_dict_shaped_config_callbacks(client, auth_as, mock_prisma, monkeypatch):
+    """Dict-shaped success_callback config values list their keys as editable rows."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "llm_router", None)
+
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(
+        return_value={
+            "litellm_settings": {"success_callback": {"langsmith": {"batch_size": 1}}},
+            "general_settings": {},
+            "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
+        }
+    )
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    import litellm
+
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_callbacks_by_type",
+        MagicMock(return_value={"success": ["langsmith"], "failure": [], "success_and_failure": []}),
+    )
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/get/config/callbacks")
+
+    assert response.status_code == 200
+    callbacks = response.json()["callbacks"]
+    assert [(callback["name"], callback.get("read_only", False)) for callback in callbacks] == [("langsmith", False)]
+
+
 def test_get_config_callbacks_excludes_internal_runtime_callbacks(client, auth_as, mock_prisma, monkeypatch):
     """Proxy infrastructure callbacks are excluded from callback inventory."""
     from litellm.proxy import proxy_server as ps

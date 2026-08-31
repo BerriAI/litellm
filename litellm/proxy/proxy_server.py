@@ -17090,7 +17090,7 @@ async def get_config(
                 return (callback,)
             if callback is None:
                 return ()
-            return tuple(callback) if isinstance(callback, list) else ()
+            return tuple(callback) if isinstance(callback, (list, dict)) else ()
 
         _success_callbacks = normalize_callback(_success_callbacks)
         _failure_callbacks = normalize_callback(_failure_callbacks)
