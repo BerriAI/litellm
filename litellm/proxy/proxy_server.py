@@ -17043,7 +17043,11 @@ async def get_config(
                 return [callback]
             elif callback is None:
                 return []
-            return callback
+            elif isinstance(callback, list):
+                return callback
+            # Convert dict, tuple, set, or any other type to empty list
+            # (config validation should prevent non-list types, but guard here)
+            return []
 
         _success_callbacks = normalize_callback(_success_callbacks)
         _failure_callbacks = normalize_callback(_failure_callbacks)
@@ -17098,10 +17102,19 @@ async def get_config(
 
             # Append runtime-only rows (those not in config).
             # Filter out internal proxy hooks (names starting with _PROXY or known internal names).
-            _internal_callback_prefixes: Final[tuple] = ("_PROXY", "_Async", "ShadowEval", "ServiceLogging", "SkillsInjection", "ResponsesID")
+            _internal_callback_prefixes: Final[tuple] = (
+                "_PROXY",
+                "_Async",
+                "ShadowEval",
+                "ServiceLogging",
+                "SkillsInjection",
+                "ResponsesID",
+            )
             for _runtime_cb_name, _runtime_cb_type in _runtime_items:
                 # Skip internal proxy callbacks (these are infrastructure, not user-configured).
-                if isinstance(_runtime_cb_name, str) and any(_runtime_cb_name.startswith(p) for p in _internal_callback_prefixes):
+                if isinstance(_runtime_cb_name, str) and any(
+                    _runtime_cb_name.startswith(p) for p in _internal_callback_prefixes
+                ):
                     continue
 
                 _normalized_runtime = _normalize_callback_alias(_runtime_cb_name)

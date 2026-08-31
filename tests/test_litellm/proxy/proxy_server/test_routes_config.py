@@ -1059,31 +1059,28 @@ def test_get_config_callbacks_appends_runtime_only_callbacks(
     # Mock runtime callbacks: register otel in addition to langfuse in config.
     import litellm
 
-    original = litellm.callbacks
-    try:
-        litellm.callbacks = ["otel"]
-        with auth_as(LitellmUserRoles.PROXY_ADMIN):
-            response = client.get("/get/config/callbacks")
-        assert response.status_code == 200
-        body = response.json()
+    monkeypatch.setattr(litellm, "callbacks", ["otel"])
 
-        callbacks = body["callbacks"]
-        callback_names = [cb["name"] for cb in callbacks]
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/get/config/callbacks")
+    assert response.status_code == 200
+    body = response.json()
 
-        # Both should be present
-        assert "langfuse" in callback_names
-        assert "otel" in callback_names
+    callbacks = body["callbacks"]
+    callback_names = [cb["name"] for cb in callbacks]
 
-        # Configured callback should NOT be marked read_only
-        langfuse_cb = next(cb for cb in callbacks if cb["name"] == "langfuse")
-        assert langfuse_cb.get("read_only") != True
+    # Both should be present
+    assert "langfuse" in callback_names
+    assert "otel" in callback_names
 
-        # Runtime-only callback should be marked read_only
-        otel_cb = next(cb for cb in callbacks if cb["name"] == "otel")
-        assert otel_cb["read_only"] is True
-        assert otel_cb["type"] == "success_and_failure"
-    finally:
-        litellm.callbacks = original
+    # Configured callback should NOT be marked read_only
+    langfuse_cb = next(cb for cb in callbacks if cb["name"] == "langfuse")
+    assert langfuse_cb.get("read_only") != True
+
+    # Runtime-only callback should be marked read_only
+    otel_cb = next(cb for cb in callbacks if cb["name"] == "otel")
+    assert otel_cb["read_only"] is True
+    assert otel_cb["type"] == "success_and_failure"
 
 
 def test_get_config_callbacks_deduplicates_configured_and_runtime(
@@ -1153,36 +1150,33 @@ def test_get_config_callbacks_redacts_runtime_only_row_secrets_for_view_only_adm
     # Mock runtime: register otel
     import litellm
 
-    original = litellm.callbacks
-    try:
-        litellm.callbacks = ["otel"]
-        # View-only admin
-        with auth_as(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
-            response = client.get("/get/config/callbacks")
-        assert response.status_code == 200
-        body = response.json()
+    monkeypatch.setattr(litellm, "callbacks", ["otel"])
 
-        callbacks = body["callbacks"]
-        otel_cb = next((cb for cb in callbacks if cb["name"] == "otel"), None)
-        assert otel_cb is not None
+    # View-only admin
+    with auth_as(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
+        response = client.get("/get/config/callbacks")
+    assert response.status_code == 200
+    body = response.json()
 
-        # Secret env vars must be redacted
-        assert otel_cb["variables"]["OTEL_HEADERS"] == "REDACTED"
-        # Non-secret vars should pass through
-        assert otel_cb["variables"]["OTEL_ENDPOINT"] == _CALLBACK_ENV_FIXTURE["OTEL_ENDPOINT"]
+    callbacks = body["callbacks"]
+    otel_cb = next((cb for cb in callbacks if cb["name"] == "otel"), None)
+    assert otel_cb is not None
 
-        # Full admin sees secrets
-        with auth_as(LitellmUserRoles.PROXY_ADMIN):
-            admin_response = client.get("/get/config/callbacks")
-        assert admin_response.status_code == 200
-        admin_body = admin_response.json()
-        admin_otel = next(
-            (cb for cb in admin_body["callbacks"] if cb["name"] == "otel"), None
-        )
-        assert admin_otel is not None
-        assert admin_otel["variables"]["OTEL_HEADERS"] == _CALLBACK_ENV_FIXTURE["OTEL_HEADERS"]
-    finally:
-        litellm.callbacks = original
+    # Secret env vars must be redacted
+    assert otel_cb["variables"]["OTEL_HEADERS"] == "REDACTED"
+    # Non-secret vars should pass through
+    assert otel_cb["variables"]["OTEL_ENDPOINT"] == _CALLBACK_ENV_FIXTURE["OTEL_ENDPOINT"]
+
+    # Full admin sees secrets
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        admin_response = client.get("/get/config/callbacks")
+    assert admin_response.status_code == 200
+    admin_body = admin_response.json()
+    admin_otel = next(
+        (cb for cb in admin_body["callbacks"] if cb["name"] == "otel"), None
+    )
+    assert admin_otel is not None
+    assert admin_otel["variables"]["OTEL_HEADERS"] == _CALLBACK_ENV_FIXTURE["OTEL_HEADERS"]
 
 
 # ---------------------------------------------------------------------------
