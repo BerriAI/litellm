@@ -207,20 +207,22 @@ class AzureAIStudioConfig(OpenAIConfig):
                 message["content"] = texts
         return stripped_messages
 
-    def _is_azure_openai_model(self, model: str, api_base: str | None) -> bool:
-        try:
-            if "/" in model:
-                model = model.split("/", 1)[1]
-            if (
-                model in litellm.open_ai_chat_completion_models
-                or model in litellm.open_ai_text_completion_models
-                or model in litellm.open_ai_embedding_models
-            ):
-                return True
-
-        except Exception:
+    def _is_foundry_model_inference_base(self, api_base: str) -> bool:
+        parsed: Final = urlparse(api_base)
+        host: Final = parsed.hostname
+        if host is None or not host.endswith(".services.ai.azure.com"):
             return False
-        return False
+        return "/openai/deployments" not in parsed.path
+
+    def _is_azure_openai_model(self, model: str, api_base: str | None) -> bool:
+        if api_base is None or self._is_foundry_model_inference_base(api_base):
+            return False
+        stripped_model: Final = model.split("/", 1)[1] if "/" in model else model
+        return (
+            stripped_model in litellm.open_ai_chat_completion_models
+            or stripped_model in litellm.open_ai_text_completion_models
+            or stripped_model in litellm.open_ai_embedding_models
+        )
 
     def _get_openai_compatible_provider_info(
         self,
