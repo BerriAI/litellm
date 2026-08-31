@@ -58,7 +58,10 @@ class PanwPrismaAirsGuardrailConfigModel(GuardrailConfigModel):
         "the full conversation history. Set true to enable for every request shape (avoids "
         "rescanning prior turns on every call of a multi-turn conversation); set false to always "
         "scan all user/system/developer messages. When unset: defaults to latest-only for "
-        "Anthropic /v1/messages requests and full-history for all other request shapes.",
+        "Anthropic /v1/messages requests and full-history for all other request shapes. "
+        "Latest-only scanning trusts caller-supplied history: earlier messages in the request "
+        "are not rescanned, so enable it only where each turn was scanned when it was the "
+        "latest message (well-behaved chat clients) or history is server-controlled.",
     )
 
     @staticmethod

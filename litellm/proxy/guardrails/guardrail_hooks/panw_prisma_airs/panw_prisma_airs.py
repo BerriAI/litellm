@@ -194,8 +194,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         # internal '<=' comparison and surfaces as a misleading api_error.
         self.timeout = float(timeout) if timeout is not None else 10.0
 
-        # Tri-state: None = not set (latest-only for Anthropic /v1/messages, full history
-        # otherwise), True = latest-only for every request shape, False = full history everywhere
+        # Tri-state scan-scope flag; resolution semantics in _use_latest_user_only()
         self.experimental_use_latest_role_message_only: bool | None = kwargs.get(
             "experimental_use_latest_role_message_only"
         )
@@ -1774,8 +1773,6 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         if input_type == "request":
             structured_messages: Final = inputs.get("structured_messages")
             if structured_messages:
-                # Latest-user-only scanning: flag-controlled for every request shape,
-                # default-on only for Anthropic /v1/messages (see _use_latest_user_only).
                 # Uses request_data["messages"] (original format), NOT structured_messages
                 # (which has injected system content from adapter translation).
                 if self._use_latest_user_only(request_data, logging_obj):
