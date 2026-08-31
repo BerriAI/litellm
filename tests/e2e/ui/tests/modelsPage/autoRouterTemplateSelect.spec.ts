@@ -17,32 +17,54 @@ async function openTemplateSelect(page: PlaywrightPage) {
   return trigger;
 }
 
+async function boxes(trigger: Locator, options: Locator) {
+  const triggerBox = await trigger.boundingBox();
+  const optionsBox = await options.boundingBox();
+  return triggerBox && optionsBox ? { triggerBox, optionsBox } : null;
+}
+
+function pollOptionsOpenBelowTrigger(trigger: Locator, options: Locator) {
+  return expect.poll(async () => {
+    const box = await boxes(trigger, options);
+    return box && box.optionsBox.y >= box.triggerBox.y + box.triggerBox.height;
+  });
+}
+
 function pollOptionsCoverTrigger(trigger: Locator, options: Locator) {
   return expect.poll(async () => {
-    const triggerBox = await trigger.boundingBox();
-    const optionsBox = await options.boundingBox();
-    if (!triggerBox || !optionsBox) return null;
-    return optionsBox.y < triggerBox.y + triggerBox.height && optionsBox.y + optionsBox.height > triggerBox.y;
+    const box = await boxes(trigger, options);
+    return (
+      box &&
+      box.optionsBox.y < box.triggerBox.y + box.triggerBox.height &&
+      box.optionsBox.y + box.optionsBox.height > box.triggerBox.y
+    );
   });
 }
 
 test.describe("Auto Router template select anchoring", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
-  for (const { room, height } of [
-    { room: "with room below it", height: 900 },
-    { room: "with no room below it", height: 560 },
-  ]) {
-    test(`keeps the trigger uncovered when the options open ${room}`, async ({ page }) => {
-      await page.setViewportSize({ width: 1280, height });
-      const trigger = await openTemplateSelect(page);
-      await trigger.scrollIntoViewIfNeeded();
+  test("opens the options below the trigger when there is room below it", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const trigger = await openTemplateSelect(page);
+    await trigger.scrollIntoViewIfNeeded();
 
-      await trigger.click();
-      const options = page.getByRole("listbox");
-      await expect(options).toBeVisible();
+    await trigger.click();
+    const options = page.getByRole("listbox");
+    await expect(options).toBeVisible();
 
-      await pollOptionsCoverTrigger(trigger, options).toBe(false);
-    });
-  }
+    await pollOptionsOpenBelowTrigger(trigger, options).toBe(true);
+  });
+
+  test("keeps the trigger uncovered when the options open with no room below it", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 560 });
+    const trigger = await openTemplateSelect(page);
+    await trigger.scrollIntoViewIfNeeded();
+
+    await trigger.click();
+    const options = page.getByRole("listbox");
+    await expect(options).toBeVisible();
+
+    await pollOptionsCoverTrigger(trigger, options).toBe(false);
+  });
 });
