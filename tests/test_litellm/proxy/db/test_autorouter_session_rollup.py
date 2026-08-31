@@ -106,6 +106,28 @@ class TestBuildTransaction:
         transaction = _build()
         assert transaction is not None and transaction.tier is None
 
+    def test_a_priced_classifier_rides_the_turns_spend(self):
+        """The classifier row is excluded from the rollup, so its charge lands here,
+        folded once into the turn that paid for it (GH #38816)."""
+        transaction = _build(metadata=_metadata(routing_decision={**ROUTING_DECISION, "classifier_cost": 0.005}))
+        assert transaction is not None and transaction.spend == pytest.approx(0.015)
+
+    @pytest.mark.parametrize(
+        "decision_extra", [{}, {"classifier_cost": 0.0}, {"classifier_cost": "bogus"}, {"classifier_cost": True}]
+    )
+    def test_an_unpriced_classifier_leaves_the_spend_alone(self, decision_extra: dict):
+        transaction = _build(metadata=_metadata(routing_decision={**ROUTING_DECISION, **decision_extra}))
+        assert transaction is not None and transaction.spend == pytest.approx(0.01)
+
+    def test_every_turn_carries_its_own_classifier_charge(self):
+        first = _build(metadata=_metadata(routing_decision={**ROUTING_DECISION, "classifier_cost": 0.005}))
+        second = _build(
+            payload=_payload(startTime="2026-08-01T12:01:00", spend=0.02),
+            metadata=_metadata(routing_decision={**ROUTING_DECISION, "classifier_cost": 0.007}),
+        )
+        assert first is not None and first.spend == pytest.approx(0.015)
+        assert second is not None and second.spend == pytest.approx(0.027)
+
     def test_router_name_falls_back_to_the_payload_model_group(self):
         transaction = _build(metadata=_metadata(routing_decision={"router_type": "complexity"}))
         assert transaction is not None and transaction.router_name == "live-auto"

@@ -93,7 +93,7 @@ def print_verbose(print_statement: object):
 
 @dataclass(frozen=True, slots=True)
 class _ProviderChunkParsed:
-    response_obj: dict[str, Any]
+    response_obj: dict[str, object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1288,7 +1288,7 @@ class CustomStreamWrapper:
                 for key, value in anthropic_response_obj["provider_specific_fields"].items():
                     setattr(model_response, key, value)
 
-            response_obj = cast(dict[str, Any], anthropic_response_obj)
+            response_obj = cast(dict[str, object], anthropic_response_obj)
         elif self.model == "replicate" or self.custom_llm_provider == "replicate":
             response_obj = self.handle_replicate_chunk(chunk)
             completion_obj["content"] = response_obj["text"]
@@ -1444,7 +1444,7 @@ class CustomStreamWrapper:
             if not isinstance(chunk, str):
                 raise ValueError(f"chunk is not a string: {chunk}")
             response_obj = cast(
-                dict[str, Any],
+                dict[str, object],
                 litellm.CodestralTextCompletionConfig()._chunk_parser(chunk),
             )
             completion_obj["content"] = response_obj["text"]
@@ -2551,7 +2551,7 @@ def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
 
     prompt_tokens: int = 0
     completion_tokens: int = 0
-    latest_usage_chunk = None
+    latest_usage_chunk: Usage | Mapping[str, int] | None = None
     prompt_tokens_details: PromptTokensDetailsWrapper | None = None
     completion_tokens_details: CompletionTokensDetailsWrapper | None = None
     cache_creation_token_details: CacheCreationTokenDetails | None = None
