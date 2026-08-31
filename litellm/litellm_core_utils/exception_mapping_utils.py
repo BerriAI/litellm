@@ -99,8 +99,8 @@ def _structured_validation_signal(
     )
 
     for payload in payloads:
-        nested_error: Final = payload.get("error")
-        error_objects: Final = (payload, nested_error) if isinstance(nested_error, dict) else (payload,)
+        nested_error = payload.get("error")
+        error_objects = (payload, nested_error) if isinstance(nested_error, dict) else (payload,)
 
         for error_object in error_objects:
             for key in _STRUCTURED_ERROR_SIGNAL_KEYS:
