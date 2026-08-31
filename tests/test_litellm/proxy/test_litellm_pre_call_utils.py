@@ -4398,13 +4398,13 @@ async def test_pipeline_keeps_guardrail_with_stage_no_pipeline_can_cover(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_pipeline_keeps_guardrail_when_sibling_callback_adds_stages(monkeypatch):
+async def test_pipeline_keeps_guardrail_when_same_name_deployment_adds_stages(monkeypatch):
     """
-    One guardrail_name can map to several registered callbacks (Presidio adds
-    a post_call output-masking sibling; duplicate-name deployments are a
-    supported load-balancing setup). Coverage must union stages across all of
-    them, so a pre_call pipeline does not strip a name whose sibling still
-    needs the flat list at post_call.
+    One guardrail_name can back several callbacks with different hooks:
+    load-balanced duplicate-name deployments, and presidio's initializer
+    registering post_call output siblings next to the primary. Coverage must
+    union stages across all of them, so a pre_call pipeline does not strip a
+    name another callback still needs in the flat list at post_call.
     """
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.types.guardrails import GuardrailEventHooks
@@ -4428,6 +4428,35 @@ async def test_pipeline_keeps_guardrail_when_sibling_callback_adds_stages(monkey
         _reset_policy_engine_registries(policy_registry, attachment_registry)
 
     assert data["metadata"]["guardrails"] == ["word_guard"]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_strips_guardrail_with_none_event_hook(monkeypatch):
+    """
+    A callback with event_hook None runs at every stage without consulting the
+    flat guardrails list, so dropping the name cannot suppress it and the
+    pre-LIT-6536 dedup behavior stands.
+    """
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+
+    guardrail = CustomGuardrail(guardrail_name="word_guard", event_hook=None)
+    policy_registry, attachment_registry = _policy_engine_pipeline_registries(
+        {"input-pipeline": _word_guard_pipeline_policy("pre_call")},
+        monkeypatch,
+        callbacks=[guardrail],
+    )
+
+    data = {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}], "metadata": {}}
+    try:
+        await add_guardrails_from_policy_engine(
+            data=data,
+            metadata_variable_name="metadata",
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        )
+    finally:
+        _reset_policy_engine_registries(policy_registry, attachment_registry)
+
+    assert data["metadata"]["guardrails"] == []
 
 
 @pytest.mark.asyncio

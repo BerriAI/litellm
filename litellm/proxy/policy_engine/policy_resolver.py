@@ -48,10 +48,11 @@ def _list_gated_stages_for_guardrail(guardrail_name: str) -> frozenset[str] | No
     request tags).
 
     Stages are unioned across every registered callback carrying the name:
-    one guardrail_name can map to several callbacks with different hooks
-    (e.g. Presidio registers a post_call output-masking sibling alongside the
-    configured one, and duplicate-name deployments are supported for load
-    balancing), and stripping the name gates all of them.
+    one guardrail_name can back several callbacks with different hooks, via
+    load-balanced duplicate-name deployments (init_guardrails) or sibling
+    registrations from a single initializer (presidio registers post_call
+    output callbacks next to the primary), and stripping the name gates
+    all of them.
 
     An unregistered name or an event_hook of None yields an empty set: the
     flat list never gates such a guardrail, so dropping the name from the
