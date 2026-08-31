@@ -61,6 +61,8 @@ locals {
   # there is no Redis to share them through, so the ceiling is tasks x workers.
   max_gateway_processes = (var.gateway_autoscaling_enabled ? var.gateway_max_capacity : var.gateway_desired_count) * var.gateway_num_workers
 
+  bedrock_policy_enabled = length(var.bedrock_model_arns) > 0 || var.enable_bedrock_mantle
+
   gateway_path_prefixes = [
     "/v1/chat/*", "/chat/*",
     "/v1/completions*", "/completions*",

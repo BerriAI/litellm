@@ -590,6 +590,18 @@ variable "bedrock_model_arns" {
   default     = []
 }
 
+variable "enable_bedrock_mantle" {
+  description = <<-EOT
+    Grant the task role `bedrock-mantle:CreateInference`, required by
+    `bedrock_mantle/...` models (OpenAI models hosted on Bedrock), which
+    authorize against the mantle action rather than `bedrock:InvokeModel`.
+    The resource is a wildcard because the mantle surface exposes no per-model
+    ARN; the statement is scoped by an `aws:RequestedRegion` condition instead.
+  EOT
+  type        = bool
+  default     = false
+}
+
 # ---------- OpenTelemetry v2 ----------
 #
 # https://docs.litellm.ai/docs/observability/opentelemetry_v2
