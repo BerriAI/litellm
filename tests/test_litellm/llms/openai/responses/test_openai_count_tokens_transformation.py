@@ -163,6 +163,103 @@ def test_messages_to_responses_input_with_tool():
     }
 
 
+def test_messages_to_responses_input_preserves_images():
+    """An image block must survive the round trip, or OpenAI counts only the text.
+
+    A 256x256 image is worth 255 tokens to OpenAI's counting API; dropping it
+    turned a 268-token request into a 13-token one.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,iVBORw0KGgo=", "detail": "high"},
+                },
+            ],
+        }
+    ]
+
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert instructions is None
+    assert input_items == [
+        {
+            "role": "user",
+            "content": (
+                {"type": "input_text", "text": "What is in this image?"},
+                {
+                    "type": "input_image",
+                    "image_url": "data:image/png;base64,iVBORw0KGgo=",
+                    "detail": "high",
+                },
+            ),
+        }
+    ]
+
+
+def test_messages_to_responses_input_image_without_detail_defaults_to_auto():
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}],
+        }
+    ]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items[0]["content"] == (
+        {"type": "input_image", "image_url": "https://example.com/cat.png", "detail": "auto"},
+    )
+
+
+def test_messages_to_responses_input_bare_string_image_url_is_preserved():
+    messages = [{"role": "user", "content": [{"type": "image_url", "image_url": "https://example.com/cat.png"}]}]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items[0]["content"] == (
+        {"type": "input_image", "image_url": "https://example.com/cat.png", "detail": "auto"},
+    )
+
+
+def test_messages_to_responses_input_text_only_blocks_stay_a_joined_string():
+    """Text-only content must keep collapsing to a string so existing counts do not shift."""
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "first"}, {"type": "text", "text": "second"}],
+        }
+    ]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items == [{"role": "user", "content": "first\nsecond"}]
+
+
+def test_messages_to_responses_input_drops_unmappable_blocks():
+    """A block with no Responses API equivalent is skipped, never forwarded verbatim."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "hi"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}},
+                {"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}},
+            ],
+        }
+    ]
+
+    input_items, _ = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert input_items[0]["content"] == (
+        {"type": "input_text", "text": "hi"},
+        {"type": "input_image", "image_url": "https://example.com/cat.png", "detail": "auto"},
+    )
+
+
 def test_validate_request_valid():
     """Test that valid requests pass validation."""
     config = OpenAICountTokensConfig()

@@ -3,10 +3,12 @@ Test for response_api_endpoints/endpoints.py
 """
 
 import unittest
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from httpx import Response
 
 import litellm
 from litellm.proxy.proxy_server import app
@@ -1816,7 +1818,12 @@ class TestResponsesInputTokens:
     never registered, so the POST fell through to the GET/DELETE-only
     /v1/responses/{response_id} route and returned 405."""
 
-    def _post_input_tokens(self, body, path="/v1/responses/input_tokens", counter=None):
+    def _post_input_tokens(
+        self,
+        body: dict[str, Any],
+        path: str = "/v1/responses/input_tokens",
+        counter: AsyncMock | None = None,
+    ) -> tuple[Response, AsyncMock]:
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
         from litellm.proxy.response_api_endpoints.endpoints import _proxy_token_counter
