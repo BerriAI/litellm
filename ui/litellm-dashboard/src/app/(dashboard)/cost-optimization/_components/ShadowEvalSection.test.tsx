@@ -100,6 +100,9 @@ const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
         shadow_win_rate_pct: 55.0,
         tie_rate_pct: 25.0,
         avg_judge_confidence: 0.81,
+        real_spend: 0.4,
+        shadow_spend: 0.1,
+        cache_hit_turns: 2,
       },
       {
         group: "REASONING",
@@ -108,6 +111,9 @@ const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
         shadow_win_rate_pct: 33.3,
         tie_rate_pct: 16.7,
         avg_judge_confidence: 0.74,
+        real_spend: 0.2,
+        shadow_spend: 0.2,
+        cache_hit_turns: 0,
       },
     ],
     by_current_model: [
@@ -118,11 +124,19 @@ const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
         shadow_win_rate_pct: 45.0,
         tie_rate_pct: 25.0,
         avg_judge_confidence: 0.8,
+        real_spend: 0.6,
+        shadow_spend: 0.3,
+        cache_hit_turns: 2,
       },
     ],
     by_key: [],
     overall_shadow_win_rate_pct: 48.0,
     overall_tie_rate_pct: 22.0,
+    sampled_real_spend: 0.6,
+    sampled_shadow_spend: 0.3,
+    not_sampled_count: 378,
+    unjudgeable_count: 10,
+    shed_count: 2,
   },
   created_at: "2026-08-07T00:00:00Z",
   ends_at: "2026-09-07T00:00:00Z",
@@ -496,10 +510,15 @@ describe("ShadowEvalSection", () => {
                 shadow_win_rate_pct: 60.0,
                 tie_rate_pct: 20.0,
                 avg_judge_confidence: 0.9,
+                real_spend: 0.9,
+                shadow_spend: 0.5,
+                cache_hit_turns: 0,
               },
             ],
             overall_shadow_win_rate_pct: 60.0,
             overall_tie_rate_pct: 20.0,
+            sampled_real_spend: 0.9,
+            sampled_shadow_spend: 0.5,
           },
         }),
       ],
@@ -588,6 +607,41 @@ describe("ShadowEvalSection", () => {
     if (!hungry) throw new Error("expected a table row per scoped key");
     expect(within(hungry).getByText("completed")).toBeInTheDocument();
     expect(within(hungry).queryByText("running")).not.toBeInTheDocument();
+  });
+
+  it("shows the measured cost comparison with savings and both arm totals", () => {
+    const j = job({});
+    mockHooks({ jobs: [j], detailsById: { "job-1": j } });
+    render(<ShadowEvalSection />);
+    expect(screen.getByText("Router cost vs your current model")).toBeInTheDocument();
+    expect(screen.getByText("-50.0%")).toBeInTheDocument();
+    expect(
+      screen.getByText("$0.3000 vs $0.6000 on the same judged turns; 2 cache-served turns excluded"),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("Router cost").length).toBeGreaterThan(0);
+  });
+
+  it("hides the cost tile when either arm has no measured spend, so a pre-measurement job never reads as a free incumbent", () => {
+    const legacy = job({});
+    legacy.results = {
+      ...legacy.results!,
+      by_tier: legacy.results!.by_tier.map((s) => ({ ...s, real_spend: 0 })),
+      sampled_real_spend: 0,
+      sampled_shadow_spend: 0.3,
+    };
+    mockHooks({ jobs: [legacy], detailsById: { "job-1": legacy } });
+    render(<ShadowEvalSection />);
+    expect(screen.queryByText(/Router cost vs/)).not.toBeInTheDocument();
+    expect(screen.getByText("Router matched or beat your current model")).toBeInTheDocument();
+  });
+
+  it("flips the cost comparison arms for a reverse job", () => {
+    const reverse = job({ direction: "reverse", baseline_model: "gpt-4o-mini" });
+    mockHooks({ jobs: [reverse], detailsById: { "job-1": reverse } });
+    render(<ShadowEvalSection />);
+    expect(screen.getByText("Router cost vs the baseline")).toBeInTheDocument();
+    expect(screen.getByText(/\$0\.6000 vs \$0\.3000 on the same judged turns/)).toBeInTheDocument();
+    expect(screen.getByText("+100.0%")).toBeInTheDocument();
   });
 
   it("keeps an older job's verdicts reachable through the previous evaluations list", async () => {

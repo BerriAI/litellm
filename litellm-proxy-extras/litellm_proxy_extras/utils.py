@@ -470,7 +470,7 @@ class ProxyExtrasDBManager:
         ProxyExtrasDBManager._mark_migrations_applied(migrations_dir)
 
     @staticmethod
-    def _mark_migrations_applied(migrations_dir: str):
+    def _mark_migrations_applied(migrations_dir: str) -> None:
         migration_names = ProxyExtrasDBManager._get_migration_names(migrations_dir)
         logger.info(f"Resolving {len(migration_names)} migrations")
         for migration_name in migration_names:

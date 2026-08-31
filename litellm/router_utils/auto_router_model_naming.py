@@ -15,7 +15,10 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
-from litellm.router_strategy.complexity_router.config import LLM_CLASSIFIER_TYPES
+from litellm.router_strategy.complexity_router.config import (
+    COMPLEXITY_ROUTER_CONFIG_KEYS,
+    LLM_CLASSIFIER_TYPES,
+)
 
 AUTO_ROUTER_MODEL_PREFIX: Final = "auto_router/"
 
@@ -186,6 +189,47 @@ def validate_complexity_router_config_write(complexity_router_config: Mapping[st
             "The router would drop this deployment at load time, so the write is rejected instead."
         )
     return None
+
+
+_COMPLEXITY_ROUTER_FIELDS: Final[frozenset[str]] = frozenset(
+    field for group in _REQUIRED_FIELD_GROUPS["complexity"] for field in group
+)
+
+
+def carries_complexity_router_settings(model: str | None, present_fields: frozenset[str]) -> bool:
+    """Whether this deployment configures a complexity router, so is judged on its key set.
+
+    Scoped rather than applied to every deployment because the setting names are only
+    unambiguous in this context: ``embedding_model``, for one, is a legitimate flat param
+    on an s3_vectors vector store. ``present_fields`` carries the same merged view
+    ``validate_strategy_router_model_write`` is judged on, so a router named only by its
+    default model is in scope, and a field added to the table above is covered here for free.
+    """
+    return classify_strategy_router_model(model or "") == "complexity" or bool(
+        present_fields & _COMPLEXITY_ROUTER_FIELDS
+    )
+
+
+def validate_complexity_router_config_placement(litellm_params: Mapping[str, object] | None) -> str | None:
+    """Reject a complexity-router setting written beside ``complexity_router_config``.
+
+    The router reads its settings only from ``litellm_params.complexity_router_config``, so a
+    key one level too high configures nothing. It does not stay inert: the alias-marker
+    forwarding carries every unrecognized ``litellm_params`` key onto the outbound request,
+    where the provider rejects it as an unknown body field, and the deployment then fails
+    every call with an error naming an internal config key. Caller scopes; this judges.
+    """
+    if litellm_params is None:
+        return None
+    misplaced: Final = tuple(sorted(frozenset(litellm_params) & COMPLEXITY_ROUTER_CONFIG_KEYS))
+    if not misplaced:
+        return None
+    return (
+        f"litellm_params sets complexity_router_config settings directly: {', '.join(misplaced)}. "
+        "The router reads these only from complexity_router_config, so there they configure nothing "
+        "and are forwarded to the provider as unknown request params, which rejects the call. "
+        "Move them under complexity_router_config."
+    )
 
 
 def validate_strategy_router_model_write(model: str, present_fields: frozenset[str]) -> str | None:

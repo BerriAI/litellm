@@ -887,6 +887,43 @@ def test_get_supported_openai_params_bedrock_converse():
         print(f"✅ Passed for model: {model}")
 
 
+@pytest.mark.parametrize(
+    "tools, expected_marker",
+    [
+        pytest.param(
+            [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {}}}}],
+            "dep-bedrock",
+            id="tools-present-so-the-cachepoint-is-placed",
+        ),
+        pytest.param(None, None, id="no-tools-so-nothing-is-placed"),
+    ],
+)
+def test_tool_config_cachepoint_is_credited_only_where_it_is_placed(tools, expected_marker):
+    """Spend attribution credits the gateway for breakpoints it placed, and a tool_config
+    point becomes one here or nowhere.
+
+    The hook that reads the configuration cannot record it: whether a cachePoint lands
+    depends on this provider and on the request carrying tools, neither of which the hook
+    sees, so marking on the point's presence credited request shapes that inject nothing.
+    """
+    bucket: dict = {"user_api_key": "sk-test"}
+    optional_params = {"cache_control_injection_points": [{"location": "tool_config"}]}
+    if tools is not None:
+        optional_params["tools"] = tools
+
+    data = AmazonConverseConfig()._transform_request_helper(
+        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        system_content_blocks=[],
+        optional_params=optional_params,
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_params={"metadata": bucket, "litellm_metadata": None, "model_info": {"id": "dep-bedrock"}},
+    )
+
+    placed = "cachePoint" in json.dumps(data.get("toolConfig", {}))
+    assert placed is (expected_marker is not None)
+    assert bucket.get("litellm_gateway_injected_cache") == expected_marker
+
+
 def test_transform_request_helper_includes_anthropic_beta_and_tools():
     """Test _transform_request_helper includes anthropic_beta for computer tools."""
     config = AmazonConverseConfig()

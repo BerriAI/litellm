@@ -5,6 +5,7 @@ import os
 import traceback
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
+from functools import lru_cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
@@ -137,6 +138,16 @@ def resolve_langfuse_credentials(
     return public_key, secret_key, resolved_host
 
 
+@lru_cache(maxsize=8)
+def _warn_invalid_deployment_environment(raw_value: str, error: str) -> None:
+    verbose_logger.warning(
+        "Ignoring invalid LANGFUSE_TRACING_ENVIRONMENT=%r for the langfuse callback: %s. "
+        "Traces will be sent to Langfuse's default environment.",
+        raw_value,
+        error,
+    )
+
+
 class LangFuseLogger:
     # Class variables or attributes
     def __init__(
@@ -165,9 +176,11 @@ class LangFuseLogger:
             # add http:// if unset, assume communicating over private network - e.g. render
             self.langfuse_host = "http://" + self.langfuse_host
         _env_override: Final = str(langfuse_environment).strip() if langfuse_environment is not None else None
-        self.langfuse_environment = _env_override or os.getenv("LANGFUSE_TRACING_ENVIRONMENT")
-        if self.langfuse_environment:
-            validate_langfuse_environment_value(self.langfuse_environment)
+        if _env_override:
+            validate_langfuse_environment_value(_env_override)
+            self.langfuse_environment: str | None = _env_override
+        else:
+            self.langfuse_environment = self.resolve_deployment_environment()
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
         self.langfuse_flush_interval = LangFuseLogger._get_langfuse_flush_interval(flush_interval)
@@ -952,6 +965,20 @@ class LangFuseLogger:
         except Exception as e:
             verbose_logger.warning("Failed to apply masking function: %s. Returning original data.", e)
             return data
+
+    @staticmethod
+    def resolve_deployment_environment() -> str | None:
+        """Resolve LANGFUSE_TRACING_ENVIRONMENT: stripped value, "default" plus a warning when invalid, None when unset."""
+        raw: Final = os.getenv("LANGFUSE_TRACING_ENVIRONMENT")
+        if not raw:
+            return None
+        value: Final = raw.strip()
+        try:
+            validate_langfuse_environment_value(value)
+        except ValueError as e:
+            _warn_invalid_deployment_environment(raw, str(e))
+            return "default"
+        return value
 
     @staticmethod
     def _get_langfuse_flush_interval(flush_interval: int) -> int:

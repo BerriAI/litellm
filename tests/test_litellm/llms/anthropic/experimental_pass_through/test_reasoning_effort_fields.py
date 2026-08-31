@@ -10,14 +10,15 @@ Covers:
 import json
 import os
 from typing import Any, Dict, Optional
-from unittest.mock import patch
 
 import pytest
 
 import litellm
-
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     normalize_reasoning_effort_value,
+)
+from litellm.router_utils.reasoning_effort_capability import (
+    resolve_supported_reasoning_efforts,
 )
 from litellm.utils import get_model_info
 
@@ -127,103 +128,38 @@ class TestModelRegistryReasoningEffortFields:
 # ---------------------------------------------------------------------------
 
 
-def _mock_model_info(**flags):
-    """Return a mock model_info dict with given capability flags."""
-    return flags
-
-
 class TestNormalizeReasoningEffortValue:
-    """Test degradation chains for normalize_reasoning_effort_value."""
+    """The degradation chains, driven against the bundled map rather than hand-built flag dicts.
 
-    # --- "max" degradation chain ---
+    A synthetic ``{"supports_max_reasoning_effort": True}`` is not a deployment the capability
+    resolver can answer for, since it never says the model reasons at all, so asserting against one
+    pins a shape the proxy never sees. Every case below names a real entry and the levels it
+    resolves to."""
 
-    def test_max_stays_max_when_supported(self):
-        with patch(
-            "litellm.utils.get_model_info",
-            return_value=_mock_model_info(
-                supports_max_reasoning_effort=True,
-                supports_xhigh_reasoning_effort=True,
-            ),
-        ):
-            assert normalize_reasoning_effort_value("max", model="test") == "max"
+    @pytest.mark.parametrize(
+        "model, provider, effort, expected",
+        [
+            ("claude-opus-4-7", "anthropic", "max", "max"),
+            ("gpt-5.5", "azure_ai", "max", "xhigh"),
+            ("gpt-5-mini", "azure", "max", "high"),
+            ("gpt-5.5", "azure_ai", "xhigh", "xhigh"),
+            ("gpt-5-mini", "azure", "xhigh", "high"),
+            ("gpt-5-mini", "azure", "minimal", "minimal"),
+            ("gpt-5.5", "azure_ai", "minimal", "low"),
+        ],
+    )
+    def test_a_tier_degrades_to_the_nearest_level_the_entry_accepts(
+        self, local_model_cost_map, model, provider, effort, expected
+    ):
+        assert normalize_reasoning_effort_value(effort, model, provider) == expected
 
-    def test_max_degrades_to_xhigh(self):
-        with patch(
-            "litellm.utils.get_model_info",
-            return_value=_mock_model_info(
-                supports_max_reasoning_effort=False,
-                supports_xhigh_reasoning_effort=True,
-            ),
-        ):
-            assert normalize_reasoning_effort_value("max", model="test") == "xhigh"
+    @pytest.mark.parametrize("effort", ["none", "low", "medium", "high"])
+    def test_a_tier_outside_any_chain_passes_through(self, local_model_cost_map, effort):
+        assert normalize_reasoning_effort_value(effort, "claude-opus-4-7", "anthropic") == effort
 
-    def test_max_degrades_to_high(self):
-        with patch(
-            "litellm.utils.get_model_info",
-            return_value=_mock_model_info(
-                supports_max_reasoning_effort=False,
-                supports_xhigh_reasoning_effort=False,
-            ),
-        ):
-            assert normalize_reasoning_effort_value("max", model="test") == "high"
-
-    # --- "xhigh" degradation chain ---
-
-    def test_xhigh_stays_xhigh_when_supported(self):
-        with patch(
-            "litellm.utils.get_model_info",
-            return_value=_mock_model_info(supports_xhigh_reasoning_effort=True),
-        ):
-            assert normalize_reasoning_effort_value("xhigh", model="test") == "xhigh"
-
-    def test_xhigh_degrades_to_high(self):
-        with patch(
-            "litellm.utils.get_model_info",
-            return_value=_mock_model_info(supports_xhigh_reasoning_effort=False),
-        ):
-            assert normalize_reasoning_effort_value("xhigh", model="test") == "high"
-
-    # --- "minimal" degradation chain ---
-
-    def test_minimal_stays_minimal_when_supported(self):
-        with patch(
-            "litellm.utils.get_model_info",
-            return_value=_mock_model_info(supports_minimal_reasoning_effort=True),
-        ):
-            assert (
-                normalize_reasoning_effort_value("minimal", model="test") == "minimal"
-            )
-
-    def test_minimal_degrades_to_low(self):
-        with patch(
-            "litellm.utils.get_model_info",
-            return_value=_mock_model_info(supports_minimal_reasoning_effort=False),
-        ):
-            assert normalize_reasoning_effort_value("minimal", model="test") == "low"
-
-    # --- passthrough values ---
-
-    def test_high_passes_through(self):
-        assert normalize_reasoning_effort_value("high", model="test") == "high"
-
-    def test_medium_passes_through(self):
-        assert normalize_reasoning_effort_value("medium", model="test") == "medium"
-
-    def test_low_passes_through(self):
-        assert normalize_reasoning_effort_value("low", model="test") == "low"
-
-    # --- exception fallback ---
-
-    def test_exception_fallback_uses_empty_model_info(self):
-        """When get_model_info raises, treat model_info as {} (no capabilities)."""
-        with patch(
-            "litellm.utils.get_model_info",
-            side_effect=Exception("model not found"),
-        ):
-            # "max" with no capabilities -> "high"
-            assert normalize_reasoning_effort_value("max", model="unknown") == "high"
-            # "minimal" with no capabilities -> "low"
-            assert normalize_reasoning_effort_value("minimal", model="unknown") == "low"
+    @pytest.mark.parametrize("effort, expected", [("max", "high"), ("xhigh", "high"), ("minimal", "low")])
+    def test_a_model_the_map_does_not_describe_keeps_the_floor(self, local_model_cost_map, effort, expected):
+        assert normalize_reasoning_effort_value(effort, "totally-made-up-model-xyz", "openai") == expected
 
 
 # ---------------------------------------------------------------------------
@@ -295,89 +231,103 @@ class TestAdapterAdaptiveThinking:
         assert result["effort"] == "medium"
 
 
-class TestDeclaredEffortsAnswerTheDegradationGate:
-    """Without this the chain reads only the per-level booleans, so a kimi-k3 request asking for
-    max silently arrives as high."""
+class TestAdvertisedLevelsAreTheForwardedLevels:
+    """The regression this file exists for: /model_group/info and this path answered the question
+    "which levels does this deployment take" through two different readers, so the proxy advertised
+    kimi-k3 max while /v1/messages quietly forwarded high. Both now resolve through one owner."""
+
+    KIMI_K3_SPELLINGS = (
+        ("kimi-k3", "moonshot"),
+        ("kimi-k3", "fireworks_ai"),
+        ("kimi-k3-us", "fireworks_ai"),
+        ("FW-Kimi-K3", "azure_ai"),
+    )
+
+    @pytest.mark.parametrize("model, provider", KIMI_K3_SPELLINGS)
+    def test_a_declared_level_is_forwarded_rather_than_degraded(self, local_model_cost_map, model, provider):
+        assert normalize_reasoning_effort_value("max", model, provider) == "max"
+
+    @pytest.mark.parametrize("model, provider", KIMI_K3_SPELLINGS)
+    def test_a_level_the_entry_does_not_declare_still_degrades(self, local_model_cost_map, model, provider):
+        """kimi-k3 declares low, high and max, so xhigh and minimal are absent from its set and keep
+        falling through the chain rather than being waved past by the presence of a declaration."""
+        assert normalize_reasoning_effort_value("xhigh", model, provider) == "high"
+        assert normalize_reasoning_effort_value("minimal", model, provider) == "low"
 
     @pytest.mark.parametrize(
         "model, provider",
-        [("kimi-k3", "moonshot"), ("kimi-k3", "fireworks_ai"), ("kimi-k3-us", "fireworks_ai")],
+        [
+            ("kimi-k3", "fireworks_ai"),
+            ("gpt-5-mini", "azure"),
+            ("gpt-5.5", "azure_ai"),
+            ("gpt-5.5-pro", "azure"),
+            ("claude-opus-4-7", "anthropic"),
+        ],
     )
-    def test_a_declared_level_survives_instead_of_degrading(self, local_model_cost_map, model, provider):
-        assert normalize_reasoning_effort_value("max", model, provider) == "max"
+    def test_a_degraded_tier_is_always_a_level_the_deployment_accepts(self, local_model_cost_map, model, provider):
+        """The invariant as a property rather than a table: whatever the three degradable tiers
+        resolve to must itself be a level the deployment accepts, so no request can arrive at a
+        level the model map says the model rejects. gpt-5.5-pro is the case that makes this bite,
+        refusing ``low`` outright, which is the floor the ``minimal`` chain used to stop on."""
+        model_info = get_model_info(model=model, custom_llm_provider=provider)
+        supported = resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True)
 
-    def test_a_level_the_entry_does_not_declare_still_degrades(self, local_model_cost_map):
-        """xhigh is not on kimi-k3's declaration, so it must keep degrading rather than be waved
-        past by the mere presence of one."""
-        assert normalize_reasoning_effort_value("xhigh", "kimi-k3", "moonshot") == "high"
-        assert normalize_reasoning_effort_value("minimal", "kimi-k3", "moonshot") == "low"
+        assert supported is not None
+        for effort in ("minimal", "xhigh", "max"):
+            assert normalize_reasoning_effort_value(effort, model, provider) in supported
 
     def test_the_wider_perplexity_entry_keeps_the_levels_it_declares(self, local_model_cost_map):
+        """The entry describing that reseller declares a six-level set, and every one of them is
+        forwarded, which is what the declared list exists to express."""
         assert normalize_reasoning_effort_value("xhigh", "perplexity/kimi-k3", "perplexity") == "xhigh"
         assert normalize_reasoning_effort_value("minimal", "perplexity/kimi-k3", "perplexity") == "minimal"
 
-    @pytest.mark.parametrize(
-        "model, provider, effort, expected",
-        [
-            ("claude-opus-4-7", "anthropic", "max", "max"),
-            ("claude-sonnet-4-6", "anthropic", "minimal", "low"),
-            ("gpt-5-mini", "azure", "max", "high"),
-        ],
-    )
-    def test_an_entry_on_the_per_level_flags_is_untouched(
-        self, local_model_cost_map, model, provider, effort, expected
-    ):
-        """The negative class that bounds this change to entries carrying the key."""
-        assert normalize_reasoning_effort_value(effort, model, provider) == expected
+    def test_the_minimal_chain_clears_a_deployment_that_refuses_low(self, local_model_cost_map):
+        """gpt-5.5-pro accepts medium, high and xhigh only, so the nearest level to ``minimal`` it
+        will actually take is ``medium``."""
+        assert normalize_reasoning_effort_value("minimal", "gpt-5.5-pro", "azure") == "medium"
 
 
-class TestDeclarationBeatsThePerLevelFlags:
-    """An entry can carry both shapes. The declaration wins whole, or /model_group/info and this
-    path would disagree about the same deployment. Driven through the public entry point over a
-    seeded map entry rather than a patched get_model_info, so it pins behaviour and not wiring."""
+@pytest.fixture
+def declared_effort_entry(local_model_cost_map, request):
+    """Register one synthetic entry whose declared levels are whatever the test asks for, so the
+    disjoint and empty declarations can be exercised without waiting for a real model to ship one.
+    An operator writing this key on a config.yaml model_info block produces exactly these shapes."""
+    key = f"synthetic/{request.node.name}"
+    litellm.model_cost[key] = {
+        "litellm_provider": "synthetic",
+        "mode": "chat",
+        "supports_reasoning": True,
+        "reasoning_effort_levels": list(request.param),
+    }
+    litellm.get_model_info.cache_clear()
+    try:
+        yield key.removeprefix("synthetic/")
+    finally:
+        litellm.model_cost.pop(key, None)
+        litellm.get_model_info.cache_clear()
 
-    MODEL = "declared-and-flagged"
 
-    @pytest.fixture
-    def seeded(self, local_model_cost_map, monkeypatch):
-        def _seed(**entry):
-            monkeypatch.setitem(
-                litellm.model_cost,
-                self.MODEL,
-                {"litellm_provider": "openai", "mode": "chat", "supports_reasoning": True, **entry},
-            )
-            litellm.get_model_info.cache_clear()
+class TestADeclarationDisjointFromTheChain:
+    """A declared set wins whole, so it can exclude the levels the per-level flags treat as always
+    available. The fallback therefore has to be read off that set: assuming ``medium`` emitted a
+    level an entry declaring only ``max`` had said it would not take."""
 
-        return _seed
+    @pytest.mark.parametrize("declared_effort_entry", [("max",)], indirect=True)
+    @pytest.mark.parametrize("effort", ["minimal", "xhigh"])
+    def test_a_chain_that_matches_nothing_still_lands_inside_the_declaration(self, declared_effort_entry, effort):
+        assert normalize_reasoning_effort_value(effort, declared_effort_entry, "synthetic") == "max"
 
-    @pytest.mark.parametrize("effort, expected", [("max", "max"), ("xhigh", "high"), ("minimal", "low")])
-    def test_a_flag_cannot_re_add_a_level_the_declaration_omits(self, seeded, effort, expected):
-        seeded(
-            reasoning_effort_levels=["low", "high", "max"],
-            supports_xhigh_reasoning_effort=True,
-            supports_minimal_reasoning_effort=True,
-            supports_max_reasoning_effort=False,
-        )
+    @pytest.mark.parametrize("declared_effort_entry", [("none", "max")], indirect=True)
+    def test_a_fallback_never_silently_turns_thinking_off(self, declared_effort_entry):
+        """``none`` is an off switch, so it must never be chosen as the nearest accepted level for a
+        caller who explicitly asked to think."""
+        assert normalize_reasoning_effort_value("minimal", declared_effort_entry, "synthetic") == "max"
 
-        assert normalize_reasoning_effort_value(effort, self.MODEL, "openai") == expected
-
-    def test_a_flag_cannot_keep_max_when_the_declaration_drops_it(self, seeded):
-        seeded(
-            reasoning_effort_levels=["low", "high"],
-            supports_max_reasoning_effort=True,
-            supports_xhigh_reasoning_effort=True,
-        )
-
-        assert normalize_reasoning_effort_value("max", self.MODEL, "openai") == "high"
-
-    def test_a_false_flag_cannot_remove_a_level_the_declaration_names(self, seeded):
-        seeded(reasoning_effort_levels=["high", "xhigh"], supports_xhigh_reasoning_effort=False)
-
-        assert normalize_reasoning_effort_value("xhigh", self.MODEL, "openai") == "xhigh"
-        assert normalize_reasoning_effort_value("max", self.MODEL, "openai") == "xhigh"
-
-    def test_a_chain_the_declaration_omits_entirely_lands_on_its_terminal(self, seeded):
-        """Documented residual: no strength ordering exists to pick a nearer declared level."""
-        seeded(reasoning_effort_levels=["high", "xhigh"])
-
-        assert normalize_reasoning_effort_value("minimal", self.MODEL, "openai") == "low"
+    @pytest.mark.parametrize("declared_effort_entry", [()], indirect=True)
+    @pytest.mark.parametrize("effort, expected", [("max", "high"), ("xhigh", "high"), ("minimal", "low")])
+    def test_a_deployment_accepting_no_tier_keeps_the_historical_floor(self, declared_effort_entry, effort, expected):
+        """There is no correct level to send a deployment that accepts none, so this keeps exactly
+        what every deployment got before the resolver was consulted. Dropping the parameter outright
+        is the real answer and belongs with the callers that build the request."""
+        assert normalize_reasoning_effort_value(effort, declared_effort_entry, "synthetic") == expected

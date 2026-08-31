@@ -1069,3 +1069,42 @@ def test_anthropic_messages_streams_together_tool_call_as_input_json_delta():
     )
     assert thinking_text == "Need weather and time."
     assert [event["delta"]["stop_reason"] for event in events if event["type"] == "message_delta"] == ["tool_use"]
+
+
+DECLARED_LEVELS_MODEL = "moonshotai/Kimi-K3"
+
+
+@pytest.mark.parametrize("effort", ["low", "high", "max"])
+def test_declared_level_is_sent_unchanged(effort):
+    """Kimi K3 declares low, high and max in the model map and Together accepts all three, but the
+    per-model clamp below only spares deepseek-ai/DeepSeek-V4-Pro, so max used to arrive as high and
+    the caller silently lost half the reasoning budget they asked for."""
+    mapped = _map_reasoning_effort(DECLARED_LEVELS_MODEL, effort)
+
+    assert mapped["reasoning_effort"] == effort
+
+
+@pytest.mark.parametrize("effort, expected", [("minimal", "low"), ("medium", "medium"), ("xhigh", "high")])
+def test_undeclared_level_still_uses_the_clamp(effort, expected):
+    """The declared set is not a licence to widen: a level the entry does not name keeps whatever
+    the hardcoded table did for it."""
+    mapped = _map_reasoning_effort(DECLARED_LEVELS_MODEL, effort)
+
+    assert mapped["reasoning_effort"] == expected
+
+
+def test_declared_levels_model_still_disables_reasoning_on_none():
+    mapped = _map_reasoning_effort(DECLARED_LEVELS_MODEL, "none")
+
+    assert mapped["reasoning"] == {"enabled": False}
+    assert "reasoning_effort" not in mapped
+
+
+def test_get_optional_params_preserves_max_for_declared_levels_model():
+    optional_params = litellm.get_optional_params(
+        model=DECLARED_LEVELS_MODEL,
+        custom_llm_provider="together_ai",
+        reasoning_effort="max",
+    )
+
+    assert optional_params["reasoning_effort"] == "max"

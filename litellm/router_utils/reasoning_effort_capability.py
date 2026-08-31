@@ -87,6 +87,22 @@ def declared_reasoning_efforts(model_info: Mapping[str, object]) -> tuple[str, .
     return tuple(effort for effort in REASONING_EFFORT_ADVERTISEMENT_ORDER if effort in declared)
 
 
+def declared_reasoning_efforts_for_model(model: str, custom_llm_provider: str) -> tuple[str, ...] | None:
+    """The levels an entry declares, resolved from the model string a provider config holds rather
+    than from a router deployment's model_info.
+
+    None means the map has no opinion, either because the entry declares nothing or because it
+    describes no such model, so a caller keeps whatever it did before the entry was described. The
+    entry is read straight off the map rather than through get_model_info, which raises for a model
+    it does not know: a provider config runs on the request path for every model it serves, most of
+    which the map never named, and a lookup miss there must not fail the call.
+    """
+    entry: Final = litellm.model_cost.get(f"{custom_llm_provider}/{model}") or litellm.model_cost.get(model)
+    if not isinstance(entry, dict):
+        return None
+    return declared_reasoning_efforts(entry)
+
+
 def _supports_none_reasoning_effort(model_info: Mapping[str, object], flag: object) -> bool:
     """Opt-in only where a request path refuses the level. AzureOpenAIGPT5Config raises
     UnsupportedParamsError on reasoning_effort='none' without an explicit true, and it is selected
@@ -132,16 +148,25 @@ def resolve_supported_reasoning_efforts(
     unset flag as () would let one custom deployment empty every level its mapped siblings agree
     on. deployment_is_mapped is that provenance, and an operator who wants either answer for an
     off-map deployment gets it by setting supports_reasoning explicitly.
+
+    If supports_reasoning is unset but at least one per-level flag (e.g.
+    supports_minimal_reasoning_effort) is present, treat it as implicitly True, since the
+    per-level flags are evidence the model supports reasoning. An explicit False always wins:
+    it is the operator's escape hatch and must not be overridden by inherited per-level flags.
     """
     supports_reasoning: Final = model_info.get("supports_reasoning")
-    if supports_reasoning is not True:
-        return () if supports_reasoning is False or deployment_is_mapped else None
+    if supports_reasoning is False:
+        return ()
+
+    flags: Final = _declared_effort_flags(model_info)
+    has_per_level_flag: Final = any(value is not None for value in flags.values())
+    if supports_reasoning is not True and not has_per_level_flag:
+        return () if deployment_is_mapped else None
 
     declared: Final = declared_reasoning_efforts(model_info)
     if declared is not None:
         return declared
 
-    flags: Final = _declared_effort_flags(model_info)
     if all(value is None for value in flags.values()):
         return None
 

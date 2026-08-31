@@ -1447,10 +1447,8 @@ Model Info:
 
         from datetime import datetime
 
-        # Get the current timestamp
         current_time: Final = datetime.now().strftime("%H:%M:%S")
         _proxy_base_url: Final = os.getenv("PROXY_BASE_URL", None)
-        # Use .name if it's an enum, otherwise use as is
         alert_type_name: Final = getattr(alert_type, "name", alert_type)
         alert_type_formatted: Final = f"Alert type: `{alert_type_name}`"
         if alert_type == "daily_reports" or alert_type == "new_model_added":
@@ -1487,9 +1485,9 @@ Model Info:
             elif self.default_webhook_url is not None:
                 _digest_webhook = self.default_webhook_url
             else:
-                _digest_webhook = os.getenv("SLACK_WEBHOOK_URL", None)
+                _digest_webhook = os.getenv("SLACK_WEBHOOK_URL") or os.getenv("ALERTING_WEBHOOK_URL")
             if _digest_webhook is None:
-                raise ValueError("Missing SLACK_WEBHOOK_URL from environment")
+                raise ValueError("Missing SLACK_WEBHOOK_URL / ALERTING_WEBHOOK_URL from environment")
 
             digest_key: Final = f"{alert_type_name_str}:{request_model or ''}:{api_base or ''}"
 
@@ -1518,10 +1516,10 @@ Model Info:
         elif self.default_webhook_url is not None:
             slack_webhook_url = self.default_webhook_url
         else:
-            slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL", None)
+            slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL") or os.getenv("ALERTING_WEBHOOK_URL")
 
         if slack_webhook_url is None:
-            raise ValueError("Missing SLACK_WEBHOOK_URL from environment")
+            raise ValueError("Missing SLACK_WEBHOOK_URL / ALERTING_WEBHOOK_URL from environment")
         payload: Final = {"text": formatted_message}
         headers: Final = {"Content-type": "application/json"}
 
