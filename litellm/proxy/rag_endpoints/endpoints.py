@@ -37,6 +37,7 @@ from litellm.proxy.rag_endpoints.upload_security import (
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
 )
+from litellm.rag.main import get_ingestion_class
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
 
 if TYPE_CHECKING:
@@ -427,6 +428,16 @@ async def parse_rag_ingest_request(
                         "Credentials must be configured server-side."
                     },
                 )
+
+        provider: Final = vector_store_opts.get("custom_llm_provider", "openai")
+        if isinstance(provider, str):
+            try:
+                get_ingestion_class(provider)
+            except ValueError as error:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": str(error)},
+                ) from error
 
     return ingest_options, secured_file_data, file_url, file_id
 
