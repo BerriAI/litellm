@@ -124,6 +124,25 @@ class TestLiteLLMCompletionResponsesConfig:
         assert "extra_field" not in result["file"]
         assert "another_field" not in result["file"]
 
+    def test_transform_input_file_item_to_file_item_keeps_filename(self):
+        """OpenAI rejects file_data with no filename beside it, so dropping it 400s the request"""
+        result = (
+            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+                {
+                    "type": "input_file",
+                    "filename": "report.pdf",
+                    "file_data": "data:application/pdf;base64,JVBERi0=",
+                }
+            )
+        )
+        assert result == {
+            "type": "file",
+            "file": {
+                "file_data": "data:application/pdf;base64,JVBERi0=",
+                "filename": "report.pdf",
+            },
+        }
+
     def test_transform_input_file_item_to_file_item_with_file_url(self):
         """file_url should be mapped to file_id for downstream URL handling"""
         result = (
