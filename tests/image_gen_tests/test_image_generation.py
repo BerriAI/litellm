@@ -3,14 +3,10 @@
 
 import logging
 import os
-import sys
 import traceback
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 from dotenv import load_dotenv
 from openai.types.image import Image
@@ -19,7 +15,6 @@ from litellm.caching import InMemoryCache
 logging.basicConfig(level=logging.DEBUG)
 load_dotenv()
 import asyncio
-import os
 import pytest
 
 import litellm

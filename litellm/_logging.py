@@ -5,7 +5,7 @@ import os
 import sys
 from datetime import datetime
 from logging import Formatter
-from typing import Any, Final
+from typing import Any, Final, TextIO
 
 import litellm
 from litellm.constants import (
@@ -88,6 +88,24 @@ def redact_secrets(value: str) -> str:
     return _redact_string(value)
 
 
+def _substituted_color_message(record: logging.LogRecord) -> str | None:
+    """Render a record's ``color_message`` against its args, or None if absent.
+
+    uvicorn's colorized formatter re-renders `color_message` against
+    record.args at emit time (see uvicorn.logging.ColourizedFormatter) instead
+    of using the already-formatted record.msg, so it has to be substituted
+    before args are cleared or it is later formatted with no args and prints
+    the raw "%s://%s:%d" placeholders instead of the URL.
+    """
+    color_message: Final = record.__dict__.get("color_message")
+    if not isinstance(color_message, str) or not record.args:
+        return None
+    try:
+        return color_message % record.args
+    except TypeError:
+        return color_message
+
+
 class SecretRedactionFilter(logging.Filter):
     """Scrubs known secret/credential patterns from log records."""
 
@@ -96,6 +114,12 @@ class SecretRedactionFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if not _ENABLE_SECRET_REDACTION:
             return True
+
+        # Runs before args are cleared, and before the extra-field loop below
+        # that redacts the substituted result.
+        substituted_color_message: Final = _substituted_color_message(record)
+        if substituted_color_message is not None:
+            record.color_message = substituted_color_message  # rebind-ok: a Filter scrubs records in place
 
         try:
             record.msg = _redact_string(record.getMessage())
@@ -210,11 +234,65 @@ class CorrelationContextFilter(logging.Filter):
 _correlation_filter: Final = CorrelationContextFilter()
 
 
-json_logs = bool(os.getenv("JSON_LOGS", False))
+_LOG_FORMAT_PREFIX: Final = "%(asctime)s - %(name)s:%(levelname)s"
+_LOG_FORMAT_SUFFIX: Final = ": %(filename)s:%(lineno)s - %(message)s"
+_PLAIN_LOG_FORMAT: Final = _LOG_FORMAT_PREFIX + _LOG_FORMAT_SUFFIX
+_COLOR_LOG_FORMAT: Final = f"\033[92m{_LOG_FORMAT_PREFIX}\033[0m{_LOG_FORMAT_SUFFIX}"
+
+
+def _stream_is_tty(stream: TextIO | None) -> bool:
+    """True when the stream is an open interactive terminal; never raises.
+
+    A stream can be None (pythonw/embedded interpreters), lack isatty entirely
+    (GUI log-redirect shims), or be closed; import must survive all three.
+    """
+    try:
+        return stream is not None and stream.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def _plain_log_format(stdout: TextIO | None, stderr: TextIO | None) -> str:
+    """The plain-text log format, colorized only when both streams are an interactive terminal.
+
+    Honors the NO_COLOR convention from no-color.org: color is disabled when
+    NO_COLOR is present with a non-empty value.
+    """
+    if os.environ.get("NO_COLOR"):
+        return _PLAIN_LOG_FORMAT
+    return _COLOR_LOG_FORMAT if _stream_is_tty(stdout) and _stream_is_tty(stderr) else _PLAIN_LOG_FORMAT
+
+
+class LevelRoutingStreamHandler(logging.StreamHandler):
+    """Writes records below WARNING to stdout and WARNING and above to stderr.
+
+    Collectors that derive severity from the stream report every stderr line as an error.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        preferred: Final = sys.stdout if record.levelno < logging.WARNING else sys.stderr
+        if preferred is None or getattr(preferred, "closed", False):
+            self.stream = sys.stderr  # rebind-ok: fall back to the pre-fix stream rather than raising per record
+        else:
+            self.stream = preferred  # rebind-ok: StreamHandler.emit writes self.stream under the handler lock
+        super().emit(record)
+
+
+def _parse_json_logs_env(value: str | None) -> bool:
+    """Strict opt-in parse for the JSON_LOGS env var: only "true" (any case) enables JSON logs.
+
+    Matches the reader in litellm-proxy-extras/_logging.py. The previous
+    bool(os.getenv(...)) treated any non-empty value, including "false" and "0",
+    as enabled.
+    """
+    return (value or "").lower() == "true"
+
+
+json_logs: Final = _parse_json_logs_env(os.getenv("JSON_LOGS"))
 # Create a handler for the logger (you may need to adapt this based on your needs)
 log_level: Final = os.getenv("LITELLM_LOG", "DEBUG")
 numeric_level: Final[str] = getattr(logging, log_level.upper())
-handler: Final = logging.StreamHandler()
+handler: Final = LevelRoutingStreamHandler()
 handler.setLevel(numeric_level)
 handler.addFilter(_secret_filter)
 handler.addFilter(_correlation_filter)
@@ -423,7 +501,7 @@ if json_logs:
     _setup_json_exception_handlers(JsonFormatter())
 else:
     formatter: Final = CorrelationPlainFormatter(
-        "\033[92m%(asctime)s - %(name)s:%(levelname)s\033[0m: %(filename)s:%(lineno)s - %(message)s",
+        _plain_log_format(sys.stdout, sys.stderr),
         datefmt="%H:%M:%S",
     )
 
@@ -604,7 +682,7 @@ def _turn_on_json():
 
     - Adds a JSON formatter to all loggers
     """
-    handler: Final = logging.StreamHandler()
+    handler: Final = LevelRoutingStreamHandler()
     handler.setFormatter(JsonFormatter())
     _initialize_loggers_with_handler(handler)
     # Set up exception handlers

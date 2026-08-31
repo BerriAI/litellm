@@ -1,7 +1,7 @@
 """
 AUTO ROUTER MANAGEMENT ENDPOINTS
 
-POST /auto_router/test_routing - Route one prompt through an unsaved complexity-router config
+POST /auto_router/test_routing - Route one request through an unsaved complexity-router config
 POST /auto_router/validate_complexity_router_config - Dry-run the complexity-router write gate without saving
 """
 
@@ -15,9 +15,10 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, field_validator
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BudgetExceededError
-from litellm.litellm_core_utils.llm_judge import router_resolves_model
+from litellm.litellm_core_utils.llm_judge import judge_target
 from litellm.proxy._types import (
     CommonProxyErrors,
     LiteLLM_TeamTable,
@@ -32,10 +33,18 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.autorouter_session_rollup import AUTOROUTER_BENCHMARKS_SQL
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.litellm_pre_call_utils import (
+    LiteLLMProxyRequestSetup,
+    refresh_proxy_server_request_body_snapshot,
+)
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router_strategy.complexity_router import ComplexityRouter
+from litellm.router_utils.auto_router_model_naming import (
+    StrategyRouterDependencyRole,
+    classify_strategy_router_model,
+    strategy_router_dependencies,
+)
 from litellm.types.management_endpoints.auto_router_endpoints import (
     SHADOW_EVAL_TURN_VALVE,
     AutoRouterBenchmarkGroup,
@@ -85,6 +94,9 @@ class _VerificationTokenRow(Protocol):
     @property
     def key_name(self) -> str | None: ...
 
+    @property
+    def team_id(self) -> str | None: ...
+
 
 class _VerificationTokenTable(Protocol):
     async def find_unique(self, *, where: Mapping[str, object]) -> _VerificationTokenRow | None: ...
@@ -108,6 +120,10 @@ class _ShadowEvalAttemptRow(Protocol):
     def error(self) -> str | None: ...
 
 
+class _ShadowEvalFunnelTable(Protocol):
+    async def create_many(self, data: Sequence[Mapping[str, object]], skip_duplicates: bool) -> int: ...
+
+
 class _ShadowEvalAttemptTable(Protocol):
     async def find_first(
         self, *, where: Mapping[str, object], order: Mapping[str, str]
@@ -124,6 +140,10 @@ def _verification_tokens(prisma_client: "PrismaClient") -> _VerificationTokenTab
 
 def _shadow_eval_jobs(prisma_client: "PrismaClient") -> _ShadowEvalJobTable:
     return prisma_client.db.litellm_shadowevaljob
+
+
+def _shadow_eval_funnel(prisma_client: "PrismaClient") -> _ShadowEvalFunnelTable:
+    return prisma_client.db.litellm_shadowevalfunnel  # pyright: ignore[reportAttributeAccessIssue]  # generated client
 
 
 def _shadow_eval_attempts(prisma_client: "PrismaClient") -> _ShadowEvalAttemptTable:
@@ -194,7 +214,7 @@ def _models_this_test_can_call(config: RequestComplexityRouterConfig) -> tuple[s
         model
         for model in (
             config.classifier_llm_config.model
-            if config.classifier_type == "llm" and config.classifier_llm_config is not None
+            if config.uses_llm_classifier and config.classifier_llm_config is not None
             else None,
             config.embedding_model if config.semantic_keyword_matching else None,
         )
@@ -284,19 +304,30 @@ async def preview_auto_router_routing(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> AutoRouterRoutingTestResponse:
     """
-    Route a single prompt through a complexity-router config and report where it landed.
+    Route a single request through a complexity-router config and report where it landed.
 
-    Answers "which model would this prompt get?" for a config that only exists in a form,
-    so an auto router can be checked before it is created. The prompt is classified by the
-    same pre-routing hook a live request runs, then dropped: nothing is sent to the model it
-    routed to, and no auto router is created. A heuristic config therefore spends nothing, while
-    an `llm` classifier or semantic keyword matching bills its classifier/embedding call to the
-    calling key, like Test Connection does.
+    Answers "which model would this request get?" for a config that only exists in a form,
+    so an auto router can be checked before it is created. The request is classified by the
+    same pre-routing hook a live request runs, over the same messages, system prompt and tool
+    definitions, then dropped: nothing is sent to the model it routed to, and no auto router is
+    created. A heuristic config therefore spends nothing, while an `llm` classifier or semantic
+    keyword matching bills its classifier/embedding call to the calling key, like Test Connection
+    does.
+
+    Send `messages` to classify a real turn, with `system` and `tools` beside it when the surface
+    carries them top level, as Anthropic /v1/messages does. `prompt` is the single-ask shorthand and
+    routes as one user turn with nothing around it.
 
     **Example Request:**
     ```json
     {
-        "prompt": "think step by step about how to shard this table",
+        "messages": [
+            {"role": "system", "content": "You are a database migration assistant"},
+            {"role": "user", "content": "the index is not unique"},
+            {"role": "assistant", "content": "Then two workers can both insert. Add a unique index"},
+            {"role": "user", "content": "ok do it"}
+        ],
+        "tools": [{"type": "function", "function": {"name": "Bash", "description": "Run a command"}}],
         "complexity_router_config": {
             "tiers": {"SIMPLE": ["gpt-4o-mini"], "REASONING": ["o3"]},
             "classifier_type": "heuristic"
@@ -339,18 +370,21 @@ async def preview_auto_router_routing(
     )
 
     request_kwargs: Final = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
-        data={"metadata": {}},  # mutable-ok: the request-metadata helper takes and returns request kwargs as a dict
+        data={  # mutable-ok: the request-metadata helper takes and returns request kwargs as a dict
+            **data.wire_body(),
+            "metadata": {},  # mutable-ok: the request-metadata helper writes the auth fields into this dict
+            "proxy_server_request": {"body": None},  # mutable-ok: the snapshot owner fills body in place
+        },
         user_api_key_dict=user_api_key_dict,
         _metadata_variable_name="metadata",
     )
+    refresh_proxy_server_request_body_snapshot(request_kwargs)
 
     try:
         hook_response: Final = await complexity_router.async_pre_routing_hook(
             model=data.router_name,
             request_kwargs=request_kwargs,
-            messages=[  # mutable-ok: the routing hook's signature takes a list of message dicts
-                {"role": "user", "content": data.prompt},  # mutable-ok: a message is dict-shaped
-            ],
+            messages=request_kwargs["messages"],
         )
     except Exception as e:  # noqa: BLE001 -- surfaces any classifier/plugin failure to the caller as a 400 instead of a 500, since the config under test is caller input
         verbose_proxy_logger.exception("Auto router routing test failed. Due to error - %s", e)
@@ -510,6 +544,53 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
     )
 
 
+def _strategy_router_key(deployment: object) -> tuple[str, str] | None:
+    """``(model_name, kind)`` for a deployment whose routing the session rollup records.
+
+    Kinds come from ``classify_strategy_router_model``, the same rule the Router registers a
+    deployment by, so this arm cannot disagree with the arm that stamped ``router_type`` onto
+    the session rows. Semantic auto-routers return None: they record no routing decision, so
+    they can never own a session row, and ``AutoRouterBenchmarkGroup.router_type`` has no
+    value for them. A permanent zero would read as "no traffic" rather than "not instrumented".
+    """
+    if not isinstance(deployment, Mapping):
+        return None
+    litellm_params: Final = deployment.get("litellm_params")
+    router_name: Final = deployment.get("model_name")
+    if not (isinstance(litellm_params, Mapping) and isinstance(router_name, str) and router_name):
+        return None
+    model: Final = litellm_params.get("model")
+    if not isinstance(model, str):
+        return None
+    kind: Final = classify_strategy_router_model(model)
+    return None if kind is None or kind == "semantic" else (router_name, kind)
+
+
+def _idle_router_groups(
+    llm_router: "Router | None", covered: frozenset[tuple[str, str]]
+) -> tuple[AutoRouterBenchmarkGroup, ...]:
+    """Zeroed groups for configured strategy routers the window's traffic did not cover.
+
+    The dashboard's router picker has to list a router the moment it is created rather than
+    once it has spent something, so the registry drives the list and the rollup only supplies
+    the measures. ``_summed_agg_row`` over no sessions is already the zero element of the
+    fold, so a group with every measure at zero costs one relabel rather than a literal that
+    would go stale the next time the response grows a field.
+    """
+    if llm_router is None:
+        return ()
+    zero: Final = _summed_agg_row(())
+    idle: Final = frozenset(
+        key
+        for key in (_strategy_router_key(deployment) for deployment in llm_router.model_list or ())
+        if key is not None and key not in covered
+    )
+    return tuple(
+        _benchmark_group(zero.model_copy(update=MappingProxyType({"router_name": name, "router_type": kind})))
+        for name, kind in sorted(idle)
+    )
+
+
 @router.get(
     "/auto_router/benchmarks",
     tags=("auto router",),
@@ -532,8 +613,13 @@ async def get_auto_router_benchmarks(
     overlaps it: its last turn is on or after start_date and its first turn is on or before
     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
     over that bucket's turns.
+
+    The rollup supplies the measures, never the list. Which routers appear comes from the
+    model registry, so one shows up as soon as it is configured and reads zero until it
+    serves traffic, and `routers_in_scope` counts those too rather than only the routers the
+    window recorded.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import llm_router, prisma_client
 
     _require_admin_viewer(user_api_key_dict, "view auto-router benchmarks across the deployment")
     if prisma_client is None:
@@ -555,11 +641,14 @@ async def get_auto_router_benchmarks(
         (end_day + timedelta(days=1)).isoformat(),
     )
     rows: Final = _SESSION_AGG_ROWS.validate_python(raw_rows or ())
-    groups: Final = tuple(_benchmark_group(row) for row in rows)
+    groups: Final = (
+        *(_benchmark_group(row) for row in rows),
+        *_idle_router_groups(llm_router, frozenset((row.router_name, row.router_type) for row in rows)),
+    )
     return AutoRouterBenchmarksResponse(
         start_date=start_day.strftime("%Y-%m-%d"),
         end_date=end_day.strftime("%Y-%m-%d"),
-        routers_in_scope=len(rows),
+        routers_in_scope=len(groups),
         totals=_benchmark_totals(_summed_agg_row(rows)),
         groups=groups,
     )
@@ -598,30 +687,152 @@ def _is_configured_pre_routing_strategy(llm_router: "Router", router_name: str) 
     )
 
 
-def _validate_plain_model(llm_router: "Router | None", model: str, field_name: str) -> None:
+def _sdk_model_is_missing_anthropic_credentials(model: str) -> bool:
+    _, provider, _, _ = litellm.get_llm_provider(model=model)
+    if provider != "anthropic" or litellm.anthropic_key or litellm.api_key:
+        return False
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+    from litellm.secret_managers.main import secret_manager_would_be_consulted
+
+    if AnthropicModelInfo.get_api_key() or AnthropicModelInfo.get_auth_token():
+        return False
+    return not any(
+        secret_manager_would_be_consulted(secret_name) for secret_name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+    )
+
+
+def _validate_plain_model(
+    llm_router: "Router | None", model: str, field_name: str, team_ids: Sequence[str | None]
+) -> None:
     """Reject a model the dispatch path cannot resolve, at start rather than as a silently
     growing error count once the job is already sampling and billing. Both the judge and a
     reverse job's baseline must be plain models: an auto-router in either slot would
-    re-route per turn, so the comparison would have no fixed arm to attribute results to."""
+    re-route per turn, so the comparison would have no fixed arm to attribute results to.
+
+    Resolvability is asked once per team the job samples for, because that is the identity
+    the call carries: a name only one team can reach fails every turn for the other keys,
+    which is the growing error count this check exists to prevent."""
     if llm_router is not None and _is_configured_pre_routing_strategy(llm_router, model):
         raise HTTPException(
             status_code=400,
             detail=f"{field_name} '{model}' is an auto-router; it must be a plain model",
         )
-    if router_resolves_model(llm_router, model):
-        return
-    import litellm
-
-    try:
-        litellm.get_llm_provider(model=model)
-    except Exception as e:
+    targets: Final = tuple((team, judge_target(llm_router, model, team)) for team in team_ids)
+    unreachable: Final = tuple(team for team, target in targets if target.via == "nothing")
+    if unreachable:
         raise HTTPException(
             status_code=400,
             detail=(
                 f"{field_name} '{model}' is neither a model configured on this proxy nor a "
-                "provider-qualified public model name (e.g. 'anthropic/claude-sonnet-5')"
+                "provider-qualified public model name (e.g. 'anthropic/claude-sonnet-5')" + _for_teams(unreachable)
             ),
-        ) from e
+        )
+    sdk_teams: Final = tuple(team for team, target in targets if target.via == "sdk")
+    if not sdk_teams:
+        return
+    if not _sdk_model_is_missing_anthropic_credentials(model):
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"{field_name} '{model}' uses the LiteLLM SDK but required credentials are not configured: "
+            "ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN" + _for_teams(sdk_teams)
+        ),
+    )
+
+
+def _for_teams(team_ids: Sequence[str | None]) -> str:
+    """Name the teams a fault applies to, when it does not apply to every key alike."""
+    named: Final = tuple(sorted(team for team in team_ids if team is not None))
+    return f" for team {', '.join(named)}" if named else ""
+
+
+_JUDGED_ROLES: Final[frozenset[StrategyRouterDependencyRole]] = frozenset({"tier", "default"})
+
+
+def _router_arm_models(llm_router: "Router | None", router_name: str) -> tuple[tuple[str, str], ...]:
+    """``(role, model_name)`` for every model the router under evaluation can answer with.
+
+    Drawn from ``strategy_router_dependencies``, the single answer to "what does this router
+    call", so this cannot disagree with the health check's reading of the same deployment.
+    Only the roles that SERVE are arms: the classifier and embedding models pick the tier,
+    they never produce a response anyone judges, so a judge sharing them carries no
+    self-preference.
+
+    A semantic auto-router keeps its routes in an opaque config blob or a file, so only its
+    default model is enumerable and the guard below is incomplete for it. That direction is
+    deliberate: it can miss a collision, never invent one.
+
+    Which tiers a router declares is a property of its config and not of who is calling, so
+    this lookup is unscoped; what each tier NAME resolves to is the team-dependent half, and
+    it belongs to the caller that compares them.
+    """
+    deployments: Final = llm_router.get_model_list(model_name=router_name) if llm_router is not None else None
+    return tuple(
+        dict.fromkeys(
+            (dependency.role, dependency.model_name)
+            for deployment in deployments or ()
+            for dependency in strategy_router_dependencies(deployment["litellm_params"])
+            if dependency.role in _JUDGED_ROLES
+        )
+    )
+
+
+def _judge_collisions_for_team(
+    llm_router: "Router | None", data: StartShadowEvalRequest, team_id: str | None
+) -> tuple[tuple[str, str], ...]:
+    """``(role, model_name)`` for each arm the judge would also be, as one team's keys see it.
+
+    Both sides resolve under the SAME team, since two names are the same model only for a
+    caller who can reach both; resolving the judge for one team against an arm for another
+    invents a collision no request could produce.
+    """
+    judge: Final = judge_target(llm_router, data.judge_model, team_id).models
+    return tuple(
+        (role, model)
+        for role, model in (
+            *_router_arm_models(llm_router, data.router_name),
+            *((("baseline", data.baseline_model),) if data.baseline_model is not None else ()),
+        )
+        if judge & judge_target(llm_router, model, team_id).models
+    )
+
+
+def _validate_judge_is_not_a_candidate(
+    llm_router: "Router | None", data: StartShadowEvalRequest, team_ids: Sequence[str | None]
+) -> None:
+    """Reject a judge that is one of the two arms it grades.
+
+    A judge scores its own output higher than a rival's, so a run whose judge also serves an
+    arm reports a win rate for that arm that measures the judge rather than the models, and
+    the whole job's spend buys a result that has to be discarded. Both arms are in scope: the
+    router answers with a tier or default model in either direction, and a reverse job's
+    ``baseline_model`` is the fixed arm the router is compared against.
+
+    Names are compared by what would ANSWER them, not by spelling: the shipped default judge
+    ``anthropic/claude-sonnet-5`` collides with a tier deployment an admin named
+    ``sonnet-tier``, and an alias collides with its target, neither of which a string
+    comparison sees.
+
+    A collision for ONE team is a collision for the job, because the verdicts every key
+    produces land in the same win rates.
+    """
+    collisions: Final = tuple(
+        dict.fromkeys(
+            collision for team_id in team_ids for collision in _judge_collisions_for_team(llm_router, data, team_id)
+        )
+    )
+    if not collisions:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"judge_model '{data.judge_model}' is also an arm this job would judge: "
+            + ", ".join(f"{role} model '{model}'" for role, model in collisions)
+            + ". A judge scores its own answers higher than a rival's, so the win rates would "
+            "measure the judge; pick a judge that serves neither arm"
+        ),
+    )
 
 
 def _is_unique_violation(error: Exception) -> bool:
@@ -644,6 +855,9 @@ class _AttemptAggRow(BaseModel):
     shadow_wins: int
     ties: int
     avg_confidence: float | None
+    real_spend: float
+    shadow_spend: float
+    cache_hit_turns: int
 
 
 _ATTEMPT_AGG_ROWS: Final = TypeAdapter(list[_AttemptAggRow])
@@ -653,7 +867,10 @@ _ATTEMPT_AGG_SELECT: Final = """
     COUNT(*) FILTER (WHERE outcome = 'real')::int AS real_wins,
     COUNT(*) FILTER (WHERE outcome = 'shadow')::int AS shadow_wins,
     COUNT(*) FILTER (WHERE outcome = 'tie')::int AS ties,
-    AVG(confidence)::float AS avg_confidence
+    AVG(confidence)::float AS avg_confidence,
+    COALESCE(SUM(real_cost + real_classifier_cost) FILTER (WHERE real_cost IS NOT NULL AND NOT real_cache_hit), 0)::float AS real_spend,
+    COALESCE(SUM(shadow_cost + shadow_classifier_cost) FILTER (WHERE real_cost IS NOT NULL AND NOT real_cache_hit), 0)::float AS shadow_spend,
+    COUNT(*) FILTER (WHERE real_cache_hit)::int AS cache_hit_turns
 FROM "LiteLLM_ShadowEvalAttempt"
 WHERE job_id = ANY($1::text[]) AND outcome != 'error'
 GROUP BY 1
@@ -674,7 +891,7 @@ WHERE j.api_key_id = ANY($1::text[]) AND j.stopped_at IS NULL
     OR (SELECT COUNT(*) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = j.id) >= j.max_turns
     OR (
       j.max_budget IS NOT NULL
-      AND (SELECT COALESCE(SUM(a.judge_cost + a.shadow_cost), 0) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = j.id) >= j.max_budget
+      AND (SELECT COALESCE(SUM(a.judge_cost + a.shadow_cost + a.shadow_classifier_cost), 0) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = j.id) >= j.max_budget
     )
   )
 """
@@ -689,12 +906,23 @@ WHERE job_id = ANY($1::text[])
 """
 
 _ATTEMPT_COUNTS_SQL: Final = """
-SELECT a.job_id, COUNT(*)::int AS attempt_count, COALESCE(SUM(a.judge_cost + a.shadow_cost), 0)::float AS spend
+SELECT a.job_id, COUNT(*)::int AS attempt_count, COALESCE(SUM(a.judge_cost + a.shadow_cost + a.shadow_classifier_cost), 0)::float AS spend
 FROM "LiteLLM_ShadowEvalAttempt" a
 JOIN "LiteLLM_ShadowEvalJob" j ON j.id = a.job_id
 WHERE a.job_id = ANY($1::text[]) AND (j.stopped_at IS NULL OR a.created_at <= j.stopped_at)
 GROUP BY a.job_id
 """
+
+_FUNNEL_TOTALS_SQL: Final = """
+SELECT COUNT(*)::int AS legs_with_rows,
+    COALESCE(SUM(not_sampled), 0)::int AS not_sampled,
+    COALESCE(SUM(unjudgeable), 0)::int AS unjudgeable,
+    COALESCE(SUM(shed), 0)::int AS shed,
+    COALESCE(SUM(withheld), 0)::int AS withheld
+FROM "LiteLLM_ShadowEvalFunnel"
+WHERE job_id = ANY($1::text[])
+"""
+
 
 _STOP_JOB_SQL: Final = """
 UPDATE "LiteLLM_ShadowEvalJob"
@@ -707,10 +935,18 @@ WHERE group_id = $1 AND stopped_by IS NULL
       AND (SELECT COUNT(*) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = k.id) < k.max_turns
       AND (
         k.max_budget IS NULL
-        OR (SELECT COALESCE(SUM(a.judge_cost + a.shadow_cost), 0) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = k.id) < k.max_budget
+        OR (SELECT COALESCE(SUM(a.judge_cost + a.shadow_cost + a.shadow_classifier_cost), 0) FROM "LiteLLM_ShadowEvalAttempt" a WHERE a.job_id = k.id) < k.max_budget
       )
   )
 """
+
+
+class _FunnelTotalsRow(BaseModel):
+    legs_with_rows: int
+    not_sampled: int
+    unjudgeable: int
+    shed: int
+    withheld: int
 
 
 class _AttemptCountRow(BaseModel):
@@ -761,6 +997,9 @@ def _slices(rows: Sequence[_AttemptAggRow]) -> tuple[ShadowEvalSlice, ...]:
             shadow_win_rate_pct=_pct_of(row.shadow_wins, row.turn_count),
             tie_rate_pct=_pct_of(row.ties, row.turn_count),
             avg_judge_confidence=round(row.avg_confidence or 0.0, 3),
+            real_spend=row.real_spend,
+            shadow_spend=row.shadow_spend,
+            cache_hit_turns=row.cache_hit_turns,
         )
         for row in sorted(rows, key=lambda r: r.turn_count, reverse=True)
     )
@@ -911,12 +1150,23 @@ async def _shadow_eval_results(prisma_client: "PrismaClient", legs: Sequence[_Le
         for row in by_leg
     )
     total_turns: Final = sum(r.turn_count for r in by_tier)
+    funnel_rows: Final = await _query_raw(prisma_client, _FUNNEL_TOTALS_SQL, leg_ids)
+    counted: Final = _FunnelTotalsRow.model_validate(funnel_rows[0]) if funnel_rows else None
+    # Coverage only when EVERY leg has a funnel row: a partial seed (one leg's insert
+    # failed) must read as unknown, not as job-level counts missing a leg's traffic.
+    funnel: Final = counted if counted is not None and counted.legs_with_rows == len(leg_ids) else None
     return ShadowEvalResult(
         by_tier=_slices(by_tier),
         by_current_model=_slices(by_model),
         by_key=_slices(by_key),
         overall_shadow_win_rate_pct=_pct_of(sum(r.shadow_wins for r in by_tier), total_turns),
         overall_tie_rate_pct=_pct_of(sum(r.ties for r in by_tier), total_turns),
+        sampled_real_spend=sum(r.real_spend for r in by_tier),
+        sampled_shadow_spend=sum(r.shadow_spend for r in by_tier),
+        not_sampled_count=funnel.not_sampled if funnel is not None else None,
+        unjudgeable_count=funnel.unjudgeable if funnel is not None else None,
+        shed_count=funnel.shed if funnel is not None else None,
+        withheld_count=funnel.withheld if funnel is not None else None,
     )
 
 
@@ -956,9 +1206,6 @@ async def start_shadow_eval(
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
     if llm_router is None or not _is_configured_pre_routing_strategy(llm_router, data.router_name):
         raise HTTPException(status_code=400, detail=f"'{data.router_name}' is not a configured auto-router")
-    _validate_plain_model(llm_router, data.judge_model, "judge_model")
-    if data.baseline_model is not None:
-        _validate_plain_model(llm_router, data.baseline_model, "baseline_model")
     token_rows: Final = await _verification_tokens(prisma_client).find_many(
         where={"token": {"in": list(data.api_key_ids)}}  # mutable-ok: Prisma filter
     )
@@ -971,6 +1218,14 @@ async def start_shadow_eval(
                 "the value the key list and key info endpoints report"
             ),
         )
+
+    # Every model check below runs once per team the job samples for, since that is the
+    # identity the shadow and judge calls carry and therefore what the router selects on.
+    team_ids: Final = tuple(dict.fromkeys(row.team_id for row in token_rows or ()))
+    _validate_plain_model(llm_router, data.judge_model, "judge_model", team_ids)
+    if data.baseline_model is not None:
+        _validate_plain_model(llm_router, data.baseline_model, "baseline_model", team_ids)
+    _validate_judge_is_not_a_candidate(llm_router, data, team_ids)
 
     # A job whose window passed or whose budget ran out stopped sampling on its own,
     # but its legs still hold their slots in the per-key, per-direction partial unique index
@@ -1010,8 +1265,14 @@ async def start_shadow_eval(
         "ends_at": ends_at,
     }
     try:
+        # Leg ids are minted here rather than by the DB default so the funnel seed below
+        # writes from the same values with no read-back, which a lagging read replica
+        # (DATABASE_URL_READ_REPLICA) could otherwise return empty.
+        leg_ids: Final = tuple(str(uuid4()) for _ in data.api_key_ids)
         await _shadow_eval_jobs(prisma_client).create_many(
-            data=[{**shared_config, "api_key_id": key} for key in data.api_key_ids]  # mutable-ok: Prisma payload
+            data=[  # mutable-ok: Prisma payload
+                {**shared_config, "id": leg_id, "api_key_id": key} for leg_id, key in zip(leg_ids, data.api_key_ids)
+            ]
         )
     except Exception as e:
         if not _is_unique_violation(e):
@@ -1022,6 +1283,16 @@ async def start_shadow_eval(
                 f"A requested key was claimed by another {data.direction} shadow eval job concurrently. Stop it first."
             ),
         ) from e
+    # Seed a zero funnel row per leg NOW: a fully covered job never skips a request, so
+    # waiting for the first skip would leave it indistinguishable from a pre-funnel job
+    # (null coverage). A failed seed degrades this job to exactly that, nothing worse.
+    try:
+        await _shadow_eval_funnel(prisma_client).create_many(
+            data=[{"job_id": leg_id} for leg_id in leg_ids],  # mutable-ok: Prisma payload
+            skip_duplicates=True,
+        )
+    except Exception as seed_err:  # noqa: BLE001  # coverage is advisory; the job must still start
+        verbose_proxy_logger.error("shadow_eval: funnel seed failed for job %s: %s", group_id, seed_err)
     labels: Final = MappingProxyType({row.token: row for row in token_rows})
     return ShadowEvalJobResponse(
         job_id=group_id,

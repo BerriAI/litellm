@@ -1,13 +1,9 @@
 import json
 import os
-import sys
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy._types import DefaultInternalUserParams, LitellmUserRoles
 from litellm.proxy.proxy_server import app
@@ -2774,7 +2770,7 @@ def mock_team_lookup(monkeypatch):
 
     existing_team_ids: set = set()
 
-    async def _find_many(where):
+    async def _find_many(where, **_):
         requested = where["team_id"]["in"]
         return [{"team_id": team_id} for team_id in requested if team_id in existing_team_ids]
 

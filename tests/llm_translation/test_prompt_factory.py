@@ -1,11 +1,8 @@
 #### What this tests ####
 #    This tests if prompts are being correctly formatted
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from typing import List
 

@@ -14,6 +14,7 @@ Pattern Overview:
 This pattern can be replicated for other message formats (e.g., Anthropic).
 """
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
 import litellm
@@ -46,7 +47,10 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
+    from fastapi import HTTPException
+
     from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class OpenAIChatCompletionsHandler(BaseTranslation):
@@ -75,7 +79,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> Any:
         """
         Process input messages by applying guardrails to text content.
@@ -324,7 +328,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self,
         response: "ModelResponse",
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: Any | None = None,
         request_data: dict | None = None,
     ) -> Any:
@@ -381,11 +385,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 if "response" not in request_data:
                     request_data["response"] = response
 
-            # Add user API key metadata with prefixed keys
-            if "litellm_metadata" not in request_data:
-                user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-                if user_metadata:
-                    request_data["litellm_metadata"] = user_metadata
+            self.merge_user_api_key_metadata_into_request(request_data, user_api_key_dict)
 
             inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
@@ -435,7 +435,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self,
         responses_so_far: list["ModelResponseStream"],
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: Any | None = None,
         request_data: dict | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
@@ -485,7 +485,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         *,
         responses_so_far: list["ModelResponseStream"],
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
         user_api_key_dict: Any | None,
         request_data: dict | None,
     ) -> list["ModelResponseStream"]:
@@ -554,11 +554,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 if "responses" not in request_data:
                     request_data["responses"] = responses_so_far
 
-            # Add user API key metadata with prefixed keys
-            if "litellm_metadata" not in request_data:
-                user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-                if user_metadata:
-                    request_data["litellm_metadata"] = user_metadata
+            self.merge_user_api_key_metadata_into_request(request_data, user_api_key_dict)
 
             inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
@@ -589,6 +585,18 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         )
 
         return responses_so_far
+
+    def build_stream_error_items(
+        self,
+        exc: "HTTPException",
+        responses_so_far: Sequence[Any] | None = None,
+    ) -> Sequence[Any] | None:
+        import json
+
+        from litellm.proxy.common_request_processing import sse_error_payload
+
+        _, error_obj = sse_error_payload(exc)
+        return (f'data: {{"error": {json.dumps(error_obj)}}}\n\n'.encode(),)
 
     @staticmethod
     def _accumulate_string_content_by_choice_index(
@@ -621,7 +629,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         *,
         responses_so_far: list["ModelResponseStream"],
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
         user_api_key_dict: Any | None,
         request_data: dict | None,
         sink: StreamTransformSink,
@@ -652,10 +660,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             request_data = {"responses": responses_so_far}
         elif "responses" not in request_data:
             request_data["responses"] = responses_so_far
-        if "litellm_metadata" not in request_data:
-            user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-            if user_metadata:
-                request_data["litellm_metadata"] = user_metadata
+        self.merge_user_api_key_metadata_into_request(request_data, user_api_key_dict)
 
         inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
         if responses_so_far and getattr(responses_so_far[0], "model", None):

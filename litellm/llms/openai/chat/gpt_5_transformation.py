@@ -6,9 +6,26 @@ import litellm
 from litellm.utils import (
     _is_explicitly_disabled_factory,
     _supports_factory,
+    declared_value_factory,
 )
 
 from .gpt_transformation import OpenAIGPTConfig
+
+
+def _catalogue_declares_default_effort() -> bool:
+    """Whether the loaded cost map carries default_reasoning_effort for ANY entry.
+
+    The map is fetched from the published branch at import time, so it can be OLDER than the
+    code reading it. On such a map every model looks undeclared, and treating that as "reasoning
+    is active" would silently strip temperature from the gpt-5.1/5.2/5.4 deployments that accept
+    it - a regression caused purely by data lag rather than by anything about the model.
+
+    So the absence of the key is only meaningful once the catalogue is known to carry it at all.
+    A map that has never heard of the key predates the feature, and the honest answer there is
+    the one litellm gave before it existed. Scanning costs ~80us on the largest published map and
+    only on the fallback path, which is noise beside the request it precedes.
+    """
+    return any(isinstance(entry, dict) and "default_reasoning_effort" in entry for entry in litellm.model_cost.values())
 
 
 def _normalize_reasoning_effort_for_chat_completion(
@@ -16,7 +33,7 @@ def _normalize_reasoning_effort_for_chat_completion(
 ) -> str | None:
     """Convert reasoning_effort to the string format expected by OpenAI chat completion API.
 
-    The chat completion API expects a simple string: 'none', 'low', 'medium', 'high', or 'xhigh'.
+    The chat completion API expects an effort string such as 'low' or 'high'.
     Config/deployments may pass the Responses API format: {'effort': 'high', 'summary': 'detailed'}.
     """
     if value is None:
@@ -115,6 +132,17 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             return False
 
     @classmethod
+    def _model_map_lookup_name(cls, model: str) -> str:
+        """The name this model is looked up by in the cost map.
+
+        Identity here, because an OpenAI model name is already its map key. Azure overrides
+        it: its routing prefixes are not map keys, so every capability lookup has to
+        normalise the name the same way, and doing that in ONE place is what keeps the
+        supports/disabled/default answers from disagreeing about which entry they read.
+        """
+        return model
+
+    @classmethod
     def _supports_reasoning_effort_level(cls, model: str, level: str) -> bool:
         """Check if the model supports a specific reasoning_effort level.
 
@@ -123,10 +151,39 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         Returns False for unknown models (safe fallback).
         """
         return _supports_factory(
-            model=model,
+            model=cls._model_map_lookup_name(model),
             custom_llm_provider=None,
             key=f"supports_{level}_reasoning_effort",
         )
+
+    @classmethod
+    def effort_resolves_to_none(cls, model: str, effective_effort: str | None) -> bool:
+        """Whether this request's reasoning effort ends up as "none", which is the single
+        condition under which the provider accepts a non-default temperature or the
+        top_p/logprobs sampling params.
+
+        An explicit reasoning_effort answers outright. When the request omits it the answer
+        is the model's DEFAULT effort, which only the map can state: supporting "none" is a
+        different fact from defaulting to it, and reading the former as the latter is what
+        forwarded temperature=0 to every gpt-5.5/5.6 deployment.
+
+        An undeclared default resolves to False. The map not saying is not the model
+        saying no, so the gate takes the conservative branch: a param the provider would
+        have rejected gets dropped or refused with an actionable error, and a model
+        released before its map entry declares a default needs no code change to be safe.
+        """
+        if effective_effort is not None:
+            return effective_effort == "none"
+        declared: Final = declared_value_factory(
+            model=cls._model_map_lookup_name(model),
+            custom_llm_provider=None,
+            key="default_reasoning_effort",
+        )
+        if declared is not None:
+            return declared == "none"
+        if not _catalogue_declares_default_effort():
+            return cls._supports_reasoning_effort_level(model, "none")
+        return False
 
     @classmethod
     def _is_reasoning_effort_level_explicitly_disabled(cls, model: str, level: str) -> bool:
@@ -140,7 +197,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         Use this for opt-out checks where unknown models should be allowed through.
         """
         return _is_explicitly_disabled_factory(
-            model=model,
+            model=cls._model_map_lookup_name(model),
             custom_llm_provider=None,
             key=f"supports_{level}_reasoning_effort",
         )
@@ -260,15 +317,16 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         if supports_none:
             sampling_params: Final = ["logprobs", "top_logprobs", "top_p"]
             has_sampling: Final = any(p in non_default_params for p in sampling_params)
-            if has_sampling and effective_effort not in (None, "none"):
+            if has_sampling and not self.effort_resolves_to_none(model, effective_effort):
                 if litellm.drop_params or drop_params:
                     for p in sampling_params:
                         non_default_params.pop(p, None)
                 else:
                     raise litellm.utils.UnsupportedParamsError(
                         message=(
-                            "gpt-5.1/5.2/5.4 only support logprobs, top_p, top_logprobs when "
-                            f"reasoning_effort='none'. Current reasoning_effort='{effective_effort}'. "
+                            f"{model} only supports logprobs, top_p, top_logprobs when reasoning_effort "
+                            "resolves to 'none', either set explicitly on the request or declared as the "
+                            f"model's default_reasoning_effort. Current reasoning_effort={effective_effort!r}. "
                             "To drop unsupported params set `litellm.drop_params = True`"
                         ),
                         status_code=400,
@@ -277,17 +335,19 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         if "temperature" in non_default_params:
             temperature_value: Final[float | None] = non_default_params.pop("temperature")
             if temperature_value is not None:
-                # models supporting reasoning_effort="none" also support flexible temperature
-                if supports_none and (effective_effort == "none" or effective_effort is None) or temperature_value == 1:
+                # a non-default temperature rides on the effort resolving to "none", not on
+                # the model merely supporting it
+                if (supports_none and self.effort_resolves_to_none(model, effective_effort)) or temperature_value == 1:
                     optional_params["temperature"] = temperature_value
                 elif litellm.drop_params or drop_params:
                     pass
                 else:
                     raise litellm.utils.UnsupportedParamsError(
                         message=(
-                            f"gpt-5 models (including gpt-5-codex) don't support temperature={temperature_value}. "
-                            "Only temperature=1 is supported. "
-                            "For gpt-5.1, temperature is supported when reasoning_effort='none' (or not specified, as it defaults to 'none'). "
+                            f"{model} doesn't support temperature={temperature_value} while reasoning is "
+                            "active. Only temperature=1 is supported unless reasoning_effort resolves to "
+                            "'none', either set explicitly on the request or declared as the model's "
+                            "default_reasoning_effort. "
                             "To drop unsupported params set `litellm.drop_params = True`"
                         ),
                         status_code=400,

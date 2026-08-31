@@ -1,13 +1,8 @@
-import os
-import sys
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.vertex_ai.text_to_speech.transformation import (

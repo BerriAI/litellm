@@ -20,6 +20,7 @@ import falAiLogo from "../../public/assets/logos/fal_ai.jpg";
 import featherlessLogo from "../../public/assets/logos/featherless.svg";
 import fireworksLogo from "../../public/assets/logos/fireworks.svg";
 import friendliLogo from "../../public/assets/logos/friendli.svg";
+import gigachatLogo from "../../public/assets/logos/gigachat.svg";
 import githubCopilotLogo from "../../public/assets/logos/github_copilot.svg";
 import googleLogo from "../../public/assets/logos/google.svg";
 import groqLogo from "../../public/assets/logos/groq.svg";
@@ -50,6 +51,7 @@ import replicateLogo from "../../public/assets/logos/replicate.svg";
 import runwayLogo from "../../public/assets/logos/runway.png";
 import sambanovaLogo from "../../public/assets/logos/sambanova.svg";
 import sapLogo from "../../public/assets/logos/sap.png";
+import scxAiLogo from "../../public/assets/logos/scx_ai.svg";
 import snowflakeLogo from "../../public/assets/logos/snowflake.svg";
 import sonioxLogo from "../../public/assets/logos/soniox.svg";
 import togetheraiLogo from "../../public/assets/logos/togetherai.svg";
@@ -106,6 +108,7 @@ export enum Providers {
   FireworksAI = "Fireworks AI",
   FRIENDLIAI = "Friendliai",
   GALADRIEL = "Galadriel",
+  GIGACHAT = "GigaChat",
   GITHUB_COPILOT = "Github Copilot",
   Google_AI_Studio = "Google AI Studio",
   GradientAI = "GradientAI",
@@ -153,6 +156,7 @@ export enum Providers {
   SAGEMAKER_LEGACY = "Sagemaker",
   Sambanova = "Sambanova",
   SAP = "SAP Generative AI Hub",
+  SCX_AI = "SCX.ai",
   Snowflake = "Snowflake",
   Soniox = "Soniox",
   TEXT_COMPLETION_CODESTRAL = "Text-Completion-Codestral",
@@ -216,6 +220,7 @@ export const provider_map: Record<string, string> = {
   FireworksAI: "fireworks_ai",
   FRIENDLIAI: "friendliai",
   GALADRIEL: "galadriel",
+  GIGACHAT: "gigachat",
   GITHUB_COPILOT: "github_copilot",
   Google_AI_Studio: "gemini",
   GradientAI: "gradient_ai",
@@ -264,6 +269,7 @@ export const provider_map: Record<string, string> = {
   SageMaker: "sagemaker_chat",
   Sambanova: "sambanova",
   SAP: "sap",
+  SCX_AI: "scx-ai",
   Snowflake: "snowflake",
   Soniox: "soniox",
   TEXT_COMPLETION_CODESTRAL: "text-completion-codestral",
@@ -320,6 +326,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.FEATHERLESS_AI]: featherlessLogo.src,
   [Providers.FireworksAI]: fireworksLogo.src,
   [Providers.FRIENDLIAI]: friendliLogo.src,
+  [Providers.GIGACHAT]: gigachatLogo.src,
   [Providers.GITHUB_COPILOT]: githubCopilotLogo.src,
   [Providers.Google_AI_Studio]: googleLogo.src,
   [Providers.Groq]: groqLogo.src,
@@ -356,6 +363,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.SAGEMAKER_LEGACY]: bedrockLogo.src,
   [Providers.Sambanova]: sambanovaLogo.src,
   [Providers.SAP]: sapLogo.src,
+  [Providers.SCX_AI]: scxAiLogo.src,
   [Providers.Snowflake]: snowflakeLogo.src,
   [Providers.Soniox]: sonioxLogo.src,
   [Providers.TEXT_COMPLETION_CODESTRAL]: mistralLogo.src,
@@ -421,6 +429,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Oracle]: "oci/xai.grok-4",
   [Providers.RunwayML]: "runwayml/gen4_turbo",
   [Providers.SageMaker]: "sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b",
+  [Providers.SCX_AI]: "scx-ai/GLM-5.2",
   [Providers.Snowflake]: "snowflake/mistral-7b",
   [Providers.Vertex_AI]: "gemini-pro",
   [Providers.VolcEngine]: "volcengine/<any-model-on-volcengine>",

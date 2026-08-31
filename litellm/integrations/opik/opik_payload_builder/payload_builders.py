@@ -17,12 +17,12 @@ def build_trace_payload(
     end_time: datetime,
     input_data: Any,
     output_data: Any,
-    metadata: dict[str, Any],
+    metadata: dict[str, object],
     tags: list[str],
     thread_id: str | None,
 ) -> types.TracePayload:
     """Build a complete trace payload."""
-    trace_name: Final = response_obj.get("object", "unknown type")
+    trace_name: Final[str] = response_obj.get("object", "unknown type")
 
     return types.TracePayload(
         project_name=project_name,
@@ -47,7 +47,7 @@ def build_span_payload(
     end_time: datetime,
     input_data: Any,
     output_data: Any,
-    metadata: dict[str, Any],
+    metadata: dict[str, object],
     tags: list[str],
     usage: dict[str, int],
     provider: str | None = None,
@@ -56,9 +56,9 @@ def build_span_payload(
     """Build a complete span payload."""
     span_id: Final = utils.create_uuid7()
 
-    model: Final = response_obj.get("model", "unknown-model")
-    obj_type: Final = response_obj.get("object", "unknown-object")
-    created: Final = response_obj.get("created", 0)
+    model: Final[str] = response_obj.get("model", "unknown-model")
+    obj_type: Final[str] = response_obj.get("object", "unknown-object")
+    created: Final[int] = response_obj.get("created", 0)
     span_name: Final = f"{model}_{obj_type}_{created}"
 
     _logging.verbose_logger.debug("OpikLogger creating span with id %s for trace %s", span_id, trace_id)

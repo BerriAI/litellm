@@ -13,7 +13,12 @@ from typing import TYPE_CHECKING, Final, NamedTuple
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.litellm_core_utils.llm_cost_calc.utils import _get_cost_per_unit, generic_cost_per_token
+from litellm.types.integrations.anthropic_cache_control_hook import (
+    GATEWAY_INJECTED_CACHE_METADATA_KEY,
+    GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT,
+)
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -24,6 +29,7 @@ class SavingsSpend(NamedTuple):
     compression: float
     prompt_caching: float
     autorouter: float = 0.0
+    gateway_injected_caching: float = 0.0
 
 
 def _input_cache_read_and_write_cost(info: ModelInfo | None) -> tuple[float, float, float]:
@@ -390,6 +396,28 @@ def _usage_from_spend_log(usage_object: Mapping[str, object] | None) -> Usage | 
         return None
 
 
+def marks_gateway_injection(metadata: Mapping[str, object] | None, model_id: str | None) -> bool:
+    """Whether the gateway put cache breakpoints on the payload THIS row was billed for.
+
+    ``AnthropicCacheControlHook.record_gateway_injection`` stamps the deployment it
+    injected for, and a row carries the deployment it was billed for, so the two agree
+    only on the leg that was actually injected. Every retry, failover and fallback of a
+    request shares one metadata bucket and one ``litellm_call_id``, so the deployment is
+    what tells those legs apart, and a marker left by a sibling reads here as no injection
+    without anyone having to strip it. An injection that ran before any deployment was
+    chosen is in the payload every leg sends, so it is marked for all of them and credits
+    each. Absent on requests the gateway never acted on
+    (client-supplied ``cache_control``, implicit provider caching) and on rows written
+    before the marker shipped; all of it is the fail-closed direction.
+    """
+    if not metadata:
+        return False
+    injected_deployment: Final = metadata.get(GATEWAY_INJECTED_CACHE_METADATA_KEY)
+    if not isinstance(injected_deployment, str):
+        return False
+    return injected_deployment in (GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT, model_id)
+
+
 def extract_cache_read_tokens(usage_object: Mapping[str, object] | None) -> int:
     """Cache-read tokens from a logged usage object, whatever shape recorded them.
 
@@ -437,15 +465,127 @@ def extract_cache_creation_tokens(usage_object: Mapping[str, object] | None) -> 
     return int(written)
 
 
+def _proxy_llm_router() -> "Router | None":
+    """The running proxy's router, or ``None`` outside a proxy (public rates only)."""
+    try:
+        from litellm.proxy.proxy_server import llm_router
+    except Exception:  # noqa: BLE001  # SDK-only usage has no proxy module to import
+        return None
+    return llm_router
+
+
+def _numeric_savings(value: object) -> float | None:
+    """``value`` as a recorded savings figure, or ``None`` when it is not one."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def classifier_cost_from_decision(routing_decision: Mapping[str, object] | None) -> float | None:
+    """The LLM-classifier cost a routing decision recorded, or ``None`` when it holds none.
+
+    ``None`` covers the decision-less request, the heuristic short-circuit that never
+    called a classifier, the unpriced classifier model, and a malformed value alike:
+    in every one of those cases there is no dollar figure to move, so callers treat
+    ``None`` as zero rather than as an error. The one owner of that reading, shared by
+    the savings netting, the session rollup and the response header, so the three can
+    never disagree about what counts as a classifier charge.
+    """
+    decision: Final = routing_decision if isinstance(routing_decision, Mapping) else {}
+    return _numeric_savings(decision.get("classifier_cost"))
+
+
+def autorouter_savings_for_request(
+    model: str | None,
+    custom_llm_provider: str | None,
+    routing_decision: Mapping[str, object] | None,
+    usage_object: Mapping[str, object] | None,
+    model_id: str | None = None,
+    llm_router: "Callable[[], Router | None] | None" = None,
+    cost_breakdown: Mapping[str, object] | None = None,
+) -> float | None:
+    """Auto-router savings for one request, net of the classifier call that routed it,
+    or ``None`` when the driver is off.
+
+    ``None`` and ``0.0`` are different facts: ``None`` means this request cannot carry a
+    figure at all (no routing decision, no baseline, unusable usage), while ``0.0`` is a
+    real figure for a routed request whose baseline resolved to the served deployment.
+    Never raises: pricing failures inside degrade to zero, and the driver-off cases
+    return ``None``, so this is safe on the logging path where a raise would fail the
+    request's logging.
+
+    The classifier deduction lives here, at the figure's one computation owner, rather
+    than in any reader: the stamped ``autorouter_savings`` is then already net, so the
+    session rollup, the daily tables and every logging consumer agree without each
+    re-deriving the deduction, and the recorded-figure-wins path cannot deduct twice.
+    """
+    usage: Final = _usage_from_spend_log(usage_object)
+    if usage is None or not model:
+        return None
+    decision: Final = routing_decision if isinstance(routing_decision, Mapping) else {}
+    recorded: Final = decision.get("savings_baseline_model")
+    recorded_id: Final = decision.get("savings_baseline_deployment_id")
+    baseline_model: Final = recorded if isinstance(recorded, str) else None
+    baseline_id: Final = recorded_id if isinstance(recorded_id, str) else None
+    if not decision or not baseline_model:
+        return None
+    router_instance: Final = llm_router() if llm_router else None
+    gross: Final = compute_autorouter_savings(
+        baseline_model=baseline_model,
+        selected_model=model,
+        selected_provider=custom_llm_provider,
+        usage=usage,
+        # Absent means the router never recorded a shape, which is the conservative
+        # reading: charge the cache write rather than claim a first turn's saving.
+        conversation_continuing=decision.get("conversation_continuing") is not False,
+        selected_info=_effective_model_info(router_instance, model_id, model or ""),
+        baseline_info=_effective_model_info(router_instance, baseline_id, baseline_model or ""),
+        cost_breakdown=cost_breakdown,
+    )
+    classifier_cost: Final = classifier_cost_from_decision(decision)
+    return gross if classifier_cost is None else gross - classifier_cost
+
+
+def autorouter_savings_for_logging_payload(
+    request_metadata: Mapping[str, object],
+    model: str | None,
+    custom_llm_provider: str | None,
+    model_id: str | None,
+    usage_object: Mapping[str, object] | None,
+    cost_breakdown: Mapping[str, object] | None,
+) -> float | None:
+    """The figure the logging payload records for a request, or ``None`` when none should be.
+
+    Internal sub-calls (the auto-router classifier, shadow eval's shadow and judge legs)
+    are excluded here for the same reason the spend writer zeroes them: they can carry a
+    real routing decision, but they are not requests the caller made, so a figure stamped
+    on them would report savings for traffic no user sent.
+    """
+    if request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
+        return None
+    routing_decision: Final = request_metadata.get("routing_decision")
+    return autorouter_savings_for_request(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        routing_decision=routing_decision if isinstance(routing_decision, Mapping) else None,
+        usage_object=usage_object,
+        model_id=model_id,
+        llm_router=_proxy_llm_router,
+        cost_breakdown=cost_breakdown,
+    )
+
+
 def compute_savings_spend(
     model: str | None,
     custom_llm_provider: str | None,
     compression_saved_tokens: int,
+    gateway_injected_cache: bool,
     routing_decision: Mapping[str, object] | None = None,
     usage_object: Mapping[str, object] | None = None,
     model_id: str | None = None,
     llm_router: "Callable[[], Router | None] | None" = None,
     cost_breakdown: Mapping[str, object] | None = None,
+    recorded_autorouter_savings: object = None,
 ) -> SavingsSpend:
     """
     Dollar savings for one request, split by optimization driver.
@@ -472,7 +612,23 @@ def compute_savings_spend(
     A request that only writes cache and gets no hits therefore reports negative savings,
     which is accurate: it really did cost more than the uncached call would have. The
     daily rollup increments arithmetically, so those rows offset positive ones in the
-    same bucket. Auto-router savings compare the
+    same bucket.
+
+    Caching is reported twice. ``prompt_caching`` is every net dollar caching saved,
+    whoever caused it, which is what a customer means by "what did caching save me".
+    ``gateway_injected_caching`` is the subset the gateway can claim credit for, carrying
+    a value only when ``gateway_injected_cache`` is set, i.e. litellm itself added the
+    ``cache_control`` breakpoints (configured injection points or the auto prompt-caching
+    flag). A client that sent its own breakpoints, and a provider that
+    caches implicitly (OpenAI, Gemini), produce the same usage shape with no gateway
+    action, so they count toward the total and not toward the attributed figure.
+
+    Reporting both rather than gating the one column keeps the customer-facing number
+    stable across the change and leaves attribution a separate question. The attributed
+    figure is normally the smaller of the two, being a subset of the same requests, but
+    not always: a request that only writes cache and never reads it has negative net
+    savings, and dropping such a request from the attributed figure can lift it above
+    the total. Auto-router savings compare the
     served ``model`` against the counterfactual baseline the router recorded on
     its ``routing_decision``, and are zero unless the two differ. That record
     also says whether the conversation was already underway, which is what tells
@@ -488,6 +644,11 @@ def compute_savings_spend(
     hypothetical token delta off flat rate keys, so they are blind to tiered pricing in
     the same way; that is pre-existing behaviour on two shipped drivers rather than
     something introduced here, and moving those numbers is its own change.
+
+    ``recorded_autorouter_savings`` is the figure the logging path stamped on the spend
+    log's metadata, honoured over recomputation so the rollup, the turn table and the
+    per-request record cannot disagree; rows written before the field shipped carry
+    nothing and recompute, mirroring ``_recorded_token_cost``.
     """
     # Deployment rates when the request came through one, public rates otherwise --
     # `_effective_model_info` merges a deployment's configured prices over the built-in
@@ -504,33 +665,27 @@ def compute_savings_spend(
     read_discount: Final = max(cache_read_input_tokens, 0) * max(input_cost - cache_read_cost, 0.0)
     write_premium: Final = max(cache_creation_input_tokens, 0) * (cache_write_cost - input_cost)
     prompt_caching: Final = read_discount - write_premium
+    gateway_injected_caching: Final = prompt_caching if gateway_injected_cache else 0.0
 
-    usage: Final = _usage_from_spend_log(usage_object)
-    if usage is None or not model:
-        return SavingsSpend(compression=compression, prompt_caching=prompt_caching)
-
-    # The configured `autorouter_savings_baseline_model` wins; otherwise the baseline
-    # the deciding router recorded on its decision; neither means the driver is off.
-    decision: Final = routing_decision if isinstance(routing_decision, Mapping) else {}
-    recorded: Final = decision.get("savings_baseline_model")
-    recorded_id: Final = decision.get("savings_baseline_deployment_id")
-    configured: Final = litellm.autorouter_savings_baseline_model
-    baseline_model: Final = configured or (recorded if isinstance(recorded, str) else None)
-    baseline_id: Final = recorded_id if configured is None and isinstance(recorded_id, str) else None
+    # The figure the logging path recorded wins, before the usage gate on purpose: a row
+    # whose usage no longer parses still carries the number computed when it did.
+    recorded_savings: Final = _numeric_savings(recorded_autorouter_savings)
     autorouter: Final = (
-        compute_autorouter_savings(
-            baseline_model=baseline_model,
-            selected_model=model,
-            selected_provider=custom_llm_provider,
-            usage=usage,
-            # Absent means the router never recorded a shape, which is the conservative
-            # reading: charge the cache write rather than claim a first turn's saving.
-            conversation_continuing=decision.get("conversation_continuing") is not False,
-            selected_info=_effective_model_info(router_instance, model_id, model or ""),
-            baseline_info=_effective_model_info(router_instance, baseline_id, baseline_model or ""),
+        recorded_savings
+        if recorded_savings is not None
+        else autorouter_savings_for_request(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            routing_decision=routing_decision,
+            usage_object=usage_object,
+            model_id=model_id,
+            llm_router=llm_router,
             cost_breakdown=cost_breakdown,
         )
-        if decision and baseline_model
-        else 0.0
     )
-    return SavingsSpend(compression=compression, prompt_caching=prompt_caching, autorouter=autorouter)
+    return SavingsSpend(
+        compression=compression,
+        prompt_caching=prompt_caching,
+        autorouter=0.0 if autorouter is None else autorouter,
+        gateway_injected_caching=gateway_injected_caching,
+    )
