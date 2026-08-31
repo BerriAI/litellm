@@ -15,23 +15,24 @@ pub(crate) struct RouteOptions {
     pub(crate) timeout: Option<Duration>,
 }
 
+pub(crate) struct RouteOptionsInputs {
+    pub(crate) model: String,
+    pub(crate) api_key: Option<String>,
+    pub(crate) api_base: Option<String>,
+    pub(crate) custom_llm_provider: Option<String>,
+    pub(crate) extra_headers: Option<Py<PyAny>>,
+    pub(crate) timeout_seconds: Option<f64>,
+}
+
 impl RouteOptions {
-    pub(crate) fn from_python(
-        py: Python<'_>,
-        model: String,
-        api_key: Option<String>,
-        api_base: Option<String>,
-        custom_llm_provider: Option<String>,
-        extra_headers: Option<Py<PyAny>>,
-        timeout_seconds: Option<f64>,
-    ) -> PyResult<Self> {
+    pub(crate) fn from_python(py: Python<'_>, inputs: RouteOptionsInputs) -> PyResult<Self> {
         Ok(Self {
-            model,
-            api_key,
-            api_base,
-            custom_llm_provider,
-            extra_headers: optional_object(py, "extra_headers", extra_headers)?,
-            timeout: optional_timeout(timeout_seconds),
+            model: inputs.model,
+            api_key: inputs.api_key,
+            api_base: inputs.api_base,
+            custom_llm_provider: inputs.custom_llm_provider,
+            extra_headers: optional_object(py, "extra_headers", inputs.extra_headers)?,
+            timeout: optional_timeout(inputs.timeout_seconds),
         })
     }
 }

@@ -1442,6 +1442,7 @@ name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "futures-util",
  "litellm-ai-gateway",
  "litellm-core",
  "litellm-python-interop",

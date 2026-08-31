@@ -1,5 +1,6 @@
 use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
-use crate::error::{CoreError, CoreResult};
+use crate::error::{CoreError, CoreResult, as_response_error};
+use crate::http_utils::classify_send_error;
 
 use super::client::http_client;
 use super::common_utils::truncate_error_body;
@@ -16,10 +17,7 @@ pub(super) async fn execute_messages_provider_call(
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = request_builder
-        .send()
-        .await
-        .map_err(|err| CoreError::Network(err.to_string()))?;
+    let response = request_builder.send().await.map_err(classify_send_error)?;
 
     let status = response.status();
     let text = response
@@ -37,7 +35,10 @@ pub(super) async fn execute_messages_provider_call(
     let response = serde_json::from_str(&text).map_err(|err| {
         CoreError::InvalidResponse(format!("invalid messages response JSON: {err}"))
     })?;
-    request.config.transform_response(&request.model, response)
+    request
+        .config
+        .transform_response(&request.model, response)
+        .map_err(as_response_error)
 }
 
 pub(super) async fn execute_messages_provider_stream(

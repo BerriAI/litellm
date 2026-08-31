@@ -794,7 +794,7 @@ mod round_trip {
 
     #[test]
     fn response_errors_collapse_to_one_variant_that_can_only_mean_already_sent() {
-        use crate::chat_completions::handler::as_response_error;
+        use crate::error::as_response_error;
 
         for original in [
             CoreError::MissingField("usage"),

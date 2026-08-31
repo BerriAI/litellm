@@ -1,11 +1,15 @@
 use std::future::Future;
-use std::sync::mpsc::sync_channel;
+use std::panic::AssertUnwindSafe;
+use std::time::Duration;
 
+use futures_util::FutureExt;
 use litellm_core::error::{CoreError, CoreResult};
-use litellm_python_interop::{release_gil, to_py};
+use litellm_python_interop::{Pythonized, panic_to_pyerr, release_gil, to_py};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use serde::Serialize;
+use tokio::runtime::{Handle, Runtime};
+use tokio::time::{self, MissedTickBehavior};
 
 pub(super) fn run_sync<T, F>(
     py: Python<'_>,
@@ -16,13 +20,32 @@ where
     T: Serialize + Send + 'static,
     F: Future<Output = CoreResult<T>> + Send + 'static,
 {
-    let (sender, receiver) = sync_channel(1);
-    pyo3_async_runtimes::tokio::get_runtime().spawn(async move {
-        let _ = sender.send(future.await);
-    });
-    let result = release_gil(py, move || receiver.recv())
-        .map_err(|_| PyRuntimeError::new_err("native route task terminated"))?
-        .map_err(map_error)?;
+    run_sync_on(
+        py,
+        pyo3_async_runtimes::tokio::get_runtime(),
+        future,
+        map_error,
+    )
+}
+
+fn run_sync_on<T, F>(
+    py: Python<'_>,
+    runtime: &Runtime,
+    future: F,
+    map_error: fn(CoreError) -> PyErr,
+) -> PyResult<Py<PyAny>>
+where
+    T: Serialize + Send + 'static,
+    F: Future<Output = CoreResult<T>> + Send + 'static,
+{
+    if Handle::try_current().is_ok() {
+        return Err(PyRuntimeError::new_err(
+            "synchronous native routes cannot run from a Tokio context; use the async route",
+        ));
+    }
+
+    let result = release_gil(py, move || runtime.block_on(wait_for_sync_result(future)))?;
+    let result = map_core_result(result, map_error)?;
     to_py(py, &result)
 }
 
@@ -36,19 +59,86 @@ where
     F: Future<Output = CoreResult<T>> + Send + 'static,
 {
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let result = future.await.map_err(map_error)?;
-        Python::attach(|py| to_py(py, &result))
+        let result = catch_route_panic(future).await?;
+        let result = map_core_result(result, map_error)?;
+        Ok(Pythonized(result))
     })
+}
+
+fn map_core_result<T>(result: CoreResult<T>, map_error: fn(CoreError) -> PyErr) -> PyResult<T> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) => Err(
+            std::panic::catch_unwind(AssertUnwindSafe(|| map_error(error)))
+                .map_err(panic_to_pyerr)?,
+        ),
+    }
+}
+
+async fn catch_route_panic<T, F>(future: F) -> PyResult<CoreResult<T>>
+where
+    F: Future<Output = CoreResult<T>>,
+{
+    AssertUnwindSafe(future)
+        .catch_unwind()
+        .await
+        .map_err(panic_to_pyerr)
+}
+
+async fn wait_for_sync_result<T, F>(future: F) -> PyResult<CoreResult<T>>
+where
+    F: Future<Output = CoreResult<T>>,
+{
+    let future = catch_route_panic(future);
+    tokio::pin!(future);
+
+    let signal_interval = Duration::from_millis(50);
+    let mut signal_checks =
+        time::interval_at(time::Instant::now() + signal_interval, signal_interval);
+    signal_checks.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            result = &mut future => return result,
+            _ = signal_checks.tick() => Python::attach(|py| py.check_signals())?,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::ffi::CString;
+    use std::future::poll_fn;
+    use std::task::Poll;
+
+    use pyo3::panic::PanicException;
+    use pyo3::types::{PyDict, PyModule};
+    use serde::Serializer;
+    use tokio::runtime::Builder;
 
     use super::*;
 
     fn runtime_error(error: CoreError) -> PyErr {
         PyRuntimeError::new_err(error.to_string())
+    }
+
+    fn panicking_error_mapper(_error: CoreError) -> PyErr {
+        panic!("error mapper panicked")
+    }
+
+    struct PanickingOutput;
+
+    impl Serialize for PanickingOutput {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            panic!("async serializer panicked")
+        }
+    }
+
+    #[pyfunction]
+    fn async_serialization_panic(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        run_async(py, async { Ok(PanickingOutput) }, runtime_error)
     }
 
     fn extract_bool(py: Python<'_>, result: PyResult<Py<PyAny>>) -> bool {
@@ -60,13 +150,13 @@ mod tests {
     }
 
     #[test]
-    fn sync_runner_polls_future_on_tokio_worker() {
+    fn sync_runner_polls_future_on_the_caller_thread() {
         Python::initialize();
         Python::attach(|py| {
             let caller_thread = std::thread::current().id();
             let result = run_sync(
                 py,
-                async move { Ok(std::thread::current().id() != caller_thread) },
+                async move { Ok(std::thread::current().id() == caller_thread) },
                 runtime_error,
             );
 
@@ -92,6 +182,117 @@ mod tests {
             );
 
             assert!(extract_bool(py, result));
+        });
+    }
+
+    #[test]
+    fn sync_runner_rejects_calls_from_a_tokio_context() {
+        Python::initialize();
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should build");
+
+        let error = runtime.block_on(async {
+            Python::attach(|py| {
+                run_sync::<bool, _>(py, async { Ok(true) }, runtime_error)
+                    .expect_err("sync route should reject a nested Tokio runtime")
+            })
+        });
+
+        assert_eq!(
+            error.to_string(),
+            "RuntimeError: synchronous native routes cannot run from a Tokio context; use the async route"
+        );
+    }
+
+    #[test]
+    fn sync_runner_can_drive_a_current_thread_runtime() {
+        Python::initialize();
+        let runtime = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should build");
+        Python::attach(|py| {
+            let result = run_sync_on(
+                py,
+                &runtime,
+                async {
+                    tokio::task::yield_now().await;
+                    Ok(true)
+                },
+                runtime_error,
+            );
+            assert!(extract_bool(py, result));
+        });
+    }
+
+    #[test]
+    fn sync_runner_maps_a_panicked_future() {
+        Python::initialize();
+        Python::attach(|py| {
+            let error = run_sync::<bool, _>(
+                py,
+                poll_fn(|_| -> Poll<CoreResult<bool>> { panic!("route future panicked") }),
+                runtime_error,
+            )
+            .expect_err("panicked route should become a Python exception");
+
+            assert!(error.is_instance_of::<PanicException>(py));
+            assert_eq!(error.to_string(), "PanicException: route future panicked");
+        });
+    }
+
+    #[test]
+    fn sync_runner_maps_a_panicked_error_mapper() {
+        Python::initialize();
+        Python::attach(|py| {
+            let error = run_sync::<bool, _>(
+                py,
+                async { Err(CoreError::InvalidRequest("invalid".to_string())) },
+                panicking_error_mapper,
+            )
+            .expect_err("panicked mapper should become a Python exception");
+
+            assert!(error.is_instance_of::<PanicException>(py));
+            assert_eq!(error.to_string(), "PanicException: error mapper panicked");
+        });
+    }
+
+    #[test]
+    fn async_runner_surfaces_serializer_panics() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "runtime").expect("module should be created");
+            module
+                .add_function(
+                    wrap_pyfunction!(async_serialization_panic, &module)
+                        .expect("function should wrap"),
+                )
+                .expect("function should register");
+            let locals = PyDict::new(py);
+            locals
+                .set_item("runtime", &module)
+                .expect("module should enter Python locals");
+            let code = CString::new(
+                r#"
+import asyncio
+
+async def exercise():
+    try:
+        await runtime.async_serialization_panic()
+    except BaseException as error:
+        assert type(error).__name__ == "PanicException"
+        assert str(error) == "async serializer panicked"
+    else:
+        raise AssertionError("serializer panic was not raised")
+
+asyncio.run(exercise())
+"#,
+            )
+            .expect("Python source should not contain null bytes");
+            py.run(&code, Some(&locals), Some(&locals))
+                .expect("serializer panic should reach the Python awaiter");
         });
     }
 }

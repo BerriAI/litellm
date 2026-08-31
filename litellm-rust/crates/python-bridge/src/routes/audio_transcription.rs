@@ -1,41 +1,35 @@
+use std::future::Future;
+
 use litellm_ai_gateway::io::audio_transcription::{
     AudioTranscriptionRequest, audio_transcription as run_audio_transcription,
 };
 use litellm_core::error::CoreResult;
 use litellm_python_interop::from_py;
 use pyo3::prelude::*;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::errors::core_error_to_pyerr;
-use crate::marshal::{RouteOptions, object_or_empty};
-use crate::routes::BridgeRoute;
+use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
 
-struct AudioTranscriptionCall {
-    options: RouteOptions,
-    audio: Value,
-    optional_params: Map<String, Value>,
-}
+fn prepare_transcription(
+    py: Python<'_>,
+    inputs: AudioTranscriptionInputs,
+) -> PyResult<impl Future<Output = CoreResult<Value>> + Send + 'static> {
+    let audio = from_py(inputs.audio.bind(py))?;
+    let options = RouteOptions::from_python(
+        py,
+        RouteOptionsInputs {
+            model: inputs.model,
+            api_key: inputs.api_key,
+            api_base: inputs.api_base,
+            custom_llm_provider: inputs.custom_llm_provider,
+            extra_headers: inputs.extra_headers,
+            timeout_seconds: inputs.timeout_seconds,
+        },
+    )?;
+    let optional_params = object_or_empty(py, "optional_params", inputs.optional_params)?;
 
-impl BridgeRoute<AudioTranscriptionInputs> for AudioTranscriptionCall {
-    type Output = Value;
-
-    fn from_python(py: Python<'_>, inputs: AudioTranscriptionInputs) -> PyResult<Self> {
-        Ok(Self {
-            options: RouteOptions::from_python(
-                py,
-                inputs.model,
-                inputs.api_key,
-                inputs.api_base,
-                inputs.custom_llm_provider,
-                inputs.extra_headers,
-                inputs.timeout_seconds,
-            )?,
-            audio: from_py(inputs.audio.bind(py))?,
-            optional_params: object_or_empty(py, "optional_params", inputs.optional_params)?,
-        })
-    }
-
-    async fn run(self) -> CoreResult<Value> {
+    Ok(async move {
         let RouteOptions {
             model,
             api_key,
@@ -43,15 +37,15 @@ impl BridgeRoute<AudioTranscriptionInputs> for AudioTranscriptionCall {
             custom_llm_provider,
             extra_headers,
             timeout,
-        } = self.options;
+        } = options;
         run_audio_transcription(AudioTranscriptionRequest {
             model: &model,
-            audio: self.audio,
+            audio,
             api_key: api_key.as_deref(),
             api_base: api_base.as_deref(),
             custom_llm_provider: custom_llm_provider.as_deref(),
             extra_headers,
-            optional_params: self.optional_params,
+            optional_params,
             timeout,
             callbacks: Vec::new(),
             guardrails: Vec::new(),
@@ -59,7 +53,7 @@ impl BridgeRoute<AudioTranscriptionInputs> for AudioTranscriptionCall {
             litellm_call_id: None,
         })
         .await
-    }
+    })
 }
 
 bridge_route! {
@@ -78,6 +72,6 @@ bridge_route! {
         optional_params: Option<Py<PyAny>>,
         timeout_seconds: Option<f64>,
     },
-    call = AudioTranscriptionCall,
+    prepare = prepare_transcription,
     errors = core_error_to_pyerr,
 }

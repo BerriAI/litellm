@@ -16,6 +16,7 @@ extension-module = ["pyo3/extension-module"]
 panic-test = []
 
 [dependencies]
+futures-util.workspace = true
 litellm-core = { workspace = true, features = ["bedrock-auth"] }
 litellm-ai-gateway = { workspace = true, default-features = false }
 litellm-python-interop.workspace = true

@@ -3,7 +3,10 @@ mod errors;
 mod marshal;
 mod routes;
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
 use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
+use litellm_python_interop::panic_to_pyerr;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 
@@ -13,6 +16,20 @@ use crate::marshal::{marshal_headers, optional_timeout};
 #[pyclass]
 struct ResponsesWebSocketConnection {
     inner: RustResponsesWebSocketConnection,
+}
+
+struct NewResponsesWebSocketConnection(ResponsesWebSocketConnection);
+
+impl<'py> IntoPyObject<'py> for NewResponsesWebSocketConnection {
+    type Target = ResponsesWebSocketConnection;
+    type Output = Bound<'py, ResponsesWebSocketConnection>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
+        catch_unwind(AssertUnwindSafe(|| Py::new(py, self.0)))
+            .map_err(panic_to_pyerr)?
+            .map(|value| value.into_bound(py))
+    }
 }
 
 #[pymethods]
@@ -32,7 +49,9 @@ impl ResponsesWebSocketConnection {
             let inner = RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout)
                 .await
                 .map_err(core_error_to_pyerr)?;
-            Python::attach(|py| Py::new(py, ResponsesWebSocketConnection { inner }))
+            Ok(NewResponsesWebSocketConnection(
+                ResponsesWebSocketConnection { inner },
+            ))
         })
     }
 
@@ -93,13 +112,15 @@ mod tests {
                 "gil_stats",
             ];
 
-            for name in expected {
-                assert!(
-                    module
-                        .hasattr(name)
-                        .expect("attribute lookup should succeed")
-                );
-            }
+            let public_names: Vec<String> = module
+                .dict()
+                .keys()
+                .extract::<Vec<String>>()
+                .expect("module names should be strings")
+                .into_iter()
+                .filter(|name| !name.starts_with("__"))
+                .collect();
+            assert_eq!(public_names, expected);
         });
     }
 }

@@ -38,6 +38,14 @@ pub enum CoreError {
     Unsupported(&'static str),
 }
 
+/// Re-tag an error raised after the provider has already returned a response.
+pub(crate) fn as_response_error(err: CoreError) -> CoreError {
+    match err {
+        already @ (CoreError::InvalidResponse(_) | CoreError::Http { .. }) => already,
+        other => CoreError::InvalidResponse(other.to_string()),
+    }
+}
+
 pub fn json_type_name(value: &serde_json::Value) -> &'static str {
     match value {
         serde_json::Value::Null => "null",
