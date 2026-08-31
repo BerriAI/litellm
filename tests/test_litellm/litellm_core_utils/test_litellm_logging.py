@@ -5893,6 +5893,74 @@ def test_get_custom_logger_compatible_class_finds_v2_newrelic(monkeypatch):
         is_otel_v2_enabled.cache_clear()
 
 
+def test_model_based_tag_rate_limits_hook_dispatch_and_lookup(monkeypatch):
+    """The "model_based_tag_rate_limits_hook" callback name must resolve to a
+    single, cached _PROXY_ModelBasedTagRateLimitsHook instance -- a second
+    _init_custom_logger_compatible_class call for the same name must return
+    the same instance, not a fresh one, and get_custom_logger_compatible_class
+    (the lookup path async_pre_call_hook, and friends rely on) must find it
+    too."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+    from litellm.proxy.hooks.model_based_tag_rate_limits_hook import (
+        _PROXY_ModelBasedTagRateLimitsHook,
+    )
+
+    logging_module._in_memory_loggers.clear()
+    try:
+        created = logging_module._init_custom_logger_compatible_class(
+            logging_integration="model_based_tag_rate_limits_hook",
+            internal_usage_cache=DualCache(),
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert isinstance(created, _PROXY_ModelBasedTagRateLimitsHook)
+        # Same name resolves to the same instance, not a second hook.
+        again = logging_module._init_custom_logger_compatible_class(
+            logging_integration="model_based_tag_rate_limits_hook",
+            internal_usage_cache=DualCache(),
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert again is created
+        found = logging_module.get_custom_logger_compatible_class("model_based_tag_rate_limits_hook")
+        assert found is created
+    finally:
+        logging_module._in_memory_loggers.clear()
+
+
+def test_global_tag_rate_limits_hook_dispatch_and_lookup(monkeypatch):
+    """Same dispatch/cached-lookup contract as the model-based hook's own
+    test above, for the "global_tag_rate_limits_hook" callback name."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+    from litellm.proxy.hooks.global_tag_rate_limits_hook import (
+        _PROXY_GlobalTagRateLimitsHook,
+    )
+
+    logging_module._in_memory_loggers.clear()
+    try:
+        created = logging_module._init_custom_logger_compatible_class(
+            logging_integration="global_tag_rate_limits_hook",
+            internal_usage_cache=DualCache(),
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert isinstance(created, _PROXY_GlobalTagRateLimitsHook)
+        # Same name resolves to the same instance, not a second hook.
+        again = logging_module._init_custom_logger_compatible_class(
+            logging_integration="global_tag_rate_limits_hook",
+            internal_usage_cache=DualCache(),
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert again is created
+        found = logging_module.get_custom_logger_compatible_class("global_tag_rate_limits_hook")
+        assert found is created
+    finally:
+        logging_module._in_memory_loggers.clear()
+
+
 class _ClientError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
