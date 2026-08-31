@@ -22,10 +22,10 @@ def test_sets_base_url_and_auth_token():
     assert merged["env"]["ENABLE_TOOL_SEARCH"] == "true"
 
 
-def test_forces_tool_search_on():
+def test_preserves_existing_tool_search():
     settings = {"env": {"ENABLE_TOOL_SEARCH": "false"}}
     merged = merge_claude_settings_static_token(settings, "http://127.0.0.1:4000", "token-abc")
-    assert merged["env"]["ENABLE_TOOL_SEARCH"] == "true"
+    assert merged["env"]["ENABLE_TOOL_SEARCH"] == "false"
 
 
 def test_drops_stray_api_key():
