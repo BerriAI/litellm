@@ -195,11 +195,12 @@ resource "google_cloud_run_v2_service" "gateway" {
     }
   }
 
-  name                = "${local.name}-gateway"
-  location            = var.region
-  ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
-  labels              = local.labels
-  deletion_protection = false
+  name                 = "${local.name}-gateway"
+  location             = var.region
+  ingress              = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  labels               = local.labels
+  invoker_iam_disabled = var.invoker_iam_disabled
+  deletion_protection  = false
 
   template {
     service_account                  = google_service_account.runtime.email
@@ -324,11 +325,12 @@ resource "google_cloud_run_v2_service" "backend" {
     }
   }
 
-  name                = "${local.name}-backend"
-  location            = var.region
-  ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
-  labels              = local.labels
-  deletion_protection = false
+  name                 = "${local.name}-backend"
+  location             = var.region
+  ingress              = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  labels               = local.labels
+  invoker_iam_disabled = var.invoker_iam_disabled
+  deletion_protection  = false
 
   template {
     service_account                  = google_service_account.runtime.email
@@ -443,11 +445,12 @@ resource "google_cloud_run_v2_service" "backend" {
 # with zero IAM bindings, so a compromised UI container can't pivot to
 # Secret Manager / Cloud SQL via the metadata service.
 resource "google_cloud_run_v2_service" "ui" {
-  name                = "${local.name}-ui"
-  location            = var.region
-  ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
-  labels              = local.labels
-  deletion_protection = false
+  name                 = "${local.name}-ui"
+  location             = var.region
+  ingress              = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  labels               = local.labels
+  invoker_iam_disabled = var.invoker_iam_disabled
+  deletion_protection  = false
 
   template {
     service_account                  = google_service_account.ui_runtime.email
@@ -491,6 +494,8 @@ resource "google_cloud_run_v2_service" "ui" {
 # (LITELLM_MASTER_KEY); these IAM bindings just open up Cloud Run's invoker
 # gate so the LB request makes it to the container.
 resource "google_cloud_run_v2_service_iam_member" "gateway_allusers" {
+  count = var.invoker_iam_disabled == true ? 0 : 1
+
   project  = var.project_id
   location = google_cloud_run_v2_service.gateway.location
   name     = google_cloud_run_v2_service.gateway.name
@@ -499,6 +504,8 @@ resource "google_cloud_run_v2_service_iam_member" "gateway_allusers" {
 }
 
 resource "google_cloud_run_v2_service_iam_member" "backend_allusers" {
+  count = var.invoker_iam_disabled == true ? 0 : 1
+
   project  = var.project_id
   location = google_cloud_run_v2_service.backend.location
   name     = google_cloud_run_v2_service.backend.name
@@ -507,6 +514,8 @@ resource "google_cloud_run_v2_service_iam_member" "backend_allusers" {
 }
 
 resource "google_cloud_run_v2_service_iam_member" "ui_allusers" {
+  count = var.invoker_iam_disabled == true ? 0 : 1
+
   project  = var.project_id
   location = google_cloud_run_v2_service.ui.location
   name     = google_cloud_run_v2_service.ui.name

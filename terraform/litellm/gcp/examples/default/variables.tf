@@ -64,6 +64,13 @@ variable "image_tag" {
   default     = "v1.86.0-dev"
 }
 
+# ---------- Load balancer auth mechanism ----------
+variable "invoker_iam_disabled" {
+  description = "Disable the Cloud Run invoker IAM check. When true, the allUsers grant is skipped. Enable if the environment implements the DomainRestrictedSharing policy."
+  type        = bool
+  default     = null
+}
+
 # TLS — provide DNS names for a managed cert, or opt into HTTP-only for dev.
 variable "lb_domains" {
   description = "DNS names (already pointing at lb_ip) for a Google-managed cert. Empty → no TLS."

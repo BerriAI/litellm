@@ -38,6 +38,8 @@ module "litellm" {
   image_registry = var.image_registry
   image_tag      = var.image_tag
 
+  invoker_iam_disabled = var.invoker_iam_disabled
+
   lb_domains                   = var.lb_domains
   allow_plaintext_lb           = var.allow_plaintext_lb
   cloudsql_deletion_protection = var.cloudsql_deletion_protection
