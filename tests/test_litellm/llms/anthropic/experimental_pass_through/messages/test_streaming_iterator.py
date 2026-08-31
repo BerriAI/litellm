@@ -501,9 +501,13 @@ async def test_async_sse_wrapper_reraises_upstream_error_to_connected_client():
     )
 
     received = []
-    with pytest.raises(_ProviderStreamError) as excinfo:
+
+    async def _drain():
         async for chunk in iterator.async_sse_wrapper(_failing_stream()):
             received.append(chunk)
+
+    with pytest.raises(_ProviderStreamError) as excinfo:
+        await _drain()
 
     assert excinfo.value.status_code == 529
     assert received
