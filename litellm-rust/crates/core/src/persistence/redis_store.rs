@@ -51,6 +51,16 @@ impl RedisStore {
         }
     }
 
+    /// Check if a key exists in Redis (O(1) existence check, no value transfer).
+    pub async fn exists(&self, key: &str) -> Result<bool, PersistenceError> {
+        let mut conn = self.client.clone();
+        let result: bool = conn
+            .exists(key)
+            .await
+            .map_err(|e| PersistenceError::Redis(format!("EXISTS failed: {e}")))?;
+        Ok(result)
+    }
+
     /// Increment a counter and set TTL atomically (for rate limiting).
     pub async fn incr_with_ttl(
         &self,

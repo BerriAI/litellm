@@ -162,6 +162,20 @@ fn lookup_cache(cache: &KeyCache, hashed: &HashedToken) -> Option<Arc<KeyObject>
     }
 }
 
+/// Check Redis for a revocation marker. Returns Ok(true) if the key has been revoked.
+async fn check_revoked(
+    redis: &litellm_core::persistence::RedisStore,
+    hashed: &HashedToken,
+) -> Result<bool, litellm_core::persistence::PersistenceError> {
+    let mut buf = [0u8; 128];
+    let prefix = b"litellm:revoked:";
+    buf[..prefix.len()].copy_from_slice(prefix);
+    let hex = hashed.as_hex_str();
+    buf[prefix.len()..prefix.len() + hex.len()].copy_from_slice(hex.as_bytes());
+    let key = std::str::from_utf8(&buf[..prefix.len() + hex.len()]).unwrap();
+    redis.exists(key).await
+}
+
 /// Look up a key in the database. Returns Arc-wrapped KeyObject.
 async fn lookup_db(
     state: &AppState,
@@ -269,6 +283,24 @@ impl FromRequestParts<AppState> for RequireValidKey {
 
         // 4. Look up in cache (returns Arc, zero-clone)
         if let Some(key_obj) = lookup_cache(&state.key_cache, &hashed_token) {
+            if let Some(ref redis) = state.redis {
+                match check_revoked(redis, &hashed_token).await {
+                    Ok(true) => {
+                        state.key_cache.remove(&hashed_token);
+                        tracing::info!("Auth: Key revoked via Redis, removed from cache");
+                        return Err(AuthRejection::Blocked.into());
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        crate::hardening::log_degradation(
+                            "redis",
+                            "key_revocation_check",
+                            &e.to_string(),
+                        );
+                    }
+                }
+            }
+
             tracing::info!("Auth: Found key in cache, blocked={}", key_obj.blocked);
             if key_obj.blocked {
                 return Err(AuthRejection::Blocked.into());
