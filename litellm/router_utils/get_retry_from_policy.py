@@ -30,7 +30,7 @@ def get_num_retries_from_retry_policy(
     # if we can find the exception then in the retry policy -> return the number of retries
 
     if model_group_retry_policy is not None and model_group is not None and model_group in model_group_retry_policy:
-        retry_policy = model_group_retry_policy.get(model_group, None)  # type: ignore
+        retry_policy = model_group_retry_policy.get(model_group, None)
 
     if retry_policy is None:
         return None

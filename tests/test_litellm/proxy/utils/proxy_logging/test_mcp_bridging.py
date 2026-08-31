@@ -76,6 +76,23 @@ def test_convert_mcp_to_llm_format_defaults_model(proxy_logging, make_mcp_reques
     }
 
 
+def test_convert_mcp_to_llm_format_exposes_headers_on_metadata(proxy_logging, make_mcp_request_obj):
+    """Guardrails read the caller's HTTP headers off ``metadata.headers`` on the chat
+    completions path, so the MCP bridge has to put them in the same place."""
+    req = make_mcp_request_obj()
+    out = proxy_logging._convert_mcp_to_llm_format(
+        request_obj=req,
+        kwargs={"headers": {"x-nuid": "nuid-1"}},
+    )
+    assert out["metadata"]["headers"] == {"x-nuid": "nuid-1"}
+
+
+def test_convert_mcp_to_llm_format_defaults_headers_to_empty(proxy_logging, make_mcp_request_obj):
+    req = make_mcp_request_obj()
+    out = proxy_logging._convert_mcp_to_llm_format(request_obj=req, kwargs={})
+    assert out["metadata"]["headers"] == {}
+
+
 def test_convert_mcp_to_llm_format_missing_request_obj_raises(proxy_logging):
     with pytest.raises(AttributeError):
         proxy_logging._convert_mcp_to_llm_format(request_obj=None, kwargs={})

@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -7,7 +7,7 @@ from litellm.llms.anthropic.experimental_pass_through.messages.transformation im
 from litellm.llms.openai_like.json_loader import SimpleProviderConfig
 from litellm.secret_managers.main import get_secret_str
 
-DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
+DEFAULT_ANTHROPIC_API_VERSION: Final = "2023-06-01"
 
 
 class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
@@ -33,18 +33,18 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict[str, str], str | None]:
-        present = {key.lower() for key in headers}
-        needs_auth = bool(api_key) and "authorization" not in present and "x-api-key" not in present
-        defaults: dict[str, str] = {
+        present: Final = {key.lower() for key in headers}
+        needs_auth: Final = bool(api_key) and "authorization" not in present and "x-api-key" not in present
+        defaults: Final[dict[str, str]] = {
             **({"authorization": f"Bearer {api_key}"} if needs_auth else {}),
             **({"anthropic-version": DEFAULT_ANTHROPIC_API_VERSION} if "anthropic-version" not in present else {}),
             **({"content-type": "application/json"} if "content-type" not in present else {}),
         }
-        combined = {**headers, **defaults}
-        normalized = {
+        combined: Final = {**headers, **defaults}
+        normalized: Final = {
             ("anthropic-beta" if key.lower() == "anthropic-beta" else key): value for key, value in combined.items()
         }
-        merged = self._update_headers_with_anthropic_beta(
+        merged: Final = self._update_headers_with_anthropic_beta(
             headers=normalized,
             optional_params=optional_params,
         )
@@ -95,7 +95,7 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
         return api_key or get_secret_str(self._provider.api_key_env) or litellm.api_key
 
     def _resolve_api_base(self, api_base: str | None) -> str:
-        env_api_base = get_secret_str(self._provider.api_base_env) if self._provider.api_base_env else None
+        env_api_base: Final = get_secret_str(self._provider.api_base_env) if self._provider.api_base_env else None
         return api_base or env_api_base or self._provider.base_url
 
     def validate_anthropic_messages_environment(

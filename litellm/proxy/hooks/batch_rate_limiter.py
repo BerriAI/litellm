@@ -18,17 +18,12 @@ Quick summary:
 """
 
 import json
-from collections.abc import Iterable
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Literal,
-    NoReturn,
-    Union,
-)
+from collections.abc import Iterable, Mapping, Sequence
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, TypeAlias
 
 from fastapi import HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -46,9 +41,21 @@ from litellm.proxy._types import (
     SpecialModelNames,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_utils import get_model_rate_limit_from_metadata
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
     ProxyRateLimitError,
     map_v3_rate_limit_type,
+)
+from litellm.proxy.hooks.batch_enqueued_tokens import (
+    BatchEnqueuedTokenOverLimit,
+    BatchEnqueuedTokenReservation,
+    BatchEnqueuedTokenScope,
+    resolve_batch_enqueued_token_scopes,
+)
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    PROJECT_ITPM_DESCRIPTOR_KEY,
+    PROJECT_OTPM_DESCRIPTOR_KEY,
+    get_or_create_request_stash,
 )
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 
@@ -67,7 +74,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
     from litellm.router import Router as _Router
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
     InternalUsageCache = _InternalUsageCache
     Router = _Router
     ParallelRequestLimiter = _ParallelRequestLimiter
@@ -82,6 +89,11 @@ else:
     RateLimitDescriptor = dict[str, Any]
 
 
+_BATCH_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+IncrementAmounts: TypeAlias = dict[Literal["requests", "tokens"], int]
+
+
 class BatchFileUsage(BaseModel):
     """
     Internal model for batch file usage tracking, used for batch rate limiting
@@ -89,6 +101,16 @@ class BatchFileUsage(BaseModel):
 
     total_tokens: int
     request_count: int
+    output_tokens: int = 0
+    # Keyed by each row's own `body.model`, distinct from `total_tokens`/
+    # `output_tokens` (the whole-file totals charged to the file-bound/
+    # top-level routing model's key/team/model limits). A batch's rows can
+    # each target a different model, so the project's per-model ITPM/OTPM
+    # quota for a row's actual model must be charged with that row's own
+    # tokens -- see `_create_project_io_descriptors_for_models`.
+    per_model_usage: dict[str, dict[str, int]] = Field(
+        default_factory=dict
+    )  # mutable-ok: accumulated incrementally per row while parsing the batch file
 
 
 class _PROXY_BatchRateLimiter(CustomLogger):
@@ -128,7 +150,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         binds one. The provider is then read from that deployment's trusted
         credentials for the provider-level skip decision.
         """
-        input_file_id = data.get("input_file_id")
+        input_file_id: Final = data.get("input_file_id")
         if not isinstance(input_file_id, str) or not input_file_id:
             return None
 
@@ -138,13 +160,13 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             get_models_from_unified_file_id,
         )
 
-        model_from_file_id = decode_model_from_file_id(input_file_id)
+        model_from_file_id: Final = decode_model_from_file_id(input_file_id)
         if model_from_file_id:
             return model_from_file_id
 
-        unified_file_id = _is_base64_encoded_unified_file_id(input_file_id)
+        unified_file_id: Final = _is_base64_encoded_unified_file_id(input_file_id)
         if unified_file_id:
-            target_model_names = get_models_from_unified_file_id(unified_file_id)
+            target_model_names: Final = get_models_from_unified_file_id(unified_file_id)
             if target_model_names:
                 return target_model_names[0]
 
@@ -159,11 +181,11 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         skip from the top-level model first would let a caller point ``model``
         at a skip-listed provider while the file routes a rate-limited one.
         """
-        file_bound_model = self._get_file_bound_batch_model(data)
+        file_bound_model: Final = self._get_file_bound_batch_model(data)
         if file_bound_model:
             return file_bound_model
 
-        model = data.get("model")
+        model: Final = data.get("model")
         if isinstance(model, str) and model:
             return model
 
@@ -188,7 +210,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             return None
 
         try:
-            credentials = get_credentials_for_model(
+            credentials: Final = get_credentials_for_model(
                 llm_router=llm_router,
                 model_id=batch_model,
                 operation_context="batch input file read (rate limiting)",
@@ -196,7 +218,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         except HTTPException:
             return None
 
-        provider = credentials.get("custom_llm_provider")
+        provider: Final = credentials.get("custom_llm_provider")
         return provider if isinstance(provider, str) and provider else None
 
     def _create_batch_rate_limit_descriptors(
@@ -204,6 +226,15 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         data: dict,
     ) -> list["RateLimitDescriptor"]:
+        """Build the standard key/user/team/model descriptor list a batch is charged against.
+
+        Deliberately excludes the project-scoped ITPM/OTPM descriptors: those
+        are charged per the JSONL row's own `body.model` once the file is
+        parsed (`_create_project_io_descriptors_for_models`), not the
+        file-bound/top-level routing model this function resolves. Charging
+        project quotas here would let a caller bind the file to a model
+        without a quota while rows execute against a quota-limited model.
+        """
         return self.parallel_request_limiter._create_rate_limit_descriptors(
             user_api_key_dict=user_api_key_dict,
             data=data,
@@ -212,10 +243,62 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             model_has_failures=False,
         )
 
+    @staticmethod
+    def _project_has_any_io_token_limits(user_api_key_dict: UserAPIKeyAuth) -> bool:
+        """True when the project has any per-model ITPM/OTPM quota configured.
+
+        Used to stop the "skip batch input file processing" fast path from
+        bypassing a project quota configured for a model other than the
+        batch's file-bound/top-level routing model: the row models that
+        actually drive execution and billing aren't known until the JSONL
+        is parsed, so the file must be read whenever *any* model could be
+        quota-limited, not only when the routing model itself is.
+        """
+        if user_api_key_dict.project_id is None:
+            return False
+        return bool(
+            get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_itpm_limit")
+        ) or bool(get_model_rate_limit_from_metadata(user_api_key_dict, "project_metadata", "model_otpm_limit"))
+
+    def _create_project_io_descriptors_for_models(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        per_model_usage: Mapping[str, Mapping[str, int]],
+    ) -> tuple[list["RateLimitDescriptor"], list[IncrementAmounts]]:  # mutable-ok: see below
+        """Build project ITPM/OTPM descriptors charged against each row's own model.
+
+        One descriptor pair per distinct `body.model` found in the JSONL,
+        each incremented only by that model's own counted usage -- never the
+        whole-batch total -- so a quota-limited model can't hide behind an
+        unlimited routing model, and an unrelated model's rows can't inflate
+        a different model's counter.
+        """
+        extra_descriptors: Final[list[RateLimitDescriptor]] = []  # mutable-ok: see above
+        extra_increments: Final[list[IncrementAmounts]] = []  # mutable-ok: see above
+        for model, usage in per_model_usage.items():
+            model_descriptors: list[RateLimitDescriptor] = []  # mutable-ok: reset per loop iteration, not module state
+            self.parallel_request_limiter.add_project_io_token_rate_limit_descriptors_from_metadata(
+                user_api_key_dict=user_api_key_dict,
+                requested_model=model,
+                descriptors=model_descriptors,
+            )
+            for descriptor in model_descriptors:
+                extra_descriptors.append(descriptor)
+                extra_increments.append(
+                    {  # mutable-ok: atomic limiter API requires mutable increment records
+                        "requests": 0,
+                        "tokens": usage.get("output_tokens", 0)
+                        if descriptor["key"] == PROJECT_OTPM_DESCRIPTOR_KEY
+                        else usage.get("total_tokens", 0),
+                    }
+                )
+        return extra_descriptors, extra_increments
+
     def _should_skip_batch_input_file_processing(
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
+        has_enqueued_scopes: bool = False,
     ) -> tuple[bool, list["RateLimitDescriptor"] | None]:
         """
         Skip downloading batch input files when the operator disabled batch
@@ -238,6 +321,11 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         routing deployment's trusted credentials and the batch is constrained
         to run on that provider.
 
+        The no-limits check also treats any project-configured ITPM/OTPM
+        quota as an applicable limit, even when it isn't scoped to the
+        routing model: a row can target a different, quota-limited model,
+        and that isn't knowable without parsing the JSONL.
+
         Returns ``(should_skip, descriptors)`` where ``descriptors`` is the
         rate-limit descriptor list computed for the no-limits check, so the
         caller can reuse it for counter enforcement without recomputing.
@@ -252,18 +340,22 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         if general_settings.get("disable_batch_input_file_rate_limiting") is True:
             return True, None
 
-        skip_providers = general_settings.get("skip_batch_input_file_rate_limiting_for_providers") or []
+        skip_providers: Final = general_settings.get("skip_batch_input_file_rate_limiting_for_providers") or []
         if skip_providers:
-            batch_provider = self._resolve_batch_provider(self._get_batch_routing_model(data))
+            batch_provider: Final = self._resolve_batch_provider(self._get_batch_routing_model(data))
             if batch_provider and batch_provider in skip_providers:
                 verbose_proxy_logger.debug("Skipping batch input file processing for provider=%s", batch_provider)
                 return True, None
 
-        descriptors = self._create_batch_rate_limit_descriptors(
+        descriptors: Final = self._create_batch_rate_limit_descriptors(
             user_api_key_dict=user_api_key_dict,
             data=data,
         )
-        if not self._has_applicable_batch_rate_limits(descriptors):
+        if (
+            not has_enqueued_scopes
+            and not self._has_applicable_batch_rate_limits(descriptors)
+            and not self._project_has_any_io_token_limits(user_api_key_dict)
+        ):
             verbose_proxy_logger.debug("Skipping batch input file processing: no rate limits configured")
             return True, None
 
@@ -292,7 +384,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
     ) -> bool:
         """True when the key may only call a subset of models (JSONL must be checked)."""
-        models = user_api_key_dict.models or []
+        models: Final = user_api_key_dict.models or []
         if "*" in models:
             return False
         if SpecialModelNames.all_proxy_models.value in models:
@@ -302,6 +394,58 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         if not models:
             return False
         return True
+
+    def _estimate_entry_output_tokens(
+        self,
+        entry: Mapping[str, object],
+        min_configured_otpm_limit: int | None,
+    ) -> int:
+        """Conservative per-row output-token estimate for the project OTPM reservation.
+
+        Batch completion never reconciles actual usage back into the rate
+        limiter, so this pre-call estimate is the only OTPM enforcement a
+        batch gets. Mirrors the real-time no-``max_tokens`` floor so a row
+        that omits an output cap can't be used to bypass OTPM the way an
+        unbounded streaming request could.
+
+        Embeddings rows are identified by the row's own ``url`` (the OpenAI
+        batch schema puts the target route there, e.g. ``/v1/embeddings``),
+        never by body shape: a `/v1/responses` row also carries `body.input`
+        with no `messages`/`prompt`, so guessing from body shape alone would
+        misclassify a token-generating Responses row as a zero-output
+        embeddings row and let it skip the OTPM reservation entirely.
+        """
+        url: Final = entry.get("url")
+        if isinstance(url, str) and "embeddings" in url:
+            return 0  # embeddings: no output tokens
+        raw_body: Final = entry.get("body")
+        body: Final[Mapping[str, object]] = (
+            MappingProxyType(_BATCH_BODY_ADAPTER.validate_python(raw_body))
+            if isinstance(raw_body, Mapping)
+            else MappingProxyType({})  # mutable-ok: immediately frozen empty fallback
+        )
+        # `max_tokens`/`max_completion_tokens` cap chat completions; `/v1/responses`
+        # rows cap output with `max_output_tokens` instead -- omitting it here
+        # would fall through to the floor estimate for every capped Responses row.
+        explicit_cap: Final = next(
+            (
+                v
+                for v in (
+                    body.get("max_tokens"),
+                    body.get("max_completion_tokens"),
+                    body.get("max_output_tokens"),
+                )
+                if v is not None
+            ),
+            None,
+        )
+        candidate_count: Final = self.parallel_request_limiter.get_output_candidate_count(body)
+        if explicit_cap is not None:
+            try:
+                return max(0, int(explicit_cap)) * candidate_count
+            except (TypeError, ValueError, OverflowError):
+                pass
+        return self.parallel_request_limiter.no_max_tokens_output_floor(min_configured_otpm_limit) * candidate_count
 
     @staticmethod
     def _has_applicable_batch_rate_limits(
@@ -337,11 +481,11 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         )
         from litellm.proxy.proxy_server import llm_router
 
-        fetch_kwargs: dict[str, Any] = {
+        fetch_kwargs: Final[dict[str, Any]] = {
             "custom_llm_provider": custom_llm_provider,
         }
 
-        model_from_file_id = decode_model_from_file_id(file_id)
+        model_from_file_id: Final = decode_model_from_file_id(file_id)
         if model_from_file_id:
             if llm_router is not None:
                 try:
@@ -359,7 +503,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     pass
             return get_original_file_id(file_id), fetch_kwargs
 
-        request_model = data.get("model")
+        request_model: Final = data.get("model")
         if isinstance(request_model, str) and request_model and llm_router is not None:
             try:
                 credentials = get_credentials_for_model(
@@ -377,6 +521,59 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         return file_id, fetch_kwargs
 
+    async def _reserve_batch_enqueued_tokens(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        data: Mapping[str, object],
+        batch_usage: BatchFileUsage,
+        scopes: tuple[BatchEnqueuedTokenScope, ...],
+    ) -> None:
+        """Reserve the batch's estimated tokens against the caller's enqueued-token allowance.
+
+        Runs instead of the per-minute counter charge when the key or team
+        opted in via ``batch_enqueued_token_limit`` metadata. The reservation
+        is stashed on the request so the v3 limiter's post-call hooks can
+        persist it (keyed by the provider batch id) and refund it when the
+        batch reaches a terminal state.
+        """
+        outcome: Final = await self.parallel_request_limiter.batch_enqueued_token_store.reserve(
+            tokens=batch_usage.total_tokens,
+            scopes=scopes,
+            litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+        )
+        match outcome:
+            case BatchEnqueuedTokenOverLimit():
+                self._raise_enqueued_limit_error(over_limit=outcome, data=data, batch_usage=batch_usage)
+            case BatchEnqueuedTokenReservation():
+                get_or_create_request_stash().batch_enqueued_reservation = outcome
+
+    def _raise_enqueued_limit_error(
+        self,
+        over_limit: BatchEnqueuedTokenOverLimit,
+        data: Mapping[str, object],
+        batch_usage: BatchFileUsage,
+    ) -> NoReturn:
+        scope: Final = over_limit.scope
+        remaining: Final = max(0, scope.limit - over_limit.enqueued)
+        detail: Final = (
+            f"Batch enqueued token limit exceeded for {scope.key}: {scope.value}. "
+            f"Batch requires {batch_usage.total_tokens} tokens but only {remaining} enqueued tokens remaining "
+            f"out of {scope.limit} enqueued token limit. "
+            f"Tokens free up as running batches complete or are cancelled."
+        )
+        raw_model: Final = data.get("model")
+        resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
+            raw_model if isinstance(raw_model, str) else None
+        )
+        raise ProxyRateLimitError(
+            detail=detail,
+            headers=MappingProxyType({"rate_limit_type": "tokens"}),
+            category=RateLimitErrorCategory.LITELLM_BATCH_RATE_LIMIT,
+            rate_limit_type=map_v3_rate_limit_type("tokens"),
+            model=resolved_model,
+            llm_provider=llm_provider,
+        )
+
     def _raise_rate_limit_error(
         self,
         status: "RateLimitStatus",
@@ -388,22 +585,35 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         """Raise :class:`ProxyRateLimitError` (a 429) for batch rate limit exceeded."""
         from datetime import datetime
 
-        # Find the descriptor for this status
-        descriptor_index = next(
-            (i for i, d in enumerate(descriptors) if d.get("key") == status.get("descriptor_key")),
+        # Find the descriptor for this status. Matching on (key, value) is
+        # required, not key alone: a batch can carry several project ITPM/OTPM
+        # descriptors sharing one key (e.g. `model_per_project_otpm`) but
+        # scoped to different models via `value`
+        # ("{project_id}:{model}") -- key-only matching would always resolve
+        # to the first same-keyed descriptor regardless of which one was
+        # actually over its limit. Falls back to key-only matching for
+        # statuses that predate `descriptor_value` (e.g. from should_rate_limit).
+        status_descriptor_value: Final = status.get("descriptor_value")
+        descriptor_index: Final = next(
+            (
+                i
+                for i, d in enumerate(descriptors)
+                if d.get("key") == status.get("descriptor_key")
+                and (status_descriptor_value is None or d.get("value") == status_descriptor_value)
+            ),
             0,
         )
-        descriptor: RateLimitDescriptor = (
+        descriptor: Final[RateLimitDescriptor] = (
             descriptors[descriptor_index] if descriptors else {"key": "", "value": "", "rate_limit": None}
         )
 
-        now = datetime.now().timestamp()
-        window_size = self.parallel_request_limiter.window_size
-        reset_time = now + window_size
-        reset_time_formatted = datetime.fromtimestamp(reset_time).strftime("%Y-%m-%d %H:%M:%S UTC")
+        now: Final = datetime.now().timestamp()
+        window_size: Final = self.parallel_request_limiter.window_size
+        reset_time: Final = now + window_size
+        reset_time_formatted: Final = datetime.fromtimestamp(reset_time).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-        remaining_display = max(0, status["limit_remaining"])
-        current_limit = status["current_limit"]
+        remaining_display: Final = max(0, status["limit_remaining"])
+        current_limit: Final = status["current_limit"]
 
         if limit_type == "requests":
             detail = (
@@ -413,9 +623,27 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 f"Limit resets at: {reset_time_formatted}"
             )
         else:  # tokens
+            # Project ITPM/OTPM descriptors are keyed "{project_id}:{model}" and
+            # charged with that model's own rows (see
+            # `_create_project_io_descriptors_for_models`), not the whole
+            # batch's totals -- report the matching per-model figure when one
+            # is available so the error reflects what was actually charged.
+            descriptor_model: Final = (
+                descriptor.get("value", "").split(":", 1)[-1]
+                if descriptor.get("key") in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
+                else None
+            )
+            model_usage: Final = batch_usage.per_model_usage.get(descriptor_model) if descriptor_model else None
+            batch_token_count: Final = (
+                (model_usage or {}).get("output_tokens", batch_usage.output_tokens)
+                if descriptor.get("key") == PROJECT_OTPM_DESCRIPTOR_KEY
+                else (model_usage or {}).get("total_tokens", batch_usage.total_tokens)
+                if descriptor.get("key") == PROJECT_ITPM_DESCRIPTOR_KEY
+                else batch_usage.total_tokens
+            )
             detail = (
                 f"Batch rate limit exceeded for {descriptor.get('key', 'unknown')}: {descriptor.get('value', 'unknown')}. "
-                f"Batch contains {batch_usage.total_tokens} tokens but only {remaining_display} tokens remaining "
+                f"Batch contains {batch_token_count} tokens but only {remaining_display} tokens remaining "
                 f"out of {current_limit} TPM limit. "
                 f"Limit resets at: {reset_time_formatted}"
             )
@@ -450,7 +678,10 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         falls back to a per-process asyncio.Lock + in-memory operation.
 
         ``descriptors`` may be passed in by the pre-call hook to reuse the list
-        already computed when deciding whether to skip file processing.
+        already computed when deciding whether to skip file processing. It
+        never contains project ITPM/OTPM descriptors (those are model-specific
+        and only knowable once ``batch_usage.per_model_usage`` is populated by
+        parsing the JSONL), so this always builds and appends them here.
         """
         if descriptors is None:
             descriptors = self._create_batch_rate_limit_descriptors(
@@ -458,20 +689,29 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 data=data,
             )
 
-        increment: dict[Literal["requests", "tokens"], int] = {
-            "requests": batch_usage.request_count,
-            "tokens": batch_usage.total_tokens,
-        }
-        increments: list[dict[Literal["requests", "tokens"], int]] = [increment for _ in descriptors]
+        increments: list[IncrementAmounts] = [  # mutable-ok: reassigned below to append project IO increments
+            {  # mutable-ok: atomic limiter API requires mutable increment records
+                "requests": batch_usage.request_count,
+                "tokens": batch_usage.total_tokens,
+            }
+            for _d in descriptors
+        ]
 
-        rate_limit_response = await self.parallel_request_limiter.atomic_check_and_increment_by_n(
+        project_io_descriptors, project_io_increments = self._create_project_io_descriptors_for_models(
+            user_api_key_dict=user_api_key_dict,
+            per_model_usage=batch_usage.per_model_usage,
+        )
+        descriptors = [*descriptors, *project_io_descriptors]
+        increments = [*increments, *project_io_increments]
+
+        rate_limit_response: Final = await self.parallel_request_limiter.atomic_check_and_increment_by_n(
             descriptors=descriptors,
             increments=increments,
             parent_otel_span=user_api_key_dict.parent_otel_span,
         )
 
         if rate_limit_response["overall_code"] == "OVER_LIMIT":
-            requested_model = data.get("model") if data else None
+            requested_model: Final = data.get("model") if data else None
             for status in rate_limit_response["statuses"]:
                 if status["code"] == "OVER_LIMIT":
                     self._raise_rate_limit_error(
@@ -488,6 +728,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
         user_api_key_dict: UserAPIKeyAuth | None = None,
         data: dict | None = None,
+        descriptors: Sequence["RateLimitDescriptor"] | None = None,
     ) -> BatchFileUsage:
         """
         Count number of requests and tokens in a batch input file.
@@ -496,10 +737,37 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             file_id: The file ID to read
             custom_llm_provider: The custom LLM provider to use for token encoding
             user_api_key_dict: User authentication information for file access (required for managed files)
+            descriptors: Rate limit descriptors already computed for this batch, so the
+                configured project OTPM limit can scale the no-``max_tokens`` output floor
 
         Returns:
-            BatchFileUsage with total_tokens and request_count
+            BatchFileUsage with total_tokens, output_tokens, request_count, and
+            per_model_usage (each row's own totals, keyed by its `body.model`)
         """
+        descriptor_otpm_limits: Final = tuple(
+            int(v)
+            for d in (descriptors or ())
+            if d.get("key") == PROJECT_OTPM_DESCRIPTOR_KEY
+            for rate_limit in (d.get("rate_limit"),)
+            for v in (rate_limit.get("tokens_per_unit") if rate_limit is not None else None,)
+            if v is not None
+        )
+        # `descriptors` only ever carries the routing model's own OTPM limit
+        # (see `_create_batch_rate_limit_descriptors`), but a row can target
+        # any project-configured model. Folding in every configured model's
+        # OTPM limit keeps the no-`max_tokens` floor from drifting wide just
+        # because a row's specific model isn't known until parsed below.
+        project_otpm_limits: Final = (
+            tuple(int(v) for v in project_otpm_limit_map.values())
+            if user_api_key_dict is not None
+            and (
+                project_otpm_limit_map := get_model_rate_limit_from_metadata(
+                    user_api_key_dict, "project_metadata", "model_otpm_limit"
+                )
+            )
+            else ()
+        )
+        min_configured_otpm_limit: Final = min((*descriptor_otpm_limits, *project_otpm_limits), default=None)
         try:
             # Check if this is a managed file (base64 encoded unified file ID)
             from litellm.proxy.openai_files_endpoints.common_utils import (
@@ -509,10 +777,10 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
             # Managed files require bypassing the HTTP endpoint (which runs access-check hooks)
             # and calling the managed files hook directly with the user's credentials.
-            is_managed_file = _is_base64_encoded_unified_file_id(file_id)
+            is_managed_file: Final = _is_base64_encoded_unified_file_id(file_id)
             # For managed files the unified file id encodes the proxy model
             # alias(es) the file was uploaded for; auth validates against those.
-            target_model_names = get_models_from_unified_file_id(is_managed_file) if is_managed_file else []
+            target_model_names: Final = get_models_from_unified_file_id(is_managed_file) if is_managed_file else []
             if is_managed_file and user_api_key_dict is not None:
                 file_content = await self._fetch_managed_file_content(
                     file_id=file_id,
@@ -531,7 +799,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     **fetch_kwargs,
                 )
 
-            file_content_bytes = getattr(file_content, "content", None)
+            file_content_bytes: Final = getattr(file_content, "content", None)
             if not isinstance(file_content_bytes, bytes):
                 raise ValueError(
                     f"Expected bytes content from file retrieval for {file_id}, got {type(file_content_bytes)}"
@@ -550,24 +818,52 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             #      can't be evaded by sending uncountable rows.
             # Counting stays best-effort, so a legitimate (e.g. multimodal) row
             # the counter can't measure is estimated, not hard-rejected.
-            models: set = set()
+            models: Final[set] = set()
+            # Keyed by each row's own `body.model`, so the project ITPM/OTPM
+            # quota for that model is charged with only its own rows' tokens,
+            # never the whole batch's -- see `_create_project_io_descriptors_for_models`.
+            per_model_usage: Final[dict[str, dict[str, int]]] = {}
             total_tokens = 0
+            output_tokens = 0  # rebind-ok: accumulated per JSONL row in the loop below
             request_count = 0
             for raw_line in _iter_batch_input_lines(file_content_bytes):
                 request_count += 1
                 try:
                     entry = json.loads(raw_line)
                 except Exception:
-                    total_tokens += _estimate_batch_entry_tokens(raw_line)
+                    entry_total_tokens = _estimate_batch_entry_tokens(raw_line)
+                    entry_output_tokens = self.parallel_request_limiter.no_max_tokens_output_floor(
+                        min_configured_otpm_limit
+                    )
+                    total_tokens += entry_total_tokens
+                    output_tokens += entry_output_tokens
                     continue
+
+                model: str | None = (entry.get("body") or {}).get("model") if isinstance(entry, dict) else None
+                if model:
+                    models.add(model)
+
                 if isinstance(entry, dict):
-                    model = (entry.get("body") or {}).get("model")
-                    if model:
-                        models.add(model)
+                    entry_output_tokens = self._estimate_entry_output_tokens(entry, min_configured_otpm_limit)
+                else:
+                    entry_output_tokens = self.parallel_request_limiter.no_max_tokens_output_floor(
+                        min_configured_otpm_limit
+                    )
+                output_tokens += entry_output_tokens
+
                 try:
-                    total_tokens += _count_entry_tokens(entry)
+                    entry_total_tokens = _count_entry_tokens(entry)
                 except Exception:
-                    total_tokens += _estimate_batch_entry_tokens(raw_line)
+                    entry_total_tokens = _estimate_batch_entry_tokens(raw_line)
+                total_tokens += entry_total_tokens
+
+                if model:
+                    model_usage = per_model_usage.setdefault(
+                        model, {"total_tokens": 0, "output_tokens": 0, "request_count": 0}
+                    )
+                    model_usage["total_tokens"] += entry_total_tokens
+                    model_usage["output_tokens"] += entry_output_tokens
+                    model_usage["request_count"] += 1
 
             # Validate every model named in the batch JSONL against the
             # caller's per-key model allowlist. Without this, a caller
@@ -584,6 +880,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             return BatchFileUsage(
                 total_tokens=total_tokens,
                 request_count=request_count,
+                output_tokens=output_tokens,
+                per_model_usage=per_model_usage,
             )
 
         except HTTPException as e:
@@ -658,7 +956,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     },
                 ) from e
 
-        llm_model_list = llm_router.model_list if llm_router is not None else None
+        llm_model_list: Final = llm_router.model_list if llm_router is not None else None
         for model in models:
             model_to_check = model
             try:
@@ -741,7 +1039,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         if proxy_logging_obj is None:
             raise ValueError("proxy_logging_obj not available. Cannot access managed files hook.")
 
-        managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
+        managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
         if managed_files_obj is None:
             raise ValueError("Managed files hook not found. Cannot access managed file.")
 
@@ -753,7 +1051,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         # Use the managed files hook to get file content
         # This properly handles user permissions and file ownership
-        file_content = await managed_files_obj.afile_content(
+        file_content: Final = await managed_files_obj.afile_content(
             file_id=file_id,
             litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
             llm_router=llm_router,
@@ -799,27 +1097,29 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         try:
             # Extract input_file_id from data
-            input_file_id = data.get("input_file_id")
+            input_file_id: Final = data.get("input_file_id")
             if not input_file_id:
                 verbose_proxy_logger.debug("No input_file_id in batch request, skipping rate limiting")
                 return data
 
+            enqueued_scopes: Final = resolve_batch_enqueued_token_scopes(user_api_key_dict)
             should_skip, batch_rate_limit_descriptors = self._should_skip_batch_input_file_processing(
-                data=data, user_api_key_dict=user_api_key_dict
+                data=data, user_api_key_dict=user_api_key_dict, has_enqueued_scopes=bool(enqueued_scopes)
             )
             if should_skip:
                 return data
 
             # Get custom_llm_provider for token counting
-            custom_llm_provider = data.get("custom_llm_provider", "openai")
+            custom_llm_provider: Final = data.get("custom_llm_provider", "openai")
 
             # Count tokens and requests from input file
             verbose_proxy_logger.debug("Counting tokens from batch input file: %s", input_file_id)
-            batch_usage = await self.count_input_file_usage(
+            batch_usage: Final = await self.count_input_file_usage(
                 file_id=input_file_id,
                 custom_llm_provider=custom_llm_provider,
                 user_api_key_dict=user_api_key_dict,
                 data=data,
+                descriptors=batch_rate_limit_descriptors,
             )
 
             verbose_proxy_logger.debug(
@@ -829,6 +1129,16 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             # Store batch usage in data for later reference
             data["_batch_token_count"] = batch_usage.total_tokens
             data["_batch_request_count"] = batch_usage.request_count
+
+            if enqueued_scopes:
+                await self._reserve_batch_enqueued_tokens(
+                    user_api_key_dict=user_api_key_dict,
+                    data=data,
+                    batch_usage=batch_usage,
+                    scopes=enqueued_scopes,
+                )
+                verbose_proxy_logger.debug("Batch enqueued-token reservation succeeded")
+                return data
 
             # Directly increment counters by batch amounts (check happens atomically)
             # This will raise HTTPException if limits are exceeded

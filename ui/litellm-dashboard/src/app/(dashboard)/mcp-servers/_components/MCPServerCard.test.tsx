@@ -52,13 +52,13 @@ describe("MCPServerCard logo", () => {
 
   it("passes an external logo_url through untouched", () => {
     renderCard({ mcp_info: { server_name: "demo_server", logo_url: "https://cdn.example.com/logo.png" } });
-    expect(screen.getByAltText("demo_server logo").getAttribute("src")).toBe("https://cdn.example.com/logo.png");
+    expect(screen.getByAltText("demo_server logo")).toHaveAttribute("src", "https://cdn.example.com/logo.png");
   });
 
   it("prefixes a stored asset path with the server root path under a non-root mount", () => {
     setServerRootPath("/litellm");
     renderCard({ mcp_info: { server_name: "demo_server", logo_url: "/ui/assets/logos/github.svg" } });
-    expect(screen.getByAltText("demo_server logo").getAttribute("src")).toBe("/litellm/ui/assets/logos/github.svg");
+    expect(screen.getByAltText("demo_server logo")).toHaveAttribute("src", "/litellm/ui/assets/logos/github.svg");
   });
 
   it("renders a letter avatar when no logo_url is set", () => {

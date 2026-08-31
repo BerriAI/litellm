@@ -2,10 +2,15 @@ import asyncio
 import os
 import time
 from datetime import datetime, timedelta
+from typing import Final
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
-from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS, AZURE_STORAGE_MSFT_VERSION
+from litellm.constants import (
+    _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+    AZURE_STORAGE_DEFAULT_ENDPOINT_SUFFIX,
+    AZURE_STORAGE_MSFT_VERSION,
+)
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.azure.common_utils import get_azure_ad_token_from_entra_id
@@ -32,14 +37,17 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             self.azure_storage_account_key: str | None = os.getenv("AZURE_STORAGE_ACCOUNT_KEY")
 
             # Required Env Variables for Azure Storage
-            _azure_storage_account_name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
+            _azure_storage_account_name: Final = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
             if not _azure_storage_account_name:
                 raise ValueError("Missing required environment variable: AZURE_STORAGE_ACCOUNT_NAME")
             self.azure_storage_account_name: str = _azure_storage_account_name
-            _azure_storage_file_system = os.getenv("AZURE_STORAGE_FILE_SYSTEM")
+            _azure_storage_file_system: Final = os.getenv("AZURE_STORAGE_FILE_SYSTEM")
             if not _azure_storage_file_system:
                 raise ValueError("Missing required environment variable: AZURE_STORAGE_FILE_SYSTEM")
             self.azure_storage_file_system: str = _azure_storage_file_system
+            self.azure_storage_endpoint_suffix: str = (
+                os.getenv("AZURE_STORAGE_ENDPOINT_SUFFIX") or AZURE_STORAGE_DEFAULT_ENDPOINT_SUFFIX
+            )
             self._service_client = None
             # Time that the azure service client expires, in order to reset the connection pool and keep it fresh
             self._service_client_timeout: float | None = None
@@ -58,6 +66,14 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             )
             raise e
 
+    @property
+    def azure_storage_dfs_endpoint(self) -> str:
+        return f"https://{self.azure_storage_account_name}.dfs.{self.azure_storage_endpoint_suffix}"
+
+    @property
+    def azure_storage_blob_endpoint(self) -> str:
+        return f"https://{self.azure_storage_account_name}.blob.{self.azure_storage_endpoint_suffix}"
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
         Async Log success events to Azure Blob Storage
@@ -71,7 +87,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 "AzureBlobStorageLogger: Logging - Enters logging function for model %s",
                 kwargs,
             )
-            standard_logging_payload: StandardLoggingPayload | None = kwargs.get("standard_logging_object")
+            standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
 
             if standard_logging_payload is None:
                 raise ValueError("standard_logging_payload is not set")
@@ -94,7 +110,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 "AzureBlobStorageLogger: Logging - Enters logging function for model %s",
                 kwargs,
             )
-            standard_logging_payload: StandardLoggingPayload | None = kwargs.get("standard_logging_object")
+            standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
 
             if standard_logging_payload is None:
                 raise ValueError("standard_logging_payload is not set")
@@ -139,11 +155,11 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             else:
                 # Get a valid token instead of always requesting a new one
                 await self.set_valid_azure_ad_token()
-                async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
-                json_payload = safe_dumps(payload) + "\n"  # Add newline for each log entry
-                payload_bytes = json_payload.encode("utf-8")
-                filename = f"{payload.get('id') or str(uuid.uuid4())}.json"
-                base_url = f"https://{self.azure_storage_account_name}.dfs.core.windows.net/{self.azure_storage_file_system}/{filename}"
+                async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
+                json_payload: Final = safe_dumps(payload) + "\n"  # Add newline for each log entry
+                payload_bytes: Final = json_payload.encode("utf-8")
+                filename: Final = f"{payload.get('id') or str(uuid.uuid4())}.json"
+                base_url = f"{self.azure_storage_dfs_endpoint}/{self.azure_storage_file_system}/{filename}"
 
                 # Execute the 3-step upload process
                 await self._create_file(async_client, base_url)
@@ -160,12 +176,12 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         """Helper method to create the file resource"""
         try:
             verbose_logger.debug("Creating file resource at: %s", base_url)
-            headers = {
+            headers: Final = {
                 "x-ms-version": AZURE_STORAGE_MSFT_VERSION,
                 "Content-Length": "0",
                 "Authorization": f"Bearer {self.azure_auth_token}",
             }
-            response = await client.put(f"{base_url}?resource=file", headers=headers)
+            response: Final = await client.put(f"{base_url}?resource=file", headers=headers)
             response.raise_for_status()
             verbose_logger.debug("Successfully created file resource")
         except Exception as e:
@@ -176,12 +192,12 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         """Helper method to append data to the file"""
         try:
             verbose_logger.debug("Appending data to file: %s", base_url)
-            headers = {
+            headers: Final = {
                 "x-ms-version": AZURE_STORAGE_MSFT_VERSION,
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {self.azure_auth_token}",
             }
-            response = await client.patch(
+            response: Final = await client.patch(
                 f"{base_url}?action=append&position=0",
                 headers=headers,
                 data=json_payload,
@@ -196,12 +212,12 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         """Helper method to flush the data"""
         try:
             verbose_logger.debug("Flushing data at position %s", position)
-            headers = {
+            headers: Final = {
                 "x-ms-version": AZURE_STORAGE_MSFT_VERSION,
                 "Content-Length": "0",
                 "Authorization": f"Bearer {self.azure_auth_token}",
             }
-            response = await client.patch(f"{base_url}?action=flush&position={position}", headers=headers)
+            response: Final = await client.patch(f"{base_url}?action=flush&position={position}", headers=headers)
             response.raise_for_status()
             verbose_logger.debug("Successfully flushed data")
         except Exception as e:
@@ -253,13 +269,13 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         if client_secret is None:
             raise ValueError("Missing required environment variable: AZURE_STORAGE_CLIENT_SECRET")
 
-        token_provider = get_azure_ad_token_from_entra_id(
+        token_provider: Final = get_azure_ad_token_from_entra_id(
             tenant_id=tenant_id,
             client_id=client_id,
             client_secret=client_secret,
             scope="https://storage.azure.com/.default",
         )
-        token = token_provider()
+        token: Final = token_provider()
 
         verbose_logger.debug("azure auth token %s", token)
 
@@ -295,7 +311,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             self._service_client = None
         if not self._service_client:
             self._service_client = DataLakeServiceClient(
-                account_url=f"https://{self.azure_storage_account_name}.dfs.core.windows.net",
+                account_url=self.azure_storage_dfs_endpoint,
                 credential=self.azure_storage_account_key,
             )
             self._service_client_timeout = time.time() + _DEFAULT_TTL_FOR_HTTPX_CLIENTS
@@ -310,16 +326,16 @@ class AzureBlobStorageLogger(CustomBatchLogger):
 
         # Create an async service client
 
-        service_client = await self.get_service_client()
+        service_client: Final = await self.get_service_client()
         # Get file system client
-        file_system_client = service_client.get_file_system_client(file_system=self.azure_storage_file_system)
+        file_system_client: Final = service_client.get_file_system_client(file_system=self.azure_storage_file_system)
 
         try:
             # Create directory with today's date
             from datetime import datetime
 
-            today = datetime.now().strftime("%Y-%m-%d")
-            directory_client = file_system_client.get_directory_client(today)
+            today: Final = datetime.now().strftime("%Y-%m-%d")
+            directory_client: Final = file_system_client.get_directory_client(today)
 
             # check if the directory exists
             if not await directory_client.exists():
@@ -327,14 +343,14 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 verbose_logger.debug("Created directory: %s", today)
 
             # Create a file client
-            file_name = f"{payload.get('id') or str(uuid.uuid4())}.json"
-            file_client = directory_client.get_file_client(file_name)
+            file_name: Final = f"{payload.get('id') or str(uuid.uuid4())}.json"
+            file_client: Final = directory_client.get_file_client(file_name)
 
             # Create the file
             await file_client.create_file()
 
             # Content to append
-            content = safe_dumps(payload).encode("utf-8")
+            content: Final = safe_dumps(payload).encode("utf-8")
 
             # Append content to the file
             await file_client.append_data(data=content, offset=0, length=len(content))

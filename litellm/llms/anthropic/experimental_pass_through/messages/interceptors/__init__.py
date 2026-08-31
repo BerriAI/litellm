@@ -1,7 +1,9 @@
+from typing import Final
+
 from .advisor import AdvisorOrchestrationHandler
 from .base import MessagesInterceptor
 
-_interceptors: list[MessagesInterceptor] = [
+_interceptors: Final[list[MessagesInterceptor]] = [
     AdvisorOrchestrationHandler(),
 ]
 

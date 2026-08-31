@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -9,11 +10,11 @@ from litellm.types.guardrails import *
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 
-def can_modify_guardrails(team_obj: Optional[LiteLLM_TeamTable]) -> bool:
+def can_modify_guardrails(team_obj: LiteLLM_TeamTable | None) -> bool:
     if team_obj is None:
         return True
 
-    team_metadata = team_obj.metadata or {}
+    team_metadata: Final = team_obj.metadata or {}
 
     if team_metadata.get("guardrails", None) is not None and isinstance(team_metadata.get("guardrails"), dict):
         if team_metadata.get("guardrails", {}).get("modify_guardrails", None) is False:
@@ -30,13 +31,13 @@ async def should_proceed_based_on_metadata(data: dict, guardrail_name: str) -> b
         if "guardrails" in data["metadata"]:
             # expect users to pass
             # guardrails: { prompt_injection: true, rail_2: false }
-            request_guardrails = data["metadata"]["guardrails"]
+            request_guardrails: Final = data["metadata"]["guardrails"]
             verbose_proxy_logger.debug(
                 "Guardrails %s passed in request - checking which to apply",
                 request_guardrails,
             )
 
-            requested_callback_names = []
+            requested_callback_names: Final = []
 
             # v1 implementation of this
             if isinstance(request_guardrails, dict):

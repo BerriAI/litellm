@@ -6,7 +6,7 @@ then builds a SemanticRouter for prompt matching.
 """
 
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import yaml
 
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 
-ROUTE_TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "route_templates")
+ROUTE_TEMPLATES_DIR: Final = os.path.join(os.path.dirname(__file__), "route_templates")
 
 
 class SemanticGuardRouteLoader:
@@ -29,7 +29,7 @@ class SemanticGuardRouteLoader:
     @staticmethod
     def load_builtin_template(template_name: str) -> dict[str, Any]:
         """Load a built-in route template YAML by name."""
-        file_path = os.path.join(ROUTE_TEMPLATES_DIR, f"{template_name}.yaml")
+        file_path: Final = os.path.join(ROUTE_TEMPLATES_DIR, f"{template_name}.yaml")
         if not os.path.exists(file_path):
             raise ValueError(
                 f"SemanticGuard: unknown route template '{template_name}'. "
@@ -41,7 +41,7 @@ class SemanticGuardRouteLoader:
     @staticmethod
     def list_builtin_templates() -> list[str]:
         """List available built-in template names."""
-        templates = []
+        templates: Final = []
         if os.path.isdir(ROUTE_TEMPLATES_DIR):
             for fname in os.listdir(ROUTE_TEMPLATES_DIR):
                 if fname.endswith(".yaml"):
@@ -54,7 +54,7 @@ class SemanticGuardRouteLoader:
         if not os.path.exists(file_path):
             raise ValueError(f"SemanticGuard: custom routes file not found: {file_path}")
         with open(file_path, "r") as f:
-            data = yaml.safe_load(f)
+            data: Final = yaml.safe_load(f)
         if isinstance(data, list):
             return data
         if isinstance(data, dict):
@@ -72,7 +72,7 @@ class SemanticGuardRouteLoader:
         """Build semantic-router Route objects from templates + custom config."""
         from semantic_router.routers.base import Route
 
-        routes: list[Route] = []
+        routes: Final[list[Route]] = []
 
         if route_templates:
             for template_name in route_templates:
@@ -88,7 +88,7 @@ class SemanticGuardRouteLoader:
                 )
 
         if custom_routes_file:
-            custom_defs = cls.load_custom_routes_file(custom_routes_file)
+            custom_defs: Final = cls.load_custom_routes_file(custom_routes_file)
             for route_def in custom_defs:
                 threshold = route_def.get("similarity_threshold", global_threshold)
                 routes.append(
@@ -130,7 +130,7 @@ class SemanticGuardRouteLoader:
             LiteLLMRouterEncoder,
         )
 
-        encoder = LiteLLMRouterEncoder(
+        encoder: Final = LiteLLMRouterEncoder(
             litellm_router_instance=litellm_router,
             model_name=embedding_model,
             score_threshold=global_threshold,

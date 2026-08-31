@@ -4,7 +4,7 @@ Fetches prompts from any API that implements the /beta/litellm_prompt_management
 """
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -84,7 +84,7 @@ class GenericPromptManager(CustomPromptManagement):
 
     def _get_headers(self) -> dict[str, str]:
         """Get HTTP headers for API requests."""
-        headers = {
+        headers: Final = {
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
@@ -108,15 +108,15 @@ class GenericPromptManager(CustomPromptManagement):
         if prompt_id is None and prompt_spec is None:
             raise ValueError("prompt_id or prompt_spec is required")
 
-        url = f"{self.api_base}/beta/litellm_prompt_management"
-        params = {
+        url: Final = f"{self.api_base}/beta/litellm_prompt_management"
+        params: Final = {
             "prompt_id": prompt_id,
             **(self.additional_provider_specific_query_params or {}),
         }
-        http_client = _get_httpx_client()
+        http_client: Final = _get_httpx_client()
 
         try:
-            response = http_client.get(
+            response: Final = http_client.get(
                 url,
                 params=params,
                 headers=self._get_headers(),
@@ -138,8 +138,8 @@ class GenericPromptManager(CustomPromptManagement):
         if prompt_id is None and prompt_spec is None:
             raise ValueError("prompt_id or prompt_spec is required")
 
-        url = f"{self.api_base}/beta/litellm_prompt_management"
-        params = {
+        url: Final = f"{self.api_base}/beta/litellm_prompt_management"
+        params: Final = {
             "prompt_id": prompt_id,
             **(
                 prompt_spec.litellm_params.provider_specific_query_params
@@ -148,12 +148,12 @@ class GenericPromptManager(CustomPromptManagement):
             ),
         }
 
-        http_client = get_async_httpx_client(
+        http_client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.PromptManagement,
         )
 
         try:
-            response = await http_client.get(
+            response: Final = await http_client.get(
                 url,
                 params=params,
                 headers=self._get_headers(),
@@ -240,9 +240,9 @@ class GenericPromptManager(CustomPromptManagement):
         Common caching logic for the prompt manager.
         """
         # Check cache first
-        cache_key = self._get_cache_key(prompt_id, prompt_label, prompt_version)
+        cache_key: Final = self._get_cache_key(prompt_id, prompt_label, prompt_version)
         if cache_key in self._prompt_cache:
-            cached_prompt = self._prompt_cache[cache_key]
+            cached_prompt: Final = self._prompt_cache[cache_key]
             # Return a copy with variables applied if needed
             if prompt_variables:
                 return self._apply_variables(cached_prompt, prompt_variables)
@@ -276,7 +276,7 @@ class GenericPromptManager(CustomPromptManagement):
         Returns:
             PromptManagementClient structure
         """
-        cached_prompt = self._common_caching_logic(
+        cached_prompt: Final = self._common_caching_logic(
             prompt_id=prompt_id,
             prompt_label=prompt_label,
             prompt_version=prompt_version,
@@ -285,10 +285,10 @@ class GenericPromptManager(CustomPromptManagement):
         if cached_prompt:
             return cached_prompt
 
-        cache_key = self._get_cache_key(prompt_id, prompt_label, prompt_version)
+        cache_key: Final = self._get_cache_key(prompt_id, prompt_label, prompt_version)
         try:
             # Fetch from API
-            api_response = self._fetch_prompt_from_api(prompt_id, prompt_spec)
+            api_response: Final = self._fetch_prompt_from_api(prompt_id, prompt_spec)
 
             # Parse the response
             prompt_client = self._parse_api_response(prompt_id, prompt_spec, api_response)
@@ -315,7 +315,7 @@ class GenericPromptManager(CustomPromptManagement):
         prompt_version: int | None = None,
     ) -> PromptManagementClient:
         # Check cache first
-        cached_prompt = self._common_caching_logic(
+        cached_prompt: Final = self._common_caching_logic(
             prompt_id=prompt_id,
             prompt_label=prompt_label,
             prompt_version=prompt_version,
@@ -324,12 +324,12 @@ class GenericPromptManager(CustomPromptManagement):
         if cached_prompt:
             return cached_prompt
 
-        cache_key = self._get_cache_key(prompt_id, prompt_label, prompt_version)
+        cache_key: Final = self._get_cache_key(prompt_id, prompt_label, prompt_version)
 
         try:
             # Fetch from API
 
-            api_response = await self.async_fetch_prompt_from_api(prompt_id=prompt_id, prompt_spec=prompt_spec)
+            api_response: Final = await self.async_fetch_prompt_from_api(prompt_id=prompt_id, prompt_spec=prompt_spec)
 
             # Parse the response
             prompt_client = self._parse_api_response(prompt_id, prompt_spec, api_response)
@@ -364,16 +364,16 @@ class GenericPromptManager(CustomPromptManagement):
             Updated PromptManagementClient with variables applied
         """
         # Create a copy of the prompt template with variables applied
-        updated_messages: list[AllMessageValues] = []
+        updated_messages: Final[list[AllMessageValues]] = []
         for message in prompt_client["prompt_template"]:
-            updated_message = dict(message)  # type: ignore
+            updated_message = dict(message)
             if "content" in updated_message and isinstance(updated_message["content"], str):
                 content = updated_message["content"]
                 for key, value in variables.items():
                     content = content.replace(f"{{{key}}}", str(value))
                     content = content.replace(f"{{{{{key}}}}}", str(value))  # Also support {{key}}
                 updated_message["content"] = content
-            updated_messages.append(updated_message)  # type: ignore
+            updated_messages.append(updated_message)
 
         return PromptManagementClient(
             prompt_id=prompt_client["prompt_id"],
@@ -416,17 +416,8 @@ class GenericPromptManager(CustomPromptManagement):
             tools=tools,
             prompt_label=prompt_label,
             prompt_version=prompt_version,
-            ignore_prompt_manager_model=(
-                ignore_prompt_manager_model or prompt_spec.litellm_params.ignore_prompt_manager_model
-                if prompt_spec
-                else False
-            ),
-            ignore_prompt_manager_optional_params=(
-                ignore_prompt_manager_optional_params
-                or prompt_spec.litellm_params.ignore_prompt_manager_optional_params
-                if prompt_spec
-                else False
-            ),
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
         )
 
     def get_chat_completion_prompt(
@@ -457,17 +448,8 @@ class GenericPromptManager(CustomPromptManagement):
             prompt_spec=prompt_spec,
             prompt_label=prompt_label,
             prompt_version=prompt_version,
-            ignore_prompt_manager_model=(
-                ignore_prompt_manager_model or prompt_spec.litellm_params.ignore_prompt_manager_model
-                if prompt_spec
-                else False
-            ),
-            ignore_prompt_manager_optional_params=(
-                ignore_prompt_manager_optional_params
-                or prompt_spec.litellm_params.ignore_prompt_manager_optional_params
-                if prompt_spec
-                else False
-            ),
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
         )
 
     def clear_cache(self) -> None:

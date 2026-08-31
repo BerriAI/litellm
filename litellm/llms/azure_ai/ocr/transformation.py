@@ -2,16 +2,19 @@
 Azure AI OCR transformation implementation.
 """
 
+from typing import Final
+
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
 )
+from litellm.llms.azure_ai.common_utils import get_azure_ai_auth_headers
 from litellm.llms.base_llm.ocr.transformation import DocumentType, OCRRequestData
 from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.secret_managers.main import get_secret_str
 
-AZURE_AI_OCR_API_KEY_ENV_VAR = "AZURE_AI_API_KEY"
+AZURE_AI_OCR_API_KEY_ENV_VAR: Final = "AZURE_AI_API_KEY"
 
 
 class AzureAIOCRConfig(MistralOCRConfig):
@@ -45,16 +48,11 @@ class AzureAIOCRConfig(MistralOCRConfig):
         """
         Validate environment and return headers for Azure AI OCR.
 
-        Azure AI uses Bearer token authentication with AZURE_AI_API_KEY.
+        Authenticates with AZURE_AI_API_KEY, or with an Entra ID / OAuth token when no key is set.
         """
         # Get API key from environment if not provided
         if api_key is None:
             api_key = get_secret_str(AZURE_AI_OCR_API_KEY_ENV_VAR)
-
-        if api_key is None:
-            raise ValueError(
-                "Missing Azure AI API Key - A call is being made to Azure AI but no key is set either in the environment variables or via params"
-            )
 
         # Validate API base is provided
         if api_base is None:
@@ -66,7 +64,7 @@ class AzureAIOCRConfig(MistralOCRConfig):
             )
 
         headers = {
-            "Authorization": f"Bearer {api_key}",
+            **get_azure_ai_auth_headers(api_key=api_key, litellm_params=litellm_params),
             "Content-Type": "application/json",
             **headers,
         }
@@ -121,7 +119,7 @@ class AzureAIOCRConfig(MistralOCRConfig):
 
         # Fetch and convert to base64 data URI
         # convert_url_to_base64 already returns a full data URI like "data:image/jpeg;base64,..."
-        data_uri = convert_url_to_base64(url=url)
+        data_uri: Final = convert_url_to_base64(url=url)
 
         verbose_logger.debug("Azure AI OCR: Converted URL to data URI (length: %s)", len(data_uri))
 
@@ -144,7 +142,7 @@ class AzureAIOCRConfig(MistralOCRConfig):
 
         # Fetch and convert to base64 data URI asynchronously
         # async_convert_url_to_base64 already returns a full data URI like "data:image/jpeg;base64,..."
-        data_uri = await async_convert_url_to_base64(url=url)
+        data_uri: Final = await async_convert_url_to_base64(url=url)
 
         verbose_logger.debug("Azure AI OCR: Converted URL to data URI (length: %s)", len(data_uri))
 
@@ -180,18 +178,18 @@ class AzureAIOCRConfig(MistralOCRConfig):
             raise ValueError(f"Expected document dict, got {type(document)}")
 
         # Check if we need to convert URL to base64
-        doc_type = document.get("type")
-        transformed_document = document.copy()
+        doc_type: Final = document.get("type")
+        transformed_document: Final = document.copy()
 
         if doc_type == "document_url":
-            document_url = document.get("document_url", "")
+            document_url: Final = document.get("document_url", "")
             # If it's not already a data URI, convert it
             if document_url and not document_url.startswith("data:"):
                 verbose_logger.debug("Azure AI OCR: Converting document URL to base64 data URI (sync)")
                 data_uri = self._convert_url_to_data_uri_sync(url=document_url)
                 transformed_document["document_url"] = data_uri
         elif doc_type == "image_url":
-            image_url = document.get("image_url", "")
+            image_url: Final = document.get("image_url", "")
             # If it's not already a data URI, convert it
             if image_url and not image_url.startswith("data:"):
                 verbose_logger.debug("Azure AI OCR: Converting image URL to base64 data URI (sync)")
@@ -237,18 +235,18 @@ class AzureAIOCRConfig(MistralOCRConfig):
             raise ValueError(f"Expected document dict, got {type(document)}")
 
         # Check if we need to convert URL to base64
-        doc_type = document.get("type")
-        transformed_document = document.copy()
+        doc_type: Final = document.get("type")
+        transformed_document: Final = document.copy()
 
         if doc_type == "document_url":
-            document_url = document.get("document_url", "")
+            document_url: Final = document.get("document_url", "")
             # If it's not already a data URI, convert it
             if document_url and not document_url.startswith("data:"):
                 verbose_logger.debug("Azure AI OCR: Converting document URL to base64 data URI (async)")
                 data_uri = await self._convert_url_to_data_uri_async(url=document_url)
                 transformed_document["document_url"] = data_uri
         elif doc_type == "image_url":
-            image_url = document.get("image_url", "")
+            image_url: Final = document.get("image_url", "")
             # If it's not already a data URI, convert it
             if image_url and not image_url.startswith("data:"):
                 verbose_logger.debug("Azure AI OCR: Converting image URL to base64 data URI (async)")

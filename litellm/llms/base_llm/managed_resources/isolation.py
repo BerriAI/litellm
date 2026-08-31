@@ -3,13 +3,14 @@ Tenant-isolation helpers for managed file/batch/vector-store resources.
 
 Returns a Prisma filter and an ownership check that scope managed resources
 to the caller's identity: proxy admins see everything, user-keyed callers
-see records they created, and service-account keys (no user_id) fall back
-to the resource's owning team. Callers with no admin role and no
-identifying ids are denied so an empty user_id can never select an
-unscoped query.
+see records they created, service-account keys (no user_id) fall back to
+the resource's owning team, and keys with neither a user_id nor a team_id
+fall back to their own hashed token so they can still reach the resources
+they created. Callers with no admin role and no identifying ids at all
+are denied so an empty user_id can never select an unscoped query.
 """
 
-from typing import Any
+from typing import Any, Final
 
 from litellm.proxy._types import (
     UserAPIKeyAuth,
@@ -17,6 +18,32 @@ from litellm.proxy._types import (
 from litellm.proxy._types import (
     user_api_key_has_admin_view as _user_has_admin_view,
 )
+
+
+def resolve_resource_owner_id(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> str | None:
+    """Return the identity to stamp on (and match against) a managed
+    resource's ``created_by``.
+
+    A key with neither a user_id nor a team_id would otherwise stamp
+    ``created_by=None`` and be locked out of its own resources, so it owns
+    them under its hashed token instead, using the ``key:`` scope prefix
+    already used by ``proxy/common_utils/resource_ownership.py``. ``None``
+    means the caller has no usable identity of its own and must fall back
+    to team scoping, or be denied.
+    """
+    if user_api_key_dict.user_id is not None:
+        return user_api_key_dict.user_id
+
+    if user_api_key_dict.team_id is not None:
+        return None
+
+    token: Final = user_api_key_dict.token or user_api_key_dict.api_key
+    if token:
+        return f"key:{token}"
+
+    return None
 
 
 def build_list_page(items: list[Any], has_more: bool = False) -> dict[str, Any]:
@@ -39,7 +66,8 @@ def build_owner_filter(
     to records the caller is allowed to see.
 
     - ``{}`` means no scoping (proxy admins).
-    - ``{"created_by": <user_id>}`` for user-keyed callers.
+    - ``{"created_by": <owner_id>}`` for user-keyed callers, and for keys
+      with no user_id and no team_id (owner id is their hashed token).
     - ``{"team_id": <team_id>}`` for service-account callers
       that have a team but no user_id.
     - ``{"OR": [...]}`` when the caller has both — listing must include
@@ -51,8 +79,8 @@ def build_owner_filter(
     if _user_has_admin_view(user_api_key_dict):
         return {}
 
-    user_id = user_api_key_dict.user_id
-    team_id = user_api_key_dict.team_id
+    user_id: Final = user_api_key_dict.user_id
+    team_id: Final = user_api_key_dict.team_id
 
     if user_id is not None and team_id is not None:
         return {
@@ -62,11 +90,12 @@ def build_owner_filter(
             ]
         }
 
-    if user_id is not None:
-        return {"created_by": user_id}
-
     if team_id is not None:
         return {"team_id": team_id}
+
+    owner_id: Final = resolve_resource_owner_id(user_api_key_dict)
+    if owner_id is not None:
+        return {"created_by": owner_id}
 
     return None
 
@@ -86,11 +115,11 @@ def can_access_resource(
     if _user_has_admin_view(user_api_key_dict):
         return True
 
-    user_id = user_api_key_dict.user_id
-    if user_id is not None and created_by is not None and created_by == user_id:
+    owner_id: Final = resolve_resource_owner_id(user_api_key_dict)
+    if owner_id is not None and created_by is not None and created_by == owner_id:
         return True
 
-    team_id = user_api_key_dict.team_id
+    team_id: Final = user_api_key_dict.team_id
     if team_id is not None and resource_team_id is not None and resource_team_id == team_id:
         return True
 

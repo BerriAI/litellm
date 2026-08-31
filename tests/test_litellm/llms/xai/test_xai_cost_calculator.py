@@ -4,7 +4,6 @@ Test suite for XAI cost calculation functionality.
 
 import math
 import os
-import sys
 
 import litellm
 from litellm.types.utils import (
@@ -13,11 +12,17 @@ from litellm.types.utils import (
     Usage,
 )
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
-from litellm.llms.xai.cost_calculator import cost_per_token, cost_per_web_search_request
+from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
+    StandardBuiltInToolCostTracking,
+)
+from litellm.llms.xai.cost_calculator import (
+    _DEFAULT_WEB_SEARCH_COST_PER_CALL,
+    _web_search_cost_per_call_from_model_info,
+    apply_server_side_tool_usage_details_to_usage,
+    cost_per_token,
+    cost_per_web_search_request,
+)
 
 
 class TestXAICostCalculator:
@@ -46,8 +51,8 @@ class TestXAICostCalculator:
         # Expected costs for grok-3-mini:
         # Input: 12 tokens * $3e-7 = $0.0000036
         # Output: 125 tokens * $5e-7 = $0.0000625
-        expected_prompt_cost = 12 * 3e-7
-        expected_completion_cost = 125 * 5e-7
+        expected_prompt_cost = 12 * 1.25e-6
+        expected_completion_cost = 125 * 2.5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
@@ -72,8 +77,8 @@ class TestXAICostCalculator:
         # Expected costs for grok-3-mini:
         # Input: 12 tokens * $3e-7 = $0.0000036
         # Completion: (125 + 949) tokens * $5e-7 = $0.000537
-        expected_prompt_cost = 12 * 3e-7
-        expected_completion_cost = (125 + 949) * 5e-7
+        expected_prompt_cost = 12 * 1.25e-6
+        expected_completion_cost = (125 + 949) * 2.5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
@@ -99,8 +104,8 @@ class TestXAICostCalculator:
         # Input: 12 tokens * $3e-7 = $0.0000036
         # Completion: (125 + 949) tokens * $5e-7 = $0.000537
         # Note: text_tokens field is ignored, only completion_tokens + reasoning_tokens matters
-        expected_prompt_cost = 12 * 3e-7
-        expected_completion_cost = (125 + 949) * 5e-7
+        expected_prompt_cost = 12 * 1.25e-6
+        expected_completion_cost = (125 + 949) * 2.5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
@@ -122,11 +127,12 @@ class TestXAICostCalculator:
 
         prompt_cost, completion_cost = cost_per_token(model="grok-4", usage=usage)
 
-        # Expected costs for grok-4:
-        # Input: 10 tokens * $3e-6 = $0.00003
-        # Completion: (200 + 150) tokens * $1.5e-5 = $0.00525
-        expected_prompt_cost = 10 * 3e-6
-        expected_completion_cost = (200 + 150) * 1.5e-5
+        # grok-4 was retired on 2026-05-15 and now redirects to grok-4.3, so it bills
+        # at grok-4.3's rates:
+        # Input: 10 tokens * $1.25e-6
+        # Completion: (200 + 150) tokens * $2.5e-6
+        expected_prompt_cost = 10 * 1.25e-6
+        expected_completion_cost = (200 + 150) * 2.5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
@@ -153,24 +159,12 @@ class TestXAICostCalculator:
         # Expected costs for grok-3-fast-beta:
         # Input: 20 tokens * $5e-6 = $0.0001
         # Completion: (300 + 200) tokens * $2.5e-5 = $0.0125
-        expected_prompt_cost = 20 * 5e-6
-        expected_completion_cost = (300 + 200) * 2.5e-5
+        expected_prompt_cost = 20 * 1.25e-6
+        expected_completion_cost = (300 + 200) * 2.5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
-    def test_edge_case_no_completion_tokens_details(self):
-        """Test cost calculation when completion_tokens_details is not present."""
-        usage = Usage(prompt_tokens=12, completion_tokens=125, total_tokens=137)
-
-        prompt_cost, completion_cost = cost_per_token(model="grok-3-mini", usage=usage)
-
-        # Should fall back to basic calculation
-        expected_prompt_cost = 12 * 3e-7
-        expected_completion_cost = 125 * 5e-7
-
-        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
-        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
     def test_edge_case_large_reasoning_tokens(self):
         """Test cost calculation when reasoning_tokens is larger than completion_tokens."""
@@ -192,46 +186,34 @@ class TestXAICostCalculator:
         # Expected costs:
         # Input: 12 tokens * $3e-7 = $0.0000036
         # Completion: (50 + 100) tokens * $5e-7 = $0.000075
-        expected_prompt_cost = 12 * 3e-7
-        expected_completion_cost = (50 + 100) * 5e-7
+        expected_prompt_cost = 12 * 1.25e-6
+        expected_completion_cost = (50 + 100) * 2.5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
-    def test_tiered_pricing_above_128k_tokens(self):
-        """Test tiered pricing for tokens above 128k."""
-        # Test with grok-4-fast-reasoning which has tiered pricing
+    def test_tiered_pricing_above_200k_tokens(self):
         usage = Usage(
-            prompt_tokens=150000,  # Above 128k threshold
-            completion_tokens=100000,  # Above 128k threshold
-            total_tokens=300000,
+            prompt_tokens=250000,
+            completion_tokens=100000,
+            total_tokens=400000,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
-                reasoning_tokens=50000,  # Total completion tokens = 100000 + 50000 = 150000 > 128k
+                reasoning_tokens=50000,
                 rejected_prediction_tokens=0,
                 text_tokens=None,
             ),
         )
-
-        prompt_cost, completion_cost = cost_per_token(
-            model="xai/grok-4-fast-reasoning", usage=usage
-        )
-
-        # Expected costs for grok-4-fast-reasoning with tiered pricing:
-        # Input: 150000 tokens * $0.4e-6 (ALL tokens at tiered rate since input > 128k) = $0.06
-        # Completion: (100000 + 50000) tokens * $1e-6 (tiered rate since input > 128k) = $0.15
-        expected_prompt_cost = 150000 * 0.4e-6
-        expected_completion_cost = (100000 + 50000) * 1e-6
-
+        prompt_cost, completion_cost = cost_per_token(model="xai/grok-4.3", usage=usage)
+        expected_prompt_cost = 250000 * 2.5e-6
+        expected_completion_cost = (100000 + 50000) * 5e-6
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
-    def test_tiered_pricing_below_128k_tokens(self):
-        """Test that regular pricing is used for tokens below 128k threshold."""
-        # Test with grok-4-fast-reasoning which has tiered pricing
+    def test_tiered_pricing_below_200k_tokens(self):
         usage = Usage(
-            prompt_tokens=100000,  # Below 128k threshold
+            prompt_tokens=100000,
             completion_tokens=50000,
             total_tokens=160000,
             completion_tokens_details=CompletionTokensDetailsWrapper(
@@ -242,26 +224,18 @@ class TestXAICostCalculator:
                 text_tokens=None,
             ),
         )
-
-        prompt_cost, completion_cost = cost_per_token(
-            model="xai/grok-4-fast-reasoning", usage=usage
-        )
-
-        # Expected costs for grok-4-fast-reasoning with regular pricing:
-        # Input: 100000 tokens * $0.2e-6 (regular rate) = $0.02
-        # Completion: (50000 + 10000) tokens * $0.5e-6 (regular rate) = $0.03
-        expected_prompt_cost = 100000 * 0.2e-6
-        expected_completion_cost = (50000 + 10000) * 0.5e-6
-
+        prompt_cost, completion_cost = cost_per_token(model="xai/grok-4.3", usage=usage)
+        expected_prompt_cost = 100000 * 1.25e-6
+        expected_completion_cost = (50000 + 10000) * 2.5e-6
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
     def test_tiered_pricing_grok_4_latest(self):
         """Test tiered pricing for grok-4-latest model."""
         usage = Usage(
-            prompt_tokens=200000,  # Above 128k threshold
+            prompt_tokens=250000,  # Above the 200k threshold
             completion_tokens=100000,
-            total_tokens=350000,
+            total_tokens=400000,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -275,59 +249,45 @@ class TestXAICostCalculator:
             model="xai/grok-4-latest", usage=usage
         )
 
-        # Expected costs for grok-4-latest with tiered pricing:
-        # Input: 200000 tokens * $6e-6 (ALL tokens at tiered rate since input > 128k) = $1.2
-        # Completion: (100000 + 50000) tokens * $30e-6 (tiered rate since input > 128k) = $4.5
-        expected_prompt_cost = 200000 * 6e-6
-        expected_completion_cost = (100000 + 50000) * 30e-6
+        # grok-4-latest redirects to grok-4.3, which tiers at 200k rather than 128k:
+        # Input: 250000 tokens * $2.5e-6 (ALL tokens at tiered rate since input > 200k)
+        # Completion: (100000 + 50000) tokens * $5e-6 (tiered rate since input > 200k)
+        expected_prompt_cost = 250000 * 2.5e-6
+        expected_completion_cost = (100000 + 50000) * 5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
-    def test_tiered_pricing_output_tokens_below_128k(self):
-        """Test that output tokens get tiered rate when input tokens > 128k, even if output tokens < 128k."""
+    def test_tiered_pricing_output_tokens_below_200k(self):
         usage = Usage(
-            prompt_tokens=150000,  # Above 128k threshold
-            completion_tokens=50000,  # Below 128k threshold
-            total_tokens=210000,
+            prompt_tokens=250000,
+            completion_tokens=50000,
+            total_tokens=310000,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
-                reasoning_tokens=10000,  # Total completion tokens = 50000 + 10000 = 60000 < 128k
+                reasoning_tokens=10000,
                 rejected_prediction_tokens=0,
                 text_tokens=None,
             ),
         )
-
-        prompt_cost, completion_cost = cost_per_token(
-            model="xai/grok-4-fast-reasoning", usage=usage
-        )
-
-        # Expected costs for grok-4-fast-reasoning:
-        # Input: 150000 tokens * $0.4e-6 (ALL tokens at tiered rate since input > 128k) = $0.06
-        # Completion: (50000 + 10000) tokens * $1e-6 (tiered rate since input > 128k) = $0.06
-        expected_prompt_cost = 150000 * 0.4e-6
-        expected_completion_cost = (50000 + 10000) * 1e-6
-
+        prompt_cost, completion_cost = cost_per_token(model="xai/grok-4.3", usage=usage)
+        expected_prompt_cost = 250000 * 2.5e-6
+        expected_completion_cost = (50000 + 10000) * 5e-6
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
     def test_tiered_pricing_model_without_tiered_pricing(self):
-        """Test that models without tiered pricing use regular pricing even above 128k."""
-        usage = Usage(
-            prompt_tokens=150000,  # Above 128k threshold
-            completion_tokens=50000,
-            total_tokens=200000,
-        )
-
-        prompt_cost, completion_cost = cost_per_token(model="grok-3-mini", usage=usage)
-
-        # grok-3-mini doesn't have tiered pricing, so should use regular rates:
-        # Input: 150000 tokens * $3e-7 (regular rate) = $0.045
-        # Completion: 50000 tokens * $5e-7 (regular rate) = $0.025
-        expected_prompt_cost = 150000 * 3e-7
+        litellm.model_cost["xai/flat-rate-fixture"] = {
+            "input_cost_per_token": 3e-7,
+            "output_cost_per_token": 5e-7,
+            "litellm_provider": "xai",
+            "mode": "chat",
+        }
+        usage = Usage(prompt_tokens=250000, completion_tokens=50000, total_tokens=300000)
+        prompt_cost, completion_cost = cost_per_token(model="xai/flat-rate-fixture", usage=usage)
+        expected_prompt_cost = 250000 * 3e-7
         expected_completion_cost = 50000 * 5e-7
-
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
@@ -348,81 +308,58 @@ class TestXAICostCalculator:
 
         prompt_cost, completion_cost = cost_per_token(model="grok-3-mini", usage=usage)
 
-        expected_prompt_cost = 12 * 3e-7
-        expected_completion_cost = 200 * 5e-7
+        expected_prompt_cost = 12 * 1.25e-6
+        expected_completion_cost = 200 * 2.5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
-    def test_web_search_cost_calculation(self):
-        """Test web search cost calculation for X.AI models."""
-        # Test with web_search_requests in prompt_tokens_details (primary path)
-        usage = Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
-            prompt_tokens_details=PromptTokensDetailsWrapper(
-                text_tokens=100,
-                web_search_requests=3,  # 3 sources used
-            ),
+    def test_web_search_cost_via_server_side_tool_usage_details(self):
+        """usage.server_side_tool_usage_details.web_search_calls at default $5/1k."""
+        usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        setattr(
+            usage,
+            "server_side_tool_usage_details",
+            {
+                "web_search_calls": 3,
+                "x_search_calls": 0,
+                "code_interpreter_calls": 0,
+                "file_search_calls": 0,
+                "mcp_calls": 0,
+                "document_search_calls": 0,
+            },
         )
 
         web_search_cost = cost_per_web_search_request(usage=usage, model_info={})
+        assert math.isclose(web_search_cost, 3 * (5.0 / 1000.0), rel_tol=1e-10)
 
-        # Expected cost: 3 sources * $0.025 per source = $0.075
-        expected_cost = 3 * (25.0 / 1000.0)  # 3 * $0.025
-
-        assert math.isclose(web_search_cost, expected_cost, rel_tol=1e-10)
-        assert math.isclose(web_search_cost, 0.075, rel_tol=1e-10)
-
-    def test_web_search_cost_fallback_calculation(self):
-        """Test web search cost calculation using fallback num_sources_used."""
-        # Test fallback: num_sources_used on usage object
-        usage = Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
+    def test_web_search_cost_uses_model_info_search_context_pricing(self):
+        usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+        setattr(usage, "server_side_tool_usage_details", {"web_search_calls": 2})
+        model_info = {
+            "search_context_cost_per_query": {
+                "search_context_size_medium": 0.01,
+            }
+        }
+        web_search_cost = cost_per_web_search_request(
+            usage=usage, model_info=model_info
         )
-        # Manually set num_sources_used (as done by transformation layer)
-        setattr(usage, "num_sources_used", 5)
+        assert math.isclose(web_search_cost, 0.02, rel_tol=1e-10)
 
-        web_search_cost = cost_per_web_search_request(usage=usage, model_info={})
+    def test_web_search_cost_zero_without_details(self):
+        usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        assert cost_per_web_search_request(usage=usage, model_info={}) == 0.0
 
-        # Expected cost: 5 sources * $0.025 per source = $0.125
-        expected_cost = 5 * (25.0 / 1000.0)  # 5 * $0.025
-
-        assert math.isclose(web_search_cost, expected_cost, rel_tol=1e-10)
-        assert math.isclose(web_search_cost, 0.125, rel_tol=1e-10)
-
-    def test_web_search_no_sources_used(self):
-        """Test web search cost calculation when no sources are used."""
-        usage = Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
-            prompt_tokens_details=PromptTokensDetailsWrapper(
-                text_tokens=100,
-                web_search_requests=0,  # No web search
-            ),
+    def test_apply_details_sets_web_search_requests_for_cost_gate(self):
+        usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+        apply_server_side_tool_usage_details_to_usage(
+            usage, {"web_search_calls": 2, "x_search_calls": 0}
         )
-
-        web_search_cost = cost_per_web_search_request(usage=usage, model_info={})
-
-        # Expected cost: 0 sources * $0.025 per source = $0.0
-        assert web_search_cost == 0.0
-
-    def test_web_search_cost_without_prompt_tokens_details(self):
-        """Test web search cost calculation when prompt_tokens_details is None."""
-        usage = Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.web_search_requests == 2
+        assert StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+            response_object=object(), usage=usage
         )
-
-        web_search_cost = cost_per_web_search_request(usage=usage, model_info={})
-
-        # Expected cost: No web search data = $0.0
-        assert web_search_cost == 0.0
 
     def test_grok_4_20_beta_reasoning_cost_calculation(self):
         """Test cost calculation for grok-4.20-beta-0309-reasoning model."""
@@ -432,10 +369,10 @@ class TestXAICostCalculator:
             model="grok-4.20-beta-0309-reasoning", usage=usage
         )
 
-        # Input: 100 tokens * $2e-6 = $0.0002
-        # Output: 200 tokens * $6e-6 = $0.0012
-        expected_prompt_cost = 100 * 2e-6
-        expected_completion_cost = 200 * 6e-6
+        # Input: 100 tokens * $1.25e-6 = $0.000125
+        # Output: 200 tokens * $2.5e-6 = $0.0005
+        expected_prompt_cost = 100 * 1.25e-6
+        expected_completion_cost = 200 * 2.5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
@@ -448,10 +385,38 @@ class TestXAICostCalculator:
             model="grok-4.20-beta-0309-non-reasoning", usage=usage
         )
 
-        # Input: 50 tokens * $2e-6 = $0.0001
-        # Output: 100 tokens * $6e-6 = $0.0006
-        expected_prompt_cost = 50 * 2e-6
-        expected_completion_cost = 100 * 6e-6
+        # Input: 50 tokens * $1.25e-6 = $0.0000625
+        # Output: 100 tokens * $2.5e-6 = $0.00025
+        expected_prompt_cost = 50 * 1.25e-6
+        expected_completion_cost = 100 * 2.5e-6
+
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+
+    def test_grok_4_20_at_exactly_200k_prompt_tokens_uses_higher_tier(self):
+        """xAI bills the >=200k tier once the prompt reaches 200k, so the boundary is inclusive."""
+        usage = Usage(prompt_tokens=200_000, completion_tokens=1_000, total_tokens=201_000)
+
+        prompt_cost, completion_cost = cost_per_token(
+            model="grok-4.20-0309-reasoning", usage=usage
+        )
+
+        expected_prompt_cost = 200_000 * 2.5e-6
+        expected_completion_cost = 1_000 * 5e-6
+
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+
+    def test_grok_4_20_just_below_200k_prompt_tokens_uses_base_tier(self):
+        """One token under the boundary still bills at the base rates."""
+        usage = Usage(prompt_tokens=199_999, completion_tokens=1_000, total_tokens=200_999)
+
+        prompt_cost, completion_cost = cost_per_token(
+            model="grok-4.20-0309-reasoning", usage=usage
+        )
+
+        expected_prompt_cost = 199_999 * 1.25e-6
+        expected_completion_cost = 1_000 * 2.5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
@@ -464,10 +429,119 @@ class TestXAICostCalculator:
             model="grok-4.20-multi-agent-beta-0309", usage=usage
         )
 
-        # Input: 200 tokens * $2e-6 = $0.0004
-        # Output: 300 tokens * $6e-6 = $0.0018
-        expected_prompt_cost = 200 * 2e-6
-        expected_completion_cost = 300 * 6e-6
+        # Input: 200 tokens * $1.25e-6 = $0.00025
+        # Output: 300 tokens * $2.5e-6 = $0.00075
+        expected_prompt_cost = 200 * 1.25e-6
+        expected_completion_cost = 300 * 2.5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+
+
+class TestXAIWebSearchCostHelpers:
+    """Focused coverage for web_search / tool-usage helpers in cost_calculator.py."""
+
+    def test_apply_details_noop_when_details_none(self):
+        usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        apply_server_side_tool_usage_details_to_usage(usage, None)
+        assert getattr(usage, "server_side_tool_usage_details", None) is None
+
+    def test_apply_details_sets_attr_but_skips_mirror_when_web_search_zero(self):
+        usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        details = {"web_search_calls": 0, "x_search_calls": 3}
+        apply_server_side_tool_usage_details_to_usage(usage, details)
+        assert getattr(usage, "server_side_tool_usage_details") == details
+        assert (
+            usage.prompt_tokens_details is None
+            or usage.prompt_tokens_details.web_search_requests is None
+        )
+
+    def test_apply_details_skips_mirror_when_web_search_calls_invalid(self):
+        usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        details = {"web_search_calls": "not-a-number"}
+        apply_server_side_tool_usage_details_to_usage(usage, details)
+        assert getattr(usage, "server_side_tool_usage_details") == details
+        assert usage.prompt_tokens_details is None
+
+    def test_apply_details_updates_existing_prompt_tokens_details(self):
+        usage = Usage(
+            prompt_tokens=1,
+            completion_tokens=1,
+            total_tokens=2,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=7),
+        )
+        apply_server_side_tool_usage_details_to_usage(usage, {"web_search_calls": 4})
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cached_tokens == 7
+        assert usage.prompt_tokens_details.web_search_requests == 4
+
+    def test_web_search_cost_per_call_default_when_model_info_empty(self):
+        assert (
+            _web_search_cost_per_call_from_model_info({})
+            == _DEFAULT_WEB_SEARCH_COST_PER_CALL
+        )
+
+    def test_web_search_cost_per_call_prefers_medium_over_low(self):
+        model_info = {
+            "search_context_cost_per_query": {
+                "search_context_size_low": 0.001,
+                "search_context_size_medium": 0.009,
+            }
+        }
+        assert _web_search_cost_per_call_from_model_info(model_info) == 0.009
+
+    def test_web_search_cost_per_call_falls_back_to_low_then_high(self):
+        assert (
+            _web_search_cost_per_call_from_model_info(
+                {"search_context_cost_per_query": {"search_context_size_low": 0.003}}
+            )
+            == 0.003
+        )
+        assert (
+            _web_search_cost_per_call_from_model_info(
+                {"search_context_cost_per_query": {"search_context_size_high": 0.007}}
+            )
+            == 0.007
+        )
+
+    def test_web_search_cost_per_call_ignores_zero_and_invalid_values(self):
+        assert (
+            _web_search_cost_per_call_from_model_info(
+                {
+                    "search_context_cost_per_query": {
+                        "search_context_size_medium": 0,
+                        "search_context_size_low": "bad",
+                    }
+                }
+            )
+            == _DEFAULT_WEB_SEARCH_COST_PER_CALL
+        )
+
+    def test_cost_per_web_search_request_zero_when_details_not_mapping(self):
+        usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        setattr(usage, "server_side_tool_usage_details", "invalid")
+        assert cost_per_web_search_request(usage=usage, model_info={}) == 0.0
+
+    def test_cost_per_web_search_request_zero_when_web_search_calls_invalid(self):
+        usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        setattr(
+            usage,
+            "server_side_tool_usage_details",
+            {"web_search_calls": object()},
+        )
+        assert cost_per_web_search_request(usage=usage, model_info={}) == 0.0
+
+    def test_cost_per_web_search_request_zero_when_web_search_calls_zero(self):
+        usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        setattr(
+            usage,
+            "server_side_tool_usage_details",
+            {"web_search_calls": 0, "x_search_calls": 5},
+        )
+        assert cost_per_web_search_request(usage=usage, model_info={}) == 0.0
+
+    def test_cost_per_web_search_request_uses_default_rate_without_model_pricing(self):
+        usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        setattr(usage, "server_side_tool_usage_details", {"web_search_calls": 4})
+        cost = cost_per_web_search_request(usage=usage, model_info={})
+        assert math.isclose(cost, 4 * _DEFAULT_WEB_SEARCH_COST_PER_CALL, rel_tol=1e-10)

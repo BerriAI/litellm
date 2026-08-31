@@ -2,8 +2,8 @@
 Translates from OpenAI's `/v1/chat/completions` to Moonshot AI's `/v1/chat/completions`
 """
 
-from collections.abc import Coroutine
-from typing import Any, Literal, cast, overload
+from collections.abc import Coroutine, Mapping
+from typing import Any, Final, Literal, cast, overload
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -14,6 +14,15 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import supports_reasoning
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+
+
+def _reasoning_effort_string(value: object) -> str | None:
+    """The /v1/messages and /v1/responses bridges wrap the level as {"effort", "summary"} for
+    providers with a reasoning-summary surface. Moonshot's API takes only the bare string and 400s
+    on an object, so the level is unwrapped and the summary, which has no Moonshot equivalent, is
+    dropped."""
+    effort: Final = value.get("effort") if isinstance(value, Mapping) else value
+    return effort if isinstance(effort, str) else None
 
 
 class MoonshotChatConfig(OpenAIGPTConfig):
@@ -61,8 +70,8 @@ class MoonshotChatConfig(OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
-        api_base = api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("MOONSHOT_API_KEY")
+        api_base = api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
+        dynamic_api_key: Final = api_key or get_secret_str("MOONSHOT_API_KEY")
         return api_base, dynamic_api_key
 
     def get_complete_url(
@@ -93,20 +102,18 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         - functions parameter is not supported (use tools instead)
         - tool_choice doesn't support "required" value
         - kimi-thinking-preview doesn't support tool calls at all
+
+        A reasoning model additionally takes `reasoning_effort`, which the OpenAI base list this
+        subtracts from does not carry, so it has to be added back rather than merely kept.
         """
-        excluded_params: list[str] = ["functions"]
-
-        # kimi-thinking-preview has additional limitations
-        if "kimi-thinking-preview" in model:
-            excluded_params.extend(["tools", "tool_choice"])
-
-        base_openai_params = super().get_supported_openai_params(model=model)
-        final_params: list[str] = []
-        for param in base_openai_params:
-            if param not in excluded_params:
-                final_params.append(param)
-
-        return final_params
+        excluded_params: Final = frozenset(
+            ("functions", "tools", "tool_choice") if "kimi-thinking-preview" in model else ("functions",)
+        )
+        base_openai_params: Final = super().get_supported_openai_params(model=model)
+        supported: Final = [param for param in base_openai_params if param not in excluded_params]
+        if supports_reasoning(model=model, custom_llm_provider="moonshot"):
+            return [*supported, "reasoning_effort"]
+        return supported
 
     def map_openai_params(
         self,
@@ -122,11 +129,16 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         - tool_choice doesn't support "required" value
         - Temperature <0.3 limitation for n>1
         """
-        supported_openai_params = self.get_supported_openai_params(model)
+        supported_openai_params: Final = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
-            elif param in supported_openai_params:
+            elif param not in supported_openai_params:
+                continue
+            elif param == "reasoning_effort":
+                if (effort := _reasoning_effort_string(value)) is not None:
+                    optional_params["reasoning_effort"] = effort
+            else:
                 optional_params[param] = value
 
         ##########################################
@@ -159,7 +171,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         Messages that already carry the field, or are not assistant/tool-call messages,
         are appended as-is (no copy made).
         """
-        result: list[AllMessageValues] = []
+        result: Final[list[AllMessageValues]] = []
         for msg in messages:
             if (
                 msg.get("role") == "assistant"

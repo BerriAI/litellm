@@ -4,9 +4,10 @@ Translate from OpenAI's `/v1/embeddings` to Sagemaker's `/invoke`
 In the Huggingface TGI format.
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.openai import AllEmbeddingInputValues
 
 from httpx._models import Headers, Response
@@ -39,7 +40,7 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         Returns:
             Appropriate embedding config instance
         """
-        model_lower = model.lower()
+        model_lower: Final = model.lower()
         if "voyage" in model_lower:
             return VoyageEmbeddingConfig()
         if "cohere" in model_lower:
@@ -47,7 +48,7 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         return cls()
 
     def get_supported_openai_params(self, model: str) -> list[str]:
-        model_lower = model.lower()
+        model_lower: Final = model.lower()
         if "voyage" in model_lower:
             return VoyageEmbeddingConfig().get_supported_openai_params(model)
         if "cohere" in model_lower:
@@ -84,7 +85,7 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         model: str,
         raw_response: Response,
         model_response: "EmbeddingResponse",
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         api_key: str | None = None,
         request_data: dict = {},
         optional_params: dict = {},
@@ -94,7 +95,7 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         Transform embedding response for Hugging Face models on SageMaker
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise SagemakerError(
                 message=f"Failed to parse response: {e}",
@@ -120,7 +121,7 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
                 message=f"HF response not in expected format - {embeddings}",
             )
 
-        output_data = []
+        output_data: Final = []
         for idx, embedding in enumerate(embeddings):
             output_data.append({"object": "embedding", "index": idx, "embedding": embedding})
 
@@ -129,7 +130,7 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         model_response.model = model
 
         # Calculate usage from request data
-        input_texts = request_data.get("inputs", [])
+        input_texts: Final = request_data.get("inputs", [])
         input_tokens = 0
         for text in input_texts:
             input_tokens += len(text.split())  # Simple word count fallback

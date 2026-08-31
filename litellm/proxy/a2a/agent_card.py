@@ -10,19 +10,19 @@ and uses LiteLLM auth.
 import re
 from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 SupportedA2AVersion = Literal["0.3", "1.0"]
 
 # Protocol versions LiteLLM can serve to A2A clients. The admin pins one per agent;
 # responses are normalized to it regardless of the upstream agent's own version.
-SUPPORTED_A2A_PROTOCOL_VERSIONS: tuple[SupportedA2AVersion, ...] = ("0.3", "1.0")
+SUPPORTED_A2A_PROTOCOL_VERSIONS: Final[tuple[SupportedA2AVersion, ...]] = ("0.3", "1.0")
 
 # Default served version when the agent card does not pin one.
-LITELLM_A2A_PROTOCOL_VERSION = "1.0"
+LITELLM_A2A_PROTOCOL_VERSION: Final = "1.0"
 
 
-_PROTOCOL_VERSION_PATTERN = re.compile(
+_PROTOCOL_VERSION_PATTERN: Final = re.compile(
     r"^(\d+\.\d+)(?:\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)?$"
 )
 
@@ -37,23 +37,23 @@ def normalize_protocol_version(version: object) -> SupportedA2AVersion | None:
     """
     if not isinstance(version, str):
         return None
-    match = _PROTOCOL_VERSION_PATTERN.match(version)
+    match: Final = _PROTOCOL_VERSION_PATTERN.match(version)
     if match is None:
         return None
-    major_minor = match.group(1)
+    major_minor: Final = match.group(1)
     return next((supported for supported in SUPPORTED_A2A_PROTOCOL_VERSIONS if supported == major_minor), None)
 
 
 def resolve_served_protocol_version(card: Mapping[str, Any] | None) -> str:
     """Return the validated protocol version an agent card pins, else the default."""
-    normalized = normalize_protocol_version(card.get("protocolVersion") if card else None)
+    normalized: Final = normalize_protocol_version(card.get("protocolVersion") if card else None)
     return normalized if normalized is not None else LITELLM_A2A_PROTOCOL_VERSION
 
 
 # Security scheme exposed by the LiteLLM-fronted agent card. Always replaces
 # whatever upstream advertised — the client must authenticate to the proxy,
 # not the upstream agent.
-LITELLM_SECURITY_SCHEMES: dict[str, dict[str, Any]] = {
+LITELLM_SECURITY_SCHEMES: Final[dict[str, dict[str, Any]]] = {
     "LiteLLMKey": {
         "type": "http",
         "scheme": "bearer",
@@ -61,7 +61,7 @@ LITELLM_SECURITY_SCHEMES: dict[str, dict[str, Any]] = {
     },
 }
 
-LITELLM_SECURITY_REQUIREMENTS: list[dict[str, list[str]]] = [{"LiteLLMKey": []}]
+LITELLM_SECURITY_REQUIREMENTS: Final[list[dict[str, list[str]]]] = [{"LiteLLMKey": []}]
 
 # Capabilities LiteLLM can faithfully proxy today. Anything not in this set is
 # dropped during merge so we don't advertise behavior the proxy can't deliver.
@@ -74,7 +74,7 @@ LITELLM_SECURITY_REQUIREMENTS: list[dict[str, list[str]]] = [{"LiteLLMKey": []}]
 # TODO: ``extendedAgentCard`` — no separate authenticated-extended-card
 #   endpoint exposed by the proxy.
 # TODO: ``extensions`` — protocol extensions aren't validated/forwarded yet.
-_ALLOWED_CAPABILITY_KEYS = {"streaming"}
+_ALLOWED_CAPABILITY_KEYS: Final = {"streaming"}
 
 # v1.0 AgentCard top-level fields. Anything else is stripped from the merged
 # card as a defense against upstream drift. ``supportedInterfaces`` is kept
@@ -86,7 +86,7 @@ _ALLOWED_CAPABILITY_KEYS = {"streaming"}
 # would let authenticated agent callers reach the backend directly and bypass
 # the proxy's auth/budget/logging. The proxy publishes its own entrypoint via
 # ``supportedInterfaces`` instead.
-_ALLOWED_TOP_LEVEL_KEYS = {
+_ALLOWED_TOP_LEVEL_KEYS: Final = {
     "protocolVersion",
     "name",
     "description",
@@ -112,7 +112,7 @@ _ALLOWED_TOP_LEVEL_KEYS = {
     "url",
 }
 
-_DEFAULT_SKILLS: list[dict[str, Any]] = [
+_DEFAULT_SKILLS: Final[list[dict[str, Any]]] = [
     {
         "id": "chat",
         "name": "Chat",
@@ -121,12 +121,12 @@ _DEFAULT_SKILLS: list[dict[str, Any]] = [
     }
 ]
 
-_DEFAULT_MODES: list[str] = ["text"]
+_DEFAULT_MODES: Final[list[str]] = ["text"]
 
 # Fallback ``version`` when the upstream card omits the field. The A2A v1.0
 # schema requires ``version`` on every card, so without this default the
 # merged card would fail validation on clients that ``model_validate`` it.
-_DEFAULT_AGENT_VERSION = "1.0.0"
+_DEFAULT_AGENT_VERSION: Final = "1.0.0"
 
 
 def _filter_capabilities(upstream_capabilities: Any) -> dict[str, Any]:
@@ -169,14 +169,14 @@ def merge_agent_card(
         A dict suitable for serving as the proxy's agent card. Only keys in
         the v1.0 AgentCard schema (plus ``supportedInterfaces``) are emitted.
     """
-    base: dict[str, Any] = deepcopy(dict(upstream_card)) if upstream_card else {}
+    base: Final[dict[str, Any]] = deepcopy(dict(upstream_card)) if upstream_card else {}
 
     # Keep the upstream ``url`` on the stored card: the runtime A2A
     # invocation path reads it from ``agent_card_params`` to know where to
     # proxy requests. The public well-known endpoint rewrites this field
     # to the proxy URL before exposing the card to clients.
 
-    served_version = resolve_served_protocol_version(upstream_card)
+    served_version: Final = resolve_served_protocol_version(upstream_card)
     base["protocolVersion"] = served_version
 
     if name:

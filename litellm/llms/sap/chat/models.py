@@ -1,6 +1,6 @@
 import warnings
 from enum import Enum
-from typing import Literal, Union
+from typing import Final, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -11,7 +11,7 @@ def validate_different_content(v: str | dict | list) -> str:
     elif isinstance(v, dict) and "text" in v:
         return v["text"]
     elif isinstance(v, list):
-        new_v = []
+        new_v: Final = []
         for item in v:
             if isinstance(item, dict) and "text" in item:
                 if item["text"]:
@@ -115,7 +115,7 @@ class SAPToolChatMessage(BaseModel):
     _content_validator = field_validator("content", mode="before")(validate_different_content)
 
 
-ChatMessage = Union[SAPMessage, SAPUserMessage, SAPAssistantMessage, SAPToolChatMessage]
+ChatMessage = SAPMessage | SAPUserMessage | SAPAssistantMessage | SAPToolChatMessage
 
 
 class ResponseFormat(BaseModel):
@@ -372,8 +372,8 @@ class MaskingModuleConfig(BaseModel):
 
     @model_validator(mode="after")
     def enforce_exactly_one_provider_list(self):
-        has_providers = self.providers is not None
-        has_masking_providers = self.masking_providers is not None
+        has_providers: Final = self.providers is not None
+        has_masking_providers: Final = self.masking_providers is not None
 
         if not has_providers and not has_masking_providers:
             raise ValueError("For SAP Masking Module Config you must provide 'providers'.")

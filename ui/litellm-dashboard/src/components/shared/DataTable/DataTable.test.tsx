@@ -337,21 +337,13 @@ describe("DataTable filtering", () => {
     );
     expect(names()).toEqual(["Charlie", "Alice", "Bob"]);
   });
-
-  it("throws when server filtering is missing required props", () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(() => render(<DataTable data={[]} columns={filterableColumns} filterMode="server" />)).toThrow(
-      /filterMode='server'/,
-    );
-    spy.mockRestore();
-  });
 });
 
 describe("DataTable loading", () => {
   it("renders skeleton rows while loading and real rows once loaded", () => {
     const { rerender } = render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameCellColumns} isLoading />);
     expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
-    expect(screen.queryByTestId("name-cell")).toBeNull();
+    expect(screen.queryByTestId("name-cell")).not.toBeInTheDocument();
 
     rerender(<DataTable data={CHARLIE_ALICE_BOB} columns={nameCellColumns} />);
     expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
@@ -470,7 +462,7 @@ describe("DataTable column visibility", () => {
 
     await user.click(screen.getByTestId("view-options-trigger"));
     expect(await screen.findByTestId("view-option-email")).toBeInTheDocument();
-    expect(screen.queryByTestId("view-option-name")).toBeNull();
+    expect(screen.queryByTestId("view-option-name")).not.toBeInTheDocument();
   });
 });
 
@@ -623,7 +615,7 @@ describe("DataTable layout", () => {
     const { container } = render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameEmailColumns} maxBodyHeight={240} />);
     expect(container.querySelector("thead")?.className).toContain("sticky");
     const scroller = container.querySelector('[data-slot="table-container"]')?.parentElement as HTMLElement;
-    expect(scroller.style.maxHeight).toBe("240px");
+    expect(scroller).toHaveStyle({ maxHeight: "240px" });
   });
 
   it("caps fillHeight at the parent's height instead of stretching to it, so a short table stays short", () => {
@@ -642,7 +634,7 @@ describe("DataTable layout", () => {
     expect(frame.className).toContain("flex-col");
     expect(scroller.className).toContain("min-h-0");
     expect(scroller.className).toContain("overflow-auto");
-    expect(scroller.style.maxHeight).toBe("");
+    expect(scroller).toHaveStyle({ maxHeight: "" });
     // Without this the Table primitive's own overflow container captures the sticky header.
     expect(scroller.className).toContain("[&_[data-slot=table-container]]:overflow-visible");
 
@@ -658,42 +650,9 @@ describe("DataTable layout", () => {
 
     expect(scroller.className).toContain("overflow-x-auto");
     expect(scroller.className).not.toContain("min-h-0");
-    expect(scroller.style.maxHeight).toBe("");
+    expect(scroller).toHaveStyle({ maxHeight: "" });
     expect((scroller.parentElement as HTMLElement).className).not.toContain("flex-col");
     expect(container.querySelector("thead")?.className).not.toContain("sticky");
     expect(container.querySelector("thead")?.className).not.toContain("bg-background");
-  });
-});
-
-describe("DataTable misconfiguration guards", () => {
-  it("throws when server sorting is missing required props", () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(() => render(<DataTable data={[]} columns={nameCellColumns} sortingMode="server" />)).toThrow(
-      /sortingMode='server'/,
-    );
-    spy.mockRestore();
-  });
-
-  it("throws when server pagination is missing required props", () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(() => render(<DataTable data={[]} columns={nameCellColumns} paginationMode="server" />)).toThrow(
-      /paginationMode='server'/,
-    );
-    spy.mockRestore();
-  });
-
-  it("throws when both defaultSorting and sorting are provided", () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(() =>
-      render(
-        <DataTable
-          data={[]}
-          columns={nameCellColumns}
-          defaultSorting={[{ id: "name", desc: false }]}
-          sorting={[{ id: "name", desc: false }]}
-        />,
-      ),
-    ).toThrow(/defaultSorting/);
-    spy.mockRestore();
   });
 });

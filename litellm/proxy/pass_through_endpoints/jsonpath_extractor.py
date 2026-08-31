@@ -4,7 +4,7 @@ JSONPath Extractor Module
 Extracts field values from data using simple JSONPath-like expressions.
 """
 
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
 
@@ -27,7 +27,7 @@ class JsonPathExtractor:
 
         Returns concatenated string of all extracted values.
         """
-        extracted_values: list[str] = []
+        extracted_values: Final[list[str]] = []
 
         for expr in jsonpath_expressions:
             try:
@@ -55,7 +55,7 @@ class JsonPathExtractor:
         if not expr or not data:
             return None
 
-        parts = expr.replace("[*]", ".[*]").split(".")
+        parts: Final = expr.replace("[*]", ".[*]").split(".")
         current: Any = data
 
         for i, part in enumerate(parts):

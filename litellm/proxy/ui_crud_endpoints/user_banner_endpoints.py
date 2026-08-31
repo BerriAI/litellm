@@ -1,6 +1,6 @@
 import asyncio
 import json
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -10,9 +10,9 @@ from litellm.proxy._types import LitellmTableNames, LitellmUserRoles, UserAPIKey
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.repositories.user_banner_repository import USER_BANNER_ROW_ID, UserBannerRepository
 
-router = APIRouter()
+router: Final = APIRouter()
 
-USER_BANNER_MAX_MESSAGE_LENGTH = 4000
+USER_BANNER_MAX_MESSAGE_LENGTH: Final = 4000
 
 UserBannerSeverity = Literal["info", "warning", "error"]
 
@@ -58,7 +58,7 @@ def parse_user_banner(raw_settings: object) -> UserBanner:
     if raw_settings is None:
         return UserBanner()
     try:
-        parsed = json.loads(raw_settings) if isinstance(raw_settings, str) else raw_settings
+        parsed: Final = json.loads(raw_settings) if isinstance(raw_settings, str) else raw_settings
         return UserBanner.model_validate(parsed)
     except (json.JSONDecodeError, ValidationError):
         return UserBanner()
@@ -80,7 +80,7 @@ async def get_user_banner() -> UserBanner:
     if prisma_client is None:
         return UserBanner()
 
-    raw_settings = await UserBannerRepository(prisma_client).get_raw_settings()
+    raw_settings: Final = await UserBannerRepository(prisma_client).get_raw_settings()
     return parse_user_banner(raw_settings)
 
 
@@ -105,9 +105,9 @@ async def update_user_banner(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected. Please connect a database.")
 
-    repository = UserBannerRepository(prisma_client)
-    before = parse_user_banner(await repository.get_raw_settings())
-    banner = UserBanner(
+    repository: Final = UserBannerRepository(prisma_client)
+    before: Final = parse_user_banner(await repository.get_raw_settings())
+    banner: Final = UserBanner(
         enabled=banner_update.enabled,
         message=banner_update.message,
         severity=banner_update.severity,

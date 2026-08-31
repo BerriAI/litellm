@@ -1,9 +1,12 @@
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
 
-from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+from litellm.llms.azure_ai.common_utils import (
+    AzureFoundryModelInfo,
+    get_azure_ai_auth_headers,
+)
 from litellm.llms.azure_ai.image_generation.mai_transformation import (
     AzureFoundryMAIImageGenerationConfig,
 )
@@ -34,8 +37,8 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        optional_params: dict[str, Any] = {}
-        supported_params = self.get_supported_openai_params(model)
+        optional_params: Final[dict[str, Any]] = {}
+        supported_params: Final = self.get_supported_openai_params(model)
 
         for key, value in dict(image_edit_optional_params).items():
             if value is None or key in optional_params:
@@ -61,7 +64,7 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
         return optional_params
 
     def _validate_size_param(self, size: str) -> None:
-        known_sizes = {
+        known_sizes: Final = {
             "1024x1024",
             "1792x1024",
             "1024x1792",
@@ -91,15 +94,13 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
         litellm_params: dict | None = None,
         api_base: str | None = None,
     ) -> dict:
-        api_key = AzureFoundryModelInfo.get_api_key(api_key)
-
-        if not api_key:
-            raise ValueError(
-                f"Azure AI API key is required for model {model}. "
-                "Set AZURE_AI_API_KEY environment variable or pass api_key parameter."
+        headers.update(
+            get_azure_ai_auth_headers(
+                api_key=AzureFoundryModelInfo.get_api_key(api_key),
+                litellm_params=litellm_params,
+                api_key_header="api-key",
             )
-
-        headers.update({"api-key": api_key})
+        )
         return headers
 
     def get_complete_url(
@@ -115,7 +116,7 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
                 "Azure AI API base is required. Set AZURE_AI_API_BASE environment variable or pass api_base parameter."
             )
 
-        api_version = litellm_params.get("api_version") or get_secret_str("AZURE_AI_API_VERSION") or "preview"
+        api_version: Final = litellm_params.get("api_version") or get_secret_str("AZURE_AI_API_VERSION") or "preview"
 
         return AzureFoundryMAIImageGenerationConfig.get_mai_image_edit_url(
             api_base=api_base,
@@ -131,7 +132,7 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> tuple[dict, RequestFiles]:
-        request_params = {
+        request_params: Final = {
             "model": model,
             **image_edit_optional_request_params,
         }
@@ -139,10 +140,10 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
             request_params["prompt"] = prompt
 
         data_without_files = {key: value for key, value in request_params.items() if key not in ["image", "mask"]}
-        files_list: list[tuple[str, Any]] = []
+        files_list: Final[list[tuple[str, Any]]] = []
 
         if image is not None:
-            image_list = [image] if not isinstance(image, list) else image
+            image_list: Final = [image] if not isinstance(image, list) else image
             for _image in image_list:
                 if _image is not None:
                     self._add_image_to_files(
@@ -161,7 +162,7 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
         logging_obj: "LiteLLMLoggingObj",
     ) -> ImageResponse:
         try:
-            response = raw_response.json()
+            response: Final = raw_response.json()
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
 

@@ -20,6 +20,7 @@ import uuid
 import weakref
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from typing import Final
 
 import httpx
 import jwt
@@ -52,10 +53,10 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 # The cache stores (fingerprint, token); anything else in the slot is treated as absent.
-_CACHED_ENTRY_ADAPTER: TypeAdapter[tuple[str, str]] = TypeAdapter(tuple[str, str])
+_CACHED_ENTRY_ADAPTER: Final[TypeAdapter[tuple[str, str]]] = TypeAdapter(tuple[str, str])
 
-CLIENT_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
-CLIENT_ASSERTION_LIFETIME_SECONDS = 60
+CLIENT_ASSERTION_TYPE: Final = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+CLIENT_ASSERTION_LIFETIME_SECONDS: Final = 60
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +81,7 @@ class TokenEndpointClient:
         client_auth: ClientAuth,
     ) -> Result[ExchangedToken, CredError]:
         try:
-            data = {**grant_params, **_client_auth_params(endpoint, client_id, client_auth)}
+            data: Final = {**grant_params, **_client_auth_params(endpoint, client_id, client_auth)}
         except (ValueError, TypeError, NotImplementedError, jwt.PyJWTError):
             verbose_proxy_logger.warning("MCP token endpoint %s: could not sign the client assertion", endpoint)
             return Error(
@@ -90,7 +91,7 @@ class TokenEndpointClient:
                 )
             )
         try:
-            raw = await _post_form(endpoint, data)
+            raw: Final = await _post_form(endpoint, data)
         except httpx.HTTPStatusError as exc:
             verbose_proxy_logger.warning(
                 "MCP token endpoint %s failed with status %s", endpoint, exc.response.status_code
@@ -110,11 +111,8 @@ class TokenEndpointClient:
             return Error(
                 CredError.of_upstream_unavailable("token exchange failed: token endpoint returned a non-JSON response")
             )
-        if raw is None:
-            verbose_proxy_logger.warning("MCP token endpoint %s returned no response", endpoint)
-            return Error(CredError.of_upstream_unavailable("token exchange failed: no response from token endpoint"))
         try:
-            parsed = _TokenEndpointResponse.model_validate(raw)
+            parsed: Final = _TokenEndpointResponse.model_validate(raw)
         except ValidationError:
             verbose_proxy_logger.warning("MCP token endpoint %s response missing access_token", endpoint)
             return Error(
@@ -191,14 +189,14 @@ class ExchangedTokenCache:
 
 
 def _cache_ttl_seconds(expires_in: int | None) -> int:
-    lifetime = expires_in if expires_in is not None else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
+    lifetime: Final = expires_in if expires_in is not None else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
     return max(
         lifetime - MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS,
         MCP_OAUTH2_TOKEN_CACHE_MIN_TTL,
     )
 
 
-async def _post_form(endpoint: str, data: dict[str, str]) -> object | None:
+async def _post_form(endpoint: str, data: dict[str, str]) -> object:
     # litellm's httpx handler and httpx.Response are only partially typed; the token endpoint
     # returns a JSON object that `_TokenEndpointResponse` validates, so the untyped boundary is
     # contained here. A non-2xx raises `httpx.HTTPStatusError`, an unreachable endpoint raises
@@ -207,8 +205,6 @@ async def _post_form(endpoint: str, data: dict[str, str]) -> object | None:
     # each to a CredError.
     client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)  # pyright: ignore[reportUnknownVariableType]  # litellm http handler is untyped
     response = await client.post(endpoint, data=data)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # litellm http handler is untyped
-    if response is None:
-        return None
     response.raise_for_status()
     return response.json()  # pyright: ignore[reportAny]  # untyped JSON; validated by _TokenEndpointResponse in fetch
 
@@ -230,7 +226,7 @@ def _client_auth_params(endpoint: str, client_id: str, client_auth: ClientAuth) 
 
 
 def _client_assertion(endpoint: str, client_id: str, auth: PrivateKeyJwtAuth) -> str:
-    now = int(time.time())
+    now: Final = int(time.time())
     return jwt.encode(
         {
             "iss": client_id,

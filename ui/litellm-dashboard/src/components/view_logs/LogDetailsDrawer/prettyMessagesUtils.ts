@@ -19,27 +19,27 @@ import {
 export const ROLE_STYLES: Record<string, RoleStyle> = {
   system: {
     background: "transparent",
-    borderColor: "#8c8c8c",
+    borderColor: "var(--color-muted-foreground)",
     label: "SYSTEM",
-    labelColor: "#8c8c8c",
+    labelColor: "var(--color-muted-foreground)",
   },
   user: {
     background: "transparent",
-    borderColor: "#1677ff",
+    borderColor: "var(--color-info)",
     label: "USER",
-    labelColor: "#1677ff",
+    labelColor: "var(--color-info)",
   },
   assistant: {
     background: "transparent",
-    borderColor: "#52c41a",
+    borderColor: "var(--color-success)",
     label: "ASSISTANT",
-    labelColor: "#52c41a",
+    labelColor: "var(--color-success)",
   },
   tool: {
     background: "transparent",
-    borderColor: "#fa8c16",
+    borderColor: "var(--color-warning)",
     label: "TOOL RESULT",
-    labelColor: "#fa8c16",
+    labelColor: "var(--color-warning)",
   },
 };
 

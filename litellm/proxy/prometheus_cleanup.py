@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import glob
 import os
+from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 
 
 def wipe_directory(directory: str) -> None:
     """Delete all .db files in the directory. Called once before workers fork."""
-    files = glob.glob(os.path.join(directory, "*.db"))
+    files: Final = glob.glob(os.path.join(directory, "*.db"))
     deleted = 0
     for filepath in files:
         try:

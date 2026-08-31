@@ -1,9 +1,11 @@
+from typing import Final
+
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
-ZAI_API_BASE = "https://api.z.ai/api/paas/v4"
+ZAI_API_BASE: Final = "https://api.z.ai/api/paas/v4"
 
 
 class ZAIChatConfig(OpenAIGPTConfig):
@@ -15,7 +17,7 @@ class ZAIChatConfig(OpenAIGPTConfig):
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
         api_base = api_base or get_secret_str("ZAI_API_BASE") or ZAI_API_BASE
-        dynamic_api_key = api_key or get_secret_str("ZAI_API_KEY")
+        dynamic_api_key: Final = api_key or get_secret_str("ZAI_API_KEY")
         return api_base, dynamic_api_key
 
     def remove_cache_control_flag_from_messages_and_tools(
@@ -32,7 +34,7 @@ class ZAIChatConfig(OpenAIGPTConfig):
         return messages, tools
 
     def get_supported_openai_params(self, model: str) -> list:
-        base_params = [
+        base_params: Final = [
             "max_tokens",
             "stream",
             "stream_options",

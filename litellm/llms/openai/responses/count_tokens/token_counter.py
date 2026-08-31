@@ -3,7 +3,7 @@ OpenAI Token Counter implementation using the Responses API /input_tokens endpoi
 """
 
 import os
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
@@ -17,7 +17,7 @@ from litellm.llms.openai.responses.count_tokens.transformation import (
 from litellm.types.utils import LlmProviders, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
-openai_count_tokens_handler = OpenAICountTokensHandler()
+openai_count_tokens_handler: Final = OpenAICountTokensHandler()
 
 
 class OpenAITokenCounter(BaseTokenCounter):
@@ -46,7 +46,7 @@ class OpenAITokenCounter(BaseTokenCounter):
             return None
 
         deployment = deployment or {}
-        litellm_params = deployment.get("litellm_params", {})
+        litellm_params: Final = deployment.get("litellm_params", {})
 
         # Get OpenAI API key from deployment config or environment
         api_key = litellm_params.get("api_key")
@@ -57,7 +57,7 @@ class OpenAITokenCounter(BaseTokenCounter):
             verbose_logger.warning("No OpenAI API key found for token counting")
             return None
 
-        api_base = litellm_params.get("api_base")
+        api_base: Final = litellm_params.get("api_base")
 
         # Convert chat messages to Responses API input format
         input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
@@ -71,7 +71,7 @@ class OpenAITokenCounter(BaseTokenCounter):
             return None
 
         try:
-            result = await openai_count_tokens_handler.handle_count_tokens_request(
+            result: Final = await openai_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
                 input=input_items if input_items is not None else [],
                 api_key=api_key,

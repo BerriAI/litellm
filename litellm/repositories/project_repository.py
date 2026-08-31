@@ -2,17 +2,21 @@
 Project repository for database operations on LiteLLM_ProjectTable.
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.repositories.base_repository import BaseRepository
+from litellm.repositories.prisma_protocols import TableActions
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
 
 
 class ProjectRepository(BaseRepository[LiteLLM_ProjectTable]):
     """Repository for project database operations."""
 
     @property
-    def table(self) -> Any:
+    def table(self) -> TableActions["prisma_models.LiteLLM_ProjectTable"]:
         return self.prisma_client.db.litellm_projecttable
 
     @property
@@ -24,7 +28,7 @@ class ProjectRepository(BaseRepository[LiteLLM_ProjectTable]):
 
     async def find_by_alias(self, project_alias: str) -> LiteLLM_ProjectTable | None:
         """Find a project by alias."""
-        projects = await self.find_many(where={"project_alias": project_alias})
+        projects: Final = await self.find_many(where={"project_alias": project_alias})
         return projects[0] if projects else None
 
     async def find_by_team_id(self, team_id: str) -> list[LiteLLM_ProjectTable]:
@@ -46,7 +50,7 @@ class ProjectRepository(BaseRepository[LiteLLM_ProjectTable]):
         object_permission_id: str | None = None,
     ) -> LiteLLM_ProjectTable:
         """Create a new project."""
-        data: dict[str, Any] = {
+        data: Final[dict[str, Any]] = {
             "created_by": created_by,
             "updated_by": created_by,
         }
@@ -89,7 +93,7 @@ class ProjectRepository(BaseRepository[LiteLLM_ProjectTable]):
         object_permission_id: str | None = None,
     ) -> LiteLLM_ProjectTable | None:
         """Update a project."""
-        data: dict[str, Any] = {"updated_by": updated_by}
+        data: Final[dict[str, Any]] = {"updated_by": updated_by}
         if project_alias is not None:
             data["project_alias"] = project_alias
         if description is not None:

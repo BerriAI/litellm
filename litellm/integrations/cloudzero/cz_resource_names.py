@@ -18,7 +18,7 @@
 
 import re
 from enum import Enum
-from typing import Any, cast
+from typing import Any, Final, cast
 
 import litellm
 
@@ -48,20 +48,20 @@ class CZRNGenerator:
         - resource-type: 'llm-usage' (represents LLM usage/inference)
         - cloud-local-id: model
         """
-        service_type = "litellm"
-        provider = self._normalize_provider(row.get("custom_llm_provider", "unknown"))
-        region = "cross-region"
+        service_type: Final = "litellm"
+        provider: Final = self._normalize_provider(row.get("custom_llm_provider", "unknown"))
+        region: Final = "cross-region"
 
         # Use the actual entity_id (team_id or user_id) as the owner account
-        team_id = row.get("team_id", "unknown")
-        owner_account_id = self._normalize_component(team_id)
+        team_id: Final = row.get("team_id", "unknown")
+        owner_account_id: Final = self._normalize_component(team_id)
 
-        resource_type = "llm-usage"
+        resource_type: Final = "llm-usage"
 
         # Create a unique identifier with just the model (entity info already in owner_account_id)
-        model = row.get("model", "unknown")
+        model: Final = row.get("model", "unknown")
 
-        cloud_local_id = model
+        cloud_local_id: Final = model
 
         return self.create_from_components(
             service_type=service_type,
@@ -90,7 +90,7 @@ class CZRNGenerator:
         resource_type = self._normalize_component(resource_type)
         # cloud_local_id can contain pipes and other characters, so don't normalize it
 
-        czrn = f"czrn:{service_type}:{provider}:{region}:{owner_account_id}:{resource_type}:{cloud_local_id}"
+        czrn: Final = f"czrn:{service_type}:{provider}:{region}:{owner_account_id}:{resource_type}:{cloud_local_id}"
 
         if not self.is_valid(czrn):
             raise ValueError(f"Generated CZRN is invalid: {czrn}")
@@ -106,7 +106,7 @@ class CZRNGenerator:
 
         Returns: (service_type, provider, region, owner_account_id, resource_type, cloud_local_id)
         """
-        match = self.CZRN_REGEX.match(czrn)
+        match: Final = self.CZRN_REGEX.match(czrn)
         if not match:
             raise ValueError(f"Invalid CZRN format: {czrn}")
 
@@ -115,7 +115,7 @@ class CZRNGenerator:
     def _normalize_provider(self, provider: str) -> str:
         """Normalize provider names to standard CZRN format."""
         # Map common provider names to CZRN standards
-        provider_map = {
+        provider_map: Final = {
             litellm.LlmProviders.AZURE.value: "azure",
             litellm.LlmProviders.AZURE_AI.value: "azure",
             litellm.LlmProviders.ANTHROPIC.value: "anthropic",
@@ -128,7 +128,7 @@ class CZRNGenerator:
             litellm.LlmProviders.TOGETHER_AI.value: "together-ai",
         }
 
-        normalized = provider.lower().replace("_", "-")
+        normalized: Final = provider.lower().replace("_", "-")
 
         # use litellm custom llm provider if not in provider_map
         if normalized not in provider_map:

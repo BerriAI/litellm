@@ -1,5 +1,6 @@
 import asyncio
 from copy import deepcopy
+from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import LITELLM_ASYNCIO_QUEUE_MAXSIZE
@@ -72,21 +73,21 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
         Combine all updates in the queue into a single update.
         This is used to reduce the size of the in-memory queue.
         """
-        updates: list[dict[str, BaseDailySpendTransaction]] = await self.flush_all_updates_from_in_memory_queue()
-        aggregated_updates = self.get_aggregated_daily_spend_update_transactions(updates)
+        updates: Final[list[dict[str, BaseDailySpendTransaction]]] = await self.flush_all_updates_from_in_memory_queue()
+        aggregated_updates: Final = self.get_aggregated_daily_spend_update_transactions(updates)
         await self.update_queue.put(aggregated_updates)
 
     async def flush_and_get_aggregated_daily_spend_update_transactions(
         self,
     ) -> dict[str, BaseDailySpendTransaction]:
         """Get all updates from the queue and return all updates aggregated by daily_transaction_key. Works for both user and team spend updates."""
-        updates = await self.flush_all_updates_from_in_memory_queue()
+        updates: Final = await self.flush_all_updates_from_in_memory_queue()
         if len(updates) > 0:
             verbose_proxy_logger.info(
                 "Spend tracking - flushed %d daily spend update items from in-memory queue",
                 len(updates),
             )
-        aggregated_daily_spend_update_transactions = (
+        aggregated_daily_spend_update_transactions: Final = (
             DailySpendUpdateQueue.get_aggregated_daily_spend_update_transactions(updates)
         )
         verbose_proxy_logger.debug(
@@ -100,7 +101,7 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
         updates: list[dict[str, BaseDailySpendTransaction]],
     ) -> dict[str, BaseDailySpendTransaction]:
         """Aggregate updates by daily_transaction_key."""
-        aggregated_daily_spend_update_transactions: dict[str, BaseDailySpendTransaction] = {}
+        aggregated_daily_spend_update_transactions: Final[dict[str, BaseDailySpendTransaction]] = {}
         for _update in updates:
             for _key, payload in _update.items():
                 if _key in aggregated_daily_spend_update_transactions:
@@ -132,6 +133,10 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
                     daily_transaction["prompt_caching_savings_spend"] = (
                         payload.get("prompt_caching_savings_spend", 0) or 0
                     ) + daily_transaction.get("prompt_caching_savings_spend", 0)
+
+                    daily_transaction["gateway_injected_caching_savings_spend"] = (
+                        payload.get("gateway_injected_caching_savings_spend", 0) or 0
+                    ) + daily_transaction.get("gateway_injected_caching_savings_spend", 0)
 
                     daily_transaction["autorouter_savings_spend"] = (
                         payload.get("autorouter_savings_spend", 0) or 0

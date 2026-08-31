@@ -14,7 +14,9 @@ keeps the batched-DELETE path, so existing deployments are untouched.
 """
 
 import re
+from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Final, TypeAlias
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -22,13 +24,28 @@ from litellm.constants import (
     SPEND_LOG_PARTITION_PRECREATE_AHEAD,
 )
 
-SPEND_LOGS_TABLE = "LiteLLM_SpendLogs"
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
+
+SPEND_LOGS_TABLE: Final = "LiteLLM_SpendLogs"
+
+RemainingTimeoutMs: TypeAlias = Callable[[], "int | None"]
+"""
+The per-statement bound in milliseconds, or None once the caller's budget is
+spent.
+
+Injected rather than passed as a number so it is re-evaluated before EVERY
+statement: a value read once at entry would let a loop issue N statements each
+bounded by the budget that was left before the first of them, which is not a
+bound on the loop at all. The caller owns the policy; this module only asks how
+much time it may still use.
+"""
 
 PartitionInterval = str  # "day" | "week" | "month"
 
-VALID_PARTITION_INTERVALS = {"day", "week", "month"}
+VALID_PARTITION_INTERVALS: Final = {"day", "week", "month"}
 
-_BOUND_UPPER_RE = re.compile(r"TO \('([^']+)'\)")
+_BOUND_UPPER_RE: Final = re.compile(r"TO \('([^']+)'\)")
 
 
 def period_start(day: date, interval: PartitionInterval) -> date:
@@ -63,7 +80,7 @@ def upcoming_partitions(today: date, interval: PartitionInterval, ahead: int) ->
     Specs (name, lower_inclusive, upper_exclusive) for the current period plus
     the next `ahead` periods, so writes always have a partition to land in.
     """
-    specs: list[tuple[str, date, date]] = []
+    specs: Final[list[tuple[str, date, date]]] = []
     start = period_start(today, interval)
     for _ in range(ahead + 1):
         upper = next_period_start(start, interval)
@@ -81,7 +98,7 @@ def parse_partition_upper_bound(bound_expr: str) -> datetime | None:
     """
     if "DEFAULT" in bound_expr.upper():
         return None
-    match = _BOUND_UPPER_RE.search(bound_expr)
+    match: Final = _BOUND_UPPER_RE.search(bound_expr)
     if match is None:
         return None
     try:
@@ -115,21 +132,26 @@ class SpendLogsPartitionManager:
         self.interval = interval
         self.precreate_ahead = precreate_ahead
 
-    async def is_partitioned(self, prisma_client) -> bool:
+    async def is_partitioned(self, prisma_client: "PrismaClient", remaining_timeout_ms: RemainingTimeoutMs) -> bool:
+        budget_ms: Final = remaining_timeout_ms()
+        if budget_ms is None:
+            return False
         try:
-            rows = await prisma_client.db.query_raw(
-                """
-                SELECT EXISTS (
-                    SELECT 1
-                    FROM pg_partitioned_table pt
-                    JOIN pg_class c ON c.oid = pt.partrelid
-                    JOIN pg_namespace n ON n.oid = c.relnamespace
-                    WHERE c.relname = $1
-                      AND n.nspname = current_schema()
-                ) AS partitioned
-                """,
-                SPEND_LOGS_TABLE,
-            )
+            async with prisma_client.db.tx() as tx:
+                await tx.execute_raw(f"SET LOCAL statement_timeout = {budget_ms}")
+                rows: Final = await tx.query_raw(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM pg_partitioned_table pt
+                        JOIN pg_class c ON c.oid = pt.partrelid
+                        JOIN pg_namespace n ON n.oid = c.relnamespace
+                        WHERE c.relname = $1
+                          AND n.nspname = current_schema()
+                    ) AS partitioned
+                    """,
+                    SPEND_LOGS_TABLE,
+                )
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Could not determine if %s is partitioned, assuming it is not: %s",
@@ -139,52 +161,89 @@ class SpendLogsPartitionManager:
             return False
         return bool(rows and rows[0].get("partitioned"))
 
-    async def ensure_partitions(self, prisma_client) -> list[str]:
+    @staticmethod
+    async def _execute_bounded_ddl(prisma_client: "PrismaClient", statement: str, timeout_ms: int) -> None:
+        """
+        Run one DDL statement under a Postgres statement and lock timeout.
+
+        Partition DDL takes an ACCESS EXCLUSIVE lock, so an unbounded statement
+        queues behind any long-running reader for as long as that reader lives,
+        and the caller's run budget cannot cut it short. lock_timeout bounds the
+        wait for the lock and statement_timeout bounds the work itself, so a
+        partition this run cannot get is simply left for the next one.
+        """
+        async with prisma_client.db.tx() as tx:
+            await tx.execute_raw(f"SET LOCAL statement_timeout = {timeout_ms}")
+            await tx.execute_raw(f"SET LOCAL lock_timeout = {timeout_ms}")
+            await tx.execute_raw(statement)
+
+    async def ensure_partitions(
+        self, prisma_client: "PrismaClient", remaining_timeout_ms: RemainingTimeoutMs
+    ) -> list[str]:
         """
         Ensure the current and upcoming partitions exist, returning the names
         now present. CREATE TABLE IF NOT EXISTS is a no-op for partitions that
         already exist, so this list is "ensured present", not "newly created".
         """
-        ensured: list[str] = []
+        ensured: Final[list[str]] = []
         for name, lower, upper in upcoming_partitions(
             datetime.now(timezone.utc).date(), self.interval, self.precreate_ahead
         ):
+            budget_ms = remaining_timeout_ms()
+            if budget_ms is None:
+                verbose_proxy_logger.info("Run budget spent, leaving the remaining partitions for the next run")
+                break
             try:
-                await prisma_client.db.execute_raw(
+                await self._execute_bounded_ddl(
+                    prisma_client,
                     f'CREATE TABLE IF NOT EXISTS "{name}" '
                     f'PARTITION OF "{SPEND_LOGS_TABLE}" '
-                    f"FOR VALUES FROM ('{lower.isoformat()}') TO ('{upper.isoformat()}')"
+                    f"FOR VALUES FROM ('{lower.isoformat()}') TO ('{upper.isoformat()}')",
+                    budget_ms,
                 )
                 ensured.append(name)
             except Exception as e:
                 verbose_proxy_logger.warning("Failed to ensure spend-log partition %s: %s", name, e)
         return ensured
 
-    async def _list_partitions(self, prisma_client) -> list[tuple[str, datetime | None]]:
-        rows = await prisma_client.db.query_raw(
-            """
-            SELECT c.relname AS name,
-                   pg_get_expr(c.relpartbound, c.oid) AS bound
-            FROM pg_inherits i
-            JOIN pg_class c ON c.oid = i.inhrelid
-            JOIN pg_class p ON p.oid = i.inhparent
-            JOIN pg_namespace n ON n.oid = p.relnamespace
-            WHERE p.relname = $1
-              AND n.nspname = current_schema()
-            """,
-            SPEND_LOGS_TABLE,
-        )
+    async def _list_partitions(
+        self, prisma_client: "PrismaClient", timeout_ms: int
+    ) -> list[tuple[str, datetime | None]]:
+        async with prisma_client.db.tx() as tx:
+            await tx.execute_raw(f"SET LOCAL statement_timeout = {timeout_ms}")
+            rows: Final = await tx.query_raw(
+                """
+                SELECT c.relname AS name,
+                       pg_get_expr(c.relpartbound, c.oid) AS bound
+                FROM pg_inherits i
+                JOIN pg_class c ON c.oid = i.inhrelid
+                JOIN pg_class p ON p.oid = i.inhparent
+                JOIN pg_namespace n ON n.oid = p.relnamespace
+                WHERE p.relname = $1
+                  AND n.nspname = current_schema()
+                """,
+                SPEND_LOGS_TABLE,
+            )
         return [(row["name"], parse_partition_upper_bound(row.get("bound") or "")) for row in rows]
 
-    async def drop_partitions_older_than(self, prisma_client, cutoff: datetime) -> list[str]:
+    async def drop_partitions_older_than(
+        self, prisma_client: "PrismaClient", cutoff: datetime, remaining_timeout_ms: RemainingTimeoutMs
+    ) -> list[str]:
         """DROP every partition whose whole range is older than `cutoff`."""
-        cutoff_naive = cutoff.astimezone(timezone.utc).replace(tzinfo=None)
-        partitions = await self._list_partitions(prisma_client)
-        to_drop = select_partitions_to_drop(partitions, cutoff_naive)
-        dropped: list[str] = []
+        list_budget_ms: Final = remaining_timeout_ms()
+        if list_budget_ms is None:
+            return []
+        cutoff_naive: Final = cutoff.astimezone(timezone.utc).replace(tzinfo=None)
+        partitions: Final = await self._list_partitions(prisma_client, list_budget_ms)
+        to_drop: Final = select_partitions_to_drop(partitions, cutoff_naive)
+        dropped: Final[list[str]] = []
         for name in to_drop:
+            budget_ms = remaining_timeout_ms()
+            if budget_ms is None:
+                verbose_proxy_logger.info("Run budget spent, leaving the remaining partitions for the next run")
+                break
             try:
-                await prisma_client.db.execute_raw(f'DROP TABLE IF EXISTS "{name}"')
+                await self._execute_bounded_ddl(prisma_client, f'DROP TABLE IF EXISTS "{name}"', budget_ms)
                 dropped.append(name)
             except Exception as e:
                 verbose_proxy_logger.warning("Failed to drop spend-log partition %s: %s", name, e)

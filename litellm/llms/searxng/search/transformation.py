@@ -4,7 +4,7 @@ Calls SearXNG's /search endpoint to search the web.
 SearXNG API Reference: https://docs.searxng.org/dev/search_api.html
 """
 
-from typing import TypedDict
+from typing import Final, TypedDict
 
 import httpx
 
@@ -105,8 +105,8 @@ class SearXNGSearchConfig(BaseSearchConfig):
 
         # Build query parameters from the transformed request body
         if data and isinstance(data, dict) and "_searxng_params" in data:
-            params = data["_searxng_params"]
-            query_string = urlencode(params)
+            params: Final = data["_searxng_params"]
+            query_string: Final = urlencode(params)
             return f"{api_base}?{query_string}"
 
         return api_base
@@ -140,7 +140,7 @@ class SearXNGSearchConfig(BaseSearchConfig):
             # SearXNG only supports single string queries, join with spaces
             query = " ".join(query)
 
-        request_data: SearXNGSearchRequest = {
+        request_data: Final[SearXNGSearchRequest] = {
             "q": query,
             "format": "json",  # Always request JSON format
         }
@@ -148,7 +148,7 @@ class SearXNGSearchConfig(BaseSearchConfig):
         # Transform Perplexity unified spec parameters to SearXNG format
         if "country" in optional_params:
             # Map country code to language (approximate)
-            country = optional_params["country"].lower()
+            country: Final = optional_params["country"].lower()
             if country == "us" or country == "uk":
                 request_data["language"] = "en"
             elif country == "de":
@@ -170,7 +170,7 @@ class SearXNGSearchConfig(BaseSearchConfig):
             pass
 
         # Convert to dict before dynamic key assignments
-        result_data = dict(request_data)
+        result_data: Final = dict(request_data)
 
         # Pass through all other SearXNG-specific parameters as-is
         for param, value in optional_params.items():
@@ -204,12 +204,12 @@ class SearXNGSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
         # Transform results to SearchResult objects
         # Note: SearXNG doesn't natively support limiting results via API params
         # It returns ~20 results per page by default
-        results = []
+        results: Final = []
         for result in response_json.get("results", []):
             # Get date from either publishedDate or pubdate field
             date = result.get("publishedDate") or result.get("pubdate")

@@ -12,12 +12,11 @@ import asyncio
 import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 
-import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._redis import _redis_kwargs_from_environment
 from litellm._uuid import uuid
@@ -37,30 +36,51 @@ from litellm.types.management_endpoints import (
     CacheSettingsField,
 )
 
-router = APIRouter()
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
+
+router: Final = APIRouter()
+
+_STORED_CACHE_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+class _CacheConfigRow(Protocol):
+    @property
+    def cache_settings(self) -> str | Mapping[str, object] | None: ...
+
+
+class _CacheConfigTable(Protocol):
+    async def find_unique(self, where: Mapping[str, str]) -> _CacheConfigRow | None: ...
+
+    async def upsert(self, where: Mapping[str, str], data: Mapping[str, Mapping[str, str]]) -> _CacheConfigRow: ...
+
+
+def _cache_config_table(prisma_client: "PrismaClient") -> _CacheConfigTable:
+    return CacheConfigRepository(prisma_client).table
+
 
 # Cache fields holding credentials. Masked on read so plaintext Redis /
 # Sentinel passwords never leave the server in a GET response. `url` is here
 # because a Redis/Valkey URL can embed a password inline
 # (e.g. redis://:secret@host:6379/1).
-_CACHE_SENSITIVE_FIELDS: set = {"password", "sentinel_password", "url"}
+_CACHE_SENSITIVE_FIELDS: Final[set[str]] = {"password", "sentinel_password", "url"}
 
 # The env fallback resolves the full set of redis.Redis kwargs, which includes
 # credential-bearing params (azure_client_secret, ssl_password, ...) that are
 # not cache UI fields. Only overlay fields the settings page actually renders,
 # so the read never surfaces a credential the UI does not manage.
-_CACHE_SETTINGS_FIELD_NAMES: frozenset = frozenset(field.field_name for field in CACHE_SETTINGS_FIELDS)
+_CACHE_SETTINGS_FIELD_NAMES: Final[frozenset[str]] = frozenset(field.field_name for field in CACHE_SETTINGS_FIELDS)
 
 # Classifier used, alongside _CACHE_SENSITIVE_FIELDS, to redact any
 # credential-bearing key before it leaves the server (`url` is kept in the
 # explicit set because its name carries no sensitive segment).
-_CREDENTIAL_CLASSIFIER = SensitiveDataMasker()
+_CREDENTIAL_CLASSIFIER: Final = SensitiveDataMasker()
 
 
-_REDACTED_VALUE = "***REDACTED***"
+_REDACTED_VALUE: Final = "***REDACTED***"
 
 
-_URL_OVERRIDDEN_CONNECTION_FIELDS: frozenset = frozenset({"host", "port", "db", "password", "username"})
+_URL_OVERRIDDEN_CONNECTION_FIELDS: Final[frozenset[str]] = frozenset({"host", "port", "db", "password", "username"})
 
 
 def _resolve_cache_url_precedence(settings: Mapping[str, object]) -> dict[str, Any]:
@@ -73,8 +93,8 @@ def _resolve_cache_url_precedence(settings: Mapping[str, object]) -> dict[str, A
     (``redis_startup_nodes``) is exempt because it authenticates via the
     discrete fields rather than a url.
     """
-    url = settings.get("url")
-    has_url = isinstance(url, str) and url.strip() != ""
+    url: Final = settings.get("url")
+    has_url: Final = isinstance(url, str) and url.strip() != ""
     if not has_url or settings.get("redis_startup_nodes"):
         return dict(settings)
     return {k: v for k, v in settings.items() if k not in _URL_OVERRIDDEN_CONNECTION_FIELDS}
@@ -87,7 +107,7 @@ def _parse_stored_settings(cache_settings_value: object) -> dict[str, object]:
     dict depending on the client, so callers that json.loads unconditionally
     silently drop the whole (still-encrypted) row on the dict path.
     """
-    parsed = json.loads(cache_settings_value) if isinstance(cache_settings_value, str) else cache_settings_value
+    parsed: Final = json.loads(cache_settings_value) if isinstance(cache_settings_value, str) else cache_settings_value
     return parsed if isinstance(parsed, dict) else {}
 
 
@@ -101,12 +121,12 @@ def _overlay_environment(stored: Mapping[str, object]) -> dict[str, object]:
     kwargs the runtime uses makes the page reflect the effective connection.
     Stored values win; the environment only fills what the stored config omits.
     """
-    env_kwargs = {
+    env_kwargs: Final = {
         key: value for key, value in _redis_kwargs_from_environment().items() if key in _CACHE_SETTINGS_FIELD_NAMES
     }
     if not env_kwargs:
         return dict(stored)
-    effective = {**env_kwargs, **stored}
+    effective: Final = {**env_kwargs, **stored}
     # the env fallback is a Redis connection, so name the type when the stored
     # config did not, letting the UI render the Redis fields it just populated
     effective.setdefault("type", "redis")
@@ -142,7 +162,7 @@ def _has_connection_target(value: object) -> bool:
 # Every field that identifies which Redis a credential belongs to, across node
 # (host/port/url), cluster (redis_startup_nodes), and sentinel
 # (sentinel_nodes/service_name) modes. A stored secret is bound to these.
-_CONNECTION_TARGET_FIELDS: tuple = (
+_CONNECTION_TARGET_FIELDS: Final[tuple[str, ...]] = (
     "host",
     "port",
     "url",
@@ -197,7 +217,7 @@ def _saved_secret_is_reusable(incoming: Mapping[str, object], saved: Mapping[str
     return True
 
 
-def _merge_over_saved(incoming: Mapping[str, object], saved: Mapping[str, object]) -> dict[str, Any]:
+def _merge_over_saved(incoming: Mapping[str, object], saved: Mapping[str, object]) -> Mapping[str, object]:
     """Keep the stored secret behind any credential the caller echoed back redacted or omitted.
 
     GET returns credentials as the marker and the form never re-prefills a
@@ -214,13 +234,13 @@ def _merge_over_saved(incoming: Mapping[str, object], saved: Mapping[str, object
     than restored, otherwise url-precedence would resurrect it and discard the
     submitted host/port.
     """
-    switching_to_discrete_target = (
+    switching_to_discrete_target: Final = (
         _has_connection_target(incoming.get("host"))
         or _has_connection_target(incoming.get("redis_startup_nodes"))
         or _has_connection_target(incoming.get("sentinel_nodes"))
     )
-    reuse_saved_secret = _saved_secret_is_reusable(incoming, saved)
-    merged = dict(incoming)
+    reuse_saved_secret: Final = _saved_secret_is_reusable(incoming, saved)
+    merged: Final = dict(incoming)
     for field in _CACHE_SENSITIVE_FIELDS:
         # A value the caller explicitly supplied is honored verbatim: a new
         # secret, or an empty string / null to clear the stored one. Only an
@@ -249,7 +269,7 @@ def _redact_settings(settings: Mapping[str, object] | None) -> dict[str, object]
     """
     if not settings:
         return {}
-    return {k: _REDACTED_VALUE for k in settings.keys()}
+    return {k: _REDACTED_VALUE for k in settings}
 
 
 def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
@@ -260,7 +280,7 @@ def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
     """
     if task.cancelled():
         return
-    exc = task.exception()
+    exc: Final = task.exception()
     if exc is not None:
         verbose_proxy_logger.warning("Failed to write cache-settings audit log: %s", exc)
 
@@ -281,15 +301,16 @@ async def _emit_cache_settings_audit_log(
     exception.  Captured under ``LiteLLM_CacheConfig`` so the row
     co-locates with the table it mutates.
     """
-    if litellm.store_audit_logs is not True:
-        return
-
     from litellm.proxy.management_helpers.audit_logs import (
         create_audit_log_for_update,
+        is_audit_logging_enabled,
     )
     from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
-    task = asyncio.create_task(
+    if not is_audit_logging_enabled():
+        return
+
+    task: Final = asyncio.create_task(
         create_audit_log_for_update(
             request_data=LiteLLM_AuditLogs(
                 id=str(uuid.uuid4()),
@@ -324,7 +345,7 @@ class CacheSettingsManager:
 
         # Normalize by removing None values and UI-only fields
         def normalize(params: dict[str, object]) -> dict[str, object]:
-            normalized = {}
+            normalized: Final = {}
             for k, v in params.items():
                 if k == "redis_type":  # Skip UI-only field
                     continue
@@ -333,39 +354,38 @@ class CacheSettingsManager:
                     normalized[k] = str(v) if not isinstance(v, (list, dict)) else v
             return normalized
 
-        normalized1 = normalize(params1)
-        normalized2 = normalize(params2)
+        normalized1: Final = normalize(params1)
+        normalized2: Final = normalize(params2)
 
         return normalized1 == normalized2
 
     @staticmethod
-    async def init_cache_settings_in_db(prisma_client, proxy_config):
+    async def init_cache_settings_in_db(prisma_client: "PrismaClient", proxy_config):
         """
         Initialize cache settings from database into the router on startup.
         Only reinitializes if cache params have changed.
         """
-        import json
-
         try:
-            cache_config = await call_with_db_reconnect_retry(
+            cache_config: Final = await call_with_db_reconnect_retry(
                 prisma_client,
-                lambda: CacheConfigRepository(prisma_client).table.find_unique(where={"id": "cache_config"}),
+                lambda: _cache_config_table(prisma_client).find_unique(where={"id": "cache_config"}),
                 reason="init_cache_settings_in_db_lookup_failure",
             )
             if cache_config is not None and cache_config.cache_settings:
                 # Parse cache settings JSON
-                cache_settings_json = cache_config.cache_settings
-                if isinstance(cache_settings_json, str):
-                    cache_settings_dict = json.loads(cache_settings_json)
-                else:
-                    cache_settings_dict = cache_settings_json
+                cache_settings_json: Final = cache_config.cache_settings
+                cache_settings_dict: Final[dict[str, object]] = (
+                    _STORED_CACHE_SETTINGS_ADAPTER.validate_json(cache_settings_json)
+                    if isinstance(cache_settings_json, str)
+                    else dict(cache_settings_json)
+                )
 
                 # Decrypt cache settings
-                decrypted_settings = proxy_config._decrypt_db_variables(variables_dict=cache_settings_dict)
+                decrypted_settings: Final = proxy_config._decrypt_db_variables(variables_dict=cache_settings_dict)
 
                 # Remove redis_type if present (UI-only field, not a Cache parameter)
                 # We derive it for UI in get_cache_settings endpoint
-                cache_params = {k: v for k, v in decrypted_settings.items() if k != "redis_type"}
+                cache_params: Final = {k: v for k, v in decrypted_settings.items() if k != "redis_type"}
 
                 # Check if cache params have changed
                 if CacheSettingsManager._last_cache_params is not None and CacheSettingsManager._cache_params_equal(
@@ -439,12 +459,12 @@ async def get_cache_settings(
 
     try:
         # Get cache settings fields from types file
-        cache_fields = [field.model_copy(deep=True) for field in CACHE_SETTINGS_FIELDS]
+        cache_fields: Final = [field.model_copy(deep=True) for field in CACHE_SETTINGS_FIELDS]
 
         # Read the stored settings (decrypted); an env-only cache has none.
         stored: dict[str, object] = {}
         if prisma_client is not None:
-            cache_config = await CacheConfigRepository(prisma_client).table.find_unique(where={"id": "cache_config"})
+            cache_config = await _cache_config_table(prisma_client).find_unique(where={"id": "cache_config"})
             if cache_config is not None and cache_config.cache_settings:
                 stored = proxy_config._decrypt_db_variables(
                     variables_dict=_parse_stored_settings(cache_config.cache_settings)
@@ -454,7 +474,7 @@ async def get_cache_settings(
         # from when the stored config leaves them unset, then apply url precedence
         # so a url-mode config does not surface conflicting discrete fields (which
         # would otherwise let a no-op save silently switch it to host/port).
-        effective = _resolve_cache_url_precedence(_overlay_environment(stored))
+        effective: Final = _resolve_cache_url_precedence(_overlay_environment(stored))
 
         # Derive redis_type for UI based on settings
         # UI uses redis_type to show/hide fields, backend only stores 'type'
@@ -468,7 +488,7 @@ async def get_cache_settings(
 
         # Redact credential fields so the GET response never carries a plaintext
         # Redis / Sentinel password off the server.
-        current_values = _redact_credentials(effective)
+        current_values: Final = _redact_credentials(effective)
 
         # Update field values with current values
         for field in cache_fields:
@@ -511,16 +531,14 @@ async def test_cache_connection(
         saved_settings: dict[str, object] = {}
         if prisma_client is not None:
             try:
-                existing_row = await CacheConfigRepository(prisma_client).table.find_unique(
-                    where={"id": "cache_config"}
-                )
+                existing_row: Final = await _cache_config_table(prisma_client).find_unique(where={"id": "cache_config"})
                 if existing_row is not None and existing_row.cache_settings:
                     saved_settings = proxy_config._decrypt_db_variables(
                         variables_dict=_parse_stored_settings(existing_row.cache_settings)
                     )
             except Exception:  # noqa: BLE001 - a saved-settings lookup failure must not block a connection test
                 saved_settings = {}
-        cache_settings = _resolve_cache_url_precedence(_merge_over_saved(request.cache_settings, saved_settings))
+        cache_settings: Final = _resolve_cache_url_precedence(_merge_over_saved(request.cache_settings, saved_settings))
         # cache_settings now carries the resolved plaintext credential; never log it raw
         verbose_proxy_logger.debug("Testing cache connection with settings: %s", _redact_credentials(cache_settings))
 
@@ -532,10 +550,10 @@ async def test_cache_connection(
             )
 
         # Create temporary cache instance
-        temp_cache = Cache(**cache_settings)
+        temp_cache: Final = Cache(**cache_settings)
 
         # Use the cache's test_connection method
-        result = await temp_cache.cache.test_connection()
+        result: Final = await temp_cache.cache.test_connection()
 
         return CacheTestResponse(**result)
 
@@ -590,23 +608,23 @@ async def update_cache_settings(
     try:
         # Read the stored row first: its decrypted values back any credential the
         # caller echoed back redacted, and its key set drives the audit diff.
-        existing_row = await CacheConfigRepository(prisma_client).table.find_unique(where={"id": "cache_config"})
+        existing_row: Final = await _cache_config_table(prisma_client).find_unique(where={"id": "cache_config"})
         before_settings: dict[str, object] | None = None
         saved_settings: dict[str, object] = {}
         if existing_row is not None and existing_row.cache_settings:
             before_settings = _parse_stored_settings(existing_row.cache_settings)
             saved_settings = proxy_config._decrypt_db_variables(variables_dict=before_settings)
-        action: AUDIT_ACTIONS = "updated" if existing_row is not None else "created"
+        action: Final[AUDIT_ACTIONS] = "updated" if existing_row is not None else "created"
 
         # Preserve stored secrets behind any redacted or omitted credential, then
         # resolve the url-vs-discrete-fields precedence.
-        cache_settings = _resolve_cache_url_precedence(_merge_over_saved(request.cache_settings, saved_settings))
+        cache_settings: Final = _resolve_cache_url_precedence(_merge_over_saved(request.cache_settings, saved_settings))
 
         # Encrypt sensitive fields (keep redis_type for storage)
-        encrypted_settings = proxy_config._encrypt_env_variables(environment_variables=cache_settings)
+        encrypted_settings: Final = proxy_config._encrypt_env_variables(environment_variables=cache_settings)
 
         # Save to database
-        await CacheConfigRepository(prisma_client).table.upsert(
+        await _cache_config_table(prisma_client).upsert(
             where={"id": "cache_config"},
             data={
                 "create": {
@@ -621,10 +639,10 @@ async def update_cache_settings(
 
         # Reinitialize cache with new settings
         # Decrypt for initialization
-        decrypted_settings = proxy_config._decrypt_db_variables(variables_dict=encrypted_settings)
+        decrypted_settings: Final = proxy_config._decrypt_db_variables(variables_dict=encrypted_settings)
 
         # Remove redis_type if present (UI-only field, not a Cache parameter)
-        cache_params = {k: v for k, v in decrypted_settings.items() if k != "redis_type"}
+        cache_params: Final = {k: v for k, v in decrypted_settings.items() if k != "redis_type"}
 
         # Initialize cache (frontend sends type="redis", not redis_type)
         proxy_config._init_cache(cache_params=cache_params)

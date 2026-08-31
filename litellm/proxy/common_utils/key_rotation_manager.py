@@ -4,7 +4,9 @@ Key Rotation Manager - Automated key rotation based on rotation schedules
 Handles finding keys that need rotation based on their individual schedules.
 """
 
+from collections.abc import Sequence
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -30,6 +32,9 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
 
 class KeyRotationManager:
     """
@@ -54,7 +59,7 @@ class KeyRotationManager:
                 # Use a dedicated lock TTL (default 600s) instead of the check interval
                 # (which defaults to 86400s / 24h). Using the check interval would create
                 # a 24-hour deadlock window if a pod crashes before releasing the lock.
-                lock_ttl = max(
+                lock_ttl: Final = max(
                     LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS, 300
                 )  # At least 5 minutes, configurable via LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS
                 lock_acquired = (
@@ -78,7 +83,7 @@ class KeyRotationManager:
             await self._cleanup_expired_deprecated_keys()
 
             # Find keys that are due for rotation
-            keys_to_rotate = await self._find_keys_needing_rotation()
+            keys_to_rotate: Final = await self._find_keys_needing_rotation()
 
             if not keys_to_rotate:
                 verbose_proxy_logger.debug("No keys are due for rotation at this time")
@@ -105,7 +110,7 @@ class KeyRotationManager:
                     cronjob_id=KEY_ROTATION_JOB_NAME,
                 )
 
-    async def _find_keys_needing_rotation(self) -> list[LiteLLM_VerificationToken]:
+    async def _find_keys_needing_rotation(self) -> "Sequence[prisma_models.LiteLLM_VerificationToken]":
         """
         Find keys that are due for rotation based on their key_rotation_at timestamp.
 
@@ -113,9 +118,9 @@ class KeyRotationManager:
         - Key has auto_rotate = true
         - key_rotation_at is null (needs initial setup) OR key_rotation_at <= now
         """
-        now = datetime.now(timezone.utc)
+        now: Final = datetime.now(timezone.utc)
 
-        keys_with_rotation = await VerificationTokenRepository(self.prisma_client).table.find_many(
+        keys_with_rotation: Final = await VerificationTokenRepository(self.prisma_client).table.find_many(
             where={
                 "auto_rotate": True,  # Only keys marked for auto rotation
                 "OR": [
@@ -132,8 +137,8 @@ class KeyRotationManager:
         Remove deprecated key entries whose revoke_at has passed.
         """
         try:
-            now = datetime.now(timezone.utc)
-            result = await DeprecatedVerificationTokenRepository(self.prisma_client).table.delete_many(
+            now: Final = datetime.now(timezone.utc)
+            result: Final = await DeprecatedVerificationTokenRepository(self.prisma_client).table.delete_many(
                 where={"revoke_at": {"lt": now}}
             )
             if result > 0:
@@ -155,12 +160,12 @@ class KeyRotationManager:
         # Check if the rotation time has passed
         return now >= key.key_rotation_at
 
-    async def _rotate_key(self, key: LiteLLM_VerificationToken):
+    async def _rotate_key(self, key: "prisma_models.LiteLLM_VerificationToken"):
         """
         Rotate a single key using existing regenerate_key_fn and call the rotation hook
         """
         # Create regenerate request with grace period for seamless cutover
-        regenerate_request = RegenerateKeyRequest(
+        regenerate_request: Final = RegenerateKeyRequest(
             key=key.token or "",
             key_alias=key.key_alias,  # Pass key alias to ensure correct secret is updated in AWS Secrets Manager
             grace_period=LITELLM_KEY_ROTATION_GRACE_PERIOD or None,
@@ -169,10 +174,10 @@ class KeyRotationManager:
         # Create a system user for key rotation
         from litellm.proxy._types import UserAPIKeyAuth
 
-        system_user = UserAPIKeyAuth.get_litellm_internal_jobs_user_api_key_auth()
+        system_user: Final = UserAPIKeyAuth.get_litellm_internal_jobs_user_api_key_auth()
 
         # Use existing regenerate key function
-        response = await regenerate_key_fn(
+        response: Final = await regenerate_key_fn(
             data=regenerate_request,
             user_api_key_dict=system_user,
             litellm_changed_by=LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
@@ -181,8 +186,8 @@ class KeyRotationManager:
         # Update the NEW key with rotation info (regenerate_key_fn creates a new token)
         if isinstance(response, GenerateKeyResponse) and response.token_id and key.rotation_interval:
             # Calculate next rotation time using helper function
-            now = datetime.now(timezone.utc)
-            next_rotation_time = _calculate_key_rotation_time(key.rotation_interval)
+            now: Final = datetime.now(timezone.utc)
+            next_rotation_time: Final = _calculate_key_rotation_time(key.rotation_interval)
             await VerificationTokenRepository(self.prisma_client).table.update(
                 where={"token": response.token_id},
                 data={
@@ -196,7 +201,7 @@ class KeyRotationManager:
         if isinstance(response, GenerateKeyResponse):
             await KeyManagementEventHooks.async_key_rotated_hook(
                 data=regenerate_request,
-                existing_key_row=key,
+                existing_key_row=key,  # pyright: ignore[reportArgumentType]  # prisma row, hook wants the domain model
                 response=response,
                 user_api_key_dict=system_user,
                 litellm_changed_by=LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,

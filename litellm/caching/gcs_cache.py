@@ -4,6 +4,7 @@ Supports syncing responses to Google Cloud Storage Buckets using HTTP requests.
 
 import asyncio
 import json
+from typing import Final
 from urllib.parse import quote
 
 from litellm._logging import print_verbose, verbose_logger
@@ -33,7 +34,7 @@ class GCSCache(BaseCache):
         self.sync_client = _get_httpx_client()
 
     def _construct_headers(self) -> dict:
-        base = GCSBucketBase(bucket_name=self.bucket_name)
+        base: Final = GCSBucketBase(bucket_name=self.bucket_name)
         base.path_service_account_json = self.path_service_account
         base.BUCKET_NAME = self.bucket_name
         return base.sync_construct_request_headers()
@@ -41,35 +42,35 @@ class GCSCache(BaseCache):
     def set_cache(self, key, value, **kwargs):
         try:
             print_verbose(f"LiteLLM SET Cache - GCS. Key={key}. Value={value}")
-            headers = self._construct_headers()
-            object_name = self.key_prefix + key
-            bucket_name = self.bucket_name
+            headers: Final = self._construct_headers()
+            object_name: Final = self.key_prefix + key
+            bucket_name: Final = self.bucket_name
             url = f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={quote(object_name, safe='')}"
-            data = json.dumps(value)
+            data: Final = json.dumps(value)
             self.sync_client.post(url=url, data=data, headers=headers)
         except Exception as e:
             print_verbose(f"GCS Caching: set_cache() - Got exception from GCS: {e}")
 
     async def async_set_cache(self, key, value, **kwargs):
         try:
-            headers = self._construct_headers()
-            object_name = self.key_prefix + key
-            bucket_name = self.bucket_name
+            headers: Final = self._construct_headers()
+            object_name: Final = self.key_prefix + key
+            bucket_name: Final = self.bucket_name
             url = f"https://storage.googleapis.com/upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={quote(object_name, safe='')}"
-            data = json.dumps(value)
+            data: Final = json.dumps(value)
             await self.async_client.post(url=url, data=data, headers=headers)
         except Exception as e:
             print_verbose(f"GCS Caching: async_set_cache() - Got exception from GCS: {e}")
 
     def get_cache(self, key, **kwargs):
         try:
-            headers = self._construct_headers()
-            object_name = self.key_prefix + key
-            bucket_name = self.bucket_name
+            headers: Final = self._construct_headers()
+            object_name: Final = self.key_prefix + key
+            bucket_name: Final = self.bucket_name
             url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{quote(object_name, safe='')}?alt=media"
-            response = self.sync_client.get(url=url, headers=headers)
+            response: Final = self.sync_client.get(url=url, headers=headers)
             if response.status_code == 200:
-                cached_response = json.loads(response.text)
+                cached_response: Final = json.loads(response.text)
                 verbose_logger.debug(
                     "Got GCS Cache: key: %s, cached_response %s. Type Response %s",
                     key,
@@ -83,11 +84,11 @@ class GCSCache(BaseCache):
 
     async def async_get_cache(self, key, **kwargs):
         try:
-            headers = self._construct_headers()
-            object_name = self.key_prefix + key
-            bucket_name = self.bucket_name
+            headers: Final = self._construct_headers()
+            object_name: Final = self.key_prefix + key
+            bucket_name: Final = self.bucket_name
             url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{quote(object_name, safe='')}?alt=media"
-            response = await self.async_client.get(url=url, headers=headers)
+            response: Final = await self.async_client.get(url=url, headers=headers)
             if response.status_code == 200:
                 return json.loads(response.text)
             return None
@@ -101,7 +102,7 @@ class GCSCache(BaseCache):
         pass
 
     async def async_set_cache_pipeline(self, cache_list, **kwargs):
-        tasks = []
+        tasks: Final = []
         for val in cache_list:
             tasks.append(self.async_set_cache(val[0], val[1], **kwargs))
         await asyncio.gather(*tasks)

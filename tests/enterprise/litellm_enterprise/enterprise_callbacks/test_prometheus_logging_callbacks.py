@@ -1,7 +1,4 @@
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import asyncio
 import logging
@@ -1741,26 +1738,16 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
 
             # Verify all five errors were logged (teams, keys, users, orgs, and user/team count)
             assert mock_logger.call_count == 5
-            assert (
-                "Error initializing teams budget metrics"
-                in mock_logger.call_args_list[0][0][0]
-            )
-            assert (
-                "Error initializing keys budget metrics"
-                in mock_logger.call_args_list[1][0][0]
-            )
-            assert (
-                "Error initializing users budget metrics"
-                in mock_logger.call_args_list[2][0][0]
-            )
-            assert (
-                "Error initializing orgs budget metrics"
-                in mock_logger.call_args_list[3][0][0]
-            )
-            assert (
-                "Error initializing user/team count metrics"
-                in mock_logger.call_args_list[4][0][0]
-            )
+            logged = [
+                call.args[0] % call.args[1:] for call in mock_logger.call_args_list
+            ]
+            assert logged == [
+                "Error initializing teams budget metrics: Database error",
+                "Error initializing keys budget metrics: Key listing error",
+                "Error initializing users budget metrics: User database error",
+                "Error initializing orgs budget metrics: Org database error",
+                "Error initializing user/team count metrics: User count error",
+            ]
 
         # Verify the metrics were never called
         prometheus_logger.litellm_remaining_team_budget_metric.assert_not_called()

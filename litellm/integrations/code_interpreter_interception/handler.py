@@ -9,13 +9,18 @@ captured stdout back through the typed agentic loop plan.
 import json
 import time
 import uuid
-from typing import Any, Literal, TypedDict, cast
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypedDict, runtime_checkable
 
 from pydantic import ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.base_llm.sandbox.transformation import (
+    CodeExecutionResult,
+    ContainerHandle,
+)
 from litellm.types.integrations.code_interpreter_interception import (
     CodeInterpreterInterceptionConfig,
 )
@@ -37,14 +42,17 @@ from litellm.types.utils import (
     ModelResponse,
 )
 
-LITELLM_CODE_EXECUTION_TOOL_NAME = "litellm_code_execution"
-_INTERCEPTION_ACTIVE_KEY = "_code_interpreter_interception_active"
-_SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
-_SESSION_SCOPED_KEY = "_code_interpreter_interception_session_scoped"
-_CONVERTED_STREAM_KEY = "_code_interpreter_interception_converted_stream"
-_LITELLM_METADATA_KEY = "litellm_metadata"
-_CACHE_TTL_SECONDS = 15 * 60
-_SESSION_SCOPED_PER_IDENTITY_CAP = 10
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+LITELLM_CODE_EXECUTION_TOOL_NAME: Final = "litellm_code_execution"
+_INTERCEPTION_ACTIVE_KEY: Final = "_code_interpreter_interception_active"
+_SANDBOX_KEY: Final = "_code_interpreter_interception_sandbox_key"
+_SESSION_SCOPED_KEY: Final = "_code_interpreter_interception_session_scoped"
+_CONVERTED_STREAM_KEY: Final = "_code_interpreter_interception_converted_stream"
+_LITELLM_METADATA_KEY: Final = "litellm_metadata"
+_CACHE_TTL_SECONDS: Final = 15 * 60
+_SESSION_SCOPED_PER_IDENTITY_CAP: Final = 10
 
 
 class CodeExecutionToolCall(TypedDict, total=False):
@@ -109,26 +117,94 @@ class ChatCompletionFunctionToolChoice(TypedDict):
 CodeExecutionFunctionToolChoice = ResponsesFunctionToolChoice | ChatCompletionFunctionToolChoice
 
 
-def _extract_session_id(kwargs: dict[str, Any]) -> str | None:
+class SandboxToolParams(TypedDict):
+    sandbox_provider: str
+    api_key: str | None
+    api_base: str | None
+
+
+class SandboxConfigProtocol(Protocol):
+    async def acreate_sandbox(self) -> ContainerHandle: ...
+
+    async def arun_code(self, *, container: ContainerHandle, code: str) -> CodeExecutionResult: ...
+
+    async def adelete_sandbox(self, *, container: ContainerHandle) -> object: ...
+
+
+@runtime_checkable
+class _SupportsOutput(Protocol):
+    output: object
+
+
+_CachedContainer: TypeAlias = tuple[ContainerHandle, SandboxToolParams | None, float, str | None]
+
+
+def _output_item_type(item: object) -> object:
+    if isinstance(item, dict):
+        item_mapping: Final[dict[str, object]] = item
+        return item_mapping.get("type")
+    return getattr(item, "type", None)
+
+
+def _response_output(response: object) -> object:
+    if isinstance(response, dict):
+        response_mapping: Final[Mapping[str, object]] = response
+        return response_mapping.get("output", [])
+    return getattr(response, "output", []) or []
+
+
+def _tool_call_arguments(arguments: object) -> str:
+    if isinstance(arguments, str):
+        return arguments
+    return "" if arguments is None else str(arguments)
+
+
+def _narrow_tool_call(tool_call: Mapping[str, object]) -> CodeExecutionToolCall:
+    tool_call_id: Final = tool_call.get("id")
+    call_id: Final = tool_call.get("call_id")
+    return {
+        "id": tool_call_id if isinstance(tool_call_id, str) else None,
+        "call_id": call_id if isinstance(call_id, str) else None,
+        "type": "function",
+        "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+        "arguments": _tool_call_arguments(tool_call.get("arguments")),
+    }
+
+
+def _extract_session_id(kwargs: dict[str, object]) -> str | None:
     for meta_key in ("metadata", "litellm_metadata"):
         meta = kwargs.get(meta_key)
         if isinstance(meta, dict):
-            sid = meta.get("session_id")
+            metadata: dict[str, object] = meta
+            sid = metadata.get("session_id")
             if sid and isinstance(sid, str):
                 return sid
     return None
 
 
-def _extract_identity(kwargs: dict[str, Any]) -> str:
-    return kwargs.get("user_api_key_hash") or ""
+def _extract_identity(kwargs: Mapping[str, object]) -> str:
+    identity: Final = kwargs.get("user_api_key_hash")
+    return identity if isinstance(identity, str) else ""
 
 
-def _resolve_sandbox_tool(sandbox_tool_name: str | None) -> dict[str, Any] | None:
+def _resolve_sandbox_tool(sandbox_tool_name: str | None) -> SandboxToolParams | None:
+    if sandbox_tool_name is None:
+        return None
     try:
         from litellm.sandbox.sandbox_tools import resolve_sandbox_tool
     except ImportError:
         return None
-    return resolve_sandbox_tool(sandbox_tool_name)
+    resolved: Final[dict[str, object] | None] = resolve_sandbox_tool(sandbox_tool_name)
+    if resolved is None:
+        return None
+    provider: Final = resolved.get("sandbox_provider")
+    api_key: Final = resolved.get("api_key")
+    api_base: Final = resolved.get("api_base")
+    return SandboxToolParams(
+        sandbox_provider=provider if isinstance(provider, str) else "",
+        api_key=api_key if isinstance(api_key, str) else None,
+        api_base=api_base if isinstance(api_base, str) else None,
+    )
 
 
 class CodeInterpreterInterceptionLogger(CustomLogger):
@@ -149,14 +225,14 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         enabled: bool = True,
         enabled_providers: list[str] | None = None,
         sandbox_tool_name: str | None = None,
-        sandbox_config: Any | None = None,
+        sandbox_config: SandboxConfigProtocol | None = None,
     ):
         super().__init__()
         self.enabled = enabled
         self.enabled_providers = enabled_providers
         self.sandbox_tool_name = sandbox_tool_name
         self.sandbox_config = sandbox_config
-        self._container_cache: dict[str, tuple[Any, dict[str, Any] | None, float, str | None]] = {}
+        self._container_cache: dict[str, _CachedContainer] = {}
 
     @classmethod
     def from_config_yaml(cls, config: CodeInterpreterInterceptionConfig) -> "CodeInterpreterInterceptionLogger":
@@ -171,19 +247,18 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         litellm_settings: dict[str, Any],
         callback_specific_params: dict[str, Any],
     ) -> "CodeInterpreterInterceptionLogger":
-        params: CodeInterpreterInterceptionConfig = {}
-        if "code_interpreter_interception_params" in litellm_settings:
-            params = litellm_settings["code_interpreter_interception_params"]
-        elif "code_interpreter_interception" in callback_specific_params and isinstance(
-            callback_specific_params["code_interpreter_interception"], dict
-        ):
-            params = cast(
-                CodeInterpreterInterceptionConfig,
-                callback_specific_params["code_interpreter_interception"],
-            )
+        params: Final[CodeInterpreterInterceptionConfig] = (
+            litellm_settings["code_interpreter_interception_params"]
+            if "code_interpreter_interception_params" in litellm_settings
+            else callback_specific_params["code_interpreter_interception"]
+            if isinstance(callback_specific_params.get("code_interpreter_interception"), dict)
+            else {}
+        )
         return CodeInterpreterInterceptionLogger.from_config_yaml(params)
 
-    async def async_pre_call_deployment_hook(self, kwargs: dict[str, Any], call_type: CallTypes | None) -> dict | None:
+    async def async_pre_call_deployment_hook(
+        self, kwargs: dict[str, object], call_type: CallTypes | None
+    ) -> dict | None:
         if not kwargs.get("_agentic_loop_depth"):
             kwargs.pop(_INTERCEPTION_ACTIVE_KEY, None)
             kwargs.pop(_SANDBOX_KEY, None)
@@ -200,16 +275,16 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         if self.enabled_providers is not None and self._resolve_provider(kwargs) not in self.enabled_providers:
             return None
 
-        tools = kwargs.get("tools")
+        tools: Final = kwargs.get("tools")
         if not isinstance(tools, list):
             return None
         if not any(isinstance(tool, dict) and tool.get("type") == "code_interpreter" for tool in tools):
             return None
 
         kwargs[_INTERCEPTION_ACTIVE_KEY] = True
-        session_id = _extract_session_id(kwargs)
+        session_id: Final = _extract_session_id(kwargs)
         if session_id:
-            identity = _extract_identity(kwargs)
+            identity: Final = _extract_identity(kwargs)
             kwargs[_SANDBOX_KEY] = f"{identity}:{session_id}" if identity else session_id
             kwargs[_SESSION_SCOPED_KEY] = True
         else:
@@ -219,7 +294,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             kwargs[_CONVERTED_STREAM_KEY] = True
         self._write_interception_metadata(kwargs)
 
-        function_tool = self._get_function_tool(call_type=call_type)
+        function_tool: Final = self._get_function_tool(call_type=call_type)
         kwargs["tools"] = [
             (function_tool if isinstance(tool, dict) and tool.get("type") == "code_interpreter" else tool)
             for tool in tools
@@ -229,13 +304,14 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         return kwargs
 
     @staticmethod
-    def _strip_interception_metadata(kwargs: dict[str, Any]) -> None:
-        metadata = kwargs.get(_LITELLM_METADATA_KEY)
+    def _strip_interception_metadata(kwargs: dict[str, object]) -> None:
+        metadata: Final = kwargs.get(_LITELLM_METADATA_KEY)
         if not isinstance(metadata, dict):
             return
-        filtered_metadata = {
+        current_metadata: Final[dict[str, object]] = metadata
+        filtered_metadata: Final = {
             key: value
-            for key, value in metadata.items()
+            for key, value in current_metadata.items()
             if not is_interception_internal_key(key)
             and not key.startswith("_agentic_loop")
             and key != "max_agentic_loops"
@@ -247,9 +323,9 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             kwargs.pop(_LITELLM_METADATA_KEY, None)
 
     @staticmethod
-    def _write_interception_metadata(kwargs: dict[str, Any]) -> None:
-        metadata = kwargs.get(_LITELLM_METADATA_KEY)
-        metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    def _write_interception_metadata(kwargs: dict[str, object]) -> None:
+        existing: Final = kwargs.get(_LITELLM_METADATA_KEY)
+        metadata: Final[dict[str, object]] = dict(existing) if isinstance(existing, dict) else {}
         for key in (_INTERCEPTION_ACTIVE_KEY, _SANDBOX_KEY, _SESSION_SCOPED_KEY, _CONVERTED_STREAM_KEY):
             if key in kwargs:
                 metadata[key] = kwargs[key]
@@ -264,7 +340,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         }
 
     def _get_function_tool(self, call_type: CallTypes | None) -> CodeExecutionFunctionTool:
-        description = "Execute python code in a sandbox and return stdout."
+        description: Final = "Execute python code in a sandbox and return stdout."
         if call_type in (CallTypes.completion, CallTypes.acompletion):
             return {
                 "type": "function",
@@ -296,22 +372,23 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         }
 
     @staticmethod
-    def _tool_choice_targets_code_interpreter(tool_choice: Any) -> bool:
+    def _tool_choice_targets_code_interpreter(tool_choice: object) -> bool:
         if not isinstance(tool_choice, dict):
             return False
-        function = tool_choice.get("function")
+        choice: Final[dict[str, object]] = tool_choice
+        function: Final = choice.get("function")
         return (
-            tool_choice.get("type") == "code_interpreter"
-            or tool_choice.get("name") == "code_interpreter"
-            or tool_choice.get("name") == LITELLM_CODE_EXECUTION_TOOL_NAME
+            choice.get("type") == "code_interpreter"
+            or choice.get("name") == "code_interpreter"
+            or choice.get("name") == LITELLM_CODE_EXECUTION_TOOL_NAME
             or (isinstance(function, dict) and function.get("name") == LITELLM_CODE_EXECUTION_TOOL_NAME)
         )
 
-    def _resolve_provider(self, kwargs: dict[str, Any]) -> str | None:
-        provider = kwargs.get("custom_llm_provider")
-        if provider:
+    def _resolve_provider(self, kwargs: dict[str, object]) -> str | None:
+        provider: Final = kwargs.get("custom_llm_provider")
+        if isinstance(provider, str) and provider:
             return provider
-        model = kwargs.get("model")
+        model: Final = kwargs.get("model")
         if not isinstance(model, str):
             return None
         try:
@@ -321,7 +398,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
 
     async def async_should_run_agentic_loop(
         self,
-        response: Any,
+        response: object,
         model: str,
         messages: list[dict],
         tools: list[dict] | None,
@@ -336,7 +413,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         if self.enabled_providers is not None and custom_llm_provider not in self.enabled_providers:
             return False, {}
 
-        tool_calls = (
+        tool_calls: Final = (
             self._extract_chat_completion_code_execution_tool_calls(response=response)
             if kwargs.get("_agentic_loop_api_surface") == CHAT_COMPLETION_AGENTIC_SURFACE
             else self._extract_code_execution_tool_calls(response=response)
@@ -351,12 +428,12 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         tools: dict,
         model: str,
         messages: list[dict],
-        response: Any,
-        anthropic_messages_provider_config: Any,
-        anthropic_messages_optional_request_params: dict,
-        logging_obj: Any,
+        response: object,
+        anthropic_messages_provider_config: object,
+        anthropic_messages_optional_request_params: dict[str, object],
+        logging_obj: "LiteLLMLoggingObj",
         stream: bool,
-        kwargs: dict,
+        kwargs: dict[str, object],
     ) -> AgenticLoopPlan:
         if kwargs.get("_agentic_loop_api_surface") == CHAT_COMPLETION_AGENTIC_SURFACE:
             return await self._build_chat_completion_agentic_loop_plan(
@@ -368,16 +445,16 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             )
 
         await self._prune_expired_cache()
-        tool_calls = cast(list[CodeExecutionToolCall], tools.get("tool_calls", []))
-        sandbox_key = kwargs.get(_SANDBOX_KEY)
-        is_session = bool(kwargs.get(_SESSION_SCOPED_KEY))
-        identity = _extract_identity(kwargs) if is_session else None
+        tool_calls: Final = self._agentic_tool_calls(tools)
+        sandbox_key: Final = self._extract_sandbox_key(kwargs)
+        is_session: Final = bool(kwargs.get(_SESSION_SCOPED_KEY))
+        identity: Final = _extract_identity(kwargs) if is_session else None
         container, params = await self._get_or_create_container(cache_key=sandbox_key, identity=identity)
 
         try:
-            container_id = cast(str | None, getattr(container, "id", None))
-            input_list = self._normalize_messages(messages)
-            code_interpreter_calls: list[CodeInterpreterCall] = []
+            container_id: Final = self._container_id(container)
+            input_list: Final = self._normalize_messages(messages)
+            code_interpreter_calls: Final[list[CodeInterpreterCall]] = []
             for tool_call in tool_calls:
                 arguments = tool_call.get("arguments", "")
                 code = self._parse_code(arguments)
@@ -411,8 +488,8 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             await self._delete_container_for_cache_key(sandbox_key)
             raise
 
-        optional_params = anthropic_messages_optional_request_params
-        request_patch = AgenticLoopRequestPatch(
+        optional_params: Final = anthropic_messages_optional_request_params
+        request_patch: Final = AgenticLoopRequestPatch(
             model=model,
             messages=input_list,
             tools=self._get_followup_tools(
@@ -443,15 +520,15 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         kwargs: dict[str, object],
     ) -> AgenticLoopPlan:
         await self._prune_expired_cache()
-        tool_calls = cast(list[CodeExecutionToolCall], tools.get("tool_calls", []))
-        sandbox_key = cast(str | None, kwargs.get(_SANDBOX_KEY))
-        is_session = bool(kwargs.get(_SESSION_SCOPED_KEY))
-        identity = _extract_identity(cast(dict[str, Any], kwargs)) if is_session else None
+        tool_calls: Final = self._agentic_tool_calls(tools)
+        sandbox_key: Final = self._extract_sandbox_key(kwargs)
+        is_session: Final = bool(kwargs.get(_SESSION_SCOPED_KEY))
+        identity: Final = _extract_identity(kwargs) if is_session else None
         container, params = await self._get_or_create_container(cache_key=sandbox_key, identity=identity)
 
         try:
-            container_id = cast(str | None, getattr(container, "id", None))
-            tool_results = [
+            container_id: Final = self._container_id(container)
+            tool_results: Final = [
                 await self._build_chat_completion_tool_result(
                     container=container,
                     params=params,
@@ -463,10 +540,10 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         except Exception:
             await self._delete_container_for_cache_key(sandbox_key)
             raise
-        tool_messages = [result[0] for result in tool_results]
-        code_interpreter_calls = [result[1] for result in tool_results]
+        tool_messages: Final = [result[0] for result in tool_results]
+        code_interpreter_calls: Final = [result[1] for result in tool_results]
 
-        request_patch = AgenticLoopRequestPatch(
+        request_patch: Final = AgenticLoopRequestPatch(
             model=model,
             messages=list(messages) + [self._build_chat_completion_assistant_message(tool_calls)] + tool_messages,
             tools=self._get_followup_tools(
@@ -489,17 +566,35 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             },
         )
 
+    @staticmethod
+    def _container_id(container: ContainerHandle) -> str | None:
+        container_id: Final[object] = getattr(container, "id", None)
+        return container_id if isinstance(container_id, str) else None
+
+    @staticmethod
+    def _agentic_tool_calls(tools: dict[str, object]) -> list[CodeExecutionToolCall]:
+        tool_calls: Final = tools.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            return []
+        items: Final[list[object]] = tool_calls
+        return [_narrow_tool_call(item) for item in items if isinstance(item, dict)]
+
+    @staticmethod
+    def _extract_sandbox_key(kwargs: dict[str, object]) -> str | None:
+        sandbox_key: Final = kwargs.get(_SANDBOX_KEY)
+        return sandbox_key if isinstance(sandbox_key, str) else None
+
     async def _build_chat_completion_tool_result(
         self,
-        container: object,
-        params: dict[str, Any] | None,
+        container: ContainerHandle,
+        params: SandboxToolParams | None,
         tool_call: CodeExecutionToolCall,
         container_id: str | None,
     ) -> tuple[ChatCompletionToolMessage, CodeInterpreterCall]:
-        arguments = tool_call.get("arguments", "")
-        code = self._parse_code(arguments)
-        stdout = await self._run_tool_call(container=container, params=params, arguments=arguments)
-        tool_call_id = tool_call.get("id") or tool_call.get("call_id") or uuid.uuid4().hex
+        arguments: Final = tool_call.get("arguments", "")
+        code: Final = self._parse_code(arguments)
+        stdout: Final = await self._run_tool_call(container=container, params=params, arguments=arguments)
+        tool_call_id: Final = tool_call.get("id") or tool_call.get("call_id") or uuid.uuid4().hex
         return (
             {
                 "role": "tool",
@@ -517,10 +612,15 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         )
 
     async def async_agentic_loop_cleanup_hook(self, plan: AgenticLoopPlan, kwargs: dict) -> None:
-        metadata = plan.metadata or {} if plan else {}
+        metadata: Final[dict[str, object]] = plan.metadata or {} if plan else {}
         if metadata.get("is_session_scoped"):
             return
-        await self._delete_container_for_cache_key(metadata.get("sandbox_key"))
+        await self._delete_container_for_cache_key(self._metadata_sandbox_key(metadata))
+
+    @staticmethod
+    def _metadata_sandbox_key(metadata: Mapping[str, object]) -> str | None:
+        sandbox_key: Final = metadata.get("sandbox_key")
+        return sandbox_key if isinstance(sandbox_key, str) else None
 
     @staticmethod
     def _filter_agentic_loop_kwargs(kwargs: dict[str, object]) -> dict[str, object]:
@@ -531,12 +631,12 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             and not is_interception_internal_key(k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES)
         }
 
-    def _get_followup_tools(self, tools: object, call_type: CallTypes | None) -> list[dict[str, Any]] | None:
+    def _get_followup_tools(self, tools: object, call_type: CallTypes | None) -> list[dict[str, object]] | None:
         if not isinstance(tools, list):
             return None
         return [
             (
-                self._get_function_tool(call_type=call_type)
+                dict(self._get_function_tool(call_type=call_type))
                 if isinstance(tool, dict) and tool.get("type") == "code_interpreter"
                 else tool
             )
@@ -544,38 +644,46 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         ]
 
     def _get_followup_optional_params(self, optional_params: dict[str, object]) -> dict[str, object]:
-        drop_tool_choice = self._tool_choice_targets_code_interpreter(optional_params.get("tool_choice"))
+        drop_tool_choice: Final = self._tool_choice_targets_code_interpreter(optional_params.get("tool_choice"))
         return {
             k: v for k, v in optional_params.items() if k != "tools" and not (k == "tool_choice" and drop_tool_choice)
         }
 
-    async def async_post_agentic_loop_response_hook(self, response: Any, plan: AgenticLoopPlan, kwargs: dict) -> Any:
-        metadata = plan.metadata or {} if plan else {}
+    async def async_post_agentic_loop_response_hook(
+        self, response: object, plan: AgenticLoopPlan, kwargs: dict
+    ) -> object:
+        metadata: Final[dict[str, object]] = plan.metadata or {} if plan else {}
         if not metadata.get("is_session_scoped"):
-            await self._delete_container_for_cache_key(metadata.get("sandbox_key"))
+            await self._delete_container_for_cache_key(self._metadata_sandbox_key(metadata))
 
-        calls = metadata.get("code_interpreter_calls")
-        if not calls:
+        calls: Final = metadata.get("code_interpreter_calls")
+        if not calls or not isinstance(calls, list):
             return response
 
-        is_dict = isinstance(response, dict)
-        output = response.get("output") if is_dict else getattr(response, "output", None)
-        if not isinstance(output, list):
+        if isinstance(response, dict):
+            response_mapping: Final[dict[str, object]] = response
+            merged_mapping_output: Final = self._merge_code_interpreter_calls(response_mapping.get("output"), calls)
+            if merged_mapping_output is not None:
+                response_mapping["output"] = merged_mapping_output
             return response
 
-        def _item_type(item: Any) -> Any:
-            return item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
-
-        insert_at = next(
-            (i for i, item in enumerate(output) if _item_type(item) == "message"),
-            len(output),
-        )
-        new_output = output[:insert_at] + list(calls) + output[insert_at:]
-        if is_dict:
-            response["output"] = new_output
-        else:
-            response.output = new_output
+        if not isinstance(response, _SupportsOutput):
+            return response
+        merged_attr_output: Final = self._merge_code_interpreter_calls(response.output, calls)
+        if merged_attr_output is not None:
+            response.output = merged_attr_output
         return response
+
+    @staticmethod
+    def _merge_code_interpreter_calls(output: object, calls: Sequence[object]) -> list[object] | None:
+        if not isinstance(output, list):
+            return None
+        items: Final[list[object]] = output
+        insert_at: Final = next(
+            (i for i, item in enumerate(items) if _output_item_type(item) == "message"),
+            len(items),
+        )
+        return items[:insert_at] + list(calls) + items[insert_at:]
 
     @staticmethod
     def _parse_code(arguments: str) -> str:
@@ -584,16 +692,16 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         except (json.JSONDecodeError, TypeError, AttributeError):
             return ""
 
-    async def _run_tool_call(self, container: Any, params: dict[str, Any] | None, arguments: str) -> str:
+    async def _run_tool_call(self, container: ContainerHandle, params: SandboxToolParams | None, arguments: str) -> str:
         try:
-            code = json.loads(arguments).get("code", "") if arguments else ""
+            code: Final = json.loads(arguments).get("code", "") if arguments else ""
         except (json.JSONDecodeError, TypeError):
             return "[invalid tool arguments: could not parse code]"
 
-        result = await self._run_code(container=container, params=params, code=code)
+        result: Final = await self._run_code(container=container, params=params, code=code)
         if getattr(result, "error", None):
-            error = result.error
-            message = error.get("value") or error.get("name") if isinstance(error, dict) else str(error)
+            error: Final = result.error
+            message: Final = error.get("value") or error.get("name") if isinstance(error, dict) else str(error)
             return f"[execution error] {message}"
         return getattr(result, "stdout", "") or ""
 
@@ -601,9 +709,9 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         self,
         cache_key: str | None,
         identity: str | None = None,
-    ) -> tuple[Any, dict[str, Any] | None]:
+    ) -> tuple[ContainerHandle, SandboxToolParams | None]:
         if cache_key:
-            cached = self._container_cache.get(cache_key)
+            cached: Final = self._container_cache.get(cache_key)
             if cached is not None:
                 self._container_cache[cache_key] = (cached[0], cached[1], time.time(), cached[3])
                 return cached[0], cached[1]
@@ -616,32 +724,34 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         return container, params
 
     async def _evict_lru_session_if_over_cap(self, identity: str) -> None:
-        identity_entries = [(k, v) for k, v in self._container_cache.items() if v[3] == identity]
+        identity_entries: Final = [(k, v) for k, v in self._container_cache.items() if v[3] == identity]
         if len(identity_entries) < _SESSION_SCOPED_PER_IDENTITY_CAP:
             return
         lru_key, lru_entry = min(identity_entries, key=lambda item: item[1][2])
         self._container_cache.pop(lru_key, None)
         await self._delete_container(container=lru_entry[0], params=lru_entry[1])
 
-    async def _create_container(self) -> tuple[Any, dict[str, Any] | None]:
+    async def _create_container(self) -> tuple[ContainerHandle, SandboxToolParams | None]:
         if self.sandbox_config is not None:
             return await self.sandbox_config.acreate_sandbox(), None
 
-        params = _resolve_sandbox_tool(self.sandbox_tool_name)
+        params: Final = _resolve_sandbox_tool(self.sandbox_tool_name)
         if params is None:
             raise ValueError(
                 "CodeInterpreterInterception: no sandbox available. Provide a "
                 "sandbox_config or configure a sandbox tool resolvable via "
                 "sandbox_tool_name."
             )
-        container = await litellm.acreate_sandbox(
+        container: Final = await litellm.acreate_sandbox(
             provider=params["sandbox_provider"],
             api_key=params.get("api_key"),
             api_base=params.get("api_base"),
         )
         return container, params
 
-    async def _run_code(self, container: Any, params: dict[str, Any] | None, code: str) -> Any:
+    async def _run_code(
+        self, container: ContainerHandle, params: SandboxToolParams | None, code: str
+    ) -> CodeExecutionResult:
         if self.sandbox_config is not None:
             return await self.sandbox_config.arun_code(container=container, code=code)
         if params is None:
@@ -653,7 +763,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             api_key=params.get("api_key"),
         )
 
-    async def _delete_container(self, container: Any, params: dict[str, Any] | None) -> None:
+    async def _delete_container(self, container: ContainerHandle, params: SandboxToolParams | None) -> None:
         try:
             if self.sandbox_config is not None:
                 await self.sandbox_config.adelete_sandbox(container=container)
@@ -672,12 +782,12 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
     async def _delete_container_for_cache_key(self, cache_key: str | None) -> None:
         if not cache_key:
             return
-        cached = self._container_cache.pop(cache_key, None)
+        cached: Final = self._container_cache.pop(cache_key, None)
         if cached is None:
             return
         await self._delete_container(container=cached[0], params=cached[1])
 
-    def _normalize_messages(self, messages: Any) -> list[dict[str, Any]]:
+    def _normalize_messages(self, messages: object) -> list[dict[str, object]]:
         if isinstance(messages, str):
             return [{"role": "user", "content": messages}]
         if isinstance(messages, list):
@@ -685,10 +795,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         return []
 
     def _extract_code_execution_tool_calls(self, response: object) -> list[CodeExecutionToolCall]:
-        if isinstance(response, dict):
-            output = response.get("output", [])
-        else:
-            output = getattr(response, "output", []) or []
+        output: Final = _response_output(response)
         if not isinstance(output, list):
             return []
 
@@ -702,17 +809,15 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             if self._is_code_execution_call(item)
         ]
 
-    def _extract_chat_completion_code_execution_tool_calls(
-        self, response: ModelResponse | dict[str, Any]
-    ) -> list[CodeExecutionToolCall]:
-        model_response = self._to_model_response(response)
+    def _extract_chat_completion_code_execution_tool_calls(self, response: object) -> list[CodeExecutionToolCall]:
+        model_response: Final = self._to_model_response(response)
         if model_response is None:
             return []
-        choices = model_response.choices or []
+        choices: Final = model_response.choices or []
         if not choices:
             return []
-        message = choices[0].message
-        tool_calls = message.tool_calls or []
+        message: Final = choices[0].message
+        tool_calls: Final = message.tool_calls or []
 
         return [
             normalized
@@ -743,48 +848,50 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
 
     @staticmethod
     def _build_chat_completion_assistant_message(
-        tool_calls: list[CodeExecutionToolCall],
+        tool_calls: Sequence[CodeExecutionToolCall],
     ) -> ChatCompletionAssistantMessage:
+        assistant_tool_calls: Final[list[ChatCompletionAssistantToolCall]] = [
+            {
+                "id": tool_call.get("id"),
+                "type": "function",
+                "function": {
+                    "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
+                    "arguments": tool_call.get("arguments", ""),
+                },
+            }
+            for tool_call in tool_calls
+        ]
         return {
             "role": "assistant",
-            "tool_calls": [
-                cast(
-                    ChatCompletionAssistantToolCall,
-                    {
-                        "id": tool_call.get("id"),
-                        "type": "function",
-                        "function": {
-                            "name": LITELLM_CODE_EXECUTION_TOOL_NAME,
-                            "arguments": tool_call.get("arguments", ""),
-                        },
-                    },
-                )
-                for tool_call in tool_calls
-            ],
+            "tool_calls": assistant_tool_calls,
         }
 
     @staticmethod
-    def _to_model_response(
-        response: ModelResponse | dict[str, Any],
-    ) -> ModelResponse | None:
+    def _to_model_response(response: object) -> ModelResponse | None:
         if isinstance(response, ModelResponse):
             return response
+        if not isinstance(response, dict):
+            return None
+        response_fields: Final[dict[str, object]] = response
         try:
-            return ModelResponse(**response)
+            return ModelResponse(**response_fields)
         except (TypeError, ValidationError):
             return None
 
-    def _is_code_execution_call(self, item: Any) -> bool:
+    def _is_code_execution_call(self, item: object) -> bool:
         if isinstance(item, dict):
-            return item.get("type") == "function_call" and item.get("name") == LITELLM_CODE_EXECUTION_TOOL_NAME
-        return (
-            getattr(item, "type", None) == "function_call"
-            and getattr(item, "name", None) == LITELLM_CODE_EXECUTION_TOOL_NAME
-        )
+            item_mapping: Final[dict[str, object]] = item
+            return (
+                item_mapping.get("type") == "function_call"
+                and item_mapping.get("name") == LITELLM_CODE_EXECUTION_TOOL_NAME
+            )
+        item_type: Final[object] = getattr(item, "type", None)
+        item_name: Final[object] = getattr(item, "name", None)
+        return item_type == "function_call" and item_name == LITELLM_CODE_EXECUTION_TOOL_NAME
 
     async def _prune_expired_cache(self) -> None:
-        now = time.time()
-        expired = [
+        now: Final = time.time()
+        expired: Final = [
             (cache_key, container, params)
             for cache_key, (container, params, last_accessed, *_) in self._container_cache.items()
             if now - last_accessed > _CACHE_TTL_SECONDS

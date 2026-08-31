@@ -8,7 +8,7 @@ budget-window value types and the team-model alias table). Re-exported from
 
 import json
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Final, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -64,8 +64,8 @@ class TeamBase(LiteLLMPydanticObjectBase):
     team_alias: str | None = None
     team_id: str | None = None
     organization_id: str | None = None
-    admins: list = []
-    members: list = []
+    admins: list[str] = []
+    members: list[str] = []
     members_with_roles: list[Member] = []
     team_member_permissions: list[str] | None = None
     metadata: dict | None = None
@@ -75,7 +75,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
     soft_budget: float | None = None
     budget_duration: str | None = None
     budget_limits: list[BudgetLimitEntry] | None = None
-    models: list = []
+    models: list[str] = []
     blocked: bool = False
     router_settings: dict | None = None
     access_group_ids: list[str] | None = None
@@ -83,7 +83,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
 
 
 class LiteLLM_TeamTable(TeamBase):
-    team_id: str  # type: ignore
+    team_id: str
     spend: float | None = None
     max_parallel_requests: int | None = None
     budget_duration: str | None = None
@@ -104,7 +104,7 @@ class LiteLLM_TeamTable(TeamBase):
     @model_validator(mode="before")
     @classmethod
     def set_model_info(cls, values):
-        dict_fields = [
+        dict_fields: Final = [
             "metadata",
             "aliases",
             "config",

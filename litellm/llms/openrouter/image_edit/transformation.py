@@ -42,7 +42,7 @@ Response format:
 
 import base64
 from io import BufferedReader, BytesIO
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
@@ -89,8 +89,8 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
-        mapped_params: dict[str, Any] = {}
+        supported_params: Final = self.get_supported_openai_params(model)
+        mapped_params: Final[dict[str, Any]] = {}
 
         for key, value in image_edit_optional_params.items():
             if key in supported_params:
@@ -152,11 +152,11 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> tuple[dict, RequestFiles]:
-        content_parts: list[dict[str, Any]] = []
+        content_parts: Final[list[dict[str, Any]]] = []
 
         # Add source image(s) as base64 data URLs
         if image is not None:
-            images = image if isinstance(image, list) else [image]
+            images: Final = image if isinstance(image, list) else [image]
             for img in images:
                 if img is None:
                     continue
@@ -174,7 +174,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         if prompt:
             content_parts.append({"type": "text", "text": prompt})
 
-        request_body: dict[str, Any] = {
+        request_body: Final[dict[str, Any]] = {
             "model": model,
             "messages": [
                 {
@@ -190,7 +190,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
             if key not in ("model", "messages", "modalities"):
                 request_body[key] = value
 
-        empty_files = cast(RequestFiles, [])
+        empty_files: Final = cast(RequestFiles, [])
         return request_body, empty_files
 
     def transform_image_edit_response(
@@ -200,7 +200,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> ImageResponse:
         try:
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
         except Exception as e:
             raise OpenRouterException(
                 message=f"Error parsing OpenRouter response: {e}",
@@ -208,11 +208,11 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
                 headers=raw_response.headers,
             )
 
-        model_response = ImageResponse()
+        model_response: Final = ImageResponse()
         model_response.data = []
 
         try:
-            choices = response_json.get("choices", [])
+            choices: Final = response_json.get("choices", [])
 
             for choice in choices:
                 message = choice.get("message", {})
@@ -270,7 +270,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         Uses the same mapping as image generation since OpenRouter
         handles both through the same chat completions endpoint.
         """
-        size_to_aspect_ratio = {
+        size_to_aspect_ratio: Final = {
             "256x256": "1:1",
             "512x512": "1:1",
             "1024x1024": "1:1",
@@ -289,7 +289,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         Uses the same mapping as image generation since OpenRouter
         handles both through the same chat completions endpoint.
         """
-        quality_to_image_size = {
+        quality_to_image_size: Final = {
             "low": "1K",
             "standard": "1K",
             "medium": "2K",
@@ -306,17 +306,17 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         model: str,
     ) -> None:
         """Extract and set usage and cost information from OpenRouter response."""
-        usage_data = response_json.get("usage", {})
+        usage_data: Final = response_json.get("usage", {})
         if usage_data:
-            prompt_tokens = usage_data.get("prompt_tokens", 0)
-            total_tokens = usage_data.get("total_tokens", 0)
+            prompt_tokens: Final = usage_data.get("prompt_tokens", 0)
+            total_tokens: Final = usage_data.get("total_tokens", 0)
 
-            completion_tokens_details = usage_data.get("completion_tokens_details", {})
-            image_tokens = completion_tokens_details.get("image_tokens", 0)
+            completion_tokens_details: Final = usage_data.get("completion_tokens_details", {})
+            image_tokens: Final = completion_tokens_details.get("image_tokens", 0)
 
             # For image edit, input may include image tokens
             input_image_tokens = 0
-            prompt_tokens_details = usage_data.get("prompt_tokens_details", {})
+            prompt_tokens_details: Final = usage_data.get("prompt_tokens_details", {})
             if prompt_tokens_details:
                 input_image_tokens = prompt_tokens_details.get("image_tokens", 0)
 
@@ -330,7 +330,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
                 total_tokens=total_tokens,
             )
 
-            cost = usage_data.get("cost")
+            cost: Final = usage_data.get("cost")
             if cost is not None:
                 if not hasattr(model_response, "_hidden_params"):
                     model_response._hidden_params = {}
@@ -340,7 +340,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
                     cost
                 )
 
-            cost_details = usage_data.get("cost_details", {})
+            cost_details: Final = usage_data.get("cost_details", {})
             if cost_details:
                 if "response_cost_details" not in model_response._hidden_params:
                     model_response._hidden_params["response_cost_details"] = {}

@@ -1,7 +1,7 @@
 import json
 import re
 from collections.abc import Collection
-from typing import Any
+from typing import Any, Final
 
 import orjson
 from fastapi import Request, UploadFile, status
@@ -14,7 +14,7 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.types.router import Deployment
 
-_FORM_CONTENT_TYPES: frozenset[str] = frozenset({"application/x-www-form-urlencoded", "multipart/form-data"})
+_FORM_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-www-form-urlencoded", "multipart/form-data"})
 
 
 def _normalize_media_type(content_type: str) -> str:
@@ -55,16 +55,16 @@ async def _read_request_body(request: Request | None) -> dict:
             return {}
 
         # Check if we already read and parsed the body
-        _cached_request_body: dict | None = _safe_get_request_parsed_body(request=request)
+        _cached_request_body: Final[dict | None] = _safe_get_request_parsed_body(request=request)
         if _cached_request_body is not None:
             return _cached_request_body
 
-        _request_headers: dict = _safe_get_request_headers(request=request)
-        content_type = _request_headers.get("content-type", "")
+        _request_headers: Final[dict] = _safe_get_request_headers(request=request)
+        content_type: Final = _request_headers.get("content-type", "")
 
         if _is_form_content_type(content_type):
             try:
-                form_data = await request.form()
+                form_data: Final = await request.form()
             except Exception as e:
                 # ``request.form()`` raises on malformed multipart (missing
                 # boundary, malformed chunk encoding, …). Surface as 400 so
@@ -84,7 +84,7 @@ async def _read_request_body(request: Request | None) -> dict:
                 parsed_body["metadata"] = json.loads(parsed_body["metadata"])
         else:
             # Read the request body
-            body = await request.body()
+            body: Final = await request.body()
 
             # Return empty dict if body is empty or None
             if not body:
@@ -96,7 +96,7 @@ async def _read_request_body(request: Request | None) -> dict:
                     # The surrogate-repair fallback below runs two full-body re.sub
                     # passes, which block the event loop on multi-MB malformed bodies.
                     # Above the configured size, skip the repair and raise the 400 now.
-                    repair_limit_bytes = MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB * 1024 * 1024
+                    repair_limit_bytes: Final = MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB * 1024 * 1024
                     if repair_limit_bytes > 0 and len(body) > repair_limit_bytes:
                         verbose_proxy_logger.error("Invalid JSON payload received: %s", e)
                         raise ProxyException(
@@ -185,8 +185,8 @@ def _safe_get_request_headers(request: Request | None) -> dict:
     """
     if request is None:
         return {}
-    state = getattr(request, "state", None)
-    cached = getattr(state, "_cached_headers", None)
+    state: Final = getattr(request, "state", None)
+    cached: Final = getattr(state, "_cached_headers", None)
     if isinstance(cached, dict):
         return cached
     if cached is not None:
@@ -222,8 +222,8 @@ def check_file_size_under_limit(
         premium_user,
     )
 
-    file_contents_size = file.size or 0
-    file_content_size_in_mb = file_contents_size / (1024 * 1024)
+    file_contents_size: Final = file.size or 0
+    file_content_size_in_mb: Final = file_contents_size / (1024 * 1024)
     if "metadata" not in request_data:
         request_data["metadata"] = {}
     request_data["metadata"]["file_size_in_mb"] = file_content_size_in_mb
@@ -231,7 +231,7 @@ def check_file_size_under_limit(
 
     if llm_router is not None and request_data["model"] in router_model_names:
         try:
-            deployment: Deployment | None = llm_router.get_deployment_by_model_group_name(
+            deployment: Final[Deployment | None] = llm_router.get_deployment_by_model_group_name(
                 model_group_name=request_data["model"]
             )
             if (
@@ -273,11 +273,9 @@ async def get_form_data(request: Request) -> dict[str, Any]:
 
     Handles when OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
     """
-    form = await request.form()
-    form_data = dict(form)
-    parsed_form_data: dict[str, Any] = {}
-    for key, value in form_data.items():
-        # OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
+    form: Final = await request.form()
+    parsed_form_data: Final[dict[str, Any]] = {}
+    for key, value in form.multi_items():  # not dict(form), which keeps only the last repeat
         if key.endswith("[]"):
             clean_key = key[:-2]
             parsed_form_data.setdefault(clean_key, []).append(value)
@@ -308,7 +306,7 @@ async def convert_upload_files_to_file_data(
         # data["files"] is now [(filename, content, content_type), ...]
         ```
     """
-    data = {}
+    data: Final = {}
     for key, value in form_data.items():
         if isinstance(value, list):
             # Check if it's a list of UploadFile objects
@@ -336,7 +334,7 @@ async def get_request_body(request: Request) -> dict[str, Any]:
     Read the request body and parse it as JSON.
     """
     if request.method == "POST":
-        content_type = request.headers.get("content-type", "")
+        content_type: Final = request.headers.get("content-type", "")
         if _is_json_content_type(content_type):
             return await _read_request_body(request)
         elif _is_form_content_type(content_type):
@@ -384,7 +382,7 @@ def extract_nested_form_metadata(form_data: dict[str, Any], prefix: str = "litel
     if not form_data:
         return {}
 
-    metadata: dict[str, Any] = {}
+    metadata: Final[dict[str, Any]] = {}
 
     for key, value in form_data.items():
         # Skip keys that don't start with the prefix
@@ -442,20 +440,20 @@ def get_tags_from_request_body(request_body: dict) -> list[str]:
     Returns:
         List of tag names (strings), empty list if no valid tags found
     """
-    metadata_variable_name = get_metadata_variable_name_from_kwargs(request_body)
+    metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(request_body)
     metadata = request_body.get(metadata_variable_name)
     # metadata can arrive as a JSON string from multipart/form-data or extra_body;
     # coerce defensively so .get() below never raises AttributeError.
     if isinstance(metadata, str):
         from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
-        parsed = safe_json_loads(metadata)
+        parsed: Final = safe_json_loads(metadata)
         metadata = parsed if isinstance(parsed, dict) else {}
     elif not isinstance(metadata, dict):
         metadata = {}
-    tags_in_metadata: Any = metadata.get("tags", [])
-    tags_in_request_body: Any = request_body.get("tags", [])
-    combined_tags: list[str] = []
+    tags_in_metadata: Final[Any] = metadata.get("tags", [])
+    tags_in_request_body: Final[Any] = request_body.get("tags", [])
+    combined_tags: Final[list[str]] = []
 
     ######################################
     # Only combine tags if they are lists
@@ -484,14 +482,14 @@ def populate_request_with_path_params(request_data: dict, request: Request) -> d
         dict: Updated request_data with path parameters and query parameters added
     """
     # Add query parameters to request_data (for GET requests, etc.)
-    query_params = _safe_get_request_query_params(request)
+    query_params: Final = _safe_get_request_query_params(request)
     if query_params:
         for key, value in query_params.items():
             # Don't overwrite existing values from request body
             request_data.setdefault(key, value)
 
     # Try to get path_params if available (sometimes populated by FastAPI)
-    path_params = getattr(request, "path_params", None)
+    path_params: Final = getattr(request, "path_params", None)
     if isinstance(path_params, dict) and path_params:
         for key, value in path_params.items():
             if key == "vector_store_id":
@@ -529,15 +527,15 @@ def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None
     # Inline import — auth_utils participates in a proxy import cycle.
     from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
 
-    path = get_request_route(request)
-    vector_store_match = re.search(r"/vector_stores/([^/]+)/", path)
+    path: Final = get_request_route(request)
+    vector_store_match: Final = re.search(r"/vector_stores/([^/]+)/", path)
     if vector_store_match:
-        vector_store_id = vector_store_match.group(1)
+        vector_store_id: Final = vector_store_match.group(1)
         verbose_proxy_logger.debug(
             "populate_request_with_path_params: Extracted vector_store_id=%s from path=%s", vector_store_id, path
         )
         request_data.setdefault("vector_store_id", vector_store_id)
-        existing_ids = request_data.get("vector_store_ids")
+        existing_ids: Final = request_data.get("vector_store_ids")
         if isinstance(existing_ids, list):
             if vector_store_id not in existing_ids:
                 existing_ids.append(vector_store_id)

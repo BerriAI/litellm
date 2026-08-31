@@ -11,7 +11,7 @@ Auth: Bearer token (litellm_params.api_key, BEDROCK_MANTLE_API_KEY, or the
 """
 
 from collections.abc import AsyncIterator, Iterator
-from typing import Any
+from typing import Any, Final
 
 import litellm
 from litellm._logging import verbose_logger
@@ -52,7 +52,7 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         litellm_params: GenericLiteLLMParams | None = None,
         model: str | None = None,
     ) -> tuple[str | None, str | None]:
-        region = (
+        region: Final = (
             (litellm_params.aws_region_name if litellm_params else None)
             or get_secret_str("BEDROCK_MANTLE_REGION")
             or get_secret_str("AWS_REGION_NAME")
@@ -68,7 +68,7 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             or get_secret_str("BEDROCK_MANTLE_API_BASE")
             or f"https://bedrock-mantle.{region}.api.aws/{mantle_base_segment(model, litellm.model_cost)}"
         )
-        dynamic_api_key = self._resolve_bearer_token(api_key)
+        dynamic_api_key: Final = self._resolve_bearer_token(api_key)
         return api_base, dynamic_api_key
 
     def validate_environment(
@@ -90,13 +90,13 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             api_key=api_key,
             api_base=api_base,
         )
-        project_id = litellm_params.get("aws_bedrock_project_id")
+        project_id: Final = litellm_params.get("aws_bedrock_project_id")
         if project_id:
             headers["OpenAI-Project"] = project_id
         return headers
 
     def get_supported_openai_params(self, model: str) -> list:
-        base_params = super().get_supported_openai_params(model)
+        base_params: Final = super().get_supported_openai_params(model)
         try:
             if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
                 if "reasoning_effort" not in base_params:

@@ -31,7 +31,7 @@ Events:
 
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
@@ -40,14 +40,14 @@ if TYPE_CHECKING:
 
     from litellm.integrations.opentelemetry import OpenTelemetryConfig
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 
 
 # OTEL_SEMCONV_STABILITY_OPT_IN is a comma-separated list of category-specific
 # opt-in values. See https://opentelemetry.io/docs/specs/semconv/gen-ai/
-OTEL_SEMCONV_STABILITY_OPT_IN_ENV = "OTEL_SEMCONV_STABILITY_OPT_IN"
+OTEL_SEMCONV_STABILITY_OPT_IN_ENV: Final = "OTEL_SEMCONV_STABILITY_OPT_IN"
 
 
 class OTELSemconvCategory(Enum):
@@ -55,11 +55,11 @@ class OTELSemconvCategory(Enum):
 
 
 # Reverse lookup: opt-in token string -> OTELSemconvCategory.
-_SEMCONV_CATEGORY_BY_VALUE = {category.value: category for category in OTELSemconvCategory}
+_SEMCONV_CATEGORY_BY_VALUE: Final = {category.value: category for category in OTELSemconvCategory}
 
 
 # LiteLLM optional_params key -> OTEL gen_ai semconv span attribute.
-_SEMCONV_REQUEST_ATTRIBUTES = {
+_SEMCONV_REQUEST_ATTRIBUTES: Final = {
     "frequency_penalty": "gen_ai.request.frequency_penalty",
     "presence_penalty": "gen_ai.request.presence_penalty",
     "top_k": "gen_ai.request.top_k",
@@ -67,14 +67,14 @@ _SEMCONV_REQUEST_ATTRIBUTES = {
 }
 
 # usage_object key -> OTEL gen_ai semconv cache-token span attribute.
-_SEMCONV_CACHE_TOKEN_ATTRIBUTES = {
+_SEMCONV_CACHE_TOKEN_ATTRIBUTES: Final = {
     "cache_creation_input_tokens": "gen_ai.usage.cache_creation.input_tokens",
     "cache_read_input_tokens": "gen_ai.usage.cache_read.input_tokens",
 }
 
 # Name of the consolidated GenAI inference event (replaces the legacy
 # per-message gen_ai.content.prompt / per-choice gen_ai.content.completion).
-_INFERENCE_DETAILS_EVENT_NAME = "gen_ai.client.inference.operation.details"
+_INFERENCE_DETAILS_EVENT_NAME: Final = "gen_ai.client.inference.operation.details"
 
 
 def parse_semconv_opt_in(raw: str | None) -> set[OTELSemconvCategory]:
@@ -144,7 +144,7 @@ class OTELGenAISemconvMixin:
         Substring match (e.g. ``aembedding`` -> ``embeddings``); defaults to
         ``chat``.
         """
-        call_type = kwargs.get("call_type", "") or ""
+        call_type: Final = kwargs.get("call_type", "") or ""
         match call_type:
             case s if "embedding" in s:
                 return "embeddings"
@@ -164,11 +164,11 @@ class OTELGenAISemconvMixin:
             if value is not None:
                 self.safe_set_attribute(span=span, key=semconv_key, value=value)
 
-        stop = optional_params.get("stop")
+        stop: Final = optional_params.get("stop")
         if stop is not None:
             # Spec types this as string[]. safe_set_attribute coerces to a
             # primitive, so set the array directly via the span API.
-            stop_list = stop if isinstance(stop, list) else [stop]
+            stop_list: Final = stop if isinstance(stop, list) else [stop]
             span.set_attribute("gen_ai.request.stop_sequences", [str(s) for s in stop_list])
 
         # Conditionally required: set only when the request is streaming.
@@ -178,7 +178,7 @@ class OTELGenAISemconvMixin:
         # Conditionally required per spec ("if available and != 1"). Valid n is
         # an int >= 1, so n > 1 is equivalent for conformant input while
         # suppressing nonsensical values (0, negative, non-int).
-        n = optional_params.get("n")
+        n: Final = optional_params.get("n")
         if isinstance(n, int) and n > 1:
             self.safe_set_attribute(span=span, key="gen_ai.request.choice.count", value=n)
 
@@ -189,7 +189,7 @@ class OTELGenAISemconvMixin:
         """
         if not standard_logging_payload:
             return
-        usage = (standard_logging_payload.get("metadata") or {}).get("usage_object") or {}
+        usage: Final = (standard_logging_payload.get("metadata") or {}).get("usage_object") or {}
         for source_key, semconv_key in _SEMCONV_CACHE_TOKEN_ATTRIBUTES.items():
             value = usage.get(source_key)
             if value:
@@ -201,7 +201,7 @@ class OTELGenAISemconvMixin:
         Always includes provider/operation; input/output messages are added
         only when content capture is enabled and non-empty. Mixin-internal.
         """
-        attrs: dict[str, Any] = {
+        attrs: Final[dict[str, Any]] = {
             "event_name": _INFERENCE_DETAILS_EVENT_NAME,
             "gen_ai.provider.name": provider,
             "gen_ai.operation.name": self._gen_ai_operation_name(kwargs),
@@ -209,8 +209,8 @@ class OTELGenAISemconvMixin:
         if not self._capture_in_event():
             return attrs
 
-        input_messages = self._transform_messages_to_otel_semantic_conventions(kwargs.get("messages") or [])
-        output_messages = self._transform_choices_to_otel_semantic_conventions(response_obj.get("choices", []))
+        input_messages: Final = self._transform_messages_to_otel_semantic_conventions(kwargs.get("messages") or [])
+        output_messages: Final = self._transform_choices_to_otel_semantic_conventions(response_obj.get("choices", []))
         if input_messages:
             attrs["gen_ai.input.messages"] = safe_dumps(input_messages)
         if output_messages:
@@ -231,7 +231,7 @@ class OTELGenAISemconvMixin:
         Replaces the legacy per-message / per-choice content events.
         """
         LogRecord, SeverityNumber = self._otel_log_types()
-        log_record = LogRecord(
+        log_record: Final = LogRecord(
             timestamp=self._to_ns(datetime.now()),
             trace_id=parent_ctx.trace_id,
             span_id=parent_ctx.span_id,

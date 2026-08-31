@@ -2,7 +2,7 @@ import base64
 import time
 from collections.abc import Mapping
 from io import BytesIO
-from typing import Any
+from typing import TYPE_CHECKING, Final
 
 from aiohttp import ClientResponse
 from httpx import Headers, Response
@@ -21,6 +21,9 @@ from litellm.types.utils import (
 
 from ...base_llm.image_variations.transformation import BaseImageVariationConfig
 from ..common_utils import TopazException, TopazModelInfo
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
@@ -99,7 +102,7 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         optional_params: dict,
         headers: dict,
     ) -> HttpHandlerRequestFields:
-        request_params = HttpHandlerRequestFields(
+        request_params: Final = HttpHandlerRequestFields(
             files={"image": self.prepare_file_tuple(image)},
             data=optional_params,
         )
@@ -112,7 +115,7 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         response_ms: float,
     ) -> ImageResponse:
         # Convert to base64
-        base64_image = base64.b64encode(image_content).decode("utf-8")
+        base64_image: Final = base64.b64encode(image_content).decode("utf-8")
 
         return ImageResponse(
             created=int(time.time()),
@@ -136,12 +139,12 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         image: FileTypes,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
     ) -> ImageResponse:
-        image_content = await raw_response.read()
+        image_content: Final = await raw_response.read()
 
-        response_ms = logging_obj.get_response_ms()
+        response_ms: Final = logging_obj.get_response_ms()
 
         return self._common_transform_response_image_variation(image_content, response_ms)
 
@@ -155,12 +158,12 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         image: FileTypes,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
     ) -> ImageResponse:
-        image_content = raw_response.content
+        image_content: Final = raw_response.content
 
-        response_ms = raw_response.elapsed.total_seconds() * 1000  # Convert to milliseconds
+        response_ms: Final = raw_response.elapsed.total_seconds() * 1000  # Convert to milliseconds
 
         return self._common_transform_response_image_variation(image_content, response_ms)
 

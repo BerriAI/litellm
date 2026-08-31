@@ -6,9 +6,11 @@ Slack alerts are sent every 10s or when events are greater than X events
 see custom_batch_logger.py for more details / defaults
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
+
+from .ms_teams import MS_TEAMS_ALERTING_DESTINATION, build_ms_teams_payload
 
 if TYPE_CHECKING:
     from .slack_alerting import SlackAlerting as _SlackAlerting
@@ -19,7 +21,7 @@ else:
 
 
 def squash_payloads(queue):
-    squashed = {}
+    squashed: Final = {}
     if len(queue) == 0:
         return squashed
     if len(queue) == 1:
@@ -57,19 +59,22 @@ async def send_to_webhook(slackAlertingInstance: SlackAlertingType, item, count)
     """
     import json
 
-    payload = item.get("payload", {})
+    payload: Final = item.get("payload", {})
     try:
         if count > 1:
             payload["text"] = f"[Num Alerts: {count}]\n\n{payload['text']}"
 
-        response = await slackAlertingInstance.async_http_handler.post(
+        request_body: Final = (
+            build_ms_teams_payload(payload["text"]) if item.get("format") == MS_TEAMS_ALERTING_DESTINATION else payload
+        )
+        response: Final = await slackAlertingInstance.async_http_handler.post(
             url=item["url"],
             headers=item["headers"],
-            data=json.dumps(payload),
+            data=json.dumps(request_body),
         )
         if response.status_code != 200:
-            verbose_proxy_logger.debug("Error sending slack alert to url=%s. Error=%s", item["url"], response.text)
+            verbose_proxy_logger.debug("Error sending alert to url=%s. Error=%s", item["url"], response.text)
     except Exception as e:
-        verbose_proxy_logger.debug("Error sending slack alert: %s", e)
+        verbose_proxy_logger.debug("Error sending alert: %s", e)
     finally:
         _print_alerting_payload_warning(payload, slackAlertingInstance=slackAlertingInstance)

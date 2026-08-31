@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
 
@@ -30,7 +32,7 @@ def get_resource_owner_scopes(
     if user_api_key_dict is None:
         return []
 
-    scopes: list[str] = []
+    scopes: Final[list[str]] = []
 
     def _add(scope: str | None) -> None:
         if scope and scope not in scopes:

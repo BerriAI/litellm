@@ -20,12 +20,10 @@ Run only these tests:
 
 import math
 import os
-import sys
 from typing import NamedTuple, Optional
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers

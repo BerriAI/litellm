@@ -3,6 +3,8 @@ This module is used to transform the request and response for the Voyage context
 This would be used for all the contextualized embeddings models in Voyage.
 """
 
+from typing import Final
+
 import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -120,7 +122,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict = {},
     ) -> EmbeddingResponse:
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception:
             raise VoyageError(message=raw_response.text, status_code=raw_response.status_code)
 
@@ -129,7 +131,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         model_response.data = raw_response_json.get("data")
         model_response.object = raw_response_json.get("object")
 
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=raw_response_json.get("usage", {}).get("total_tokens", 0),
             total_tokens=raw_response_json.get("usage", {}).get("total_tokens", 0),
         )

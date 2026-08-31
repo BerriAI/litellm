@@ -3,7 +3,7 @@ Arize Phoenix prompt manager that integrates with LiteLLM's prompt management sy
 Fetches prompt versions from Arize Phoenix and provides workspace-based access control.
 """
 
-from typing import Any
+from typing import Any, Final
 
 from jinja2 import DictLoader, select_autoescape
 from jinja2.sandbox import ImmutableSandboxedEnvironment
@@ -97,10 +97,10 @@ class ArizePhoenixTemplateManager:
         """Load a specific prompt version from Arize Phoenix."""
         try:
             # Fetch the prompt version from Arize Phoenix
-            prompt_data = self.arize_client.get_prompt_version(prompt_version_id)
+            prompt_data: Final = self.arize_client.get_prompt_version(prompt_version_id)
 
             if prompt_data:
-                template = self._parse_prompt_data(prompt_data, prompt_version_id)
+                template: Final = self._parse_prompt_data(prompt_data, prompt_version_id)
                 self.prompts[prompt_version_id] = template
             else:
                 raise ValueError(f"Prompt version '{prompt_version_id}' not found")
@@ -109,11 +109,11 @@ class ArizePhoenixTemplateManager:
 
     def _parse_prompt_data(self, data: dict[str, Any], prompt_version_id: str) -> ArizePhoenixPromptTemplate:
         """Parse Arize Phoenix prompt data and extract messages and metadata."""
-        template_data = data.get("template", {})
-        messages = template_data.get("messages", [])
+        template_data: Final = data.get("template", {})
+        messages: Final = template_data.get("messages", [])
 
         # Extract invocation parameters
-        invocation_params = data.get("invocation_parameters", {})
+        invocation_params: Final = data.get("invocation_parameters", {})
         provider_params = {}
 
         # Extract provider-specific parameters
@@ -129,7 +129,7 @@ class ArizePhoenixTemplateManager:
                     break
 
         # Build metadata dictionary
-        metadata = {
+        metadata: Final = {
             "model_name": data.get("model_name"),
             "model_provider": data.get("model_provider"),
             "description": data.get("description", ""),
@@ -151,8 +151,8 @@ class ArizePhoenixTemplateManager:
         if template_id not in self.prompts:
             raise ValueError(f"Template '{template_id}' not found")
 
-        template = self.prompts[template_id]
-        rendered_messages: list[AllMessageValues] = []
+        template: Final = self.prompts[template_id]
+        rendered_messages: Final[list[AllMessageValues]] = []
 
         for message in template.messages:
             role = message.get("role", "user")
@@ -174,9 +174,7 @@ class ArizePhoenixTemplateManager:
             # Combine rendered content
             final_content = " ".join(rendered_content_parts)
 
-            rendered_messages.append(
-                {"role": role, "content": final_content}  # type: ignore
-            )
+            rendered_messages.append({"role": role, "content": final_content})
 
         return rendered_messages
 
@@ -257,22 +255,22 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
         Returns:
             Tuple of (rendered_messages, metadata)
         """
-        template = self.prompt_manager.get_template(prompt_id)
+        template: Final = self.prompt_manager.get_template(prompt_id)
         if not template:
             raise ValueError(f"Prompt template '{prompt_id}' not found")
 
         # Render the template
-        rendered_messages = self.prompt_manager.render_template(prompt_id, prompt_variables or {})
+        rendered_messages: Final = self.prompt_manager.render_template(prompt_id, prompt_variables or {})
 
         # Extract metadata
-        metadata = {
+        metadata: Final = {
             "model": template.model,
             "temperature": template.temperature,
             "max_tokens": template.max_tokens,
         }
 
         # Add additional invocation parameters
-        invocation_params = template.invocation_parameters
+        invocation_params: Final = template.invocation_parameters
         provider_params = {}
 
         if "openai" in invocation_params:
@@ -361,10 +359,10 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
         """
         Determine if prompt management should run based on the prompt_id.
 
-        For Arize Phoenix, we always return True and handle the prompt loading
-        in the _compile_prompt_helper method.
+        Arize Phoenix needs a prompt_id to compile, so it declines requests without one;
+        prompt loading itself happens in the _compile_prompt_helper method.
         """
-        return True
+        return prompt_id is not None
 
     def _compile_prompt_helper(
         self,
@@ -395,10 +393,10 @@ class ArizePhoenixPromptManager(CustomPromptManagement):
             rendered_messages, prompt_metadata = self.get_prompt_template(prompt_id, prompt_variables)
 
             # Extract model from metadata (if specified)
-            template_model = prompt_metadata.get("model")
+            template_model: Final = prompt_metadata.get("model")
 
             # Extract optional parameters from metadata
-            optional_params = {}
+            optional_params: Final = {}
             for param in [
                 "temperature",
                 "max_tokens",

@@ -4,7 +4,7 @@ Elevenlabs Text-to-Speech transformation
 Maps OpenAI TTS spec to Elevenlabs TTS API
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import urlencode
 
 import httpx
@@ -74,8 +74,8 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
         """
         Normalize the provided voice information into an ElevenLabs voice_id.
         """
-        normalized_voice = voice.strip()
-        mapped_voice = self.VOICE_MAPPINGS.get(normalized_voice.lower())
+        normalized_voice: Final = voice.strip()
+        mapped_voice: Final = self.VOICE_MAPPINGS.get(normalized_voice.lower())
         return mapped_voice or normalized_voice
 
     def _resolve_voice_id(
@@ -100,7 +100,7 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
             mapped_voice = self._extract_voice_id(str(voice))
 
         if mapped_voice is None:
-            voice_override = params.pop("voice_id", None)
+            voice_override: Final = params.pop("voice_id", None)
             if isinstance(voice_override, str) and voice_override.strip():
                 mapped_voice = self._extract_voice_id(voice_override)
 
@@ -120,25 +120,25 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
         """
         Map OpenAI parameters to ElevenLabs TTS parameters
         """
-        mapped_params: dict[str, Any] = {}
-        query_params: dict[str, Any] = {}
+        mapped_params: Final[dict[str, Any]] = {}
+        query_params: Final[dict[str, Any]] = {}
 
         # Work on a copy so we don't mutate the caller's dictionary
-        params = dict(optional_params) if optional_params else {}
-        passthrough_kwargs: dict[str, Any] = kwargs if kwargs is not None else {}
+        params: Final = dict(optional_params) if optional_params else {}
+        passthrough_kwargs: Final[dict[str, Any]] = kwargs if kwargs is not None else {}
 
         # Extract voice identifier
-        mapped_voice = self._resolve_voice_id(voice, params)
+        mapped_voice: Final = self._resolve_voice_id(voice, params)
 
         # Response/output format → query parameter
-        response_format = params.pop("response_format", None)
+        response_format: Final = params.pop("response_format", None)
         if isinstance(response_format, str):
-            mapped_format = self.FORMAT_MAPPINGS.get(response_format, response_format)
+            mapped_format: Final = self.FORMAT_MAPPINGS.get(response_format, response_format)
             query_params["output_format"] = mapped_format
 
         # ElevenLabs does not support OpenAI speed directly.
         # Drop it to avoid sending unsupported keys unless caller already provided voice_settings.
-        speed = params.pop("speed", None)
+        speed: Final = params.pop("speed", None)
         if speed is not None:
             speed_value: float | None
             try:
@@ -147,7 +147,7 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
                 speed_value = None
             if speed_value is not None:
                 if isinstance(params.get("voice_settings"), dict):
-                    params["voice_settings"]["speed"] = speed_value  # type: ignore[index]
+                    params["voice_settings"]["speed"] = speed_value
                 else:
                     params["voice_settings"] = {"speed": speed_value}
 
@@ -202,10 +202,10 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
         """
         Build the ElevenLabs TTS request payload.
         """
-        params = dict(optional_params) if optional_params else {}
-        extra_body = params.pop("extra_body", None)
+        params: Final = dict(optional_params) if optional_params else {}
+        extra_body: Final = params.pop("extra_body", None)
 
-        request_body: dict[str, Any] = {
+        request_body: Final[dict[str, Any]] = {
             "text": input,
             "model_id": model,
         }
@@ -241,7 +241,7 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
                 continue
             mapped_params[key] = value
 
-        reserved_kwarg_keys = set(all_litellm_params) | {
+        reserved_kwarg_keys: Final = set(all_litellm_params) | {
             self.ELEVENLABS_QUERY_PARAMS_KEY,
             self.ELEVENLABS_VOICE_ID_KEY,
             "voice",
@@ -252,7 +252,7 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
             "user",
         }
 
-        extra_body_from_kwargs = kwargs.pop("extra_body", None)
+        extra_body_from_kwargs: Final = kwargs.pop("extra_body", None)
         if isinstance(extra_body_from_kwargs, dict):
             for key, value in extra_body_from_kwargs.items():
                 if value is None:
@@ -300,14 +300,14 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
         base_url = api_base or get_secret_str("ELEVENLABS_API_BASE") or self.TTS_BASE_URL
         base_url = base_url.rstrip("/")
 
-        voice_id = litellm_params.get(self.ELEVENLABS_VOICE_ID_KEY)
+        voice_id: Final = litellm_params.get(self.ELEVENLABS_VOICE_ID_KEY)
         if not isinstance(voice_id, str) or not voice_id.strip():
             raise ValueError("ElevenLabs voice_id is required. Pass `voice` when calling `litellm.speech()`.")
 
-        encoded_voice_id = encode_url_path_segment(voice_id, field_name="voice_id")
+        encoded_voice_id: Final = encode_url_path_segment(voice_id, field_name="voice_id")
         url = f"{base_url}{self.TTS_ENDPOINT_PATH}/{encoded_voice_id}"
 
-        query_params = litellm_params.get(self.ELEVENLABS_QUERY_PARAMS_KEY, {})
+        query_params: Final = litellm_params.get(self.ELEVENLABS_QUERY_PARAMS_KEY, {})
         if query_params:
             url = f"{url}?{urlencode(query_params)}"
 

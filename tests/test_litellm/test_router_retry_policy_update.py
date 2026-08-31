@@ -20,15 +20,12 @@ This file pins both halves of the fix.
 """
 
 import json
-import os
-import sys
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import ValidationError
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.types.router import RetryPolicy, UpdateRouterConfig

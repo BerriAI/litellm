@@ -8,6 +8,7 @@ import asyncio
 from collections.abc import Callable
 from datetime import datetime
 from functools import wraps
+from typing import Final
 
 from litellm._service_logger import ServiceTypes
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
@@ -20,7 +21,7 @@ def _safe_db_event_metadata(kwargs: dict) -> dict[str, str] | None:
     and secrets (tokens), none of which belongs on a span — so we surface only
     the table name when present. Everything else is dropped.
     """
-    table_name = kwargs.get("table_name")
+    table_name: Final = kwargs.get("table_name")
     return {"table_name": table_name} if isinstance(table_name, str) else None
 
 
@@ -44,10 +45,10 @@ def log_db_metrics(func):
 
     @wraps(func)
     async def wrapper(*args, **kwargs):
-        start_time: datetime = datetime.now()
+        start_time: Final[datetime] = datetime.now()
 
         try:
-            result = await func(*args, **kwargs)
+            result: Final = await func(*args, **kwargs)
             end_time: datetime = datetime.now()
             from litellm.proxy.proxy_server import proxy_logging_obj
 
@@ -68,8 +69,8 @@ def log_db_metrics(func):
                 # https://docs.litellm.ai/docs/observability/custom_callback#callback-functions
                 args is not None and len(args) > 1 and isinstance(args[1], dict)
             ):
-                passed_kwargs = args[1]
-                parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs=passed_kwargs)
+                passed_kwargs: Final = args[1]
+                parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs=passed_kwargs)
                 if parent_otel_span is not None:
                     # No metadata dump: identity rides on Baggage, and the full
                     # request metadata (auth blob, response headers, tokens) must

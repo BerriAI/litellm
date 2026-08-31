@@ -1,5 +1,7 @@
 """Tests for unified guardrail."""
 
+import logging
+
 import pytest
 
 import litellm
@@ -8,6 +10,8 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
+from litellm.llms import load_guardrail_translation_mappings
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
@@ -18,12 +22,15 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
 from litellm.llms.openai.chat.guardrail_translation.handler import (
     OpenAIChatCompletionsHandler,
 )
+from litellm.llms.openai.responses.guardrail_translation.handler import (
+    OpenAIResponsesHandler,
+)
 from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse
 from litellm.llms.mistral.ocr.guardrail_translation.handler import OCRHandler
 from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import (
     MCPGuardrailTranslationHandler,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import (
     unified_guardrail as unified_module,
 )
@@ -31,6 +38,7 @@ from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrai
     UnifiedLLMGuardrails,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import CallTypes, Delta, ModelResponseStream, StreamingChoices
 
 
@@ -75,6 +83,8 @@ def _inject_mcp_handler_mapping():
         CallTypes.anthropic_messages: _NoopTranslation,
         CallTypes.ocr: OCRHandler,
         CallTypes.aocr: OCRHandler,
+        CallTypes.responses: OpenAIResponsesHandler,
+        CallTypes.aresponses: OpenAIResponsesHandler,
     }
     yield
     unified_module.endpoint_guardrail_translation_mappings = None
@@ -486,6 +496,144 @@ class TestUnifiedLLMGuardrails:
                     f"Expected non-empty content for every streamed chunk."
                 )
 
+    class TestResponsesRouteAliases:
+        """Every /responses path alias that serves model output must scan it.
+
+        ``async_post_call_success_hook`` resolves the call type from
+        ``request_route`` via ``API_ROUTE_TO_CALL_TYPES``. A route missing from
+        that map resolves to ``None`` and the hook returns the response
+        unscanned, so an alias that the proxy serves but the map omits is a
+        silent post-call guardrail bypass.
+        """
+
+        @staticmethod
+        def _responses_api_response() -> ResponsesAPIResponse:
+            return ResponsesAPIResponse(
+                id="resp_lit4979",
+                created_at=1234567890,
+                model="gpt-4o",
+                object="response",
+                status="completed",
+                output=[
+                    {
+                        "type": "message",
+                        "id": "msg_lit4979",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Paris"}],
+                    }
+                ],
+            )
+
+        @pytest.mark.parametrize(
+            "request_route",
+            [
+                "/responses",
+                "/v1/responses",
+                "/openai/v1/responses",
+                "/responses/{response_id}",
+                "/v1/responses/{response_id}",
+                "/openai/v1/responses/{response_id}",
+            ],
+        )
+        @pytest.mark.asyncio
+        async def test_post_call_scans_output_on_every_registered_alias(
+            self, request_route: str
+        ) -> None:
+            handler = UnifiedLLMGuardrails()
+            guardrail = RecordingGuardrail()
+
+            await handler.async_post_call_success_hook(
+                data={"guardrail_to_apply": guardrail, "model": "gpt-4o"},
+                user_api_key_dict=UserAPIKeyAuth(
+                    api_key="test-key", request_route=request_route
+                ),
+                response=self._responses_api_response(),
+            )
+
+            assert guardrail.apply_calls, (
+                f"guardrail never ran for request_route={request_route!r}; model "
+                f"output reached the client unscanned"
+            )
+            assert guardrail.apply_calls[0]["input_type"] == "response"
+            assert guardrail.apply_calls[0]["inputs"]["texts"] == ["Paris"]
+
+        @pytest.mark.parametrize(
+            "route, expected",
+            [
+                ("/openai/v1/responses", (CallTypes.aresponses, CallTypes.responses)),
+                (
+                    "/openai/v1/responses/resp_abc",
+                    (CallTypes.aresponses, CallTypes.responses),
+                ),
+                (
+                    "/openai/v1/responses/resp_abc/input_items",
+                    (CallTypes.alist_input_items,),
+                ),
+            ],
+        )
+        def test_openai_prefixed_aliases_resolve_like_canonical_routes(
+            self, route: str, expected: tuple[CallTypes, ...]
+        ) -> None:
+            assert tuple(get_call_types_for_route(route) or ()) == expected
+
+        def test_responses_handler_is_registered_in_the_real_registry(self) -> None:
+            mappings = load_guardrail_translation_mappings()
+            assert CallTypes.aresponses in mappings
+            assert CallTypes.responses in mappings
+
+        @pytest.mark.asyncio
+        async def test_unresolvable_route_skips_scanning_and_says_so(
+            self, caplog: pytest.LogCaptureFixture
+        ) -> None:
+            handler = UnifiedLLMGuardrails()
+            guardrail = RecordingGuardrail()
+
+            with caplog.at_level(logging.WARNING):
+                result = await handler.async_post_call_success_hook(
+                    data={"guardrail_to_apply": guardrail, "model": "gpt-4o"},
+                    user_api_key_dict=UserAPIKeyAuth(
+                        api_key="test-key", request_route="/cursor/chat/completions"
+                    ),
+                    response=self._responses_api_response(),
+                )
+
+            assert not guardrail.apply_calls
+            assert result is not None
+            assert "call type could not be resolved" in caplog.text
+            assert "/cursor/chat/completions" in caplog.text
+
+        @pytest.mark.asyncio
+        async def test_call_type_without_handler_skips_scanning_and_says_so(
+            self, caplog: pytest.LogCaptureFixture
+        ) -> None:
+            handler = UnifiedLLMGuardrails()
+            guardrail = RecordingGuardrail()
+
+            with caplog.at_level(logging.WARNING):
+                await handler.async_post_call_success_hook(
+                    data={"guardrail_to_apply": guardrail, "model": "gpt-4o"},
+                    user_api_key_dict=UserAPIKeyAuth(
+                        api_key="test-key", request_route="/v1/chat/completions"
+                    ),
+                    response=self._responses_api_response(),
+                )
+
+            assert not guardrail.apply_calls
+            assert "has no guardrail translation handler" in caplog.text
+
+        def test_openai_prefixed_aliases_are_authorized_like_canonical_routes(self) -> None:
+            openai_routes = LiteLLMRoutes.openai_routes.value
+            for route in (
+                "/openai/v1/responses",
+                "/openai/v1/responses/{response_id}",
+                "/openai/v1/responses/{response_id}/input_items",
+            ):
+                assert route in openai_routes, (
+                    f"{route!r} missing from LiteLLMRoutes.openai_routes; team and "
+                    f"key-scoped users get 403 on this alias"
+                )
+
     class TestOCRGuardrailE2E:
         """End-to-end tests: UnifiedLLMGuardrails -> OCRHandler."""
 
@@ -800,19 +948,24 @@ class TestStreamingTransform:
         assert streamed == "ABCDEFGHIJ"
 
     @pytest.mark.asyncio
-    async def test_incremental_diff_underflow_raises(self):
+    async def test_incremental_diff_underflow_emits_error_frame(self):
         """A transform shorter than what was already streamed cannot retract
-        bytes: it raises HTTPException(stream_transform_underflow)."""
+        bytes. Chunks have already been flushed by then, so the underflow
+        surfaces as the in-stream error frame, not an unraisable HTTPException."""
+        import json as _json
+
         # First sample emits "ABCDEF" (6 chars); second sample shrinks to 3.
         guardrail = _StreamingTextGuardrail(shrink_to="ABC", shrink_after=1)
 
         chunks = [_stream_chunk("abcdef"), _stream_chunk("ghij")]
 
-        with pytest.raises(unified_module.HTTPException) as exc_info:
-            await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
 
-        assert exc_info.value.status_code == 400
-        assert exc_info.value.detail["error"] == "stream_transform_underflow"
+        frame = out[-1]
+        assert isinstance(frame, bytes)
+        payload = _json.loads(frame.decode()[len("data: ") :])
+        assert payload["error"]["message"] == "stream_transform_underflow"
+        assert payload["error"]["code"] == "400"
 
     @pytest.mark.asyncio
     async def test_incremental_diff_final_chunk_preserves_finish_reason(self):
@@ -868,10 +1021,9 @@ class TestStreamingTransform:
 
     @pytest.mark.asyncio
     async def test_emit_streaming_http_error_a2a_yields_jsonrpc_chunk(self):
-        """The shared streaming error helper emits an in-stream JSON-RPC error for
-        A2A call types instead of raising."""
-        import json
-
+        """The shared streaming error helper emits an in-stream JSON-RPC error
+        object (not a pre-serialized string, which the A2A endpoint would frame as
+        a JSON string instead of an error object) for A2A call types."""
         handler = UnifiedLLMGuardrails()
         exc = unified_module.HTTPException(
             status_code=400,
@@ -888,7 +1040,8 @@ class TestStreamingTransform:
             emitted.append(item)
 
         assert len(emitted) == 1
-        payload = json.loads(emitted[0])
+        payload = emitted[0]
+        assert isinstance(payload, dict)
         assert payload["error"]["message"] == "stream_transform_underflow"
         assert payload["id"] == "req-1"
 
@@ -1599,3 +1752,221 @@ class TestAppliedGuardrailsReflectsExecution:
     async def test_ordinary_guardrail_is_auto_marked_applied(self):
         data = await self._run(_AutoLoggingGuardrail())
         assert "auto-logging" in _applied_guardrails(data)
+
+
+class _EosHttpBlockingGuardrail(CustomGuardrail):
+    """Raises the bedrock-shaped block HTTPException at end-of-stream scan time."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="eos-http-block")
+        self.streaming_end_of_stream_only = True
+
+    def should_run_guardrail(self, data, event_type):  # type: ignore[override]
+        return True
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        raise unified_module.HTTPException(
+            status_code=400,
+            detail={
+                "error": "Violated guardrail policy",
+                "bedrock_guardrail_response": "BLOCKED_TOPIC",
+            },
+        )
+
+
+def _anthropic_sse_event(event_type, data):
+    import json as _json
+
+    return f"event: {event_type}\ndata: {_json.dumps(data)}\n\n".encode()
+
+
+def _anthropic_message_chunks(texts):
+    head = [
+        _anthropic_sse_event(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-5",
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 0},
+                },
+            },
+        ),
+        _anthropic_sse_event(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+    ]
+    deltas = [
+        _anthropic_sse_event(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+        )
+        for text in texts
+    ]
+    tail = [
+        _anthropic_sse_event("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse_event(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": 5},
+            },
+        ),
+        _anthropic_sse_event("message_stop", {"type": "message_stop"}),
+    ]
+    return head + deltas + tail
+
+
+class TestStreamingHttpErrorFrames:
+    """A post-flush end-of-stream guardrail block (HTTPException) must surface as
+    the endpoint's in-stream error frame instead of an unhandled raise that
+    silently truncates the SSE stream (PR #38722 defect 1)."""
+
+    @pytest.fixture(autouse=True)
+    def _use_real_mappings(self):
+        unified_module.endpoint_guardrail_translation_mappings = load_guardrail_translation_mappings()
+        yield
+        unified_module.endpoint_guardrail_translation_mappings = None
+
+    @pytest.mark.asyncio
+    async def test_chat_eos_block_emits_data_error_frame(self):
+        import json as _json
+
+        guardrail = _EosHttpBlockingGuardrail()
+        chunks = [_stream_chunk("hello "), _stream_chunk("world", finish_reason="stop")]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        assert out[:2] == chunks
+        frame = out[-1]
+        assert isinstance(frame, bytes)
+        text = frame.decode()
+        assert text.startswith("data: ")
+        payload = _json.loads(text[len("data: ") :])
+        assert payload["error"]["message"] == "Violated guardrail policy"
+        assert payload["error"]["code"] == "400"
+
+    @pytest.mark.asyncio
+    async def test_messages_eos_block_emits_anthropic_error_event(self):
+        guardrail = _EosHttpBlockingGuardrail()
+        chunks = _anthropic_message_chunks(["hello ", "world"])
+
+        out = await _drive_stream(
+            UnifiedLLMGuardrails(), guardrail, chunks, request_route="/v1/messages"
+        )
+
+        raw = b"".join(c for c in out if isinstance(c, bytes)).decode()
+        assert "hello " in raw
+        assert "event: error" in raw
+        assert "Violated guardrail policy" in raw
+        assert "guardrail_error" in raw
+
+    @pytest.mark.asyncio
+    async def test_responses_eos_block_emits_error_event_with_next_sequence(self):
+        guardrail = _EosHttpBlockingGuardrail()
+        chunks = [
+            {"type": "response.created", "sequence_number": 0},
+            {"type": "response.output_text.delta", "sequence_number": 1, "delta": "hello"},
+            {
+                "type": "response.completed",
+                "sequence_number": 2,
+                "response": {
+                    "model": "gpt-4",
+                    "output": [{"type": "message", "content": [{"type": "output_text", "text": "hello"}]}],
+                },
+            },
+        ]
+
+        out = await _drive_stream(
+            UnifiedLLMGuardrails(), guardrail, chunks, request_route="/v1/responses"
+        )
+
+        assert chunks[0] in out and chunks[1] in out
+        assert chunks[2] not in out
+        error_event = out[-1]
+        assert error_event.type == "error"
+        assert error_event.sequence_number == 2
+        assert error_event.error.message == "Violated guardrail policy"
+        assert error_event.error.code == "400"
+        assert error_event.error.type == "guardrail_error"
+
+    @pytest.mark.asyncio
+    async def test_pre_flush_block_still_raises_http_exception(self):
+        guardrail = _EosHttpBlockingGuardrail()
+        guardrail.streaming_buffer_until_moderated = True
+        chunks = [_stream_chunk("hello "), _stream_chunk("world", finish_reason="stop")]
+
+        with pytest.raises(unified_module.HTTPException) as exc_info:
+            await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["error"] == "Violated guardrail policy"
+
+
+class _AuditRecordingGuardrail(CustomGuardrail):
+    """Successful scan that records guardrail_information, like a flags-on audit."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="audit-recorder")
+        self.streaming_end_of_stream_only = True
+
+    def should_run_guardrail(self, data, event_type):  # type: ignore[override]
+        return True
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={"action": "NONE"},
+            request_data=request_data,
+            guardrail_status="success",
+        )
+        return inputs
+
+
+class TestStreamingGuardrailInformationBucket:
+    """guardrail_information written during a chat streaming end-of-stream scan
+    must land in the request's ``metadata`` bucket that spend logging snapshots.
+    Regression for PR #38722 defect 2: the chat handler used to plant a
+    ``litellm_metadata`` key first, flipping the bucket so every later
+    guardrail_information write was diverted and /spend/logs showed null."""
+
+    @pytest.fixture(autouse=True)
+    def _use_real_mappings(self):
+        unified_module.endpoint_guardrail_translation_mappings = load_guardrail_translation_mappings()
+        yield
+        unified_module.endpoint_guardrail_translation_mappings = None
+
+    @pytest.mark.asyncio
+    async def test_chat_eos_scan_writes_guardrail_information_to_metadata(self):
+        guardrail = _AuditRecordingGuardrail()
+        chunks = [_stream_chunk("hello "), _stream_chunk("world", finish_reason="stop")]
+
+        async def _mock_stream():
+            for chunk in chunks:
+                yield chunk
+
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test-key", user_id="user-1", request_route="/v1/chat/completions"
+        )
+        request_data = {"guardrail_to_apply": guardrail, "model": "gpt-4", "metadata": {}}
+
+        out = []
+        async for item in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=_mock_stream(),
+            request_data=request_data,
+        ):
+            out.append(item)
+
+        assert "litellm_metadata" not in request_data
+        recorded = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(recorded) == 1
+        assert recorded[0]["guardrail_name"] == "audit-recorder"
+        assert recorded[0]["guardrail_status"] == "success"
+        assert request_data["metadata"]["user_api_key_user_id"] == "user-1"

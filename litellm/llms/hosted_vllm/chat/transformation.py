@@ -4,12 +4,7 @@ Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 
 import json
 from collections.abc import Coroutine
-from typing import (
-    Any,
-    Literal,
-    cast,
-    overload,
-)
+from typing import Any, Final, Literal, cast, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _get_image_mime_type_from_url,
@@ -38,7 +33,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         vLLM chat completions currently accepts only OpenAI function tools.
         Convert custom tools into function tools so request validation does not fail.
         """
-        converted_tools: list[dict[str, Any]] = []
+        converted_tools: Final[list[dict[str, Any]]] = []
         for idx, tool in enumerate(tools):
             if not isinstance(tool, dict):
                 converted_tools.append(tool)
@@ -83,7 +78,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         return converted_tools
 
     def get_supported_openai_params(self, model: str) -> list[str]:
-        params = super().get_supported_openai_params(model)
+        params: Final = super().get_supported_openai_params(model)
         params.extend(["reasoning_effort", "thinking"])
         return params
 
@@ -103,7 +98,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         if _tools is not None:
             non_default_params["tools"] = _tools
 
-        thinking = non_default_params.pop("thinking", None)
+        thinking: Final = non_default_params.pop("thinking", None)
         if thinking is not None and isinstance(thinking, dict):
             if thinking.get("type") == "enabled":
                 if "reasoning_effort" not in non_default_params:
@@ -117,14 +112,14 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
         api_base = api_base or get_secret_str("HOSTED_VLLM_API_BASE")
-        dynamic_api_key = api_key or get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
+        dynamic_api_key: Final = api_key or get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
         return api_base, dynamic_api_key
 
     def _is_video_file(self, content_item: ChatCompletionFileObject) -> bool:
-        file = content_item.get("file", {})
-        format = file.get("format")
-        file_data = file.get("file_data")
-        file_id = file.get("file_id")
+        file: Final = content_item.get("file", {})
+        format: Final = file.get("format")
+        file_data: Final = file.get("file_data")
+        file_id: Final = file.get("file_id")
         if content_item.get("type") != "file":
             return False
         if format and format.startswith("video/"):
@@ -140,9 +135,9 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         return False
 
     def _convert_file_to_video_url(self, content_item: ChatCompletionFileObject) -> ChatCompletionVideoObject:
-        file = content_item.get("file", {})
-        file_id = file.get("file_id")
-        file_data = file.get("file_data")
+        file: Final = content_item.get("file", {})
+        file_id: Final = file.get("file_id")
+        file_data: Final = file.get("file_data")
 
         if file_id:
             return ChatCompletionVideoObject(type="video_url", video_url=ChatCompletionVideoUrlObject(url=file_id))
@@ -169,12 +164,13 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         """
         Support translating:
         - video files from file_id or file_data to video_url
-        - thinking_blocks on assistant messages are removed, and content lists
-          are converted to strings for vLLM compatibility
+        - thinking_blocks and reasoning_content on assistant messages are removed,
+          and content lists are converted to strings for vLLM compatibility
         """
         for message in messages:
             if message["role"] == "assistant":
                 message.pop("thinking_blocks", None)
+                message.pop("reasoning_content", None)
                 existing_content = message.get("content")
                 if isinstance(existing_content, list):
                     text_parts = []
@@ -226,7 +222,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                             message["tool_calls"] = tool_calls
                     content_str = "\n".join(text_parts)
                     new_content = content_blocks if has_structured_content else content_str
-                    message["content"] = new_content  # type: ignore[typeddict-item]
+                    message["content"] = new_content
             elif message["role"] == "user":
                 message_content = message.get("content")
                 if message_content and isinstance(message_content, list):

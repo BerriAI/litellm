@@ -12,6 +12,8 @@ Translations handled by LiteLLM:
 - Temperature => drop param (if user opts in to dropping param)
 """
 
+from typing import Final
+
 import litellm
 from litellm import verbose_logger
 from litellm.types.llms.openai import AllMessageValues
@@ -25,8 +27,8 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         """
         Get the supported OpenAI params for the Azure O-Series models
         """
-        all_openai_params = litellm.OpenAIGPTConfig().get_supported_openai_params(model=model)
-        non_supported_params = [
+        all_openai_params: Final = litellm.OpenAIGPTConfig().get_supported_openai_params(model=model)
+        non_supported_params: Final = [
             "logprobs",
             "top_p",
             "presence_penalty",
@@ -34,7 +36,7 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
             "top_logprobs",
         ]
 
-        o_series_only_param = self._get_o_series_only_params(model)
+        o_series_only_param: Final = self._get_o_series_only_params(model)
 
         all_openai_params.extend(o_series_only_param)
         return [param for param in all_openai_params if param not in non_supported_params]
@@ -45,7 +47,7 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
 
         - reasoning_effort
         """
-        o_series_only_param = []
+        o_series_only_param: Final = []
 
         #########################################################
         # Case 1: If the model is recognized and in litellm model cost map
@@ -82,7 +84,7 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
 
         if model is not None:
             try:
-                model_info = get_model_info(
+                model_info: Final = get_model_info(
                     model=model, custom_llm_provider=custom_llm_provider
                 )  # allow user to override default with model_info={"supports_native_streaming": true}
 

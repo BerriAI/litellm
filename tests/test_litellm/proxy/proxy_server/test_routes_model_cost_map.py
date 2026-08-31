@@ -10,9 +10,9 @@ Routes covered:
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 
 from .conftest import VOLATILE_KEYS, normalize
 
@@ -35,6 +35,7 @@ def _attach_litellm_config(mock_prisma):
     table.upsert = AsyncMock()
     table.create = AsyncMock()
     table.update = AsyncMock()
+    table.update_many = AsyncMock(return_value=1)
     table.delete = AsyncMock()
     table.delete_many = AsyncMock()
     mock_prisma.db.litellm_config = table
@@ -84,6 +85,9 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
         "timestamp": "<VOLATILE>",
     }
     assert table.upsert.await_count == 1
+    update_payload = table.upsert.await_args.kwargs["data"]["update"]
+    assert set(update_payload) == {"last_run_at", "reload_revision"}
+    assert update_payload["reload_revision"] == {"increment": 1}
 
 
 def test_reload_model_cost_map_fetch_failure_502_keeps_map(
@@ -179,6 +183,9 @@ def test_schedule_model_cost_map_reload_happy(
         "timestamp": "<VOLATILE>",
     }
     assert table.upsert.await_count == 1
+    upsert_data = table.upsert.await_args.kwargs["data"]
+    assert set(upsert_data["update"]) == {"param_value"}
+    assert set(upsert_data["create"]) == {"param_name", "param_value"}
 
 
 def test_schedule_model_cost_map_reload_invalid_hours(
@@ -213,17 +220,14 @@ def test_schedule_model_cost_map_reload_not_admin_forbidden(client, auth_as):
 
 
 def test_cancel_model_cost_map_reload_happy(client, auth_as, monkeypatch, mock_prisma):
-    """Admin cancellation deletes config row and returns success body."""
+    """Admin cancellation clears the interval and returns success body. The row itself stays:
+    it also holds the reload revision, and a counter restarted by a delete reissues a number
+    pods already applied, silently skipping their next manual reload."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
     table = _attach_litellm_config(mock_prisma)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
-
-    async def _fake_invalidate(name):
-        return None
-
-    monkeypatch.setattr(ps, "invalidate_config_param", _fake_invalidate)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.delete("/schedule/model_cost_map_reload")
@@ -234,7 +238,8 @@ def test_cancel_model_cost_map_reload_happy(client, auth_as, monkeypatch, mock_p
         "status": "success",
         "timestamp": "<VOLATILE>",
     }
-    assert table.delete.await_count == 1
+    assert json.loads(table.update_many.await_args.kwargs["data"]["param_value"]) == {"interval_hours": None}
+    assert table.delete.await_count == 0
 
 
 def test_cancel_model_cost_map_reload_not_admin_forbidden(client, auth_as):
@@ -290,10 +295,11 @@ def test_get_model_cost_map_reload_status_scheduled(
 
     table = _attach_litellm_config(mock_prisma)
     config_row = MagicMock()
-    config_row.param_value = {"interval_hours": 12, "force_reload": False}
+    config_row.param_value = {"interval_hours": 12}
+    config_row.reload_revision = 0
+    config_row.last_run_at = None
     table.find_unique = AsyncMock(return_value=config_row)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
-    monkeypatch.setattr(ps, "last_model_cost_map_reload", None)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/schedule/model_cost_map_reload/status")
@@ -306,19 +312,50 @@ def test_get_model_cost_map_reload_status_scheduled(
     }
 
 
-def test_get_model_cost_map_reload_status_no_config_not_scheduled(
+def test_get_model_cost_map_reload_status_reports_persisted_last_run(
     client, auth_as, monkeypatch, mock_prisma
 ):
-    """Config row exists but interval_hours=None → not scheduled."""
+    """last_run/next_run come from the DB row, so status survives pod restarts."""
+    from datetime import datetime, timezone
+
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
     table = _attach_litellm_config(mock_prisma)
     config_row = MagicMock()
-    config_row.param_value = {"interval_hours": None, "force_reload": True}
+    config_row.param_value = {"interval_hours": 6}
+    config_row.reload_revision = 0
+    config_row.last_run_at = datetime(2024, 1, 1, 6, 0, 0, tzinfo=timezone.utc)
     table.find_unique = AsyncMock(return_value=config_row)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
-    monkeypatch.setattr(ps, "last_model_cost_map_reload", None)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/schedule/model_cost_map_reload/status")
+    assert response.status_code == 200
+    assert normalize(response.json()) == {
+        "scheduled": True,
+        "interval_hours": 6,
+        "last_run": "2024-01-01T06:00:00+00:00",
+        "next_run": "2024-01-01T12:00:00+00:00",
+    }
+
+
+def test_get_model_cost_map_reload_status_no_config_not_scheduled(
+    client, auth_as, monkeypatch, mock_prisma
+):
+    """A row left behind by a manual reload (interval_hours=None) → not scheduled."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _attach_litellm_config(mock_prisma)
+    config_row = MagicMock()
+    config_row.param_value = {"interval_hours": None}
+    config_row.reload_revision = 3
+    config_row.last_run_at = None
+    table.find_unique = AsyncMock(return_value=config_row)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/schedule/model_cost_map_reload/status")

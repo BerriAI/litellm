@@ -12,6 +12,8 @@ Supports:
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/nova-embed.html
 """
 
+from typing import Final
+
 from litellm.types.utils import (
     Embedding,
     EmbeddingResponse,
@@ -106,16 +108,16 @@ class AmazonNovaEmbeddingConfig:
             dict: Nova embedding request
         """
         # Determine task type
-        task_type = "SEGMENTED_EMBEDDING" if async_invoke_route else "SINGLE_EMBEDDING"
+        task_type: Final = "SEGMENTED_EMBEDDING" if async_invoke_route else "SINGLE_EMBEDDING"
 
         # Build the base request structure
-        request: dict = {
+        request: Final[dict] = {
             "schemaVersion": "nova-multimodal-embed-v1",
             "taskType": task_type,
         }
 
         # Start with inference_params (user-provided params)
-        embedding_params = inference_params.copy()
+        embedding_params: Final = inference_params.copy()
 
         embedding_params.pop("output_s3_uri", None)
 
@@ -158,14 +160,14 @@ class AmazonNovaEmbeddingConfig:
                     }
                 elif media_type.startswith("video/"):
                     # Handle video data URLs
-                    video_format = media_type.split("/")[1].lower()
+                    video_format: Final = media_type.split("/")[1].lower()
                     embedding_params["video"] = {
                         "format": video_format,
                         "source": {"bytes": base64_data},
                     }
                 elif media_type.startswith("audio/"):
                     # Handle audio data URLs
-                    audio_format = media_type.split("/")[1].lower()
+                    audio_format: Final = media_type.split("/")[1].lower()
                     embedding_params["audio"] = {
                         "format": audio_format,
                         "source": {"bytes": base64_data},
@@ -256,7 +258,7 @@ class AmazonNovaEmbeddingConfig:
             ]
         }
         """
-        embeddings: list[Embedding] = []
+        embeddings: Final[list[Embedding]] = []
         total_tokens = 0
 
         for response in response_list:
@@ -306,7 +308,7 @@ class AmazonNovaEmbeddingConfig:
                 image_count=image_count,
             )
 
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=total_tokens,
             total_tokens=total_tokens,
             prompt_tokens_details=prompt_tokens_details,
@@ -325,22 +327,22 @@ class AmazonNovaEmbeddingConfig:
 
         We transform this to a job-like embedding response with the ARN in hidden params.
         """
-        invocation_arn = response.get("invocationArn", "")
+        invocation_arn: Final = response.get("invocationArn", "")
 
         # Create a placeholder embedding object for the job
-        embedding = Embedding(
+        embedding: Final = Embedding(
             embedding=[],  # Empty embedding for async jobs
             index=0,
             object="embedding",
         )
 
         # Create usage object (empty for async jobs)
-        usage = Usage(prompt_tokens=0, total_tokens=0)
+        usage: Final = Usage(prompt_tokens=0, total_tokens=0)
 
         # Create hidden params with job ID
         from litellm.types.llms.base import HiddenParams
 
-        hidden_params = HiddenParams()
+        hidden_params: Final = HiddenParams()
         setattr(hidden_params, "_invocation_arn", invocation_arn)
 
         return EmbeddingResponse(

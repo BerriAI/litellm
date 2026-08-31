@@ -1,5 +1,21 @@
+// @vitest-environment jsdom
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { clearAllMcpTokens, getToken, isTokenValid, removeToken, setToken } from "./mcpTokenStore";
+
+const decodeMaybeBase64 = (raw: string): string => {
+  try {
+    return atob(raw);
+  } catch {
+    return raw;
+  }
+};
+
+const allStoredValues = (): string =>
+  Array.from({ length: sessionStorage.length }, (_, i) => sessionStorage.key(i) ?? "")
+    .map((key) => sessionStorage.getItem(key) ?? "")
+    .flatMap((raw) => [raw, decodeMaybeBase64(raw)])
+    .join("\n");
 
 describe("mcpTokenStore", () => {
   beforeEach(() => {
@@ -8,6 +24,29 @@ describe("mcpTokenStore", () => {
 
   afterEach(() => {
     sessionStorage.clear();
+  });
+
+  it("never persists a refresh token, even when a caller supplies one", () => {
+    const callerPayload = {
+      access_token: "access-value",
+      expires_in: 3600,
+      refresh_token: "refresh-value-must-not-persist",
+      token_type: "bearer",
+    };
+
+    setToken("server-a", callerPayload, "user-1");
+
+    expect(getToken("server-a", "user-1")?.access_token).toBe("access-value");
+    expect(allStoredValues()).not.toContain("refresh-value-must-not-persist");
+  });
+
+  it("does not write the token payload as readable text", () => {
+    setToken("server-a", { access_token: "plain-access-value" }, "user-1");
+
+    const raw = sessionStorage.getItem("mcp-session-token:user-1:server-a");
+    expect(raw).not.toBeNull();
+    expect(raw).not.toContain("plain-access-value");
+    expect(getToken("server-a", "user-1")?.access_token).toBe("plain-access-value");
   });
 
   it("scopes tokens by user id", () => {

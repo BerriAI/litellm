@@ -2,6 +2,7 @@
 # This file contains the LiteralAILogger class which is used to log steps to the LiteralAI observability platform.
 import asyncio
 import os
+from typing import Final
 
 import httpx
 
@@ -34,7 +35,7 @@ class LiteralAILogger(CustomBatchLogger):
             self.headers["x-env"] = env
         self.async_httpx_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
         self.sync_http_handler = HTTPHandler()
-        batch_size = os.getenv("LITERAL_BATCH_SIZE", None)
+        batch_size: Final = os.getenv("LITERAL_BATCH_SIZE", None)
         self.flush_lock = asyncio.Lock()
         super().__init__(
             **kwargs,
@@ -49,7 +50,7 @@ class LiteralAILogger(CustomBatchLogger):
                 kwargs,
                 response_obj,
             )
-            data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
+            data: Final = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
             self.log_queue.append(data)
             verbose_logger.debug(
                 "Literal AI logging: queue length %s, batch size %s",
@@ -64,7 +65,7 @@ class LiteralAILogger(CustomBatchLogger):
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         verbose_logger.info("Literal AI Failure Event Logging!")
         try:
-            data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
+            data: Final = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
             self.log_queue.append(data)
             verbose_logger.debug(
                 "Literal AI logging: queue length %s, batch size %s",
@@ -80,11 +81,11 @@ class LiteralAILogger(CustomBatchLogger):
         if not self.log_queue:
             return
 
-        url = f"{self.literalai_api_url}/api/graphql"
-        query = self._steps_query_builder(self.log_queue)
-        variables = self._steps_variables_builder(self.log_queue)
+        url: Final = f"{self.literalai_api_url}/api/graphql"
+        query: Final = self._steps_query_builder(self.log_queue)
+        variables: Final = self._steps_variables_builder(self.log_queue)
         try:
-            response = self.sync_http_handler.post(
+            response: Final = self.sync_http_handler.post(
                 url=url,
                 json={
                     "query": query,
@@ -107,7 +108,7 @@ class LiteralAILogger(CustomBatchLogger):
                 kwargs,
                 response_obj,
             )
-            data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
+            data: Final = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
             self.log_queue.append(data)
             verbose_logger.debug(
                 "Literal AI logging: queue length %s, batch size %s",
@@ -122,7 +123,7 @@ class LiteralAILogger(CustomBatchLogger):
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         verbose_logger.info("Literal AI Failure Event Logging!")
         try:
-            data = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
+            data: Final = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
             self.log_queue.append(data)
             verbose_logger.debug(
                 "Literal AI logging: queue length %s, batch size %s",
@@ -138,12 +139,12 @@ class LiteralAILogger(CustomBatchLogger):
         if not self.log_queue:
             return
 
-        url = f"{self.literalai_api_url}/api/graphql"
-        query = self._steps_query_builder(self.log_queue)
-        variables = self._steps_variables_builder(self.log_queue)
+        url: Final = f"{self.literalai_api_url}/api/graphql"
+        query: Final = self._steps_query_builder(self.log_queue)
+        variables: Final = self._steps_variables_builder(self.log_queue)
 
         try:
-            response = await self.async_httpx_client.post(
+            response: Final = await self.async_httpx_client.post(
                 url=url,
                 json={
                     "query": query,
@@ -161,20 +162,20 @@ class LiteralAILogger(CustomBatchLogger):
             verbose_logger.exception("Literal AI Layer Error")
 
     def _prepare_log_data(self, kwargs, response_obj, start_time, end_time) -> dict:
-        logging_payload: StandardLoggingPayload | None = kwargs.get("standard_logging_object", None)
+        logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
 
         if logging_payload is None:
             raise ValueError("standard_logging_object not found in kwargs")
-        clean_metadata = logging_payload["metadata"]
-        metadata = kwargs.get("litellm_params", {}).get("metadata", {})
+        clean_metadata: Final = logging_payload["metadata"]
+        metadata: Final = kwargs.get("litellm_params", {}).get("metadata", {})
 
-        settings = logging_payload["model_parameters"]
-        messages = logging_payload["messages"]
-        response = logging_payload["response"]
+        settings: Final = logging_payload["model_parameters"]
+        messages: Final = logging_payload["messages"]
+        response: Final = logging_payload["response"]
         choices: list = []
         if isinstance(response, dict) and "choices" in response:
             choices = response["choices"]
-        message_completion = choices[0]["message"] if choices else None
+        message_completion: Final = choices[0]["message"] if choices else None
         prompt_id = None
         variables = None
 
@@ -186,9 +187,9 @@ class LiteralAILogger(CustomBatchLogger):
                     message["uuid"] = literal_prompt.get("uuid")
                     message["templated"] = True
 
-        tools = settings.pop("tools", None)
+        tools: Final = settings.pop("tools", None)
 
-        step = {
+        step: Final = {
             "id": metadata.get("step_id", str(uuid.uuid4())),
             "error": logging_payload["error_str"],
             "name": kwargs.get("model", ""),
@@ -278,7 +279,7 @@ class LiteralAILogger(CustomBatchLogger):
 
     def _steps_variables_builder(self, steps):
         def serialize_step(event, id):
-            result = {}
+            result: Final = {}
 
             for key, value in event.items():
                 # Only keep the keys that are not None to avoid overriding existing values
@@ -287,7 +288,7 @@ class LiteralAILogger(CustomBatchLogger):
 
             return result
 
-        variables = {}
+        variables: Final = {}
         for i in range(len(steps)):
             step = steps[i]
             variables.update(serialize_step(step, i))

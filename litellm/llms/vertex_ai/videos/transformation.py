@@ -7,11 +7,15 @@ Based on: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-refer
 
 import base64
 import time
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, ClassVar, Final, TypedDict, cast
 
 import httpx
-from httpx._types import RequestFiles
+from httpx._types import FileContent, RequestFiles
+from typing_extensions import ReadOnly
 
+import litellm
 from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
@@ -40,22 +44,48 @@ else:
     BaseLLMException = Any
 
 
+class _VeoVideo(TypedDict, total=False):
+    gcsUri: ReadOnly[str]
+    bytesBase64Encoded: ReadOnly[str]
+    mimeType: ReadOnly[str]
+
+
+class _VeoOperationResponse(TypedDict, total=False):
+    videos: ReadOnly[Sequence[_VeoVideo]]
+
+
+class _VeoOperationMetadata(TypedDict, total=False):
+    createTime: ReadOnly[str]
+
+
+class _VeoOperation(TypedDict, total=False):
+    name: ReadOnly[str]
+    done: ReadOnly[bool]
+    metadata: ReadOnly[_VeoOperationMetadata]
+    response: ReadOnly[_VeoOperationResponse]
+
+
+def _parse_veo_operation(raw_response: httpx.Response) -> _VeoOperation:
+    operation: Final[_VeoOperation] = raw_response.json()
+    return operation
+
+
 def _build_vertex_video_usage_from_request_data(
     request_data: dict[str, Any] | None,
-) -> dict[str, Any]:
+) -> dict[str, float | str]:
     """Build usage metadata (duration, resolution) for video cost calculation."""
-    usage_data: dict[str, Any] = {}
+    usage_data: Final[dict[str, float | str]] = {}
     if not request_data:
         return usage_data
 
-    parameters = request_data.get("parameters", {})
-    duration = parameters.get("durationSeconds") or DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
+    parameters: Final = request_data.get("parameters", {})
+    duration: Final = parameters.get("durationSeconds") or DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
     if duration is not None:
         try:
             usage_data["duration_seconds"] = float(duration)
         except (ValueError, TypeError):
             pass
-    res = parameters.get("resolution")
+    res: Final = parameters.get("resolution")
     if res is not None and str(res).strip() != "":
         usage_data["video_resolution"] = str(res).strip().lower()
     return usage_data
@@ -71,12 +101,12 @@ def _convert_image_to_vertex_format(image_file) -> dict[str, str]:
     Returns:
         Dict with bytesBase64Encoded and mimeType
     """
-    mime_type = ImageEditRequestUtils.get_image_content_type(image_file)
+    mime_type: Final = ImageEditRequestUtils.get_image_content_type(image_file)
 
     if hasattr(image_file, "seek"):
         image_file.seek(0)
-    image_bytes = image_file.read()
-    base64_encoded = base64.b64encode(image_bytes).decode("utf-8")
+    image_bytes: Final = image_file.read()
+    base64_encoded: Final = base64.b64encode(image_bytes).decode("utf-8")
 
     return {"bytesBase64Encoded": base64_encoded, "mimeType": mime_type}
 
@@ -90,6 +120,23 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
     2. Poll operation using :fetchPredictOperation until done=true
     3. Extract video data (base64) from response
     """
+
+    _OPENAI_VIDEO_SIZE_TO_ASPECT_RATIO: ClassVar[Mapping[str, str]] = MappingProxyType(
+        {
+            "1280x720": "16:9",
+            "1920x1080": "16:9",
+            "720x1280": "9:16",
+            "1080x1920": "9:16",
+        }
+    )
+    _OPENAI_VIDEO_SIZE_TO_RESOLUTION: ClassVar[Mapping[str, str]] = MappingProxyType(
+        {
+            "1280x720": "720p",
+            "1920x1080": "1080p",
+            "720x1280": "720p",
+            "1080x1920": "1080p",
+        }
+    )
 
     def __init__(self):
         BaseVideoConfig.__init__(self)
@@ -107,7 +154,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         Returns:
             Model name (e.g., "veo-2.0-generate-001") or None if extraction fails
         """
-        parts = operation_name.split("/")
+        parts: Final = operation_name.split("/")
         # Model is at index 7 in the operation name format
         if len(parts) >= 8:
             return parts[7]
@@ -125,7 +172,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         video_create_optional_params: VideoCreateOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Map OpenAI-style parameters to Veo format.
 
@@ -133,9 +180,12 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         - prompt → prompt (in instances)
         - input_reference → image (in instances)
         - size → aspectRatio (e.g., "1280x720" → "16:9")
+        - size → resolution for models with resolution-tier pricing when inferable
+          ("1280x720"/"720x1280" → "720p", "1920x1080"/"1080x1920" → "1080p");
+          skipped if ``resolution`` is already set
         - seconds → durationSeconds (defaults to 4 seconds if not provided)
         """
-        mapped_params: dict[str, Any] = {}
+        mapped_params: Final[dict[str, object]] = {}
 
         # Map input_reference to image (will be processed in transform_video_create_request)
         if "input_reference" in video_create_optional_params:
@@ -147,19 +197,31 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         if "parameters" in video_create_optional_params:
             mapped_params["parameters"] = video_create_optional_params["parameters"]
 
+        if "resolution" in video_create_optional_params:
+            mapped_params["resolution"] = video_create_optional_params["resolution"]
+
         # Map size to aspectRatio
         if "size" in video_create_optional_params:
-            size = video_create_optional_params["size"]
+            size: Final = video_create_optional_params["size"]
             if size is not None:
-                aspect_ratio = self._convert_size_to_aspect_ratio(size)
+                aspect_ratio: Final = self._convert_size_to_aspect_ratio(size)
                 if aspect_ratio:
                     mapped_params["aspectRatio"] = aspect_ratio
+                nested_params: Final = video_create_optional_params.get("parameters")
+                has_resolution = "resolution" in mapped_params or (
+                    isinstance(nested_params, dict) and nested_params.get("resolution") is not None
+                )
+                supports_resolution = self._supports_resolution_inference(model)
+                if supports_resolution and not has_resolution:
+                    inferred_resolution = self._convert_size_to_resolution(size)
+                    if inferred_resolution is not None:
+                        mapped_params["resolution"] = inferred_resolution
 
         # Map seconds to durationSeconds, default to 4 seconds (matching OpenAI)
         if "seconds" in video_create_optional_params:
-            seconds = video_create_optional_params["seconds"]
+            seconds: Final = video_create_optional_params["seconds"]
             try:
-                duration = int(seconds) if isinstance(seconds, str) else seconds
+                duration: Final = int(seconds) if isinstance(seconds, str) else seconds
                 if duration is not None:
                     mapped_params["durationSeconds"] = duration
             except (ValueError, TypeError):
@@ -177,14 +239,16 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         if not size:
             return None
 
-        aspect_ratio_map = {
-            "1280x720": "16:9",
-            "1920x1080": "16:9",
-            "720x1280": "9:16",
-            "1080x1920": "9:16",
-        }
+        return self._OPENAI_VIDEO_SIZE_TO_ASPECT_RATIO.get(size, "16:9")
 
-        return aspect_ratio_map.get(size, "16:9")
+    def _convert_size_to_resolution(self, size: str) -> str | None:
+        return self._OPENAI_VIDEO_SIZE_TO_RESOLUTION.get(size)
+
+    @staticmethod
+    def _supports_resolution_inference(model: str) -> bool:
+        model_key: Final = model if model.startswith("vertex_ai/") else f"vertex_ai/{model}"
+        model_info: Final = litellm.model_cost.get(model_key)
+        return model_info is not None and model_info.get("output_cost_per_second_1080p") is not None
 
     def validate_environment(
         self,
@@ -201,10 +265,10 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         # Extract Vertex AI parameters using safe helpers from VertexBase
         # Use safe_get_* methods that don't mutate litellm_params dict
         # Ensure litellm_params is a dict for type checking
-        params_dict: dict[str, Any] = cast(dict[str, Any], litellm_params) if litellm_params is not None else {}
+        params_dict: Final[dict[str, Any]] = cast(dict[str, Any], litellm_params) if litellm_params is not None else {}
 
-        vertex_project = VertexBase.safe_get_vertex_ai_project(litellm_params=params_dict)
-        vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(litellm_params=params_dict)
+        vertex_project: Final = VertexBase.safe_get_vertex_ai_project(litellm_params=params_dict)
+        vertex_credentials: Final = VertexBase.safe_get_vertex_ai_credentials(litellm_params=params_dict)
 
         # Get access token from Vertex credentials
         access_token, project_id = self.get_access_token(
@@ -232,7 +296,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         Returns URL for :predictLongRunning endpoint:
         https://LOCATION-aiplatform.googleapis.com/v1/projects/PROJECT/locations/LOCATION/publishers/google/models/MODEL:predictLongRunning
         """
-        vertex_project = VertexBase.safe_get_vertex_ai_project(litellm_params)
+        vertex_project: Final = VertexBase.safe_get_vertex_ai_project(litellm_params)
         vertex_location = VertexBase.safe_get_vertex_ai_location(litellm_params)
 
         if not vertex_project:
@@ -245,7 +309,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         vertex_location = vertex_location or "us-central1"
 
         # Extract model name (remove vertex_ai/ prefix if present)
-        model_name = model.replace("vertex_ai/", "")
+        model_name: Final = model.replace("vertex_ai/", "")
 
         # Construct the URL
         if api_base:
@@ -253,7 +317,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         else:
             base_url = get_vertex_base_url(vertex_location)
 
-        url = (
+        url: Final = (
             f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model_name}"
         )
 
@@ -289,8 +353,8 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         }
         """
         # Build instance with prompt
-        instance_dict: dict[str, Any] = {"prompt": prompt}
-        params_copy = video_create_optional_request_params.copy()
+        instance_dict: Final[dict[str, object]] = {"prompt": prompt}
+        params_copy: Final = video_create_optional_request_params.copy()
 
         # Check if user wants to provide full instance dict
         if "instances" in params_copy and isinstance(params_copy["instances"], dict):
@@ -298,7 +362,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
             instance_dict.update(params_copy["instances"])
             params_copy.pop("instances")
         elif "image" in params_copy and params_copy["image"] is not None:
-            image = params_copy["image"]
+            image: Final = params_copy["image"]
             if isinstance(image, dict):
                 # Already in Vertex format e.g. {"gcsUri": "gs://..."} or
                 # {"bytesBase64Encoded": "...", "mimeType": "..."}
@@ -323,21 +387,21 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         # flat prevents the double-nesting bug:
         #   {"parameters": {"parameters": {...}}}  ← wrong
         #   {"parameters": {...}}                  ← correct
-        nested_params = params_copy.pop("parameters", None)
-        vertex_params: dict[str, Any] = {}
+        nested_params: Final = params_copy.pop("parameters", None)
+        vertex_params: Final[dict[str, object]] = {}
         if isinstance(nested_params, dict):
             vertex_params.update(nested_params)
         vertex_params.update(params_copy)
 
         # Build request data directly (TypedDict doesn't have model_dump)
-        request_data: dict[str, Any] = {"instances": [instance_dict]}
+        request_data: Final[dict[str, object]] = {"instances": [instance_dict]}
 
         # Only add parameters if there are any
         if vertex_params:
             request_data["parameters"] = vertex_params
 
         # Append :predictLongRunning endpoint to api_base
-        url = f"{api_base}:predictLongRunning"
+        url: Final = f"{api_base}:predictLongRunning"
 
         # No files needed - everything is in JSON
         return request_data, [], url
@@ -363,9 +427,9 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         - status: "processing"
         - usage: includes duration_seconds and optional video_resolution for cost calculation
         """
-        response_data = raw_response.json()
+        response_data: Final = _parse_veo_operation(raw_response)
 
-        operation_name = response_data.get("name")
+        operation_name: Final = response_data.get("name")
         if not operation_name:
             raise ValueError(f"No operation name in Veo response: {response_data}")
 
@@ -374,7 +438,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         else:
             video_id = operation_name
 
-        video_obj = VideoObject(id=video_id, object="video", status="processing", model=model)
+        video_obj: Final = VideoObject(id=video_id, object="video", status="processing", model=model)
 
         video_obj.usage = _build_vertex_video_usage_from_request_data(request_data)
         return video_obj
@@ -391,8 +455,8 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
 
         Veo polls operations using :fetchPredictOperation endpoint with POST request.
         """
-        operation_name = extract_original_video_id(video_id)
-        model = self.extract_model_from_operation_name(operation_name)
+        operation_name: Final = extract_original_video_id(video_id)
+        model: Final = self.extract_model_from_operation_name(operation_name)
 
         if not model:
             raise ValueError(
@@ -403,10 +467,10 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         # Construct the full URL including model ID
         # URL format: https://LOCATION-aiplatform.googleapis.com/v1/projects/PROJECT/locations/LOCATION/publishers/google/models/MODEL:fetchPredictOperation
         # Strip trailing slashes from api_base and append model
-        url = f"{api_base.rstrip('/')}/{model}:fetchPredictOperation"
+        url: Final = f"{api_base.rstrip('/')}/{model}:fetchPredictOperation"
 
         # Request body contains the operation name
-        params = {"operationName": operation_name}
+        params: Final = {"operationName": operation_name}
 
         return url, params
 
@@ -441,14 +505,14 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
             }
         }
         """
-        response_data = raw_response.json()
+        response_data: Final = _parse_veo_operation(raw_response)
 
-        operation_name = response_data.get("name", "")
-        is_done = response_data.get("done", False)
-        error_data = response_data.get("error")
+        operation_name: Final = response_data.get("name", "")
+        is_done: Final = response_data.get("done", False)
+        error_data: Final = response_data.get("error")
 
         # Extract model from operation name
-        model = self.extract_model_from_operation_name(operation_name)
+        model: Final = self.extract_model_from_operation_name(operation_name)
 
         if custom_llm_provider:
             video_id = encode_video_id_with_provider(operation_name, custom_llm_provider, model)
@@ -456,7 +520,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
             video_id = operation_name
 
         # Convert createTime to Unix timestamp
-        create_time_str = response_data.get("metadata", {}).get("createTime")
+        create_time_str: Final = response_data.get("metadata", {}).get("createTime")
         if create_time_str:
             try:
                 created_at = _convert_vertex_datetime_to_openai_datetime(create_time_str)
@@ -472,7 +536,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         else:
             status = "processing"
 
-        video_obj = VideoObject(
+        video_obj: Final = VideoObject(
             id=video_id,
             object="video",
             status=status,
@@ -513,7 +577,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
 
         Extracts the base64 encoded video from the response and decodes it to bytes.
         """
-        response_data = raw_response.json()
+        response_data: Final = _parse_veo_operation(raw_response)
 
         if not response_data.get("done", False):
             raise ValueError(
@@ -521,21 +585,21 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
             )
 
         try:
-            video_response = response_data.get("response", {})
-            videos = video_response.get("videos", [])
+            video_response: Final = response_data.get("response", {})
+            videos: Final = video_response.get("videos", [])
 
             if not videos or len(videos) == 0:
                 raise ValueError("No video data found in completed operation")
 
             # Get the first video
-            video_data = videos[0]
-            base64_encoded = video_data.get("bytesBase64Encoded")
+            video_data: Final = videos[0]
+            base64_encoded: Final = video_data.get("bytesBase64Encoded")
 
             if not base64_encoded:
                 raise ValueError("No base64 encoded video data found")
 
             # Decode base64 to bytes
-            video_bytes = base64.b64decode(base64_encoded)
+            video_bytes: Final = base64.b64decode(base64_encoded)
             return video_bytes
 
         except (KeyError, IndexError) as e:
@@ -548,7 +612,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        extra_body: dict[str, Any] | None = None,
+        extra_body: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         """
         Video remix is not supported by Veo API.
@@ -574,7 +638,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
-        extra_query: dict[str, Any] | None = None,
+        extra_query: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         """
         Video list is not supported by Veo API.
@@ -615,7 +679,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         """Video delete is not supported."""
         raise NotImplementedError("Video delete is not supported by Vertex AI Veo.")
 
-    def transform_video_create_character_request(self, name, video, api_base, litellm_params, headers):
+    def transform_video_create_character_request(self, name, video: object, api_base, litellm_params, headers):
         raise NotImplementedError("video create character is not supported for Vertex AI")
 
     def transform_video_create_character_response(self, raw_response, logging_obj):
@@ -649,9 +713,10 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        extra_body: dict[str, Any] | None = None,
+        video_file: FileContent | None = None,
+        extra_body: dict[str, object] | None = None,
         prefetched_source_data: dict[str, Any] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, Mapping[str, object], RequestFiles | None]:
         """
         Build a predictLongRunning edit request from the pre-fetched source video.
 
@@ -667,12 +732,13 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         if not prefetched_source_data.get("done", False):
             raise ValueError("Source video generation is not complete yet. Check the video status before editing.")
 
-        videos = prefetched_source_data.get("response", {}).get("videos", [])
+        source_response: Final[_VeoOperationResponse] = prefetched_source_data.get("response", {})
+        videos: Final = source_response.get("videos", [])
         if not videos:
             raise ValueError("No videos found in the completed operation. Cannot edit.")
 
-        source_video = videos[0]
-        video_input: dict[str, Any] = {}
+        source_video: Final = videos[0]
+        video_input: Final[dict[str, str]] = {}
         if "gcsUri" in source_video:
             video_input["gcsUri"] = source_video["gcsUri"]
         elif "bytesBase64Encoded" in source_video:
@@ -681,24 +747,24 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         else:
             raise ValueError("Source video has neither gcsUri nor bytesBase64Encoded. Cannot edit.")
 
-        operation_name = extract_original_video_id(video_id)
-        model = self.extract_model_from_operation_name(operation_name) or ""
+        operation_name: Final = extract_original_video_id(video_id)
+        model: Final = self.extract_model_from_operation_name(operation_name) or ""
 
-        instance_dict: dict[str, Any] = {"prompt": prompt, "video": video_input}
-        request_data: dict[str, Any] = {"instances": [instance_dict]}
+        instance_dict: Final[dict[str, object]] = {"prompt": prompt, "video": video_input}
+        request_data: Final[dict[str, object]] = {"instances": [instance_dict]}
 
         if extra_body:
-            extra_body_copy = dict(extra_body)
-            nested_params = extra_body_copy.pop("parameters", None)
-            vertex_params: dict[str, Any] = {}
+            extra_body_copy: Final = dict(extra_body)
+            nested_params: Final = extra_body_copy.pop("parameters", None)
+            vertex_params: Final[dict[str, object]] = {}
             if isinstance(nested_params, dict):
                 vertex_params.update(nested_params)
             vertex_params.update(extra_body_copy)
             if vertex_params:
                 request_data["parameters"] = vertex_params
 
-        edit_url = f"{api_base.rstrip('/')}/{model}:predictLongRunning"
-        return edit_url, request_data
+        edit_url: Final = f"{api_base.rstrip('/')}/{model}:predictLongRunning"
+        return edit_url, request_data, None
 
     def transform_video_edit_response(
         self,
@@ -716,20 +782,20 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         usage includes duration_seconds and optional video_resolution from the
         edit request parameters for cost calculation.
         """
-        response_data = raw_response.json()
+        response_data: Final = _parse_veo_operation(raw_response)
 
-        operation_name = response_data.get("name")
+        operation_name: Final = response_data.get("name")
         if not operation_name:
             raise ValueError(f"No operation name in Veo edit response: {response_data}")
 
-        model = self.extract_model_from_operation_name(operation_name) or ""
+        model: Final = self.extract_model_from_operation_name(operation_name) or ""
 
         if custom_llm_provider:
             video_id = encode_video_id_with_provider(operation_name, custom_llm_provider, model)
         else:
             video_id = operation_name
 
-        video_obj = VideoObject(
+        video_obj: Final = VideoObject(
             id=video_id,
             object="video",
             status="processing",

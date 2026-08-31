@@ -5,6 +5,7 @@ Functions to create audit logs for LiteLLM Proxy
 import asyncio
 import json
 from datetime import datetime, timezone
+from typing import Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -19,8 +20,24 @@ from litellm.proxy._types import (
 from litellm.repositories.table_repositories import AuditLogRepository
 from litellm.types.utils import StandardAuditLogPayload
 
-_audit_log_callback_cache: dict[str, CustomLogger] = {}
-ALLOW_LITELLM_CHANGED_BY_HEADER_METADATA_KEY = "allow_litellm_changed_by_header"
+_audit_log_callback_cache: Final[dict[str, CustomLogger]] = {}
+ALLOW_LITELLM_CHANGED_BY_HEADER_METADATA_KEY: Final = "allow_litellm_changed_by_header"
+
+
+def is_audit_logging_enabled(store_audit_logs: bool | None = None) -> bool:
+    from litellm.secret_managers.main import get_secret_bool
+
+    configured_value: Final[bool | None] = litellm.store_audit_logs if store_audit_logs is None else store_audit_logs
+    if configured_value is not None:
+        return configured_value
+
+    environment_value: Final[bool | None] = get_secret_bool("LITELLM_STORE_AUDIT_LOGS")
+    if environment_value is not None:
+        return environment_value
+
+    from litellm.proxy.proxy_server import premium_user
+
+    return premium_user is True
 
 
 def _allows_litellm_changed_by_header(user_api_key_dict: UserAPIKeyAuth) -> bool:
@@ -65,7 +82,7 @@ def _resolve_audit_log_callback(name: str) -> CustomLogger | None:
         )
 
         instance = _init_custom_logger_compatible_class(
-            logging_integration=name,  # type: ignore
+            logging_integration=name,
             internal_usage_cache=None,
             llm_router=None,
         )
@@ -88,7 +105,7 @@ def _build_audit_log_payload(
     if request_data.updated_at is not None:
         updated_at = request_data.updated_at.isoformat()
 
-    table_name_str: str = (
+    table_name_str: Final[str] = (
         request_data.table_name.value
         if isinstance(request_data.table_name, LitellmTableNames)
         else str(request_data.table_name)
@@ -110,7 +127,7 @@ def _build_audit_log_payload(
 def _audit_log_task_done_callback(task: asyncio.Task) -> None:
     """Log exceptions from audit log callback tasks so they don't slip through silently."""
     try:
-        exc = task.exception()
+        exc: Final = task.exception()
     except asyncio.CancelledError:
         return
     if exc is not None:
@@ -124,7 +141,7 @@ async def _dispatch_audit_log_to_callbacks(
     if not litellm.audit_log_callbacks:
         return
 
-    payload = _build_audit_log_payload(request_data)
+    payload: Final = _build_audit_log_payload(request_data)
 
     for callback in litellm.audit_log_callbacks:
         try:
@@ -163,14 +180,10 @@ async def create_object_audit_log(
     - user_api_key_dict: UserAPIKeyAuth - The user api key dictionary.
     - litellm_proxy_admin_name: Optional[str] - The name of the proxy admin.
     """
-    from litellm.secret_managers.main import get_secret_bool
-
-    _store_audit_logs: bool | None = litellm.store_audit_logs or get_secret_bool("LITELLM_STORE_AUDIT_LOGS")
-
-    if _store_audit_logs is not True:
+    if not is_audit_logging_enabled():
         return
 
-    _changed_by = get_audit_log_changed_by(
+    _changed_by: Final = get_audit_log_changed_by(
         litellm_changed_by=litellm_changed_by,
         user_api_key_dict=user_api_key_dict,
         litellm_proxy_admin_name=litellm_proxy_admin_name,
@@ -195,10 +208,7 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
     """
     Create an audit log for an object.
     """
-    from litellm.secret_managers.main import get_secret_bool
-
-    _store_audit_logs: bool | None = litellm.store_audit_logs or get_secret_bool("LITELLM_STORE_AUDIT_LOGS")
-    if _store_audit_logs is not True:
+    if not is_audit_logging_enabled():
         return
 
     from litellm.proxy.proxy_server import premium_user, prisma_client
@@ -221,12 +231,12 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
         verbose_proxy_logger.error("prisma_client is None, cannot write audit log to DB")
         return
 
-    _request_data = request_data.model_dump(exclude_none=True)
+    _request_data: Final = request_data.model_dump(exclude_none=True)
 
     try:
         await AuditLogRepository(prisma_client).table.create(
             data={
-                **_request_data,  # type: ignore
+                **_request_data,
             }
         )
     except Exception as e:

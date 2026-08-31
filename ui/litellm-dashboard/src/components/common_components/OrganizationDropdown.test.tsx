@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import OrganizationDropdown from "./OrganizationDropdown";
@@ -54,12 +54,28 @@ describe("OrganizationDropdown", () => {
     await user.click(screen.getByRole("combobox"));
     await user.click(await screen.findByText("Engineering"));
 
-    expect(onChange).toHaveBeenCalledWith("org-1", expect.anything());
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange.mock.calls[0][0]).toBe("org-1");
   });
 
-  it("should add ant-select-disabled class when disabled prop is true", () => {
-    const { container } = render(<OrganizationDropdown organizations={MOCK_ORGS} disabled={true} />);
-    expect(container.querySelector(".ant-select-disabled")).toBeTruthy();
+  it("should filter options by organization id", async () => {
+    const user = userEvent.setup();
+    render(<OrganizationDropdown organizations={MOCK_ORGS} />);
+
+    await user.click(screen.getByRole("combobox"));
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "org-2" } });
+
+    expect(await screen.findByText("Sales")).toBeInTheDocument();
+    expect(screen.queryByText("Engineering")).not.toBeInTheDocument();
+  });
+
+  it("should not open the option list when disabled prop is true", async () => {
+    const user = userEvent.setup();
+    render(<OrganizationDropdown organizations={MOCK_ORGS} disabled={true} />);
+
+    await user.click(screen.getByRole("combobox"));
+
+    expect(screen.queryByText("Engineering")).not.toBeInTheDocument();
   });
 
   it("should render with empty organizations list", () => {

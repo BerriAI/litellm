@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
@@ -27,16 +27,16 @@ def _convert_image(image):
     except Exception:
         raise Exception("ollama image conversion failed please run `pip install Pillow`")
 
-    orig = image
+    orig: Final = image
     if image.startswith("data:"):
         image = image.split(",")[-1]
     try:
-        image_data = Image.open(io.BytesIO(base64.b64decode(image)))
+        image_data: Final = Image.open(io.BytesIO(base64.b64decode(image)))
         if image_data.format in ["JPEG", "PNG"]:
             return image
     except Exception:
         return orig
-    jpeg_image = io.BytesIO()
+    jpeg_image: Final = io.BytesIO()
     image_data.convert("RGB").save(jpeg_image, "JPEG")
     jpeg_image.seek(0)
     return base64.b64encode(jpeg_image.getvalue()).decode("utf-8")
@@ -95,16 +95,16 @@ class OllamaModelInfo(BaseLLMModelInfo):
         List all models available on the Ollama server via /api/tags endpoint.
         """
 
-        passed_api_base = api_base
-        base = self.get_server_api_base(api_base)
+        passed_api_base: Final = api_base
+        base: Final = self.get_server_api_base(api_base)
         api_key = self.get_api_key(api_key) if passed_api_base is None or api_key else None
-        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        headers: Final = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
-        names: set[str] = set()
+        names: Final[set[str]] = set()
         try:
-            resp = httpx.get(f"{base}/api/tags", headers=headers)
+            resp: Final = httpx.get(f"{base}/api/tags", headers=headers)
             resp.raise_for_status()
-            data = resp.json()
+            data: Final = resp.json()
             # Expecting a dict with a 'models' list
             models_list = []
             if isinstance(data, dict) and "models" in data and isinstance(data["models"], list):
@@ -124,13 +124,13 @@ class OllamaModelInfo(BaseLLMModelInfo):
             try:
                 from litellm import models_by_provider
 
-                static = models_by_provider.get("ollama", []) or []
+                static: Final = models_by_provider.get("ollama", []) or []
                 return [f"ollama/{m}" for m in static]
             except Exception as e1:
                 verbose_logger.warning("Error retrieving static ollama models as fallback: %s", e1)
                 return []
         # assemble full model names
-        result = sorted(names)
+        result: Final = sorted(names)
         return result
 
     @staticmethod
@@ -143,24 +143,24 @@ class OllamaModelInfo(BaseLLMModelInfo):
     def _is_static_ollama_model(model: str) -> bool:
         from litellm import model_cost
 
-        stripped_model = OllamaModelInfo._strip_ollama_model_prefix(model)
-        potential_model_names = {
+        stripped_model: Final = OllamaModelInfo._strip_ollama_model_prefix(model)
+        potential_model_names: Final = {
             model,
             stripped_model,
             "ollama/" + stripped_model,
             "ollama_chat/" + stripped_model,
         }
-        model_cost_keys = {key.lower() for key in model_cost}
+        model_cost_keys: Final = {key.lower() for key in model_cost}
         return any(name.lower() in model_cost_keys for name in potential_model_names)
 
     @staticmethod
     def _supports_function_calling(ollama_model_info: dict) -> bool:
-        _template: str = str(ollama_model_info.get("template", "") or "")
+        _template: Final[str] = str(ollama_model_info.get("template", "") or "")
         return "tools" in _template.lower()
 
     @staticmethod
     def _get_max_tokens(ollama_model_info: dict) -> int | None:
-        _model_info: dict = ollama_model_info.get("model_info", {})
+        _model_info: Final[dict] = ollama_model_info.get("model_info", {})
 
         for key, value in _model_info.items():
             if "context_length" in key:
@@ -176,13 +176,13 @@ class OllamaModelInfo(BaseLLMModelInfo):
         from litellm import module_level_client
 
         model = self._strip_ollama_model_prefix(model)
-        passed_api_base = api_base
+        passed_api_base: Final = api_base
         api_base = self.get_server_api_base(api_base)
         api_key = self.get_api_key(api_key) if passed_api_base is None or api_key else None
-        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        headers: Final = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
         try:
-            response = module_level_client.post(
+            response: Final = module_level_client.post(
                 url=f"{api_base}/api/show",
                 json={"name": model},
                 headers=headers,
@@ -201,8 +201,8 @@ class OllamaModelInfo(BaseLLMModelInfo):
                 "max_output_tokens": None,
             }
 
-        model_info = response.json()
-        max_tokens = self._get_max_tokens(model_info)
+        model_info: Final = response.json()
+        max_tokens: Final = self._get_max_tokens(model_info)
 
         return {
             "key": model,

@@ -4,7 +4,7 @@ A2A Protocol Transformation for LiteLLM
 
 import uuid
 from collections.abc import Iterator
-from typing import Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -19,6 +19,11 @@ from ..common_utils import (
     extract_text_from_a2a_response,
 )
 from .streaming_iterator import A2AModelResponseIterator
+
+if TYPE_CHECKING:
+    import tiktoken
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class A2AConfig(BaseConfig):
@@ -53,7 +58,7 @@ class A2AConfig(BaseConfig):
             Tuple of (api_base, api_key, headers) with registry values filled in
         """
         # Extract agent name from model (e.g., "a2a/my-agent" -> "my-agent")
-        agent_name = model.split("/", 1)[1] if "/" in model else None
+        agent_name: Final = model.split("/", 1)[1] if "/" in model else None
 
         # Only lookup if agent name exists and some config is missing
         if not agent_name or (api_base is not None and api_key is not None and headers is not None):
@@ -65,7 +70,7 @@ class A2AConfig(BaseConfig):
                 global_agent_registry,
             )
 
-            agent = global_agent_registry.get_agent_by_name(agent_name)
+            agent: Final = global_agent_registry.get_agent_by_name(agent_name)
             if agent:
                 # Get api_base from agent card URL
                 if api_base is None and agent.agent_card_params:
@@ -77,7 +82,7 @@ class A2AConfig(BaseConfig):
                         api_key = agent.litellm_params.get("api_key")
 
                     if headers is None:
-                        agent_headers = agent.litellm_params.get("headers")
+                        agent_headers: Final = agent.litellm_params.get("headers")
                         if agent_headers:
                             headers = agent_headers
 
@@ -210,17 +215,17 @@ class A2AConfig(BaseConfig):
             A2A JSON-RPC 2.0 request dict
         """
         # Generate request ID
-        request_id = str(uuid.uuid4())
+        request_id: Final = str(uuid.uuid4())
 
         if not messages:
             raise ValueError("At least one message is required for A2A completion")
 
         # Convert all messages to maintain conversation history
         # Use helper to format conversation with role prefixes
-        full_context = convert_messages_to_prompt(messages)
+        full_context: Final = convert_messages_to_prompt(messages)
 
         # Create single A2A message with full conversation context
-        a2a_message = {
+        a2a_message: Final = {
             "role": "user",
             "parts": [{"kind": "text", "text": full_context}],
             "messageId": str(uuid.uuid4()),
@@ -229,10 +234,10 @@ class A2AConfig(BaseConfig):
         # Build JSON-RPC 2.0 request
         # For A2A protocol, the method is "message/send" for non-streaming
         # and "message/stream" for streaming
-        stream = optional_params.get("stream", False)
-        method = "message/stream" if stream else "message/send"
+        stream: Final = optional_params.get("stream", False)
+        method: Final = "message/stream" if stream else "message/send"
 
-        request_data = {
+        request_data: Final = {
             "jsonrpc": "2.0",
             "id": request_id,
             "method": method,
@@ -246,12 +251,12 @@ class A2AConfig(BaseConfig):
         model: str,
         raw_response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         request_data: dict,
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -275,7 +280,7 @@ class A2AConfig(BaseConfig):
             Populated ModelResponse object
         """
         try:
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
         except Exception as e:
             raise A2AError(
                 status_code=raw_response.status_code,
@@ -285,7 +290,7 @@ class A2AConfig(BaseConfig):
 
         # Check for JSON-RPC error
         if "error" in response_json:
-            error = response_json["error"]
+            error: Final = response_json["error"]
             raise A2AError(
                 status_code=raw_response.status_code,
                 message=f"A2A error: {error.get('message', 'Unknown error')}",
@@ -293,7 +298,7 @@ class A2AConfig(BaseConfig):
             )
 
         # Extract text from A2A response
-        text = extract_text_from_a2a_response(response_json)
+        text: Final = extract_text_from_a2a_response(response_json)
 
         # Populate model response
         model_response.choices = [
@@ -318,8 +323,8 @@ class A2AConfig(BaseConfig):
         try:
             from litellm.utils import token_counter
 
-            prompt_tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
-            completion_tokens = token_counter(model="gpt-3.5-turbo", text=text, count_response_tokens=True)
+            prompt_tokens: Final = token_counter(model="gpt-3.5-turbo", messages=messages)
+            completion_tokens: Final = token_counter(model="gpt-3.5-turbo", text=text, count_response_tokens=True)
             setattr(
                 model_response,
                 "usage",
@@ -367,8 +372,8 @@ class A2AConfig(BaseConfig):
         Returns:
             A2A message dict
         """
-        content = message.get("content", "")
-        role = message.get("role", "user")
+        content: Final = message.get("content", "")
+        role: Final = message.get("role", "user")
 
         return {
             "role": role,
@@ -379,7 +384,7 @@ class A2AConfig(BaseConfig):
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         """Return appropriate error class for A2A errors"""
         # Convert headers to dict if needed
-        headers_dict = dict(headers) if isinstance(headers, httpx.Headers) else headers
+        headers_dict: Final = dict(headers) if isinstance(headers, httpx.Headers) else headers
         return A2AError(
             status_code=status_code,
             message=error_message,

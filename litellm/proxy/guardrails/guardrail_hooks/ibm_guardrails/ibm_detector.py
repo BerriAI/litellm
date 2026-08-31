@@ -8,7 +8,7 @@
 import os
 from collections.abc import AsyncGenerator
 from datetime import datetime
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
@@ -29,7 +29,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
 )
 from litellm.types.utils import CallTypesLiteral, GuardrailStatus, ModelResponseStream
 
-GUARDRAIL_NAME = "ibm_guardrails"
+GUARDRAIL_NAME: Final = "ibm_guardrails"
 
 
 class IBMGuardrailDetector(CustomGuardrail):
@@ -115,11 +115,11 @@ class IBMGuardrailDetector(CustomGuardrail):
             List of lists where top-level list is per message in contents,
             sublists are individual detections on that message
         """
-        start_time = datetime.now()
+        start_time: Final = datetime.now()
 
-        payload = {"contents": contents, "detector_params": self.detector_params}
+        payload: Final = {"contents": contents, "detector_params": self.detector_params}
 
-        headers = {
+        headers: Final = {
             "Authorization": f"Bearer {self.auth_token}",
             "content-type": "application/json",
             "detector-id": self.detector_id,
@@ -136,20 +136,20 @@ class IBMGuardrailDetector(CustomGuardrail):
         )
 
         try:
-            response = await self.async_handler.post(
+            response: Final = await self.async_handler.post(
                 url=self.api_url,
                 json=payload,
                 headers=headers,
             )
             response.raise_for_status()
-            response_json: list[list[IBMDetectorDetection]] = response.json()
+            response_json: Final[list[list[IBMDetectorDetection]]] = response.json()
 
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
 
             # Add guardrail information to request trace
             if request_data:
-                guardrail_status = self._determine_guardrail_status_detector_server(response_json)
+                guardrail_status: Final = self._determine_guardrail_status_detector_server(response_json)
                 self.add_standard_logging_guardrail_information_to_request_data(
                     guardrail_provider=self.guardrail_provider,
                     guardrail_json_response={
@@ -204,14 +204,14 @@ class IBMGuardrailDetector(CustomGuardrail):
         Returns:
             List of detections
         """
-        start_time = datetime.now()
+        start_time: Final = datetime.now()
 
-        payload = {
+        payload: Final = {
             "content": content,
             "detectors": {self.detector_id: self.detector_params},
         }
 
-        headers = {
+        headers: Final = {
             "Authorization": f"Bearer {self.auth_token}",
             "content-type": "application/json",
         }
@@ -227,20 +227,20 @@ class IBMGuardrailDetector(CustomGuardrail):
         )
 
         try:
-            response = await self.async_handler.post(
+            response: Final = await self.async_handler.post(
                 url=self.api_url,
                 json=payload,
                 headers=headers,
             )
             response.raise_for_status()
-            response_json: IBMDetectorResponseOrchestrator = response.json()
+            response_json: Final[IBMDetectorResponseOrchestrator] = response.json()
 
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
 
             # Add guardrail information to request trace
             if request_data:
-                guardrail_status = self._determine_guardrail_status_orchestrator(response_json)
+                guardrail_status: Final = self._determine_guardrail_status_orchestrator(response_json)
                 self.add_standard_logging_guardrail_information_to_request_data(
                     guardrail_provider=self.guardrail_provider,
                     guardrail_json_response=dict(response_json),
@@ -339,9 +339,9 @@ class IBMGuardrailDetector(CustomGuardrail):
             if not isinstance(response_json, dict):
                 return "guardrail_failed_to_respond"
 
-            detections = response_json.get("detections", [])
+            detections: Final = response_json.get("detections", [])
             # Apply threshold filtering
-            filtered = self._filter_detections_by_threshold(detections)
+            filtered: Final = self._filter_detections_by_threshold(detections)
 
             if filtered:
                 return "guardrail_intervened"
@@ -393,7 +393,7 @@ class IBMGuardrailDetector(CustomGuardrail):
         Returns:
             Formatted error message string
         """
-        filtered_detections = self._filter_detections_by_threshold(detections)
+        filtered_detections: Final = self._filter_detections_by_threshold(detections)
 
         error_message = f"IBM Guardrail Detector failed: {len(filtered_detections)} violation(s) detected\n\n"
 
@@ -426,16 +426,16 @@ class IBMGuardrailDetector(CustomGuardrail):
             add_guardrail_to_applied_guardrails_header,
         )
 
-        event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call
+        event_type: Final[GuardrailEventHooks] = GuardrailEventHooks.pre_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
         # Covers multimodal list content + Responses-API input.
-        contents_to_check: list[str] = list(iter_message_text(data))
+        contents_to_check: Final[list[str]] = list(iter_message_text(data))
         if contents_to_check:
             if self.is_detector_server:
                 # Call detector server with all contents at once
-                result = await self._call_detector_server(
+                result: Final = await self._call_detector_server(
                     contents=contents_to_check,
                     request_data=data,
                     event_type=GuardrailEventHooks.pre_call,
@@ -495,16 +495,16 @@ class IBMGuardrailDetector(CustomGuardrail):
             add_guardrail_to_applied_guardrails_header,
         )
 
-        event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
+        event_type: Final[GuardrailEventHooks] = GuardrailEventHooks.during_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return
 
         # Covers multimodal list content + Responses-API input.
-        contents_to_check: list[str] = list(iter_message_text(data))
+        contents_to_check: Final[list[str]] = list(iter_message_text(data))
         if contents_to_check:
             if self.is_detector_server:
                 # Call detector server with all contents at once
-                result = await self._call_detector_server(
+                result: Final = await self._call_detector_server(
                     contents=contents_to_check,
                     request_data=data,
                     event_type=GuardrailEventHooks.during_call,
@@ -587,7 +587,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                 )
                 return
 
-            contents_to_check: list[str] = []
+            contents_to_check: Final[list[str]] = []
             for choice in response.choices:
                 if isinstance(choice, litellm.Choices):
                     verbose_proxy_logger.debug("async_post_call_success_hook choice: %s", choice)
@@ -597,7 +597,7 @@ class IBMGuardrailDetector(CustomGuardrail):
             if contents_to_check:
                 if self.is_detector_server:
                     # Call detector server with all contents at once
-                    result = await self._call_detector_server(
+                    result: Final = await self._call_detector_server(
                         contents=contents_to_check,
                         request_data=data,
                         event_type=GuardrailEventHooks.post_call,

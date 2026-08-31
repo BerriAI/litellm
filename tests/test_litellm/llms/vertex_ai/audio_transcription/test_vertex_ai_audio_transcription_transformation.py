@@ -1,13 +1,11 @@
 import base64
 import json
 import os
-import sys
 from urllib.parse import urlparse
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
 from litellm.llms.vertex_ai.audio_transcription.transformation import (

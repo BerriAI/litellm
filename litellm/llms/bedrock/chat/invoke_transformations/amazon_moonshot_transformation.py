@@ -8,7 +8,7 @@ Reference: https://aws.amazon.com/about-aws/whats-new/2025/12/amazon-bedrock-ful
 """
 
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -21,6 +21,8 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.types.utils import ModelResponse
 
@@ -76,7 +78,7 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
 
         # Remove any provider prefix (e.g., moonshot/)
         if "/" in model and not model.startswith("arn:"):
-            parts = model.split("/", 1)
+            parts: Final = model.split("/", 1)
             if len(parts) == 2:
                 model = parts[1]
 
@@ -94,13 +96,13 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
         Note: kimi-k2-thinking DOES support tool calls (unlike kimi-thinking-preview)
         The parent MoonshotChatConfig class handles the kimi-thinking-preview exclusion.
         """
-        excluded_params: list[str] = [
+        excluded_params: Final[list[str]] = [
             "functions",
             "stop",
         ]  # Bedrock doesn't support stopSequences
 
-        base_openai_params = super(MoonshotChatConfig, self).get_supported_openai_params(model=model)
-        final_params: list[str] = []
+        base_openai_params: Final = super(MoonshotChatConfig, self).get_supported_openai_params(model=model)
+        final_params: Final[list[str]] = []
         for param in base_openai_params:
             if param not in excluded_params:
                 final_params.append(param)
@@ -151,7 +153,7 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
         self._get_boto_credentials_from_optional_params(optional_params, model)
 
         # Strip routing prefixes to get the actual model ID
-        clean_model_id = self._get_model_id(model)
+        clean_model_id: Final = self._get_model_id(model)
 
         # Use Moonshot's transform_request which handles message transformation
         # and tool_choice="required" workaround
@@ -181,11 +183,11 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
             return None, content
 
         # Match <reasoning>...</reasoning> tags
-        reasoning_match = re.match(r"<reasoning>(.*?)</reasoning>\s*(.*)", content, re.DOTALL)
+        reasoning_match: Final = re.match(r"<reasoning>(.*?)</reasoning>\s*(.*)", content, re.DOTALL)
 
         if reasoning_match:
-            reasoning_content = reasoning_match.group(1).strip()
-            main_content = reasoning_match.group(2).strip()
+            reasoning_content: Final = reasoning_match.group(1).strip()
+            main_content: Final = reasoning_match.group(2).strip()
             return reasoning_content, main_content
 
         return None, content
@@ -200,7 +202,7 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> "ModelResponse":

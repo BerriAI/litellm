@@ -1,7 +1,5 @@
 import asyncio
 import json
-import os
-import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -12,9 +10,6 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock
 
 from litellm.caching.in_memory_cache import InMemoryCache

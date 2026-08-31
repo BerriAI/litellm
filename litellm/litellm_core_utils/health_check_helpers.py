@@ -2,16 +2,31 @@
 Helper functions for health check calls.
 """
 
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Literal
+import base64
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Final, Literal
 
 from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import ImageResponse
 
 # Minimal PDF for health checks - base64 encoded 1-page PDF with just "test"
 TEST_PDF_URL = "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MKMyAwIG9iago8PC9UeXBlIC9QYWdlCi9QYXJlbnQgMSAwIFIKL01lZGlhQm94IFswIDAgNjEyIDc5Ml0KL0NvbnRlbnRzIDQgMCBSCi9SZXNvdXJjZXMgPDwvRm9udCA8PC9GMSAyIDAgUj4+Pj4+PgplbmRvYmoKNCAwIG9iago8PC9MZW5ndGggNDQ+PgpzdHJlYW0KQlQKL0YxIDI0IFRmCjEwMCA3MDAgVGQKKHRlc3QpIFRqCkVUCmVuZHN0cmVhbQplbmRvYmoKMiAwIG9iago8PC9UeXBlIC9Gb250Ci9TdWJ0eXBlIC9UeXBlMQovQmFzZUZvbnQgL0hlbHZldGljYT4+CmVuZG9iagoxIDAgb2JqCjw8L1R5cGUgL1BhZ2VzCi9LaWRzIFszIDAgUl0KL0NvdW50IDE+PgplbmRvYmoKNSAwIG9iago8PC9UeXBlIC9DYXRhbG9nCi9QYWdlcyAxIDAgUj4+CmVuZG9iagp0cmFpbGVyCjw8L1NpemUgNgovUm9vdCA1IDAgUj4+CnN0YXJ0eHJlZgozMjQKJSVFT0Y="
+
+# Minimal image for health checks - base64 encoded 512x512 blue circle on a white background PNG
+TEST_IMAGE_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAIAAAB7GkOtAAAJk0lEQVR42u3VQREAIRADwVWCOmTjBVzwSLorCri6nbkAVBpPACAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACACAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACACAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACAIAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACAIAAAAgAAAIAZdY+HgEBgIRr/meeGgGA8EMvDAgAuPh6gACAi68HCAA4+mKAAICjLwYIALj7SoAAgLuvBAgA7r4pAQKAu29KgADg7psSIAA4/SYDCADuvikBAoDTbzKAAOD0mwwgADj9JgMIAE6/yQACgNNvMoAA4PSbDCAAOP0mAwgATr/JAAKA668BIAA4/TKAAOD0mwwgALj+pgEIAE6/yQACgOtvGoAA4PSbDCAAuP6mAQgATr/JAAKA628agADg9JsMIAC4/qYBCACuv2kAAoDrbxqAAOD0mwwgALj+pgEIAK6/aQACgOtvGoAA4PqbBiAArr+ZBiAATr+ZDCAArr+ZBiAArr+ZBiAArr+ZBiAArr+ZBggArr+ZBggArr+ZBggArr+ZBggArr+ZBggArr+ZBggArr+ZBggAAmAmAAKA62+mAQKA62+mAQKA62/m1xYAXH/TAAQA1980AAHA9TcNQAAEwEwAEADX30wDEADX30wDEADX30wDEADX30wDEAABMBMABMD1N9MABMD1N9MABEAAzAQAAXD9zTQAAXD9zTRAABAAMwEQAFx/Mw0QAFx/Mw0QAATATAAEANffTAMEANffTAMEAAEwEwABwPU30wABQADMBEAAXH8z0wABcP3NTAMEQADMTAAEwPU3Mw0QAAEwMwEQANffTAMQAAEwEwAEwPU30wAEQADMBAABcP3NNAABEAAzAUAAXH8zDUAABMBMABAA199MAwQAATATAAHA9TfTAAFAAMwEQABw/c00QAAQADMBEAAEwEwABMD1NzMNEAABMDMBEADX38w0QAAEwMwEQAAEwMwEQABcfzPTAAEQADMTAAEQADMTAAFw/c1MAwRAAMxMAARAAMxMAATA9TczDRAAATATAARAAMwEAAFw/c00AAEQADMBQAAEwEwAEADX30wDBAABMBMAAUAAzARAABAAMwEQAFx/Mw0QAAEwMwEQAAEwMwEQAAEwMwEQANffzDRAAATAzARAAATAzARAAATAzARAAATAzARAAFx/M9MAARAAMxMAARAAMxMAARAAMxMAARAAMxMAAXD9zUwDBEAAzEwABEAAzAQAARAAMwFAAATATAAQAAEwEwABQADMBEAAEAAzARAAXH8zDRAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAAATAzARAA19/MNEAANMDM9UcABMBMABAAATATAAHwBAJgJgACgACYCYAAIABmAiAA+IvMBEAABMDMBEAABMDMBEAABMDMBEAABMDMBEAABMDMBEAABMDMBEAABMDMBEAABMDMBEAABMDMBEAABMDMBEAANMDMXH8BEAAzEwABEAAzEwABEAAzEwABEAAzEwABEAAzEwABEAAzAUAABMBMABAADTBz/REAATATAAFAAMwEQAAQADMBEAAEwEwABAANMHP9BUAAzEwABEAAzEwABEAAzEwABEAAzEwABEADzMz1FwABMDMBEAABMDMBEAABMDMBEAANMDPXXwAEwMwEQAAEwMwEQAAEwMwEQAA0wMxcfwEQADMTAAEQADMBQAA0wMz1RwAEwEwAEAABMBMABEADzFx/AUAAzARAABAAMwEQADTAzPUXAATATAAEAAEwEwABQAPMXH8BEAAzEwABEAAzEwAB0AAzc/0FQADMTAAEQAPMzPUXAAEwMwEQAAEwMwEQAA0wM9dfAATAzARAADTAzFx/ARAAMwFAADTAzPVHAATATAAQAA0wc/0RAAEwEwAEQAPMXH8EQADMBAAB0AAz118AEAAzARAANMDM9RcABMBMAAQADTBz/QUAATATAAFAA8xcfwFAA8xcfwFAAMwEQADQADPXXwAEwMwEQAA0wMxcfwHQADNz/QVAAMxMAARAA8xcfwRAA8xcfwRAAMwEAAHQADPXHwHQADPXHwEQADMBQAA0wMz1RwA0wMz1RwAEwEwAEAANMHP9BQANMHP9BQANMHP9BQANMHP9BQABMBMAAUADzFx/AUADzFx/AUADzFx/AUADzFx/AUADzFx/AUADzPVHABAAEwAEAA0w1x8BQAPM9UcA0ABz/REANMBcfwQADTDXHwHQADPXHwHQADPXHwHQADPXHwHQADPXHwHQADPXHwGQATOnHwHQADPXHwHQADPXXwDQADPXXwDQADPXXwDQADPXXwCQAXP6EQA0wFx/BAANMNcfAUADzPVHAJABc/oRADTAXH8EABkwpx8BQAPM9UcAkAFz+hEANMBcfwQAGTCnHwFAA8z1RwCQAXP6EQBkwJx+BAANMNcfAUAGzOlHAJABc/oRAGTA6QcBQAacfhAAZMDpRwBABpx+BABkwOlHAEAGnH4EAJTA3UcAQAacfgQAlMDdRwBACdx9BACUwN1HAEAJ3H0EAJTA3UcAQAwcfQQAmmLgsyIA0NIDHw4BgJYe+DQIAISHwVMjAJDQDI+AAAAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACACAAAAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACAAAAgAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACAAAAgAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACAAAAgCAAAAgAAAIAAACAIAAACAAAAgAAAIAgAAAIAAACAAAAgCAAAAIAABNHpialFcmLajuAAAAAElFTkSuQmCC"
+
+
+IMAGE_EDIT_HEALTH_CHECK_PROMPT: Final = (
+    "Add a small yellow star in the top right corner of this simple drawing of a blue circle on a white background"
+)
+
+
+def get_image_file_for_health_check() -> bytes:
+    """Return the image used for health checks."""
+    return base64.b64decode(TEST_IMAGE_BASE64)
 
 
 class HealthCheckHelpers:
@@ -59,8 +74,8 @@ class HealthCheckHelpers:
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
-        _metadata_variable_name = "litellm_metadata"
-        litellm_metadata = HealthCheckHelpers._get_metadata_for_health_check_call()
+        _metadata_variable_name: Final = "litellm_metadata"
+        litellm_metadata: Final = HealthCheckHelpers._get_metadata_for_health_check_call()
         model_params[_metadata_variable_name] = litellm_metadata
         model_params = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
             data=model_params,
@@ -96,9 +111,9 @@ class HealthCheckHelpers:
         """
         import litellm
 
-        logging_obj = filtered_model_params.get("litellm_logging_obj")
+        logging_obj: Final = filtered_model_params.get("litellm_logging_obj")
         if logging_obj is not None:
-            api_base = filtered_model_params.get("api_base")
+            api_base: Final = filtered_model_params.get("api_base")
             logging_obj.update_from_kwargs(
                 kwargs=filtered_model_params,
                 model=filtered_model_params.get("model"),
@@ -111,6 +126,17 @@ class HealthCheckHelpers:
             return await litellm.alist_batches(**filtered_model_params)
         else:
             return await litellm.acompletion(**model_params)
+
+    @staticmethod
+    async def _image_edit_health_check(edit_request: Callable[[], Awaitable["ImageResponse"]]) -> "ImageResponse":
+        import litellm
+
+        try:
+            return await edit_request()
+        except litellm.BadRequestError as e:
+            if isinstance(e, litellm.ContentPolicyViolationError) or "moderation_blocked" in str(e):
+                return litellm.ImageResponse()
+            raise
 
     @staticmethod
     def get_mode_handlers(
@@ -127,6 +153,7 @@ class HealthCheckHelpers:
             "audio_speech",
             "audio_transcription",
             "image_generation",
+            "image_edit",
             "video_generation",
             "rerank",
             "realtime",
@@ -184,6 +211,13 @@ class HealthCheckHelpers:
             "image_generation": lambda: litellm.aimage_generation(
                 **_filter_model_params(model_params=model_params),
                 prompt=prompt,
+            ),
+            "image_edit": lambda: HealthCheckHelpers._image_edit_health_check(
+                edit_request=lambda: litellm.aimage_edit(
+                    **_filter_model_params(model_params=model_params),
+                    image=get_image_file_for_health_check(),
+                    prompt=IMAGE_EDIT_HEALTH_CHECK_PROMPT,
+                ),
             ),
             "video_generation": lambda: litellm.avideo_generation(
                 **_filter_model_params(model_params=model_params),

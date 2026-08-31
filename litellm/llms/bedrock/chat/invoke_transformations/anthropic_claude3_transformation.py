@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -19,9 +19,9 @@ from litellm.llms.bedrock.common_utils import (
     convert_bedrock_invoke_output_format_to_inline_schema,
     get_anthropic_beta_from_headers,
     normalize_bedrock_opus_output_config_effort,
+    normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     pop_bedrock_invoke_output_config_format,
-    remove_custom_field_from_tools,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
 from litellm.types.llms.openai import AllMessageValues
@@ -29,6 +29,8 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import _supports_factory
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -76,7 +78,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         # Force tool-based structured outputs for Bedrock Invoke
         # (similar to VertexAI fix in #19201)
         # Bedrock Invoke doesn't support output_format parameter
-        original_model = model
+        original_model: Final = model
         if "response_format" in non_default_params:
             # Use a model name that forces tool-based approach
             model = "claude-3-sonnet-20240229"
@@ -117,10 +119,10 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         """
         if not AnthropicConfig._is_adaptive_thinking_model(model, "bedrock"):
             return
-        effort = params.get("reasoning_effort")
+        effort: Final = params.get("reasoning_effort")
         if not isinstance(effort, str):
             return
-        clamped = {"effort": effort}
+        clamped: Final = {"effort": effort}
         normalize_bedrock_opus_output_config_effort(model=model, output_config=clamped)
         params["reasoning_effort"] = clamped["effort"]
 
@@ -132,7 +134,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        _anthropic_request = self._build_bedrock_anthropic_request_base(
+        _anthropic_request: Final = self._build_bedrock_anthropic_request_base(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -141,7 +143,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         )
 
         self._convert_document_url_sources_to_base64(_anthropic_request)
-        beta_list = self._compute_bedrock_invoke_beta_headers(
+        beta_list: Final = self._compute_bedrock_invoke_beta_headers(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -160,7 +162,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        _anthropic_request = self._build_bedrock_anthropic_request_base(
+        _anthropic_request: Final = self._build_bedrock_anthropic_request_base(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -169,7 +171,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         )
 
         await self._async_convert_document_url_sources_to_base64(_anthropic_request)
-        beta_list = self._compute_bedrock_invoke_beta_headers(
+        beta_list: Final = self._compute_bedrock_invoke_beta_headers(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -189,7 +191,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         headers: dict,
     ) -> dict:
         filtered_params = {k: v for k, v in optional_params.items() if k not in self.aws_authentication_params}
-        output_config = filtered_params.get("output_config")
+        output_config: Final = filtered_params.get("output_config")
         if isinstance(output_config, dict):
             filtered_params["output_config"] = dict(output_config)
             normalize_bedrock_opus_output_config_effort(
@@ -198,7 +200,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             )
         filtered_params = self._normalize_bedrock_tool_search_tools(filtered_params)
 
-        anthropic_request = AnthropicConfig.transform_request(
+        anthropic_request: Final = AnthropicConfig.transform_request(
             self,
             model=model,
             messages=messages,
@@ -210,8 +212,8 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         anthropic_request.pop("model", None)
         anthropic_request.pop("stream", None)
         anthropic_request.pop("stream_chunk_size", None)
-        output_format = anthropic_request.pop("output_format", None)
-        output_config_format = pop_bedrock_invoke_output_config_format(anthropic_request)
+        output_format: Final = anthropic_request.pop("output_format", None)
+        output_config_format: Final = pop_bedrock_invoke_output_config_format(anthropic_request)
         if output_format:
             convert_bedrock_invoke_output_format_to_inline_schema(
                 output_format=output_format,
@@ -243,8 +245,8 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         if "anthropic_version" not in anthropic_request:
             anthropic_request["anthropic_version"] = self.anthropic_version
 
-        # Remove `custom` field from tools (Bedrock doesn't support it)
-        remove_custom_field_from_tools(anthropic_request)
+        # Hoist `custom.defer_loading` then drop `custom` (Bedrock doesn't support it)
+        normalize_custom_field_on_tools(anthropic_request)
         normalize_tool_input_schema_types_for_bedrock_invoke(anthropic_request)
         return anthropic_request
 
@@ -255,14 +257,14 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         optional_params: dict,
         headers: dict,
     ) -> list[str]:
-        tools = optional_params.get("tools")
-        tool_search_used = self.is_tool_search_used(tools)
-        programmatic_tool_calling_used = self.is_programmatic_tool_calling_used(tools)
-        input_examples_used = self.is_input_examples_used(tools)
+        tools: Final = optional_params.get("tools")
+        tool_search_used: Final = self.is_tool_search_used(tools)
+        programmatic_tool_calling_used: Final = self.is_programmatic_tool_calling_used(tools)
+        input_examples_used: Final = self.is_input_examples_used(tools)
 
-        user_beta_set = set(get_anthropic_beta_from_headers(headers))
-        beta_set = set(user_beta_set)
-        auto_betas = self.get_anthropic_beta_list(
+        user_beta_set: Final = set(get_anthropic_beta_from_headers(headers))
+        beta_set: Final = set(user_beta_set)
+        auto_betas: Final = self.get_anthropic_beta_list(
             model=model,
             optional_params=optional_params,
             computer_tool_used=self.is_computer_tool_used(tools),
@@ -278,7 +280,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             if "opus-4" in model.lower() or "opus_4" in model.lower():
                 beta_set.add("tool-search-tool-2025-10-19")
 
-        auto_beta_list = filter_and_transform_beta_headers(
+        auto_beta_list: Final = filter_and_transform_beta_headers(
             beta_headers=list(beta_set - user_beta_set),
             provider="bedrock",
         )
@@ -288,7 +290,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         """
         Bedrock Invoke does not accept document URL sources. Convert to base64 payloads.
         """
-        messages = anthropic_request.get("messages")
+        messages: Final = anthropic_request.get("messages")
         if not isinstance(messages, list):
             return
 
@@ -327,7 +329,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         """
         Async version of document URL conversion for async completion paths.
         """
-        messages = anthropic_request.get("messages")
+        messages: Final = anthropic_request.get("messages")
         if not isinstance(messages, list):
             return
 
@@ -366,11 +368,11 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         """
         Convert tool search entries to the format supported by the Bedrock Invoke API.
         """
-        tools = optional_params.get("tools")
+        tools: Final = optional_params.get("tools")
         if not tools or not isinstance(tools, list):
             return optional_params
 
-        normalized_tools = []
+        normalized_tools: Final = []
         for tool in tools:
             tool_type = tool.get("type")
             if tool_type == "tool_search_tool_bm25_20251119":
@@ -397,7 +399,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

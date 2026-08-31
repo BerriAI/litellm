@@ -1,7 +1,15 @@
 import React, { useState, useEffect } from "react";
-import { Form, Select, Button as AntdButton, Tooltip, Input, InputNumber, Alert } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
+import { MultiSelect } from "@/components/shared/MultiSelect";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+import { Info, TriangleAlert } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import { FormProvider, useForm } from "react-hook-form";
+import { PasswordInput } from "@/components/shared/PasswordInput";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   AUTH_TYPE,
   isClientForwardedTokenMode,
@@ -10,7 +18,6 @@ import {
   isHeldOAuthTokenStale,
   preservedAdminCredentials,
   preservedDeclaredAppCredentials,
-  ADMIN_CONFIG_CREDENTIAL_KEYS,
   withoutMintedTokenCredentials,
   OAUTH_FLOW,
   MCP_OAUTH2_FLOW_M2M,
@@ -18,6 +25,8 @@ import {
   MCPServer,
   MCPServerCostInfo,
   TRANSPORT,
+  TRANSPORT_ITEMS,
+  AUTH_TYPE_ITEMS,
   getMcpOAuthMode,
   oauth2FlowToFormValue,
 } from "@/components/mcp_tools/types";
@@ -40,15 +49,35 @@ import IdJagFormFields from "./IdJagFormFields";
 import OAuthFormFields from "./OAuthFormFields";
 import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
-import {
-  validateMCPServerUrl,
-  validateMCPServerName,
-  normalizeEnvVars,
-  normalizeToolOverrideMap,
-  TOOL_DISPLAY_NAME_PATTERN,
-} from "./utils";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { validateMCPServerUrl, validateMCPServerName, normalizeToolOverrideMap } from "./utils";
+import { EditServerFormValues, buildEditServerPayload, editPayloadErrorMessage } from "./editServerPayload";
+import { toast } from "@/lib/toast";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
+import {
+  MountedFormField,
+  MountedFormProvider,
+  projectMountedValues,
+  useMountRegistry,
+  type MountedFormValues,
+} from "@/components/common_components/MountedFormField";
+import { requiredRule, validatorRules } from "@/components/common_components/formRules";
+import {
+  allFieldsValue,
+  mountedPaths,
+  resetFields,
+  setFieldsValue,
+  singleBranchChange,
+  useMountedValues,
+} from "./mcpFormStore";
+import {
+  numberControl,
+  notOnlyWhitespace,
+  parsesAsJsonObject,
+  selectControl,
+  selectTriggerControl,
+  tagsControl,
+  textControl,
+} from "./mcpFieldRules";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 interface MCPServerEditProps {
@@ -61,15 +90,6 @@ interface MCPServerEditProps {
 }
 
 const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.TOKEN, AUTH_TYPE.BASIC];
-const AUTH_TYPES_REQUIRING_CREDENTIALS = [
-  ...AUTH_TYPES_REQUIRING_AUTH_VALUE,
-  AUTH_TYPE.OAUTH2,
-  AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE,
-  AUTH_TYPE.OAUTH2_ID_JAG,
-  AUTH_TYPE.AWS_SIGV4,
-  AUTH_TYPE.TRUE_PASSTHROUGH,
-  AUTH_TYPE.OAUTH_DELEGATE,
-];
 export const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 
 const MCPServerEdit: React.FC<MCPServerEditProps> = ({
@@ -80,177 +100,6 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   onSuccess,
   availableAccessGroups,
 }) => {
-  const [form] = Form.useForm();
-  const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({});
-  const [tools, setTools] = useState<any[]>([]);
-  const [isLoadingTools, setIsLoadingTools] = useState(false);
-  const [toolsError, setToolsError] = useState<string | null>(null);
-  const [searchValue, setSearchValue] = useState<string>("");
-  const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
-  const [removeStoredApp, setRemoveStoredApp] = useState(false);
-  // Set when the upstream identity (url/endpoints) changed while a declared app is present, so the
-  // section warns that the saved app may not match the new upstream (the app is kept, not wiped).
-  const [appMayNotMatchUpstream, setAppMayNotMatchUpstream] = useState(false);
-  const [allowedTools, setAllowedTools] = useState<string[]>([]);
-  const [hasToolAllowlistInteraction, setHasToolAllowlistInteraction] = useState(false);
-  const [toolNameToDisplayName, setToolNameToDisplayName] = useState<Record<string, string>>({});
-  const [toolNameToDescription, setToolNameToDescription] = useState<Record<string, string>>({});
-  const [pendingRestoredValues, setPendingRestoredValues] = useState<Record<string, any> | null>(null);
-  const [logoUrl, setLogoUrl] = useState<string | undefined>(mcpServer.mcp_info?.logo_url || undefined);
-  const authType = Form.useWatch("auth_type", form) as string | undefined;
-  const transportType = Form.useWatch("transport", form) as string | undefined;
-  const isStdioTransport = transportType === "stdio";
-  const isOpenAPITransport = transportType === TRANSPORT.OPENAPI;
-  const isMCPTransport = !isStdioTransport && !isOpenAPITransport;
-  const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
-  const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
-  const isTokenExchangeAuthType = authType === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE;
-  const isIdJagAuthType = authType === AUTH_TYPE.OAUTH2_ID_JAG;
-  const isAwsSigV4AuthType = authType === AUTH_TYPE.AWS_SIGV4;
-  const oauthFlowTypeValue = Form.useWatch("oauth_flow_type", form) as string | undefined;
-  const isM2MFlow = isOAuthAuthType && oauthFlowTypeValue === OAUTH_FLOW.M2M;
-  // Watch reflects a live toggle when the delegate switch is mounted; fall back to
-  // the stored value otherwise (useWatch returns undefined for an unmounted field,
-  // the same trap the oauth_flow_type field originally hit).
-  const delegateAuthWatched = Form.useWatch("delegate_auth_to_upstream", form) as boolean | undefined;
-  const isDelegateAuth = delegateAuthWatched ?? Boolean(mcpServer.delegate_auth_to_upstream);
-
-  // Watch form fields that affect tool fetching
-  const currentUrl = Form.useWatch("url", form);
-  const currentSpecPath = Form.useWatch("spec_path", form);
-  const currentServerName = Form.useWatch("server_name", form);
-  const currentAuthType = Form.useWatch("auth_type", form);
-  const currentStaticHeaders = Form.useWatch("static_headers", form);
-  const currentCredentials = Form.useWatch("credentials", form);
-  const currentIssuer = Form.useWatch("issuer", form);
-  const currentAuthorizationUrl = Form.useWatch("authorization_url", form);
-  const currentTokenUrl = Form.useWatch("token_url", form);
-  const currentRegistrationUrl = Form.useWatch("registration_url", form);
-  const hasExistingToolAllowlist =
-    Boolean(mcpServer.mcp_info?.tool_allowlist_enforced) || (mcpServer.allowed_tools?.length ?? 0) > 0;
-  const existingAllowedTools = hasExistingToolAllowlist ? mcpServer.allowed_tools ?? [] : null;
-
-  const persistEditUiState = () => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    try {
-      const values = form.getFieldsValue(true);
-      setSecureItem(
-        EDIT_OAUTH_UI_STATE_KEY,
-        JSON.stringify({
-          serverId: mcpServer.server_id,
-          formValues: values,
-          costConfig,
-          allowedTools,
-          hasToolAllowlistInteraction,
-          searchValue,
-          aliasManuallyEdited,
-        }),
-      );
-    } catch (err) {
-      console.warn("Failed to persist MCP edit state", err);
-    }
-  };
-
-  // The auth mode every decision must key off: the admin's in-flight form selection wins over the
-  // saved record, so authorizing, loading tools, and saving all agree with what the form shows. Paths
-  // that read only mcpServer.auth_type go stale the moment the admin switches modes in the form.
-  const getEffectiveAuthType = () => form.getFieldValue("auth_type") ?? mcpServer.auth_type;
-
-  // The OAuth authorization identity (see getOAuthAuthorizationIdentity) captured when a token is fetched
-  // in this edit session; undefined when none is held. If a mint-relevant field later diverges from it,
-  // the held token (hook response + sessionStorage) is discarded so the admin must re-authorize.
-  const authorizedIdentityRef = React.useRef<string | undefined>(undefined);
-
-  const {
-    startOAuthFlow,
-    status: oauthStatus,
-    error: oauthError,
-    tokenResponse: oauthTokenResponse,
-    reset: resetOAuthFlow,
-  } = useMcpOAuthFlow({
-    accessToken,
-    getCredentials: () => form.getFieldValue("credentials"),
-    getTemporaryPayload: () => {
-      const values = form.getFieldsValue(true);
-      const url = values.url || mcpServer.url;
-      const transport = values.transport || mcpServer.transport;
-      if (!url || !transport) {
-        return null;
-      }
-      const staticHeaders = Array.isArray(values.static_headers)
-        ? values.static_headers.reduce((acc: Record<string, string>, entry: Record<string, string>) => {
-            const header = entry?.header?.trim();
-            if (!header) {
-              return acc;
-            }
-            acc[header] = (entry?.value ?? "").trim();
-            return acc;
-          }, {})
-        : ({} as Record<string, string>);
-
-      return {
-        server_id: mcpServer.server_id,
-        server_name: values.server_name || mcpServer.server_name || mcpServer.alias,
-        alias: values.alias || mcpServer.alias,
-        description: values.description || mcpServer.description,
-        url,
-        transport,
-        auth_type: isClientForwardedTokenMode(values.auth_type) ? values.auth_type : AUTH_TYPE.OAUTH2,
-        credentials: isClientForwardedTokenMode(values.auth_type)
-          ? preservedAdminCredentials(values.credentials)
-          : values.credentials,
-        mcp_access_groups: values.mcp_access_groups || mcpServer.mcp_access_groups,
-        static_headers: staticHeaders,
-        command: values.command,
-        args: values.args,
-        env: values.env,
-      };
-    },
-    onTokenReceived: (token) => {
-      if (!token?.access_token) {
-        return;
-      }
-
-      authorizedIdentityRef.current = getOAuthAuthorizationIdentity(form.getFieldsValue(true));
-      if (isClientForwardedTokenMode(getEffectiveAuthType())) {
-        const browserHeldToken = {
-          access_token: token.access_token,
-          expires_in: token.expires_in,
-          refresh_token: token.refresh_token,
-          token_type: token.token_type,
-        };
-        setToken(mcpServer.server_id, browserHeldToken, userID);
-        NotificationsManager.success(
-          "Token held for this browser session. Tools can now be loaded and configured; the token is not saved to LiteLLM.",
-        );
-        return;
-      }
-
-      const current = (form.getFieldValue("credentials") as Record<string, unknown> | undefined) ?? {};
-      const nextCredentials = {
-        ...(preservedAdminCredentials(current) ?? {}),
-        ...(current.scopes !== undefined && { scopes: current.scopes }),
-        access_token: token.access_token,
-        ...(token.refresh_token && { refresh_token: token.refresh_token }),
-        ...(token.expires_in && { expires_in: token.expires_in }),
-        ...(token.scope && { scope: token.scope }),
-      };
-      // Path-replace (not deep-merge) so a re-authorize with fewer token fields does not leave stale
-      // siblings behind; the admin-typed client keys and scopes are carried explicitly above.
-      form.setFieldValue("credentials", nextCredentials);
-      // Re-capture after writing credentials so the token is not invalidated by its own credential write.
-      authorizedIdentityRef.current = getOAuthAuthorizationIdentity(form.getFieldsValue(true));
-
-      NotificationsManager.success(
-        "OAuth authorization successful! Please click 'Update MCP Server' to save the credentials.",
-      );
-    },
-    onBeforeRedirect: persistEditUiState,
-    flowSource: "edit",
-  });
-
   const initialStaticHeaders = React.useMemo(() => {
     if (!mcpServer.static_headers) {
       return [];
@@ -309,6 +158,181 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     [mcpServer, effectiveTransport, initialStaticHeaders, initialEnvVars, initialEnvJson],
   );
 
+  const form = useForm<MountedFormValues>({ mode: "onChange", defaultValues: initialValues });
+  const registry = useMountRegistry();
+  const mountedValues = useMountedValues(form, registry);
+  const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({});
+  const [tools, setTools] = useState<any[]>([]);
+  const [isLoadingTools, setIsLoadingTools] = useState(false);
+  const [toolsError, setToolsError] = useState<string | null>(null);
+  const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
+  const [removeStoredApp, setRemoveStoredApp] = useState(false);
+  // Set when the upstream identity (url/endpoints) changed while a declared app is present, so the
+  // section warns that the saved app may not match the new upstream (the app is kept, not wiped).
+  const [appMayNotMatchUpstream, setAppMayNotMatchUpstream] = useState(false);
+  const [allowedTools, setAllowedTools] = useState<string[]>([]);
+  const [hasToolAllowlistInteraction, setHasToolAllowlistInteraction] = useState(false);
+  const [toolNameToDisplayName, setToolNameToDisplayName] = useState<Record<string, string>>({});
+  const [toolNameToDescription, setToolNameToDescription] = useState<Record<string, string>>({});
+  const [pendingRestoredValues, setPendingRestoredValues] = useState<Record<string, any> | null>(null);
+  const [logoUrl, setLogoUrl] = useState<string | undefined>(mcpServer.mcp_info?.logo_url || undefined);
+  const authType = mountedValues.auth_type as string | undefined;
+  const transportType = mountedValues.transport as string | undefined;
+  const isStdioTransport = transportType === "stdio";
+  const isOpenAPITransport = transportType === TRANSPORT.OPENAPI;
+  const isMCPTransport = !isStdioTransport && !isOpenAPITransport;
+  const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
+  const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
+  const isTokenExchangeAuthType = authType === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE;
+  const isIdJagAuthType = authType === AUTH_TYPE.OAUTH2_ID_JAG;
+  const isAwsSigV4AuthType = authType === AUTH_TYPE.AWS_SIGV4;
+  // Same fallback as the delegate switch below: the value is undefined until the field mounts, so
+  // reading it alone flashes the "no OAuth flow set" warning at a server that already has one.
+  const oauthFlowTypeValue =
+    (mountedValues.oauth_flow_type as string | undefined) ?? oauth2FlowToFormValue(mcpServer.oauth2_flow);
+  const isM2MFlow = isOAuthAuthType && oauthFlowTypeValue === OAUTH_FLOW.M2M;
+  // Watch reflects a live toggle when the delegate switch is mounted; fall back to
+  // the stored value otherwise (useWatch returns undefined for an unmounted field,
+  // the same trap the oauth_flow_type field originally hit).
+  const delegateAuthWatched = mountedValues.delegate_auth_to_upstream as boolean | undefined;
+  const isDelegateAuth = delegateAuthWatched ?? Boolean(mcpServer.delegate_auth_to_upstream);
+
+  // Watch form fields that affect tool fetching
+  const currentUrl = mountedValues.url;
+  const currentSpecPath = mountedValues.spec_path;
+  const currentServerName = mountedValues.server_name;
+  const currentAuthType = mountedValues.auth_type;
+  const currentStaticHeaders = mountedValues.static_headers;
+  const currentCredentials = mountedValues.credentials;
+  const currentIssuer = mountedValues.issuer;
+  const currentAuthorizationUrl = mountedValues.authorization_url;
+  const currentTokenUrl = mountedValues.token_url;
+  const currentRegistrationUrl = mountedValues.registration_url;
+  const hasExistingToolAllowlist =
+    Boolean(mcpServer.mcp_info?.tool_allowlist_enforced) || (mcpServer.allowed_tools?.length ?? 0) > 0;
+  const existingAllowedTools = hasExistingToolAllowlist ? mcpServer.allowed_tools ?? [] : null;
+
+  const persistEditUiState = () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      const values = allFieldsValue(form);
+      setSecureItem(
+        EDIT_OAUTH_UI_STATE_KEY,
+        JSON.stringify({
+          serverId: mcpServer.server_id,
+          formValues: values,
+          costConfig,
+          allowedTools,
+          hasToolAllowlistInteraction,
+          aliasManuallyEdited,
+        }),
+      );
+    } catch (err) {
+      console.warn("Failed to persist MCP edit state", err);
+    }
+  };
+
+  // The auth mode every decision must key off: the admin's in-flight form selection wins over the
+  // saved record, so authorizing, loading tools, and saving all agree with what the form shows. Paths
+  // that read only mcpServer.auth_type go stale the moment the admin switches modes in the form.
+  const getEffectiveAuthType = () => allFieldsValue(form).auth_type ?? mcpServer.auth_type;
+
+  // The OAuth authorization identity (see getOAuthAuthorizationIdentity) captured when a token is fetched
+  // in this edit session; undefined when none is held. If a mint-relevant field later diverges from it,
+  // the held token (hook response + sessionStorage) is discarded so the admin must re-authorize.
+  const authorizedIdentityRef = React.useRef<string | undefined>(undefined);
+
+  const {
+    startOAuthFlow,
+    status: oauthStatus,
+    error: oauthError,
+    tokenResponse: oauthTokenResponse,
+    reset: resetOAuthFlow,
+  } = useMcpOAuthFlow({
+    accessToken,
+    getCredentials: () => allFieldsValue(form).credentials,
+    getTemporaryPayload: () => {
+      const values = allFieldsValue(form);
+      const url = values.url || mcpServer.url;
+      const transport = values.transport || mcpServer.transport;
+      if (!url || !transport) {
+        return null;
+      }
+      const staticHeaders = Array.isArray(values.static_headers)
+        ? values.static_headers.reduce((acc: Record<string, string>, entry: Record<string, string>) => {
+            const header = entry?.header?.trim();
+            if (!header) {
+              return acc;
+            }
+            acc[header] = (entry?.value ?? "").trim();
+            return acc;
+          }, {})
+        : ({} as Record<string, string>);
+
+      return {
+        server_id: mcpServer.server_id,
+        server_name: values.server_name || mcpServer.server_name || mcpServer.alias,
+        alias: values.alias || mcpServer.alias,
+        description: values.description || mcpServer.description,
+        url,
+        transport,
+        auth_type: isClientForwardedTokenMode(values.auth_type) ? values.auth_type : AUTH_TYPE.OAUTH2,
+        credentials: isClientForwardedTokenMode(values.auth_type)
+          ? preservedAdminCredentials(values.credentials)
+          : values.credentials,
+        issuer: values.issuer,
+        authorization_url: values.authorization_url,
+        token_url: values.token_url,
+        registration_url: values.registration_url,
+        mcp_access_groups: values.mcp_access_groups || mcpServer.mcp_access_groups,
+        static_headers: staticHeaders,
+        command: values.command,
+        args: values.args,
+        env: values.env,
+      };
+    },
+    onTokenReceived: (token) => {
+      if (!token?.access_token) {
+        return;
+      }
+
+      authorizedIdentityRef.current = getOAuthAuthorizationIdentity(allFieldsValue(form));
+      if (isClientForwardedTokenMode(getEffectiveAuthType())) {
+        const browserHeldToken = {
+          access_token: token.access_token,
+          expires_in: token.expires_in,
+          token_type: token.token_type,
+        };
+        setToken(mcpServer.server_id, browserHeldToken, userID);
+        toast.success(
+          "Token held for this browser session. Tools can now be loaded and configured; the token is not saved to LiteLLM.",
+        );
+        return;
+      }
+
+      const current = (allFieldsValue(form).credentials as Record<string, unknown> | undefined) ?? {};
+      const nextCredentials = {
+        ...(preservedAdminCredentials(current) ?? {}),
+        ...(current.scopes !== undefined && { scopes: current.scopes }),
+        access_token: token.access_token,
+        ...(token.refresh_token && { refresh_token: token.refresh_token }),
+        ...(token.expires_in && { expires_in: token.expires_in }),
+        ...(token.scope && { scope: token.scope }),
+      };
+      // Path-replace (not deep-merge) so a re-authorize with fewer token fields does not leave stale
+      // siblings behind; the admin-typed client keys and scopes are carried explicitly above.
+      form.setValue("credentials", nextCredentials);
+      // Re-capture after writing credentials so the token is not invalidated by its own credential write.
+      authorizedIdentityRef.current = getOAuthAuthorizationIdentity(allFieldsValue(form));
+
+      toast.success("OAuth authorization successful! Please click 'Update MCP Server' to save the credentials.");
+    },
+    onBeforeRedirect: persistEditUiState,
+    flowSource: "edit",
+  });
+
   // antd applies `initialValues` only at first mount. When the server loads after
   // mount (e.g. returning from the OAuth redirect lands on Overview and the form
   // mounts before the server data is ready), the form would stay blank. Re-sync it
@@ -320,7 +344,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       return;
     }
     syncedServerIdRef.current = mcpServer.server_id;
-    form.setFieldsValue(initialValues);
+    setFieldsValue(form, initialValues);
     // Reset per-server OAuth UI state so it never carries across a server switch without an unmount: a
     // stale removeStoredApp would send an explicit-null credential write that deletes the new server's
     // stored app, and a stale warning would show on a server whose upstream did not change.
@@ -390,9 +414,6 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       if (typeof parsed.hasToolAllowlistInteraction === "boolean") {
         setHasToolAllowlistInteraction(parsed.hasToolAllowlistInteraction);
       }
-      if (parsed.searchValue) {
-        setSearchValue(parsed.searchValue);
-      }
       if (typeof parsed.aliasManuallyEdited === "boolean") {
         setAliasManuallyEdited(parsed.aliasManuallyEdited);
       }
@@ -411,11 +432,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     // on the re-run triggered by the transportType watch (without it the effect's
     // deps never change and the second pass never runs, leaving fields blank).
     const transport = pendingRestoredValues.transport || mcpServer.transport;
-    if (transport && transport !== form.getFieldValue("transport")) {
-      form.setFieldsValue({ transport });
+    if (transport && transport !== allFieldsValue(form).transport) {
+      setFieldsValue(form, { transport });
       return;
     }
-    form.setFieldsValue(pendingRestoredValues);
+    setFieldsValue(form, pendingRestoredValues);
     setPendingRestoredValues(null);
   }, [pendingRestoredValues, form, mcpServer.transport, transportType]);
 
@@ -424,7 +445,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     if (mcpServer.mcp_access_groups) {
       // If access groups are objects, extract the name property; if strings, use as is
       const groupNames = mcpServer.mcp_access_groups.map((g: any) => (typeof g === "string" ? g : g.name || String(g)));
-      form.setFieldValue("mcp_access_groups", groupNames);
+      form.setValue("mcp_access_groups", groupNames);
     }
   }, [mcpServer]);
 
@@ -456,16 +477,16 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     resetOAuthFlow();
     // The admin-typed app is upstream-scoped config, not minted material, so it survives every
     // invalidation; only the held token is discarded. Token-shaped keys are excluded by the filter.
-    const keptAdminCredentials = preservedAdminCredentials(form.getFieldValue("credentials"));
-    form.resetFields([...CLEARED_ON_INVALIDATION]);
+    const keptAdminCredentials = preservedAdminCredentials(allFieldsValue(form).credentials);
+    resetFields(form, [...CLEARED_ON_INVALIDATION], initialValues as MountedFormValues);
     if (keptAdminCredentials) {
-      form.setFieldsValue({ credentials: keptAdminCredentials });
+      setFieldsValue(form, { credentials: keptAdminCredentials });
     }
     const preserved = Object.fromEntries(
       CLEARED_ON_INVALIDATION.filter((key) => key in changedValues).map((key) => [key, changedValues[key]]),
     );
     if (Object.keys(preserved).length > 0) {
-      form.setFieldsValue(preserved);
+      setFieldsValue(form, preserved);
     }
   };
 
@@ -480,12 +501,12 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       const upstreamChanged = ["url", "spec_path", "issuer", "authorization_url", "token_url", "registration_url"].some(
         (key) => key in changedValues,
       );
-      const hasDeclaredApp = preservedDeclaredAppCredentials(form.getFieldValue("credentials")) !== undefined;
+      const hasDeclaredApp = preservedDeclaredAppCredentials(allFieldsValue(form).credentials) !== undefined;
       if (upstreamChanged && hasDeclaredApp) {
         setAppMayNotMatchUpstream(true);
       }
     }
-    if (isHeldOAuthTokenStale(form.getFieldsValue(true), authorizedIdentityRef.current)) {
+    if (isHeldOAuthTokenStale(allFieldsValue(form), authorizedIdentityRef.current)) {
       clearHeldOAuthToken(changedValues);
     }
   };
@@ -509,7 +530,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     setIsLoadingTools(true);
     setToolsError(null);
     try {
-      const values = form.getFieldsValue(true);
+      const values = allFieldsValue(form);
       const rawTransport = values.transport || mcpServer.transport;
       // oauth2_flow must be explicit: the preview endpoint infers client_credentials from the
       // inherited client_id/client_secret/token_url (common once DCR or discovery filled them) and
@@ -603,38 +624,6 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
   };
 
-  // Generate options with existing groups and potential new group
-  const getAccessGroupOptions = () => {
-    const existingOptions = availableAccessGroups.map((group: string) => ({
-      value: group,
-      label: (
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-          <span className="font-medium">{group}</span>
-        </div>
-      ),
-    }));
-
-    // If search value doesn't match any existing group and is not empty, add "create new group" option
-    if (
-      searchValue &&
-      !availableAccessGroups.some((group) => group.toLowerCase().includes(searchValue.toLowerCase()))
-    ) {
-      existingOptions.push({
-        value: searchValue,
-        label: (
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-            <span className="font-medium">{searchValue}</span>
-            <span className="text-gray-400 text-xs ml-1">create new group</span>
-          </div>
-        ),
-      });
-    }
-
-    return existingOptions;
-  };
-
   const handleTransportChange = (value: string) => {
     // Clear fields that are not relevant for the selected transport.
     if (value === "stdio") {
@@ -648,7 +637,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         token_url: undefined,
         registration_url: undefined,
       };
-      form.setFieldsValue(clearedForStdio);
+      setFieldsValue(form, clearedForStdio);
     } else if (value === TRANSPORT.OPENAPI) {
       const clearedForOpenapi = {
         url: undefined,
@@ -657,9 +646,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         env_json: undefined,
         stdio_config: undefined,
       };
-      form.setFieldsValue(clearedForOpenapi);
+      setFieldsValue(form, clearedForOpenapi);
     } else {
-      form.setFieldsValue({
+      setFieldsValue(form, {
         spec_path: undefined,
         command: undefined,
         args: undefined,
@@ -667,289 +656,59 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         stdio_config: undefined,
       });
     }
-    if (isHeldOAuthTokenStale(form.getFieldsValue(true), authorizedIdentityRef.current)) {
+    if (isHeldOAuthTokenStale(allFieldsValue(form), authorizedIdentityRef.current)) {
       clearHeldOAuthToken();
     }
   };
 
-  const handleSave = async (values: Record<string, any>) => {
-    if (!accessToken) return;
-    const invalidDisplayName = Object.entries(toolNameToDisplayName).find(
-      ([, displayName]) => displayName && !TOOL_DISPLAY_NAME_PATTERN.test(displayName),
-    );
-    if (invalidDisplayName) {
-      NotificationsManager.fromBackend(
-        `Tool display name "${invalidDisplayName[1]}" is invalid. Only letters, digits, underscores, and hyphens are allowed (no spaces).`,
-      );
+  const handleTransportSelected =
+    (onChange: (value: string) => void) =>
+    (value: string | null): void => {
+      if (value === null) return;
+      onChange(value);
+      handleTransportChange(value);
+    };
+
+  const valuesChangeRef = React.useRef(handleFormValuesChange);
+  valuesChangeRef.current = handleFormValuesChange;
+
+  React.useEffect(() => {
+    const subscription = form.watch((values, { name, type }) => {
+      if (type !== "change" || name === undefined) {
+        return;
+      }
+      valuesChangeRef.current(singleBranchChange(name, values as MountedFormValues));
+    });
+    return () => subscription.unsubscribe();
+  }, [form]);
+
+  const submitForm = async () => {
+    const isValid = await form.trigger(mountedPaths(registry) as string[]);
+    if (!isValid) {
       return;
     }
+    await handleSave(projectMountedValues(registry, form.getValues) as unknown as EditServerFormValues);
+  };
+
+  const handleSave = async (values: EditServerFormValues) => {
+    if (!accessToken) return;
     try {
-      // Ensure access groups is always a string array
-      const {
-        static_headers: staticHeadersList,
-        env_vars: envVarsList,
-        credentials: credentialValues,
-        stdio_config: rawStdioConfig,
-        env_json: rawEnvJson,
-        command: rawCommand,
-        args: rawArgs,
-        allow_all_keys: allowAllKeysRaw,
-        available_on_public_internet: availableOnPublicInternetRaw,
-        delegate_auth_to_upstream: delegateAuthToUpstreamRaw,
-        oauth_passthrough: oauthPassthroughRaw,
-        dcr_bridge: dcrBridgeRaw,
-        token_validation_json: rawTokenValidationJson,
-        ...restValues
-      } = values;
-
-      const accessGroups = (restValues.mcp_access_groups || []).map((g: any) =>
-        typeof g === "string" ? g : g.name || String(g),
-      );
-
-      const staticHeaders = Array.isArray(staticHeadersList)
-        ? staticHeadersList.reduce((acc: Record<string, string>, entry: Record<string, string>) => {
-            const header = entry?.header?.trim();
-            if (!header) {
-              return acc;
-            }
-            acc[header] = (entry?.value ?? "").trim();
-            return acc;
-          }, {})
-        : ({} as Record<string, string>);
-
-      const envVars = normalizeEnvVars(envVarsList);
-
-      const credentialsPayload =
-        credentialValues && typeof credentialValues === "object"
-          ? Object.entries(credentialValues).reduce((acc: Record<string, any>, [key, value]) => {
-              if (value === undefined || value === null || value === "") {
-                if (value === "" && (ADMIN_CONFIG_CREDENTIAL_KEYS as readonly string[]).includes(key)) {
-                  acc[key] = null;
-                }
-                return acc;
-              }
-              if (key === "scopes") {
-                if (Array.isArray(value)) {
-                  const filteredScopes = value.filter((scope) => scope != null && scope !== "");
-                  if (filteredScopes.length > 0) {
-                    acc[key] = filteredScopes;
-                  }
-                }
-              } else {
-                acc[key] = value;
-              }
-              return acc;
-            }, {})
-          : undefined;
-
-      let stdioFields: Record<string, any> = {};
-
-      if (restValues.transport === "stdio") {
-        // Prefer JSON config if provided (matches Create screen behavior)
-        if (rawStdioConfig) {
-          try {
-            const stdioConfig = JSON.parse(rawStdioConfig);
-
-            let actualConfig = stdioConfig;
-            if (stdioConfig?.mcpServers && typeof stdioConfig.mcpServers === "object") {
-              const serverNames = Object.keys(stdioConfig.mcpServers);
-              if (serverNames.length > 0) {
-                actualConfig = stdioConfig.mcpServers[serverNames[0]];
-              }
-            }
-
-            const parsedArgs = Array.isArray(actualConfig?.args)
-              ? actualConfig.args.map((v: any) => String(v)).filter((v: string) => v.trim() !== "")
-              : [];
-
-            const parsedEnv =
-              actualConfig?.env && typeof actualConfig.env === "object" && !Array.isArray(actualConfig.env)
-                ? Object.entries(actualConfig.env).reduce((acc: Record<string, string>, [k, v]) => {
-                    if (k == null || String(k).trim() === "") return acc;
-                    acc[String(k)] = v == null ? "" : String(v);
-                    return acc;
-                  }, {})
-                : {};
-
-            stdioFields = {
-              command: actualConfig?.command ? String(actualConfig.command) : undefined,
-              args: parsedArgs,
-              env: parsedEnv,
-            };
-
-            if (!stdioFields.command) {
-              NotificationsManager.fromBackend("Stdio configuration must include a command");
-              return;
-            }
-          } catch {
-            NotificationsManager.fromBackend("Invalid JSON in stdio configuration");
-            return;
-          }
-        } else {
-          // Dedicated fields path (command/args + env JSON)
-          let parsedEnv: Record<string, string> = {};
-          if (rawEnvJson) {
-            try {
-              const env = JSON.parse(rawEnvJson);
-              if (env && typeof env === "object" && !Array.isArray(env)) {
-                parsedEnv = Object.entries(env).reduce((acc: Record<string, string>, [k, v]) => {
-                  if (k == null || String(k).trim() === "") return acc;
-                  acc[String(k)] = v == null ? "" : String(v);
-                  return acc;
-                }, {});
-              }
-            } catch {
-              NotificationsManager.fromBackend("Invalid JSON in stdio env configuration");
-              return;
-            }
-          }
-          const parsedArgs = Array.isArray(rawArgs)
-            ? rawArgs.map((v: any) => String(v)).filter((v: string) => v.trim() !== "")
-            : [];
-
-          const parsedCommand = rawCommand ? String(rawCommand).trim() : "";
-          if (!parsedCommand) {
-            NotificationsManager.fromBackend("Stdio transport requires a command");
-            return;
-          }
-
-          stdioFields = {
-            command: parsedCommand,
-            args: parsedArgs,
-            env: parsedEnv,
-          };
-        }
+      const built = buildEditServerPayload(values, {
+        mcpServer,
+        logoUrl,
+        costConfig,
+        allowedTools,
+        hasExistingToolAllowlist,
+        hasToolAllowlistInteraction,
+        toolNameToDisplayName,
+        toolNameToDescription,
+        removeStoredApp,
+      });
+      if (built.kind !== "ok") {
+        toast.fromError(editPayloadErrorMessage(built));
+        return;
       }
-
-      // Map "openapi" transport to "http" for the backend
-      if (restValues.transport === TRANSPORT.OPENAPI) {
-        restValues.transport = "http";
-      }
-
-      // Parse token_validation JSON if provided
-      let tokenValidation: Record<string, any> | null = null;
-      if (rawTokenValidationJson && rawTokenValidationJson.trim() !== "") {
-        try {
-          tokenValidation = JSON.parse(rawTokenValidationJson);
-        } catch {
-          NotificationsManager.fromBackend("Invalid JSON in Token Validation Rules");
-          return;
-        }
-      }
-
-      // Prepare the payload with cost configuration and permission fields
-      const mcpInfoServerName =
-        restValues.server_name ||
-        restValues.url ||
-        mcpServer.server_name ||
-        mcpServer.url ||
-        restValues.alias ||
-        mcpServer.alias ||
-        "unknown";
-
-      const toolAllowlistEnforced = hasExistingToolAllowlist || hasToolAllowlistInteraction || allowedTools.length > 0;
-
-      const payload: Record<string, any> = {
-        ...restValues,
-        ...stdioFields,
-        // Remove UI-only fields
-        stdio_config: undefined,
-        env_json: undefined,
-        ...(mcpServer.auth_type === AUTH_TYPE.OAUTH2 && restValues.auth_type !== AUTH_TYPE.OAUTH2
-          ? { issuer: null, authorization_url: null, token_url: null, registration_url: null }
-          : {}),
-        ...(mcpServer.auth_type === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE &&
-        restValues.auth_type !== AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE
-          ? { token_exchange_endpoint: null, audience: null, subject_token_type: null, token_exchange_profile: null }
-          : {}),
-        server_id: mcpServer.server_id,
-        mcp_info: {
-          ...(mcpServer.mcp_info ?? {}),
-          server_name: mcpInfoServerName,
-          description: restValues.description,
-          logo_url: logoUrl || undefined,
-          mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
-          tool_allowlist_enforced: toolAllowlistEnforced,
-        },
-        mcp_access_groups: accessGroups,
-        alias: restValues.alias,
-        // Include permission management fields
-        extra_headers: restValues.extra_headers || [],
-        ...(toolAllowlistEnforced
-          ? {
-              allowed_tools: allowedTools,
-            }
-          : {}),
-        tool_name_to_display_name: Object.keys(toolNameToDisplayName).length > 0 ? toolNameToDisplayName : null,
-        tool_name_to_description: Object.keys(toolNameToDescription).length > 0 ? toolNameToDescription : null,
-        disallowed_tools: restValues.disallowed_tools || [],
-        static_headers: staticHeaders,
-        env_vars: envVars,
-        allow_all_keys: Boolean(allowAllKeysRaw ?? mcpServer.allow_all_keys),
-        available_on_public_internet: Boolean(availableOnPublicInternetRaw ?? mcpServer.available_on_public_internet),
-        // ``delegate_auth_to_upstream`` is only honored server-side for
-        // ``auth_type=oauth2`` (PKCE passthrough). The Form.Item is
-        // conditionally rendered so the value drops out of the form on
-        // auth_type change; force false for any other configuration to avoid
-        // persisting a stale ``true`` that would silently re-activate if the
-        // configuration is later switched back.
-        delegate_auth_to_upstream: (() => {
-          const isOauth2 = restValues.auth_type === AUTH_TYPE.OAUTH2;
-          return isOauth2 ? Boolean(delegateAuthToUpstreamRaw ?? mcpServer.delegate_auth_to_upstream) : false;
-        })(),
-        // ``oauth_passthrough`` is the dedicated, non-oauth2 opt-in. It is only
-        // honored for ``auth_type=none`` servers that forward ``Authorization``
-        // upstream. Kept separate from ``delegate_auth_to_upstream`` so enabling
-        // pass-through never regresses oauth2 servers. Force false otherwise.
-        oauth_passthrough: (() => {
-          const isNoneAuth = restValues.auth_type === AUTH_TYPE.NONE || restValues.auth_type == null;
-          const extraHeaders = Array.isArray(restValues.extra_headers) ? restValues.extra_headers : [];
-          const hasAuthorizationHeader = extraHeaders.some(
-            (h: unknown) => typeof h === "string" && h.toLowerCase() === "authorization",
-          );
-          return isNoneAuth && hasAuthorizationHeader
-            ? Boolean(oauthPassthroughRaw ?? mcpServer.oauth_passthrough)
-            : false;
-        })(),
-        // ``dcr_bridge`` is only meaningful for the client-forwarded token
-        // modes (true_passthrough / oauth_delegate). The Form.Item is
-        // conditionally rendered so the value drops out of the form on
-        // auth_type change; force false for any other configuration to avoid
-        // persisting a stale ``true`` that would silently re-activate if the
-        // mode is later switched back.
-        dcr_bridge: isClientForwardedTokenMode(restValues.auth_type)
-          ? Boolean(dcrBridgeRaw ?? mcpServer.dcr_bridge)
-          : false,
-        ...(restValues.auth_type === AUTH_TYPE.OAUTH2 && restValues.oauth_flow_type
-          ? {
-              oauth2_flow:
-                restValues.oauth_flow_type === OAUTH_FLOW.M2M ? MCP_OAUTH2_FLOW_M2M : MCP_OAUTH2_FLOW_INTERACTIVE,
-            }
-          : {}),
-        // Include token_validation when it is set (non-null) or when clearing an existing value
-        ...(tokenValidation !== null || mcpServer.token_validation ? { token_validation: tokenValidation } : {}),
-      };
-
-      const includeCredentials =
-        restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
-
-      // Client-forwarded rows persist ONLY the declared app; strip any token material lingering in the
-      // form (e.g. from a prior oauth2 authorize this session) so it can never reach the row.
-      const submitCredentials = isClientForwardedTokenMode(restValues.auth_type)
-        ? preservedAdminCredentials(credentialsPayload)
-        : credentialsPayload;
-
-      if (includeCredentials && submitCredentials && Object.keys(submitCredentials).length > 0) {
-        payload.credentials = submitCredentials;
-      }
-
-      // Explicit removal of a saved app for the client-forwarded modes, applied AFTER the filter so it
-      // always wins. Blank fields are the keep-existing convention (the backend merges partial
-      // credential updates), so removal must be an explicit-null write: encrypt skips nulls and the
-      // merge overrides the stored keys, returning the server to dynamic client registration.
-      if (removeStoredApp && isClientForwardedTokenMode(restValues.auth_type)) {
-        payload.credentials = { client_id: null, client_secret: null };
-      }
+      const payload = built.payload;
 
       const updated = await updateMCPServer(accessToken, payload);
 
@@ -959,9 +718,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       // never in the server row. M2M/static auth resolve server-side and need neither.
       if (oauthTokenResponse?.access_token) {
         const oauthMode = getMcpOAuthMode({
-          auth_type: restValues.auth_type,
+          auth_type: values.auth_type,
           oauth2_flow: isM2MFlow ? MCP_OAUTH2_FLOW_M2M : null,
-          delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw ?? mcpServer.delegate_auth_to_upstream),
+          delegate_auth_to_upstream: Boolean(values.delegate_auth_to_upstream ?? mcpServer.delegate_auth_to_upstream),
         });
         try {
           if (oauthMode === "authorization_code") {
@@ -973,500 +732,559 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
               scopes: typeof scope === "string" && scope ? scope.split(" ") : undefined,
             };
             await storeMCPOAuthUserCredential(accessToken, mcpServer.server_id, oauthCredentialPayload);
-          } else if (oauthMode === "passthrough" || isClientForwardedTokenMode(restValues.auth_type)) {
+          } else if (oauthMode === "passthrough" || isClientForwardedTokenMode(values.auth_type)) {
             const browserHeldToken = {
               access_token: oauthTokenResponse.access_token,
               expires_in: oauthTokenResponse.expires_in,
-              refresh_token: oauthTokenResponse.refresh_token,
               token_type: oauthTokenResponse.token_type,
             };
             setToken(mcpServer.server_id, browserHeldToken, userID);
           }
         } catch (error: unknown) {
           const message = error instanceof Error ? error.message : "";
-          NotificationsManager.fromBackend(
-            "MCP Server updated, but failed to persist OAuth token" + (message ? `: ${message}` : ""),
-          );
+          toast.fromError("MCP Server updated, but failed to persist OAuth token" + (message ? `: ${message}` : ""));
           return;
         }
       }
 
-      NotificationsManager.success("MCP Server updated successfully");
+      toast.success("MCP Server updated successfully");
       setAppMayNotMatchUpstream(false);
       onSuccess(updated);
     } catch (error: any) {
-      NotificationsManager.fromBackend("Failed to update MCP Server" + (error?.message ? `: ${error.message}` : ""));
+      toast.fromError("Failed to update MCP Server" + (error?.message ? `: ${error.message}` : ""));
     }
   };
 
   return (
-    <TabGroup>
-      <TabList className="grid w-full grid-cols-2">
-        <Tab>Server Configuration</Tab>
-        <Tab>Cost Configuration</Tab>
-      </TabList>
-      <TabPanels className="mt-6">
-        <TabPanel>
-          <Form
-            form={form}
-            onFinish={handleSave}
-            onValuesChange={handleFormValuesChange}
-            initialValues={initialValues}
-            layout="vertical"
-          >
-            <Form.Item
-              label="MCP Server Name"
-              name="server_name"
-              rules={[
-                {
-                  validator: (_, value) => validateMCPServerName(value),
-                },
-              ]}
-            >
-              <Input className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500" />
-            </Form.Item>
-            <Form.Item
-              label="Alias"
-              name="alias"
-              rules={[
-                {
-                  validator: (_, value) => validateMCPServerName(value),
-                },
-              ]}
-            >
-              <Input
-                onChange={() => setAliasManuallyEdited(true)}
-                className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-              />
-            </Form.Item>
-            <Form.Item label="Description" name="description">
-              <Input className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500" />
-            </Form.Item>
-            <MCPLogoSelector value={logoUrl} onChange={setLogoUrl} />
-            <Form.Item label="Transport Type" name="transport" rules={[{ required: true }]}>
-              <Select onChange={handleTransportChange}>
-                <Select.Option value="http">Streamable HTTP (Recommended)</Select.Option>
-                <Select.Option value="sse">Server-Sent Events (SSE)</Select.Option>
-                <Select.Option value="stdio">Standard Input/Output (stdio)</Select.Option>
-                <Select.Option value={TRANSPORT.OPENAPI}>OpenAPI Spec</Select.Option>
-              </Select>
-            </Form.Item>
-
-            {/* URL field - only for HTTP/SSE */}
-            {isMCPTransport && (
-              <Form.Item
-                label="MCP Server URL"
-                name="url"
-                rules={[
-                  { required: true, message: "Please enter a server URL" },
-                  { validator: (_, value) => validateMCPServerUrl(value) },
-                ]}
-              >
-                <Input
-                  placeholder="https://your-mcp-server.com"
-                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                />
-              </Form.Item>
-            )}
-
-            {/* OpenAPI Spec URL - only for OpenAPI transport */}
-            {isOpenAPITransport && (
-              <Form.Item
-                label={
-                  <span className="text-sm font-medium text-gray-700 flex items-center">
-                    OpenAPI Spec URL
-                    <Tooltip title="URL to an OpenAPI specification (JSON or YAML). MCP tools will be automatically generated from the API endpoints defined in the spec.">
-                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                    </Tooltip>
-                  </span>
-                }
-                name="spec_path"
-                rules={[{ required: true, message: "Please enter an OpenAPI spec URL" }]}
-              >
-                <Input
-                  placeholder="https://petstore3.swagger.io/api/v3/openapi.json"
-                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                />
-              </Form.Item>
-            )}
-
-            <Form.Item
-              label={
-                <span className="text-sm font-medium text-gray-700 flex items-center">
-                  Max Concurrent Requests (optional)
-                  <Tooltip title="Maximum number of tool calls LiteLLM will run against this server at the same time. Additional calls wait for a free slot. Leave blank for no limit.">
-                    <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                  </Tooltip>
-                </span>
-              }
-              name="max_concurrent_requests"
-            >
-              <InputNumber
-                min={1}
-                precision={0}
-                placeholder="e.g. 10"
-                style={{ width: "100%" }}
-                className="rounded-lg"
-              />
-            </Form.Item>
-
-            {/* Authentication - for HTTP, SSE, and OpenAPI */}
-            {!isStdioTransport && (
-              <>
-                <Form.Item label="Authentication" name="auth_type" rules={[{ required: true }]}>
-                  <Select virtual={false}>
-                    <Select.Option value="none">None</Select.Option>
-                    <Select.Option value="api_key">API Key</Select.Option>
-                    <Select.Option value="bearer_token">Bearer Token</Select.Option>
-                    <Select.Option value="token">Token</Select.Option>
-                    <Select.Option value="basic">Basic Auth</Select.Option>
-                    <Select.Option value="oauth2">OAuth</Select.Option>
-                    <Select.Option value="oauth2_token_exchange">OAuth Token Exchange (OBO)</Select.Option>
-                    <Select.Option value="oauth2_id_jag">ID-JAG (Okta Cross App Access)</Select.Option>
-                    <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
-                    <Select.Option value="true_passthrough">True Passthrough (no LiteLLM auth)</Select.Option>
-                    <Select.Option value="oauth_delegate">
-                      OAuth Delegate (client-supplied upstream token)
-                    </Select.Option>
-                  </Select>
-                </Form.Item>
-                <TruePassthroughWarning authType={authType} />
-                <PassthroughAuthorizeSection
-                  authType={authType}
-                  oauthFlow={{
-                    startOAuthFlow,
-                    status: oauthStatus,
-                    error: oauthError,
-                    tokenResponse: oauthTokenResponse,
-                  }}
-                  isEditing
-                  savedAuthType={mcpServer.auth_type}
-                  removeStoredApp={removeStoredApp}
-                  onRemoveStoredAppChange={setRemoveStoredApp}
-                  appMayNotMatchUpstream={appMayNotMatchUpstream}
-                />
-              </>
-            )}
-
-            {isStdioTransport && (
-              <div className="rounded-lg border border-gray-200 p-4 space-y-4">
-                <p className="text-sm text-gray-600">
-                  Configure the stdio transport used to launch the MCP server process. You can either fill in the fields
-                  below or paste a JSON configuration.
-                </p>
-
-                <Form.Item
-                  label="Command"
-                  name="command"
-                  rules={[{ required: true, message: "Please enter a command for stdio transport" }]}
-                >
-                  <Input
-                    placeholder="e.g., npx"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-
-                <Form.Item label="Args" name="args">
-                  <Select
-                    mode="tags"
-                    size="large"
-                    tokenSeparators={[","]}
-                    placeholder="Add args (press enter or comma)"
-                    className="rounded-lg"
-                  />
-                </Form.Item>
-
-                <Form.Item
-                  label="Environment (JSON object)"
-                  name="env_json"
-                  rules={[
-                    {
-                      validator: (_, value) => {
-                        if (!value) return Promise.resolve();
-                        try {
-                          const parsed = JSON.parse(value);
-                          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-                            return Promise.resolve();
-                          }
-                          return Promise.reject(new Error("Env must be a JSON object"));
-                        } catch {
-                          return Promise.reject(new Error("Please enter valid JSON"));
-                        }
-                      },
-                    },
-                  ]}
-                >
-                  <Input.TextArea
-                    rows={6}
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500 font-mono text-sm"
-                    placeholder={`{\n  \"KEY\": \"value\"\n}`}
-                  />
-                </Form.Item>
-
-                {/* Optional JSON config (if provided, it overrides command/args/env on save) */}
-                <StdioConfiguration isVisible={true} required={false} />
-              </div>
-            )}
-
-            {!isStdioTransport && shouldShowAuthValueField && (
-              <Form.Item
-                label={
-                  <span className="text-sm font-medium text-gray-700 flex items-center">
-                    Authentication Value
-                    <Tooltip title="Token, password, or header value to send with each request for the selected auth type.">
-                      <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                    </Tooltip>
-                  </span>
-                }
-                name={["credentials", "auth_value"]}
-                rules={[
-                  {
-                    validator: (_, value) =>
-                      value && typeof value === "string" && value.trim() === ""
-                        ? Promise.reject(new Error("Authentication value cannot be empty"))
-                        : Promise.resolve(),
-                  },
-                ]}
-              >
-                <Input.Password
-                  placeholder="Enter token or secret (leave blank to keep existing)"
-                  className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                />
-              </Form.Item>
-            )}
-
-            {!isStdioTransport && isOAuthAuthType && (
-              <>
-                {!oauthFlowTypeValue && !isDelegateAuth && (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    className="mb-4 rounded-lg"
-                    message="This server has no OAuth flow set"
-                    description="Choose Machine-to-Machine (M2M) or Interactive (PKCE) so LiteLLM authenticates it the way you intend, then save. Until it is set, LiteLLM falls back to interactive per-user auth and treats a machine-to-machine credential shape conservatively."
-                  />
-                )}
-                <OAuthFormFields
-                  isM2M={isM2MFlow}
-                  isEditing
-                  oauthFlow={{
-                    startOAuthFlow,
-                    status: oauthStatus,
-                    error: oauthError,
-                    tokenResponse: oauthTokenResponse,
-                  }}
-                />
-              </>
-            )}
-
-            {!isStdioTransport && isTokenExchangeAuthType && <TokenExchangeFormFields isEditing />}
-
-            {!isStdioTransport && isIdJagAuthType && <IdJagFormFields isEditing />}
-
-            {!isStdioTransport && isAwsSigV4AuthType && (
-              <>
-                <p className="text-sm text-gray-500 mb-2">
-                  For MCP servers hosted on AWS Bedrock AgentCore.{" "}
-                  <a
-                    href="https://docs.litellm.ai/docs/mcp_aws_sigv4"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-500 hover:text-blue-700"
-                  >
-                    View docs &rarr;
-                  </a>
-                </p>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      AWS Region
-                      <Tooltip title="AWS region for SigV4 signing (e.g., us-east-1)">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name={["credentials", "aws_region_name"]}
-                  rules={[]}
-                >
-                  <Input
-                    placeholder="us-east-1 (leave blank to keep existing)"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      AWS Service Name
-                      <Tooltip title="AWS service name for SigV4 signing. Defaults to 'bedrock-agentcore'.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name={["credentials", "aws_service_name"]}
-                >
-                  <Input
-                    placeholder="bedrock-agentcore (leave blank to keep existing)"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      AWS Access Key ID
-                      <Tooltip title="Optional. If not provided, falls back to the boto3 credential chain (IAM role, env vars, etc.).">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name={["credentials", "aws_access_key_id"]}
-                  rules={[]}
-                >
-                  <Input.Password
-                    placeholder="Leave blank to keep existing"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      AWS Secret Access Key
-                      <Tooltip title="Optional. Required if AWS Access Key ID is provided.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name={["credentials", "aws_secret_access_key"]}
-                  rules={[]}
-                >
-                  <Input.Password
-                    placeholder="Leave blank to keep existing"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      AWS Session Token
-                      <Tooltip title="Optional. Only needed for temporary STS credentials.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name={["credentials", "aws_session_token"]}
-                >
-                  <Input.Password
-                    placeholder="Leave blank to keep existing"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      AWS Role ARN
-                      <Tooltip title="Optional. IAM role ARN to assume via STS before signing. If set, LiteLLM calls sts:AssumeRole to get temporary credentials.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name={["credentials", "aws_role_name"]}
-                >
-                  <Input
-                    placeholder="Leave blank to keep existing"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-                <Form.Item
-                  label={
-                    <span className="text-sm font-medium text-gray-700 flex items-center">
-                      AWS Session Name
-                      <Tooltip title="Optional. Session name for the AssumeRole call — appears in CloudTrail logs. Auto-generated if omitted.">
-                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
-                      </Tooltip>
-                    </span>
-                  }
-                  name={["credentials", "aws_session_name"]}
-                >
-                  <Input
-                    placeholder="Leave blank to keep existing"
-                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
-                  />
-                </Form.Item>
-              </>
-            )}
-
-            {/* Environment Variables Section */}
-            <div className="mt-6">
-              <EnvVarsSection />
-            </div>
-
-            {/* Permission Management / Access Control Section */}
-            <div className="mt-6">
-              <MCPPermissionManagement
-                availableAccessGroups={availableAccessGroups}
-                mcpServer={mcpServer}
-                searchValue={searchValue}
-                setSearchValue={setSearchValue}
-                getAccessGroupOptions={getAccessGroupOptions}
-              />
-            </div>
-
-            {/* Tool Configuration Section */}
-            <div className="mt-6">
-              <MCPToolConfiguration
-                accessToken={accessToken}
-                formValues={{
-                  server_id: mcpServer.server_id,
-                  server_name: currentServerName ?? mcpServer.server_name,
-                  url: currentUrl ?? mcpServer.url,
-                  spec_path: currentSpecPath ?? mcpServer.spec_path,
-                  transport: transportType ?? mcpServer.transport,
-                  auth_type: currentAuthType ?? mcpServer.auth_type,
-                  mcp_info: mcpServer.mcp_info,
-                  oauth_flow_type:
-                    oauthFlowTypeValue ?? oauth2FlowToFormValue(mcpServer.oauth2_flow) ?? OAUTH_FLOW.INTERACTIVE,
-                  static_headers: currentStaticHeaders ?? mcpServer.static_headers,
-                  credentials: currentCredentials,
-                  issuer: currentIssuer ?? mcpServer.issuer,
-                  authorization_url: currentAuthorizationUrl ?? mcpServer.authorization_url,
-                  token_url: currentTokenUrl ?? mcpServer.token_url,
-                  registration_url: currentRegistrationUrl ?? mcpServer.registration_url,
+    <Tabs defaultValue="server">
+      <TabsList variant="line" className="grid h-auto w-full grid-cols-2 rounded-none border-b p-0">
+        <TabsTrigger value="server" className="rounded-none py-2">
+          Server Configuration
+        </TabsTrigger>
+        <TabsTrigger value="cost" className="rounded-none py-2">
+          Cost Configuration
+        </TabsTrigger>
+      </TabsList>
+      <div className="mt-6">
+        <TabsContent value="server" keepMounted>
+          <FormProvider {...form}>
+            <MountedFormProvider value={{ control: form.control, registry }}>
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void submitForm();
                 }}
-                allowedTools={allowedTools}
-                existingAllowedTools={existingAllowedTools}
-                hasToolAllowlistInteraction={hasToolAllowlistInteraction}
-                isEditMode
-                onAllowedToolsChange={setAllowedTools}
-                onToolAllowlistInteraction={() => setHasToolAllowlistInteraction(true)}
-                toolNameToDisplayName={toolNameToDisplayName}
-                toolNameToDescription={toolNameToDescription}
-                onToolNameToDisplayNameChange={setToolNameToDisplayName}
-                onToolNameToDescriptionChange={setToolNameToDescription}
-                externalTools={tools}
-                externalIsLoading={isLoadingTools}
-                externalError={toolsError}
-                externalCanFetch={true}
-              />
-            </div>
+              >
+                <MountedFormField
+                  label="MCP Server Name"
+                  name="server_name"
+                  rules={{ validate: validatorRules({ validator: (_, value) => validateMCPServerName(value) }) }}
+                >
+                  {(control) => (
+                    <Input
+                      {...textControl(control)}
+                      className="rounded-lg border-border focus:border-info focus:ring-ring"
+                    />
+                  )}
+                </MountedFormField>
+                <MountedFormField
+                  label="Alias"
+                  name="alias"
+                  rules={{ validate: validatorRules({ validator: (_, value) => validateMCPServerName(value) }) }}
+                >
+                  {(control) => (
+                    <Input
+                      {...textControl(control)}
+                      onChange={(event) => {
+                        control.onChange(event);
+                        setAliasManuallyEdited(true);
+                      }}
+                      className="rounded-lg border-border focus:border-info focus:ring-ring"
+                    />
+                  )}
+                </MountedFormField>
+                <MountedFormField label="Description" name="description">
+                  {(control) => (
+                    <Input
+                      {...textControl(control)}
+                      className="rounded-lg border-border focus:border-info focus:ring-ring"
+                    />
+                  )}
+                </MountedFormField>
+                <MCPLogoSelector value={logoUrl} onChange={setLogoUrl} />
+                <MountedFormField
+                  label="Transport Type"
+                  name="transport"
+                  required
+                  rules={{ validate: { required: requiredRule("Transport Type is required") } }}
+                >
+                  {(control) => (
+                    <Select
+                      items={TRANSPORT_ITEMS}
+                      value={(control.value as string | undefined) ?? null}
+                      onValueChange={handleTransportSelected(control.onChange)}
+                    >
+                      <SelectTrigger {...selectTriggerControl(control)} className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {TRANSPORT_ITEMS.map((item) => (
+                          <SelectItem key={item.value} value={item.value}>
+                            {item.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </MountedFormField>
 
-            <div className="flex justify-end gap-2">
-              <AntdButton onClick={onCancel}>Cancel</AntdButton>
-              <Button type="submit">Save Changes</Button>
-            </div>
-          </Form>
-        </TabPanel>
+                {/* URL field - only for HTTP/SSE */}
+                {isMCPTransport && (
+                  <MountedFormField
+                    label="MCP Server URL"
+                    name="url"
+                    required
+                    rules={{
+                      validate: {
+                        required: requiredRule("Please enter a server URL"),
+                        ...validatorRules({ validator: (_, value) => validateMCPServerUrl(value) }),
+                      },
+                    }}
+                  >
+                    {(control) => (
+                      <Input
+                        {...textControl(control)}
+                        placeholder="https://your-mcp-server.com"
+                        className="rounded-lg border-border focus:border-info focus:ring-ring"
+                      />
+                    )}
+                  </MountedFormField>
+                )}
 
-        <TabPanel>
+                {/* OpenAPI Spec URL - only for OpenAPI transport */}
+                {isOpenAPITransport && (
+                  <MountedFormField
+                    label={
+                      <span className="text-sm font-medium text-foreground flex items-center">
+                        OpenAPI Spec URL
+                        <SimpleTooltip content="URL to an OpenAPI specification (JSON or YAML). MCP tools will be automatically generated from the API endpoints defined in the spec.">
+                          <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+                        </SimpleTooltip>
+                      </span>
+                    }
+                    name="spec_path"
+                    required
+                    rules={{ validate: { required: requiredRule("Please enter an OpenAPI spec URL") } }}
+                  >
+                    {(control) => (
+                      <Input
+                        {...textControl(control)}
+                        placeholder="https://petstore3.swagger.io/api/v3/openapi.json"
+                        className="rounded-lg border-border focus:border-info focus:ring-ring"
+                      />
+                    )}
+                  </MountedFormField>
+                )}
+
+                <MountedFormField
+                  label={
+                    <span className="text-sm font-medium text-foreground flex items-center">
+                      Max Concurrent Requests (optional)
+                      <SimpleTooltip content="Maximum number of tool calls LiteLLM will run against this server at the same time. Additional calls wait for a free slot. Leave blank for no limit.">
+                        <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+                      </SimpleTooltip>
+                    </span>
+                  }
+                  name="max_concurrent_requests"
+                >
+                  {(control) => (
+                    <Input
+                      {...numberControl(control, 0)}
+                      min={1}
+                      step={1}
+                      placeholder="e.g. 10"
+                      className="w-full rounded-lg"
+                    />
+                  )}
+                </MountedFormField>
+
+                {/* Authentication - for HTTP, SSE, and OpenAPI */}
+                {!isStdioTransport && (
+                  <>
+                    <MountedFormField
+                      label="Authentication"
+                      name="auth_type"
+                      required
+                      rules={{ validate: { required: requiredRule("Authentication is required") } }}
+                    >
+                      {(control) => (
+                        <Select {...selectControl<string>(control)} items={AUTH_TYPE_ITEMS}>
+                          <SelectTrigger {...selectTriggerControl(control)} className="w-full">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {AUTH_TYPE_ITEMS.map((item) => (
+                              <SelectItem key={item.value} value={item.value}>
+                                {item.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    </MountedFormField>
+                    <TruePassthroughWarning authType={authType} />
+                    <PassthroughAuthorizeSection
+                      authType={authType}
+                      oauthFlow={{
+                        startOAuthFlow,
+                        status: oauthStatus,
+                        error: oauthError,
+                        tokenResponse: oauthTokenResponse,
+                      }}
+                      isEditing
+                      savedAuthType={mcpServer.auth_type}
+                      removeStoredApp={removeStoredApp}
+                      onRemoveStoredAppChange={setRemoveStoredApp}
+                      appMayNotMatchUpstream={appMayNotMatchUpstream}
+                    />
+                  </>
+                )}
+
+                {isStdioTransport && (
+                  <div className="rounded-lg border border-border p-4 space-y-4">
+                    <p className="text-sm text-muted-foreground">
+                      Configure the stdio transport used to launch the MCP server process. You can either fill in the
+                      fields below or paste a JSON configuration.
+                    </p>
+
+                    <MountedFormField
+                      label="Command"
+                      name="command"
+                      required
+                      rules={{ validate: { required: requiredRule("Please enter a command for stdio transport") } }}
+                    >
+                      {(control) => (
+                        <Input
+                          {...textControl(control)}
+                          placeholder="e.g., npx"
+                          className="rounded-lg border-border focus:border-info focus:ring-ring"
+                        />
+                      )}
+                    </MountedFormField>
+
+                    <MountedFormField label="Args" name="args">
+                      {(control) => (
+                        <MultiSelect
+                          {...tagsControl(control)}
+                          placeholder="Add args (press enter or comma)"
+                          className="rounded-lg"
+                        />
+                      )}
+                    </MountedFormField>
+
+                    <MountedFormField
+                      label="Environment (JSON object)"
+                      name="env_json"
+                      rules={{
+                        validate: {
+                          jsonObject: parsesAsJsonObject("Please enter valid JSON", "Env must be a JSON object"),
+                        },
+                      }}
+                    >
+                      {(control) => (
+                        <Textarea
+                          {...textControl(control)}
+                          rows={6}
+                          className="rounded-lg border-border focus:border-info focus:ring-ring font-mono text-sm"
+                          placeholder={`{\n  \"KEY\": \"value\"\n}`}
+                        />
+                      )}
+                    </MountedFormField>
+
+                    {/* Optional JSON config (if provided, it overrides command/args/env on save) */}
+                    <StdioConfiguration isVisible={true} required={false} />
+                  </div>
+                )}
+
+                {!isStdioTransport && shouldShowAuthValueField && (
+                  <MountedFormField
+                    label={
+                      <span className="text-sm font-medium text-foreground flex items-center">
+                        Authentication Value
+                        <SimpleTooltip content="Token, password, or header value to send with each request for the selected auth type.">
+                          <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+                        </SimpleTooltip>
+                      </span>
+                    }
+                    name={["credentials", "auth_value"]}
+                    rules={{ validate: { notWhitespace: notOnlyWhitespace("Authentication value cannot be empty") } }}
+                  >
+                    {(control) => (
+                      <PasswordInput
+                        {...textControl(control)}
+                        placeholder="Enter token or secret (leave blank to keep existing)"
+                        groupClassName="rounded-lg border-border focus:border-info focus:ring-ring"
+                      />
+                    )}
+                  </MountedFormField>
+                )}
+
+                {!isStdioTransport && isOAuthAuthType && (
+                  <>
+                    {!oauthFlowTypeValue && !isDelegateAuth && (
+                      <Alert variant="warning" className="mb-4 rounded-lg">
+                        <TriangleAlert />
+                        <AlertTitle>This server has no OAuth flow set</AlertTitle>
+                        <AlertDescription>
+                          Choose Machine-to-Machine (M2M) or Interactive (PKCE) so LiteLLM authenticates it the way you
+                          intend, then save. Until it is set, LiteLLM falls back to interactive per-user auth and treats
+                          a machine-to-machine credential shape conservatively.
+                        </AlertDescription>
+                      </Alert>
+                    )}
+                    <OAuthFormFields
+                      isM2M={isM2MFlow}
+                      isEditing
+                      oauthFlow={{
+                        startOAuthFlow,
+                        status: oauthStatus,
+                        error: oauthError,
+                        tokenResponse: oauthTokenResponse,
+                      }}
+                    />
+                  </>
+                )}
+
+                {!isStdioTransport && isTokenExchangeAuthType && <TokenExchangeFormFields isEditing />}
+
+                {!isStdioTransport && isIdJagAuthType && <IdJagFormFields isEditing />}
+
+                {!isStdioTransport && isAwsSigV4AuthType && (
+                  <>
+                    <p className="text-sm text-muted-foreground mb-2">
+                      For MCP servers hosted on AWS Bedrock AgentCore.{" "}
+                      <a
+                        href="https://docs.litellm.ai/docs/mcp_aws_sigv4"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-info hover:text-info/80"
+                      >
+                        View docs &rarr;
+                      </a>
+                    </p>
+                    <MountedFormField
+                      label={
+                        <span className="text-sm font-medium text-foreground flex items-center">
+                          AWS Region
+                          <SimpleTooltip content="AWS region for SigV4 signing (e.g., us-east-1)">
+                            <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+                          </SimpleTooltip>
+                        </span>
+                      }
+                      name={["credentials", "aws_region_name"]}
+                    >
+                      {(control) => (
+                        <Input
+                          {...textControl(control)}
+                          placeholder="us-east-1 (leave blank to keep existing)"
+                          className="rounded-lg border-border focus:border-info focus:ring-ring"
+                        />
+                      )}
+                    </MountedFormField>
+                    <MountedFormField
+                      label={
+                        <span className="text-sm font-medium text-foreground flex items-center">
+                          AWS Service Name
+                          <SimpleTooltip content="AWS service name for SigV4 signing. Defaults to 'bedrock-agentcore'.">
+                            <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+                          </SimpleTooltip>
+                        </span>
+                      }
+                      name={["credentials", "aws_service_name"]}
+                    >
+                      {(control) => (
+                        <Input
+                          {...textControl(control)}
+                          placeholder="bedrock-agentcore (leave blank to keep existing)"
+                          className="rounded-lg border-border focus:border-info focus:ring-ring"
+                        />
+                      )}
+                    </MountedFormField>
+                    <MountedFormField
+                      label={
+                        <span className="text-sm font-medium text-foreground flex items-center">
+                          AWS Access Key ID
+                          <SimpleTooltip content="Optional. If not provided, falls back to the boto3 credential chain (IAM role, env vars, etc.).">
+                            <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+                          </SimpleTooltip>
+                        </span>
+                      }
+                      name={["credentials", "aws_access_key_id"]}
+                    >
+                      {(control) => (
+                        <PasswordInput
+                          {...textControl(control)}
+                          placeholder="Leave blank to keep existing"
+                          groupClassName="rounded-lg border-border focus:border-info focus:ring-ring"
+                        />
+                      )}
+                    </MountedFormField>
+                    <MountedFormField
+                      label={
+                        <span className="text-sm font-medium text-foreground flex items-center">
+                          AWS Secret Access Key
+                          <SimpleTooltip content="Optional. Required if AWS Access Key ID is provided.">
+                            <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+                          </SimpleTooltip>
+                        </span>
+                      }
+                      name={["credentials", "aws_secret_access_key"]}
+                    >
+                      {(control) => (
+                        <PasswordInput
+                          {...textControl(control)}
+                          placeholder="Leave blank to keep existing"
+                          groupClassName="rounded-lg border-border focus:border-info focus:ring-ring"
+                        />
+                      )}
+                    </MountedFormField>
+                    <MountedFormField
+                      label={
+                        <span className="text-sm font-medium text-foreground flex items-center">
+                          AWS Session Token
+                          <SimpleTooltip content="Optional. Only needed for temporary STS credentials.">
+                            <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+                          </SimpleTooltip>
+                        </span>
+                      }
+                      name={["credentials", "aws_session_token"]}
+                    >
+                      {(control) => (
+                        <PasswordInput
+                          {...textControl(control)}
+                          placeholder="Leave blank to keep existing"
+                          groupClassName="rounded-lg border-border focus:border-info focus:ring-ring"
+                        />
+                      )}
+                    </MountedFormField>
+                    <MountedFormField
+                      label={
+                        <span className="text-sm font-medium text-foreground flex items-center">
+                          AWS Role ARN
+                          <SimpleTooltip content="Optional. IAM role ARN to assume via STS before signing. If set, LiteLLM calls sts:AssumeRole to get temporary credentials.">
+                            <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+                          </SimpleTooltip>
+                        </span>
+                      }
+                      name={["credentials", "aws_role_name"]}
+                    >
+                      {(control) => (
+                        <Input
+                          {...textControl(control)}
+                          placeholder="Leave blank to keep existing"
+                          className="rounded-lg border-border focus:border-info focus:ring-ring"
+                        />
+                      )}
+                    </MountedFormField>
+                    <MountedFormField
+                      label={
+                        <span className="text-sm font-medium text-foreground flex items-center">
+                          AWS Session Name
+                          <SimpleTooltip content="Optional. Session name for the AssumeRole call — appears in CloudTrail logs. Auto-generated if omitted.">
+                            <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+                          </SimpleTooltip>
+                        </span>
+                      }
+                      name={["credentials", "aws_session_name"]}
+                    >
+                      {(control) => (
+                        <Input
+                          {...textControl(control)}
+                          placeholder="Leave blank to keep existing"
+                          className="rounded-lg border-border focus:border-info focus:ring-ring"
+                        />
+                      )}
+                    </MountedFormField>
+                  </>
+                )}
+
+                {/* Environment Variables Section */}
+                <div className="mt-6">
+                  <EnvVarsSection />
+                </div>
+
+                {/* Permission Management / Access Control Section */}
+                <div className="mt-6">
+                  <MCPPermissionManagement
+                    availableAccessGroups={availableAccessGroups}
+                    mcpServer={mcpServer}
+                    mountedAuthType={authType}
+                  />
+                </div>
+
+                {/* Tool Configuration Section */}
+                <div className="mt-6">
+                  <MCPToolConfiguration
+                    accessToken={accessToken}
+                    formValues={{
+                      server_id: mcpServer.server_id,
+                      server_name: currentServerName ?? mcpServer.server_name,
+                      url: currentUrl ?? mcpServer.url,
+                      spec_path: currentSpecPath ?? mcpServer.spec_path,
+                      transport: transportType ?? mcpServer.transport,
+                      auth_type: currentAuthType ?? mcpServer.auth_type,
+                      mcp_info: mcpServer.mcp_info,
+                      oauth_flow_type:
+                        oauthFlowTypeValue ?? oauth2FlowToFormValue(mcpServer.oauth2_flow) ?? OAUTH_FLOW.INTERACTIVE,
+                      static_headers: currentStaticHeaders ?? mcpServer.static_headers,
+                      credentials: currentCredentials,
+                      issuer: currentIssuer ?? mcpServer.issuer,
+                      authorization_url: currentAuthorizationUrl ?? mcpServer.authorization_url,
+                      token_url: currentTokenUrl ?? mcpServer.token_url,
+                      registration_url: currentRegistrationUrl ?? mcpServer.registration_url,
+                    }}
+                    allowedTools={allowedTools}
+                    existingAllowedTools={existingAllowedTools}
+                    hasToolAllowlistInteraction={hasToolAllowlistInteraction}
+                    isEditMode
+                    onAllowedToolsChange={setAllowedTools}
+                    onToolAllowlistInteraction={() => setHasToolAllowlistInteraction(true)}
+                    toolNameToDisplayName={toolNameToDisplayName}
+                    toolNameToDescription={toolNameToDescription}
+                    onToolNameToDisplayNameChange={setToolNameToDisplayName}
+                    onToolNameToDescriptionChange={setToolNameToDescription}
+                    externalTools={tools}
+                    externalIsLoading={isLoadingTools}
+                    externalError={toolsError}
+                    externalCanFetch={true}
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={onCancel}>
+                    Cancel
+                  </Button>
+                  <Button type="submit">Save Changes</Button>
+                </div>
+              </form>
+            </MountedFormProvider>
+          </FormProvider>
+        </TabsContent>
+
+        <TabsContent value="cost" keepMounted>
           <div className="space-y-6">
             <MCPServerCostConfig value={costConfig} onChange={setCostConfig} tools={tools} disabled={isLoadingTools} />
 
             <div className="flex justify-end gap-2">
-              <AntdButton onClick={onCancel}>Cancel</AntdButton>
-              <Button onClick={() => form.submit()}>Save Changes</Button>
+              <Button variant="outline" onClick={onCancel}>
+                Cancel
+              </Button>
+              <Button onClick={() => void submitForm()}>Save Changes</Button>
             </div>
           </div>
-        </TabPanel>
-      </TabPanels>
-    </TabGroup>
+        </TabsContent>
+      </div>
+    </Tabs>
   );
 };
 

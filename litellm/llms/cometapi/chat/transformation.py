@@ -6,7 +6,7 @@ Documentation: [CometAPI Documentation Link]
 """
 
 from collections.abc import AsyncIterator, Iterator
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
@@ -37,10 +37,10 @@ class CometAPIConfig(OpenAIGPTConfig):
         """
         Map OpenAI format parameters to CometAPI format
         """
-        mapped_openai_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        mapped_openai_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
         # CometAPI-specific parameters (if any)
-        extra_body: dict[str, Any] = {}
+        extra_body: Final[dict[str, Any]] = {}
         # TODO: Add CometAPI-specific parameter handling here
         # Example:
         # custom_param = non_default_params.pop("custom_param", None)
@@ -78,8 +78,8 @@ class CometAPIConfig(OpenAIGPTConfig):
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
-        extra_body = optional_params.pop("extra_body", {})
-        response = super().transform_request(model, messages, optional_params, litellm_params, headers)
+        extra_body: Final = optional_params.pop("extra_body", {})
+        response: Final = super().transform_request(model, messages, optional_params, litellm_params, headers)
         response.update(extra_body)
         return response
 
@@ -101,7 +101,7 @@ class CometAPIConfig(OpenAIGPTConfig):
         # Default base
         if api_base is None:
             api_base = "https://api.cometapi.com/v1"
-        endpoint = "chat/completions"
+        endpoint: Final = "chat/completions"
 
         # Normalize
         api_base = api_base.rstrip("/")
@@ -161,8 +161,8 @@ class CometAPIChatCompletionStreamingHandler(BaseModelResponseIterator):
         try:
             # Handle error in chunk
             if "error" in chunk:
-                error_chunk = chunk["error"]
-                error_message = "CometAPI Error: {}".format(error_chunk.get("message", "Unknown error"))
+                error_chunk: Final = chunk["error"]
+                error_message: Final = "CometAPI Error: {}".format(error_chunk.get("message", "Unknown error"))
                 raise CometAPIException(
                     message=error_message,
                     status_code=error_chunk.get("code", 400),
@@ -170,7 +170,7 @@ class CometAPIChatCompletionStreamingHandler(BaseModelResponseIterator):
                 )
 
             # Process choices
-            new_choices = []
+            new_choices: Final = []
             for choice in chunk["choices"]:
                 # Handle reasoning content if present
                 if "delta" in choice and "reasoning" in choice["delta"]:

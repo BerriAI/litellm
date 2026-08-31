@@ -11,7 +11,7 @@ test.skip("Internal Users Search", () => {
     await tab.click();
 
     await expect(page.locator("tbody tr").first()).toBeVisible();
-    await expect(page.locator(".ant-skeleton")).toHaveCount(0);
+    await expect(page.locator('[data-slot="skeleton"]')).toHaveCount(0);
   }
 
   test("can search users by email", async ({ page }) => {

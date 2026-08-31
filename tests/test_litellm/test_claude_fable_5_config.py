@@ -27,20 +27,6 @@ def _load_root_cost_map() -> dict:
         return json.load(f)
 
 
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    """Force the bundled backup cost map so assertions don't depend on the
-    network-fetched ``main`` copy (which lags this branch until merge)."""
-    original_model_cost = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original_model_cost
-        litellm.get_model_info.cache_clear()
-
 
 def test_fable_5_model_pricing_and_capabilities():
     model_data = _load_root_cost_map()
@@ -184,6 +170,23 @@ def test_fable_5_all_variants_carry_adaptive_thinking_flag(cost_map):
         k for k in variants if cost_map[k].get("supports_adaptive_thinking") is not True
     ]
     assert not missing, f"missing supports_adaptive_thinking: {missing}"
+
+
+@pytest.mark.parametrize(
+    "cost_map",
+    [_load_root_cost_map(), GetModelCostMap.load_local_model_cost_map()],
+    ids=["root", "bundled_backup"],
+)
+def test_fable_5_all_variants_carry_thinking_always_on_flag(cost_map):
+    """Every Fable 5 entry must advertise ``thinking_always_on``.
+
+    The flag drives the Anthropic transformations to omit an explicit
+    ``thinking.type='disabled'``, which Fable 5 rejects with a 400; a variant
+    missing the flag forwards the param verbatim and the provider 400s."""
+    variants = [k for k in cost_map if "claude-fable-5" in k]
+    assert variants, "no claude-fable-5 entries found in cost map"
+    missing = [k for k in variants if cost_map[k].get("thinking_always_on") is not True]
+    assert not missing, f"missing thinking_always_on: {missing}"
 
 
 @pytest.mark.parametrize(

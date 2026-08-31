@@ -7,7 +7,7 @@ OpenRouter is OpenAI-compatible and supports embeddings via the /v1/embeddings e
 Docs: https://openrouter.ai/docs
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -54,10 +54,10 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
         from litellm import get_secret
 
         # Get OpenRouter-specific headers
-        openrouter_site_url = get_secret("OR_SITE_URL") or "https://litellm.ai"
-        openrouter_app_name = get_secret("OR_APP_NAME") or "liteLLM"
+        openrouter_site_url: Final = get_secret("OR_SITE_URL") or "https://litellm.ai"
+        openrouter_app_name: Final = get_secret("OR_APP_NAME") or "liteLLM"
 
-        openrouter_headers = {
+        openrouter_headers: Final = {
             "HTTP-Referer": openrouter_site_url,
             "X-Title": openrouter_app_name,
             "Content-Type": "application/json",
@@ -68,7 +68,7 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
             openrouter_headers["Authorization"] = f"Bearer {api_key}"
 
         # Merge with existing headers (user's extra_headers take priority)
-        merged_headers = {**openrouter_headers, **headers}
+        merged_headers: Final = {**openrouter_headers, **headers}
 
         return merged_headers
 
@@ -136,7 +136,7 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
         logging_obj.post_call(original_response=raw_response.text)
 
         # OpenRouter returns standard OpenAI-compatible embedding response
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
         return convert_to_model_response_object(
             response_object=response_json,

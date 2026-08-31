@@ -2,7 +2,7 @@ import asyncio
 import contextvars
 from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 import litellm
 from litellm._logging import verbose_logger
@@ -20,8 +20,8 @@ from litellm.utils import ProviderConfigManager, client, exception_type
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
-together_rerank = TogetherAIRerank()
-bedrock_rerank = BedrockRerankHandler()
+together_rerank: Final = TogetherAIRerank()
+bedrock_rerank: Final = BedrockRerankHandler()
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
 
@@ -44,10 +44,10 @@ async def arerank(
     Async: Reranks a list of documents based on their relevance to the query
     """
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["arerank"] = True
 
-        func = partial(
+        func: Final = partial(
             rerank,
             model,
             query,
@@ -60,9 +60,9 @@ async def arerank(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -107,23 +107,23 @@ def rerank(
     # The router forwards rerank calls via an untyped `**kwargs` unpack, and a
     # typed named param there would trip the basedpyright budget gate without
     # adding real safety; it stays typed downstream via get_optional_rerank_params.
-    instruction: str | None = kwargs.get("instruction", None)
-    headers: dict | None = kwargs.get("headers")  # type: ignore
-    litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-    litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
-    proxy_server_request = kwargs.get("proxy_server_request", None)
-    model_info = kwargs.get("model_info", None)
-    user = kwargs.get("user", None)
-    client = kwargs.get("client", None)
+    instruction: Final[str | None] = kwargs.get("instruction", None)
+    headers: Final[dict | None] = kwargs.get("headers")
+    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+    litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+    proxy_server_request: Final = kwargs.get("proxy_server_request", None)
+    model_info: Final = kwargs.get("model_info", None)
+    user: Final = kwargs.get("user", None)
+    client: Final = kwargs.get("client", None)
     try:
-        _is_async = kwargs.pop("arerank", False) is True
-        optional_params = GenericLiteLLMParams(**kwargs)
+        _is_async: Final = kwargs.pop("arerank", False) is True
+        optional_params: Final = GenericLiteLLMParams(**kwargs)
         # Params that are unique to specific versions of the client for the rerank call
-        unique_version_params = {
+        unique_version_params: Final = {
             "max_chunks_per_doc": max_chunks_per_doc,
             "max_tokens_per_doc": max_tokens_per_doc,
         }
-        present_version_params = [k for k, v in unique_version_params.items() if v is not None]
+        present_version_params: Final = [k for k, v in unique_version_params.items() if v is not None]
 
         (
             model,
@@ -137,14 +137,14 @@ def rerank(
             api_key=optional_params.api_key,
         )
 
-        rerank_provider_config: BaseRerankConfig = ProviderConfigManager.get_provider_rerank_config(
+        rerank_provider_config: Final[BaseRerankConfig] = ProviderConfigManager.get_provider_rerank_config(
             model=model,
             provider=litellm.LlmProviders(_custom_llm_provider),
             api_base=optional_params.api_base,
             present_version_params=present_version_params,
         )
 
-        optional_rerank_params: dict = get_optional_rerank_params(
+        optional_rerank_params: Final[dict] = get_optional_rerank_params(
             rerank_provider_config=rerank_provider_config,
             model=model,
             drop_params=kwargs.get("drop_params") or litellm.drop_params or False,
@@ -163,9 +163,9 @@ def rerank(
         if isinstance(optional_params.timeout, str):
             optional_params.timeout = float(optional_params.timeout)
 
-        model_response = RerankResponse()
+        model_response: Final = RerankResponse()
 
-        rerank_litellm_params = {
+        rerank_litellm_params: Final = {
             "litellm_call_id": litellm_call_id,
             "proxy_server_request": proxy_server_request,
             "model_info": model_info,
@@ -195,7 +195,7 @@ def rerank(
                 dynamic_api_base
                 or optional_params.api_base
                 or litellm.api_base
-                or get_secret("COHERE_API_BASE")  # type: ignore
+                or get_secret("COHERE_API_BASE")
                 or "https://api.cohere.com"
             )
 
@@ -221,7 +221,7 @@ def rerank(
                 dynamic_api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
                 or optional_params.api_base
                 or litellm.api_base
-                or get_secret("AZURE_AI_API_BASE")  # type: ignore
+                or get_secret("AZURE_AI_API_BASE")
             )
             response = base_llm_http_handler.rerank(
                 model=model,
@@ -270,12 +270,14 @@ def rerank(
                 dynamic_api_key
                 or optional_params.api_key
                 or litellm.togetherai_api_key
-                or get_secret("TOGETHERAI_API_KEY")  # type: ignore
+                or get_secret("TOGETHERAI_API_KEY")
                 or litellm.api_key
             )
 
             if api_key is None:
                 raise ValueError("TogetherAI API key is required, please set 'TOGETHERAI_API_KEY' in your environment")
+
+            api_base = dynamic_api_base or optional_params.api_base or litellm.api_base or "https://api.together.ai/v1"
 
             response = together_rerank.rerank(
                 model=model,
@@ -286,6 +288,7 @@ def rerank(
                 return_documents=return_documents,
                 max_chunks_per_doc=max_chunks_per_doc,
                 api_key=api_key,
+                api_base=api_base,
                 _is_async=_is_async,
             )
         elif _custom_llm_provider == litellm.LlmProviders.JINA_AI:
@@ -293,7 +296,7 @@ def rerank(
                 raise ValueError("Jina AI API key is required, please set 'JINA_AI_API_KEY' in your environment")
 
             api_base = (
-                dynamic_api_base or optional_params.api_base or litellm.api_base or get_secret("BEDROCK_API_BASE")  # type: ignore
+                dynamic_api_base or optional_params.api_base or litellm.api_base or get_secret("BEDROCK_API_BASE")
             )
 
             response = base_llm_http_handler.rerank(
@@ -319,7 +322,7 @@ def rerank(
             # Rerank uses ai.api.nvidia.com instead of integrate.api.nvidia.com
             api_base = (
                 optional_params.api_base
-                or get_secret("NVIDIA_NIM_API_BASE")  # type: ignore
+                or get_secret("NVIDIA_NIM_API_BASE")
                 or "https://ai.api.nvidia.com"  # Default for rerank
             )
 
@@ -340,12 +343,12 @@ def rerank(
             )
         elif _custom_llm_provider == litellm.LlmProviders.BEDROCK:
             api_base = (
-                dynamic_api_base or optional_params.api_base or litellm.api_base or get_secret("BEDROCK_API_BASE")  # type: ignore
+                dynamic_api_base or optional_params.api_base or litellm.api_base or get_secret("BEDROCK_API_BASE")
             )
 
             # Merge headers and extra_headers if both are provided
             merged_headers = headers or litellm.headers or {}
-            extra_headers_from_kwargs = kwargs.get("extra_headers")
+            extra_headers_from_kwargs: Final = kwargs.get("extra_headers")
             if extra_headers_from_kwargs:
                 merged_headers = {**merged_headers, **extra_headers_from_kwargs}
 
@@ -470,7 +473,7 @@ def rerank(
                 litellm_params=rerank_litellm_params,
             )
         elif _custom_llm_provider == litellm.LlmProviders.WATSONX:
-            credentials = IBMWatsonXMixin.get_watsonx_credentials(
+            credentials: Final = IBMWatsonXMixin.get_watsonx_credentials(
                 optional_params=dict(optional_params),
                 api_key=dynamic_api_key,
                 api_base=dynamic_api_base,

@@ -1,13 +1,9 @@
 import os
-import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.types.realtime import RealtimeQueryParams

@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 import orjson
 
@@ -13,22 +13,34 @@ def extract_model_from_target_model_names(target_model_names: Any) -> str | None
     return target_model_names[0] if target_model_names else None
 
 
+def video_reference_to_id(video_ref: object) -> str:
+    if isinstance(video_ref, dict):
+        return video_ref.get("id", "")
+    if not isinstance(video_ref, str):
+        return ""
+    try:
+        parsed_ref: Final = orjson.loads(video_ref)
+    except orjson.JSONDecodeError:
+        return video_ref
+    return parsed_ref.get("id", "") if isinstance(parsed_ref, dict) else video_ref
+
+
 def get_custom_provider_from_data(data: dict[str, Any]) -> str | None:
-    custom_llm_provider = data.get("custom_llm_provider")
+    custom_llm_provider: Final = data.get("custom_llm_provider")
     if custom_llm_provider:
         return custom_llm_provider
 
     extra_body = data.get("extra_body")
     if isinstance(extra_body, str):
         try:
-            parsed_extra_body = orjson.loads(extra_body)
+            parsed_extra_body: Final = orjson.loads(extra_body)
             if isinstance(parsed_extra_body, dict):
                 extra_body = parsed_extra_body
         except Exception:
             extra_body = None
 
     if isinstance(extra_body, dict):
-        extra_body_custom_llm_provider = extra_body.get("custom_llm_provider")
+        extra_body_custom_llm_provider: Final = extra_body.get("custom_llm_provider")
         if isinstance(extra_body_custom_llm_provider, str):
             return extra_body_custom_llm_provider
 
@@ -44,7 +56,7 @@ def encode_character_id_in_response(response: Any, custom_llm_provider: str, mod
         )
         return response
 
-    character_id = getattr(response, "id", None)
+    character_id: Final = getattr(response, "id", None)
     if isinstance(character_id, str) and character_id:
         response.id = encode_character_id_with_provider(
             character_id=character_id,

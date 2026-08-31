@@ -4,13 +4,15 @@ Utilities for mapping exceptions to Anthropic error format.
 Similar to litellm/litellm_core_utils/exception_mapping_utils.py but for Anthropic response format.
 """
 
+from typing import Final
+
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
 from .exceptions import AnthropicErrorResponse, AnthropicErrorType
 
 # HTTP status code -> Anthropic error type
 # Source: https://docs.anthropic.com/en/api/errors
-ANTHROPIC_ERROR_TYPE_MAP: dict[int, AnthropicErrorType] = {
+ANTHROPIC_ERROR_TYPE_MAP: Final[dict[int, AnthropicErrorType]] = {
     400: "invalid_request_error",
     401: "authentication_error",
     403: "permission_error",
@@ -50,9 +52,9 @@ class AnthropicExceptionMapping:
             "request_id": "req_..."
         }
         """
-        error_type = AnthropicExceptionMapping.get_error_type(status_code)
+        error_type: Final = AnthropicExceptionMapping.get_error_type(status_code)
 
-        response: AnthropicErrorResponse = {
+        response: Final[AnthropicErrorResponse] = {
             "type": "error",
             "error": {
                 "type": error_type,
@@ -76,7 +78,7 @@ class AnthropicExceptionMapping:
         - Generic: {"message": "..."}
         - Plain strings
         """
-        parsed = safe_json_loads(raw_message)
+        parsed: Final = safe_json_loads(raw_message)
         if isinstance(parsed, dict):
             # Bedrock format
             if "detail" in parsed and isinstance(parsed["detail"], dict):
@@ -151,7 +153,7 @@ class AnthropicExceptionMapping:
             # Optionally add request_id if provided and not present
             if request_id and "request_id" not in parsed:
                 parsed["request_id"] = request_id
-            return parsed  # type: ignore
+            return parsed
 
         # Extract message - use parsed dict if available, otherwise raw string
         if parsed is not None:

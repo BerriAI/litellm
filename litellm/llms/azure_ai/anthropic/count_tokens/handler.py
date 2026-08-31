@@ -4,7 +4,7 @@ Azure AI Anthropic CountTokens API handler.
 Uses httpx for HTTP requests with Azure authentication.
 """
 
-from typing import Any
+from typing import Any, Final
 
 import httpx
 
@@ -59,7 +59,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
             verbose_logger.debug("Processing Azure AI Anthropic CountTokens request for model: %s", model)
 
             # Transform request to Anthropic format
-            request_body = self.transform_request_to_count_tokens(
+            request_body: Final = self.transform_request_to_count_tokens(
                 model=model,
                 messages=messages,
                 tools=tools,
@@ -69,23 +69,23 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
             verbose_logger.debug("Transformed request: %s", request_body)
 
             # Get endpoint URL
-            endpoint_url = self.get_count_tokens_endpoint(api_base)
+            endpoint_url: Final = self.get_count_tokens_endpoint(api_base)
 
             verbose_logger.debug("Making request to: %s", endpoint_url)
 
             # Get required headers with Azure authentication
-            headers = self.get_required_headers(
+            headers: Final = self.get_required_headers(
                 api_key=api_key,
                 litellm_params=litellm_params,
             )
 
             # Use LiteLLM's async httpx client
-            async_client = get_async_httpx_client(llm_provider=litellm.LlmProviders.AZURE_AI)
+            async_client: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.AZURE_AI)
 
             # Use provided timeout or fall back to litellm.request_timeout
-            request_timeout = timeout if timeout is not None else litellm.request_timeout
+            request_timeout: Final = timeout if timeout is not None else litellm.request_timeout
 
-            response = await async_client.post(
+            response: Final = await async_client.post(
                 endpoint_url,
                 headers=headers,
                 json=request_body,
@@ -95,14 +95,14 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
             verbose_logger.debug("Response status: %s", response.status_code)
 
             if response.status_code != 200:
-                error_text = response.text
+                error_text: Final = response.text
                 verbose_logger.error("Azure AI Anthropic API error: %s", error_text)
                 raise AnthropicError(
                     status_code=response.status_code,
                     message=error_text,
                 )
 
-            azure_response = response.json()
+            azure_response: Final = response.json()
 
             verbose_logger.debug("Azure AI Anthropic response: %s", azure_response)
 

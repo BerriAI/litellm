@@ -14,8 +14,9 @@ import os
 import random
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from importlib.resources import files
-from typing import Protocol
+from typing import Final, Protocol
 
 import httpx
 
@@ -28,11 +29,11 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     set_fallback_generalizations,
 )
 
-FALLBACK_GENERALIZATIONS_KEY = "fallback_generalizations"
+FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
 
 # Reserved top-level keys that are not model entries. They must be excluded
 # from the model-count integrity check so a real upstream shrink can't be masked.
-RESERVED_TOP_LEVEL_KEYS = frozenset({"sample_spec", FALLBACK_GENERALIZATIONS_KEY})
+RESERVED_TOP_LEVEL_KEYS: Final = frozenset({"sample_spec", FALLBACK_GENERALIZATIONS_KEY})
 
 
 def _count_model_entries(model_cost: dict) -> int:
@@ -54,7 +55,7 @@ class GetModelCostMap:
     @staticmethod
     def load_local_model_cost_map() -> dict:
         """Load the local backup model cost map bundled with the package."""
-        content = json.loads(
+        content: Final = json.loads(
             files("litellm").joinpath("model_prices_and_context_window_backup.json").read_text(encoding="utf-8")
         )
         return content
@@ -63,7 +64,7 @@ class GetModelCostMap:
     def _get_backup_model_count(cls) -> int:
         """Return the number of models in the local backup (cached int)."""
         if cls._backup_model_count < 0:
-            backup = cls.load_local_model_cost_map()
+            backup: Final = cls.load_local_model_cost_map()
             cls._backup_model_count = _count_model_entries(backup)
         return cls._backup_model_count
 
@@ -94,7 +95,7 @@ class GetModelCostMap:
         max_shrink_ratio: float = MODEL_COST_MAP_MAX_SHRINK_RATIO,
     ) -> bool:
         """Check 2: model count has not reduced significantly vs backup."""
-        fetched_count = _count_model_entries(fetched_map)
+        fetched_count: Final = _count_model_entries(fetched_map)
 
         if fetched_count < min_model_count:
             verbose_logger.warning(
@@ -161,14 +162,14 @@ class GetModelCostMap:
         Returns the parsed JSON dict. Raises on network/parse errors
         (caller is expected to handle).
         """
-        response = httpx.get(url, timeout=timeout)
+        response: Final = httpx.get(url, timeout=timeout)
         response.raise_for_status()
         return response.json()
 
 
-RETRYABLE_FETCH_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
-MODEL_COST_MAP_FETCH_MAX_ATTEMPTS = 3
-MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS = 30.0
+RETRYABLE_FETCH_STATUS_CODES: Final = frozenset({429, 500, 502, 503, 504})
+MODEL_COST_MAP_FETCH_MAX_ATTEMPTS: Final = 3
+MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS: Final = 30.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,11 +192,11 @@ class _FetchAttemptRetryable:
 
 
 def _parse_retry_after_seconds(response: httpx.Response) -> float | None:
-    header = response.headers.get("Retry-After")
+    header: Final = response.headers.get("Retry-After")
     if header is None:
         return None
     try:
-        seconds = float(header)
+        seconds: Final = float(header)
     except ValueError:
         return None
     return seconds if seconds >= 0 else None
@@ -222,7 +223,7 @@ async def _attempt_fetch(
     client: _AsyncGetClient, url: str, timeout: int
 ) -> ModelCostMapReloaded | ModelCostMapReloadUnavailable | _FetchAttemptRetryable:
     try:
-        response = await client.get(url, timeout=timeout)
+        response: Final = await client.get(url, timeout=timeout)
     except httpx.HTTPError as e:
         return _FetchAttemptRetryable(reason=f"{type(e).__name__} fetching {url}: {e}", retry_after_seconds=None)
     if response.status_code in RETRYABLE_FETCH_STATUS_CODES:
@@ -233,7 +234,7 @@ async def _attempt_fetch(
     if response.is_error:
         return ModelCostMapReloadUnavailable(reason=f"HTTP {response.status_code} from {url}")
     try:
-        parsed = response.json()
+        parsed: Final = response.json()
     except ValueError as e:
         return ModelCostMapReloadUnavailable(reason=f"invalid JSON from {url}: {e}")
     if not isinstance(parsed, dict):
@@ -292,7 +293,7 @@ async def refetch_model_cost_map(
             model_cost_map=_finalize_model_cost_map(GetModelCostMap.load_local_model_cost_map())
         )
 
-    result = await _fetch_remote_model_cost_map_with_retry(
+    result: Final = await _fetch_remote_model_cost_map_with_retry(
         url=url,
         timeout=timeout,
         max_attempts=max_attempts,
@@ -325,10 +326,11 @@ class ModelCostMapSourceInfo:
     url: str | None = None
     is_env_forced: bool = False
     fallback_reason: str | None = None
+    loaded_at: "datetime | None" = None
 
 
 # Module-level singleton tracking the source of the current cost map
-_cost_map_source_info = ModelCostMapSourceInfo()
+_cost_map_source_info: Final = ModelCostMapSourceInfo()
 
 
 def get_model_cost_map_source_info() -> dict:
@@ -349,6 +351,11 @@ def get_model_cost_map_source_info() -> dict:
     }
 
 
+def get_model_cost_map_loaded_at() -> "datetime | None":
+    """When this process last loaded its cost map, stamped at the start of every load"""
+    return _cost_map_source_info.loaded_at
+
+
 def _expand_model_aliases(model_cost: dict) -> dict:
     """
     Expand ``aliases`` lists in model cost entries into top-level entries.
@@ -360,8 +367,8 @@ def _expand_model_aliases(model_cost: dict) -> dict:
     If an alias collides with an existing canonical entry the alias is
     skipped and a warning is logged.
     """
-    aliases_to_add: dict[str, dict] = {}
-    keys_with_aliases: list[str] = []
+    aliases_to_add: Final[dict[str, dict]] = {}
+    keys_with_aliases: Final[list[str]] = []
 
     for model_name, model_info in model_cost.items():
         aliases: list | None = model_info.get("aliases")
@@ -410,8 +417,8 @@ def _finalize_model_cost_map(model_cost: dict) -> dict:
     The ``fallback_generalizations`` block is installed into the generalizations
     module and removed from the map so it is never treated as a model entry.
     """
-    raw = model_cost.pop(FALLBACK_GENERALIZATIONS_KEY, None)
-    rules = raw.get("rules") if isinstance(raw, dict) else None
+    raw: Final = model_cost.pop(FALLBACK_GENERALIZATIONS_KEY, None)
+    rules: Final = raw.get("rules") if isinstance(raw, dict) else None
     set_fallback_generalizations(rules)
     return _expand_model_aliases(model_cost)
 
@@ -428,6 +435,7 @@ def get_model_cost_map(url: str) -> dict:
     The full backup dict is only parsed when it must be *returned* as a
     fallback — it is never held in memory long-term.
     """
+    _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
     # Note: can't use get_secret_bool here — this runs during litellm.__init__
     # before litellm._key_management_settings is set.
     if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
@@ -441,7 +449,7 @@ def get_model_cost_map(url: str) -> dict:
     _cost_map_source_info.is_env_forced = False
 
     try:
-        content = GetModelCostMap.fetch_remote_model_cost_map(url)
+        content: Final = GetModelCostMap.fetch_remote_model_cost_map(url)
     except Exception as e:
         verbose_logger.warning(
             "LiteLLM: Failed to fetch remote model cost map from %s: %s. Falling back to local backup.",

@@ -7,7 +7,7 @@
 
 import json
 import os
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 from fastapi import HTTPException
 
@@ -22,13 +22,13 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import GenericGuardrailAPIInputs
 
-GUARDRAIL_NAME = "qualifire"
-DEFAULT_QUALIFIRE_API_BASE = "https://proxy.qualifire.ai"
+GUARDRAIL_NAME: Final = "qualifire"
+DEFAULT_QUALIFIRE_API_BASE: Final = "https://proxy.qualifire.ai"
 
 
 class QualifireGuardrail(CustomGuardrail):
@@ -87,6 +87,7 @@ class QualifireGuardrail(CustomGuardrail):
         self.tool_selection_quality_check = tool_selection_quality_check
         self.assertions = assertions
         self.on_flagged = on_flagged or "block"
+        self._validate_on_flagged(self.on_flagged)
 
         # If no checks are specified and no evaluation_id, default to prompt_injections
         if not self._has_any_check_enabled() and not self.evaluation_id:
@@ -97,6 +98,32 @@ class QualifireGuardrail(CustomGuardrail):
 
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         super().__init__(**kwargs)
+
+    def _validate_on_flagged(self, on_flagged: str) -> None:
+        if on_flagged not in ("block", "monitor"):
+            # on_flagged is defined on LakeraV2GuardrailConfigModel but LitellmParams
+            # flattens every guardrail config mixin together, so a value Lakera
+            # supports (e.g. "inject_system_message") type-checks for any guardrail,
+            # including this one, which never implements it. Reject it explicitly
+            # instead of silently falling through to a block-on-anything-else branch.
+            raise ValueError(
+                f"Qualifire guardrail does not support on_flagged={on_flagged!r}; "
+                "only 'block' and 'monitor' are supported."
+            )
+
+    def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
+        """
+        The base implementation blindly ``setattr``s every field on ``litellm_params``
+        (including ``on_flagged``) onto this live instance with no revalidation, so an
+        in-place config update (via the DB/UI, without a restart) could otherwise
+        reintroduce the exact invalid on_flagged value __init__ rejects. Validate the
+        prospective post-update value *before* mutating, so a rejected update leaves
+        the live instance untouched instead of raising after it's already been
+        corrupted. Mirrors LakeraAIGuardrail's own override of this same method.
+        """
+        prospective_on_flagged: Final = litellm_params.on_flagged or self.on_flagged
+        self._validate_on_flagged(prospective_on_flagged)
+        super().update_in_memory_litellm_params(litellm_params=litellm_params)
 
     def _has_any_check_enabled(self) -> bool:
         """Check if any evaluation check is explicitly enabled."""
@@ -125,7 +152,7 @@ class QualifireGuardrail(CustomGuardrail):
             "tool_calls": [{"id": "...", "name": "...", "arguments": {...}}]  # optional
         }
         """
-        api_messages = []
+        api_messages: Final = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -192,7 +219,7 @@ class QualifireGuardrail(CustomGuardrail):
         if not tools:
             return None
 
-        api_tools = []
+        api_tools: Final = []
         for tool in tools:
             if isinstance(tool, dict):
                 # Handle OpenAI function tool format
@@ -225,7 +252,7 @@ class QualifireGuardrail(CustomGuardrail):
         A high score (close to 100) indicates GOOD content, low score indicates problems.
         """
         # Check evaluation results for any flagged items
-        evaluation_results = result.get("evaluationResults", []) or []
+        evaluation_results: Final = result.get("evaluationResults", []) or []
 
         for eval_result in evaluation_results:
             results = eval_result.get("results", []) or []
@@ -243,7 +270,7 @@ class QualifireGuardrail(CustomGuardrail):
         available_tools: list[dict[str, Any]] | None,
     ) -> dict[str, Any]:
         """Build payload dictionary for the /api/evaluation/evaluate endpoint."""
-        payload: dict[str, Any] = {"messages": api_messages}
+        payload: Final[dict[str, Any]] = {"messages": api_messages}
 
         if output is not None:
             payload["output"] = output
@@ -293,19 +320,19 @@ class QualifireGuardrail(CustomGuardrail):
             HTTPException: If content is blocked
         """
         # Apply dynamic param overrides
-        evaluation_id = dynamic_params.get("evaluation_id") or self.evaluation_id
-        assertions = dynamic_params.get("assertions") or self.assertions
-        on_flagged = dynamic_params.get("on_flagged") or self.on_flagged
+        evaluation_id: Final = dynamic_params.get("evaluation_id") or self.evaluation_id
+        assertions: Final = dynamic_params.get("assertions") or self.assertions
+        on_flagged: Final = dynamic_params.get("on_flagged") or self.on_flagged
 
         # Prepare headers
-        headers = {
+        headers: Final = {
             "X-Qualifire-API-Key": self.qualifire_api_key or "",
             "Content-Type": "application/json",
         }
 
         try:
             # Convert messages to API format
-            api_messages = self._convert_messages_to_api_format(messages)
+            api_messages: Final = self._convert_messages_to_api_format(messages)
 
             # Use invoke endpoint if evaluation_id is provided
             if evaluation_id:
@@ -347,16 +374,16 @@ class QualifireGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Qualifire Guardrail: Making request to %s", url)
 
             # Make the API request
-            response = await self.async_handler.post(
+            response: Final = await self.async_handler.post(
                 url=url,
                 headers=headers,
                 json=payload,
             )
             response.raise_for_status()
-            result = response.json()
+            result: Final = response.json()
 
             # Extract response info for logging
-            qualifire_response = {
+            qualifire_response: Final = {
                 "score": result.get("score"),
                 "status": result.get("status"),
             }
@@ -368,7 +395,7 @@ class QualifireGuardrail(CustomGuardrail):
             )
 
             # Check if any evaluation flagged the content
-            is_flagged = self._check_if_flagged(result)
+            is_flagged: Final = self._check_if_flagged(result)
 
             if is_flagged:
                 if on_flagged == "monitor":
@@ -422,7 +449,7 @@ class QualifireGuardrail(CustomGuardrail):
             HTTPException: If content is blocked
         """
         # Get dynamic params from request body (allows runtime overrides)
-        dynamic_params = self.get_guardrail_dynamic_request_body_params(request_data=request_data)
+        dynamic_params: Final = self.get_guardrail_dynamic_request_body_params(request_data=request_data)
 
         # Extract messages from structured_messages or request_data
         messages: list[AllMessageValues] | None = inputs.get("structured_messages")
@@ -432,7 +459,7 @@ class QualifireGuardrail(CustomGuardrail):
         # For response (post_call), messages may not be available in the inputs
         # We need to work with texts instead and construct messages if needed
         output: str | None = None
-        texts = inputs.get("texts", [])
+        texts: Final = inputs.get("texts", [])
 
         if input_type == "response":
             # For post_call, extract output from texts
@@ -442,18 +469,18 @@ class QualifireGuardrail(CustomGuardrail):
             # If no structured messages available, construct from texts
             if not messages and texts:
                 # Create a simple message structure for the output
-                messages = [{"role": "assistant", "content": output or ""}]  # type: ignore
+                messages = [{"role": "assistant", "content": output or ""}]
 
         if not messages:
             # For pre_call with no messages, try to construct from texts
             if texts:
-                messages = [{"role": "user", "content": texts[-1] if texts else ""}]  # type: ignore
+                messages = [{"role": "user", "content": texts[-1] if texts else ""}]
             else:
                 verbose_proxy_logger.debug("Qualifire Guardrail: No messages or texts found, skipping")
                 return inputs
 
         # Get available tools from request_data for tool_selection_quality_check
-        available_tools = request_data.get("tools")
+        available_tools: Final = request_data.get("tools")
 
         await self._run_qualifire_check(
             messages=messages,
@@ -465,7 +492,7 @@ class QualifireGuardrail(CustomGuardrail):
         return inputs
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:  # type: ignore
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
             QualifireGuardrailConfigModel,
         )

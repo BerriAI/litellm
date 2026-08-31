@@ -1,6 +1,6 @@
 import json
 from abc import abstractmethod
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, cast
 
 import litellm
 
@@ -35,7 +35,7 @@ def convert_model_response_to_streaming(
         ValueError: If the conversion fails
     """
     try:
-        streaming_choices: list[StreamingChoices] = []
+        streaming_choices: Final[list[StreamingChoices]] = []
         for choice in model_response.choices:
             streaming_choices.append(
                 StreamingChoices(
@@ -46,7 +46,7 @@ def convert_model_response_to_streaming(
                     finish_reason=choice.finish_reason,
                 )
             )
-        processed_chunk = ModelResponseStream(
+        processed_chunk: Final = ModelResponseStream(
             id=model_response.id,
             object="chat.completion.chunk",
             created=model_response.created,
@@ -55,7 +55,7 @@ def convert_model_response_to_streaming(
         )
         # Carry usage onto the streaming chunk so fake-streamed responses
         # (e.g. Vertex AI Gemma :predict) still report token counts.
-        usage = getattr(model_response, "usage", None)
+        usage: Final = getattr(model_response, "usage", None)
         if usage is not None:
             setattr(processed_chunk, "usage", usage)
         return processed_chunk
@@ -98,7 +98,7 @@ class BaseModelResponseIterator:
     @staticmethod
     def _string_to_dict_parser(str_line: str) -> dict | None:
         stripped_json_chunk: dict | None = None
-        stripped_chunk = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(str_line)
+        stripped_chunk: Final = litellm.CustomStreamWrapper._strip_sse_data_from_chunk(str_line)
         try:
             if stripped_chunk is not None:
                 stripped_json_chunk = json.loads(stripped_chunk)
@@ -110,7 +110,7 @@ class BaseModelResponseIterator:
 
     def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk | ModelResponseStream:
         # chunk is a str at this point
-        stripped_json_chunk = BaseModelResponseIterator._string_to_dict_parser(str_line=str_line)
+        stripped_json_chunk: Final = BaseModelResponseIterator._string_to_dict_parser(str_line=str_line)
         if "[DONE]" in str_line:
             return GenericStreamingChunk(
                 text="",

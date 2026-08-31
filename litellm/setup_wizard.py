@@ -22,9 +22,11 @@ try:
 
     _HAS_RAW_TERMINAL: bool = True
 except ImportError:
-    termios = None  # type: ignore[assignment]
-    tty = None  # type: ignore[assignment]
+    termios = None
+    tty = None
     _HAS_RAW_TERMINAL = False
+
+from typing import Final
 
 from litellm.utils import check_valid_key
 
@@ -38,7 +40,7 @@ from litellm.utils import check_valid_key
 # `models`       — default models written into the generated config
 # ---------------------------------------------------------------------------
 
-PROVIDERS: list[dict] = [
+PROVIDERS: Final[list[dict]] = [
     {
         "id": "openai",
         "name": "OpenAI",
@@ -115,21 +117,21 @@ PROVIDERS: list[dict] = [
 # ANSI colour helpers
 # ---------------------------------------------------------------------------
 
-_ANSI_RE = re.compile(r"\033\[[^m]*m")
+_ANSI_RE: Final = re.compile(r"\033\[[^m]*m")
 
-_ORANGE = "\033[38;2;215;119;87m"
-_DIM = "\033[2m"
-_BOLD = "\033[1m"
-_GREEN = "\033[38;2;78;186;101m"
-_BLUE = "\033[38;2;177;185;249m"
-_GREY = "\033[38;2;153;153;153m"
-_RESET = "\033[0m"
-_CHECK = "✔"
-_CROSS = "✘"
+_ORANGE: Final = "\033[38;2;215;119;87m"
+_DIM: Final = "\033[2m"
+_BOLD: Final = "\033[1m"
+_GREEN: Final = "\033[38;2;78;186;101m"
+_BLUE: Final = "\033[38;2;177;185;249m"
+_GREY: Final = "\033[38;2;153;153;153m"
+_RESET: Final = "\033[0m"
+_CHECK: Final = "✔"
+_CROSS: Final = "✘"
 
-_CURSOR_HIDE = "\033[?25l"
-_CURSOR_SHOW = "\033[?25h"
-_MOVE_UP = "\033[{}A"
+_CURSOR_HIDE: Final = "\033[?25l"
+_CURSOR_SHOW: Final = "\033[?25h"
+_MOVE_UP: Final = "\033[{}A"
 
 
 def _supports_color() -> bool:
@@ -193,7 +195,7 @@ def _yaml_escape(value: str) -> str:
 # Layout constants
 # ---------------------------------------------------------------------------
 
-LITELLM_ASCII = r"""
+LITELLM_ASCII: Final = r"""
   ██╗     ██╗████████╗███████╗██╗     ██╗     ███╗   ███╗
   ██║     ██║╚══██╔══╝██╔════╝██║     ██║     ████╗ ████║
   ██║     ██║   ██║   █████╗  ██║     ██║     ██╔████╔██║
@@ -233,11 +235,11 @@ class SetupWizard:
         print(f"  {bold('Lets get started.')}")
         print()
 
-        providers = SetupWizard._select_providers()
-        env_vars = SetupWizard._collect_keys(providers)
+        providers: Final = SetupWizard._select_providers()
+        env_vars: Final = SetupWizard._collect_keys(providers)
         port, master_key = SetupWizard._proxy_settings()
 
-        config_path = Path(os.getcwd()) / "litellm_config.yaml"
+        config_path: Final = Path(os.getcwd()) / "litellm_config.yaml"
         try:
             config_path.write_text(SetupWizard._build_config(providers, env_vars, master_key))
         except OSError as exc:
@@ -280,15 +282,15 @@ class SetupWizard:
         """Read one keypress from /dev/tty in raw mode."""
         assert termios is not None and tty is not None  # only called when _HAS_RAW_TERMINAL
         with open("/dev/tty", "rb") as tty_fh:
-            fd = tty_fh.fileno()
-            old = termios.tcgetattr(fd)
+            fd: Final = tty_fh.fileno()
+            old: Final = termios.tcgetattr(fd)
             try:
                 tty.setraw(fd)
-                ch = tty_fh.read(1)
+                ch: Final = tty_fh.read(1)
                 if ch == b"\x1b":
-                    ch2 = tty_fh.read(1)
+                    ch2: Final = tty_fh.read(1)
                     if ch2 == b"[":
-                        ch3 = tty_fh.read(1)
+                        ch3: Final = tty_fh.read(1)
                         return "\x1b[" + ch3.decode("utf-8", errors="replace")
                     return "\x1b" + ch2.decode("utf-8", errors="replace")
                 return ch.decode("utf-8", errors="replace")
@@ -298,7 +300,7 @@ class SetupWizard:
     @staticmethod
     def _render_selector(cursor: int, selected: set[int], first_render: bool) -> int:
         """Draw or redraw the provider list. Returns the number of lines printed."""
-        lines = [
+        lines: Final = [
             f"\n  {bold('Add your first model')}\n",
             grey("  ↑↓ to navigate · Space to select · Enter to confirm") + "\n",
             "\n",
@@ -310,7 +312,7 @@ class SetupWizard:
             lines.append(f"  {arrow} {bullet} {name_str}  {grey(p['description'])}\n")
         lines.append("\n")
 
-        content = "".join(lines)
+        content: Final = "".join(lines)
         if not first_render and _supports_color():
             sys.stdout.write(_MOVE_UP.format(content.count("\n")))
         sys.stdout.write(content)
@@ -320,7 +322,7 @@ class SetupWizard:
     @staticmethod
     def _select_interactive() -> list[dict]:
         cursor = 0
-        selected: set[int] = set()
+        selected: Final[set[int]] = set()
 
         if _supports_color():
             sys.stdout.write(_CURSOR_HIDE)
@@ -384,7 +386,7 @@ class SetupWizard:
 
     @staticmethod
     def _collect_keys(providers: list[dict]) -> dict[str, str]:
-        env_vars: dict[str, str] = {}
+        env_vars: Final[dict[str, str]] = {}
         print()
         print(_divider())
         print()
@@ -423,7 +425,7 @@ class SetupWizard:
     @staticmethod
     def _prompt_key(provider: dict) -> str:
         """Prompt for a provider's API key, with skip option. Returns the key or ''."""
-        hint = grey(provider.get("key_hint", ""))
+        hint: Final = grey(provider.get("key_hint", ""))
         while True:
             key = _styled_input(f"  {blue('❯')} {bold(provider['name'])} API key {hint}: ")
             if key:
@@ -438,7 +440,7 @@ class SetupWizard:
         Validate credentials using litellm.utils.check_valid_key and print result.
         Offers a re-entry loop on failure. Returns the final (possibly re-entered) key.
         """
-        test_model: str | None = provider.get("test_model")
+        test_model: Final[str | None] = provider.get("test_model")
         if not test_model:
             return api_key  # Azure / Bedrock / Ollama — skip validation
 
@@ -480,8 +482,8 @@ class SetupWizard:
                 port = int(port_raw)
                 break
             print(grey("  Enter a valid port number (1–65535)."))
-        key_raw = _styled_input(f"  {blue('❯')} Master key {grey('[auto-generate]')}: ")
-        master_key = key_raw if key_raw else f"sk-{secrets.token_urlsafe(32)}"
+        key_raw: Final = _styled_input(f"  {blue('❯')} Master key {grey('[auto-generate]')}: ")
+        master_key: Final = key_raw if key_raw else f"sk-{secrets.token_urlsafe(32)}"
         return port, master_key
 
     # ── config generation ────────────────────────────────────────────────────
@@ -492,7 +494,7 @@ class SetupWizard:
         env_vars: dict[str, str],
         master_key: str,
     ) -> str:
-        env_copy = dict(env_vars)  # work on a copy — do not mutate caller's dict
+        env_copy: Final = dict(env_vars)  # work on a copy — do not mutate caller's dict
         lines = ["model_list:"]
         for p in providers:
             # Only emit models for providers that actually have credentials
@@ -535,7 +537,7 @@ class SetupWizard:
             "",
         ]
 
-        real_vars = {k: v for k, v in env_copy.items() if not k.startswith("_LITELLM_")}
+        real_vars: Final = {k: v for k, v in env_copy.items() if not k.startswith("_LITELLM_")}
         if real_vars:
             lines.append("environment_variables:")
             for k, v in real_vars.items():
@@ -567,7 +569,7 @@ class SetupWizard:
 
     @staticmethod
     def _offer_start(config_path: Path, port: int, master_key: str) -> None:
-        start = _styled_input(f"  {blue('❯')} Start the proxy now? {grey('(Y/n)')}: ").lower()
+        start: Final = _styled_input(f"  {blue('❯')} Start the proxy now? {grey('(Y/n)')}: ").lower()
         if start not in ("", "y", "yes"):
             print()
             print(f"  Run {bold(f'litellm --config {config_path}')} whenever you're ready.")
@@ -599,8 +601,8 @@ class SetupWizard:
         print(f"  {green(_CHECK)} Starting…  {grey('(Ctrl+C to stop)')}")
         print()
 
-        scripts_dir = sysconfig.get_path("scripts")
-        litellm_bin = os.path.join(scripts_dir or "", "litellm")
+        scripts_dir: Final = sysconfig.get_path("scripts")
+        litellm_bin: Final = os.path.join(scripts_dir or "", "litellm")
         try:
             os.execlp(
                 litellm_bin,

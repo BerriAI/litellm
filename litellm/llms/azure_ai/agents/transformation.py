@@ -21,7 +21,7 @@ The API uses these endpoints:
 See: https://learn.microsoft.com/en-us/azure/ai-foundry/agents/quickstart
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -34,6 +34,8 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
@@ -95,7 +97,7 @@ class AzureAIAgentsConfig(BaseConfig):
         """
         if "agents/" in model:
             # Split on "agents/" and take the part after it
-            parts = model.split("agents/", 1)
+            parts: Final = model.split("agents/", 1)
             if len(parts) == 2:
                 return parts[1]
         return model
@@ -176,7 +178,7 @@ class AzureAIAgentsConfig(BaseConfig):
 
         model format: "azure_ai/agents/<agent_id>" or "agents/<agent_id>" or just "<agent_id>"
         """
-        agent_id = optional_params.get("agent_id") or optional_params.get("assistant_id")
+        agent_id: Final = optional_params.get("agent_id") or optional_params.get("assistant_id")
         if agent_id:
             return agent_id
 
@@ -197,10 +199,10 @@ class AzureAIAgentsConfig(BaseConfig):
         This stores the necessary data for the multi-step agent flow.
         The actual API calls happen in the custom handler.
         """
-        agent_id = self._get_agent_id(model, optional_params)
+        agent_id: Final = self._get_agent_id(model, optional_params)
 
         # Convert messages to a format we can use
-        converted_messages = []
+        converted_messages: Final = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -215,7 +217,7 @@ class AzureAIAgentsConfig(BaseConfig):
 
             converted_messages.append({"role": role, "content": content})
 
-        payload: dict[str, Any] = {
+        payload: Final[dict[str, Any]] = {
             "agent_id": agent_id,
             "messages": converted_messages,
             "api_version": self._get_api_version(optional_params),
@@ -295,7 +297,7 @@ class AzureAIAgentsConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -342,7 +344,7 @@ class AzureAIAgentsConfig(BaseConfig):
             # Try to get Azure AD token using the existing Azure auth mechanisms
             # This uses the scope for Azure AI (ai.azure.com) instead of cognitive services
             # Create a GenericLiteLLMParams with the scope override for Azure Foundry Agents
-            azure_auth_params = dict(litellm_params) if litellm_params else {}
+            azure_auth_params: Final = dict(litellm_params) if litellm_params else {}
             azure_auth_params["azure_scope"] = "https://ai.azure.com/.default"
             api_key = get_azure_ad_token(GenericLiteLLMParams(**azure_auth_params))
 

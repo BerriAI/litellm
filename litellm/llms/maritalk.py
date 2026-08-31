@@ -1,3 +1,5 @@
+from typing import Final
+
 from httpx._models import Headers
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -30,7 +32,7 @@ class MaritalkConfig(OpenAIGPTConfig):
         tools: list[dict] | None = None,
         tool_choice: str | dict | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

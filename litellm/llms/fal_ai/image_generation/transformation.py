@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -13,6 +13,8 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -60,7 +62,7 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        final_api_key: str | None = api_key or get_secret_str("FAL_AI_API_KEY")
+        final_api_key: Final[str | None] = api_key or get_secret_str("FAL_AI_API_KEY")
         if not final_api_key:
             raise ValueError("FAL_AI_API_KEY is not set")
 
@@ -76,7 +78,7 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -84,7 +86,7 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         Transform the image generation response to the litellm image response
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -95,7 +97,7 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
             model_response.data = []
 
         # Handle fal.ai response format
-        images = response_data.get("images", [])
+        images: Final = response_data.get("images", [])
         if isinstance(images, list):
             for image_data in images:
                 if isinstance(image_data, dict):
@@ -139,7 +141,7 @@ class FalAIImageGenerationConfig(FalAIBaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
         for k in non_default_params:
             if k not in optional_params:
                 if k in supported_params:
@@ -164,7 +166,7 @@ class FalAIImageGenerationConfig(FalAIBaseConfig):
         """
         Transform the image generation request to the fal.ai image generation request body
         """
-        fal_ai_image_generation_request_body = {
+        fal_ai_image_generation_request_body: Final = {
             "prompt": prompt,
             **optional_params,
         }

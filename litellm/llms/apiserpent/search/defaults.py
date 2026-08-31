@@ -6,18 +6,18 @@ package-level defaults. See https://apiserpent.com/docs.
 """
 
 from dataclasses import asdict, dataclass
-from typing import Literal
+from typing import Final, Literal
 
 SearchEngine = Literal["google", "bing", "yahoo", "ddg"]
 SafeSearch = Literal["off", "moderate", "strict"]
 Freshness = Literal["h", "1h", "d", "1d", "7d", "w", "m", "1m", "y", "1y"]
 ResponseFormat = Literal["full", "simple"]
 
-NUM_MIN = 1
-NUM_MIN_DEEP = 10
-NUM_MAX = 100
-PAGES_MIN = 1
-PAGES_MAX = 10
+NUM_MIN: Final = 1
+NUM_MIN_DEEP: Final = 10
+NUM_MAX: Final = 100
+PAGES_MIN: Final = 1
+PAGES_MAX: Final = 10
 
 
 @dataclass(frozen=True)
@@ -50,7 +50,7 @@ class APISerpentSearchParams:
 
     def to_request_params(self) -> dict:
         """Return non-None fields as request params, booleans lowercased."""
-        params: dict = {}
+        params: Final[dict] = {}
         for key, value in asdict(self).items():
             if value is None:
                 continue
@@ -62,5 +62,5 @@ class APISerpentSearchParams:
         return set(cls.__dataclass_fields__.keys())
 
 
-QUICK_SEARCH_PATH = "/api/search/quick"
-DEEP_SEARCH_PATH = "/api/search"
+QUICK_SEARCH_PATH: Final = "/api/search/quick"
+DEEP_SEARCH_PATH: Final = "/api/search"

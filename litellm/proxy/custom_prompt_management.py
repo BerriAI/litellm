@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.types.llms.openai import AllMessageValues
@@ -40,4 +42,4 @@ class X42PromptManagement(CustomPromptManagement):
         return "x42-prompt-management"
 
 
-x42_prompt_management = X42PromptManagement()
+x42_prompt_management: Final = X42PromptManagement()

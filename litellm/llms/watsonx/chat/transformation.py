@@ -4,6 +4,8 @@ Translation from OpenAI's `/chat/completions` endpoint to IBM WatsonX's `/text/c
 Docs: https://cloud.ibm.com/apidocs/watsonx-ai#text-chat
 """
 
+from typing import Final
+
 from litellm import verbose_logger
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.watsonx import (
@@ -62,7 +64,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
 
         ## TOOL CHOICE ##
 
-        _tool_choice = non_default_params.pop("tool_choice", None)
+        _tool_choice: Final = non_default_params.pop("tool_choice", None)
         if self.is_tool_choice_option(_tool_choice):
             optional_params["tool_choice_option"] = _tool_choice
         elif _tool_choice is not None:
@@ -72,7 +74,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
-        api_base = api_base or get_secret_str("HOSTED_VLLM_API_BASE")  # type: ignore
+        api_base = api_base or get_secret_str("HOSTED_VLLM_API_BASE")
         dynamic_api_key = api_key or get_secret_str("HOSTED_VLLM_API_KEY") or ""  # vllm does not require an api key
         return api_base, dynamic_api_key
 
@@ -87,7 +89,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
     ) -> str:
         url = self._get_base_url(api_base=api_base)
         if model.startswith("deployment/"):
-            deployment_id = "/".join(model.split("/")[1:])
+            deployment_id: Final = "/".join(model.split("/")[1:])
             endpoint = (
                 WatsonXAIEndpoint.DEPLOYMENT_CHAT_STREAM.value if stream else WatsonXAIEndpoint.DEPLOYMENT_CHAT.value
             )
@@ -122,7 +124,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
             else:
                 hf_model = model
             try:
-                result = hf_template_fn(model=hf_model, messages=messages)
+                result: Final = hf_template_fn(model=hf_model, messages=messages)
                 # Return result if it's truthy (not None and not empty string)
                 # The caller will handle None/empty by falling back to default
                 if result:

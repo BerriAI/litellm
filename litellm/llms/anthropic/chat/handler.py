@@ -5,15 +5,9 @@ Calling + translation logic for anthropic's `/v1/messages` endpoint
 import copy
 import json
 from collections.abc import Callable
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Literal,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
 
-import httpx  # type: ignore
+import httpx
 
 import litellm
 import litellm.litellm_core_utils
@@ -24,12 +18,15 @@ from litellm.anthropic_beta_headers_manager import (
 )
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     _get_httpx_client,
     get_async_httpx_client,
 )
+from litellm.rust_bridge import chat_completions as rust_chat_completions_bridge
+from litellm.rust_bridge.chat_completions import rust_chat_completions_accepts
 from litellm.types.llms.anthropic import (
     ContentBlockDelta,
     ContentBlockStart,
@@ -64,6 +61,7 @@ from ..common_utils import AnthropicError, process_anthropic_headers
 from .transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY, AnthropicConfig
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.llms.base_llm.chat.transformation import BaseConfig
 
@@ -85,7 +83,7 @@ async def make_call(
         client = litellm.module_level_aclient
 
     try:
-        response = await client.post(
+        response: Final = await client.post(
             api_base,
             headers=headers,
             data=data,
@@ -95,7 +93,7 @@ async def make_call(
         )
     except httpx.HTTPStatusError as e:
         error_headers = getattr(e, "headers", None)
-        error_response = getattr(e, "response", None)
+        error_response: Final = getattr(e, "response", None)
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
         raise AnthropicError(
@@ -109,7 +107,7 @@ async def make_call(
                 raise e
         raise AnthropicError(status_code=500, message=str(e))
 
-    completion_stream = ModelResponseIterator(
+    completion_stream: Final = ModelResponseIterator(
         streaming_response=response.aiter_lines(),
         sync_stream=False,
         json_mode=json_mode,
@@ -145,7 +143,7 @@ def make_sync_call(
         client = litellm.module_level_client  # re-use a module level client
 
     try:
-        response = client.post(
+        response: Final = client.post(
             api_base,
             headers=headers,
             data=data,
@@ -155,7 +153,7 @@ def make_sync_call(
         )
     except httpx.HTTPStatusError as e:
         error_headers = getattr(e, "headers", None)
-        error_response = getattr(e, "response", None)
+        error_response: Final = getattr(e, "response", None)
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
         raise AnthropicError(
@@ -170,14 +168,14 @@ def make_sync_call(
         raise AnthropicError(status_code=500, message=str(e))
 
     if response.status_code != 200:
-        response_headers = getattr(response, "headers", None)
+        response_headers: Final = getattr(response, "headers", None)
         raise AnthropicError(
             status_code=response.status_code,
             message=response.read(),
             headers=response_headers,
         )
 
-    completion_stream = ModelResponseIterator(
+    completion_stream: Final = ModelResponseIterator(
         streaming_response=response.iter_lines(),
         sync_stream=True,
         json_mode=json_mode,
@@ -212,7 +210,7 @@ class AnthropicChatCompletion(BaseLLM):
         client: AsyncHTTPHandler | None,
         encoding,
         api_key,
-        logging_obj,
+        logging_obj: "LiteLLMLoggingObj",
         stream,
         _is_function_call,
         data: dict,
@@ -241,7 +239,7 @@ class AnthropicChatCompletion(BaseLLM):
                 litellm_params.get(ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY) if isinstance(litellm_params, dict) else None
             ),
         )
-        streamwrapper = CustomStreamWrapper(
+        streamwrapper: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
             model=model,
             custom_llm_provider="anthropic",
@@ -273,10 +271,10 @@ class AnthropicChatCompletion(BaseLLM):
         headers={},
         client: AsyncHTTPHandler | None = None,
     ) -> Union[ModelResponse, "CustomStreamWrapper"]:
-        async_handler = client or get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
+        async_handler: Final = client or get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
 
         try:
-            response = await async_handler.post(
+            response: Final = await async_handler.post(
                 api_base,
                 headers=headers,
                 json=data,
@@ -291,10 +289,10 @@ class AnthropicChatCompletion(BaseLLM):
                 original_response=str(e),
                 additional_args={"complete_input_dict": data},
             )
-            status_code = getattr(e, "status_code", 500)
+            status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
             error_text = getattr(e, "text", str(e))
-            error_response = getattr(e, "response", None)
+            error_response: Final = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             if error_response and hasattr(error_response, "text"):
@@ -330,7 +328,7 @@ class AnthropicChatCompletion(BaseLLM):
         print_verbose: Callable,
         encoding,
         api_key,
-        logging_obj,
+        logging_obj: "LiteLLMLoggingObj",
         optional_params: dict,
         timeout: float | httpx.Timeout,
         litellm_params: dict,
@@ -343,11 +341,11 @@ class AnthropicChatCompletion(BaseLLM):
         from litellm.utils import ProviderConfigManager
 
         optional_params = copy.deepcopy(optional_params)
-        stream = optional_params.pop("stream", None)
-        json_mode: bool = optional_params.pop("json_mode", False)
-        is_vertex_request: bool = optional_params.pop("is_vertex_request", False)
+        stream: Final = optional_params.pop("stream", None)
+        json_mode: Final[bool] = optional_params.pop("json_mode", False)
+        is_vertex_request: Final[bool] = optional_params.pop("is_vertex_request", False)
         optional_params.pop("vertex_count_tokens_location", None)
-        _is_function_call = False
+        _is_function_call: Final = False
         messages = copy.deepcopy(messages)
         headers = AnthropicConfig().validate_environment(
             api_key=api_key,
@@ -359,37 +357,142 @@ class AnthropicChatCompletion(BaseLLM):
             api_base=api_base,
         )
 
-        config = ProviderConfigManager.get_provider_chat_config(
+        config: Final = ProviderConfigManager.get_provider_chat_config(
             model=model,
             provider=LlmProviders(custom_llm_provider),
         )
         if config is None:
             raise ValueError(f"Provider config not found for model: {model} and provider: {custom_llm_provider}")
 
-        data = config.transform_request(
+        def build_request() -> tuple[dict, dict]:  # mutable-ok: rewritten in place downstream
+            """Translate the request the Python way, returning `(headers, data)`.
+
+            The pair stays mutable because the streaming path rewrites it in
+            place (`data["stream"] = True`) before sending.
+
+            Shared by the normal path and by the Rust path's fallback, which
+            builds it only when the Rust call did not serve the request.
+            """
+            request_data: Final = config.transform_request(
+                model=model,
+                messages=messages,
+                optional_params={**optional_params, "is_vertex_request": is_vertex_request},
+                litellm_params=litellm_params,
+                headers=headers,
+            )
+            return update_request_with_filtered_beta(
+                headers=headers,
+                request_data=request_data,
+                provider=custom_llm_provider,
+            )
+
+        # The Rust core owns the whole call for the subset it accepts, so ask
+        # before transforming: whichever path runs emits pre_call exactly once.
+        # `get_config` merges the class-level defaults (Anthropic's required
+        # `max_tokens` among them) that `transform_request` would have applied.
+        rust_optional_params: Final = {  # mutable-ok: json.dumps in the bridge rejects a mappingproxy
+            **AnthropicConfig.get_config(model=model),
+            **optional_params,
+        }
+        serves_via_rust: Final = rust_chat_completions_accepts(
             model=model,
             messages=messages,
-            optional_params={**optional_params, "is_vertex_request": is_vertex_request},
+            optional_params=rust_optional_params,
+            custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            headers=headers,
+            stream=stream,
         )
-
-        headers, data = update_request_with_filtered_beta(
-            headers=headers,
-            request_data=data,
-            provider=custom_llm_provider,
-        )
-
-        ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key=api_key,
-            additional_args={
-                "complete_input_dict": data,
+        if serves_via_rust:
+            rust_logging_args: Final = {  # mutable-ok: logging callbacks read additional_args as a plain dict
+                "complete_input_dict": {  # mutable-ok: same, and it is serialized alongside its parent
+                    "model": model,
+                    "messages": messages,
+                    **rust_optional_params,
+                },
                 "api_base": api_base,
                 "headers": headers,
-            },
-        )
+            }
+            logging_obj.pre_call(input=messages, api_key=api_key, additional_args=rust_logging_args)
+            log_rust_post_call: Final = rust_chat_completions_bridge.response_logger(
+                logging_obj=logging_obj,
+                messages=messages,
+                api_key=api_key,
+                additional_args=rust_logging_args,
+            )
+            if acompletion is True:
+
+                async def python_fallback() -> "ModelResponse | CustomStreamWrapper":
+                    # pre_call already fired for this request above. The Rust
+                    # path only declines before the provider is called, so this
+                    # is the same attempt continuing, not a second one.
+                    fallback_headers, fallback_data = build_request()
+                    return await self.acompletion_function(
+                        model=model,
+                        messages=messages,
+                        data=fallback_data,
+                        api_base=api_base,
+                        custom_prompt_dict=custom_prompt_dict,
+                        model_response=model_response,
+                        print_verbose=print_verbose,
+                        encoding=encoding,
+                        api_key=api_key,
+                        provider_config=config,
+                        logging_obj=logging_obj,
+                        optional_params=optional_params,
+                        stream=stream,
+                        _is_function_call=_is_function_call,
+                        litellm_params=litellm_params,
+                        logger_fn=logger_fn,
+                        headers=fallback_headers,
+                        client=client,
+                        json_mode=json_mode,
+                        timeout=timeout,
+                    )
+
+                return rust_chat_completions_bridge.achat_completions_or_fallback(
+                    model=model,
+                    messages=messages,
+                    optional_params=rust_optional_params,
+                    model_response=model_response,
+                    api_key=api_key,
+                    api_base=api_base,
+                    custom_llm_provider=custom_llm_provider,
+                    extra_headers=headers,
+                    timeout=timeout,
+                    on_response=log_rust_post_call,
+                    python_fallback=python_fallback,
+                )
+            rust_response: Final = rust_chat_completions_bridge.chat_completions(
+                model=model,
+                messages=messages,
+                optional_params=rust_optional_params,
+                model_response=model_response,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=headers,
+                timeout=timeout,
+                on_response=log_rust_post_call,
+            )
+            if rust_response is not None:
+                return rust_response
+
+        headers, data = build_request()
+
+        ## LOGGING
+        # Reaching here with `serves_via_rust` set means the Rust attempt
+        # declined at call time, before the provider was called, and already
+        # logged this request. That is the same attempt continuing.
+        if not serves_via_rust:
+            logging_obj.pre_call(
+                input=messages,
+                api_key=api_key,
+                additional_args={
+                    "complete_input_dict": data,
+                    "api_base": api_base,
+                    "headers": headers,
+                },
+            )
         print_verbose(f"_is_function_call: {_is_function_call}")
         if acompletion is True:
             if (
@@ -450,7 +553,7 @@ class AnthropicChatCompletion(BaseLLM):
                 completion_stream, headers = make_sync_call(
                     client=client,
                     api_base=api_base,
-                    headers=headers,  # type: ignore
+                    headers=headers,
                     data=json.dumps(data),
                     model=model,
                     messages=messages,
@@ -479,7 +582,7 @@ class AnthropicChatCompletion(BaseLLM):
                     client = client
 
                 try:
-                    response = client.post(
+                    response: Final = client.post(
                         api_base,
                         headers=headers,
                         data=json.dumps(data),
@@ -487,10 +590,10 @@ class AnthropicChatCompletion(BaseLLM):
                         logging_obj=logging_obj,
                     )
                 except Exception as e:
-                    status_code = getattr(e, "status_code", 500)
+                    status_code: Final = getattr(e, "status_code", 500)
                     error_headers = getattr(e, "headers", None)
                     error_text = getattr(e, "text", str(e))
-                    error_response = getattr(e, "response", None)
+                    error_response: Final = getattr(e, "response", None)
                     if error_headers is None and error_response:
                         error_headers = getattr(error_response, "headers", None)
                     if error_response and hasattr(error_response, "text"):
@@ -552,7 +655,7 @@ class ModelResponseIterator:
 
         # For handling partial JSON chunks from fragmentation
         # See: https://github.com/BerriAI/litellm/issues/17473
-        self.accumulated_json: str = ""
+        self._json_buffer = JSONFragmentAccumulator()
         self.chunk_type: Literal["valid_json", "accumulated_json"] = "valid_json"
 
         # Track current content block type to avoid emitting tool calls for non-tool blocks
@@ -576,6 +679,14 @@ class ModelResponseIterator:
         self._current_server_tool_id: str | None = None
         self._container_id: str | None = None
 
+    @property
+    def accumulated_json(self) -> str:
+        return self._json_buffer.snapshot()
+
+    @accumulated_json.setter
+    def accumulated_json(self, value: str) -> None:
+        self._json_buffer.set(value)
+
     def check_empty_tool_call_args(self) -> bool:
         """
         Check if the tool call block so far has been an empty string
@@ -593,19 +704,22 @@ class ModelResponseIterator:
 
         for block in self.content_blocks:
             if block["delta"]["type"] == "input_json_delta":
-                args += block["delta"].get("partial_json", "")  # type: ignore
+                args += block["delta"].get("partial_json", "")
 
         if len(args) == 0:
             return True
         return False
 
     def _handle_usage(self, anthropic_usage_chunk: dict | UsageDelta) -> Usage:
-        reasoning_content = "".join(self.reasoning_content_chunks) if self.reasoning_content_chunks else None
-        return AnthropicConfig().calculate_usage(
+        reasoning_content: Final = "".join(self.reasoning_content_chunks) if self.reasoning_content_chunks else None
+        usage: Final = AnthropicConfig().calculate_usage(
             usage_object=cast(dict, anthropic_usage_chunk),
             reasoning_content=reasoning_content,
             speed=self.speed,
         )
+        if usage.speed is not None:
+            self.speed = usage.speed
+        return usage
 
     def _content_block_delta_helper(
         self, chunk: dict
@@ -621,9 +735,9 @@ class ModelResponseIterator:
         """
         text = ""
         tool_use: ChatCompletionToolCallChunk | None = None
-        provider_specific_fields = {}
+        provider_specific_fields: Final = {}
         reasoning_content: str | None = None
-        content_block = ContentBlockDelta(**chunk)  # type: ignore
+        content_block: Final = ContentBlockDelta(**chunk)
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] = []
 
         self.content_blocks.append(content_block)
@@ -649,7 +763,7 @@ class ModelResponseIterator:
         elif "citation" in content_block["delta"]:
             provider_specific_fields["citation"] = content_block["delta"]["citation"]
         elif "thinking" in content_block["delta"] or "signature" in content_block["delta"]:
-            thinking_content = content_block["delta"].get("thinking")
+            thinking_content: Final = content_block["delta"].get("thinking")
             if isinstance(thinking_content, str) and thinking_content:
                 self.reasoning_content_chunks.append(thinking_content)
                 reasoning_content = thinking_content
@@ -661,7 +775,7 @@ class ModelResponseIterator:
                 ]
                 provider_specific_fields["thinking_blocks"] = thinking_blocks
 
-            signature = content_block["delta"].get("signature")
+            signature: Final = content_block["delta"].get("signature")
             if isinstance(signature, str) and signature:
                 thinking_blocks = [
                     ChatCompletionThinkingBlock(
@@ -700,10 +814,10 @@ class ModelResponseIterator:
         """
         Handle the redacted thinking content
         """
-        thinking_blocks = [
+        thinking_blocks: Final = [
             ChatCompletionRedactedThinkingBlock(
                 type="redacted_thinking",
-                data=content_block_start["content_block"]["data"],  # type: ignore
+                data=content_block_start["content_block"]["data"],
             )
         ]
         provider_specific_fields["thinking_blocks"] = thinking_blocks
@@ -717,9 +831,9 @@ class ModelResponseIterator:
         )
 
         if chunk.get("content_block", {}).get("type") == "tool_use":
-            content_block_start = ContentBlockStartToolUse(**chunk)  # type: ignore
+            content_block_start = ContentBlockStartToolUse(**chunk)
         else:
-            content_block_start = ContentBlockStartText(**chunk)  # type: ignore
+            content_block_start = ContentBlockStartText(**chunk)
 
         return content_block_start
 
@@ -735,7 +849,7 @@ class ModelResponseIterator:
         wins" for list-valued provider_specific_fields keys, so the last
         emission must contain every result.
         """
-        results = []
+        results: Final = []
         for tr in self.tool_results:
             if tr.get("type") != "bash_code_execution_tool_result":
                 continue
@@ -758,7 +872,7 @@ class ModelResponseIterator:
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
-            type_chunk = chunk.get("type", "") or ""
+            type_chunk: Final = chunk.get("type", "") or ""
 
             text = ""
             tool_use: ChatCompletionToolCallChunk | None = None
@@ -769,7 +883,7 @@ class ModelResponseIterator:
             thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None = None
 
             # Always use index=0 for OpenAI choice format (fixes multi-choice errors)
-            index = 0
+            index: Final = 0
             if type_chunk == "content_block_delta":
                 """
                 Anthropic content chunk
@@ -788,7 +902,7 @@ class ModelResponseIterator:
                 data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01T1x1fJ34qAmk2tNTrN7Up6","name":"get_weather","input":{}}}
                 """
 
-                content_block_start = self.get_content_block_start(chunk=chunk)
+                content_block_start: Final = self.get_content_block_start(chunk=chunk)
                 self.content_blocks = []  # reset content blocks when new block starts
                 # Track current content block type for filtering deltas
                 self.current_content_block_type = content_block_start["content_block"]["type"]
@@ -822,18 +936,18 @@ class ModelResponseIterator:
                     # and is assembled at content_block_stop.
                     if content_block_start["content_block"]["type"] == "server_tool_use":
                         self._current_server_tool_id = content_block_start["content_block"]["id"]
-                        tool_input = content_block_start["content_block"].get("input", {})
+                        tool_input: Final = content_block_start["content_block"].get("input", {})
                         self._server_tool_inputs[self._current_server_tool_id] = tool_input
                     # Include caller information if present (for programmatic tool calling)
                     if "caller" in content_block_start["content_block"]:
-                        caller_data = content_block_start["content_block"]["caller"]
+                        caller_data: Final = content_block_start["content_block"]["caller"]
                         if caller_data:
-                            tool_use["caller"] = cast(dict[str, Any], caller_data)  # type: ignore[typeddict-item]
+                            tool_use["caller"] = cast(dict[str, Any], caller_data)
                 elif content_block_start["content_block"]["type"] == "redacted_thinking":
                     (
                         thinking_blocks,
                         provider_specific_fields,
-                    ) = self._handle_redacted_thinking_content(  # type: ignore
+                    ) = self._handle_redacted_thinking_content(
                         content_block_start=content_block_start,
                         provider_specific_fields=provider_specific_fields,
                     )
@@ -850,7 +964,7 @@ class ModelResponseIterator:
 
                 elif content_block_start["content_block"]["type"].endswith("_tool_result"):
                     # Handle all tool result types (web_search, bash_code_execution, text_editor, etc.)
-                    content_type = content_block_start["content_block"]["type"]
+                    content_type: Final = content_block_start["content_block"]["type"]
 
                     # Special handling for web_search_tool_result for backwards compatibility
                     if content_type == "web_search_tool_result":
@@ -874,16 +988,16 @@ class ModelResponseIterator:
                         provider_specific_fields["code_interpreter_results"] = self._build_code_interpreter_results()
 
             elif type_chunk == "content_block_stop":
-                ContentBlockStop(**chunk)  # type: ignore
+                ContentBlockStop(**chunk)
                 # check if tool call content block - only for tool_use and server_tool_use blocks
                 if self.current_content_block_type in ("tool_use", "server_tool_use"):
-                    is_empty = self.check_empty_tool_call_args()
+                    is_empty: Final = self.check_empty_tool_call_args()
                     if is_empty:
                         tool_use = ChatCompletionToolCallChunk(
-                            id=None,  # type: ignore[typeddict-item]
+                            id=None,
                             type="function",
                             function=ChatCompletionToolCallFunctionChunk(
-                                name=None,  # type: ignore[typeddict-item]
+                                name=None,
                                 arguments="{}",
                             ),
                             index=self.tool_index,
@@ -918,7 +1032,7 @@ class ModelResponseIterator:
                     # Store container_id and re-emit code_interpreter_results
                     # so stream_chunk_builder's last-value-wins picks up the
                     # version with container_id populated.
-                    container_id = container.get("id") if isinstance(container, dict) else None
+                    container_id: Final = container.get("id") if isinstance(container, dict) else None
                     if container_id and self.tool_results:
                         self._container_id = container_id
                         provider_specific_fields["code_interpreter_results"] = self._build_code_interpreter_results()
@@ -942,15 +1056,15 @@ class ModelResponseIterator:
                     }
                 }
                 """
-                message_start_block = MessageStartBlock(**chunk)  # type: ignore
+                message_start_block: Final = MessageStartBlock(**chunk)
                 if "usage" in message_start_block["message"]:
                     usage = self._handle_usage(anthropic_usage_chunk=message_start_block["message"]["usage"])
             elif type_chunk == "error":
                 """
                 {"type":"error","error":{"details":null,"type":"api_error","message":"Internal server error"}      }
                 """
-                _error_dict = chunk.get("error", {}) or {}
-                message = _error_dict.get("message", None) or str(chunk)
+                _error_dict: Final = chunk.get("error", {}) or {}
+                message: Final = _error_dict.get("message", None) or str(chunk)
                 raise AnthropicError(
                     message=message,
                     status_code=500,  # it looks like Anthropic API does not return a status code in the chunk error - default to 500
@@ -958,7 +1072,7 @@ class ModelResponseIterator:
 
             text, tool_use = self._handle_json_mode_chunk(text=text, tool_use=tool_use)
 
-            returned_chunk = ModelResponseStream(
+            returned_chunk: Final = ModelResponseStream(
                 choices=[
                     StreamingChoices(
                         index=index,
@@ -1013,12 +1127,12 @@ class ModelResponseIterator:
         if tool_use.get("id") is not None:
             # New tool call from content_block_start - tool name is always complete here
             # (per Anthropic's fine-grained streaming pattern)
-            tool_name = tool_use.get("function", {}).get("name", "")
+            tool_name: Final = tool_use.get("function", {}).get("name", "")
             self.is_response_format_tool = tool_name == RESPONSE_FORMAT_TOOL_NAME
 
         # Convert tool to content if we're tracking a response_format tool
         if self.is_response_format_tool:
-            message = AnthropicConfig._convert_tool_response_to_message(tool_calls=[tool_use])
+            message: Final = AnthropicConfig._convert_tool_response_to_message(tool_calls=[tool_use])
             if message is not None:
                 text = message.content or ""
                 tool_use = None
@@ -1037,40 +1151,48 @@ class ModelResponseIterator:
         Returns:
             Tuple of (finish_reason, usage, container)
         """
-        message_delta = MessageBlockDelta(**chunk)  # type: ignore
+        message_delta: Final = MessageBlockDelta(**chunk)
         finish_reason = map_finish_reason(finish_reason=message_delta["delta"].get("stop_reason", "stop") or "stop")
         # Override finish_reason to "stop" if we converted response_format tools
         # (matches OpenAI behavior and non-streaming Anthropic implementation)
         if self.converted_response_format_tool:
             finish_reason = "stop"
-        usage = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
-        container = message_delta["delta"].get("container")
+        usage: Final = self._handle_usage(anthropic_usage_chunk=message_delta["usage"])
+        container: Final = message_delta["delta"].get("container")
         return finish_reason, usage, container
 
-    def _handle_accumulated_json_chunk(self, data_str: str) -> ModelResponseStream | None:
+    def _handle_accumulated_json_chunk(self, data_str: str, is_final: bool = False) -> ModelResponseStream | None:
         """
         Handle partial JSON chunks by accumulating them until valid JSON is received.
 
         This fixes network fragmentation issues where SSE data chunks may be split
         across TCP packets. See: https://github.com/BerriAI/litellm/issues/17473
 
+        Mid-stream, defer parsing until the buffer's last byte can close a value:
+        attempting a parse after every fragment of one large object is O(n^2) and
+        holds the GIL, freezing the event loop. At end of stream (is_final) no more
+        data is coming, so drain whatever complete values remain regardless of the
+        trailing byte.
+
         Args:
             data_str: The JSON string to parse (without "data:" prefix)
+            is_final: True when called from the end-of-stream drain, where the
+                trailing-byte heuristic no longer applies
 
         Returns:
             ModelResponseStream if JSON is complete, None if still accumulating
         """
-        # Accumulate JSON data
-        self.accumulated_json += data_str
+        self._json_buffer.append(data_str)
 
-        # Try to parse the accumulated JSON
-        try:
-            data_json = json.loads(self.accumulated_json)
-            self.accumulated_json = ""  # Reset after successful parsing
-            return self.chunk_parser(chunk=data_json)
-        except json.JSONDecodeError:
-            # If it's not valid JSON yet, continue to the next chunk
+        if not is_final and not self._json_buffer.could_close_json():
             return None
+
+        while True:
+            found, decoded = self._json_buffer.pop_next_value()
+            if not found:
+                return None
+            if isinstance(decoded, dict):
+                return self.chunk_parser(chunk=decoded)
 
     def _parse_sse_data(self, str_line: str) -> ModelResponseStream | None:
         """
@@ -1082,7 +1204,7 @@ class ModelResponseIterator:
         Returns:
             ModelResponseStream if parsing succeeded, None if accumulating partial JSON
         """
-        data_str = str_line[5:]  # Remove "data:" prefix
+        data_str: Final = str_line[5:]  # Remove "data:" prefix
 
         if self.chunk_type == "accumulated_json":
             # Already in accumulation mode, keep accumulating
@@ -1090,7 +1212,7 @@ class ModelResponseIterator:
 
         # Try to parse as valid JSON first
         try:
-            data_json = json.loads(data_str)
+            data_json: Final = json.loads(data_str)
             return self.chunk_parser(chunk=data_json)
         except json.JSONDecodeError:
             # Switch to accumulation mode and start accumulating
@@ -1107,13 +1229,10 @@ class ModelResponseIterator:
                 chunk = self.response_iterator.__next__()
             except StopIteration:
                 # If we have accumulated JSON when stream ends, try to parse it
-                if self.accumulated_json:
-                    try:
-                        data_json = json.loads(self.accumulated_json)
-                        self.accumulated_json = ""
-                        return self.chunk_parser(chunk=data_json)
-                    except json.JSONDecodeError:
-                        pass
+                if self._json_buffer:
+                    result = self._handle_accumulated_json_chunk(data_str="", is_final=True)
+                    if result is not None:
+                        return result
                 raise StopIteration
             except ValueError as e:
                 raise RuntimeError(f"Error receiving chunk from stream: {e}")
@@ -1156,13 +1275,10 @@ class ModelResponseIterator:
                 chunk = await self.async_response_iterator.__anext__()
             except StopAsyncIteration:
                 # If we have accumulated JSON when stream ends, try to parse it
-                if self.accumulated_json:
-                    try:
-                        data_json = json.loads(self.accumulated_json)
-                        self.accumulated_json = ""
-                        return self.chunk_parser(chunk=data_json)
-                    except json.JSONDecodeError:
-                        pass
+                if self._json_buffer:
+                    result = self._handle_accumulated_json_chunk(data_str="", is_final=True)
+                    if result is not None:
+                        return result
                 raise StopAsyncIteration
             except ValueError as e:
                 raise RuntimeError(f"Error receiving chunk from stream: {e}")
@@ -1209,12 +1325,12 @@ class ModelResponseIterator:
 
         # Extract the data line from SSE format
         # SSE events can be: "event: X\ndata: {...}\n\n" or just "data: {...}\n\n"
-        index = str_line.find("data:")
+        index: Final = str_line.find("data:")
         if index != -1:
             str_line = str_line[index:]
 
         if str_line.startswith("data:"):
-            data_json = json.loads(str_line[5:])
+            data_json: Final = json.loads(str_line[5:])
             return self.chunk_parser(chunk=data_json)
         else:
             return ModelResponseStream(id=self.response_id)

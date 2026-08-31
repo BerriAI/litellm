@@ -8,7 +8,7 @@ Docs: https://openrouter.ai/docs/parameters
 
 from collections.abc import AsyncIterator, Iterator
 from enum import Enum
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 
@@ -21,6 +21,11 @@ from litellm.types.utils import ModelResponse, ModelResponseStream
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import OpenRouterException
+
+if TYPE_CHECKING:
+    import tiktoken
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class CacheControlSupportedModels(str, Enum):
@@ -38,7 +43,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
         """
         Allow reasoning parameters for models flagged as reasoning-capable.
         """
-        supported_params = super().get_supported_openai_params(model=model)
+        supported_params: Final = super().get_supported_openai_params(model=model)
         try:
             if litellm.supports_reasoning(model=model, custom_llm_provider="openrouter") or litellm.supports_reasoning(
                 model=model
@@ -60,13 +65,13 @@ class OpenrouterConfig(OpenAIGPTConfig):
         if non_default_params.get("reasoning_effort") == "max":
             non_default_params = {**non_default_params, "reasoning_effort": "xhigh"}
 
-        mapped_openai_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        mapped_openai_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
         # OpenRouter-only parameters
-        extra_body = {}
-        transforms = non_default_params.pop("transforms", None)
-        models = non_default_params.pop("models", None)
-        route = non_default_params.pop("route", None)
+        extra_body: Final = {}
+        transforms: Final = non_default_params.pop("transforms", None)
+        models: Final = non_default_params.pop("models", None)
+        route: Final = non_default_params.pop("route", None)
         if transforms is not None:
             extra_body["transforms"] = transforms
         if models is not None:
@@ -83,7 +88,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
         Returns:
             bool: True if model supports cache_control (Claude or Gemini models)
         """
-        model_lower = model.lower()
+        model_lower: Final = model.lower()
         return any(supported_model.value in model_lower for supported_model in CacheControlSupportedModels)
 
     def remove_cache_control_flag_from_messages_and_tools(
@@ -105,7 +110,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
         To avoid exceeding Anthropic's limit of 4 cache breakpoints, cache_control is only
         added to the LAST content block in each message.
         """
-        transformed_messages: list[AllMessageValues] = []
+        transformed_messages: Final[list[AllMessageValues]] = []
         for message in messages:
             message_dict = dict(message)
             cache_control = message_dict.pop("cache_control", None)
@@ -156,8 +161,8 @@ class OpenrouterConfig(OpenAIGPTConfig):
         if self._supports_cache_control_in_content(model):
             messages = self._move_cache_control_to_content(messages)
 
-        extra_body = optional_params.pop("extra_body", {})
-        response = super().transform_request(model, messages, optional_params, litellm_params, headers)
+        extra_body: Final = optional_params.pop("extra_body", {})
+        response: Final = super().transform_request(model, messages, optional_params, litellm_params, headers)
         response.update(extra_body)
 
         # ALWAYS add usage parameter to get cost data from OpenRouter
@@ -172,12 +177,12 @@ class OpenrouterConfig(OpenAIGPTConfig):
         model: str,
         raw_response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         request_data: dict,
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -207,9 +212,9 @@ class OpenrouterConfig(OpenAIGPTConfig):
         # Extract cost from OpenRouter response body
         # OpenRouter returns cost information in the usage object when usage.include=true
         try:
-            response_json = raw_response.json()
+            response_json: Final = raw_response.json()
             if "usage" in response_json and response_json["usage"]:
-                response_cost = response_json["usage"].get("cost")
+                response_cost: Final = response_json["usage"].get("cost")
                 if response_cost is not None:
                     # Store cost in hidden params for the cost calculator to use
                     if not hasattr(model_response, "_hidden_params"):
@@ -250,8 +255,8 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
         try:
             ## HANDLE ERROR IN CHUNK ##
             if "error" in chunk:
-                error_chunk = chunk["error"]
-                error_message = OpenRouterErrorMessage(
+                error_chunk: Final = chunk["error"]
+                error_message: Final = OpenRouterErrorMessage(
                     message="Message: {}, Metadata: {}, User ID: {}".format(
                         error_chunk["message"],
                         error_chunk.get("metadata", {}),
@@ -266,7 +271,7 @@ class OpenRouterChatCompletionStreamingHandler(BaseModelResponseIterator):
                     headers=error_message["metadata"].get("headers", {}),
                 )
 
-            new_choices = []
+            new_choices: Final = []
             for choice in chunk["choices"]:
                 choice["delta"]["reasoning_content"] = choice["delta"].get("reasoning")
                 new_choices.append(choice)

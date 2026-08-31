@@ -1,8 +1,8 @@
 # What is this?
 ## Helper utilities
 import copy
-from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, Literal, Union
+from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
     from litellm.types.utils import ModelResponseStream
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 
@@ -58,6 +58,67 @@ def safe_divide(
     return numerator / denominator
 
 
+def _is_litellm_limit_rejection(exception: BaseException) -> bool:
+    from litellm.exceptions import RateLimitErrorCategory
+
+    litellm_limit_categories: Final = frozenset(
+        (RateLimitErrorCategory.LITELLM_RATE_LIMIT.value, RateLimitErrorCategory.LITELLM_BATCH_RATE_LIMIT.value)
+    )
+    return getattr(exception, "category", None) in litellm_limit_categories
+
+
+def _is_proxy_rejection(exception: BaseException) -> bool:
+    if _is_litellm_limit_rejection(exception):
+        return True
+    try:
+        from starlette.exceptions import HTTPException
+    except ImportError:
+        return False
+    return isinstance(exception, HTTPException)
+
+
+def _is_provider_originated(exception: BaseException) -> bool:
+    if _is_proxy_rejection(exception):
+        return False
+    if getattr(exception, "llm_provider", None):
+        return True
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    return isinstance(exception, BaseLLMException)
+
+
+def is_expected_client_error(exception: BaseException | None) -> bool:
+    """
+    True when the proxy itself rejected the request with an HTTP 4xx before any
+    provider call (bad key, budget, unknown model, guardrail). A 4xx returned by
+    a provider is an upstream or deployment problem, so it is never an expected
+    client error and keeps its traceback: a mapped litellm exception carries
+    ``llm_provider``, and the raw ``BaseLLMException`` that provider handlers
+    raise before mapping (the /v1/messages route surfaces it as-is) is one too.
+    The proxy's own limiters raise ``HTTPException`` subclasses that also carry
+    an ``llm_provider``, so any ``HTTPException`` stays a proxy rejection, and
+    so does any exception whose unified rate-limit ``category`` names litellm's
+    own limiter (``BudgetExceededError`` is a plain ``Exception`` that the auth
+    handler decorates with the requested model's provider).
+
+    ProxyException stores the status on .code (as a str), HTTPException and
+    litellm exceptions on .status_code.
+    """
+    if exception is None:
+        return False
+    if _is_provider_originated(exception):
+        return False
+    code: Final[object] = getattr(exception, "code", None)
+    status_code: Final[object] = code if code is not None else getattr(exception, "status_code", None)
+    if status_code is None or isinstance(status_code, bool):
+        return False
+    try:
+        status: Final = int(str(status_code))
+    except ValueError:
+        return False
+    return 400 <= status < 500
+
+
 def coerce_token_limit(value: object) -> int | None:
     """
     Coerce a max_input_tokens / max_output_tokens value to an int, treating a
@@ -87,7 +148,7 @@ def coerce_token_limit(value: object) -> int | None:
     return None
 
 
-_FINISH_REASON_MAP: dict[str, OpenAIChatCompletionFinishReason] = {
+_FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     # Anthropic
     "stop_sequence": "stop",
     "end_turn": "stop",
@@ -131,11 +192,14 @@ _FINISH_REASON_MAP: dict[str, OpenAIChatCompletionFinishReason] = {
     "content_filter": "content_filter",
     # Anthropic Sonnet 4
     "content_filtered": "content_filter",
+    # Generic error passthrough (OpenRouter and other OpenAI-compatible providers
+    # emit lowercase "error" when a provider fails mid-stream)
+    "error": "stop",
 }
 
 
 def map_finish_reason(finish_reason: str) -> OpenAIChatCompletionFinishReason:
-    mapped = _FINISH_REASON_MAP.get(finish_reason)
+    mapped: Final = _FINISH_REASON_MAP.get(finish_reason)
     if mapped is None:
         verbose_logger.warning("Unmapped finish_reason '%s', defaulting to 'stop'", finish_reason)
         return "stop"
@@ -170,7 +234,7 @@ def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metad
     PATCH for issue where both `litellm_metadata` and `metadata` are present in the kwargs
     and user_api_key values are in 'metadata'.
     """
-    potential_spend_tracking_metadata_substring = "user_api_key"
+    potential_spend_tracking_metadata_substring: Final = "user_api_key"
     for key, value in metadata.items():
         if potential_spend_tracking_metadata_substring in key:
             litellm_metadata[key] = value
@@ -178,7 +242,7 @@ def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metad
 
 
 def get_metadata_variable_name_from_kwargs(
-    kwargs: dict,
+    kwargs: Mapping[str, object],
 ) -> Literal["metadata", "litellm_metadata"]:
     """
     Helper to return what the "metadata" field should be called in the request data
@@ -205,7 +269,7 @@ def get_or_create_metadata_bucket(
     reader of proxy-internal metadata resolves the bucket through here, so a caller that
     supplies its own ``metadata`` field cannot split them across two dicts.
     """
-    metadata_key = get_metadata_variable_name_from_kwargs(request_data)
+    metadata_key: Final = get_metadata_variable_name_from_kwargs(request_data)
     metadata_bucket = request_data.get(metadata_key)
     if not isinstance(metadata_bucket, dict):
         metadata_bucket = {}
@@ -219,9 +283,9 @@ def get_litellm_metadata_from_kwargs(kwargs: dict):
 
     Return `litellm_metadata` if it exists, otherwise return `metadata`
     """
-    litellm_params = kwargs.get("litellm_params", {})
+    litellm_params: Final = kwargs.get("litellm_params", {})
     if litellm_params:
-        metadata = litellm_params.get("metadata", {})
+        metadata: Final = litellm_params.get("metadata", {})
         litellm_metadata = litellm_params.get("litellm_metadata", {})
         if litellm_metadata and metadata:
             litellm_metadata = add_missing_spend_metadata_to_litellm_metadata(litellm_metadata, metadata)
@@ -240,7 +304,7 @@ def reconstruct_model_name(
 ) -> str:
     """Reconstruct full model name with provider prefix for logging."""
     # Check if deployment model name from router metadata is available (has original prefix)
-    deployment_model_name = metadata.get("deployment")
+    deployment_model_name: Final = metadata.get("deployment")
     if deployment_model_name and "/" in deployment_model_name:
         # Use the deployment model name which preserves the original provider prefix
         return deployment_model_name
@@ -259,8 +323,8 @@ def _get_parent_otel_span_from_kwargs(
     try:
         if kwargs is None:
             return None
-        litellm_params = kwargs.get("litellm_params")
-        _metadata = kwargs.get("metadata") or {}
+        litellm_params: Final = kwargs.get("litellm_params")
+        _metadata: Final = kwargs.get("metadata") or {}
         if "litellm_parent_otel_span" in _metadata:
             return _metadata["litellm_parent_otel_span"]
         elif (
@@ -297,10 +361,10 @@ def process_response_headers(
 
     # Raw httpx.Headers objects come directly from provider HTTP responses and
     # must never be treated as LiteLLM-owned, regardless of caller intent.
-    _preserve = preserve_litellm_internal_headers and isinstance(response_headers, dict)
+    _preserve: Final = preserve_litellm_internal_headers and isinstance(response_headers, dict)
 
-    openai_headers = {}
-    processed_headers = {}
+    openai_headers: Final = {}
+    processed_headers: Final = {}
     additional_headers = {}
 
     for k, v in response_headers.items():
@@ -332,7 +396,7 @@ def preserve_upstream_non_openai_attributes(
     Preserve non-OpenAI attributes from the original chunk.
     """
     # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
-    expected_keys = set(type(model_response).model_fields.keys()).union({"usage"})
+    expected_keys: Final = set(type(model_response).model_fields.keys()).union({"usage"})
     for key, value in original_chunk.model_dump().items():
         if key not in expected_keys:
             setattr(model_response, key, value)
@@ -390,6 +454,62 @@ def safe_deep_copy(data):
     return new_data
 
 
+def independent_snapshot(
+    data: dict,  # mutable-ok: caller-defined request-payload shape
+) -> dict:  # mutable-ok: caller-defined request-payload shape
+    """
+    A copy of ``data`` whose top-level keys are deep-copied independently
+    where possible -- always attempted, regardless of
+    ``litellm.safe_memory_mode``. Unlike ``safe_deep_copy``, which can return
+    the *original* object outright under that mode (defeating any isolation
+    guarantee for every key, not just the ones that need it), this never
+    skips copying wholesale.
+
+    Real proxy requests carry ``data["litellm_logging_obj"]`` (a ``Logging``
+    instance nesting a live OTel span with a real lock) by the time
+    ``pre_call_hook`` runs, which can never be deep-copied. Any individual
+    key that fails to deep-copy falls back to sharing its original
+    reference, same crash tolerance as ``safe_deep_copy``'s own per-key
+    fallback; callers needing true isolation (e.g. a guardrail's
+    ``scan_raw_request`` snapshot) only depend on the keys that are plain,
+    cleanly-copyable structures (``messages``/``input``,
+    ``metadata``/``litellm_metadata``).
+    """
+    sanitized: Final = {
+        key: (
+            {  # mutable-ok: same request-payload shape as data
+                inner_key: ("placeholder" if inner_key == "litellm_parent_otel_span" else inner_value)
+                for inner_key, inner_value in value.items()
+            }
+            if key in ("metadata", "litellm_metadata") and isinstance(value, dict)
+            else value
+        )
+        for key, value in data.items()
+    }
+
+    def _copied_value(key: str, sanitized_value: object) -> object:
+        try:
+            copied_value: Final = copy.deepcopy(sanitized_value)
+        except Exception:  # noqa: BLE001  # any unpicklable value falls back to the original reference for this key only
+            return data.get(key)
+        original_value: Final = data.get(key)
+        if (
+            key in ("metadata", "litellm_metadata")
+            and isinstance(copied_value, dict)
+            and isinstance(original_value, dict)
+            and "litellm_parent_otel_span" in original_value
+        ):
+            return {  # mutable-ok: same request-payload shape as data
+                **copied_value,
+                "litellm_parent_otel_span": original_value["litellm_parent_otel_span"],
+            }
+        return copied_value
+
+    return {  # mutable-ok: same request-payload shape as data
+        key: _copied_value(key, value) for key, value in sanitized.items()
+    }
+
+
 def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
     """
     Recursively filter out Exception objects and callable objects from dicts/lists.
@@ -417,12 +537,12 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
     if callable(data) and not isinstance(data, type):
         return None
     # Skip known non-serializable object types (Logging, Router, etc.)
-    obj_type_name = type(data).__name__
+    obj_type_name: Final = type(data).__name__
     if obj_type_name in ["Logging", "LiteLLMLoggingObj", "Router"]:
         return None
 
     if isinstance(data, dict):
-        result: dict[str, Any] = {}
+        result: Final[dict[str, Any]] = {}
         for k, v in data.items():
             # Skip exception and callable values
             if isinstance(v, Exception) or (callable(v) and not isinstance(v, type)):
@@ -436,7 +556,7 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
                 continue
         return result
     elif isinstance(data, list):
-        result_list: list[Any] = []
+        result_list: Final[list[Any]] = []
         for item in data:
             # Skip exception and callable items
             if isinstance(item, Exception) or (callable(item) and not isinstance(item, type)):
@@ -471,7 +591,7 @@ def filter_internal_params(data: dict, additional_internal_params: set | None = 
         return data
 
     # Known internal parameters that should never be sent to provider APIs
-    internal_params = {
+    internal_params: Final = {
         "skip_mcp_handler",
         "mcp_handler_context",
         "_skip_mcp_handler",
@@ -497,14 +617,14 @@ def redact_nested_match_and_regex_keys(
     if payload is None or isinstance(payload, str):
         return payload
     try:
-        redacted: dict | list[Any] | str | None = copy.deepcopy(payload)
+        redacted: Final[dict | list[Any] | str | None] = copy.deepcopy(payload)
     except Exception:
         return payload
 
     # Iterative traversal; `seen` guards against cyclic refs preserved by deepcopy.
     try:
-        seen: set = set()
-        stack: list[Any] = [redacted]
+        seen: Final[set] = set()
+        stack: Final[list[Any]] = [redacted]
         while stack:
             node = stack.pop()
             node_id = id(node)

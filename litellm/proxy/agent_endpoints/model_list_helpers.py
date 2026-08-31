@@ -25,20 +25,23 @@ async def append_agents_to_model_group(
         from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
         from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
             AgentRequestHandler,
+            RestrictedAgentAccess,
         )
 
-        allowed_agent_ids = await AgentRequestHandler.get_allowed_agents(user_api_key_auth=user_api_key_dict)
-
-        for agent_id in allowed_agent_ids:
-            agent = global_agent_registry.get_agent_by_id(agent_id)
-            if agent is not None:
-                model_groups.append(
-                    ModelGroupInfoProxy(
-                        model_group=f"a2a/{agent.agent_name}",
-                        mode="chat",
-                        providers=["a2a"],
-                    )
-                )
+        match await AgentRequestHandler.resolve_agent_access(user_api_key_auth=user_api_key_dict):
+            case RestrictedAgentAccess(allowed_agent_ids):
+                for agent_id in allowed_agent_ids:
+                    agent = global_agent_registry.get_agent_by_id(agent_id)
+                    if agent is not None:
+                        model_groups.append(
+                            ModelGroupInfoProxy(
+                                model_group=f"a2a/{agent.agent_name}",
+                                mode="chat",
+                                providers=["a2a"],
+                            )
+                        )
+            case _:
+                pass
     except Exception as e:
         verbose_proxy_logger.debug("Error appending agents to model_group/info: %s", e)
 
@@ -59,30 +62,33 @@ async def append_agents_to_model_info(
         from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
         from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
             AgentRequestHandler,
+            RestrictedAgentAccess,
         )
 
-        allowed_agent_ids = await AgentRequestHandler.get_allowed_agents(user_api_key_auth=user_api_key_dict)
-
-        for agent_id in allowed_agent_ids:
-            agent = global_agent_registry.get_agent_by_id(agent_id)
-            if agent is not None:
-                models.append(
-                    {
-                        "model_name": f"a2a/{agent.agent_name}",
-                        "litellm_params": {
-                            "model": f"a2a/{agent.agent_name}",
-                            "custom_llm_provider": "a2a",
-                        },
-                        "model_info": {
-                            "id": agent.agent_id,
-                            "mode": "chat",
-                            "db_model": True,
-                            "created_by": agent.created_by,
-                            "created_at": agent.created_at,
-                            "updated_at": agent.updated_at,
-                        },
-                    }
-                )
+        match await AgentRequestHandler.resolve_agent_access(user_api_key_auth=user_api_key_dict):
+            case RestrictedAgentAccess(allowed_agent_ids):
+                for agent_id in allowed_agent_ids:
+                    agent = global_agent_registry.get_agent_by_id(agent_id)
+                    if agent is not None:
+                        models.append(
+                            {
+                                "model_name": f"a2a/{agent.agent_name}",
+                                "litellm_params": {
+                                    "model": f"a2a/{agent.agent_name}",
+                                    "custom_llm_provider": "a2a",
+                                },
+                                "model_info": {
+                                    "id": agent.agent_id,
+                                    "mode": "chat",
+                                    "db_model": True,
+                                    "created_by": agent.created_by,
+                                    "created_at": agent.created_at,
+                                    "updated_at": agent.updated_at,
+                                },
+                            }
+                        )
+            case _:
+                pass
     except Exception as e:
         verbose_proxy_logger.debug("Error appending agents to v2/model/info: %s", e)
 

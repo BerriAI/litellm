@@ -6,6 +6,7 @@ Handles Server-Sent Events (SSE) streaming responses from LangGraph.
 
 import json
 import uuid
+from typing import Final
 
 import httpx
 
@@ -54,12 +55,12 @@ class LangGraphSSEStreamIterator:
 
         # Handle SSE data lines
         if line.startswith("data:"):
-            json_str = line[5:].strip()
+            json_str: Final = line[5:].strip()
             if not json_str:
                 return None
 
             try:
-                data = json.loads(json_str)
+                data: Final = json.loads(json_str)
                 return self._process_data(data)
             except json.JSONDecodeError:
                 verbose_logger.debug("Skipping non-JSON SSE line: %s", line[:100])
@@ -75,8 +76,8 @@ class LangGraphSSEStreamIterator:
         """
         # Handle tuple format: ["messages", ...]
         if isinstance(data, list) and len(data) >= 2:
-            event_type = data[0]
-            payload = data[1]
+            event_type: Final = data[0]
+            payload: Final = data[1]
 
             if event_type == "messages":
                 return self._process_messages_event(payload)
@@ -89,9 +90,9 @@ class LangGraphSSEStreamIterator:
             if "content" in data:
                 return self._create_content_chunk(data.get("content", ""))
             elif "messages" in data:
-                messages = data.get("messages", [])
+                messages: Final = data.get("messages", [])
                 if messages:
-                    last_msg = messages[-1]
+                    last_msg: Final = messages[-1]
                     if isinstance(last_msg, dict) and last_msg.get("type") == "ai":
                         return self._create_content_chunk(last_msg.get("content", ""))
 
@@ -135,7 +136,7 @@ class LangGraphSSEStreamIterator:
 
     def _create_content_chunk(self, text: str) -> ModelResponseStream:
         """Create a ModelResponseStream chunk with content."""
-        chunk = ModelResponseStream(
+        chunk: Final = ModelResponseStream(
             id=f"chatcmpl-{uuid.uuid4()}",
             created=0,
             model=self.model,
@@ -154,7 +155,7 @@ class LangGraphSSEStreamIterator:
 
     def _create_final_chunk(self) -> ModelResponseStream:
         """Create a final ModelResponseStream chunk with finish_reason."""
-        chunk = ModelResponseStream(
+        chunk: Final = ModelResponseStream(
             id=f"chatcmpl-{uuid.uuid4()}",
             created=0,
             model=self.model,

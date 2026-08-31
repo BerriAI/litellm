@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Final
 
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 
@@ -18,7 +18,7 @@ def get_optional_rerank_params(
     instruction: str | None = None,
     non_default_params: dict | None = None,
 ) -> dict:
-    all_non_default_params = non_default_params or {}
+    all_non_default_params: Final = non_default_params or {}
     if query is not None:
         all_non_default_params["query"] = query
     if top_n is not None:

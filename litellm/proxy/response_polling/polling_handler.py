@@ -4,7 +4,7 @@ Response Polling Handler for Background Responses with Cache
 
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid4
@@ -55,10 +55,10 @@ class ResponsePollingHandler:
         Returns:
             ResponsesAPIResponse object following OpenAI spec
         """
-        created_timestamp = int(datetime.now(timezone.utc).timestamp())
+        created_timestamp: Final = int(datetime.now(timezone.utc).timestamp())
 
         # Create OpenAI-compliant response object
-        response = ResponsesAPIResponse(
+        response: Final = ResponsesAPIResponse(
             id=polling_id,
             object="response",
             status="queued",  # OpenAI native status
@@ -68,7 +68,7 @@ class ResponsePollingHandler:
             usage=None,
         )
 
-        cache_key = self.get_cache_key(polling_id)
+        cache_key: Final = self.get_cache_key(polling_id)
 
         if self.redis_cache:
             # Store ResponsesAPIResponse directly in Redis
@@ -136,16 +136,16 @@ class ResponsePollingHandler:
         if not self.redis_cache:
             return
 
-        cache_key = self.get_cache_key(polling_id)
+        cache_key: Final = self.get_cache_key(polling_id)
 
         # Get current state
-        cached_state = await self.redis_cache.async_get_cache(cache_key)
+        cached_state: Final = await self.redis_cache.async_get_cache(cache_key)
         if not cached_state:
             verbose_proxy_logger.warning("No cached state found for polling_id: %s", polling_id)
             return
 
         # Parse existing ResponsesAPIResponse from cache
-        state = json.loads(cached_state)
+        state: Final = json.loads(cached_state)
 
         # Update status (using OpenAI native status values)
         if status:
@@ -207,7 +207,7 @@ class ResponsePollingHandler:
             ttl=self.ttl,
         )
 
-        output_count = len(state.get("output", []))
+        output_count: Final = len(state.get("output", []))
         verbose_proxy_logger.debug(
             "Updated polling state for %s: status=%s, output_items=%s", polling_id, state["status"], output_count
         )
@@ -217,8 +217,8 @@ class ResponsePollingHandler:
         if not self.redis_cache:
             return None
 
-        cache_key = self.get_cache_key(polling_id)
-        cached_state = await self.redis_cache.async_get_cache(cache_key)
+        cache_key: Final = self.get_cache_key(polling_id)
+        cached_state: Final = await self.redis_cache.async_get_cache(cache_key)
 
         if cached_state:
             return json.loads(cached_state)
@@ -242,7 +242,7 @@ class ResponsePollingHandler:
         if not self.redis_cache:
             return False
 
-        cache_key = self.get_cache_key(polling_id)
+        cache_key: Final = self.get_cache_key(polling_id)
         # Use RedisCache's async_delete_cache method which handles Redis/RedisCluster
         await self.redis_cache.async_delete_cache(cache_key)
         return True
@@ -288,14 +288,14 @@ def should_use_polling_for_request(
     if isinstance(polling_via_cache_enabled, list):
         # First, try to get provider from model string format "provider/model"
         if "/" in model:
-            provider = model.split("/")[0]
+            provider: Final = model.split("/")[0]
             if provider in polling_via_cache_enabled:
                 return True
         # Otherwise, check ALL deployments for this model_name in router
         elif llm_router is not None:
             try:
                 # Get all deployment indices for this model name
-                indices = llm_router.model_name_to_deployment_indices.get(model, [])
+                indices: Final = llm_router.model_name_to_deployment_indices.get(model, [])
                 for idx in indices:
                     deployment_dict = llm_router.model_list[idx]
                     litellm_params = deployment_dict.get("litellm_params", {})

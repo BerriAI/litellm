@@ -1,368 +1,260 @@
 {
   "ANN001": {
-    "limit": 3097
+    "limit": 2995
   },
   "ANN002": {
-    "limit": 69
+    "limit": 71
   },
   "ANN003": {
-    "limit": 831
+    "limit": 809
   },
   "ANN201": {
-    "limit": 2137
+    "limit": 2002
   },
   "ANN202": {
-    "limit": 941
+    "limit": 845
   },
   "ANN204": {
-    "limit": 724
+    "limit": 698
   },
   "ANN205": {
-    "limit": 127
+    "limit": 112
   },
   "ANN206": {
-    "limit": 130
+    "limit": 133
   },
   "ANN401": {
-    "limit": 1848
+    "limit": 587
   },
   "ASYNC230": {
-    "limit": 14
-  },
-  "B004": {
-    "limit": 4
-  },
-  "B006": {
-    "limit": 188
-  },
-  "B008": {
-    "limit": 505
-  },
-  "B009": {
-    "limit": 84
-  },
-  "B010": {
-    "limit": 194
-  },
-  "B018": {
-    "limit": 5
-  },
-  "B019": {
-    "limit": 4
-  },
-  "B021": {
-    "limit": 4
-  },
-  "B026": {
-    "limit": 6
-  },
-  "B033": {
-    "limit": 0
-  },
-  "BLE001": {
-    "limit": 2899
-  },
-  "C401": {
     "limit": 11
   },
+  "B004": {
+    "limit": 2
+  },
+  "B006": {
+    "limit": 176
+  },
+  "B008": {
+    "limit": 503
+  },
+  "B009": {
+    "limit": 52
+  },
+  "B010": {
+    "limit": 190
+  },
+  "B018": {
+    "limit": 2
+  },
+  "B019": {
+    "limit": 1
+  },
+  "B021": {
+    "limit": 1
+  },
+  "B026": {
+    "limit": 3
+  },
+  "BLE001": {
+    "limit": 2917
+  },
+  "C401": {
+    "limit": 8
+  },
   "C404": {
-    "limit": 4
+    "limit": 1
   },
   "C405": {
-    "limit": 21
+    "limit": 19
   },
   "C408": {
-    "limit": 14
+    "limit": 11
   },
   "C414": {
-    "limit": 7
+    "limit": 4
   },
   "C419": {
-    "limit": 4
+    "limit": 1
   },
   "C901": {
     "limit": 311
   },
   "D419": {
-    "limit": 9
+    "limit": 6
   },
   "DTZ001": {
-    "limit": 5
+    "limit": 2
   },
   "DTZ003": {
-    "limit": 33
+    "limit": 26
   },
   "DTZ005": {
-    "limit": 241
+    "limit": 233
   },
   "DTZ006": {
-    "limit": 13
-  },
-  "DTZ007": {
-    "limit": 23
-  },
-  "DTZ011": {
-    "limit": 6
-  },
-  "EXE001": {
-    "limit": 7
-  },
-  "EXE002": {
-    "limit": 6
-  },
-  "F401": {
-    "limit": 23
-  },
-  "FURB136": {
-    "limit": 0
-  },
-  "FURB168": {
-    "limit": 0
-  },
-  "FURB188": {
-    "limit": 0
-  },
-  "I001": {
-    "limit": 0
-  },
-  "LOG015": {
-    "limit": 8
-  },
-  "N999": {
-    "limit": 4
-  },
-  "PERF102": {
-    "limit": 30
-  },
-  "PERF401": {
-    "limit": 142
-  },
-  "PERF402": {
-    "limit": 9
-  },
-  "PERF403": {
-    "limit": 74
-  },
-  "PIE790": {
-    "limit": 0
-  },
-  "PIE800": {
-    "limit": 0
-  },
-  "PIE804": {
-    "limit": 24
-  },
-  "PIE810": {
-    "limit": 44
-  },
-  "PLC0206": {
-    "limit": 31
-  },
-  "PLC0208": {
-    "limit": 0
-  },
-  "PLC0414": {
-    "limit": 38
-  },
-  "PLR0124": {
-    "limit": 4
-  },
-  "PLR0206": {
-    "limit": 4
-  },
-  "PLR0402": {
-    "limit": 0
-  },
-  "PLR1704": {
-    "limit": 6
-  },
-  "PLR1711": {
-    "limit": 0
-  },
-  "PLR1714": {
-    "limit": 261
-  },
-  "PLR1730": {
-    "limit": 0
-  },
-  "PLR2044": {
-    "limit": 0
-  },
-  "PLW0127": {
-    "limit": 43
-  },
-  "PLW0133": {
-    "limit": 4
-  },
-  "PLW0602": {
-    "limit": 230
-  },
-  "PLW0603": {
-    "limit": 193
-  },
-  "PLW1508": {
-    "limit": 198
-  },
-  "PLW1510": {
-    "limit": 5
-  },
-  "PYI030": {
-    "limit": 0
-  },
-  "PYI036": {
-    "limit": 5
-  },
-  "PYI041": {
-    "limit": 0
-  },
-  "PYI064": {
-    "limit": 0
-  },
-  "RET501": {
-    "limit": 0
-  },
-  "RET504": {
-    "limit": 702
-  },
-  "RUF010": {
-    "limit": 0
-  },
-  "RUF012": {
-    "limit": 168
-  },
-  "RUF015": {
-    "limit": 11
-  },
-  "RUF019": {
-    "limit": 41
-  },
-  "RUF022": {
-    "limit": 0
-  },
-  "RUF023": {
-    "limit": 0
-  },
-  "RUF046": {
-    "limit": 5
-  },
-  "RUF051": {
-    "limit": 0
-  },
-  "RUF059": {
-    "limit": 73
-  },
-  "RUF100": {
-    "limit": 480
-  },
-  "S110": {
-    "limit": 236
-  },
-  "S112": {
-    "limit": 24
-  },
-  "SIM101": {
-    "limit": 61
-  },
-  "SIM102": {
-    "limit": 324
-  },
-  "SIM103": {
-    "limit": 129
-  },
-  "SIM113": {
-    "limit": 6
-  },
-  "SIM114": {
-    "limit": 0
-  },
-  "SIM115": {
-    "limit": 5
-  },
-  "SIM117": {
     "limit": 10
   },
-  "SIM118": {
-    "limit": 0
+  "DTZ007": {
+    "limit": 17
   },
-  "SIM201": {
+  "DTZ011": {
+    "limit": 3
+  },
+  "EXE001": {
     "limit": 4
   },
-  "SIM210": {
-    "limit": 11
+  "EXE002": {
+    "limit": 3
   },
-  "SIM211": {
-    "limit": 4
+  "F401": {
+    "limit": 13
   },
-  "SIM222": {
-    "limit": 4
+  "LOG015": {
+    "limit": 5
   },
-  "SIM401": {
+  "N999": {
+    "limit": 1
+  },
+  "PERF102": {
+    "limit": 23
+  },
+  "PERF401": {
     "limit": 12
   },
-  "TC004": {
+  "PERF403": {
+    "limit": 33
+  },
+  "PIE804": {
+    "limit": 18
+  },
+  "PIE810": {
+    "limit": 43
+  },
+  "PLC0206": {
+    "limit": 26
+  },
+  "PLC0414": {
+    "limit": 46
+  },
+  "PLR0124": {
+    "limit": 1
+  },
+  "PLR0206": {
+    "limit": 1
+  },
+  "PLR1704": {
+    "limit": 3
+  },
+  "PLR1714": {
+    "limit": 256
+  },
+  "PLW0127": {
+    "limit": 57
+  },
+  "PLW0602": {
+    "limit": 215
+  },
+  "PLW0603": {
+    "limit": 191
+  },
+  "PLW1508": {
+    "limit": 190
+  },
+  "PLW1510": {
+    "limit": 2
+  },
+  "PYI036": {
+    "limit": 3
+  },
+  "RET504": {
+    "limit": 175
+  },
+  "RUF012": {
+    "limit": 239
+  },
+  "RUF015": {
     "limit": 8
   },
-  "TC005": {
-    "limit": 0
+  "RUF019": {
+    "limit": 31
   },
-  "TID251": {
-    "limit": 0
-  },
-  "TRY002": {
-    "limit": 547
-  },
-  "TRY004": {
-    "limit": 97
-  },
-  "TRY201": {
-    "limit": 420
-  },
-  "TRY203": {
-    "limit": 121
-  },
-  "TRY300": {
-    "limit": 879
-  },
-  "UP006": {
-    "limit": 0
-  },
-  "UP007": {
-    "limit": 0
-  },
-  "UP008": {
-    "limit": 0
-  },
-  "UP012": {
-    "limit": 0
-  },
-  "UP018": {
-    "limit": 0
-  },
-  "UP024": {
-    "limit": 0
-  },
-  "UP028": {
-    "limit": 5
-  },
-  "UP031": {
-    "limit": 5
-  },
-  "UP032": {
-    "limit": 0
-  },
-  "UP034": {
-    "limit": 0
-  },
-  "UP035": {
-    "limit": 0
-  },
-  "UP036": {
+  "RUF046": {
     "limit": 4
   },
-  "UP037": {
+  "RUF059": {
+    "limit": 66
+  },
+  "RUF100": {
     "limit": 0
   },
-  "UP045": {
-    "limit": 0
+  "S110": {
+    "limit": 217
+  },
+  "S112": {
+    "limit": 22
+  },
+  "SIM101": {
+    "limit": 56
+  },
+  "SIM102": {
+    "limit": 314
+  },
+  "SIM103": {
+    "limit": 119
+  },
+  "SIM113": {
+    "limit": 3
+  },
+  "SIM115": {
+    "limit": 2
+  },
+  "SIM117": {
+    "limit": 6
+  },
+  "SIM201": {
+    "limit": 1
+  },
+  "SIM210": {
+    "limit": 8
+  },
+  "SIM211": {
+    "limit": 1
+  },
+  "SIM222": {
+    "limit": 1
+  },
+  "SIM401": {
+    "limit": 11
+  },
+  "TC004": {
+    "limit": 5
+  },
+  "TID251": {
+    "limit": 1108
+  },
+  "TRY002": {
+    "limit": 524
+  },
+  "TRY004": {
+    "limit": 96
+  },
+  "TRY201": {
+    "limit": 405
+  },
+  "TRY203": {
+    "limit": 113
+  },
+  "TRY300": {
+    "limit": 855
+  },
+  "UP028": {
+    "limit": 2
+  },
+  "UP031": {
+    "limit": 2
+  },
+  "UP036": {
+    "limit": 1
   }
 }

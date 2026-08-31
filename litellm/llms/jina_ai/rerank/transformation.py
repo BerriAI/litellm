@@ -6,7 +6,8 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://jina.ai/reranker
 """
 
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, Final
 
 from httpx import URL, Response
 
@@ -47,8 +48,8 @@ class JinaAIRerankConfig(BaseRerankConfig):
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
     ) -> dict:
-        optional_params = {}
-        supported_params = self.get_supported_cohere_rerank_params(model)
+        optional_params: Final = {}
+        supported_params: Final = self.get_supported_cohere_rerank_params(model)
         for k, v in non_default_params.items():
             if k in supported_params:
                 optional_params[k] = v
@@ -64,13 +65,13 @@ class JinaAIRerankConfig(BaseRerankConfig):
         model: str,
         optional_params: dict | None = None,
     ) -> str:
-        base_path = "/v1/rerank"
+        base_path: Final = "/v1/rerank"
 
         if api_base is None:
             return "https://api.jina.ai/v1/rerank"
-        base = URL(api_base)
+        base: Final = URL(api_base)
         # Reconstruct URL with cleaned path
-        cleaned_base = str(base.copy_with(path=base_path))
+        cleaned_base: Final = str(base.copy_with(path=base_path))
 
         return cleaned_base
 
@@ -99,13 +100,13 @@ class JinaAIRerankConfig(BaseRerankConfig):
 
         logging_obj.post_call(original_response=raw_response.text)
 
-        _json_response = raw_response.json()
+        _json_response: Final = raw_response.json()
 
-        _billed_units = RerankBilledUnits(**_json_response.get("usage", {}))
-        _tokens = RerankTokens(**_json_response.get("usage", {}))
-        rerank_meta = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
+        _billed_units: Final = RerankBilledUnits(**_json_response.get("usage", {}))
+        _tokens: Final = RerankTokens(**_json_response.get("usage", {}))
+        rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
-        _results: list[dict] | None = _json_response.get("results")
+        _results: Final[list[dict] | None] = _json_response.get("results")
 
         if _results is None:
             raise ValueError(f"No results found in the response={_json_response}")
@@ -113,7 +114,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
         # Transform Jina AI's response format to match LiteLLM's expected format
         # Jina AI returns: {"index": 0, "relevance_score": 0.72, "document": "hello"}
         # LiteLLM expects: {"index": 0, "relevance_score": 0.72, "document": {"text": "hello"}}
-        transformed_results = []
+        transformed_results: Final = []
         for result in _results:
             transformed_result = {
                 "index": result["index"],
@@ -129,7 +130,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
 
         return RerankResponse(
             id=_json_response.get("id") or str(uuid.uuid4()),
-            results=transformed_results,  # type: ignore
+            results=transformed_results,
             meta=rerank_meta,
         )  # Return response
 
@@ -139,6 +140,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         if api_key is None:
             raise ValueError("api_key is required. Set via `api_key` parameter or `JINA_API_KEY` environment variable.")
@@ -166,9 +168,9 @@ class JinaAIRerankConfig(BaseRerankConfig):
         ):
             return 0.0, 0.0
 
-        total_tokens = billed_units.get("total_tokens")
+        total_tokens: Final = billed_units.get("total_tokens")
         if total_tokens is None:
             return 0.0, 0.0
 
-        input_cost = model_info["input_cost_per_token"] * total_tokens
+        input_cost: Final = model_info["input_cost_per_token"] * total_tokens
         return input_cost, 0.0

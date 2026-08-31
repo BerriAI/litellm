@@ -12,6 +12,8 @@ tell "user asked for this" from "nobody set it". This resolver answers that:
 
 from __future__ import annotations
 
+from typing import Final
+
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 
 
@@ -19,7 +21,7 @@ def get_configured_request_timeout() -> float | None:
     """Return the explicitly-configured ``litellm.request_timeout``, else ``None``."""
     import litellm
 
-    timeout = float(litellm.request_timeout)
+    timeout: Final = float(litellm.request_timeout)
     if litellm.request_timeout_explicitly_set:
         return timeout
     if timeout != float(DEFAULT_REQUEST_TIMEOUT_SECONDS):

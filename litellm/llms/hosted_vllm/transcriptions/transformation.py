@@ -2,6 +2,8 @@
 Transformation logic for Hosted VLLM rerank
 """
 
+from typing import Final
+
 import httpx
 
 from litellm.llms.base_llm.audio_transcription.transformation import (
@@ -56,7 +58,7 @@ class HostedVLLMAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
         Transform the audio transcription request
         """
 
-        data = {"model": model, "file": audio_file, **optional_params}
+        data: Final = {"model": model, "file": audio_file, **optional_params}
 
         return AudioTranscriptionRequestData(
             data=data,
