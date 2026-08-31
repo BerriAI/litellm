@@ -23,8 +23,7 @@ def test_friendli_glm_5_3_flash_model_info():
     assert info["max_output_tokens"] == 1048576
     assert info["supports_function_calling"] is True
     assert info["supports_reasoning"] is True
-    assert info["supports_low_reasoning_effort"] is True
-    assert info["supports_max_reasoning_effort"] is True
+    assert info["reasoning_effort_levels"] == ["low", "high", "max"]
     assert info["supports_tool_choice"] is True
     assert info["supports_prompt_caching"] is True
     assert info["supports_vision"] is True
