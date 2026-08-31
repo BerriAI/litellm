@@ -6,6 +6,7 @@ import galileoLogo from "../../public/assets/logos/galileo.ico";
 import lagoLogo from "../../public/assets/logos/lago.svg";
 import langfuseLogo from "../../public/assets/logos/langfuse.png";
 import langsmithLogo from "../../public/assets/logos/langsmith.png";
+import newrelicLogo from "../../public/assets/logos/newrelic.png";
 import openmeterLogo from "../../public/assets/logos/openmeter.png";
 import otelLogo from "../../public/assets/logos/otel.png";
 
@@ -78,6 +79,17 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     description: "Datadog Logging Integration",
   },
   {
+    id: "newrelic",
+    displayName: "New Relic",
+    logo: newrelicLogo.src,
+    supports_key_team_logging: true,
+    dynamic_params: {
+      newrelic_api_key: "password",
+      newrelic_region: "text",
+    },
+    description: "New Relic Logging Integration",
+  },
+  {
     id: "lago",
     displayName: "Lago",
     logo: lagoLogo.src,
@@ -97,6 +109,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       langfuse_public_key: "text",
       langfuse_secret_key: "password",
       langfuse_host: "text",
+      langfuse_environment: "text",
     },
     description: "Langfuse v2 Logging Integration",
   },
@@ -109,6 +122,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       langfuse_public_key: "text",
       langfuse_secret_key: "password",
       langfuse_host: "text",
+      langfuse_environment: "text",
     },
     description: "Langfuse v3 OTEL Logging Integration",
   },

@@ -1,16 +1,19 @@
 import asyncio
 import traceback
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     get_key_object,
@@ -18,6 +21,10 @@ from litellm.proxy.auth.auth_checks import (
     log_db_metrics,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.db.db_spend_update_writer import (
+    debitable_model_access_groups,
+    get_llm_router,
+)
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.spend_log_error_logger import (
     should_suppress_spend_log_tracebacks,
@@ -25,6 +32,7 @@ from litellm.proxy.spend_tracking.spend_log_error_logger import (
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _sanitize_error_information_for_spend_logs,
+    get_request_model_access_groups,
 )
 from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.types.utils import (
@@ -34,16 +42,18 @@ from litellm.types.utils import (
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
 
+if TYPE_CHECKING:
+    from litellm.proxy.utils import ProxyLogging
+
 _UNATTRIBUTED_TRACKABLE_CALL_TYPES: Final[frozenset[str]] = frozenset(
     {
         CallTypes.pass_through.value,
         CallTypes.llm_passthrough_route.value,
         CallTypes.allm_passthrough_route.value,
-        # CheckBatchCost's synthetic logging_obj for a completed managed batch only ever
-        # carries user_api_key_user_id (from LiteLLM_ManagedObjectTable.created_by) and
-        # user_api_key_team_id (from .team_id) -- both are None for batches created with
-        # the master key or a team-less key, since the table never stores the raw key
-        # hash. The batch already incurred real provider cost, so track it regardless.
+        # CheckBatchCost's synthetic logging_obj for a completed managed batch carries
+        # whatever LiteLLM_ManagedObjectTable stored at create time, and all of it is
+        # None for a batch created before those columns were persisted, or by the master
+        # key. The batch already incurred real provider cost, so track it regardless.
         CallTypes.aretrieve_batch.value,
     }
 )
@@ -126,6 +136,15 @@ class _ProxyDBLogger(CustomLogger):
         existing_metadata: Final[dict] = request_data.get("metadata", None) or {}
         existing_metadata.update(_metadata)
 
+        litellm_metadata_bucket: Final = request_data.get("litellm_metadata")
+        if (
+            isinstance(litellm_metadata_bucket, dict)
+            and "standard_logging_guardrail_information" not in existing_metadata
+        ):
+            guardrail_info: Final = litellm_metadata_bucket.get("standard_logging_guardrail_information")
+            if guardrail_info is not None:
+                existing_metadata["standard_logging_guardrail_information"] = guardrail_info
+
         if "litellm_params" not in request_data:
             request_data["litellm_params"] = {}
 
@@ -176,9 +195,14 @@ class _ProxyDBLogger(CustomLogger):
         # recovered cost onto request_data (the usage rides along in
         # ``combined_usage_object`` for the token columns), so attribute the
         # real partial spend to this failure row instead of zero.
-        recovered_response_cost = 0.0
-        if isinstance(request_data.get("combined_usage_object"), litellm.Usage):
-            recovered_response_cost = max(float(request_data.get("response_cost") or 0.0), 0.0)
+        recovered_stream_cost: Final = (
+            max(float(request_data.get("response_cost") or 0.0), 0.0)
+            if isinstance(request_data.get("combined_usage_object"), litellm.Usage)
+            else 0.0
+        )
+        recovered_response_cost: Final = recovered_stream_cost + guardrail_information_cost(
+            existing_metadata.get("standard_logging_guardrail_information")
+        )
 
         await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key_dict.api_key,
@@ -240,6 +264,11 @@ class _ProxyDBLogger(CustomLogger):
                 sl_object=sl_object,
                 metadata=metadata,
             )
+            model_access_groups: Final = debitable_model_access_groups(
+                attributed=get_request_model_access_groups(kwargs),
+                served_model_id=sl_object.get("model_id") if sl_object is not None else None,
+                router=get_llm_router(),
+            )
 
             if response_cost is not None:
                 user_api_key: Final = metadata.get("user_api_key", None)
@@ -278,6 +307,7 @@ class _ProxyDBLogger(CustomLogger):
                         response_cost=response_cost,
                         budget_reservation=budget_reservation,
                         request_tags=tags,
+                        model_access_groups=model_access_groups,
                     )
 
                     # update cache (fire-and-forget for backward compat:
@@ -304,6 +334,21 @@ class _ProxyDBLogger(CustomLogger):
                 elif budget_reservation is not None:
                     await _release_budget_reservation(budget_reservation=budget_reservation)
             else:
+                if _is_unbilled_interaction_response(completion_response):
+                    if BACKGROUND_INTERACTION_COST_POLLING_ENABLED and _is_unbilled_in_progress_interaction(
+                        completion_response
+                    ):
+                        verbose_proxy_logger.debug(
+                            "Cost tracking deferred for in-progress background interaction; "
+                            "the budget reservation stays open until the poll task logs the final usage"
+                        )
+                        return
+                    await _release_budget_reservation(budget_reservation=budget_reservation)
+                    verbose_proxy_logger.debug(
+                        "Released the budget reservation for an interaction create with no usage "
+                        "that no poll task will settle"
+                    )
+                    return
                 await _release_budget_reservation(budget_reservation=budget_reservation)
                 # Non-model call types (health checks, afile_delete) have no model or standard_logging_object.
                 # Use .get() for "stream" to avoid KeyError on health checks.
@@ -449,6 +494,24 @@ def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
                     bucket[key] = value
 
 
+def _is_unbilled_interaction_response(completion_response: object) -> bool:
+    from litellm.interactions.background_cost_polling import missing_usage_is_expected
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    if not isinstance(completion_response, InteractionsAPIResponse):
+        return False
+    return completion_response.usage is None and missing_usage_is_expected(completion_response)
+
+
+def _is_unbilled_in_progress_interaction(completion_response: object) -> bool:
+    from litellm.interactions.background_cost_polling import is_pollable_background_interaction
+    from litellm.types.interactions import InteractionsAPIResponse
+
+    if not isinstance(completion_response, InteractionsAPIResponse):
+        return False
+    return completion_response.usage is None and is_pollable_background_interaction(completion_response)
+
+
 def _should_track_cost_callback(
     user_api_key: str | None,
     user_id: str | None,
@@ -507,7 +570,7 @@ def _get_request_tags_for_cost_tracking(
 
 
 async def _update_database_and_spend_counters(
-    proxy_logging_obj: Any,
+    proxy_logging_obj: "ProxyLogging",
     increment_spend_counters: Any,
     user_api_key: str | None,
     user_id: str | None,
@@ -521,9 +584,10 @@ async def _update_database_and_spend_counters(
     response_cost: float,
     budget_reservation: dict | None,
     request_tags: list[str] | None = None,
+    model_access_groups: Sequence[str] | None = None,
 ) -> None:
     try:
-        await proxy_logging_obj.db_spend_update_writer.update_database(
+        spend_log_request_id = await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key,
             response_cost=response_cost,
             user_id=user_id,
@@ -559,6 +623,9 @@ async def _update_database_and_spend_counters(
             budget_reservation=budget_reservation,
             end_user_id=end_user_id,
             tags=request_tags,
+            request_id=spend_log_request_id,
+            request_started_at=start_time,
+            model_access_groups=model_access_groups,
         )
     except Exception:
         if budget_reservation is not None:
