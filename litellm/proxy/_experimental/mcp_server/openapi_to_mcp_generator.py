@@ -9,10 +9,11 @@ import os
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
-from typing import Final, Literal, Protocol, TypeAlias, TypedDict, overload
+from typing import Final, Literal, Protocol, TypeAlias, TypedDict, cast, overload
 from urllib.parse import quote
 
 import httpx
+import yaml
 from typing_extensions import ReadOnly, Required
 
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
@@ -199,6 +200,18 @@ def load_openapi_spec(filepath: str) -> _OpenAPISpec:
     return asyncio.run(load_openapi_spec_async(filepath))
 
 
+def _parse_openapi_spec(text: str) -> _OpenAPISpec:
+    """Parse JSON or YAML OpenAPI documents into a mapping."""
+    try:
+        parsed: object = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = yaml.safe_load(text)
+
+    if not isinstance(parsed, dict):
+        raise TypeError("OpenAPI spec must be a JSON or YAML object")
+    return cast(_OpenAPISpec, parsed)
+
+
 async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> _OpenAPISpec:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
@@ -208,14 +221,14 @@ async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None
             else await async_safe_get(client, filepath, max_response_bytes=max_bytes)
         )
         r.raise_for_status()
-        return r.json()
+        return _parse_openapi_spec(r.text)
 
     # fallback: local file
     # Local filesystem path
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"OpenAPI spec not found at {filepath}")
     with open(filepath, "r", encoding="utf-8") as f:
-        return json.load(f)
+        return _parse_openapi_spec(f.read())
 
 
 def get_base_url(spec: _OpenAPISpec, spec_path: str | None = None) -> str:
