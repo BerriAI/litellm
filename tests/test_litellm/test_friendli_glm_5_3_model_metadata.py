@@ -16,15 +16,14 @@ def test_friendli_glm_5_3_model_info():
     ), f"{model} not found in model_prices_and_context_window.json"
     assert info["litellm_provider"] == "friendliai"
     assert info["mode"] == "chat"
-    assert info["input_cost_per_token"] == 1.4e-06
-    assert info["output_cost_per_token"] == 4.4e-06
-    assert info["cache_read_input_token_cost"] == 2.6e-07
+    assert info["input_cost_per_token"] == 1.26e-06
+    assert info["output_cost_per_token"] == 3.96e-06
+    assert info["cache_read_input_token_cost"] == 2.34e-07
     assert info["max_input_tokens"] == 1048576
     assert info["max_output_tokens"] == 1048576
     assert info["supports_function_calling"] is True
     assert info["supports_reasoning"] is True
-    assert info["supports_low_reasoning_effort"] is True
-    assert info["supports_max_reasoning_effort"] is True
+    assert info["reasoning_effort_levels"] == ["low", "high", "max"]
     assert info["supports_tool_choice"] is True
     assert info["supports_prompt_caching"] is True
     assert info["supports_vision"] is False
