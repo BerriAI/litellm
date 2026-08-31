@@ -38,8 +38,16 @@ pub(crate) const MESSAGES_ROUTE_PATH: &str = "/v1/messages";
 
 /// Request headers owned by the gateway and never forwarded upstream.
 #[cfg(feature = "server")]
-pub(crate) const MESSAGES_HEADERS_NOT_FORWARDED: &[&str] =
-    &["authorization", "connection", "content-length", "host"];
+pub(crate) const MESSAGES_HEADERS_NOT_FORWARDED: &[&str] = &[
+    "authorization",
+    "connection",
+    "content-length",
+    "host",
+    "x-litellm-key",
+    "api-key",
+    "x-api-key",
+    "x-google-api-key",
+];
 
 /// HTTP path for the OpenAI-compatible chat completions route.
 #[cfg(feature = "server")]
@@ -47,8 +55,16 @@ pub(crate) const CHAT_COMPLETIONS_ROUTE_PATH: &str = "/v1/chat/completions";
 
 /// Request headers owned by the gateway and never forwarded upstream for chat completions.
 #[cfg(feature = "server")]
-pub(crate) const CHAT_COMPLETIONS_HEADERS_NOT_FORWARDED: &[&str] =
-    &["authorization", "connection", "content-length", "host"];
+pub(crate) const CHAT_COMPLETIONS_HEADERS_NOT_FORWARDED: &[&str] = &[
+    "authorization",
+    "connection",
+    "content-length",
+    "host",
+    "x-litellm-key",
+    "api-key",
+    "x-api-key",
+    "x-google-api-key",
+];
 
 /// HTTP path for the OpenAI-compatible embeddings route.
 #[cfg(feature = "server")]
@@ -56,8 +72,16 @@ pub(crate) const EMBEDDINGS_ROUTE_PATH: &str = "/v1/embeddings";
 
 /// Request headers owned by the gateway and never forwarded upstream for embeddings.
 #[cfg(feature = "server")]
-pub(crate) const EMBEDDINGS_HEADERS_NOT_FORWARDED: &[&str] =
-    &["authorization", "connection", "content-length", "host"];
+pub(crate) const EMBEDDINGS_HEADERS_NOT_FORWARDED: &[&str] = &[
+    "authorization",
+    "connection",
+    "content-length",
+    "host",
+    "x-litellm-key",
+    "api-key",
+    "x-api-key",
+    "x-google-api-key",
+];
 
 /// HTTP path for the OpenAI-compatible images generation route.
 #[cfg(feature = "server")]
@@ -69,8 +93,16 @@ pub(crate) const IMAGES_ROUTE_PATH_EDITS: &str = "/v1/images/edits";
 
 /// Request headers owned by the gateway and never forwarded upstream for images.
 #[cfg(feature = "server")]
-pub(crate) const IMAGES_HEADERS_NOT_FORWARDED: &[&str] =
-    &["authorization", "connection", "content-length", "host"];
+pub(crate) const IMAGES_HEADERS_NOT_FORWARDED: &[&str] = &[
+    "authorization",
+    "connection",
+    "content-length",
+    "host",
+    "x-litellm-key",
+    "api-key",
+    "x-api-key",
+    "x-google-api-key",
+];
 
 /// HTTP path for the OpenAI-compatible audio speech (TTS) route.
 #[cfg(feature = "server")]
@@ -82,5 +114,13 @@ pub(crate) const AUDIO_ROUTE_PATH_TRANSCRIPTIONS: &str = "/v1/audio/transcriptio
 
 /// Request headers owned by the gateway and never forwarded upstream for audio.
 #[cfg(feature = "server")]
-pub(crate) const AUDIO_HEADERS_NOT_FORWARDED: &[&str] =
-    &["authorization", "connection", "content-length", "host"];
+pub(crate) const AUDIO_HEADERS_NOT_FORWARDED: &[&str] = &[
+    "authorization",
+    "connection",
+    "content-length",
+    "host",
+    "x-litellm-key",
+    "api-key",
+    "x-api-key",
+    "x-google-api-key",
+];

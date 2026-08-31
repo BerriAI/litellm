@@ -162,6 +162,13 @@ pub async fn run(
         )));
     }
 
+    let first_provider_model = deployments[0].litellm_params.model.as_str();
+    if cost_calculator::lookup_model_pricing(first_provider_model).is_none() {
+        return Err(CoreError::InvalidRequest(format!(
+            "no pricing data available for model '{model}', spend tracking is required"
+        )));
+    }
+
     let timeout = Some(Duration::from_secs_f64(
         state.config.default_request_timeout_secs,
     ));
@@ -438,14 +445,27 @@ fn estimate_prompt_tokens(body: &Value) -> u64 {
     body.get("messages")
         .and_then(Value::as_array)
         .map(|messages| {
-            let char_count: usize = messages
-                .iter()
-                .filter_map(|msg| msg.get("content").and_then(Value::as_str))
-                .map(|content| content.len())
-                .sum();
+            let char_count: usize = messages.iter().map(message_char_count).sum();
             (char_count / 4) as u64
         })
         .unwrap_or(0)
+}
+
+fn message_char_count(msg: &Value) -> usize {
+    let Some(content) = msg.get("content") else {
+        return 0;
+    };
+    if let Some(s) = content.as_str() {
+        return s.len();
+    }
+    if let Some(blocks) = content.as_array() {
+        return blocks
+            .iter()
+            .filter_map(|block| block.get("text").and_then(Value::as_str))
+            .map(|text| text.len())
+            .sum();
+    }
+    0
 }
 
 /// Estimate spend for streaming requests where actual token counts aren't available.
