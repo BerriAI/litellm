@@ -32,7 +32,7 @@ import {
   modelSentinelOptions,
   parseAllowedRoutes,
 } from "./keyEditFieldNormalizers";
-import { KeyTypeSelect, labelWithHint } from "./KeyEditViewControls";
+import { KeyBudgetNumberField, KeyTypeSelect, labelWithHint } from "./KeyEditViewControls";
 import {
   AgentsAndGroups,
   KeyEditFormValues,
@@ -416,29 +416,19 @@ export function KeyEditView({
             )}
           </FormField>
 
-          <FormField control={form.control} name="max_budget" label="Max Budget (USD)">
-            {({ ref: _ref, ...field }) => (
-              <NumericalInput
-                {...field}
-                value={field.value ?? ""}
-                step={0.01}
-                style={{ width: "100%" }}
-                placeholder="Enter a numerical value"
-              />
-            )}
-          </FormField>
+          <KeyBudgetNumberField
+            control={form.control}
+            name="max_budget"
+            label="Max Budget (USD)"
+            placeholder="Enter a numerical value"
+          />
 
-          <FormField control={form.control} name="soft_budget" label="Soft Budget (USD)">
-            {({ ref: _ref, ...field }) => (
-              <NumericalInput
-                {...field}
-                value={field.value ?? ""}
-                step={0.01}
-                style={{ width: "100%" }}
-                placeholder="Get alerts when spend crosses this value, without blocking requests"
-              />
-            )}
-          </FormField>
+          <KeyBudgetNumberField
+            control={form.control}
+            name="soft_budget"
+            label="Soft Budget (USD)"
+            placeholder="Get alerts when spend crosses this value, without blocking requests"
+          />
 
           <FormField control={form.control} name="budget_duration" label="Reset Budget">
             {({ value, onChange, id }) => (
