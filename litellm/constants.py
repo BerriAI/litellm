@@ -489,7 +489,10 @@ MAX_LANGFUSE_INITIALIZED_CLIENTS: Final = int(os.getenv("MAX_LANGFUSE_INITIALIZE
 # bounded so a slow client throttles the upstream pump instead of letting it
 # buffer the whole response in memory; the detached-drain cap bounds how many
 # post-disconnect drains may run concurrently so client behavior can't create
-# unbounded worker state.
+# unbounded worker state. Setting the cap to 0 disables detached draining
+# entirely: every post-disconnect pump bills whatever partial output it has
+# already collected and aborts the upstream stream immediately, instead of
+# continuing to drain for the real terminal usage.
 ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE: Final = int(
     os.getenv("ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", "1024")
 )

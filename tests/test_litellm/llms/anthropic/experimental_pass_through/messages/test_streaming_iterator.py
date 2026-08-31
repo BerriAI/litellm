@@ -636,6 +636,48 @@ async def test_async_sse_wrapper_bills_partial_when_detached_drain_cap_reached(m
 
 
 @pytest.mark.asyncio
+async def test_async_sse_wrapper_bills_partial_when_detached_drains_disabled(monkeypatch):
+    """
+    Regression: ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS=0 must disable
+    detached draining entirely, not just shrink the cap. With no slots ever
+    available, the very first post-disconnect chunk must fall back to partial
+    spend logging instead of hanging on a cap that's unreachable.
+    """
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", 0)
+    monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 4)
+
+    tail_reached = False
+
+    async def _long_stream():
+        nonlocal tail_reached
+        yield {"type": "message_start", "message": {"id": "m", "usage": {"input_tokens": 5, "output_tokens": 1}}}
+        yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "x"}}
+        for i in range(100):
+            yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": f"more{i}"}}
+        tail_reached = True
+        yield {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 42}}
+        yield {"type": "message_stop"}
+
+    iterator = _RecordingLoggingIterator(litellm_logging_obj=_make_logging_obj("drains_disabled"), request_body={})
+    gen = iterator.async_sse_wrapper(_long_stream())
+    await gen.__anext__()  # message_start
+    await gen.__anext__()  # first delta
+    await gen.aclose()  # client disconnects; 100+ chunks remain upstream
+
+    for _ in range(200):
+        if iterator.logged_chunks:
+            break
+        await asyncio.sleep(0)
+
+    assert iterator.logged_chunks, "pump never billed with detached drains disabled"
+    assert len(iterator.logged_chunks) <= 2 + streaming_iterator_module.ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE
+    assert len(iterator.logged_chunks) < 100
+    assert not any(c.startswith(b"event: message_stop\n") for c in iterator.logged_chunks)
+    assert tail_reached is False, "pump kept draining despite detached drains being disabled"
+    assert len(streaming_iterator_module._DETACHED_STREAM_DRAINS) == 0
+
+
+@pytest.mark.asyncio
 async def test_async_sse_wrapper_aborts_upstream_when_detached_drain_cap_reached(monkeypatch):
     """
     Regression: when the cap is full and a disconnected pump bails, it must call
