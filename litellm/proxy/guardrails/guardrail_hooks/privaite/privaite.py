@@ -372,7 +372,7 @@ class PrivaiteGuardrail(CustomGuardrail):
             except ImportError as exc:  # pragma: no cover
                 raise RuntimeError(
                     "The PrivAiTe guardrail requires the 'privaite' package. "
-                    "Install it with: pip install 'privaite>=0.2.4'"
+                    "Install it with: pip install 'privaite>=0.4.2'"
                 ) from exc
 
             if self.block_entities and "block_entities" not in PIIConfig.model_fields:
