@@ -9959,6 +9959,22 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "azure_ai/deepseek-v4-flash-0731": {
+        "cache_read_input_token_cost": 2.8e-08,
+        "deprecation_date": "2026-12-03",
+        "input_cost_per_token": 1.9e-07,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5.1e-07,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/deepseek/",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
     "azure_ai/embed-v-4-0": {
         "input_cost_per_token": 1.2e-07,
         "litellm_provider": "azure_ai",
