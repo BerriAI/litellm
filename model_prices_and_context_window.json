@@ -553,6 +553,26 @@
         "supports_response_schema": true,
         "supports_vision": true
     },
+    "amazon.nova-sonic-v1:0": {
+        "input_cost_per_audio_token": 3.4e-06,
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "bedrock",
+        "mode": "realtime",
+        "output_cost_per_audio_token": 1.36e-05,
+        "output_cost_per_token": 2.4e-07,
+        "supports_audio_input": true,
+        "supports_audio_output": true
+    },
+    "amazon.nova-2-sonic-v1:0": {
+        "input_cost_per_audio_token": 3e-06,
+        "input_cost_per_token": 3.3e-07,
+        "litellm_provider": "bedrock",
+        "mode": "realtime",
+        "output_cost_per_audio_token": 1.2e-05,
+        "output_cost_per_token": 2.75e-06,
+        "supports_audio_input": true,
+        "supports_audio_output": true
+    },
     "amazon.rerank-v1:0": {
         "input_cost_per_query": 0.001,
         "input_cost_per_token": 0.0,
@@ -19565,6 +19585,34 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true
+    },
+    "friendliai/zai-org/GLM-5.3-Flash": {
+        "litellm_provider": "friendliai",
+        "supports_reasoning": true,
+        "supports_function_calling": true,
+        "max_input_tokens": 1048576,
+        "max_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 5e-07,
+        "cache_read_input_token_cost": 3e-08,
+        "supports_prompt_caching": true,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_native_structured_output": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "mode": "chat",
+        "comment": "Native multimodal GLM model for efficient coding and long-horizon agent tasks",
+        "source": "https://api.friendli.ai/serverless/v1/models",
+        "supports_vision": true,
+        "supports_image_input": true,
+        "supports_video_input": true
     },
     "ft:babbage-002": {
         "deprecation_date": "2026-10-23",

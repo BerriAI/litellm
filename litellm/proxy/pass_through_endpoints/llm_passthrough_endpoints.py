@@ -2820,7 +2820,7 @@ async def gigachat_proxy_route(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-):
+) -> Response:
     """
     [Docs](https://docs.litellm.ai/docs/pass_through/gigachat)
     """
