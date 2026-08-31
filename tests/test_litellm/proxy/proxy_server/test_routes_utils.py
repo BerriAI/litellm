@@ -9,11 +9,13 @@ Pins (PR2):
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
 import litellm
 from litellm.proxy import proxy_server
+from litellm.router_utils import pattern_match_deployments
 
 from .conftest import normalize  # type: ignore[import-not-found]
 
@@ -143,6 +145,55 @@ def test_supported_openai_params_resolves_router_alias(client, auth_as, monkeypa
     expected = litellm.get_supported_openai_params(model="claude-opus-4-6", custom_llm_provider="anthropic")
     assert response.json() == {"supported_openai_params": expected}
     assert "max_tokens" in response.json()["supported_openai_params"]
+
+
+def test_supported_openai_params_never_runs_oauth_for_authenticating_providers(client, auth_as, monkeypatch, tmp_path):
+    """Regression: github_copilot/chatgpt names answer from their declaration; resolving them
+    through ``get_llm_provider`` would run the provider's OAuth device flow and block the event loop."""
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    (tmp_path / "access-token").write_text("fake-access-token")
+    (tmp_path / "api-key.json").write_text(
+        json.dumps(
+            {
+                "token": "fake-api-key",
+                "expires_at": 4102444800,
+                "endpoints": {"api": "https://api.githubcopilot.com"},
+            }
+        )
+    )
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "copilot-alias",
+                "litellm_params": {"model": "github_copilot/gpt-4o"},
+            },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*"},
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    resolution_attempts: list[str] = []
+
+    def _oauth_tripwire(model, *args, **kwargs):
+        resolution_attempts.append(model)
+        raise AssertionError("get_llm_provider would run the OAuth device flow")
+
+    monkeypatch.setattr(litellm, "get_llm_provider", _oauth_tripwire)
+    monkeypatch.setattr(pattern_match_deployments, "get_llm_provider", _oauth_tripwire)
+    expected = litellm.get_supported_openai_params(model="gpt-4o", custom_llm_provider="github_copilot")
+
+    with auth_as():
+        via_alias = client.get("/utils/supported_openai_params", params={"model": "copilot-alias"})
+        via_direct_name = client.get("/utils/supported_openai_params", params={"model": "github_copilot/gpt-4o"})
+
+    assert via_alias.status_code == 200
+    assert via_alias.json() == {"supported_openai_params": expected}
+    assert via_direct_name.status_code == 200
+    assert via_direct_name.json() == {"supported_openai_params": expected}
+    assert resolution_attempts == []
 
 
 def test_supported_openai_params_invalid_model(client, auth_as, monkeypatch):
