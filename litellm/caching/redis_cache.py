@@ -18,6 +18,7 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextvars import ContextVar
 from datetime import timedelta
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypeVar, cast
 
 import litellm
@@ -27,6 +28,7 @@ from litellm.constants import (
     REDIS_CIRCUIT_BREAKER_ENABLED,
     REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
     REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
+    REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION,
 )
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
@@ -41,6 +43,8 @@ from .base_cache import BaseCache
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
+    from prometheus_client import Counter as _PromCounter
+    from prometheus_client import Gauge as _PromGauge
     from redis.asyncio import Redis, RedisCluster
     from redis.asyncio.client import Pipeline
     from redis.asyncio.cluster import ClusterPipeline
@@ -107,10 +111,20 @@ class RedisCircuitBreaker:
       HALF_OPEN - recovery probe: allow one request through
 
     Transitions:
-      CLOSED    -> OPEN      after failure_threshold consecutive failures
+      CLOSED    -> OPEN      after failure_threshold consecutive hard connectivity
+                             failures, or after failure_threshold consecutive failures
+                             of any class once the streak has spanned at least
+                             timeout_min_duration seconds
       OPEN      -> HALF_OPEN after recovery_timeout seconds
       HALF_OPEN -> CLOSED    on success
       HALF_OPEN -> OPEN      on failure (resets timer)
+
+    Timeouts are accounted separately from hard connectivity failures because the async
+    Redis timeout includes time waiting for the worker event loop to resume: one loop
+    stall makes every in-flight operation time out together, which satisfies a purely
+    consecutive threshold instantly even though Redis is healthy. Requiring a
+    timeout-only streak to also span timeout_min_duration filters such bursts while a
+    real outage that surfaces as timeouts still opens the breaker after that duration.
     """
 
     CLOSED = "closed"
@@ -122,11 +136,15 @@ class RedisCircuitBreaker:
         failure_threshold: int,
         recovery_timeout: int,
         enabled: bool = True,
+        timeout_min_duration: float = REDIS_CIRCUIT_BREAKER_TIMEOUT_MIN_DURATION,
     ) -> None:
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
         self.enabled = enabled
+        self.timeout_min_duration = timeout_min_duration
         self._failure_count = 0
+        self._hard_failure_count = 0
+        self._streak_started_at: float | None = None
         self._opened_at: float | None = None
         self._state = self.CLOSED
 
@@ -141,24 +159,41 @@ class RedisCircuitBreaker:
             return True
         if self._state == self.OPEN:
             if time.time() - (self._opened_at or 0) > self.recovery_timeout:
-                self._state = self.HALF_OPEN
+                self._set_state(self.HALF_OPEN)
                 return False  # this caller is the designated probe
             return True
         return False
 
-    def record_failure(self) -> None:
+    def _should_open(self, now: float) -> bool:
+        if self._state == self.HALF_OPEN:
+            return True
+        if self._hard_failure_count >= self.failure_threshold:
+            return True
+        if self._failure_count < self.failure_threshold:
+            return False
+        return now - (self._streak_started_at or now) >= self.timeout_min_duration
+
+    def record_failure(self, is_timeout: bool = False) -> None:
         if not self.enabled:
             return
+        now: Final = time.time()
         self._failure_count += 1
-        self._opened_at = time.time()
-        if self._failure_count >= self.failure_threshold:
+        if not is_timeout:
+            self._hard_failure_count += 1
+        if self._streak_started_at is None:
+            self._streak_started_at = now
+        self._opened_at = now
+        _breaker_metrics().record_failure("timeout" if is_timeout else "connectivity")
+        if self._should_open(now):
             if self._state != self.OPEN:
                 verbose_logger.warning(
-                    "Redis circuit breaker OPENED after %d consecutive failures — fast-failing Redis calls for %ds",
+                    "Redis circuit breaker OPENED after %d consecutive failures"
+                    " (%d hard connectivity) — fast-failing Redis calls for %ds",
                     self._failure_count,
+                    self._hard_failure_count,
                     self.recovery_timeout,
                 )
-            self._state = self.OPEN
+            self._set_state(self.OPEN)
 
     def record_success(self) -> None:
         if not self.enabled:
@@ -166,7 +201,15 @@ class RedisCircuitBreaker:
         if self._state == self.HALF_OPEN:
             verbose_logger.info("Redis circuit breaker CLOSED — Redis recovered")
         self._failure_count = 0
-        self._state = self.CLOSED
+        self._hard_failure_count = 0
+        self._streak_started_at = None
+        self._set_state(self.CLOSED)
+
+    def _set_state(self, state: str) -> None:
+        if state != self._state:
+            _breaker_metrics().record_transition(state)
+        self._state = state
+        _breaker_metrics().record_state(state)
 
 
 _RedisCallResult = TypeVar("_RedisCallResult")
@@ -206,6 +249,78 @@ def _is_redis_health_failure(exc: BaseException) -> bool:
         return True
 
 
+@functools.lru_cache(maxsize=1)
+def _redis_timeout_error_types() -> tuple[type, ...]:
+    """Health failures that are timeouts rather than unambiguous connectivity errors.
+
+    ``builtins.TimeoutError`` covers ``asyncio.TimeoutError`` and ``socket.timeout``
+    (aliases since py3.11 / py3.10). ``redis.exceptions.TimeoutError`` does not subclass
+    either, so it is listed explicitly.
+    """
+    try:
+        from redis.exceptions import TimeoutError as RedisTimeoutError
+    except ImportError:
+        return (TimeoutError,)
+    return (RedisTimeoutError, TimeoutError)
+
+
+def _is_redis_timeout_failure(exc: BaseException) -> bool:
+    return isinstance(exc, _redis_timeout_error_types())
+
+
+class _BreakerMetrics:
+    """Prometheus metrics for the Redis circuit breaker; no-ops when the client is absent.
+
+    Registered lazily on the default registry (which /metrics serves) via the module-level
+    ``_breaker_metrics`` singleton so repeated RedisCache construction never re-registers.
+    """
+
+    _STATE_VALUES: Final = MappingProxyType(
+        {RedisCircuitBreaker.CLOSED: 0, RedisCircuitBreaker.OPEN: 1, RedisCircuitBreaker.HALF_OPEN: 2}
+    )
+
+    def __init__(self) -> None:
+        self._state_gauge: _PromGauge | None = None
+        self._transitions: _PromCounter | None = None
+        self._failures: _PromCounter | None = None
+        try:
+            from prometheus_client import Counter as PromCounter
+            from prometheus_client import Gauge
+        except ImportError:
+            return
+        self._state_gauge = Gauge(
+            "litellm_redis_circuit_breaker_state",
+            "Redis circuit breaker state (0=closed, 1=open, 2=half_open)",
+        )
+        self._transitions = PromCounter(
+            "litellm_redis_circuit_breaker_transitions",
+            "Redis circuit breaker state transitions",
+            labelnames=("state",),
+        )
+        self._failures = PromCounter(
+            "litellm_redis_circuit_breaker_failures",
+            "Redis health failures counted by the circuit breaker",
+            labelnames=("failure_class",),
+        )
+
+    def record_state(self, state: str) -> None:
+        if self._state_gauge is not None:
+            self._state_gauge.set(self._STATE_VALUES[state])
+
+    def record_transition(self, state: str) -> None:
+        if self._transitions is not None:
+            self._transitions.labels(state).inc()
+
+    def record_failure(self, failure_class: str) -> None:
+        if self._failures is not None:
+            self._failures.labels(failure_class).inc()
+
+
+@functools.lru_cache(maxsize=1)
+def _breaker_metrics() -> _BreakerMetrics:
+    return _BreakerMetrics()
+
+
 def _record_swallowed_redis_failure(breaker: RedisCircuitBreaker, exc: BaseException) -> None:
     """Record a Redis failure that the calling method is about to swallow.
 
@@ -217,7 +332,7 @@ def _record_swallowed_redis_failure(breaker: RedisCircuitBreaker, exc: BaseExcep
     """
     if not _is_redis_health_failure(exc):
         return
-    breaker.record_failure()
+    breaker.record_failure(is_timeout=_is_redis_timeout_failure(exc))
     _swallowed_redis_failures.set(_swallowed_redis_failures.get() + 1)
 
 
@@ -239,7 +354,7 @@ async def _run_under_circuit_breaker(
         result: Final = await call()
     except Exception as e:
         if _is_redis_health_failure(e):
-            breaker.record_failure()
+            breaker.record_failure(is_timeout=_is_redis_timeout_failure(e))
         raise
     if _swallowed_redis_failures.get() == swallowed_before:
         breaker.record_success()
