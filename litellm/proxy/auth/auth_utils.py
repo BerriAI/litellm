@@ -15,6 +15,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
     EMPTY_MAPPING,
+    INVALID_VIRTUAL_KEY_ERROR_MARKER,
     MINIMUM_CUSTOM_KEY_LENGTH,
     STANDARD_CUSTOMER_ID_HEADERS,
 )
@@ -33,12 +34,16 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
 from litellm.types.utils import CustomPricingLiteLLMParams
 
-INVALID_VIRTUAL_KEY_ERROR_MESSAGE: Final = "LiteLLM Virtual Key expected"
-_INVALID_VIRTUAL_KEY_ERROR_MARKER: Final = "_litellm_invalid_virtual_key_error"
-
 
 def is_invalid_virtual_key_error(exception: BaseException | None) -> bool:
-    """True when an authentication error rejects a malformed virtual key."""
+    """True when an authentication error rejects a malformed virtual key.
+
+    Classifies only by the marker stamped where that 401 is raised. Message
+    content is never inspected: other 401s interpolate caller-supplied values
+    (vector store ids, organization ids) into their messages, so a phrase
+    match would let a request body demote an authorization failure to the
+    quiet log path.
+    """
     if not isinstance(exception, (HTTPException, ProxyException)):
         return False
 
@@ -47,11 +52,7 @@ def is_invalid_virtual_key_error(exception: BaseException | None) -> bool:
     if str(status_code) != str(status.HTTP_401_UNAUTHORIZED):
         return False
 
-    if getattr(exception, _INVALID_VIRTUAL_KEY_ERROR_MARKER, False) is True:
-        return True
-
-    message: Final = getattr(exception, "detail", None) or getattr(exception, "message", "")
-    return INVALID_VIRTUAL_KEY_ERROR_MESSAGE in str(message)
+    return getattr(exception, INVALID_VIRTUAL_KEY_ERROR_MARKER, False) is True
 
 
 def mark_invalid_virtual_key_error(exception: ProxyException, is_invalid_virtual_key: bool) -> ProxyException:
@@ -67,7 +68,7 @@ def mark_invalid_virtual_key_error(exception: ProxyException, is_invalid_virtual
         openai_code=None if exception.openai_code is None else str(exception.openai_code),
         provider_specific_fields=exception.provider_specific_fields,
     )
-    setattr(marked_exception, _INVALID_VIRTUAL_KEY_ERROR_MARKER, True)
+    setattr(marked_exception, INVALID_VIRTUAL_KEY_ERROR_MARKER, True)
     return marked_exception
 
 

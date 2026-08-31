@@ -26,6 +26,8 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import (
     GLOBAL_PROXY_SPEND_CACHE_KEY,
+    INVALID_VIRTUAL_KEY_ERROR_MARKER,
+    INVALID_VIRTUAL_KEY_ERROR_MESSAGE,
     LITELLM_PROXY_BUDGET_NAME,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
 )
@@ -61,7 +63,6 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_method import AuthMethod
 from litellm.proxy.auth.auth_utils import (
-    INVALID_VIRTUAL_KEY_ERROR_MESSAGE,
     abbreviate_api_key,
     get_end_user_id_from_request_body,
     get_model_from_request,
@@ -1872,13 +1873,17 @@ async def _user_api_key_auth_builder(
                 _masked_key: Final = f"{api_key[:4]}****{api_key[-4:]}" if len(api_key) > 8 else "****"
                 if not api_key.startswith("sk-"):
                     _hint = _JWT_AUTH_DISABLED_HINT if not enable_jwt_auth and JWTHandler.is_jwt(token=api_key) else ""
-                    raise HTTPException(
+                    _malformed_key_error = HTTPException(
                         status_code=status.HTTP_401_UNAUTHORIZED,
                         detail=(
                             f"{INVALID_VIRTUAL_KEY_ERROR_MESSAGE}. Received={_masked_key}, "
                             f"expected to start with 'sk-'.{_hint}"
                         ),
                     )  # prevent token hashes from being used
+                    # Stamp provenance here so log routing classifies this 401 by
+                    # where it was raised, never by its message text.
+                    setattr(_malformed_key_error, INVALID_VIRTUAL_KEY_ERROR_MARKER, True)
+                    raise _malformed_key_error
             else:
                 verbose_logger.warning(
                     "litellm.proxy.proxy_server.user_api_key_auth(): Warning - Key is not a string. Got type={}".format(

@@ -26,6 +26,7 @@ from prisma.errors import (
 
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import INVALID_VIRTUAL_KEY_ERROR_MARKER
 from litellm.exceptions import BudgetExceededError
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
@@ -703,6 +704,13 @@ async def test_auth_failure_ip_stamp_does_not_mutate_callers_request_data():
     assert request_data == {"model": "gpt-4o"}
 
 
+def _marked_malformed_key_error() -> HTTPException:
+    """Build the malformed-key 401 as its raise site does: marker stamped on it."""
+    error = HTTPException(status_code=401, detail="LiteLLM Virtual Key expected. Received=test")
+    setattr(error, INVALID_VIRTUAL_KEY_ERROR_MARKER, True)
+    return error
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "auth_error,expect_traceback,expect_level",
@@ -717,10 +725,16 @@ async def test_auth_failure_ip_stamp_does_not_mutate_callers_request_data():
         ),
         pytest.param(ValueError("unexpected internal error"), True, "ERROR", id="unexpected_error_keeps_traceback"),
         pytest.param(
-            HTTPException(status_code=401, detail="LiteLLM Virtual Key expected. Received=test"),
+            _marked_malformed_key_error(),
             False,
             "WARNING",
             id="malformed_virtual_key_warning_no_traceback",
+        ),
+        pytest.param(
+            HTTPException(status_code=401, detail="LiteLLM Virtual Key expected. Received=test"),
+            False,
+            "ERROR",
+            id="phrase_without_marker_stays_loud",
         ),
     ],
 )
