@@ -12480,9 +12480,10 @@ async def supported_openai_params(model: str):
     """
     global llm_router
     try:
-        deployments: Final = llm_router.get_model_list(model_name=model) if llm_router is not None else None
-        model_to_map: Final = (deployments[0]["litellm_params"].get("model") or model) if deployments else model
-        litellm_model, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model_to_map)
+        resolved_models: Final = llm_router.resolved_litellm_models(model) if llm_router is not None else ()
+        litellm_model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=resolved_models[0] if resolved_models else model
+        )
         return {
             "supported_openai_params": litellm.get_supported_openai_params(
                 model=litellm_model, custom_llm_provider=custom_llm_provider
