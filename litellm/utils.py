@@ -3090,7 +3090,7 @@ def register_model(
         # = 0 when they are absent from the raw entry. Writing those zeros
         # back flips a sparse entry from "no cost keys" (priced via name)
         # to "cost keys = 0" (free), which makes
-        # ``_is_cost_explicitly_configured`` return True and silently
+        # ``_group_declares_explicit_cost`` return True and silently
         # disables budget enforcement on the next re-registration.
         _raw_entry = litellm.model_cost.get(model_cost_key)
         if _raw_entry is None:

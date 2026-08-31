@@ -433,7 +433,7 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
             # not from defaulted sparse auto-registration entries.
             # See: https://github.com/BerriAI/litellm/issues/24770
             safe_name = str(model_name).replace("\n", "").replace("\r", "")
-            if not _is_cost_explicitly_configured(model_name, llm_router):
+            if not _group_declares_explicit_cost(model=model_name, llm_router=llm_router):
                 verbose_proxy_logger.debug(
                     "Model %s has zero cost but no explicit cost "
                     "configuration in model_cost entry — treating as unknown "
@@ -480,34 +480,14 @@ def _has_ptu_flat_cost(model: str, llm_router: "Router") -> bool:
 
     Such a deployment carries an explicit zero per-token price so the flat cost is not charged
     twice, which otherwise reads here as a free model and waives every budget check for it.
+
+    Resolved through ``Router.get_model_list()`` so a model_group_alias pointing at a PTU group
+    is covered; scanning ``model_list`` by exact name never matches an alias, and the caller
+    treats a False here as "no flat cost to worry about".
     """
-    for deployment in llm_router.model_list:
-        if deployment.get("model_name") != model:
-            continue
+    for deployment in llm_router.get_model_list(model_name=model) or ():
         model_info = deployment.get("model_info") or _NO_MODEL_INFO
         if model_info.get("ptu_count") is not None and model_info.get("cost_per_ptu_per_hour") is not None:
-            return True
-    return False
-
-
-def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
-    """
-    Check if any deployment in the model group has cost fields explicitly
-    set in its litellm.model_cost entry.
-
-    When Router._create_deployment() registers a model not in the global
-    cost map, it creates a sparse entry like {"id": "<hash>"} with no cost
-    fields. _get_model_info_helper() then defaults missing costs to 0.
-    This function detects that scenario by checking the raw model_cost entry.
-    """
-    for deployment in llm_router.model_list:
-        if deployment.get("model_name") != model:
-            continue
-        model_id = deployment.get("model_info", {}).get("id")
-        if model_id is None:
-            continue
-        raw_entry = litellm.model_cost.get(model_id, {})
-        if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
             return True
     return False
 
@@ -563,7 +543,7 @@ def _model_group_has_pricing(model: str, llm_router: "Router") -> bool:
 
 def _group_declares_explicit_cost(model: str, llm_router: "Router") -> bool:
     """
-    Alias-aware counterpart to ``_is_cost_explicitly_configured``, which resolves the model group
+    Whether any deployment in the model group prices itself explicitly. Resolves the model group
     the same way ``_model_group_has_pricing`` does. A deployment that prices itself through its
     ``model_info`` block lands in the cost map under its deployment id rather than in its
     litellm_params, and reaching that entry through the router's own resolution keeps an alias

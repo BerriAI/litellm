@@ -9277,7 +9277,7 @@ class Router:
 
         A strategy-router alias is never the deployment actually called or
         billed, so custom pricing configured on it must not become a cost-map
-        price: an explicit zero would let ``_is_cost_explicitly_configured``
+        price: an explicit zero would let ``_group_declares_explicit_cost``
         treat the alias as a genuinely free model and waive budget checks for
         requests that route to (and bill as) a real deployment.
         """
