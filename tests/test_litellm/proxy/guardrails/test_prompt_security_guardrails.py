@@ -1,20 +1,19 @@
-from fastapi.exceptions import HTTPException
-from unittest.mock import patch, AsyncMock
-from httpx import Response, Request
 import base64
+from unittest.mock import AsyncMock, patch
 
 import pytest
-
-from litellm.proxy.guardrails.guardrail_hooks.prompt_security.prompt_security import (
-    PromptSecurityGuardrailMissingSecrets,
-    PromptSecurityGuardrail,
-)
+from fastapi.exceptions import HTTPException
+from httpx import Request, Response
 
 import litellm
 from litellm.llms.openai.chat.guardrail_translation.handler import (
     OpenAIChatCompletionsHandler,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.prompt_security.prompt_security import (
+    PromptSecurityGuardrail,
+    PromptSecurityGuardrailMissingSecrets,
+)
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import (
     unified_guardrail as unified_module,
 )
@@ -555,7 +554,7 @@ async def test_role_filtering(monkeypatch: pytest.MonkeyPatch):
         return mock_response
 
     with patch.object(guardrail.async_handler, "post", side_effect=mock_post):
-        result = await guardrail.apply_guardrail(
+        await guardrail.apply_guardrail(
             inputs=inputs,
             request_data=request_data,
             input_type="request",
