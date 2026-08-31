@@ -602,6 +602,43 @@ async def test_async_sse_wrapper_salvages_partial_spend_on_upstream_error_after_
 
 
 @pytest.mark.asyncio
+async def test_async_sse_wrapper_salvages_spend_when_queued_error_is_never_consumed():
+    """
+    When the upstream errors while the client is still connected, the pump
+    forwards the exception through the queue expecting the relay to re-raise it
+    into the proxy's failure handling. If the client disconnects before
+    consuming that queued exception, the handoff never happens and no failure
+    hook runs, so the pump must notice the unconsumed exception at teardown and
+    salvage partial spend instead of dropping the row entirely.
+    """
+    upstream_errored = asyncio.Event()
+
+    async def _failing_stream():
+        yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 52, "output_tokens": 1}}}
+        yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "partial"}}
+        upstream_errored.set()
+        raise _ProviderStreamError("mid-stream failure", status_code=500)
+
+    iterator = _RecordingLoggingIterator(
+        litellm_logging_obj=_make_logging_obj("test_salvage_on_unconsumed_queued_error"),
+        request_body={},
+    )
+
+    gen = iterator.async_sse_wrapper(_failing_stream())
+    received = [await gen.__anext__(), await gen.__anext__()]
+    await upstream_errored.wait()  # exception is now queued behind the consumed chunks
+    await gen.aclose()  # client disconnects without ever consuming the queued exception
+
+    for _ in range(100):
+        if iterator.logged_chunks:
+            break
+        await asyncio.sleep(0.01)
+
+    assert iterator.logging_call_count == 1
+    assert iterator.logged_chunks == received
+
+
+@pytest.mark.asyncio
 async def test_async_sse_wrapper_applies_backpressure_to_slow_client(monkeypatch):
     """
     Regression: the relay queue is bounded, so a slow client throttles the

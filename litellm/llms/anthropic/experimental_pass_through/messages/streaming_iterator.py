@@ -157,6 +157,17 @@ def _try_claim_detached_drain_slot() -> bool:
     return True
 
 
+def _exception_left_unconsumed(queue: "asyncio.Queue[bytes | None | BaseException]", exc: BaseException) -> bool:
+    """After client detach the relay never reads the queue again, so drain it here.
+
+    The forwarded exception still sitting in the queue means the relay tore
+    down before re-raising it, so the proxy's failure handling never ran and
+    the caller must salvage spend itself.
+    """
+    remaining: Final = tuple(queue.get_nowait() for _ in range(queue.qsize()))
+    return any(item is exc for item in remaining)
+
+
 def _sse_event(event_type: str, payload: Mapping[str, object]) -> bytes:
     return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n".encode()
 
@@ -637,13 +648,16 @@ class BaseAnthropicMessagesStreamingIterator:
 
         Handing the original exception to the client-facing generator lets it
         re-raise so the proxy's failure handling keeps the provider status and
-        owns logging (no success-bill). If the client already went away, no
-        failure hook runs, so bill the partial instead of dropping the request.
+        owns logging (no success-bill). If the client already went away, or
+        disconnects before ever consuming the queued exception, no failure hook
+        runs, so bill the partial instead of dropping the request.
         """
         from litellm._logging import verbose_proxy_logger
 
         if not client_detached.is_set() and await self._enqueue_for_client(queue, client_detached, exc):
-            return
+            await client_detached.wait()
+            if not _exception_left_unconsumed(queue, exc):
+                return
         verbose_proxy_logger.warning(
             "async_sse_wrapper upstream pump failed after client disconnect (%d chunks): %s(%s)",
             len(collected_chunks),
