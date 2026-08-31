@@ -6,6 +6,7 @@ Covers:
 """
 
 import io
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -45,6 +46,41 @@ def client_internal_user():
         yield TestClient(app)
     finally:
         app.dependency_overrides = original_overrides
+
+
+@pytest.mark.asyncio
+async def test_s3_rag_ingest_persists_embedding_model_for_managed_search():
+    from litellm.proxy.rag_endpoints.endpoints import (
+        _save_vector_store_to_db_from_rag_ingest,
+    )
+
+    table = MagicMock()
+    table.find_unique = AsyncMock(return_value=None)
+    created_row = MagicMock()
+    created_row.model_dump.return_value = {
+        "vector_store_id": "documents:index",
+        "custom_llm_provider": "s3_vectors",
+    }
+    table.create = AsyncMock(return_value=created_row)
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_managedvectorstorestable = table
+
+    await _save_vector_store_to_db_from_rag_ingest(
+        response={"vector_store_id": "documents:index"},
+        ingest_options={
+            "embedding": {"model": "text-embedding-3-large"},
+            "vector_store": {
+                "custom_llm_provider": "s3_vectors",
+                "vector_bucket_name": "documents",
+            },
+        },
+        prisma_client=prisma_client,
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1", team_id="team-1"),
+    )
+
+    persisted_params = json.loads(table.create.await_args.kwargs["data"]["litellm_params"])
+    assert persisted_params["embedding_model"] == "text-embedding-3-large"
+    assert persisted_params["vector_bucket_name"] == "documents"
 
 
 def test_internal_user_viewer_rag_ingest_without_vector_store_id_rejected(

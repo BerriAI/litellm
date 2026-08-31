@@ -806,3 +806,55 @@ describe("daily activity api_key filter", () => {
     expect(requestedUrl(mockFetch)).toContain("user_id=");
   });
 });
+
+describe("ragIngestCall", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  const sendRequest = async (provider: string, providerParams: Record<string, unknown>) => {
+    const mockFetch = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ status: "completed" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    global.fetch = mockFetch;
+
+    await Networking.ragIngestCall(
+      "sk-key",
+      new File(["content"], "document.txt"),
+      provider,
+      undefined,
+      undefined,
+      undefined,
+      providerParams,
+    );
+
+    const body = mockFetch.mock.calls[0][1]?.body as FormData;
+    return JSON.parse(String(body.get("request")));
+  };
+
+  it("serializes embedding_model at the provider-defined ingest level", async () => {
+    const s3Request = await sendRequest("s3_vectors", {
+      vector_bucket_name: "documents",
+      embedding_model: "text-embedding-3-large",
+    });
+    const bedrockRequest = await sendRequest("bedrock", {
+      embedding_model: "amazon.titan-embed-text-v2:0",
+    });
+
+    expect(s3Request).toEqual({
+      ingest_options: {
+        embedding: { model: "text-embedding-3-large" },
+        vector_store: {
+          custom_llm_provider: "s3_vectors",
+          vector_bucket_name: "documents",
+        },
+      },
+    });
+    expect(bedrockRequest.ingest_options.vector_store.embedding_model).toBe("amazon.titan-embed-text-v2:0");
+  });
+});
