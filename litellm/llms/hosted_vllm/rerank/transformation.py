@@ -187,8 +187,12 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         # Rerank has no completion step, so a server reporting only one of the two
         # meta fields still gives us the full token count; cross-fill before
         # falling back to the OpenAI/TEI-style top-level `usage` field.
-        total_tokens: Final = meta_total if meta_total is not None else (meta_input if meta_input is not None else usage_total_tokens)
-        input_tokens: Final = meta_input if meta_input is not None else (meta_total if meta_total is not None else usage_total_tokens)
+        total_tokens: Final = (
+            meta_total if meta_total is not None else (meta_input if meta_input is not None else usage_total_tokens)
+        )
+        input_tokens: Final = (
+            meta_input if meta_input is not None else (meta_total if meta_total is not None else usage_total_tokens)
+        )
         _billed_units: Final = RerankBilledUnits(total_tokens=total_tokens)
         _tokens: Final = RerankTokens(input_tokens=input_tokens)
         rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
