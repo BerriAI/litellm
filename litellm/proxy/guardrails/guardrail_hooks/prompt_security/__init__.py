@@ -21,6 +21,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
         streaming_transform_mode=getattr(litellm_params, "streaming_transform_mode", None),
+        file_sanitization_fail_open=getattr(litellm_params, "file_sanitization_fail_open", None),
     )
     litellm.logging_callback_manager.add_litellm_callback(_prompt_security_callback)
 
