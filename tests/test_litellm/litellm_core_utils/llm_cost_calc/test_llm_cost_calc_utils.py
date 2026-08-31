@@ -27,6 +27,7 @@ from litellm.types.utils import (
 )
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    CostCalculatorUtils,
     PromptTokensDetailsResult,
     TokenTypeCostBreakdown,
     _calculate_input_cost,
@@ -532,40 +533,71 @@ def test_generic_cost_per_token_bedrock_mantle_gpt56_long_context(_local_model_c
 
 
 @pytest.mark.parametrize(
-    "model",
+    "model,input_rate,cache_read_rate,output_rate,long_input_rate,long_cache_read_rate,long_output_rate",
     [
-        "bedrock_mantle/openai.gpt-5.5",
-        "bedrock_mantle/openai.gpt-5.4",
+        ("bedrock_mantle/openai.gpt-5.5", 5.5e-06, 5.5e-07, 3.3e-05, 1.1e-05, 1.1e-06, 4.95e-05),
+        ("bedrock_mantle/openai.gpt-5.4", 2.75e-06, 2.75e-07, 1.65e-05, 5.5e-06, 5.5e-07, 2.475e-05),
+        ("bedrock_mantle/openai.gpt-5.6-sol", 5.5e-06, 5.5e-07, 3.3e-05, 1.1e-05, 1.1e-06, 4.95e-05),
     ],
 )
-def test_generic_cost_per_token_bedrock_mantle_gpt55_gpt54_long_context_flat_rate(_local_model_cost_map, model):
-    """Bedrock serves gpt-5.5 and gpt-5.4 up to its enforced 1,050,000-token prompt maximum and documents
-    no long-context tier for them, so a prompt past 272K is billed at the flat per-token rates."""
+def test_generic_cost_per_token_bedrock_mantle_gpt5_matches_aws_invoiced_rates(
+    _local_model_cost_map,
+    model,
+    input_rate,
+    cache_read_rate,
+    output_rate,
+    long_input_rate,
+    long_cache_read_rate,
+    long_output_rate,
+):
+    """AWS bills a Bedrock GPT-5.x prompt past 272K under its long-context usage types, the whole prompt at
+    2x input, 2x cache read, and 1.5x output. The flat rates undercounted a 300K gpt-5.5 prompt by half and
+    sol's base rates sat 20% under the invoice."""
 
-    model_cost_map = litellm.model_cost[model]
-    assert model_cost_map["max_input_tokens"] == 1050000
-    assert [key for key in model_cost_map if "above_272k" in key] == []
-
-    served_prompt_tokens = 1030590
     cached_tokens = 100000
     completion_tokens = 1000
-    usage = Usage(
-        prompt_tokens=served_prompt_tokens,
+
+    invoiced_prompt_tokens = 300238
+    long_usage = Usage(
+        prompt_tokens=invoiced_prompt_tokens,
         completion_tokens=completion_tokens,
-        total_tokens=served_prompt_tokens + completion_tokens,
+        total_tokens=invoiced_prompt_tokens + completion_tokens,
         prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
     )
-    prompt_cost, completion_cost = generic_cost_per_token(
+    long_prompt_cost, long_completion_cost = generic_cost_per_token(
         model=model,
-        usage=usage,
+        usage=long_usage,
         custom_llm_provider="bedrock_mantle",
     )
-    assert round(prompt_cost, 10) == round(
-        model_cost_map["input_cost_per_token"] * (served_prompt_tokens - cached_tokens)
-        + model_cost_map["cache_read_input_token_cost"] * cached_tokens,
-        10,
+    assert long_prompt_cost == pytest.approx(
+        long_input_rate * (invoiced_prompt_tokens - cached_tokens) + long_cache_read_rate * cached_tokens
     )
-    assert round(completion_cost, 10) == round(model_cost_map["output_cost_per_token"] * completion_tokens, 10)
+    assert long_completion_cost == pytest.approx(long_output_rate * completion_tokens)
+
+    threshold_prompt_tokens = 272000
+    short_usage = Usage(
+        prompt_tokens=threshold_prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=threshold_prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+    short_prompt_cost, short_completion_cost = generic_cost_per_token(
+        model=model,
+        usage=short_usage,
+        custom_llm_provider="bedrock_mantle",
+    )
+    assert short_prompt_cost == pytest.approx(
+        input_rate * (threshold_prompt_tokens - cached_tokens) + cache_read_rate * cached_tokens
+    )
+    assert short_completion_cost == pytest.approx(output_rate * completion_tokens)
+
+
+def test_bedrock_mantle_gpt56_sol_cache_write_matches_aws_invoiced_rate(_local_model_cost_map):
+    """The invoice bills sol 30-minute cache writes at $6.88 per million tokens, 1.25x the $5.50 input rate."""
+
+    sol = litellm.model_cost["bedrock_mantle/openai.gpt-5.6-sol"]
+    assert sol["cache_creation_input_token_cost"] == pytest.approx(6.875e-06)
+    assert sol["cache_creation_input_token_cost_above_272k_tokens"] == pytest.approx(1.375e-05)
 
 
 def test_generic_cost_per_token_honors_non_standard_above_threshold():
@@ -3841,3 +3873,76 @@ def test_generic_cost_per_token_grok_46_long_context(_local_model_cost_map):
     )
     assert prompt_cost == pytest.approx(200_000 * 4e-06 + 50_000 * 1e-06)
     assert completion_cost == pytest.approx(1_000 * 1.2e-05)
+
+
+@pytest.mark.parametrize(
+    ("response_quality", "requested_quality", "expected_cost"),
+    [
+        (None, "low", 0.04),
+        (None, None, 0.06),
+        ("high", "low", 0.08),
+    ],
+)
+def test_route_image_generation_cost_falls_back_to_requested_quality(
+    monkeypatch, response_quality, requested_quality, expected_cost
+):
+    def tier(cost):
+        return {"litellm_provider": "xai", "mode": "image_generation", "input_cost_per_image": cost}
+
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "xai/grok-imagine-image-2.0": tier(0.06),
+            "low/1024-x-1024/grok-imagine-image-2.0": tier(0.04),
+            "high/1024-x-1024/grok-imagine-image-2.0": tier(0.08),
+        },
+    )
+    response = ImageResponse(data=[ImageObject(url="https://example.com/image.png")], quality=response_quality)
+    optional_params = {} if requested_quality is None else {"quality": requested_quality}
+
+    cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="xai/grok-imagine-image-2.0",
+        completion_response=response,
+        custom_llm_provider="xai",
+        optional_params=optional_params,
+        call_type="image_generation",
+    )
+
+    assert cost == expected_cost
+
+
+@pytest.mark.parametrize(
+    ("requested_size", "expected_cost"),
+    [
+        ("1536x1024", 0.05),
+        ("1536-x-1024", 0.05),
+        ("auto", 0.04),
+        (None, 0.04),
+    ],
+)
+def test_route_image_generation_cost_falls_back_to_requested_size(monkeypatch, requested_size, expected_cost):
+    def tier(cost):
+        return {"litellm_provider": "xai", "mode": "image_generation", "input_cost_per_image": cost}
+
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "xai/grok-imagine-image-2.0": tier(0.06),
+            "low/1024-x-1024/grok-imagine-image-2.0": tier(0.04),
+            "low/1536-x-1024/grok-imagine-image-2.0": tier(0.05),
+        },
+    )
+    response = ImageResponse(data=[ImageObject(url="https://example.com/image.png")])
+    optional_params = {"quality": "low", **({} if requested_size is None else {"size": requested_size})}
+
+    cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="xai/grok-imagine-image-2.0",
+        completion_response=response,
+        custom_llm_provider="xai",
+        optional_params=optional_params,
+        call_type="image_generation",
+    )
+
+    assert cost == expected_cost

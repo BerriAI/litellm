@@ -10,15 +10,13 @@ vi.mock(
   async () => await import("../../../tests/mocks/complexityScorerDefaults"),
 );
 
-const { modelPatchUpdateCall, modelAvailableCall, getAutoRouterClassifierDefaultPromptCall } = vi.hoisted(() => ({
-  modelPatchUpdateCall: vi.fn().mockResolvedValue({}),
-  modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
-  getAutoRouterClassifierDefaultPromptCall: vi.fn().mockResolvedValue("Classify the request into exactly one tier."),
-}));
-
-const { validateAutoRouterConfig } = vi.hoisted(() => ({
-  validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true }),
-}));
+const { modelPatchUpdateCall, modelAvailableCall, getAutoRouterClassifierDefaultPromptCall, validateAutoRouterConfig } =
+  vi.hoisted(() => ({
+    validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true }),
+    modelPatchUpdateCall: vi.fn().mockResolvedValue({}),
+    modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
+    getAutoRouterClassifierDefaultPromptCall: vi.fn().mockResolvedValue("Classify the request into exactly one tier."),
+  }));
 
 vi.mock("../networking", () => ({
   modelPatchUpdateCall,
@@ -101,6 +99,8 @@ describe("EditAutoRouterModal keyword matching", () => {
     expect(config.match_threshold).toBe(0.72);
   });
 
+  // Same gate as the create form: the dry-run's verdict has to stop the PATCH, or an operator sees
+  // a raw 400 instead of the inline message the dry-run was added to give them.
   it("does not PATCH when the backend's dry-run rejects the config", async () => {
     const user = userEvent.setup();
     validateAutoRouterConfig.mockResolvedValueOnce({
@@ -295,8 +295,7 @@ describe("EditAutoRouterModal classifier context window", () => {
     renderLlmModal();
 
     await user.click(await screen.findByText("Advanced: Classification Method"));
-    const windowSizeSection = (await screen.findByText("Context Window Size")).closest("div") as HTMLElement;
-    const input = within(windowSizeSection).getByRole("spinbutton");
+    const input = await screen.findByLabelText("Context Window Size");
     fireEvent.change(input, { target: { value: "8" } });
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
@@ -817,5 +816,76 @@ describe("EditAutoRouterModal plan-mode minimum tier", () => {
 
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
     expect(savedConfig()).not.toHaveProperty("plan_mode_min_tier");
+  });
+});
+
+describe("EditAutoRouterModal with a stored custom tier set", () => {
+  const CUSTOM_STORED = {
+    tiers: { CASUAL: ["gpt-4o-mini"], SECURITY_REVIEW: ["gpt-4o-mini"] },
+    tier_definitions: [
+      { name: "CASUAL", description: "small talk" },
+      { name: "SECURITY_REVIEW", description: "audits and vulnerability review" },
+    ],
+    fallback_tier: "CASUAL",
+    classifier_type: "llm",
+    classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    plan_mode_min_tier: "SECURITY_REVIEW",
+    classification_prompt: "operator written preamble",
+    tier_model_configs: {
+      SECURITY_REVIEW: [{ model_name: "gpt-4o-mini", litellm_params: { reasoning_effort: "high" } }],
+    },
+  };
+
+  const renderCustomModal = () =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: { ...MODEL_DATA.litellm_params, complexity_router_config: CUSTOM_STORED },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  it("shows the stored tier names rather than the built-in four", async () => {
+    renderCustomModal();
+    expect(await screen.findByText("SECURITY_REVIEW Tier")).toBeInTheDocument();
+    expect(screen.queryByText("Simple Tier")).not.toBeInTheDocument();
+  });
+
+  it("saves an untouched custom-tier router back byte-identically, tier set and floor included", async () => {
+    const user = userEvent.setup();
+    renderCustomModal();
+
+    await screen.findByText("SECURITY_REVIEW Tier");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+
+    const config = savedConfig();
+    expect(config.tier_definitions).toEqual(CUSTOM_STORED.tier_definitions);
+    expect(config.tiers).toEqual(CUSTOM_STORED.tiers);
+    expect(config.fallback_tier).toBe("CASUAL");
+    expect(config.plan_mode_min_tier).toBe("SECURITY_REVIEW");
+    expect(config.classification_prompt).toBe("operator written preamble");
+    expect(config.classifier_type).toBe("llm");
+  });
+
+  it("keeps the stored per-model reasoning effort, which hydrates by tier name and saves by row id", async () => {
+    const user = userEvent.setup();
+    renderCustomModal();
+
+    await screen.findByText("SECURITY_REVIEW Tier");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+
+    expect(savedConfig().tier_model_configs).toEqual(CUSTOM_STORED.tier_model_configs);
   });
 });

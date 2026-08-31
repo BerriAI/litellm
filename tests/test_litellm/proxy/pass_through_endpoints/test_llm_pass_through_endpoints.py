@@ -1870,7 +1870,10 @@ class TestBedrockAgentRuntimePassthroughToggle:
 
         with (
             patch("litellm.proxy.proxy_server.general_settings", general_settings),
-            patch("litellm.utils.get_secret", return_value="us-east-1"),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
+                return_value="us-east-1",
+            ),
             patch("litellm.llms.bedrock.chat.BedrockConverseLLM", return_value=bedrock_llm),
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_request_copy",
@@ -1920,7 +1923,10 @@ class TestBedrockAgentRuntimePassthroughToggle:
     async def test_model_invoke_still_routed_when_agent_runtime_disabled(self):
         with (
             patch("litellm.proxy.proxy_server.general_settings", self.DISABLED),
-            patch("litellm.utils.get_secret", return_value="us-east-1"),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
+                return_value="us-east-1",
+            ),
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_request_copy",
                 Mock(),

@@ -1,14 +1,14 @@
 
-import pytest
-
-
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.proxy_track_cost_callback import (
-    _ProxyDBLogger,
     _get_budget_reservation_from_metadata,
+    _ProxyDBLogger,
     _should_track_cost_callback,
     _update_database_and_spend_counters,
 )
@@ -567,9 +567,12 @@ async def test_update_database_and_spend_counters_preserves_db_exception_when_re
 @pytest.mark.asyncio
 async def test_update_database_and_spend_counters_updates_counters_after_db_update():
     proxy_logging_obj = MagicMock()
-    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock()
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(
+        return_value="chatcmpl-abc123"
+    )
     increment_spend_counters = AsyncMock()
     budget_reservation = {"reserved_cost": 0.5, "entries": []}
+    start_time = datetime.now()
 
     await _update_database_and_spend_counters(
         proxy_logging_obj=proxy_logging_obj,
@@ -581,11 +584,12 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         org_id="test_org_id",
         kwargs={},
         completion_response=None,
-        start_time=datetime.now(),
+        start_time=start_time,
         end_time=datetime.now(),
         response_cost=0.2,
         budget_reservation=budget_reservation,
         request_tags=["tag-a"],
+        model_access_groups=("premium",),
     )
 
     proxy_logging_obj.db_spend_update_writer.update_database.assert_awaited_once()
@@ -598,6 +602,9 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         budget_reservation=budget_reservation,
         end_user_id="test_end_user_id",
         tags=["tag-a"],
+        request_id="chatcmpl-abc123",
+        request_started_at=start_time,
+        model_access_groups=("premium",),
     )
 
 
@@ -1875,3 +1882,168 @@ async def test_track_cost_callback_logs_unauthenticated_pass_through_request(
         assert mock_proxy_logging.db_spend_update_writer.update_database.await_count == (
             1 if expect_spend_log else 0
         )
+
+
+@pytest.mark.asyncio
+async def test_update_database_and_spend_counters_forwards_the_spend_log_request_id():
+    """The budget-window flush excludes the log rows its increments already
+    cover. That only works if the id update_database recorded the row under is
+    handed to the counter update, so this seam is load-bearing."""
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(
+        return_value="chatcmpl-abc123"
+    )
+    increment_spend_counters = AsyncMock()
+
+    await _update_database_and_spend_counters(
+        proxy_logging_obj=proxy_logging_obj,
+        increment_spend_counters=increment_spend_counters,
+        user_api_key="test_api_key",
+        user_id="test_user_id",
+        end_user_id=None,
+        team_id="test_team_id",
+        org_id="test_org_id",
+        kwargs={},
+        completion_response=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        response_cost=0.2,
+        budget_reservation=None,
+    )
+
+    assert increment_spend_counters.await_args.kwargs["request_id"] == "chatcmpl-abc123"
+
+
+@pytest.mark.asyncio
+async def test_update_database_and_spend_counters_forwards_a_missing_request_id_as_none():
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(return_value=None)
+    increment_spend_counters = AsyncMock()
+
+    await _update_database_and_spend_counters(
+        proxy_logging_obj=proxy_logging_obj,
+        increment_spend_counters=increment_spend_counters,
+        user_api_key="test_api_key",
+        user_id="test_user_id",
+        end_user_id=None,
+        team_id="test_team_id",
+        org_id="test_org_id",
+        kwargs={},
+        completion_response=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        response_cost=0.2,
+        budget_reservation=None,
+    )
+
+    assert increment_spend_counters.await_args.kwargs["request_id"] is None
+
+
+class _FakeDeploymentLookup:
+    """Deployment lookup returning the access groups each deployment declares."""
+
+    def __init__(self, deployments):
+        self._deployments = deployments
+
+    def get_model_info(self, id):
+        if id not in self._deployments:
+            return None
+        return {"model_name": "premium-haiku", "model_info": {"id": id, "access_groups": list(self._deployments[id])}}
+
+
+def _model_access_group_kwargs(granted, served_model_id=None):
+    metadata = {"user_api_key": "hashed-key", "user_api_key_user_id": "user-1"}
+    if granted is not None:
+        metadata[MODEL_ACCESS_GROUP_METADATA_KEY] = list(granted)
+    return {
+        "call_type": "acompletion",
+        "model": "premium-haiku",
+        "litellm_call_id": "test-call-id",
+        "litellm_params": {"metadata": metadata},
+        "stream": False,
+        "standard_logging_object": {"response_cost": 0.25, "request_tags": None, "model_id": served_model_id},
+    }
+
+
+async def _groups_charged_by_the_callback(kwargs, deployments=None):
+    """The groups the callback hands the spend counters for one request.
+
+    The callback resolves ``proxy_logging_obj`` and the router by importing them off
+    ``proxy_server`` inside its own body, so there is no seam to inject either through.
+    """
+    logger = _ProxyDBLogger()
+    with (
+        patch(  # test-quality-ok: callback imports proxy_logging_obj off proxy_server in its body, no seam
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_proxy_logging,
+        patch(  # test-quality-ok: the arguments to this call are the boundary under test
+            "litellm.proxy.hooks.proxy_track_cost_callback._update_database_and_spend_counters",
+            new=AsyncMock(),
+        ) as mock_update,
+        patch(  # test-quality-ok: llm_router is a proxy_server global the callback reads lazily, no seam
+            "litellm.proxy.proxy_server.llm_router", new=_FakeDeploymentLookup(deployments or {})
+        ),
+    ):
+        mock_proxy_logging.failed_tracking_alert = AsyncMock()
+        mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+        mock_proxy_logging.db_spend_update_writer = MagicMock()
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    return mock_update.await_args.kwargs["model_access_groups"]
+
+
+@pytest.mark.asyncio
+async def test_track_cost_callback_charges_the_model_access_groups_auth_stamped():
+    """Auth stamps the matched groups onto request metadata; the callback has to carry them through.
+
+    Without this hop nothing writes ``spend:model_access_group:*`` on the normal path, so with
+    reservations disabled the budget check reads a counter no one maintains.
+    """
+    charged = await _groups_charged_by_the_callback(
+        kwargs=_model_access_group_kwargs(granted=["premium", "starter"]),
+    )
+
+    assert charged == ("premium", "starter")
+
+
+@pytest.mark.asyncio
+async def test_track_cost_callback_charges_no_model_access_group_when_none_were_stamped():
+    """A request no budgeted group authorized must not debit anything."""
+    charged = await _groups_charged_by_the_callback(
+        kwargs=_model_access_group_kwargs(granted=None),
+    )
+
+    assert charged == ()
+
+
+@pytest.mark.asyncio
+async def test_spend_counters_only_debit_the_group_the_served_deployment_belongs_to():
+    """A caller granted two pools that both cover the model group only draws down the pool that served.
+
+    The database writer already narrows by served deployment, so passing the unnarrowed set to the
+    live counters let one request block a pool the persisted spend never debited.
+    """
+    charged = await _groups_charged_by_the_callback(
+        kwargs=_model_access_group_kwargs(granted=["premium", "tier0"], served_model_id="deployment-premium"),
+        deployments={"deployment-premium": ["premium"], "deployment-tier0": ["tier0"]},
+    )
+
+    assert charged == ("premium",)
+
+
+@pytest.mark.asyncio
+async def test_spend_counters_keep_every_granted_group_when_the_deployment_is_unknown():
+    """An unidentifiable deployment leaves the auth-time set standing, so nothing silently stops billing."""
+    charged = await _groups_charged_by_the_callback(
+        kwargs=_model_access_group_kwargs(granted=["premium", "tier0"], served_model_id="deployment-gone"),
+        deployments={"deployment-premium": ["premium"]},
+    )
+
+    assert charged == ("premium", "tier0")

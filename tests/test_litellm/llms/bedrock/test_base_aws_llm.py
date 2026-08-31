@@ -1274,7 +1274,7 @@ def test_different_roles_without_session_names_should_not_share_cache():
         ({}, {"verify": True}),
         (
             {"aws_region_name": "us-east-1"},
-            {"verify": True},
+            {"verify": True, "region_name": "us-east-1"},
         ),
         (
             {"aws_sts_endpoint": "https://sts.eu-west-1.amazonaws.com"},
@@ -1285,7 +1285,7 @@ def test_different_roles_without_session_names_should_not_share_cache():
             },
         ),
     ],
-    ids=["no_region_or_endpoint", "bedrock_region_ignored_for_sts", "explicit_sts_endpoint"],
+    ids=["no_region_or_endpoint", "configured_region_is_sts_fallback", "explicit_sts_endpoint"],
 )
 def test_eks_irsa_ambient_credentials_used(role_kwargs, expected_client_kwargs):
     """
@@ -1467,6 +1467,135 @@ def test_build_sts_client_kwargs(env, aws_sts_endpoint, ssl_verify, expected):
             )
             == expected
         )
+
+
+@pytest.mark.parametrize(
+    "env,aws_sts_endpoint,aws_region_name,expected_region",
+    [
+        ({}, None, "cn-north-1", "cn-north-1"),
+        ({"AWS_REGION": "eu-west-1"}, None, "cn-north-1", "eu-west-1"),
+        ({"AWS_DEFAULT_REGION": "ap-southeast-1"}, None, "cn-north-1", "ap-southeast-1"),
+        ({}, "https://sts.cn-north-1.amazonaws.com.cn", "us-east-1", "cn-north-1"),
+        ({}, None, None, None),
+    ],
+    ids=[
+        "configured_region_fallback",
+        "env_region_beats_configured",
+        "env_default_region_beats_configured",
+        "cn_endpoint_beats_configured",
+        "nothing_configured",
+    ],
+)
+def test_resolve_sts_region_configured_region_fallback(
+    env: dict[str, str],
+    aws_sts_endpoint: str | None,
+    aws_region_name: str | None,
+    expected_region: str | None,
+) -> None:
+    with patch.dict(os.environ, env, clear=True):
+        assert (
+            BaseAWSLLM._resolve_sts_region(
+                aws_sts_endpoint=aws_sts_endpoint,
+                aws_region_name=aws_region_name,
+            )
+            == expected_region
+        )
+
+
+def test_build_sts_client_kwargs_configured_region_fallback() -> None:
+    base_aws_llm = BaseAWSLLM()
+    with patch.dict(os.environ, {}, clear=True):
+        assert base_aws_llm._build_sts_client_kwargs(aws_region_name="cn-north-1") == {
+            "verify": True,
+            "region_name": "cn-north-1",
+        }
+    with patch.dict(os.environ, {"AWS_REGION": "eu-west-1"}, clear=True):
+        assert base_aws_llm._build_sts_client_kwargs(aws_region_name="cn-north-1") == {
+            "verify": True,
+            "region_name": "eu-west-1",
+        }
+
+
+def test_assume_role_sts_client_uses_configured_cn_region() -> None:
+    """arn:aws-cn roles must resolve against a cn STS endpoint, not the commercial default."""
+    base_aws_llm = BaseAWSLLM()
+    mock_expiry = MagicMock()
+    mock_expiry.tzinfo = timezone.utc
+    time_diff = MagicMock()
+    time_diff.total_seconds.return_value = 3600
+    mock_expiry.__sub__ = MagicMock(return_value=time_diff)
+    mock_sts_client = MagicMock()
+    mock_sts_client.assume_role.return_value = {
+        "Credentials": {
+            "AccessKeyId": "assumed-access-key",
+            "SecretAccessKey": "assumed-secret-key",
+            "SessionToken": "assumed-session-token",
+            "Expiration": mock_expiry,
+        }
+    }
+
+    with patch.dict(os.environ, {}, clear=True):
+        with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
+            credentials, ttl = base_aws_llm._auth_with_aws_role(
+                aws_access_key_id=None,
+                aws_secret_access_key=None,
+                aws_session_token=None,
+                aws_role_name="arn:aws-cn:iam::2222222222222:role/LitellmBedrockRole",
+                aws_session_name="test-session",
+                aws_region_name="cn-north-1",
+            )
+            mock_boto3_client.assert_called_with(
+                "sts",
+                region_name="cn-north-1",
+                verify=True,
+            )
+            assert credentials.access_key == "assumed-access-key"
+            assert credentials.secret_key == "assumed-secret-key"
+            assert credentials.token == "assumed-session-token"
+            assert ttl is not None
+
+
+@pytest.mark.parametrize(
+    "model,expected_region",
+    [
+        (
+            "arn:aws-cn:bedrock:cn-north-1:123456789012:application-inference-profile/p",
+            "cn-north-1",
+        ),
+        (
+            "arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:foundation-model/m",
+            "us-gov-west-1",
+        ),
+        (
+            "bedrock/arn:aws-cn:bedrock:cn-northwest-1:123456789012:inference-profile/p",
+            "cn-northwest-1",
+        ),
+        ("anthropic.claude-3", None),
+    ],
+)
+def test_get_aws_region_from_model_arn_partition_arns(model: str, expected_region: str | None) -> None:
+    assert BaseAWSLLM()._get_aws_region_from_model_arn(model) == expected_region
+
+
+@pytest.mark.parametrize(
+    "endpoint_type,region,expected",
+    [
+        ("runtime", "cn-north-1", "https://bedrock-runtime.cn-north-1.amazonaws.com.cn"),
+        ("agent", "cn-north-1", "https://bedrock-agent-runtime.cn-north-1.amazonaws.com.cn"),
+        ("agentcore", "cn-north-1", "https://bedrock-agentcore.cn-north-1.amazonaws.com.cn"),
+        ("runtime", "us-east-1", "https://bedrock-runtime.us-east-1.amazonaws.com"),
+        ("agent", "us-east-1", "https://bedrock-agent-runtime.us-east-1.amazonaws.com"),
+        ("agentcore", "us-east-1", "https://bedrock-agentcore.us-east-1.amazonaws.com"),
+        ("runtime", "us-gov-west-1", "https://bedrock-runtime.us-gov-west-1.amazonaws.com"),
+    ],
+)
+def test_select_default_endpoint_url_partitions(endpoint_type: str, region: str, expected: str) -> None:
+    assert (
+        BaseAWSLLM()._select_default_endpoint_url(
+            endpoint_type=endpoint_type, aws_region_name=region
+        )
+        == expected
+    )
 
 
 def test_irsa_cross_account_sts_client_uses_resolved_region():
@@ -1663,6 +1792,7 @@ def test_sts_endpoint_region_matches_bedrock_region_param():
                 "aws_secret_access_key": "explicit-secret-key",
                 "aws_session_token": "assumed-session-token",
                 "verify": True,
+                "region_name": "us-east-1",
             },
         ),
         (
@@ -1677,7 +1807,7 @@ def test_sts_endpoint_region_matches_bedrock_region_param():
             },
         ),
     ],
-    ids=["no_region_or_endpoint", "bedrock_region_ignored_for_sts", "explicit_sts_endpoint"],
+    ids=["no_region_or_endpoint", "configured_region_is_sts_fallback", "explicit_sts_endpoint"],
 )
 def test_explicit_credentials_used_when_provided(role_kwargs, expected_client_kwargs):
     """
