@@ -60,7 +60,6 @@ from .llms.openai import (
     Batch,
     ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
-    ChatCompletionReasoningSummaryTextBlock,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
