@@ -3835,6 +3835,50 @@ async def test_centralized_common_checks_runs_for_standard_auth():
 
 
 @pytest.mark.asyncio
+async def test_centralized_common_checks_runs_for_raw_passthrough_without_auth():
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    route = "/chat/completions"
+    token = UserAPIKeyAuth(api_key="sk-test")
+    request = Request(scope={"type": "http", "headers": []})
+    request._url = URL(url=route)
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    attrs["general_settings"] = {
+        "reject_clientside_metadata_tags": True,
+        "pass_through_endpoints": [
+            {
+                "path": route,
+                "target": "https://example.com",
+            }
+        ]
+    }
+    originals = {
+        attribute: getattr(_proxy_server_mod, attribute, None)
+        for attribute in attrs
+    }
+    try:
+        for attribute, value in attrs.items():
+            setattr(_proxy_server_mod, attribute, value)
+        with pytest.raises(ProxyException) as exc_info:
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data={
+                    "model": "gpt-4o",
+                    "metadata": {"tags": ["client-supplied"]},
+                },
+                route=route,
+            )
+    finally:
+        for attribute, value in originals.items():
+            setattr(_proxy_server_mod, attribute, value)
+
+    assert exc_info.value.type == ProxyErrorTypes.bad_request_error
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "route",
     [

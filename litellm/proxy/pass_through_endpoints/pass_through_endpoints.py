@@ -3060,7 +3060,7 @@ async def _register_pass_through_endpoint(
     forward_headers: Final = endpoint_data.get("forward_headers")
     merge_query_params: Final = endpoint_data.get("merge_query_params")
     default_query_params: Final = endpoint_data.get("default_query_params")
-    auth: Final[bool | str | None] = endpoint_data.get("auth")
+    auth: Final[bool | str | None] = endpoint_data.get("auth", True)
     dependencies = None
     auth_enforced: Final = auth is not None and str(auth).lower() == "true"
 
