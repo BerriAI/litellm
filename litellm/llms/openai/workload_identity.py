@@ -5,6 +5,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlparse
 
+import litellm
 from litellm.secret_managers.main import get_secret_str
 
 from .common_utils import OpenAIError
@@ -44,9 +45,12 @@ def resolve_openai_workload_identity_config(
     api_key: str | None,
     api_base: str | None,
 ) -> OpenAIWorkloadIdentityConfig | None:
-    if api_key is not None:
+    if api_key is not None or get_secret_str("OPENAI_API_KEY") is not None:
         return None
-    if not _targets_openai_api(api_base):
+    effective_api_base: Final = (
+        api_base or litellm.api_base or get_secret_str("OPENAI_BASE_URL") or get_secret_str("OPENAI_API_BASE")
+    )
+    if not _targets_openai_api(effective_api_base):
         return None
     identity_provider_id: Final = get_secret_str("OPENAI_IDENTITY_PROVIDER_ID")
     service_account_id: Final = get_secret_str("OPENAI_SERVICE_ACCOUNT_ID")

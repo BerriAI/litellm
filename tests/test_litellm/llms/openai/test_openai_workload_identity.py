@@ -9,6 +9,7 @@ import respx
 from openai import AsyncOpenAI, OpenAI
 
 import litellm
+from litellm.llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig
 from litellm.llms.openai.common_utils import BaseOpenAILLM, OpenAIError
 from litellm.llms.openai.openai import OpenAIChatCompletion
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -28,6 +29,9 @@ def wif_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> OpenAIWorkloadId
     token_file: Final = tmp_path / "subject_token.jwt"
     token_file.write_text("subject-token-from-file")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "api_base", None)
     monkeypatch.setenv("OPENAI_IDENTITY_PROVIDER_ID", "idp_test123")
     monkeypatch.setenv("OPENAI_SERVICE_ACCOUNT_ID", "user-test456")
     monkeypatch.setenv("OPENAI_IDENTITY_TOKEN_FILE", str(token_file))
@@ -53,11 +57,35 @@ class TestResolveConfig:
     def test_static_api_key_wins(self, wif_env: OpenAIWorkloadIdentityConfig) -> None:
         assert resolve_openai_workload_identity_config(api_key="sk-static", api_base=None) is None
 
+    def test_env_openai_api_key_wins(
+        self, wif_env: OpenAIWorkloadIdentityConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+        assert resolve_openai_workload_identity_config(api_key=None, api_base=None) is None
+
     def test_foreign_api_base_disables(self, wif_env: OpenAIWorkloadIdentityConfig) -> None:
         assert resolve_openai_workload_identity_config(api_key=None, api_base="https://my-vllm.internal/v1") is None
 
     def test_openai_api_base_allows(self, wif_env: OpenAIWorkloadIdentityConfig) -> None:
         assert resolve_openai_workload_identity_config(api_key=None, api_base="https://api.openai.com/v1") == wif_env
+
+    def test_foreign_env_base_url_disables(
+        self, wif_env: OpenAIWorkloadIdentityConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENAI_BASE_URL", "https://my-vllm.internal/v1")
+        assert resolve_openai_workload_identity_config(api_key=None, api_base=None) is None
+
+    def test_openai_env_base_url_allows(
+        self, wif_env: OpenAIWorkloadIdentityConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        assert resolve_openai_workload_identity_config(api_key=None, api_base=None) == wif_env
+
+    def test_foreign_litellm_api_base_disables(
+        self, wif_env: OpenAIWorkloadIdentityConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "api_base", "https://my-vllm.internal/v1")
+        assert resolve_openai_workload_identity_config(api_key=None, api_base=None) is None
 
     @pytest.mark.parametrize(
         "missing_var",
@@ -184,5 +212,11 @@ class TestResponsesValidateEnvironment:
             headers={},
             model="gpt-4o-mini",
             litellm_params=GenericLiteLLMParams(api_base="https://my-vllm.internal/v1"),
+        )
+        assert headers["Authorization"] == "Bearer None"
+
+    def test_litellm_proxy_subclass_never_mints_wif(self, wif_env: OpenAIWorkloadIdentityConfig) -> None:
+        headers: Final = LiteLLMProxyResponsesAPIConfig().validate_environment(
+            headers={}, model="gpt-4o-mini", litellm_params=GenericLiteLLMParams()
         )
         assert headers["Authorization"] == "Bearer None"
