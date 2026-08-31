@@ -1,4 +1,3 @@
-import inspect as real_inspect
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -6,6 +5,7 @@ import pytest
 from litellm._redis import (
     _coerce_redis_kwargs_types,
     _get_redis_client_logic,
+    _get_redis_env_kwarg_mapping,
     get_redis_async_client,
     get_redis_connection_pool,
 )
@@ -224,14 +224,17 @@ def test_health_check_interval_from_env_is_int(monkeypatch):
     assert isinstance(interval, int), f"Expected int, got {type(interval)}: {interval!r}"
 
 
+def _signature_without_defaults(testkey):
+    """Stand-in for a client whose parameter declares no default at all."""
+
+
+def _signature_with_float_default(myparam=1.0):
+    """Stand-in for a client whose parameter declares a float default."""
+
+
 def test_coerce_redis_kwargs_types_empty_default_param_unchanged():
     """String params whose signature entry has no default (inspect.Parameter.empty) are left as-is."""
-    empty_param = real_inspect.Parameter("testkey", real_inspect.Parameter.POSITIONAL_OR_KEYWORD)
-    fake_sig = MagicMock()
-    fake_sig.parameters = {"testkey": empty_param}
-
-    with patch("litellm._redis.inspect.signature", return_value=fake_sig):
-        result = _coerce_redis_kwargs_types({"testkey": "some_value"})
+    result = _coerce_redis_kwargs_types({"testkey": "some_value"}, client=_signature_without_defaults)
 
     assert result["testkey"] == "some_value"
     assert isinstance(result["testkey"], str)
@@ -239,12 +242,7 @@ def test_coerce_redis_kwargs_types_empty_default_param_unchanged():
 
 def test_coerce_redis_kwargs_types_float_valid():
     """String values for params whose signature default is a float are coerced to float."""
-    float_param = real_inspect.Parameter("myparam", real_inspect.Parameter.POSITIONAL_OR_KEYWORD, default=1.0)
-    fake_sig = MagicMock()
-    fake_sig.parameters = {"myparam": float_param}
-
-    with patch("litellm._redis.inspect.signature", return_value=fake_sig):
-        result = _coerce_redis_kwargs_types({"myparam": "3.14"})
+    result = _coerce_redis_kwargs_types({"myparam": "3.14"}, client=_signature_with_float_default)
 
     assert result["myparam"] == pytest.approx(3.14)
     assert isinstance(result["myparam"], float)
@@ -252,27 +250,15 @@ def test_coerce_redis_kwargs_types_float_valid():
 
 def test_coerce_redis_kwargs_types_float_invalid_drops_key():
     """An unconvertible string for a float-default param is dropped from the result."""
-    float_param = real_inspect.Parameter("myparam", real_inspect.Parameter.POSITIONAL_OR_KEYWORD, default=1.0)
-    fake_sig = MagicMock()
-    fake_sig.parameters = {"myparam": float_param}
-
-    with patch("litellm._redis.inspect.signature", return_value=fake_sig):
-        result = _coerce_redis_kwargs_types({"myparam": "not_a_float"})
+    result = _coerce_redis_kwargs_types({"myparam": "not_a_float"}, client=_signature_with_float_default)
 
     assert "myparam" not in result
 
 
 def test_get_redis_client_logic_raises_without_host_or_url(monkeypatch):
     """_get_redis_client_logic raises ValueError when neither host nor url is provided."""
-    for envvar in [
-        "REDIS_URL",
-        "REDIS_HOST",
-        "REDIS_PORT",
-        "REDIS_CLUSTER_NODES",
-        "REDIS_SENTINEL_NODES",
-    ]:
+    for envvar in (*_get_redis_env_kwarg_mapping(), "REDIS_CLUSTER_NODES", "REDIS_SENTINEL_NODES"):
         monkeypatch.delenv(envvar, raising=False)
 
-    with patch("litellm._redis._redis_kwargs_from_environment", return_value={}):
-        with pytest.raises(ValueError, match="Either 'host' or 'url' must be specified for redis"):
-            _get_redis_client_logic()
+    with pytest.raises(ValueError, match="Either 'host' or 'url' must be specified for redis"):
+        _get_redis_client_logic()
