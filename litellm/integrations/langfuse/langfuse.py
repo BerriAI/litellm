@@ -166,6 +166,17 @@ class LangFuseLogger:
             raise Exception(
                 f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\n{traceback.format_exc()}\033[0m"
             )
+        import warnings
+
+        warnings.warn(
+            "LangFuseLogger (the 'langfuse' callback) uses the Langfuse Python SDK "
+            "and is deprecated in favour of LangfuseOtelLogger (the 'langfuse_otel' "
+            "callback), which sends spans directly over OpenTelemetry and is compatible "
+            "with Langfuse v4 Cloud Fast Preview. "
+            "Set success_callback=['langfuse_otel'] to switch to the new integration.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.public_key, self.secret_key, self.langfuse_host = resolve_langfuse_credentials(
             langfuse_public_key=langfuse_public_key,
             langfuse_secret=langfuse_secret,

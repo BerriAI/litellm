@@ -146,7 +146,7 @@ proxy-runtime = [
     "anthropic[vertex]>=0.84.0,<1.0",
     "grpcio==1.78.0",
     "prometheus-client>=0.20.0,<1.0",
-    "langfuse>=2.59.7,<3.0",
+    "langfuse>=4.7,<5",
     "opentelemetry-api==1.28.0",
     "opentelemetry-sdk==1.28.0",
     "opentelemetry-exporter-otlp==1.28.0",
@@ -195,7 +195,7 @@ dev = [
     "opentelemetry-sdk==1.28.0",
     "opentelemetry-exporter-otlp==1.28.0",
     "opentelemetry-instrumentation-fastapi==0.49b0",
-    "langfuse==2.59.7",
+    "langfuse>=4.7,<5",
     "fastapi-offline==1.7.6",
     "fakeredis==2.34.1",
     "pytest-rerunfailures==15.1",
@@ -356,7 +356,7 @@ also_copy = [
 # Run the test suite once before mutation to gather line coverage, then skip
 # mutating lines no test exercises. Those mutants would survive regardless
 # (no test hits the line to kill them), so generating them wastes hours of CI.
-# The score now reads as "mutation score over covered code" — pair with a
+# The score now reads as "mutation score over covered code" â€” pair with a
 # line-coverage number when reporting.
 mutate_only_covered_lines = true
 # Disable rerun/parallel plugins for mutation runs:
