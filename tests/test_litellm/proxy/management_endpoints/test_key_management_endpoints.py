@@ -17066,3 +17066,105 @@ async def test_check_project_key_limits_still_rejects_real_model_outside_project
 
     assert exc_info.value.status_code == 400
     assert "Model 'gpt-5.4-mini' not in project's allowed models" in exc_info.value.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_update_key_soft_budget_updates_existing_budget_row():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _update_key_soft_budget,
+    )
+
+    existing_key = LiteLLM_VerificationToken(token="test-token", budget_id="budget-123")
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_budgettable.update = AsyncMock()
+
+    result = await _update_key_soft_budget(
+        prisma_client=mock_prisma_client,
+        existing_key_row=existing_key,
+        soft_budget=25.0,
+        changed_by="user-1",
+    )
+
+    assert result == "budget-123"
+    mock_prisma_client.db.litellm_budgettable.update.assert_awaited_once_with(
+        where={"budget_id": "budget-123"},
+        data={"soft_budget": 25.0, "updated_by": "user-1"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_key_soft_budget_clears_existing_budget_row():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _update_key_soft_budget,
+    )
+
+    existing_key = LiteLLM_VerificationToken(token="test-token", budget_id="budget-123")
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_budgettable.update = AsyncMock()
+
+    result = await _update_key_soft_budget(
+        prisma_client=mock_prisma_client,
+        existing_key_row=existing_key,
+        soft_budget=None,
+        changed_by="user-1",
+    )
+
+    assert result == "budget-123"
+    mock_prisma_client.db.litellm_budgettable.update.assert_awaited_once_with(
+        where={"budget_id": "budget-123"},
+        data={"soft_budget": None, "updated_by": "user-1"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_key_soft_budget_creates_budget_row_when_key_has_none():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _update_key_soft_budget,
+    )
+
+    existing_key = LiteLLM_VerificationToken(token="test-token", budget_id=None)
+    created_row = MagicMock()
+    created_row.budget_id = "budget-new"
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(return_value=created_row)
+
+    result = await _update_key_soft_budget(
+        prisma_client=mock_prisma_client,
+        existing_key_row=existing_key,
+        soft_budget=10.5,
+        changed_by="user-1",
+    )
+
+    assert result == "budget-new"
+    mock_prisma_client.db.litellm_budgettable.create.assert_awaited_once_with(
+        data={"soft_budget": 10.5, "created_by": "user-1", "updated_by": "user-1"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_key_soft_budget_noop_when_clearing_without_budget_row():
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _update_key_soft_budget,
+    )
+
+    existing_key = LiteLLM_VerificationToken(token="test-token", budget_id=None)
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock()
+    mock_prisma_client.db.litellm_budgettable.update = AsyncMock()
+
+    result = await _update_key_soft_budget(
+        prisma_client=mock_prisma_client,
+        existing_key_row=existing_key,
+        soft_budget=None,
+        changed_by="user-1",
+    )
+
+    assert result is None
+    mock_prisma_client.db.litellm_budgettable.create.assert_not_awaited()
+    mock_prisma_client.db.litellm_budgettable.update.assert_not_awaited()
+
+
+def test_update_key_request_accepts_soft_budget():
+    request = UpdateKeyRequest(key="sk-test", soft_budget=42.0)
+    assert request.soft_budget == 42.0
+    assert "soft_budget" in request.model_fields_set

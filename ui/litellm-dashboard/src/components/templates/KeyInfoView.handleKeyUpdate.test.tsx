@@ -483,3 +483,86 @@ describe("KeyInfoView handleKeyUpdate empty strings", () => {
     });
   });
 });
+
+describe("KeyInfoView handleKeyUpdate soft_budget", () => {
+  const renderWithSoftBudget = (softBudget: number | null) => {
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "access_abc",
+      userId: "user_1",
+      userRole: "Admin",
+      premiumUser: true,
+      token: "token_123",
+      userEmail: "test@example.com",
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    });
+
+    return render(
+      <KeyInfoView
+        keyId="tok_123"
+        onClose={() => {}}
+        keyData={
+          { ...baseKeyData, litellm_budget_table: softBudget === null ? null : { soft_budget: softBudget } } as any
+        }
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+  };
+
+  it("should send a changed soft_budget as a number", async () => {
+    renderWithSoftBudget(null);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      soft_budget: "25",
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.soft_budget).toBe(25);
+  });
+
+  it("should omit an unchanged soft_budget so unrelated edits skip the budget gate", async () => {
+    renderWithSoftBudget(25);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      soft_budget: 25,
+      key_alias: "renamed",
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect("soft_budget" in sentPayload).toBe(false);
+  });
+
+  it("should forward a cleared soft_budget as an explicit null the JSON body keeps", async () => {
+    renderWithSoftBudget(25);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      soft_budget: "",
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.soft_budget).toBeNull();
+    expect(JSON.stringify({ ...sentPayload })).toContain('"soft_budget":null');
+  });
+});

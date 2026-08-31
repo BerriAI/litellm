@@ -22,6 +22,7 @@ export interface KeyEditFormValues {
   models?: string[];
   allowed_routes?: string;
   max_budget?: number | string | null;
+  soft_budget?: number | string | null;
   budget_duration?: string | null;
   tpm_limit?: number | string | null;
   tpm_limit_type?: string | null;
@@ -67,6 +68,7 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
   allowed_routes:
     Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0 ? keyData.allowed_routes.join(", ") : "",
   max_budget: keyData.max_budget,
+  soft_budget: (keyData.litellm_budget_table as { soft_budget?: number | null } | null | undefined)?.soft_budget ?? null,
   budget_duration: canonicalBudgetDuration(keyData.budget_duration),
   tpm_limit: keyData.tpm_limit,
   tpm_limit_type: (keyData as { tpm_limit_type?: string | null }).tpm_limit_type ?? null,
@@ -117,6 +119,7 @@ export const keyEditFormSchema = z.object({
   models: z.custom<string[] | undefined>(),
   allowed_routes: z.custom<string | undefined>(),
   max_budget: z.custom<number | string | null | undefined>(),
+  soft_budget: z.custom<number | string | null | undefined>(),
   budget_duration: z.custom<string | null | undefined>(),
   tpm_limit: z.custom<number | string | null | undefined>(),
   tpm_limit_type: z.custom<string | null | undefined>(),
@@ -168,6 +171,7 @@ export const toSubmittedValues = (
   models: values.models,
   allowed_routes: values.allowed_routes,
   max_budget: values.max_budget,
+  soft_budget: values.soft_budget,
   budget_duration: values.budget_duration,
   tpm_limit: values.tpm_limit,
   tpm_limit_type: values.tpm_limit_type,

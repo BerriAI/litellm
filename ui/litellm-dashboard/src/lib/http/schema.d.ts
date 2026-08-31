@@ -7960,7 +7960,7 @@ export interface paths {
          *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
-         *     - soft_budget: Optional[float] - [TODO] Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
+         *     - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached. Set to null to remove the soft budget.
          *     - max_parallel_requests: Optional[int] - Rate limit for parallel requests
          *     - metadata: Optional[dict] - Metadata for key. Example {"team": "core-infra", "app": "app2"}
          *     - tpm_limit: Optional[int] - Tokens per minute limit
@@ -36854,6 +36854,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Rpm Limit Type */
             rpm_limit_type?: ("guaranteed_throughput" | "best_effort_throughput" | "dynamic") | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
             /** Spend */
             spend?: number | null;
             /** Tag Rpm Limit */

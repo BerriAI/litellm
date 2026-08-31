@@ -21,6 +21,7 @@ import traceback
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeVar, cast
 
 import fastapi
@@ -157,6 +158,7 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from prisma import Prisma
     from prisma import models as prisma_models
+    from prisma import types as prisma_types
 
 _RepositoryModelT = TypeVar("_RepositoryModelT", bound=BaseModel)
 
@@ -1765,11 +1767,7 @@ async def generate_key_fn(
                 status_code=400,
                 detail={"error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"},
             )
-        if data.soft_budget is not None and (not math.isfinite(data.soft_budget) or data.soft_budget < 0):
-            raise HTTPException(
-                status_code=400,
-                detail={"error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"},
-            )
+        _validate_soft_budget_value(data.soft_budget)
 
         custom_key_generate_hook: Final[Callable[..., Awaitable[Mapping[str, object]]] | None] = (
             _custom_key_generate_hook(proxy_server)
@@ -2072,6 +2070,63 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
 
     non_default_values["metadata"] = encrypt_callback_vars(casted_metadata)
     return non_default_values
+
+
+def _validate_soft_budget_value(soft_budget: float | None) -> None:
+    if soft_budget is not None and (not math.isfinite(soft_budget) or soft_budget < 0):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"soft_budget must be a non-negative finite number. Received: {soft_budget}"},
+        )
+
+
+async def _update_key_soft_budget(
+    prisma_client: PrismaClient,
+    existing_key_row: LiteLLM_VerificationToken,
+    soft_budget: float | None,
+    changed_by: str,
+) -> str | None:
+    existing_budget_id: Final = existing_key_row.budget_id
+    if existing_budget_id is not None:
+        budget_update: Final[prisma_types.LiteLLM_BudgetTableUpdateInput] = {
+            "soft_budget": soft_budget,
+            "updated_by": changed_by,
+        }
+        budget_where: Final[prisma_types.LiteLLM_BudgetTableWhereUniqueInput] = {"budget_id": existing_budget_id}
+        await BudgetRepository(prisma_client).table.update(where=budget_where, data=budget_update)
+        return existing_budget_id
+    if soft_budget is None:
+        return None
+    budget_create: Final[prisma_types.LiteLLM_BudgetTableCreateInput] = {
+        "soft_budget": soft_budget,
+        "created_by": changed_by,
+        "updated_by": changed_by,
+    }
+    created_budget: Final[prisma_models.LiteLLM_BudgetTable] = await BudgetRepository(prisma_client).table.create(
+        data=budget_create
+    )
+    return created_budget.budget_id
+
+
+async def _apply_soft_budget_update(
+    data: UpdateKeyRequest,
+    non_default_values: Mapping[str, object],
+    prisma_client: PrismaClient,
+    existing_key_row: LiteLLM_VerificationToken,
+    changed_by: str,
+) -> Mapping[str, object]:
+    if "soft_budget" not in data.model_fields_set:
+        return non_default_values
+    remaining: Final = MappingProxyType({k: v for k, v in non_default_values.items() if k != "soft_budget"})
+    updated_budget_id: Final = await _update_key_soft_budget(
+        prisma_client=prisma_client,
+        existing_key_row=existing_key_row,
+        soft_budget=data.soft_budget,
+        changed_by=changed_by,
+    )
+    if updated_budget_id is not None and existing_key_row.budget_id is None:
+        return MappingProxyType({**remaining, "budget_id": updated_budget_id})
+    return remaining
 
 
 async def prepare_key_update_data(
@@ -2604,6 +2659,7 @@ async def _validate_update_key_data(
         (data.max_budget is not None and data.max_budget != existing_key_row.max_budget)
         or data.spend is not None
         or "budget_limits" in data.model_fields_set
+        or "soft_budget" in data.model_fields_set
     )
 
     _existing_metadata: Final = getattr(existing_key_row, "metadata", None)
@@ -2802,7 +2858,7 @@ async def update_key_fn(
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
-    - soft_budget: Optional[float] - [TODO] Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
+    - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached. Set to null to remove the soft budget.
     - max_parallel_requests: Optional[int] - Rate limit for parallel requests
     - metadata: Optional[dict] - Metadata for key. Example {"team": "core-infra", "app": "app2"}
     - tpm_limit: Optional[int] - Tokens per minute limit
@@ -2858,6 +2914,7 @@ async def update_key_fn(
     """
     from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import (
+        litellm_proxy_admin_name,
         llm_router,
         premium_user,
         prisma_client,
@@ -2872,6 +2929,8 @@ async def update_key_fn(
                 status_code=400,
                 detail={"error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"},
             )
+
+        _validate_soft_budget_value(data.soft_budget)
 
         # get the row from db
         existing_key_row: Final = await _get_and_validate_existing_key(
@@ -2929,9 +2988,18 @@ async def update_key_fn(
             existing_key_alias=existing_key_row.key_alias,
         )
 
-        _data: Final = {**non_default_values, "token": key}
         if prisma_client is None:
             raise Exception("Not connected to DB!")
+
+        update_values: Final = await _apply_soft_budget_update(
+            data=data,
+            non_default_values=non_default_values,
+            prisma_client=prisma_client,
+            existing_key_row=existing_key_row,
+            changed_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
+        )
+
+        _data: Final = {**update_values, "token": key}
         response: Final = await prisma_client.update_data(token=key, data=_data)
 
         # Delete - key from cache, since it's been updated!
@@ -6262,7 +6330,7 @@ async def _list_key_helper(
                     {"token": "desc"},  # fallback sort
                 ]
             ),
-            include={"object_permission": True},
+            include={"object_permission": True, "litellm_budget_table": True},
         )
 
     verbose_proxy_logger.debug("Fetched %s keys", len(keys))

@@ -428,6 +428,18 @@ export function KeyEditView({
             )}
           </FormField>
 
+          <FormField control={form.control} name="soft_budget" label="Soft Budget (USD)">
+            {({ ref: _ref, ...field }) => (
+              <NumericalInput
+                {...field}
+                value={field.value ?? ""}
+                step={0.01}
+                style={{ width: "100%" }}
+                placeholder="Get alerts when spend crosses this value, without blocking requests"
+              />
+            )}
+          </FormField>
+
           <FormField control={form.control} name="budget_duration" label="Reset Budget">
             {({ value, onChange, id }) => (
               <BudgetDurationDropdown

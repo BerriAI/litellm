@@ -1848,6 +1848,7 @@ describe("KeyEditView", () => {
     key_alias: "asdasdas",
     models: [],
     max_budget: 0,
+    soft_budget: null,
     budget_duration: "30d",
     tpm_limit: 10,
     tpm_limit_type: null,

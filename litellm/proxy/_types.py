@@ -1260,6 +1260,7 @@ class UpdateKeyRequest(KeyRequestBase):
     # else they will get overwritten
     duration: str | None = None
     spend: float | None = None
+    soft_budget: float | None = None
     metadata: dict | None = None
     temp_budget_increase: float | None = None
     temp_budget_expiry: datetime | None = None

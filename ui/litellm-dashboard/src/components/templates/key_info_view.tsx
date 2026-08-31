@@ -210,6 +210,19 @@ export default function KeyInfoView({
       // Handle max budget empty string
       formValues.max_budget = mapEmptyStringToNull(formValues.max_budget);
 
+      // soft_budget is a budget change server-side (admin-gated); only send it when it changed
+      // so a non-admin edit of unrelated fields isn't blocked by that gate.
+      const previousSoftBudget =
+        (currentKeyData.litellm_budget_table as { soft_budget?: number | null } | null | undefined)?.soft_budget ??
+        null;
+      const nextSoftBudget =
+        formValues.soft_budget === "" || formValues.soft_budget == null ? null : Number(formValues.soft_budget);
+      if (nextSoftBudget === previousSoftBudget) {
+        delete formValues.soft_budget;
+      } else {
+        formValues.soft_budget = nextSoftBudget;
+      }
+
       // Handle object_permission updates
       if (formValues.vector_stores !== undefined) {
         formValues.object_permission = {
