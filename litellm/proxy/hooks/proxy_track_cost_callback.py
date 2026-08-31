@@ -586,6 +586,9 @@ async def _update_database_and_spend_counters(
     request_tags: list[str] | None = None,
     model_access_groups: Sequence[str] | None = None,
 ) -> None:
+    # Keep the current request out of the DB reseed floor until its reservation
+    # reconcile and any fallback direct counter increment have completed.
+    spend_counter_update_complete = asyncio.Event() if budget_reservation is not None else None
     try:
         spend_log_request_id = await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key,
@@ -598,8 +601,11 @@ async def _update_database_and_spend_counters(
             start_time=start_time,
             end_time=end_time,
             org_id=org_id,
+            spend_counter_update_complete=spend_counter_update_complete,
         )
     except Exception:
+        if spend_counter_update_complete is not None:
+            spend_counter_update_complete.set()
         if budget_reservation is not None:
             try:
                 await _release_budget_reservation(budget_reservation=budget_reservation)
@@ -612,32 +618,40 @@ async def _update_database_and_spend_counters(
                         "Failed to invalidate budget reservation counters after release failed"
                     )
         raise
+    except BaseException:
+        if spend_counter_update_complete is not None:
+            spend_counter_update_complete.set()
+        raise
 
     try:
-        await increment_spend_counters(
-            token=user_api_key,
-            team_id=team_id,
-            user_id=user_id,
-            response_cost=response_cost,
-            org_id=org_id,
-            budget_reservation=budget_reservation,
-            end_user_id=end_user_id,
-            tags=request_tags,
-            request_id=spend_log_request_id,
-            request_started_at=start_time,
-            model_access_groups=model_access_groups,
-        )
-    except Exception:
-        if budget_reservation is not None:
-            try:
-                await _invalidate_budget_reservation_counters(budget_reservation=budget_reservation)
-            except Exception:
-                verbose_proxy_logger.exception(
-                    "Failed to invalidate budget reservation counters after spend counter update failed"
-                )
-            finally:
-                budget_reservation["finalized"] = True
-        raise
+        try:
+            await increment_spend_counters(
+                token=user_api_key,
+                team_id=team_id,
+                user_id=user_id,
+                response_cost=response_cost,
+                org_id=org_id,
+                budget_reservation=budget_reservation,
+                end_user_id=end_user_id,
+                tags=request_tags,
+                request_id=spend_log_request_id,
+                request_started_at=start_time,
+                model_access_groups=model_access_groups,
+            )
+        except Exception:
+            if budget_reservation is not None:
+                try:
+                    await _invalidate_budget_reservation_counters(budget_reservation=budget_reservation)
+                except Exception:
+                    verbose_proxy_logger.exception(
+                        "Failed to invalidate budget reservation counters after spend counter update failed"
+                    )
+                finally:
+                    budget_reservation["finalized"] = True
+            raise
+    finally:
+        if spend_counter_update_complete is not None:
+            spend_counter_update_complete.set()
 
 
 async def _release_budget_reservation(budget_reservation: dict | None) -> None:

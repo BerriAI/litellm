@@ -215,6 +215,7 @@ class DBSpendUpdateWriter:
         start_time: datetime | None,
         end_time: datetime | None,
         response_cost: float | None,
+        spend_counter_update_complete: asyncio.Event | None = None,
     ) -> str | None:
         """Returns the LiteLLM_SpendLogs request_id this call was recorded
         under, so the caller can tell the budget-window writer which log rows
@@ -299,6 +300,7 @@ class DBSpendUpdateWriter:
                     litellm_proxy_budget_name=litellm_proxy_budget_name,
                     payload=payload,
                     request_model_access_groups=get_request_model_access_groups(kwargs),
+                    spend_counter_update_complete=spend_counter_update_complete,
                 )
             )
 
@@ -494,15 +496,22 @@ class DBSpendUpdateWriter:
         litellm_proxy_budget_name: str | None,
         payload: SpendLogsPayload,
         request_model_access_groups: Sequence[str] = (),
+        spend_counter_update_complete: asyncio.Event | None = None,
     ):
         """
         Runs all 13 spend-update helpers sequentially inside a single asyncio task.
 
         Each helper is wrapped in try/except so one failure doesn't prevent the others.
 
+        Reservation reconciliation may provide a barrier so its DB reseed cannot
+        observe this request before the direct counter increment is applied.
+
         The deepcopy runs here, off the awaited request path, so the daily spend
         helpers get a payload isolated from the spend-log queue entry and the caller.
         """
+        if spend_counter_update_complete is not None:
+            await spend_counter_update_complete.wait()
+
         payload_copy: Final = copy.deepcopy(payload)
         request_tags: Final = payload_copy.get("request_tags")
         try:

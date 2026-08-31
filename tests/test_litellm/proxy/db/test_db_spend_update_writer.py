@@ -1578,6 +1578,36 @@ async def test_update_database_creates_single_task():
 
 
 @pytest.mark.asyncio
+async def test_batch_database_updates_waits_for_spend_counter_reconciliation():
+    db_writer = DBSpendUpdateWriter()
+    spend_counter_update_complete = asyncio.Event()
+    db_writer._update_user_db = AsyncMock(side_effect=asyncio.CancelledError)
+
+    batch_task = asyncio.create_task(
+        db_writer._batch_database_updates(
+            response_cost=0.1,
+            user_id="u1",
+            hashed_token="t1",
+            team_id="team1",
+            org_id="org1",
+            end_user_id="eu1",
+            prisma_client=MagicMock(),
+            litellm_proxy_budget_name="budget",
+            payload={"request_tags": []},
+            spend_counter_update_complete=spend_counter_update_complete,
+        )
+    )
+
+    await asyncio.sleep(0)
+    db_writer._update_user_db.assert_not_awaited()
+
+    spend_counter_update_complete.set()
+    with pytest.raises(asyncio.CancelledError):
+        await batch_task
+    db_writer._update_user_db.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_batch_database_updates_isolation_on_failure():
     """
     Test that if one helper inside _batch_database_updates raises,

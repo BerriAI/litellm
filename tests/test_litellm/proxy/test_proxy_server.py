@@ -8192,8 +8192,8 @@ async def test_increment_spend_counters_reseeds_from_db_on_bad_reserved_counter(
     """When the reservation reconcile finds the counter in an inconsistent state
     (here: missing), it must NOT delete the counter and fail open (the old
     behavior, which left the counter unenforced after a Redis reload). It reseeds
-    from the authoritative DB so the counter reflects the recorded total and
-    budget gating continues."""
+    from the authoritative DB and applies this request's actual cost so the
+    counter reflects both the recorded total and buffered spend."""
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.proxy_server import increment_spend_counters
     from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
@@ -8230,9 +8230,9 @@ async def test_increment_spend_counters_reseeds_from_db_on_bad_reserved_counter(
             )
 
         assert budget_reservation["finalized"] is True
-        # counter reseeded to the authoritative DB value, not deleted/left None
-        # and not double-counted via a direct increment
-        assert counter_cache.in_memory_cache.get_cache(key="spend:key:key-bad-reserved-counter") == pytest.approx(0.6)
+        # The DB floor can lag this request's buffered spend, so reconciliation
+        # reseeds to 0.6 and then applies the current request's 0.25 cost.
+        assert counter_cache.in_memory_cache.get_cache(key="spend:key:key-bad-reserved-counter") == pytest.approx(0.85)
     finally:
         ps.spend_counter_cache = orig_counter
         ps.prisma_client = orig_prisma
@@ -11325,7 +11325,11 @@ async def test_window_spend_row_is_enqueued_even_when_the_counter_was_reserved()
     }
 
     original_reconcile = br.reconcile_budget_reservation
-    br.reconcile_budget_reservation = AsyncMock(return_value=None)
+    br.reconcile_budget_reservation = AsyncMock(
+        return_value=types.MappingProxyType(
+            {entry["counter_key"]: None for entry in reservation["entries"]}
+        )
+    )
     try:
         with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
             await increment_spend_counters(

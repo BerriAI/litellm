@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from types import MappingProxyType
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -590,9 +591,10 @@ async def test_increment_spend_counters_skips_reserved_counter_keys(monkeypatch)
 
     reserved = {"spend:key:hashed-tok", "spend:org:org1"}
     monkeypatch.setattr(
-        br, "get_reserved_counter_keys", MagicMock(return_value=set(reserved))
+        br,
+        "reconcile_budget_reservation",
+        AsyncMock(return_value=MappingProxyType({counter_key: None for counter_key in reserved})),
     )
-    monkeypatch.setattr(br, "reconcile_budget_reservation", AsyncMock())
 
     recorded: dict[str, float] = {}
 
@@ -710,11 +712,11 @@ async def test_increment_spend_counters_zero_cost_is_noop_finalizes_reservation(
 
 
 @pytest.mark.asyncio
-async def test_reconcile_budget_reservation_for_counter_update_returns_empty_set_when_none():
+async def test_reconcile_budget_reservation_for_counter_update_returns_empty_mapping_when_none():
     result = await ps._reconcile_budget_reservation_for_counter_update(
         budget_reservation=None, response_cost=1.0
     )
-    assert result == set()
+    assert not result
 
 
 @pytest.mark.asyncio
@@ -743,7 +745,7 @@ async def test_reconcile_budget_reservation_for_counter_update_failure_invalidat
         budget_reservation={"foo": "bar"}, response_cost=1.0
     )
 
-    assert result == set()
+    assert not result
     assert fake_invalidate.called is True
 
 

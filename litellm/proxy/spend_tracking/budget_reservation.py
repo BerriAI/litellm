@@ -280,19 +280,24 @@ async def reconcile_budget_reservation(
     budget_reservation: dict | None,
     actual_cost: float | None,
     finalize: bool = True,
-) -> None:
-    if not budget_reservation or budget_reservation.get("finalized") is True:
-        return
+) -> Mapping[str, None]:
+    if not budget_reservation:
+        return MappingProxyType({})
+    if budget_reservation.get("finalized") is True:
+        return MappingProxyType(
+            {counter_key: None for counter_key in get_reserved_counter_keys(budget_reservation=budget_reservation)}
+        )
 
     reserved_cost: Final = float(budget_reservation.get("reserved_cost") or 0.0)
     actual: Final = float(actual_cost or 0.0)
-    await _set_reserved_entries_actual_cost(
+    reconciled_counter_keys: Final = await _set_reserved_entries_actual_cost(
         entries=budget_reservation.get("entries") or [],
         actual_cost=actual,
         default_reserved_cost=reserved_cost,
     )
     if finalize:
         budget_reservation["finalized"] = True
+    return reconciled_counter_keys
 
 
 async def release_budget_reservation(budget_reservation: dict | None) -> None:
@@ -808,14 +813,22 @@ async def _set_reserved_entries_actual_cost(
     actual_cost: float,
     default_reserved_cost: float,
     reseed_on_inconsistent: bool = True,
-) -> None:
-    for entry in entries:
-        await _set_reserved_entry_actual_cost(
-            entry=entry,
-            actual_cost=actual_cost,
-            default_reserved_cost=default_reserved_cost,
-            reseed_on_inconsistent=reseed_on_inconsistent,
-        )
+) -> Mapping[str, None]:
+    return MappingProxyType(
+        {
+            counter_key: None
+            for entry in entries
+            if (
+                counter_key := await _set_reserved_entry_actual_cost(
+                    entry=entry,
+                    actual_cost=actual_cost,
+                    default_reserved_cost=default_reserved_cost,
+                    reseed_on_inconsistent=reseed_on_inconsistent,
+                )
+            )
+            is not None
+        }
+    )
 
 
 async def _set_reserved_entry_actual_cost(
@@ -823,15 +836,15 @@ async def _set_reserved_entry_actual_cost(
     actual_cost: float,
     default_reserved_cost: float,
     reseed_on_inconsistent: bool = True,
-) -> None:
+) -> str | None:
     from litellm.proxy.proxy_server import (
         _increment_spend_counter_cache,
         reseed_spend_counter_from_db,
     )
 
     counter_key: Final = entry.get("counter_key")
-    if counter_key is None:
-        return
+    if not isinstance(counter_key, str):
+        return None
     reserved_cost: Final = _get_entry_reserved_cost(
         entry=entry,
         default_reserved_cost=default_reserved_cost,
@@ -839,16 +852,19 @@ async def _set_reserved_entry_actual_cost(
     target_adjustment: Final = actual_cost - reserved_cost
     applied_adjustment: Final = float(entry.get("applied_adjustment") or 0.0)
     adjustment: Final = target_adjustment - applied_adjustment
-    if adjustment == 0:
-        return
+    minimum_current_value: Final = max(0.0, reserved_cost + applied_adjustment)
     if await _counter_can_apply_adjustment(
         counter_key=counter_key,
         adjustment=adjustment,
+        minimum_current_value=minimum_current_value,
     ):
-        await _increment_spend_counter_cache(
-            counter_key=counter_key,
-            increment=adjustment,
-        )
+        if adjustment != 0:
+            await _increment_spend_counter_cache(
+                counter_key=counter_key,
+                increment=adjustment,
+            )
+        entry["applied_adjustment"] = target_adjustment
+        return counter_key
     elif reseed_on_inconsistent:
         # Post-call reconcile / release: the counter was flushed or reseeded
         # between reservation and reconcile (Redis restart / cross-pod reset),
@@ -857,18 +873,19 @@ async def _set_reserved_entry_actual_cost(
         # and failing open — deleting it is what left budgets unenforced after a
         # Redis reload.
         await reseed_spend_counter_from_db(counter_key=counter_key)
+        return None
     else:
         # Pre-call admission resize: the in-flight reservation cost is not yet
         # persisted, so the DB floor would discard it. Keep the original
         # fail-closed behavior (raise -> reserve_budget_for_request releases and
         # denies) rather than admitting against an inconsistent counter.
         raise RuntimeError(f"Cannot resize budget reservation against inconsistent counter {counter_key}")
-    entry["applied_adjustment"] = target_adjustment
 
 
 async def _counter_can_apply_adjustment(
     counter_key: str,
     adjustment: float,
+    minimum_current_value: float,
 ) -> bool:
     from litellm.proxy.proxy_server import spend_counter_cache
 
@@ -881,7 +898,7 @@ async def _counter_can_apply_adjustment(
     except (TypeError, ValueError):
         return False
 
-    return not (adjustment < 0 and current_float + adjustment < -1e-12)
+    return current_float >= minimum_current_value - 1e-12 and current_float + adjustment >= -1e-12
 
 
 async def _release_applied_entries_best_effort(
