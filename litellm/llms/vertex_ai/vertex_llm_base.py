@@ -27,6 +27,13 @@ from .common_utils import (
     get_vertex_base_url,
 )
 
+
+def _graft_default_vertex_path(api_base: str, default_url: str) -> str:
+    default_segments: Final = urlparse(default_url).path.lstrip("/").split("/")
+    graft_segments: Final = default_segments[1:] if default_segments[0] in ("v1", "v1beta1") else default_segments
+    return api_base.rstrip("/") + "/" + "/".join(graft_segments)
+
+
 GOOGLE_IMPORT_ERROR_MESSAGE: Final = (
     "Google Cloud SDK not found. Install it with: pip install 'litellm[google]' or pip install google-cloud-aiplatform"
 )
@@ -621,8 +628,9 @@ class VertexBase:
 
         Handles custom api_base for:
         1. Gemini (Google AI Studio) - constructs /models/{model}:{endpoint}
-        2. Vertex AI with standard proxies - constructs {api_base}:{endpoint};
-           if api_base has no path (bare host), grafts the default vertex URL path onto it
+        2. Vertex AI with standard proxies - grafts the default vertex URL path onto the
+           api_base when its path is empty or only an API version (/v1, /v1beta1);
+           otherwise constructs {api_base}:{endpoint}
         3. Vertex AI with PSC endpoints - constructs full path structure
            {api_base}/v1/projects/{project}/locations/{location}/endpoints/{model}:{endpoint}
            (only when use_psc_endpoint_format=True)
@@ -669,6 +677,8 @@ class VertexBase:
                     )
                 elif urlparse(api_base).path in ("", "/"):
                     url = api_base.rstrip("/") + urlparse(url).path
+                elif urlparse(api_base).path.rstrip("/") in ("/v1", "/v1beta1") and "/projects/" in urlparse(url).path:
+                    url = _graft_default_vertex_path(api_base=api_base, default_url=url)
                 else:
                     url = f"{api_base}:{endpoint}"
             if stream is True:
