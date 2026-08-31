@@ -56,7 +56,7 @@ def _blocked_responses_api_stream(
     logging_obj: LiteLLMLoggingObj,
     request_data: dict[str, object],
 ) -> CachedResponsesAPIStreamingIterator:
-    return CachedResponsesAPIStreamingIterator(
+    return CachedResponsesAPIStreamingIterator(  # mutable-ok: the iterator stores advancing stream state
         response=response,
         logging_obj=logging_obj,
         request_data=request_data,
