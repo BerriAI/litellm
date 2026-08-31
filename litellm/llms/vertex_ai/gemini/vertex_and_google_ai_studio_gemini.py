@@ -283,6 +283,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return model.split("/")[-1] in GEMINI_ROLLING_LATEST_ALIASES
 
     @staticmethod
+    def _is_gemini_3_flash_or_newer(model: str | None) -> bool:
+        """
+        Check if the model is a Gemini 3 or newer Flash, the tier that accepts
+        the MINIMAL thinking level. Flash-Lite counts, Pro does not.
+        """
+        if not model:
+            return False
+        return VertexGeminiConfig._is_gemini_3_or_newer(model) and "flash" in model.lower()
+
+    @staticmethod
     def _forward_gemini_function_call_id(model: str) -> bool:
         """
         Whether to include `id` on function_call / function_response parts.
@@ -866,10 +876,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Returns:
             GeminiThinkingConfig with thinkingLevel and includeThoughts
         """
-        # Check if this is gemini-3-flash which supports MINIMAL thinking level
-        # Covers gemini-3-flash, gemini-3-flash-preview, gemini-3.1-flash, gemini-3.1-flash-lite-preview,
-        # gemini-3.5-flash, and any future 3.x-flash variants.
-        is_gemini3flash: Final = model and ("flash" in model.lower() and "gemini-3" in model.lower())
+        is_gemini3flash: Final = VertexGeminiConfig._is_gemini_3_flash_or_newer(model)
         is_gemini31pro: Final = model and ("gemini-3.1-pro-preview" in model.lower())
         if reasoning_effort == "minimal":
             if is_gemini3flash:
@@ -963,7 +970,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     params["includeThoughts"] = True
                     # Follow provider defaults unless explicitly opted into legacy behavior.
                     if litellm.enable_gemini_default_thinking_level_low is True:
-                        is_gemini3flash: Final = "gemini-3" in model.lower() and "flash" in model.lower()
+                        is_gemini3flash: Final = VertexGeminiConfig._is_gemini_3_flash_or_newer(model)
                         params["thinkingLevel"] = "minimal" if is_gemini3flash else "low"
             else:
                 # Thinking disabled
