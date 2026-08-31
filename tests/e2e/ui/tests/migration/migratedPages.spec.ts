@@ -36,16 +36,10 @@ async function expectRendered(page: Page) {
 async function clickSidebar(page: Page, segment: string) {
   const link = sidebar(page).locator(`a[href$="/ui/${segment}"]`).first();
   for (let i = 0; i < 8 && !(await link.isVisible().catch(() => false)); i++) {
-    // A collapsed group is a menu item with a group-toggle button but no
-    // rendered submenu yet; clicking the toggle expands it.
-    const collapsedGroup = sidebar(page)
-      .locator(
-        '[data-slot="sidebar-menu-item"]:has(> [data-slot="sidebar-menu-button"]):not(:has(> [data-slot="sidebar-menu-sub"])) > [data-slot="sidebar-menu-button"]',
-      )
-      .first();
+    const collapsedGroup = sidebar(page).getByRole("button", { expanded: false }).first();
     if (!(await collapsedGroup.isVisible().catch(() => false))) break;
     await collapsedGroup.click();
-    await page.waitForTimeout(250);
+    await expect(collapsedGroup).toHaveAttribute("aria-expanded", "true");
   }
   await link.click();
 }
