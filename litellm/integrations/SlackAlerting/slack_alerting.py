@@ -5,6 +5,7 @@ import datetime
 import os
 import random
 import time
+from collections.abc import Callable
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -17,7 +18,11 @@ import litellm.litellm_core_utils.litellm_logging
 import litellm.types
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.constants import HOURS_IN_A_DAY, SLACK_DAILY_REPORT_LOCK_ID
+from litellm.constants import (
+    HOURS_IN_A_DAY,
+    SLACK_DAILY_REPORT_LOCK_ID,
+    SLACK_MODEL_DEPRECATION_LOCK_ID,
+)
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_alert_type
 from litellm.integrations.SlackAlerting.hanging_request_check import (
@@ -45,9 +50,20 @@ from litellm.repositories.table_repositories import InvitationLinkRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.integrations.slack_alerting import *
+from litellm.types.proxy.model_deprecation import (
+    DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
+    DEPRECATION_IDLE_POLL_SECONDS,
+)
 
 from ..email_templates.templates import *
 from .batching_handler import send_to_webhook, squash_payloads
+from .ms_teams import (
+    MS_TEAMS_ALERT_HEADERS,
+    MS_TEAMS_ALERTING_DESTINATION,
+    MSTeamsAlertText,
+    MSTeamsQueueItem,
+    get_ms_teams_webhook_url,
+)
 from .utils import process_slack_alerting_variables
 
 if TYPE_CHECKING:
@@ -57,6 +73,12 @@ if TYPE_CHECKING:
     Router = _Router
 else:
     Router = Any
+
+
+def _proxy_llm_router() -> Router | None:
+    from litellm.proxy.proxy_server import llm_router
+
+    return llm_router
 
 
 class SlackAlerting(CustomBatchLogger):
@@ -1044,6 +1066,99 @@ Model Info:
     async def model_removed_alert(self, model_name: str):
         pass
 
+    def _deprecation_alerts_enabled(self) -> bool:
+        return self.alerting is not None and AlertType.model_deprecation_warnings in self.alert_types
+
+    async def send_model_deprecation_alert(
+        self,
+        llm_router: Router | None = None,
+        pod_lock_manager: "PodLockManager | None" = None,
+    ) -> bool:
+        """Alert on the router's deprecated and imminent models, True when one was sent
+
+        The daily lock is claimed only once there is something to say, so an empty pass never blocks a
+        later real one, and a sent alert is stamped in the shared cache for a day so sibling pods stop asking
+        """
+        if not self._deprecation_alerts_enabled():
+            return False
+
+        from litellm.proxy.common_utils.model_deprecation import (
+            collect_model_deprecations,
+            format_deprecation_alert_message,
+        )
+
+        snapshot: Final = collect_model_deprecations(llm_router=llm_router)
+        message: Final = format_deprecation_alert_message(snapshot)
+        if message is None:
+            return False
+        if not await self._claimed_deprecation_alert_window(pod_lock_manager):
+            return False
+
+        level: Final[Literal["Low", "Medium", "High"]] = "High" if snapshot.deprecated else "Medium"
+
+        await self.send_alert(
+            message=message,
+            level=level,
+            alert_type=AlertType.model_deprecation_warnings,
+            alerting_metadata={  # mutable-ok: send_alert takes a dict payload
+                "deprecated_count": len(snapshot.deprecated),
+                "imminent_count": len(snapshot.imminent),
+                "upcoming_count": len(snapshot.upcoming),
+            },
+        )
+        await self.internal_usage_cache.async_set_cache(
+            key=SlackAlertingCacheKeys.deprecation_alert_sent_key.value,
+            value=time.time(),
+            ttl=DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
+        )
+        return True
+
+    async def _claimed_deprecation_alert_window(self, pod_lock_manager: "PodLockManager | None") -> bool:
+        """Without a redis backed lock there is no fleet to coordinate, so a lone pod always alerts"""
+        if pod_lock_manager is None:
+            return True
+        return (
+            await pod_lock_manager.acquire_lock(
+                cronjob_id=SLACK_MODEL_DEPRECATION_LOCK_ID,
+                ttl=DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
+                allow_reentrant=False,
+            )
+        ) is not False
+
+    async def _deprecation_alert_sent_within_a_day(self) -> bool:
+        return (
+            await self.internal_usage_cache.async_get_cache(key=SlackAlertingCacheKeys.deprecation_alert_sent_key.value)
+        ) is not None
+
+    async def _run_deprecation_alert_pass(
+        self, llm_router: Router | None, pod_lock_manager: "PodLockManager | None"
+    ) -> bool:
+        if llm_router is None or not self._deprecation_alerts_enabled():
+            return False
+        if await self._deprecation_alert_sent_within_a_day():
+            return False
+        return await self.send_model_deprecation_alert(llm_router=llm_router, pod_lock_manager=pod_lock_manager)
+
+    async def run_scheduled_deprecation_check(
+        self,
+        get_llm_router: Callable[[], Router | None] = _proxy_llm_router,
+        pod_lock_manager: "PodLockManager | None" = None,
+    ) -> None:
+        """Poll every pass for a loaded router, the alert being on, and no alert in the last day, then alert
+
+        A pass that could not alert (no router yet, alert type off, a sibling pod holds the daily lock, or a
+        redis blip at claim time) is retried on the next poll instead of costing a day, while a pass that
+        raised (a missing webhook, say) backs off a full day so a misconfiguration logs once, not every poll
+        """
+        while True:
+            try:
+                await self._run_deprecation_alert_pass(get_llm_router(), pod_lock_manager)
+            except Exception as e:  # noqa: BLE001  # a failed alert must not kill the loop
+                verbose_proxy_logger.exception("Error in model deprecation alert loop: %s", e)
+                await asyncio.sleep(DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS)
+                continue
+            await asyncio.sleep(DEPRECATION_IDLE_POLL_SECONDS)
+
     async def send_webhook_alert(self, webhook_event: WebhookEvent) -> bool:
         """
         Sends structured alert to webhook, if set.
@@ -1323,12 +1438,42 @@ Model Info:
             # only send budget alerts over Email
             await self.send_email_alert_using_smtp(webhook_event=user_info, alert_type=alert_type)
 
-        if "slack" not in self.alerting:
+        send_to_slack: Final = "slack" in self.alerting
+        send_to_ms_teams: Final = MS_TEAMS_ALERTING_DESTINATION in self.alerting
+        if not send_to_slack and not send_to_ms_teams:
             return
         if alert_type not in self.alert_types:
             return
 
         from datetime import datetime
+
+        current_time: Final = datetime.now().strftime("%H:%M:%S")
+        _proxy_base_url: Final = os.getenv("PROXY_BASE_URL", None)
+        alert_type_name: Final = getattr(alert_type, "name", alert_type)
+        alert_type_formatted: Final = f"Alert type: `{alert_type_name}`"
+        if alert_type == "daily_reports" or alert_type == "new_model_added":
+            formatted_message = alert_type_formatted + message
+        else:
+            formatted_message = (
+                f"{alert_type_formatted}\nLevel: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
+            )
+
+        if kwargs:
+            for key, value in kwargs.items():
+                formatted_message += f"\n\n{key}: `{value}`\n\n"
+        if alerting_metadata:
+            for key, value in alerting_metadata.items():
+                formatted_message += f"\n\n*Alerting Metadata*: \n{key}: `{value}`\n\n"
+        if _proxy_base_url is not None:
+            formatted_message += f"\n\nProxy URL: `{_proxy_base_url}`"
+
+        if send_to_ms_teams:
+            self._enqueue_ms_teams_alert(formatted_message=formatted_message, alert_type=alert_type)
+
+        if not send_to_slack:
+            if len(self.log_queue) >= self.batch_size:
+                await self.flush_queue()
+            return
 
         # Check if digest mode is enabled for this alert type
         alert_type_name_str: Final = getattr(alert_type, "value", str(alert_type))
@@ -1340,9 +1485,9 @@ Model Info:
             elif self.default_webhook_url is not None:
                 _digest_webhook = self.default_webhook_url
             else:
-                _digest_webhook = os.getenv("SLACK_WEBHOOK_URL", None)
+                _digest_webhook = os.getenv("SLACK_WEBHOOK_URL") or os.getenv("ALERTING_WEBHOOK_URL")
             if _digest_webhook is None:
-                raise ValueError("Missing SLACK_WEBHOOK_URL from environment")
+                raise ValueError("Missing SLACK_WEBHOOK_URL / ALERTING_WEBHOOK_URL from environment")
 
             digest_key: Final = f"{alert_type_name_str}:{request_model or ''}:{api_base or ''}"
 
@@ -1365,38 +1510,16 @@ Model Info:
                     )
             return  # Suppress immediate alert; will be emitted by _flush_digest_buckets
 
-        # Get the current timestamp
-        current_time: Final = datetime.now().strftime("%H:%M:%S")
-        _proxy_base_url: Final = os.getenv("PROXY_BASE_URL", None)
-        # Use .name if it's an enum, otherwise use as is
-        alert_type_name: Final = getattr(alert_type, "name", alert_type)
-        alert_type_formatted: Final = f"Alert type: `{alert_type_name}`"
-        if alert_type == "daily_reports" or alert_type == "new_model_added":
-            formatted_message = alert_type_formatted + message
-        else:
-            formatted_message = (
-                f"{alert_type_formatted}\nLevel: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
-            )
-
-        if kwargs:
-            for key, value in kwargs.items():
-                formatted_message += f"\n\n{key}: `{value}`\n\n"
-        if alerting_metadata:
-            for key, value in alerting_metadata.items():
-                formatted_message += f"\n\n*Alerting Metadata*: \n{key}: `{value}`\n\n"
-        if _proxy_base_url is not None:
-            formatted_message += f"\n\nProxy URL: `{_proxy_base_url}`"
-
         # check if we find the slack webhook url in self.alert_to_webhook_url
         if self.alert_to_webhook_url is not None and alert_type in self.alert_to_webhook_url:
             slack_webhook_url: str | list[str] | None = self.alert_to_webhook_url[alert_type]
         elif self.default_webhook_url is not None:
             slack_webhook_url = self.default_webhook_url
         else:
-            slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL", None)
+            slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL") or os.getenv("ALERTING_WEBHOOK_URL")
 
         if slack_webhook_url is None:
-            raise ValueError("Missing SLACK_WEBHOOK_URL from environment")
+            raise ValueError("Missing SLACK_WEBHOOK_URL / ALERTING_WEBHOOK_URL from environment")
         payload: Final = {"text": formatted_message}
         headers: Final = {"Content-type": "application/json"}
 
@@ -1422,6 +1545,24 @@ Model Info:
 
         if len(self.log_queue) >= self.batch_size:
             await self.flush_queue()
+
+    def _enqueue_ms_teams_alert(self, formatted_message: str, alert_type: AlertType) -> None:
+        ms_teams_webhook_url: Final = get_ms_teams_webhook_url()
+        if ms_teams_webhook_url is None:
+            verbose_proxy_logger.error(
+                "MS Teams alerting is enabled but MS_TEAMS_WEBHOOK_URL is not set. Dropping alert type=%s",
+                alert_type,
+            )
+            return
+        payload: Final[MSTeamsAlertText] = {"text": formatted_message}
+        item: Final[MSTeamsQueueItem] = {
+            "url": ms_teams_webhook_url,
+            "headers": MS_TEAMS_ALERT_HEADERS,
+            "payload": payload,
+            "alert_type": alert_type,
+            "format": MS_TEAMS_ALERTING_DESTINATION,
+        }
+        self.log_queue.append(item)
 
     async def async_send_batch(self):
         if not self.log_queue:

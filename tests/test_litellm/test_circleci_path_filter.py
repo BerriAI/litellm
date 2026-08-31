@@ -7,6 +7,9 @@ category, it prints `run` or `skip`. The gating contract we lock in here:
   * docs-only changes (``*.md``, ``*.mdx``, ``docs/``) run nothing
   * client-only changes (``ui/``) run client jobs but skip backend jobs
   * any backend change runs both client and backend jobs
+  * ``ui`` tracks ``ui/`` plus CI config, so a backend-only change skips it
+    where ``client`` would still run, while a change to the workflows that
+    define the dashboard jobs still exercises them
 
 If this logic silently regresses, real test jobs get skipped, so these cases
 are the guardrail against that.
@@ -40,6 +43,7 @@ def classify(category: str, changed: list[str]) -> str:
 DOCS = ["README.md", "docs/my_website/index.mdx", "litellm/anywhere.md"]
 CLIENT = ["ui/litellm-dashboard/src/App.tsx"]
 BACKEND = ["litellm/main.py"]
+CI = [".github/workflows/test-litellm-ui-unit.yml"]
 
 
 @pytest.mark.parametrize(
@@ -48,20 +52,27 @@ BACKEND = ["litellm/main.py"]
         # docs-only: skip everything
         ("backend", DOCS, "skip"),
         ("client", DOCS, "skip"),
+        ("ui", DOCS, "skip"),
         ("backend", [], "skip"),
         ("client", [], "skip"),
+        ("ui", [], "skip"),
         # client-only: backend skips, client runs
         ("backend", CLIENT, "skip"),
         ("client", CLIENT, "run"),
+        ("ui", CLIENT, "run"),
         ("backend", CLIENT + DOCS, "skip"),
         ("client", CLIENT + DOCS, "run"),
+        ("ui", CLIENT + DOCS, "run"),
         # any backend change: both run ("backend runs both")
         ("backend", BACKEND, "run"),
         ("client", BACKEND, "run"),
+        ("ui", BACKEND, "skip"),
         ("backend", BACKEND + DOCS, "run"),
         ("client", BACKEND + DOCS, "run"),
+        ("ui", BACKEND + DOCS, "skip"),
         ("backend", BACKEND + CLIENT, "run"),
         ("client", BACKEND + CLIENT, "run"),
+        ("ui", BACKEND + CLIENT, "run"),
     ],
 )
 def test_classify_decisions(category: str, changed: list[str], expected: str) -> None:
@@ -71,6 +82,31 @@ def test_classify_decisions(category: str, changed: list[str], expected: str) ->
 def test_markdown_under_ui_counts_as_client_not_docs() -> None:
     assert classify("client", ["ui/litellm-dashboard/README.md"]) == "run"
     assert classify("backend", ["ui/litellm-dashboard/README.md"]) == "skip"
+    assert classify("ui", ["ui/litellm-dashboard/README.md"]) == "run"
+
+
+def test_ci_config_changes_reach_every_category() -> None:
+    """A workflow edit has to exercise the jobs it defines, otherwise the change
+    ships unvalidated: the dashboard jobs would skip on the very pull request
+    that rewrites them."""
+    assert classify("ui", CI) == "run"
+    assert classify("backend", CI) == "run"
+    assert classify("client", CI) == "run"
+
+
+def test_markdown_under_dot_github_is_still_docs() -> None:
+    """`.github/**` counting as CI config must not drag the pull request template
+    and other markdown back into running the full suite."""
+    assert classify("ui", [".github/pull_request_template.md"]) == "skip"
+    assert classify("backend", [".github/pull_request_template.md"]) == "skip"
+
+
+def test_ui_and_client_diverge_on_a_backend_only_change() -> None:
+    """`client` gates CircleCI's dashboard end-to-end jobs, which drive a real
+    proxy and so must run on backend changes. `ui` gates the dashboard build and
+    its unit tests, which cannot see the backend at all."""
+    assert classify("client", BACKEND) == "run"
+    assert classify("ui", BACKEND) == "skip"
 
 
 def test_non_docs_directory_with_docs_in_name_is_backend() -> None:
