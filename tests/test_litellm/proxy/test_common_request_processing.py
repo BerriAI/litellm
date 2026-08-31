@@ -3485,6 +3485,28 @@ class TestHandleLLMApiExceptionRetryAfter:
         assert proxy_exc.headers["retry-after"] == "43"
         assert proxy_exc.headers["x-custom"] == "1"
 
+    async def test_handle_llm_api_exception_budget_exceeded_uses_custom_message(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            litellm, "budget_exceeded_error_message", "Allowance reached, contact the AI team."
+        )
+        exc = litellm.BudgetExceededError(current_cost=10.51, max_budget=10.0)
+
+        proxy_exc = await self._invoke(exc)
+
+        assert proxy_exc.message == "Allowance reached, contact the AI team."
+        assert proxy_exc.type == "budget_exceeded"
+        assert proxy_exc.code == "429"
+
+    async def test_handle_llm_api_exception_budget_exceeded_defaults_to_detail(self):
+        exc = litellm.BudgetExceededError(current_cost=10.51, max_budget=10.0)
+
+        proxy_exc = await self._invoke(exc)
+
+        assert "10.51" in proxy_exc.message
+        assert proxy_exc.type == "budget_exceeded"
+
 
 class TestHandleLLMApiExceptionFramingHeaders:
     """HTTP-framing headers on the provider exception must be stripped before the

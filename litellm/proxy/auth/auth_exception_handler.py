@@ -169,7 +169,7 @@ class UserAPIKeyAuthExceptionHandler:
 
             if isinstance(e, litellm.BudgetExceededError):
                 raise ProxyException(
-                    message=e.message,
+                    message=e.client_facing_message,
                     type=ProxyErrorTypes.budget_exceeded,
                     param=None,
                     code=getattr(e, "status_code", status.HTTP_429_TOO_MANY_REQUESTS),

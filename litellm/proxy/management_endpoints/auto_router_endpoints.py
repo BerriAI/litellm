@@ -256,7 +256,7 @@ async def _authorize_models_this_test_can_call(
         )
     except BudgetExceededError as e:
         raise ProxyException(
-            message=e.message,
+            message=e.client_facing_message,
             type=ProxyErrorTypes.budget_exceeded,
             param=None,
             code=status.HTTP_400_BAD_REQUEST,

@@ -25,6 +25,7 @@ from prisma.errors import (
 )
 
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BudgetExceededError
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
@@ -351,6 +352,41 @@ async def test_handle_authentication_error_budget_exceeded():
 
     assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
     assert int(exc_info.value.code) == status.HTTP_429_TOO_MANY_REQUESTS
+
+
+@pytest.mark.asyncio
+async def test_handle_authentication_error_budget_exceeded_custom_message(monkeypatch):
+    from litellm.exceptions import BudgetExceededError
+
+    monkeypatch.setattr(
+        litellm,
+        "budget_exceeded_error_message",
+        "Your AI usage allowance has been reached. Please contact the AI team.",
+    )
+
+    budget_error = BudgetExceededError(
+        message="Budget has been exceeded! Current cost: 10.51, Max budget: 10.00",
+        current_cost=10.51,
+        max_budget=10.00,
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await UserAPIKeyAuthExceptionHandler()._handle_authentication_error(
+            budget_error,
+            MagicMock(),
+            {},
+            "/v1/chat/completions",
+            None,
+            "sk-test",
+        )
+
+    assert (
+        exc_info.value.message
+        == "Your AI usage allowance has been reached. Please contact the AI team."
+    )
+    assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+    assert int(exc_info.value.code) == status.HTTP_429_TOO_MANY_REQUESTS
+    assert "10.51" in budget_error.message
 
 
 @pytest.mark.asyncio

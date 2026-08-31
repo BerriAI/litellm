@@ -398,6 +398,7 @@ budget_duration: Optional[str] = (
 )
 default_soft_budget: float = DEFAULT_SOFT_BUDGET  # by default all litellm proxy keys have a soft budget of 50.0
 budget_exceeded_throttle_percentage: Optional[float] = None
+budget_exceeded_error_message: Optional[str] = None
 forward_traceparent_to_llm_provider: bool = False
 
 

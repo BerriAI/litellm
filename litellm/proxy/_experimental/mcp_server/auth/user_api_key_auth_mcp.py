@@ -1223,7 +1223,7 @@ class MCPRequestHandler:
         except (HTTPException, ProxyException):
             raise
         except litellm.BudgetExceededError as e:
-            raise HTTPException(status_code=getattr(e, "status_code", 429), detail=str(e)) from None
+            raise HTTPException(status_code=getattr(e, "status_code", 429), detail=e.client_facing_message) from None
         except Exception as e:  # noqa: BLE001  # untyped gate failure: retryable 503 for a DB outage, else fail closed 401
             MCPRequestHandler._raise_503_if_db_unavailable(e)
             raise HTTPException(status_code=401, detail="Invalid or expired credential") from None

@@ -985,6 +985,12 @@ class BudgetExceededError(Exception):
         self.message = message
         super().__init__(message)
 
+    @property
+    def client_facing_message(self) -> str:
+        import litellm
+
+        return litellm.budget_exceeded_error_message or self.message
+
 
 ## DEPRECATED ##
 class InvalidRequestError(openai.BadRequestError):
