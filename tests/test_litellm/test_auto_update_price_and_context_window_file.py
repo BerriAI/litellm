@@ -115,9 +115,40 @@ def test_transform_modalities_set_vision_image_and_video_flags(sync_module):
     assert entry_text["supports_video_input"] is False
 
 
-def test_transform_survives_failed_fetch(sync_module):
+def test_transforms_survive_failed_fetch(sync_module):
     assert sync_module.transform_friendli_data(None, {}) == {}
     assert sync_module.transform_friendli_data([], {}) == {}
+    assert sync_module.transform_openrouter_data(None) == {}
+    assert sync_module.transform_vercel_ai_gateway_data(None) == {}
+
+
+def test_vercel_transform_skips_rows_without_token_pricing_or_limits(sync_module):
+    rows = [
+        {
+            "id": "wan-video",
+            "pricing": {"video_duration_pricing": [{"resolution": "720p", "cost_per_second": "0.1"}]},
+        },
+        {
+            "id": "qwen3-embedding",
+            "context_window": 32768,
+            "max_tokens": 32768,
+            "pricing": {"input": "0.00000001"},
+        },
+        {
+            "id": "no-limits-chat",
+            "pricing": {"input": "0.000001", "output": "0.000002"},
+        },
+        {
+            "id": "good-chat",
+            "context_window": 128000,
+            "max_tokens": 8192,
+            "pricing": {"input": "0.000001", "output": "0.000002"},
+        },
+    ]
+    transformed = sync_module.transform_vercel_ai_gateway_data(rows)
+    assert list(transformed) == ["vercel_ai_gateway/good-chat"]
+    assert transformed["vercel_ai_gateway/good-chat"]["input_cost_per_token"] == 1e-06
+    assert transformed["vercel_ai_gateway/good-chat"]["output_cost_per_token"] == 2e-06
 
 
 def test_transform_inherits_allowlisted_keys_from_base_model_entry(sync_module):
