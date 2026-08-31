@@ -733,6 +733,22 @@ def _check_allowed_routes_caller_permission(
     )
 
 
+def _is_safe_preset_route_transition(
+    incoming_allowed_routes: list | None,
+    existing_allowed_routes: list | None,
+) -> bool:
+    """
+    True when every route on BOTH sides is a safe `key_type` preset bucket
+    (empty = full access, which non-admins already get from a default
+    `/key/generate`). Requiring the existing side too keeps an owner from
+    clearing an admin-set custom route restriction (LIT-4139).
+    """
+    return all(
+        route in _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS
+        for route in (*(incoming_allowed_routes or []), *(existing_allowed_routes or []))
+    )
+
+
 def _check_permissions_caller_permission(
     data: GenerateRequestBase,
     user_api_key_dict: UserAPIKeyAuth,
@@ -2533,11 +2549,15 @@ async def _validate_update_key_data(
 
     _is_proxy_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
 
-    _check_allowed_routes_caller_permission(
-        allowed_routes=data.allowed_routes,
-        user_api_key_dict=user_api_key_dict,
-        allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
-    )
+    if not _is_safe_preset_route_transition(
+        incoming_allowed_routes=data.allowed_routes,
+        existing_allowed_routes=existing_key_row.allowed_routes,
+    ):
+        _check_allowed_routes_caller_permission(
+            allowed_routes=data.allowed_routes,
+            user_api_key_dict=user_api_key_dict,
+            allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
+        )
     _check_passthrough_routes_caller_permission(
         data=data,
         user_api_key_dict=user_api_key_dict,
