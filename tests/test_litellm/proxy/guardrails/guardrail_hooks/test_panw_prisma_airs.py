@@ -5121,12 +5121,14 @@ class TestPanwAirsLatestRoleMessageOnlyOpenAIShape:
         ) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
-            await handler.apply_guardrail(
+            result = await handler.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
                 input_type="request",
             )
 
+            # All texts pass through unmodified on allow
+            assert result["texts"] == ["system text", "assistant text"]
             # Fallback role-filter scan: system scanned, assistant skipped
             assert mock_api.call_count == 1
             assert mock_api.call_args.kwargs["content"] == "system text"
@@ -5229,12 +5231,14 @@ class TestPanwAirsLatestRoleMessageOnlyOpenAIShape:
         ) as mock_api:
             mock_api.return_value = {"action": "allow", "category": "benign"}
 
-            await handler.apply_guardrail(
+            result = await handler.apply_guardrail(
                 inputs=inputs,
                 request_data=openai_multiturn_request_data,
                 input_type="response",
             )
 
+            # All texts pass through unmodified on allow
+            assert result["texts"] == ["response text one", "response text two"]
             # Both response texts scanned; scope filtering is request-side only
             assert mock_api.call_count == 2
 
