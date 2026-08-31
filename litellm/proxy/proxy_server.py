@@ -8268,6 +8268,7 @@ def _fast_serialize_simple_model_response_stream(
         "thinking_blocks",
         "provider_specific_fields",
         "refusal",
+        "reasoning_items",
     )
     if any(getattr(delta, field, None) is not None for field in unsupported_delta_fields):
         return None
