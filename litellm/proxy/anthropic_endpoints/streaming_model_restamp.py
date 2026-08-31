@@ -14,7 +14,11 @@ from typing import Final
 from pydantic import TypeAdapter, ValidationError
 
 _MESSAGE_START_EVENT: Final = "message_start"
+_MESSAGE_START_MARKER: Final = b"message_start"
 _SSE_DATA_FIELD: Final = "data:"
+_SSE_FRAME_END: Final = b"\n\n"
+_MAX_HELD_BYTES: Final = 65536
+_PING_MARKERS: Final = (b"event: ping", b'"type": "ping"', b'"type":"ping"')
 
 _EVENT_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
@@ -79,3 +83,77 @@ def restamp_anthropic_stream_chunk_model(chunk: object, requested_model: str) ->
         return chunk if restamped_text is None else restamped_text
 
     return chunk
+
+
+def _is_ping_frame(frame: bytes) -> bool:
+    return any(marker in frame for marker in _PING_MARKERS)
+
+
+class AnthropicStreamModelRestamper:
+    """
+    Per-stream restamper for the encoded passthrough path, where chunks are raw
+    transport reads: the ``message_start`` SSE frame can arrive split across
+    chunks or coalesced with later frames. Complete frames are emitted as their
+    terminator closes them and an incomplete tail is held until it completes,
+    so the restamp never misses a torn frame. Once ``message_start`` has been
+    handled, or the first real event proves the stream carries none, every
+    later chunk passes through untouched.
+    """
+
+    def __init__(self, requested_model: str) -> None:
+        self._requested_model: Final = requested_model
+        self._held = b""
+        self._armed = True
+
+    def process(self, chunk: object) -> object:
+        if not self._armed:
+            return chunk
+        if isinstance(chunk, (bytes, bytearray)):
+            return self._process_encoded(bytes(chunk))
+        if isinstance(chunk, str):
+            return self._process_encoded(chunk.encode("utf-8"))
+        restamped: Final = restamp_anthropic_stream_chunk_model(chunk, self._requested_model)
+        if isinstance(chunk, dict) and chunk.get("type") not in (None, "ping"):
+            self._armed = False
+        return restamped
+
+    def _process_encoded(self, data: bytes) -> bytes:
+        combined: Final = self._held + data
+        if _SSE_FRAME_END not in combined:
+            if len(combined) > _MAX_HELD_BYTES:
+                self._held = b""
+                self._armed = False
+                return combined
+            self._held = combined
+            return b""
+        closed, _, tail = combined.rpartition(_SSE_FRAME_END)
+        emitted: Final = self._restamped_closed_block(closed + _SSE_FRAME_END)
+        if not self._armed:
+            self._held = b""
+            return emitted + tail
+        self._held = tail
+        return emitted
+
+    def _restamped_closed_block(self, closed: bytes) -> bytes:
+        frames: Final = tuple(closed.split(_SSE_FRAME_END)[:-1])
+        decider: Final = next(
+            (
+                index
+                for index, frame in enumerate(frames)
+                if _MESSAGE_START_MARKER in frame or (b"data:" in frame and not _is_ping_frame(frame))
+            ),
+            None,
+        )
+        if decider is None:
+            return closed
+        self._armed = False
+        decider_frame: Final = frames[decider] + _SSE_FRAME_END
+        if _MESSAGE_START_MARKER not in decider_frame:
+            return closed
+        restamped_text: Final = _restamped_frame(decider_frame.decode("utf-8", errors="ignore"), self._requested_model)
+        if restamped_text is None:
+            return closed
+        return b"".join(
+            restamped_text.encode("utf-8") if index == decider else frame + _SSE_FRAME_END
+            for index, frame in enumerate(frames)
+        )

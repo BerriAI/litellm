@@ -177,7 +177,7 @@ if TYPE_CHECKING:
 else:
     ProxyConfig = Any
 from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
-    restamp_anthropic_stream_chunk_model,
+    AnthropicStreamModelRestamper,
 )
 from litellm.proxy.litellm_pre_call_utils import (
     add_litellm_data_to_request,
@@ -3414,10 +3414,10 @@ class ProxyBaseLLMRequestProcessing:
         if not restamp_model:
             return ProxyBaseLLMRequestProcessing.return_sse_chunk
 
+        restamper: Final = AnthropicStreamModelRestamper(restamp_model)
+
         def serialize(chunk: object) -> str:
-            return ProxyBaseLLMRequestProcessing.return_sse_chunk(
-                restamp_anthropic_stream_chunk_model(chunk, restamp_model)
-            )
+            return ProxyBaseLLMRequestProcessing.return_sse_chunk(restamper.process(chunk))
 
         return serialize
 
