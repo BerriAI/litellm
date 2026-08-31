@@ -40,6 +40,7 @@ from litellm.utils import (
     _is_streaming_request,
     _snapshot_exception_for_hook,
     async_post_call_failure_deployment_hook,
+    async_post_call_success_deployment_hook,
     client,
     get_api_key,
     get_llm_provider,
@@ -5765,3 +5766,87 @@ class TestHuggingFaceConfigFetch:
         assert _get_max_position_embeddings("some-org/some-model") == 512
         request_timeout = hf_config_route.calls.last.request.extensions["timeout"]
         assert request_timeout["read"] == HF_CONFIG_FETCH_TIMEOUT_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_success_deployment_hook_chains_past_callback_returning_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression (LIT-5863): the dispatcher must run every callback, chaining each non-None
+    result into the next call, instead of returning at the first callback answering non-None.
+    A guardrail answering with the unmodified response used to starve every callback after it."""
+    from litellm.types.utils import ModelResponse
+
+    original = ModelResponse()
+    replacement = ModelResponse()
+
+    class PassthroughLogger(CustomLogger):
+        async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
+            return response
+
+    class ReplacingLogger(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen: list = []
+
+        async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
+            self.seen.append(response)
+            return replacement
+
+    class ObservingLogger(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen: list = []
+
+        async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
+            self.seen.append(response)
+            return None
+
+    replacer = ReplacingLogger()
+    observer = ObservingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [PassthroughLogger(), replacer, observer])
+
+    result = await async_post_call_success_deployment_hook(
+        request_data={}, response=original, call_type=CallTypes.acompletion
+    )
+
+    assert replacer.seen == [original]
+    assert observer.seen == [replacement]
+    assert result is replacement
+
+
+@pytest.mark.asyncio
+async def test_registered_guardrail_does_not_starve_vector_store_search_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression (LIT-5863): with any guardrail registered ahead of the lazily-appended
+    VectorStorePreCallHook, /v1/chat/completions responses lost
+    provider_specific_fields["search_results"] because the guardrail answered the unmodified
+    response and the dispatcher stopped there."""
+    from types import SimpleNamespace
+
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
+        VectorStorePreCallHook,
+    )
+    from litellm.types.utils import ModelResponse
+
+    search_results: Final = [{"search_query": "coolant", "data": [{"content": [{"text": "Cryoline-9", "type": "text"}]}]}]
+    logging_obj = SimpleNamespace(model_call_details={"search_results": search_results})
+    response = ModelResponse(choices=[{"message": {"role": "assistant", "content": "Cryoline-9"}}])
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [CustomGuardrail(guardrail_name="dummy-guardrail"), VectorStorePreCallHook()],
+    )
+
+    result = await async_post_call_success_deployment_hook(
+        request_data={"litellm_logging_obj": logging_obj},
+        response=response,
+        call_type=CallTypes.acompletion,
+    )
+
+    provider_fields = result.choices[0].message.provider_specific_fields
+    assert provider_fields is not None
+    assert provider_fields["search_results"] == search_results

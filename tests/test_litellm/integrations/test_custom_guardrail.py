@@ -1091,8 +1091,8 @@ class TestCustomGuardrailPassthroughSupport:
             call_type=CallTypes.allm_passthrough_route,
         )
 
-        # When result is None, should return the original response
-        assert result == mock_response
+        # None means the guardrail did not modify the response (LIT-5863 contract)
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_async_post_call_success_deployment_hook_with_none_call_type(self):
@@ -1120,8 +1120,8 @@ class TestCustomGuardrailPassthroughSupport:
             call_type=None,
         )
 
-        # Should return the original response when result is None
-        assert result == mock_response
+        # None means the guardrail did not modify the response (LIT-5863 contract)
+        assert result is None
 
     def test_is_valid_response_type_with_none(self):
         """
@@ -2237,3 +2237,73 @@ class TestRecordsOwnGuardrailInformation:
         )
 
         assert _guardrail_entries(request_data) == []
+
+
+class TestCustomGuardrailPostCallSuccessDeploymentHook:
+    """Regression tests for LIT-5863: this hook answering the unmodified response instead of
+    None made the utils.py dispatcher treat the guardrail as having modified the response,
+    which starved every later callback in litellm.callbacks (notably the lazily-appended
+    VectorStorePreCallHook that attaches provider_specific_fields["search_results"])."""
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_request_has_no_guardrails(self):
+        from litellm.types.utils import ModelResponse
+
+        guardrail = CustomGuardrail(guardrail_name="test-guardrail")
+        response = ModelResponse()
+
+        assert (
+            await guardrail.async_post_call_success_deployment_hook(
+                request_data={}, response=response, call_type=CallTypes.acompletion
+            )
+            is None
+        )
+        assert (
+            await guardrail.async_post_call_success_deployment_hook(
+                request_data={"guardrails": "not-a-list"}, response=response, call_type=CallTypes.acompletion
+            )
+            is None
+        )
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_guardrail_should_not_run(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+        from litellm.types.utils import ModelResponse
+
+        guardrail = CustomGuardrail(
+            guardrail_name="test-guardrail",
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+        response = ModelResponse()
+
+        result = await guardrail.async_post_call_success_deployment_hook(
+            request_data={"guardrails": ["test-guardrail"]},
+            response=response,
+            call_type=CallTypes.acompletion,
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_modified_response_when_guardrail_runs(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+        from litellm.types.utils import ModelResponse
+
+        replacement = ModelResponse()
+
+        class ReplacingGuardrail(CustomGuardrail):
+            async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+                return replacement
+
+        guardrail = ReplacingGuardrail(
+            guardrail_name="test-guardrail",
+            event_hook=GuardrailEventHooks.post_call,
+        )
+
+        result = await guardrail.async_post_call_success_deployment_hook(
+            request_data={"guardrails": ["test-guardrail"]},
+            response=ModelResponse(),
+            call_type=CallTypes.acompletion,
+        )
+
+        assert result is replacement
