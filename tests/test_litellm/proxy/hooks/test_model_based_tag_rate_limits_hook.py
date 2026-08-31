@@ -27,11 +27,15 @@ from litellm.proxy.hooks.model_based_tag_rate_limits_hook import (
     _current_admission_token,
     _extract_team_id,
     _inflight_key,
+    _own_concurrency_key_for_limit,
+    _own_concurrency_keys_for_hop,
     _pending_reservations_cache_key,
     _PROXY_ModelBasedTagRateLimitsHook,
 )
 from litellm.proxy.hooks.tag_rate_limits_shared import (
     BACKGROUND_TASKS as _BACKGROUND_TASKS,
+)
+from litellm.proxy.hooks.tag_rate_limits_shared import (
     CONCURRENCY_MIN_SAFETY_TTL_SECONDS as _CONCURRENCY_MIN_SAFETY_TTL_SECONDS,
 )
 from litellm.types.router import (
@@ -3076,6 +3080,112 @@ async def test_concurrent_batch_siblings_do_not_bypass_a_concurrency_limit(time_
     assert len(rejections) == 1
 
 
+@pytest.mark.asyncio
+async def test_fast_failing_batch_sibling_does_not_release_a_still_executing_siblings_slot(time_controller):
+    """
+    Live repro: racing two comma-separated abatch_completion branches sharing
+    one model_call_details, one bad-keyed for a fast 401, showed the
+    genuinely-executing sibling's own inflight key drop before its real
+    completion finished, admitting a third same-tag caller past a
+    concurrency=1 cap. async_log_failure_event used to release every pending
+    reservation unconditionally regardless of which hop it belonged to; it
+    must release only the failing branch's own slot.
+    """
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router(limit=2)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+    request_kwargs, kwargs = _call_context(["end_user_id:u1"])
+
+    async def _admit() -> None:
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+        )
+
+    # Both branches of one abatch_completion dispatch admit under the
+    # identical shared model_call_details, each its own asyncio.Task --
+    # exactly like Router.abatch_completion's real dispatch, and needed for
+    # _release_stale_hop_reservations' own admission-lineage token to treat
+    # them as two independent lineages rather than two hops of one chain.
+    await asyncio.create_task(_admit())
+    await asyncio.create_task(_admit())
+
+    # The second branch fails fast (e.g. a bad key on that specific model) --
+    # its own failure event must release only its own slot, not the first
+    # branch's, which is still genuinely executing.
+    kwargs["standard_logging_object"] = {
+        "model_group": "grp",
+        "model_id": "dep-1",
+        "total_tokens": 0,
+        "response_cost": 0,
+    }
+    await limiter.async_log_failure_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+
+    # One slot freed (the failing branch's), one still held (the executing
+    # branch's): a fresh request fits, a second one does not.
+    await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+    )
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+        )
+
+
+@pytest.mark.asyncio
+async def test_fast_succeeding_batch_sibling_does_not_release_a_still_executing_siblings_slot(time_controller):
+    """
+    Same live repro as the failure-path version above, but for the more
+    common case: one branch of a comma-separated abatch_completion dispatch
+    finishes (successfully) well before its sibling. async_log_success_event
+    must release only that one branch's own slot.
+    """
+    limiter = _make_limiter(time_controller)
+    router = _concurrency_router(limit=2)
+    limiter.update_variables(llm_router=router)
+    healthy = router.model_list
+    request_kwargs, kwargs = _call_context(["end_user_id:u1"])
+
+    async def _admit() -> None:
+        await limiter.async_filter_deployments(
+            model="grp", healthy_deployments=healthy, messages=None, request_kwargs=request_kwargs
+        )
+
+    # Each branch its own asyncio.Task -- see the failure-path test above
+    # for why that's required to model two independent admission lineages.
+    await asyncio.create_task(_admit())
+    await asyncio.create_task(_admit())
+
+    kwargs["standard_logging_object"] = {
+        "model_group": "grp",
+        "model_id": "dep-1",
+        "total_tokens": 10,
+        "response_cost": 0.01,
+    }
+    await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    await limiter.async_filter_deployments(
+        model="grp",
+        healthy_deployments=healthy,
+        messages=None,
+        request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+    )
+    with pytest.raises(ProxyRateLimitError):
+        await limiter.async_filter_deployments(
+            model="grp",
+            healthy_deployments=healthy,
+            messages=None,
+            request_kwargs={"metadata": {"tags": ["end_user_id:u1"]}},
+        )
+
+
 def _request_limit_router(limit: int) -> "litellm.Router":
     return litellm.Router(
         model_list=[
@@ -4256,6 +4366,76 @@ def test_concurrency_ttl_floor_does_not_shorten_a_longer_period_seconds():
 
 
 # ---------------------------------------------------------------------------
+# _own_concurrency_key_for_limit / _own_concurrency_keys_for_hop -- the
+# terminal release paths' own recomputation of exactly which reservation(s)
+# a completing hop is entitled to release, mirroring
+# _increment_operation_for_limit's own deployment_scope/tag_value/
+# entry_applies checks.
+# ---------------------------------------------------------------------------
+
+
+def test_own_concurrency_key_for_limit_matches_the_key_admission_would_reserve():
+    entry = TagRateLimitEntry(name="inflight", tag_id="end_user_id", limit=1, period_seconds=300)
+    configured_limit = _ConfiguredLimit(unit="concurrency", entry=entry, deployment_scope=None)
+    admission_key = _inflight_key("grp", configured_limit, "u1", key_hash=None)
+    assert _own_concurrency_key_for_limit(configured_limit, "grp", ["end_user_id:u1"], "dep-1", None, None) == (
+        admission_key
+    )
+
+
+def test_own_concurrency_key_for_limit_is_none_for_a_non_concurrency_unit():
+    entry = TagRateLimitEntry(name="daily", tag_id="end_user_id", limit=500, period_seconds=86400)
+    configured_limit = _ConfiguredLimit(unit="tokens", entry=entry, deployment_scope=None)
+    assert _own_concurrency_key_for_limit(configured_limit, "grp", ["end_user_id:u1"], "dep-1", None, None) is None
+
+
+def test_own_concurrency_key_for_limit_is_none_outside_its_deployment_scope():
+    entry = TagRateLimitEntry(name="inflight", tag_id="end_user_id", limit=1, period_seconds=300)
+    configured_limit = _ConfiguredLimit(unit="concurrency", entry=entry, deployment_scope=("dep-1",))
+    assert _own_concurrency_key_for_limit(configured_limit, "grp", ["end_user_id:u1"], "dep-2", None, None) is None
+    assert _own_concurrency_key_for_limit(configured_limit, "grp", ["end_user_id:u1"], "dep-1", None, None) is not None
+
+
+def test_own_concurrency_key_for_limit_is_none_without_a_matching_tag():
+    entry = TagRateLimitEntry(name="inflight", tag_id="end_user_id", limit=1, period_seconds=300)
+    configured_limit = _ConfiguredLimit(unit="concurrency", entry=entry, deployment_scope=None)
+    assert _own_concurrency_key_for_limit(configured_limit, "grp", ["team_id:t1"], "dep-1", None, None) is None
+
+
+def test_own_concurrency_key_for_limit_folds_in_key_hash_only_when_scoped():
+    scoped_entry = TagRateLimitEntry(
+        name="inflight", tag_id="end_user_id", limit=1, period_seconds=300, scope_by_key_hash=True
+    )
+    scoped_limit = _ConfiguredLimit(unit="concurrency", entry=scoped_entry, deployment_scope=None)
+    key_with_hash = _own_concurrency_key_for_limit(scoped_limit, "grp", ["end_user_id:u1"], "dep-1", "hashA", None)
+    key_with_different_hash = _own_concurrency_key_for_limit(
+        scoped_limit, "grp", ["end_user_id:u1"], "dep-1", "hashB", None
+    )
+    assert key_with_hash != key_with_different_hash
+
+    unscoped_entry = TagRateLimitEntry(name="inflight", tag_id="end_user_id", limit=1, period_seconds=300)
+    unscoped_limit = _ConfiguredLimit(unit="concurrency", entry=unscoped_entry, deployment_scope=None)
+    key_ignoring_hash_a = _own_concurrency_key_for_limit(
+        unscoped_limit, "grp", ["end_user_id:u1"], "dep-1", "hashA", None
+    )
+    key_ignoring_hash_b = _own_concurrency_key_for_limit(
+        unscoped_limit, "grp", ["end_user_id:u1"], "dep-1", "hashB", None
+    )
+    assert key_ignoring_hash_a == key_ignoring_hash_b
+
+
+def test_own_concurrency_keys_for_hop_only_collects_concurrency_unit_entries():
+    concurrency_entry = TagRateLimitEntry(name="inflight", tag_id="end_user_id", limit=1, period_seconds=300)
+    token_entry = TagRateLimitEntry(name="daily", tag_id="end_user_id", limit=500, period_seconds=86400)
+    configured = (
+        _ConfiguredLimit(unit="concurrency", entry=concurrency_entry, deployment_scope=None),
+        _ConfiguredLimit(unit="tokens", entry=token_entry, deployment_scope=None),
+    )
+    keys = _own_concurrency_keys_for_hop(configured, "grp", ["end_user_id:u1"], "dep-1", None, None)
+    assert len(keys) == 1
+
+
+# ---------------------------------------------------------------------------
 # pending-concurrency-key field on model_call_details must survive a detached
 # asyncio.create_task fork (e.g. litellm's own failure-logging dispatch),
 # and a release must never sweep up a key a still-live sibling hop appended
@@ -4334,6 +4514,50 @@ async def test_release_only_own_lineage_leaves_a_concurrent_siblings_reservation
     released = await limiter._pop_pending_concurrency_keys(model_call_details, only_own_lineage=True)
     assert released == (("own-key", None),)
     assert model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD] == [("sibling-key", None, sibling_token)]
+
+
+@pytest.mark.asyncio
+async def test_pop_pending_concurrency_keys_only_keys_releases_at_most_one_per_key(time_controller):
+    """
+    only_keys is the terminal (success/failure) release paths' own filter:
+    reservations sharing a key are fungible, so a matching key releases
+    exactly one entry, never every entry sharing that key -- two branches
+    admitted under the identical key must each release their own unit
+    independently, not have one release both at once.
+    """
+    limiter = _make_limiter(time_controller)
+    model_call_details: dict = {
+        _PENDING_CONCURRENCY_KEYS_FIELD: [
+            ("shared-key", None, object()),
+            ("shared-key", None, object()),
+            ("other-key", None, object()),
+        ]
+    }
+
+    first_release = await limiter._pop_pending_concurrency_keys(model_call_details, only_keys=frozenset({"shared-key"}))
+    assert first_release == (("shared-key", None),)
+    assert model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD] == [
+        ("shared-key", None, model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD][0][2]),
+        ("other-key", None, model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD][1][2]),
+    ]
+
+    second_release = await limiter._pop_pending_concurrency_keys(
+        model_call_details, only_keys=frozenset({"shared-key"})
+    )
+    assert second_release == (("shared-key", None),)
+    assert model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD] == [
+        ("other-key", None, model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD][0][2])
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pop_pending_concurrency_keys_only_keys_ignores_a_non_matching_key(time_controller):
+    limiter = _make_limiter(time_controller)
+    model_call_details: dict = {_PENDING_CONCURRENCY_KEYS_FIELD: [("sibling-key", None, object())]}
+
+    released = await limiter._pop_pending_concurrency_keys(model_call_details, only_keys=frozenset({"my-own-key"}))
+    assert released == ()
+    assert len(model_call_details[_PENDING_CONCURRENCY_KEYS_FIELD]) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -4779,12 +5003,16 @@ async def test_concurrency_scope_by_key_hash_gives_independent_reservations_per_
         )
 
     async def _release(key: str, kwargs: dict):
+        # Mirrors real Router dispatch: the deployment-specific litellm_params
+        # this hop actually attempted with carries the same authenticated
+        # user_api_key admission itself read, which is what
+        # _resolve_hop_context recomputes this hop's own concurrency key from.
+        kwargs["metadata"]["user_api_key"] = key
         kwargs["standard_logging_object"] = {
             "model_group": "grp",
             "model_id": "dep-1",
             "total_tokens": 0,
             "response_cost": 0,
-            "metadata": {"user_api_key_hash": key},
         }
         await limiter.async_log_success_event(
             kwargs=kwargs,

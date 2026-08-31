@@ -573,18 +573,24 @@ _INDEX_TTL_SECONDS: Final = 5.0
 # several branches concurrently, each its own Task, but hands every branch
 # the identical `litellm_logging_obj` -- so a still-live sibling branch's
 # own reservation can sit in this same list. Each entry also carries an
-# admission-scoped token (see `_current_admission_token`), but that token is
-# only ever trusted at the *next admission's own* stale-hop cleanup (see
-# `_release_stale_hop_reservations`), never at the terminal release hooks
-# below: a `ContextVar` has the identical non-descendant-task blind spot
-# documented above for the reservation data itself, so a streaming
-# response's own success event -- fired from a task the proxy forked
-# independently of admission's -- would never see a matching token either,
-# leaking every streaming request's reservation instead of releasing it.
-# The terminal hooks release unconditionally, accepting the narrower risk
-# that a still-live `abatch_completion` sibling's own reservation gets
-# freed early, in exchange for actually releasing the far more common
-# single-branch (including streaming) case.
+# admission-scoped token (see `_current_admission_token`), trusted only at
+# the *next admission's own* stale-hop cleanup (see
+# `_release_stale_hop_reservations`): a `ContextVar` has the same
+# non-descendant-task blind spot the comment above documents for the
+# reservation data itself, so a streaming response's own success event --
+# fired from a task the proxy forked independently of admission's -- would
+# never see a matching token either.
+#
+# The terminal release hooks (`async_log_success_event`/
+# `async_log_failure_event`) use a different filter instead, immune to that
+# blind spot: `_release_own_concurrency_keys` recomputes exactly the key(s)
+# *this* hop's own admission reserved from data reliably specific to this
+# hop even while `model_call_details` is shared (see
+# `_resolve_hop_context`'s own docstring), and releases at most one entry
+# per matching key -- reservations sharing a key are fungible, so this
+# never touches a still-live sibling branch's own entry under a different
+# key, and releases exactly one unit under a shared key even when a sibling
+# holds another.
 _PENDING_CONCURRENCY_KEYS_FIELD: Final[str] = "_model_based_tag_rate_limits_pending_concurrency_keys"
 
 # Identifies which admission call queued a given reservation, scoped by
@@ -915,6 +921,69 @@ def _increment_operation_for_limit(
         increment_value=increment_value,
         ttl=_bucket_ttl_seconds(configured_limit.entry),
     )
+
+
+def _own_concurrency_key_for_limit(
+    configured_limit: _ConfiguredLimit,
+    model_group: str,
+    tags: Sequence[str],
+    deployment_id: str | None,
+    key_hash: str | None,
+    key_alias: str | None,
+) -> str | None:
+    """The exact `_inflight_key` this hop's own admission would have reserved
+    for `configured_limit`, or `None` if `configured_limit` doesn't apply to
+    this hop at all -- mirrors `_increment_operation_for_limit`'s own
+    deployment_scope/tag_value/entry_applies checks, restricted to the
+    "concurrency" unit `_increment_operation_for_limit` itself skips."""
+    if configured_limit.unit != "concurrency":
+        return None
+    if configured_limit.deployment_scope is not None and deployment_id not in configured_limit.deployment_scope:
+        return None
+    tag_value: Final = _extract_identity(tags, configured_limit.entry.tag_id)
+    if tag_value is None:
+        return None
+    if not _entry_applies(configured_limit.entry, tags, key_alias, model_group):
+        return None
+    key_hash_for_limit: Final = key_hash if configured_limit.entry.scope_by_key_hash else None
+    return _inflight_key(model_group, configured_limit, tag_value, key_hash=key_hash_for_limit)
+
+
+def _own_concurrency_keys_for_hop(
+    configured: Sequence[_ConfiguredLimit],
+    model_group: str,
+    tags: Sequence[str],
+    deployment_id: str | None,
+    key_hash: str | None,
+    key_alias: str | None,
+) -> frozenset[str]:
+    return frozenset(
+        key
+        for configured_limit in configured
+        if (
+            key := _own_concurrency_key_for_limit(
+                configured_limit, model_group, tags, deployment_id, key_hash, key_alias
+            )
+        )
+        is not None
+    )
+
+
+class _HopContext(NamedTuple):
+    """The identity of the one hop whose success/failure event this is --
+    resolved from `standard_logging_object`/`litellm_params`, both freshly
+    overwritten by *this* hop's own attempt just before its callback fires
+    (see `_resolve_hop_context`'s own docstring for why that's reliable even
+    though the surrounding `model_call_details` dict is shared across an
+    `abatch_completion` dispatch's sibling branches)."""
+
+    standard_logging_object: StandardLoggingPayload
+    configured: tuple[_ConfiguredLimit, ...]
+    model_group: str
+    tags: tuple[str, ...]
+    deployment_id: str | None
+    key_hash: str | None
+    key_alias: str | None
 
 
 def _resolve_max_in_memory_cache_size() -> int | None:
@@ -1547,10 +1616,9 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         concluded and failed: Router awaits one hop's entire attempt (call
         plus its own failure handling) before starting the next, and a hop
         that instead succeeded ends the request there via
-        async_log_success_event, which already pops everything pending on
-        this same model_call_details -- so admission is never re-entered, in
-        that same lineage, while an earlier hop's reservation is still
-        legitimately in flight.
+        async_log_success_event, which already released its own reservation
+        -- so admission is never re-entered, in that same lineage, while an
+        earlier hop's reservation is still legitimately in flight.
 
         The lineage check matters because `model_call_details` is not always
         scoped to one such chain: `Router.abatch_completion`'s comma-separated
@@ -1611,22 +1679,42 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         return frozenset(key for key, _partition_key, token in pending_request_increments if token is admission_token)
 
     async def _pop_pending_concurrency_keys(
-        self, kwargs: Mapping[str, object], *, only_own_lineage: bool = False
+        self,
+        kwargs: Mapping[str, object],
+        *,
+        only_own_lineage: bool = False,
+        only_keys: frozenset[str] = frozenset(),
     ) -> tuple[tuple[str, _PartitionKey], ...]:
         # Snapshot then remove only those exact entries, never a blanket
         # clear: a sibling branch sharing this same request's
         # model_call_details can still be live and appending concurrently
         # (see the field's own docstring), so wiping the whole list here
         # would silently strand that branch's reservation instead of
-        # releasing it later. `only_own_lineage` additionally excludes any
-        # entry a *different* admission lineage queued -- see
-        # `_release_stale_hop_reservations`'s own docstring for why that
-        # distinction, not just presence, decides what's actually stale.
+        # releasing it later.
+        #
+        # `only_keys`, when non-empty, takes priority: at most one entry per
+        # requested key, since reservations sharing a key are fungible (any
+        # one of them represents the same +1 to the same counter) -- see
+        # `_release_own_concurrency_keys`'s own docstring for why this is the
+        # terminal (success/failure) release paths' own filter, not
+        # `only_own_lineage`.
+        #
+        # `only_own_lineage` additionally excludes any entry a *different*
+        # admission lineage queued -- see `_release_stale_hop_reservations`'s
+        # own docstring for why that distinction, not just presence, decides
+        # what's actually stale.
         pending: Final = kwargs.get(_PENDING_CONCURRENCY_KEYS_FIELD)
         if not isinstance(pending, list) or not pending:
             return ()
+        matched_indices: Final = tuple(
+            idx
+            for key in only_keys
+            if (idx := next((i for i, entry in enumerate(pending) if entry[0] == key), None)) is not None
+        )
         snapshot: Final = (
-            tuple(entry for entry in pending if entry[2] is _current_admission_token())
+            tuple(pending[idx] for idx in matched_indices)
+            if only_keys
+            else tuple(entry for entry in pending if entry[2] is _current_admission_token())
             if only_own_lineage
             else tuple(pending)
         )
@@ -1770,66 +1858,40 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
             )
         await self._release_keys(release_keys)
 
-    async def async_log_failure_event(
-        self,
-        kwargs,  # noqa: ANN001  # matches CustomLogger.async_log_failure_event; kwargs is dict[str, Any] codebase-wide
-        response_obj: object,
-        start_time: object,
-        end_time: object,
-    ) -> None:
-        # No special-case skip for this hook's own tag_rate_limit_exceeded
-        # rejection: a hop whose own admission rejects never reaches the
-        # point where a concurrency reservation is queued (see
-        # async_filter_deployments), so _pop_pending_concurrency_keys already
-        # returns nothing to release in that case. Skipping release based on
-        # the exception's error marker alone would be wrong here, since
-        # global_tag_rate_limits_hook raises the identical marker -- that
-        # rejection can land after this hook already reserved a slot for the
-        # same request, and that slot must still be released.
-        #
-        # Not `only_own_lineage=True`: a streaming response is consumed (and
-        # this event fired) from a task the proxy forks independently of
-        # admission's own, so `_ADMISSION_CONTEXT` never reaches it either --
-        # requiring a match here would leak every streaming request's
-        # reservation until `_CONCURRENCY_MIN_SAFETY_TTL_SECONDS` instead of
-        # releasing it. `async_release_disconnect_state_hook` stays
-        # unfiltered for the identical reason; releasing everything here
-        # keeps a still-live `abatch_completion` sibling's own reservation
-        # exposed to the same risk that hook already accepts.
-        release_keys: Final = await self._pop_pending_concurrency_keys(kwargs)
-        if release_keys:
-            await self._release_keys(release_keys)
-
-    async def async_log_success_event(
-        self,
-        kwargs,  # noqa: ANN001  # matches CustomLogger.async_log_success_event; kwargs is dict[str, Any] codebase-wide
-        response_obj: object,
-        start_time: object,
-        end_time: object,
-    ) -> None:
-        # Not `only_own_lineage=True`: see async_log_failure_event's own comment above.
-        release_keys: Final = await self._pop_pending_concurrency_keys(kwargs)
-        if release_keys:
-            release_task: Final = asyncio.create_task(self._release_keys(release_keys))
-            _BACKGROUND_TASKS.add(release_task)  # mutable-ok: see _BACKGROUND_TASKS's own docstring
-            release_task.add_done_callback(_BACKGROUND_TASKS.discard)
-
+    def _resolve_hop_context(self, kwargs: Mapping[str, object]) -> _HopContext | None:
+        """
+        `standard_logging_object` and `litellm_params` are freshly overwritten
+        by *this* hop's own attempt immediately before its success/failure
+        callback fires -- Router builds each hop's own `litellm_params` from
+        whichever deployment it actually attempted, and litellm's dispatch
+        writes `standard_logging_object` with no `await` between that write
+        and this callback firing, so a sibling branch of an `abatch_completion`
+        dispatch has no chance to interleave and overwrite it first even
+        though the surrounding `model_call_details` dict (`kwargs` here) is
+        the identical object shared across every branch (confirmed live: it,
+        `litellm_call_id`, and the top-level `metadata`/`litellm_metadata`
+        dicts are all one shared object across a comma-separated dispatch's
+        branches). Token/dollar accounting below already depends on this
+        being reliably per-hop; reused here to recompute exactly the
+        concurrency key(s) this hop's own admission reserved, rather than a
+        value that would have to survive being read back from a different
+        branch or task.
+        """
         if self.llm_router is None:
-            return
-
+            return None
         standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
         if standard_logging_object is None:
-            return
-
+            return None
         model_group: Final = standard_logging_object.get("model_group")
         if not model_group:
-            return
+            return None
 
         # kwargs here is Logging.model_call_details, not the router's flat
         # request kwargs admission sees: metadata/litellm_metadata are never
         # top-level here, only nested under kwargs["litellm_params"] (see
         # Logging.update_environment_variables).
-        litellm_params_for_metadata: Final = kwargs.get("litellm_params") or kwargs
+        litellm_params_raw: Final = kwargs.get("litellm_params")
+        litellm_params_for_metadata: Final = litellm_params_raw if isinstance(litellm_params_raw, Mapping) else kwargs
         metadata_variable_name: Final = _resolve_authoritative_metadata_variable_name(litellm_params_for_metadata)
         team_id: Final = _extract_team_id(litellm_params_for_metadata, metadata_variable_name)
         key_hash: Final = _extract_key_hash(litellm_params_for_metadata, metadata_variable_name)
@@ -1873,7 +1935,7 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         candidate_model_names: Final = _routing_group_candidates_or(kwargs, fallback=live_candidate_model_names)
         configured: Final = self._index.get(self.llm_router).resolve_any(model_group, team_id, candidate_model_names)
         if not configured:
-            return
+            return None
 
         tags: Final = _order_tags_for_identity_resolution(
             _get_tags_from_request_kwargs(kwargs, metadata_variable_name=metadata_variable_name),
@@ -1881,22 +1943,108 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
             metadata_variable_name,
         )
         if not tags:
+            return None
+
+        return _HopContext(
+            standard_logging_object=standard_logging_object,
+            configured=configured,
+            model_group=model_group,
+            tags=tags,
+            deployment_id=deployment_id if isinstance(deployment_id, str) else None,
+            key_hash=key_hash,
+            key_alias=key_alias,
+        )
+
+    async def _release_own_concurrency_keys(
+        self, kwargs: Mapping[str, object], context: "_HopContext | None"
+    ) -> tuple[tuple[str, _PartitionKey], ...]:
+        """
+        Releases exactly the concurrency reservation(s) this hop's own
+        admission made, computed via `context` the same way admission itself
+        computed them -- never "every reservation currently pending", which
+        would also release a still-live `abatch_completion` sibling branch's
+        own reservation (see `_PENDING_CONCURRENCY_KEYS_FIELD`'s docstring).
+        Falls back to the pre-existing unconditional release only when
+        `context` itself couldn't be resolved (nothing configured for this
+        tag/model, or an identity-extraction edge case) -- in which case there
+        is no way to tell a sibling's reservation apart from this hop's own
+        anyway, so this only ever matters for the single-branch case that
+        release already handled correctly before `abatch_completion` existed.
+        """
+        own_concurrency_keys: Final = (
+            _own_concurrency_keys_for_hop(
+                context.configured,
+                context.model_group,
+                context.tags,
+                context.deployment_id,
+                context.key_hash,
+                context.key_alias,
+            )
+            if context is not None
+            else frozenset()
+        )
+        if own_concurrency_keys:
+            return await self._pop_pending_concurrency_keys(kwargs, only_keys=own_concurrency_keys)
+        return await self._pop_pending_concurrency_keys(kwargs)
+
+    async def async_log_failure_event(
+        self,
+        kwargs,  # noqa: ANN001  # matches CustomLogger.async_log_failure_event; kwargs is dict[str, Any] codebase-wide
+        response_obj: object,
+        start_time: object,
+        end_time: object,
+    ) -> None:
+        # No special-case skip for this hook's own tag_rate_limit_exceeded
+        # rejection: a hop whose own admission rejects never reaches the
+        # point where a concurrency reservation is queued (see
+        # async_filter_deployments), so nothing is ever found to release in
+        # that case. Skipping release based on the exception's error marker
+        # alone would be wrong here, since global_tag_rate_limits_hook raises
+        # the identical marker -- that rejection can land after this hook
+        # already reserved a slot for the same request, and that slot must
+        # still be released.
+        release_keys: Final = await self._release_own_concurrency_keys(kwargs, self._resolve_hop_context(kwargs))
+        if release_keys:
+            await self._release_keys(release_keys)
+
+    async def async_log_success_event(
+        self,
+        kwargs,  # noqa: ANN001  # matches CustomLogger.async_log_success_event; kwargs is dict[str, Any] codebase-wide
+        response_obj: object,
+        start_time: object,
+        end_time: object,
+    ) -> None:
+        context: Final = self._resolve_hop_context(kwargs)
+        release_keys: Final = await self._release_own_concurrency_keys(kwargs, context)
+        if release_keys:
+            release_task: Final = asyncio.create_task(self._release_keys(release_keys))
+            _BACKGROUND_TASKS.add(release_task)  # mutable-ok: see _BACKGROUND_TASKS's own docstring
+            release_task.add_done_callback(_BACKGROUND_TASKS.discard)
+
+        if context is None:
             return
 
         now: Final = _admission_time_or(kwargs, fallback=self._time_provider().timestamp())
         increment_by_unit: Final[Mapping[_LimitUnit, float]] = MappingProxyType(
             {
-                "tokens": float(standard_logging_object.get("total_tokens") or 0),
-                "dollars": float(standard_logging_object.get("response_cost") or 0),
+                "tokens": float(context.standard_logging_object.get("total_tokens") or 0),
+                "dollars": float(context.standard_logging_object.get("response_cost") or 0),
             }
         )
 
         operation_by_limit: Final = tuple(
             (configured_limit, operation)
-            for configured_limit in configured
+            for configured_limit in context.configured
             if (
                 operation := _increment_operation_for_limit(
-                    configured_limit, model_group, tags, deployment_id, key_hash, key_alias, increment_by_unit, now
+                    configured_limit,
+                    context.model_group,
+                    context.tags,
+                    context.deployment_id,
+                    context.key_hash,
+                    context.key_alias,
+                    increment_by_unit,
+                    now,
                 )
             )
             is not None
