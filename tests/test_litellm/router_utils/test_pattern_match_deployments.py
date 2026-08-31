@@ -40,6 +40,19 @@ def test_get_pattern_never_resolves_declared_authenticating_providers(monkeypatc
     assert resolution_attempts == []
 
 
+def test_get_pattern_bare_provider_name_never_matches_that_providers_wildcard(monkeypatch):
+    """Regression: a bare ``github_copilot`` adopted itself as its provider and retried as
+    ``github_copilot/github_copilot``, false-matching the wildcard for a name no deployment serves."""
+
+    def _unknown_provider(model, *args, **kwargs):
+        raise ValueError(f"unknown provider for {model}")
+
+    monkeypatch.setattr(pattern_match_deployments, "get_llm_provider", _unknown_provider)
+    router = PatternMatchRouter()
+    router.add_pattern("github_copilot/*", _wildcard_deployment("github_copilot/*"))
+    assert router.get_pattern("github_copilot") is None
+
+
 def test_get_pattern_still_resolves_unqualified_names(monkeypatch):
     monkeypatch.setattr(
         pattern_match_deployments,

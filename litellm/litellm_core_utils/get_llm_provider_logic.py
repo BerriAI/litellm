@@ -135,7 +135,7 @@ def declared_authenticating_provider(model: str, custom_llm_provider: str | None
     and for a declared pair the resolver's answer is the declaration itself, so metadata callers
     adopt the declaration instead of resolving.
     """
-    declared: Final = custom_llm_provider or model.split("/", 1)[0]
+    declared: Final = custom_llm_provider or (model.split("/", 1)[0] if "/" in model else None)
     return declared if declared in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO else None
 
 

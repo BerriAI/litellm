@@ -12482,11 +12482,7 @@ async def supported_openai_params(model: str):
 
     global llm_router
     try:
-        resolved_models: Final = (
-            llm_router.resolved_litellm_models(model)
-            if llm_router is not None and declared_authenticating_provider(model) is None
-            else ()
-        )
+        resolved_models: Final = llm_router.resolved_litellm_models(model) if llm_router is not None else ()
         target_model: Final = resolved_models[0] if resolved_models else model
         declared_provider: Final = declared_authenticating_provider(target_model)
         litellm_model, custom_llm_provider = (
