@@ -46,6 +46,7 @@ test.describe("Internal Users Search", () => {
     await page.getByTestId("users-filter-sso-id").fill("e2e-sso-id-that-matches-nobody");
     await page.getByTestId("filter-drawer-apply").click();
 
-    await expect(page.getByRole("row").filter({ hasText: "No results" })).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText("No users found")).toBeVisible({ timeout: 30_000 });
+    await expect(userRows(page).filter({ hasText: "noteam@test.local" })).toHaveCount(0);
   });
 });
