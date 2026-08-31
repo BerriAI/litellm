@@ -35,11 +35,12 @@ async function expectRendered(page: Page) {
  */
 async function clickSidebar(page: Page, segment: string) {
   const link = sidebar(page).locator(`a[href$="/ui/${segment}"]`).first();
+  const collapsedGroups = sidebar(page).getByRole("button", { expanded: false });
   for (let i = 0; i < 8 && !(await link.isVisible().catch(() => false)); i++) {
-    const collapsedGroup = sidebar(page).getByRole("button", { expanded: false }).first();
-    if (!(await collapsedGroup.isVisible().catch(() => false))) break;
-    await collapsedGroup.click();
-    await expect(collapsedGroup).toHaveAttribute("aria-expanded", "true");
+    const stillCollapsed = await collapsedGroups.count();
+    if (stillCollapsed === 0) break;
+    await collapsedGroups.first().click();
+    await expect(collapsedGroups).toHaveCount(stillCollapsed - 1);
   }
   await link.click();
 }
