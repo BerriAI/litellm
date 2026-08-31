@@ -804,6 +804,30 @@ from litellm.passthrough.timeout_utils import (
 )
 
 
+def _derive_passthrough_model_from_target_url(target_url: str) -> str | None:
+    """Derive a stable model identifier for logging from the pass-through target URL.
+
+    Generic pass-through upstreams (fal.ai, Modal, ComfyUI-style workflow and
+    image-gen APIs) often carry the model identity in the URL path rather than a
+    ``model`` field in the request body. When the body has no model, fall back
+    to the target URL path (``https://fal.run/fal-ai/flux/schnell`` ->
+    ``fal-ai/flux/schnell``; host when there is no path) so Langfuse / Spend
+    Logs entries stay distinguishable per upstream endpoint instead of all
+    reading ``unknown``. Deterministic string handling only - never a network
+    call. Query params and fragments are dropped (they carry per-request noise,
+    e.g. API keys or cursors, not model identity).
+    """
+    try:
+        parsed: Final = urlparse(target_url)
+        path: Final = (parsed.path or "").strip("/")
+        # urlparse only raises lazily (e.g. invalid ports/IPv6 hosts surface on
+        # attribute access), so ``.hostname`` stays inside the try block.
+        hostname: Final = parsed.hostname
+    except ValueError:
+        return None
+    return path or hostname or None
+
+
 async def pass_through_request(
     request: Request,
     target: str,
@@ -927,8 +951,18 @@ async def pass_through_request(
 
         ## LOGGING OBJECT ## - initialize before pre_call_hook so guardrails can access it
         # Surface the requested model (when the body carries one) so logging/spans
-        # read e.g. ``chat gpt-4o`` instead of ``chat unknown``.
-        passthrough_model: Final = (_parsed_body.get("model") if isinstance(_parsed_body, dict) else None) or "unknown"
+        # read e.g. ``chat gpt-4o`` instead of ``chat unknown``. Generic bodies
+        # without a ``model`` field (fal.ai, Modal, ComfyUI-style upstreams
+        # identify the model in the URL path) fall back to the target path so
+        # Langfuse / Spend Logs entries stay distinguishable per endpoint.
+        # Provider-specific routes keep the ``unknown`` sentinel: their logging
+        # handlers (e.g. Anthropic) compare against it to decide whether to
+        # recover the model from response chunks / litellm_params.
+        passthrough_model: Final = (
+            (_parsed_body.get("model") if isinstance(_parsed_body, dict) else None)
+            or (_derive_passthrough_model_from_target_url(str(url)) if endpoint_type == EndpointType.GENERIC else None)
+            or "unknown"
+        )
         start_time: Final = datetime.now()
         logging_obj = Logging(
             model=passthrough_model,
@@ -2054,9 +2088,12 @@ async def websocket_passthrough_request(
             ]:
                 upstream_headers[header_name] = header_value
 
-    # Initialize logging object similar to HTTP passthrough
+    # Initialize logging object similar to HTTP passthrough. WebSocket frames
+    # carry no ``model`` field up front, so fall back to the target URL path
+    # (Vertex AI Live setup frames overwrite this once a model is extracted).
+    websocket_passthrough_model: Final = _derive_passthrough_model_from_target_url(target) or "unknown"
     logging_obj: Final = Logging(
-        model="unknown",
+        model=websocket_passthrough_model,
         messages=[{"role": "user", "content": "WebSocket connection"}],
         stream=True,  # WebSockets are inherently streaming
         call_type="pass_through_endpoint",
@@ -2102,7 +2139,7 @@ async def websocket_passthrough_request(
 
     # Update logging environment variables
     logging_obj.update_environment_variables(
-        model="unknown",
+        model=websocket_passthrough_model,
         user="unknown",
         optional_params={},
         litellm_params=dict(kwargs.get("litellm_params", {})),
