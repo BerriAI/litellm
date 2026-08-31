@@ -9,27 +9,16 @@ GIGACHAT_BASE_URL: Final = "https://gigachat.devices.sberbank.ru/api/v1"
 
 
 def convert_usage(usage_data: Mapping[str, int]) -> Usage:
-    prompt_tokens: Final = usage_data.get("prompt_tokens", 0)
-    completion_tokens: Final = usage_data.get("completion_tokens", 0)
     precached_prompt_tokens: Final = usage_data.get("precached_prompt_tokens", 0)
-    total_tokens: Final = usage_data.get("total_tokens", 0)
-
-    prompt_tokens_total: Final = prompt_tokens + precached_prompt_tokens
-    total_tokens_total: Final = total_tokens + precached_prompt_tokens
-
-    prompt_tokens_details: PromptTokensDetailsWrapper | None = (
-        None  # rebind-ok: conditionally assigned when cached tokens exist
+    prompt_tokens_details: Final = (
+        PromptTokensDetailsWrapper(cached_tokens=precached_prompt_tokens) if precached_prompt_tokens > 0 else None
     )
-    if precached_prompt_tokens > 0:
-        prompt_tokens_details = PromptTokensDetailsWrapper(
-            cached_tokens=precached_prompt_tokens
-        )  # rebind-ok: conditionally assigned when cached tokens exist
 
     return Usage(
-        prompt_tokens=prompt_tokens_total,
-        completion_tokens=completion_tokens,
+        prompt_tokens=usage_data.get("prompt_tokens", 0),
+        completion_tokens=usage_data.get("completion_tokens", 0),
         prompt_tokens_details=prompt_tokens_details,
-        total_tokens=total_tokens_total,
+        total_tokens=usage_data.get("total_tokens", 0),
     )
 
 

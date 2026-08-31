@@ -75,24 +75,23 @@ class GigaChatModelResponseIterator:
             )
             finish_reason = "tool_calls"
 
-        if chunk_finish_reason == "stop":
-            usage_data: Final = chunk.get("usage") or {}  # mutable-ok: empty dict default
-            if usage_data and isinstance(usage_data, dict):
-                validated_usage: Final = {k: int(v) for k, v in usage_data.items()}
-                usage = convert_usage(validated_usage)
-                _prompt_details: dict | None = (
-                    usage.prompt_tokens_details.model_dump() if usage.prompt_tokens_details else None
-                )  # rebind-ok: conditional
-                _completion_details: dict | None = (
-                    usage.completion_tokens_details.model_dump() if usage.completion_tokens_details else None
-                )  # rebind-ok: conditional
-                usage_block = ChatCompletionUsageBlock(  # pyright: ignore[reportCallIssue]  # TypedDict kwarg constructor
-                    prompt_tokens=usage.prompt_tokens,
-                    completion_tokens=usage.completion_tokens,
-                    total_tokens=usage.total_tokens,
-                    prompt_tokens_details=_prompt_details,
-                    completion_tokens_details=_completion_details,
-                )
+        usage_data: Final = chunk.get("usage") or {}  # mutable-ok: empty dict default
+        if usage_data and isinstance(usage_data, dict):
+            validated_usage: Final = {k: int(v) for k, v in usage_data.items()}
+            usage = convert_usage(validated_usage)
+            _prompt_details: dict | None = (
+                usage.prompt_tokens_details.model_dump() if usage.prompt_tokens_details else None
+            )  # rebind-ok: conditional
+            _completion_details: dict | None = (
+                usage.completion_tokens_details.model_dump() if usage.completion_tokens_details else None
+            )  # rebind-ok: conditional
+            usage_block = ChatCompletionUsageBlock(  # pyright: ignore[reportCallIssue]  # TypedDict kwarg constructor
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                total_tokens=usage.total_tokens,
+                prompt_tokens_details=_prompt_details,
+                completion_tokens_details=_completion_details,
+            )
 
         return GenericStreamingChunk(
             text=str(text),
