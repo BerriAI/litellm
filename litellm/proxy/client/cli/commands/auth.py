@@ -1,9 +1,7 @@
-import json
-import os
 import sys
 import time
 import webbrowser
-from pathlib import Path
+from collections.abc import Callable, Mapping
 from typing import Any, Final
 from urllib.parse import urlencode
 
@@ -11,61 +9,263 @@ import click
 import requests
 from rich.console import Console
 from rich.table import Table
+from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm.constants import CLI_JWT_EXPIRATION_HOURS
-from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
+from litellm.litellm_core_utils.cli_keyring import (
+    DISABLE_KEYRING_ENV_VAR,
+    SYSTEM_KEYRING,
+    KeyringDisabled,
+    KeyringDiscardsWrites,
+    KeyringNotInstalled,
+    KeyringUnreachable,
+    SecretErased,
+    SecretFound,
+    SecretMissing,
+    SecretStored,
+    SecretStranded,
+    SecretVault,
+)
+from litellm.litellm_core_utils.cli_token_utils import (
+    CliTokenRecord,
+    CredentialNotCleared,
+    CredentialNotRecorded,
+    CredentialNotSaved,
+    SecretSave,
+    clear_cli_token,
+    get_cli_token_file_path,
+    is_cli_token_fresh,
+    load_cli_token,
+    save_cli_token,
+)
 
-from .private_json import write_private_json
+from .claude_settings import (
+    CLAUDE_SETTINGS_PATH,
+    SETTINGS_FILE_OWNERS,
+    ClaudeSettingsError,
+    write_claude_settings,
+)
+from .pkce_login import (
+    Http,
+    PkceFailure,
+    RevocationUnavailable,
+    fresh_api_key,
+    pkce_token_record,
+    revoke_stored_credential,
+    run_pkce_login,
+)
 
 
-# Token storage utilities
-def get_token_file_path() -> str:
-    """Get the path to store the authentication token"""
-    home_dir: Final = Path.home()
-    config_dir: Final = home_dir / ".litellm"
-    config_dir.mkdir(exist_ok=True)
-    return str(config_dir / "token.json")
+class CliTokenData(TypedDict):
+    base_url: str
+    key: str
+    user_id: str
+    user_email: str
+    user_role: str
+    auth_header_name: str
+    jwt_token: str
+    timestamp: float
+    expires_at: ReadOnly[NotRequired[float]]
+    refresh_token: ReadOnly[NotRequired[str]]
+    client_id: ReadOnly[NotRequired[str]]
+    token_endpoint: ReadOnly[NotRequired[str]]
+    revocation_endpoint: ReadOnly[NotRequired[str]]
+    resource: ReadOnly[NotRequired[str]]
+    team_id: ReadOnly[NotRequired[str | None]]
 
 
-def save_token(token_data: dict[str, Any]) -> None:
-    """Save token data to file"""
-    write_private_json(get_token_file_path(), token_data)
+class CliTeam(TypedDict, total=False):
+    team_id: str | None
+    team_alias: str | None
+    models: list[str]
+    max_budget: float | None
 
 
-def load_token() -> dict[str, Any] | None:
-    """Load token data from file"""
-    token_file: Final = get_token_file_path()
-    if not os.path.exists(token_file):
-        return None
-
-    try:
-        with open(token_file, "r") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return None
+class CliContextObj(TypedDict):
+    base_url: str
+    base_url_explicit: NotRequired[bool]
+    secret_vault: NotRequired[ReadOnly[SecretVault]]
+    api_key: ReadOnly[NotRequired[str | None]]
+    api_key_from_token_file: ReadOnly[NotRequired[bool]]
 
 
-def clear_token() -> None:
-    """Clear stored token"""
-    token_file: Final = get_token_file_path()
-    if os.path.exists(token_file):
-        os.remove(token_file)
+class CliPollData(TypedDict, total=False):
+    status: str
+    key: str
+    user_id: str
+    teams: list[str]
+    team_details: object
+    requires_team_selection: bool
+    team_id: str
 
 
-def get_stored_api_key(expected_base_url: str | None = None) -> str | None:
-    """Get the stored API key from token file.
+class CliSsoStartData(TypedDict):
+    login_id: str
+    poll_secret: str
+    user_code: str
+
+
+class CliAuthResult(TypedDict):
+    api_key: str
+    user_id: str | None
+    teams: list[str]
+    team_id: str | None
+
+
+KEYRING_INSTALL_HINT: Final = "pip install 'litellm[cli]'"
+
+KEYRING_ENABLE_HINT: Final = "keyring --enable (or unset PYTHON_KEYRING_BACKEND)"
+
+STRANDED_CREDENTIAL_MESSAGE: Final = (
+    "Logged out locally, but your credential is still in the OS keychain and could not be removed."
+)
+
+UNCHECKED_KEYCHAIN_MESSAGE: Final = (
+    "Logged out locally, but your OS keychain could not be checked, so a credential stored there by "
+    "an earlier login may still be usable."
+)
+
+
+def storage_notice(outcome: SecretSave) -> str:
+    """Tell the user where the credential ended up, and how to get keychain storage if it did not."""
+    path: Final = get_cli_token_file_path()
+    match outcome:
+        case SecretStored():
+            return "Credential stored in your OS keychain."
+        case KeyringNotInstalled():
+            return (
+                f"Credential stored in {path} (owner-only). "
+                f"For OS keychain storage, install the keyring package with: {KEYRING_INSTALL_HINT}"
+            )
+        case KeyringDisabled():
+            return f"Keychain storage is off ({DISABLE_KEYRING_ENV_VAR}). Credential stored in {path} (owner-only)."
+        case KeyringUnreachable():
+            return f"No OS keychain available. Credential stored in {path} (owner-only)."
+        case KeyringDiscardsWrites():
+            return (
+                f"Your keyring backend keeps nothing it is given, so the credential was stored in {path} "
+                f"(owner-only) instead. For OS keychain storage, run: {KEYRING_ENABLE_HINT}"
+            )
+        case CredentialNotSaved(detail=detail):
+            return (
+                f"Signed in, but the credential could not be saved to {path}: {detail}. "
+                "Any login you already had is untouched. Run 'lite login' again once that path is "
+                "writable, or 'lite logout' to clear whatever is stored now."
+            )
+        case CredentialNotRecorded():
+            return (
+                f"Signed in, and the credential is in your OS keychain, but {path} could not be "
+                "replaced, so it still describes your previous login and may still hold its "
+                "credential. Run 'lite login' again once that path is writable, or 'lite logout' "
+                "to clear both."
+            )
+
+
+def keychain_unreadable_notice(vault: SecretVault) -> str:
+    """Explain why the secret half of a stored login cannot be produced, and what fixes it"""
+    match vault.read():
+        case KeyringNotInstalled():
+            return (
+                "Your credential is in your OS keychain, which this install cannot read without the "
+                f"keyring package. Install it with: {KEYRING_INSTALL_HINT}, or run 'lite login' to start over."
+            )
+        case KeyringDisabled():
+            return (
+                f"Your credential is in your OS keychain, which {DISABLE_KEYRING_ENV_VAR} is blocking. "
+                "Unset it, or run 'lite login' to start over."
+            )
+        case KeyringUnreachable():
+            return (
+                "Your credential is in your OS keychain, which could not be read. Unlock it, or run "
+                "'lite login' to start over."
+            )
+        case SecretFound() | SecretMissing():
+            return "Your credential could not be read from your OS keychain. Run 'lite login' to start over."
+
+
+def context_secret_vault(ctx: click.Context) -> SecretVault:
+    """Where this invocation reads and writes secret material; injectable through ctx.obj for tests"""
+    ctx_obj: Final[CliContextObj | None] = ctx.obj
+    if ctx_obj is None:
+        return SYSTEM_KEYRING
+    return ctx_obj.get("secret_vault") or SYSTEM_KEYRING
+
+
+def load_token(*, vault: SecretVault = SYSTEM_KEYRING) -> Mapping[str, object] | None:
+    """The stored credential as a plain mapping, with the secret resolved out of the vault.
+
+    The PKCE renewal and revocation helpers read records by field name, so this is the
+    shape they get; the keychain split lives underneath, in `load_cli_token`.
+    """
+    record: Final = load_cli_token(vault=vault)
+    return None if record is None else record.model_dump(exclude_none=True)
+
+
+def save_token(record: CliTokenData, *, vault: SecretVault = SYSTEM_KEYRING) -> SecretSave:
+    """Store a credential the PKCE layer produced, secret in the vault and the rest on disk"""
+    return save_cli_token(CliTokenRecord(**record), vault=vault)
+
+
+def _renewal_saver(vault: SecretVault) -> Callable[[CliTokenData], None]:
+    """Persist a silently renewed credential, and say on stderr when no store would keep it.
+
+    A renewal rotates the refresh token, so a rotation that is never stored logs this
+    machine out on the next command; the user hears about it rather than guessing.
+    """
+
+    def save(record: CliTokenData) -> None:
+        outcome: Final = save_token(record, vault=vault)
+        if isinstance(outcome, (CredentialNotSaved, CredentialNotRecorded)):
+            _warn(storage_notice(outcome))
+
+    return save
+
+
+def _renewal_reader(vault: SecretVault) -> Callable[[], Mapping[str, object] | None]:
+    """Re-read the record mid-renewal, so a rotation a sibling `lite` process saved is seen"""
+
+    def reload() -> Mapping[str, object] | None:
+        return load_token(vault=vault)
+
+    return reload
+
+
+def get_stored_api_key(
+    expected_base_url: str | None = None,
+    *,
+    vault: SecretVault = SYSTEM_KEYRING,
+) -> str | None:
+    """Get the stored API key.
 
     If expected_base_url is provided, the key is only returned when it was
     originally issued for that URL. This prevents credential leakage when the
-    CLI is pointed at a different (possibly malicious) server.
+    CLI is pointed at a different (possibly malicious) server. A key obtained by
+    ``lite login --pkce`` is refreshed here once it nears expiry.
     """
-    from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key
+    token_data: Final = load_token(vault=vault)
+    if token_data is None:
+        return None
+    if expected_base_url is not None and token_data.get("base_url") != expected_base_url.rstrip("/"):
+        return None
+    return fresh_api_key(
+        token_data,
+        _renewal_saver(vault),
+        requests.Session(),
+        reload=_renewal_reader(vault),
+        warn=_warn,
+    )
 
-    return get_litellm_gateway_api_key(expected_base_url=expected_base_url)
+
+def _warn(message: str) -> None:
+    click.echo(message, err=True)
+
+
+def _login_command(renews: bool) -> str:
+    return "lite login --pkce" if renews else "lite login"
 
 
 # Team selection utilities
-def display_teams_table(teams: list[dict[str, Any]]) -> None:
+def display_teams_table(teams: list[CliTeam]) -> None:
     """Display teams in a formatted table"""
     console: Final = Console()
 
@@ -165,7 +365,7 @@ def display_interactive_team_selection(teams: list[dict[str, Any]], selected_ind
     for i, team in enumerate(teams):
         team_alias = team.get("team_alias") or "N/A"
         team_id = team.get("team_id", "N/A")
-        models = team.get("models", [])
+        models: list[str] = team.get("models", [])
         max_budget = team.get("max_budget")
 
         # Format models list
@@ -249,10 +449,11 @@ def prompt_team_selection_fallback(
 
     while True:
         try:
-            choice = click.prompt(
+            prompt_response: str = click.prompt(
                 "\nSelect a team by entering the index number (or 'skip' to continue without a team)",
                 type=str,
-            ).strip()
+            )
+            choice = prompt_response.strip()
 
             if choice.lower() == "skip":
                 return None
@@ -275,7 +476,7 @@ def prompt_team_selection_fallback(
 
 def _response_error_detail(response: requests.Response) -> str | None:
     try:
-        body: Final = response.json()
+        body: Final[dict[str, object] | list[object] | str | int | float | bool | None] = response.json()
     except ValueError:
         return None
     detail: Final = body.get("detail") if isinstance(body, dict) else None
@@ -309,15 +510,12 @@ def _poll_for_ready_data(
     other_status_log_every: int = 10,
     http_error_log_every: int = 10,
     connection_error_log_every: int = 10,
-) -> dict[str, Any] | None:
+) -> CliPollData | None:
     for attempt in range(total_timeout // poll_interval):
         try:
-            request_kwargs: dict[str, Any] = {"timeout": request_timeout}
-            if headers is not None:
-                request_kwargs["headers"] = headers
-            response = requests.get(url, **request_kwargs)
+            response = requests.get(url, headers=headers, timeout=request_timeout)
             if response.status_code == 200:
-                data = response.json()
+                data: CliPollData = response.json()
                 status = data.get("status")
                 if status == "ready":
                     return data
@@ -341,7 +539,7 @@ def _poll_for_ready_data(
     return None
 
 
-def _normalize_teams(teams, team_details):
+def _normalize_teams(teams: object, team_details: object) -> list[CliTeam]:
     """If team_details are a
 
     Args:
@@ -365,7 +563,7 @@ def _normalize_teams(teams, team_details):
     return []
 
 
-def _start_cli_sso_flow(base_url: str) -> dict[str, Any]:
+def _start_cli_sso_flow(base_url: str) -> CliSsoStartData:
     start_url: Final = f"{base_url}/sso/cli/start"
     try:
         response: Final = requests.post(start_url, timeout=10)
@@ -389,7 +587,7 @@ def _start_cli_sso_flow(base_url: str) -> dict[str, Any]:
         )
 
     try:
-        data: Final = response.json()
+        data: Final[CliSsoStartData] = response.json()
     except ValueError:
         content_type: Final = response.headers.get("content-type", "unknown")
         raise ValueError(
@@ -398,7 +596,7 @@ def _start_cli_sso_flow(base_url: str) -> dict[str, Any]:
             f"Response starts with: {response.text[:200]!r}"
         )
 
-    required_fields: Final = ("login_id", "poll_secret", "user_code")
+    required_fields: Final[tuple[str, ...]] = ("login_id", "poll_secret", "user_code")
     missing_fields: Final = tuple(field for field in required_fields if not isinstance(data.get(field), str))
     if missing_fields:
         raise ValueError(
@@ -412,7 +610,7 @@ def _get_cli_sso_poll_headers(poll_secret: str) -> dict[str, str]:
     return {"x-litellm-cli-poll-secret": poll_secret}
 
 
-def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> dict | None:
+def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> CliAuthResult | None:
     """
     Poll the server for authentication completion and handle team selection.
 
@@ -431,7 +629,7 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> di
         teams = data.get("teams", [])
         team_details: Final = data.get("team_details")
         user_id = data.get("user_id")
-        normalized_teams: Final[list[dict[str, Any]]] = _normalize_teams(teams, team_details)
+        normalized_teams: Final[list[CliTeam]] = _normalize_teams(teams, team_details)
         if not normalized_teams:
             click.echo("Warning: No teams available for selection.")
             return None
@@ -478,7 +676,7 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> di
 
 
 def _handle_team_selection_during_polling(
-    base_url: str, key_id: str, poll_secret: str, teams: list[dict[str, Any]]
+    base_url: str, key_id: str, poll_secret: str, teams: list[CliTeam]
 ) -> str | None:
     """
     Handle team selection and re-poll with selected team_id.
@@ -522,7 +720,7 @@ def _handle_team_selection_during_polling(
     return None
 
 
-def _render_and_prompt_for_team_selection(teams: list[dict[str, Any]]) -> str | None:
+def _render_and_prompt_for_team_selection(teams: list[CliTeam]) -> str | None:
     """Render teams table and prompt user for a team selection.
 
     Returns the selected team_id as a string, or None if selection was
@@ -546,10 +744,11 @@ def _render_and_prompt_for_team_selection(teams: list[dict[str, Any]]) -> str | 
     # Simple selection
     while True:
         try:
-            choice = click.prompt(
+            prompt_response: str = click.prompt(
                 "\nSelect a team by entering the index number (or 'skip' to use first team)",
                 type=str,
-            ).strip()
+            )
+            choice = prompt_response.strip()
 
             if choice.lower() == "skip":
                 # Default to the first team's ID if the user skips an
@@ -575,16 +774,87 @@ def _render_and_prompt_for_team_selection(teams: list[dict[str, Any]]) -> str | 
             return None
 
 
-@click.command(name="login")
-@click.pass_context
-def login(ctx: click.Context):
-    """Login to LiteLLM proxy using SSO authentication"""
-    from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
+def _configure_claude_code(base_url: str) -> None:
+    """Point Claude Code at base_url by patching ~/.claude/settings.json."""
+    try:
+        write_claude_settings(base_url, CLAUDE_SETTINGS_PATH, SETTINGS_FILE_OWNERS)
+    except ClaudeSettingsError as e:
+        raise click.ClickException(f"Logged in, but could not configure Claude Code: {e}")
+    click.echo(f"\nConfigured Claude Code: {CLAUDE_SETTINGS_PATH} now routes through {base_url.rstrip('/')}.")
+    click.echo("Your other Claude Code settings were left untouched. Restart Claude Code to pick this up.")
+
+
+def _finish_login(base_url: str, api_key: str, config_claude: bool, stored: SecretSave) -> None:
     from litellm.proxy.client.cli.interface import show_commands
 
-    base_url: Final = ctx.obj["base_url"]
+    click.echo("\nLogin successful!")
+    click.echo(f"JWT Token: {api_key[:20]}...")
+    click.echo(storage_notice(stored))
+    if isinstance(stored, (CredentialNotSaved, CredentialNotRecorded)):
+        return
+    click.echo("You can now use the CLI without specifying --api-key")
+    if config_claude:
+        _configure_claude_code(base_url)
+    click.echo("\n" + "=" * 60)
+    show_commands()
+
+
+def _replace_stored_token(record: CliTokenData, http: Http, vault: SecretVault) -> SecretSave:
+    previous: Final = load_token(vault=vault)
+    stored: Final = save_token(record, vault=vault)
+    if previous is None or isinstance(stored, CredentialNotSaved):
+        return stored
+    revocation: Final = revoke_stored_credential(previous, http)
+    if revocation is not None:
+        click.echo(
+            f"Could not revoke the previous login's refresh token on the proxy ({revocation.reason}); "
+            "it expires on its own."
+        )
+    return stored
+
+
+def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault) -> None:
+    http: Final = requests.Session()
+    credential: Final = run_pkce_login(base_url, http, echo=click.echo)
+    if isinstance(credential, PkceFailure):
+        click.echo(f"Authentication failed: {credential.reason}")
+        return
+    stored: Final = _replace_stored_token(pkce_token_record(base_url, credential), http, vault)
+    _finish_login(base_url, credential.access_token, config_claude, stored)
+
+
+@click.command(name="login")
+@click.option(
+    "--config-claude",
+    is_flag=True,
+    default=False,
+    help=(
+        "After logging in, update ~/.claude/settings.json so Claude Code routes through this proxy. "
+        "Unrelated settings are preserved."
+    ),
+)
+@click.option(
+    "--pkce",
+    is_flag=True,
+    default=False,
+    help=(
+        "Sign in with OAuth authorization code + PKCE through your system browser (loopback redirect), "
+        "with a refresh token that renews the key automatically. Requires a proxy that serves "
+        "/.well-known/litellm-cli-auth."
+    ),
+)
+@click.pass_context
+def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
+    """Login to LiteLLM proxy using SSO authentication"""
+    from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
+
+    ctx_obj: Final[CliContextObj] = ctx.obj
+    base_url: Final = ctx_obj["base_url"]
 
     try:
+        if pkce:
+            _pkce_login(base_url, config_claude, context_secret_vault(ctx))
+            return
         cli_sso_flow: Final = _start_cli_sso_flow(base_url=base_url)
         key_id: Final = cli_sso_flow["login_id"]
         poll_secret: Final = cli_sso_flow["poll_secret"]
@@ -611,7 +881,7 @@ def login(ctx: click.Context):
 
             # Save token data. base_url is stored so we can verify origin
             # before reusing the key on a subsequent CLI invocation.
-            save_token(
+            stored: Final = _replace_stored_token(
                 {
                     "base_url": base_url.rstrip("/"),
                     "key": api_key,
@@ -621,16 +891,12 @@ def login(ctx: click.Context):
                     "auth_header_name": "Authorization",
                     "jwt_token": "",
                     "timestamp": time.time(),
-                }
+                },
+                requests.Session(),
+                context_secret_vault(ctx),
             )
 
-            click.echo("\nLogin successful!")
-            click.echo(f"JWT Token: {api_key[:20]}...")
-            click.echo("You can now use the CLI without specifying --api-key")
-
-            # Show available commands after successful login
-            click.echo("\n" + "=" * 60)
-            show_commands()
+            _finish_login(base_url, api_key, config_claude, stored)
             return
         else:
             click.echo("Authentication timed out. Please try again.")
@@ -643,16 +909,54 @@ def login(ctx: click.Context):
     except KeyboardInterrupt:
         click.echo("\nAuthentication cancelled by user.")
         return
+    except click.ClickException:
+        # Login itself already succeeded; only the post-login step failed, so this
+        # must not be relabelled as an authentication failure by the handler below.
+        raise
     except Exception as e:
         click.echo(f"Authentication failed: {e}")
         return
 
 
 @click.command(name="logout")
-def logout():
+@click.pass_context
+def logout(ctx: click.Context):
     """Logout and clear stored authentication"""
-    clear_token()
-    click.echo("Logged out successfully. Authentication token cleared.")
+    vault: Final = context_secret_vault(ctx)
+    token_data: Final = load_token(vault=vault)
+    revocation: Final = revoke_stored_credential(token_data, requests.Session()) if token_data is not None else None
+    match revocation:
+        case RevocationUnavailable(reason=reason):
+            raise click.ClickException(
+                f"The proxy could not record the revocation ({reason}). Nothing was cleared; "
+                "run `lite logout` again shortly."
+            )
+        case PkceFailure(reason=reason):
+            click.echo(f"Could not revoke the refresh token on the proxy ({reason}); it expires on its own.")
+        case None:
+            pass
+        case _:
+            assert_never(revocation)
+
+    path: Final = get_cli_token_file_path()
+    match clear_cli_token(vault=vault):
+        case SecretErased():
+            click.echo("Logged out successfully. Authentication token cleared.")
+        case CredentialNotCleared(detail=detail):
+            click.echo(f"Your credential is still in {path}, which could not be removed: {detail}.")
+            click.echo("Delete that file, or make the directory writable and run 'lite logout' again.")
+        case SecretStranded():
+            click.echo(STRANDED_CREDENTIAL_MESSAGE)
+            click.echo("Unlock your keychain and run 'lite logout' again to clear it.")
+        case KeyringNotInstalled():
+            click.echo(UNCHECKED_KEYCHAIN_MESSAGE)
+            click.echo(f"Install the keyring package with: {KEYRING_INSTALL_HINT}, then run 'lite logout' again.")
+        case KeyringDisabled():
+            click.echo(UNCHECKED_KEYCHAIN_MESSAGE)
+            click.echo(f"Unset {DISABLE_KEYRING_ENV_VAR} and run 'lite logout' again to clear it.")
+        case KeyringUnreachable():
+            click.echo(UNCHECKED_KEYCHAIN_MESSAGE)
+            click.echo("Unlock your keychain and run 'lite logout' again to clear it.")
 
 
 @click.command(name="print-token")
@@ -663,10 +967,12 @@ def print_token(ctx: click.Context):
     Designed to be used as Claude Code's `apiKeyHelper`
     (https://docs.claude.com/en/docs/claude-code/settings): stdout must
     contain only the token, so all diagnostics go to stderr. The token
-    expires after `LITELLM_CLI_JWT_EXPIRATION_HOURS` (default 24h); once
-    expired, run `lite login` again.
+    expires after `LITELLM_CLI_JWT_EXPIRATION_HOURS` (default 24h); a
+    `lite login --pkce` token renews itself here first, and once a token
+    has expired for good, run the same `lite login` command again.
     """
-    token_data: Final = load_token()
+    vault: Final = context_secret_vault(ctx)
+    token_data: Final = load_token(vault=vault)
     if not token_data:
         click.echo("Not authenticated. Run 'lite login'.", err=True)
         sys.exit(1)
@@ -675,45 +981,79 @@ def print_token(ctx: click.Context):
     # explicitly pointed us at a server, trust whichever one `lite login`
     # actually issued this token for -- that's the whole point of not
     # needing a wrapper command.
-    if ctx.obj.get("base_url_explicit"):
-        base_url: Final = ctx.obj["base_url"]
-        if token_data.get("base_url") != base_url.rstrip("/"):
-            click.echo("Not authenticated for this server. Run 'lite login'.", err=True)
-            sys.exit(1)
+    ctx_obj: Final[CliContextObj] = ctx.obj
+    issued_for_this_server: Final = token_data.get("base_url") == ctx_obj.get("base_url", "").rstrip("/")
+    if ctx_obj.get("base_url_explicit") and not issued_for_this_server:
+        click.echo("Not authenticated for this server. Run 'lite login'.", err=True)
+        sys.exit(1)
 
-    if not is_cli_token_fresh(token_data):
+    renews: Final = "refresh_token" in token_data
+    if not is_cli_token_fresh(token_data) and not renews:
         click.echo("Token expired. Run 'lite login' again.", err=True)
         sys.exit(1)
 
-    api_key: Final = token_data.get("key")
+    if token_data.get("key") is None:
+        click.echo(keychain_unreadable_notice(vault), err=True)
+        sys.exit(1)
+
+    api_key: Final = (
+        ctx_obj.get("api_key")
+        if issued_for_this_server and ctx_obj.get("api_key_from_token_file")
+        else fresh_api_key(
+            token_data,
+            _renewal_saver(vault),
+            requests.Session(),
+            reload=_renewal_reader(vault),
+            warn=_warn,
+        )
+    )
     if not api_key:
-        click.echo("No token available. Run 'lite login'.", err=True)
+        click.echo(f"Key expired. Run '{_login_command(renews)}' again.", err=True)
         sys.exit(1)
 
     click.echo(api_key)
 
 
 @click.command(name="whoami")
-def whoami():
+@click.pass_context
+def whoami(ctx: click.Context):
     """Show current authentication status"""
-    token_data: Final = load_token()
+    vault: Final = context_secret_vault(ctx)
+    token_data: Final = load_token(vault=vault)
 
     if not token_data:
         click.echo("Not authenticated. Run 'lite login' to authenticate.")
         return
 
-    click.echo("Authenticated")
-    click.echo(f"User Email: {token_data.get('user_email', 'Unknown')}")
-    click.echo(f"User ID: {token_data.get('user_id', 'Unknown')}")
-    click.echo(f"User Role: {token_data.get('user_role', 'Unknown')}")
+    key_readable: Final = token_data.get("key") is not None
+    click.echo("Authenticated" if key_readable else "Signed in, but the credential cannot be read")
+    click.echo(f"User Email: {token_data.get('user_email') or 'Unknown'}")
+    click.echo(f"User ID: {token_data.get('user_id') or 'Unknown'}")
+    click.echo(f"User Role: {token_data.get('user_role') or 'Unknown'}")
+    team_id: Final = token_data.get("team_id")
+    if team_id:
+        click.echo(f"Team ID: {team_id}")
 
-    # Check if token is still valid (basic timestamp check)
-    timestamp: Final = token_data.get("timestamp", 0)
-    age_hours: Final = (time.time() - timestamp) / 3600
+    stamped: Final = token_data.get("timestamp")
+    age_hours: Final = (time.time() - (stamped if isinstance(stamped, (int, float)) else 0.0)) / 3600
     click.echo(f"Token age: {age_hours:.1f} hours")
 
-    if age_hours > CLI_JWT_EXPIRATION_HOURS:
+    if not key_readable:
+        click.echo(keychain_unreadable_notice(vault))
+
+    expires_at: Final = token_data.get("expires_at")
+    if isinstance(expires_at, (int, float)):
+        click.echo(_key_expiry_line(expires_at, renews="refresh_token" in token_data))
+    elif age_hours > CLI_JWT_EXPIRATION_HOURS:
         click.echo(f"Warning: Token is more than {CLI_JWT_EXPIRATION_HOURS} hours old and may have expired.")
+
+
+def _key_expiry_line(expires_at: float, renews: bool) -> str:
+    remaining_hours: Final = (expires_at - time.time()) / 3600
+    if remaining_hours <= 0:
+        return f"Key expired. Run '{_login_command(renews)}' again"
+    status: Final = f"Key expires in: {remaining_hours:.1f} hours"
+    return f"{status}, renewed on next use" if renews else status
 
 
 @click.group(name="auth")

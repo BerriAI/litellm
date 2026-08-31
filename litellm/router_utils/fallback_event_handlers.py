@@ -1,5 +1,6 @@
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final
@@ -12,6 +13,16 @@ from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
     get_fallback_error_info,
 )
+from litellm.router_utils.batch_utils import _get_router_metadata_variable_name
+from litellm.router_utils.cooldown_handlers import (
+    _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper, used across router_utils
+    _set_cooldown_deployments,  # pyright: ignore[reportPrivateUsage] - shared helper, used across router_utils
+    cast_exception_status_to_int,
+    is_advisor_orchestration_failure,
+)
+from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+    increment_deployment_failures_for_current_minute,
+)
 from litellm.types.router import LiteLLMParamsTypedDict
 
 if TYPE_CHECKING:
@@ -20,6 +31,116 @@ if TYPE_CHECKING:
     LitellmRouter = _Router
 else:
     LitellmRouter = Any
+
+# Status codes a generic API call's caller-supplied resource id can trigger on its own
+# (e.g. a nonexistent file/batch/thread id), independent of the selected deployment's health.
+_REQUEST_SCOPED_STATUS_CODES: Final = frozenset((404,))
+
+
+def _trigger_cooldown_for_failed_deployment(
+    litellm_router: LitellmRouter,
+    kwargs: Mapping[str, Any],
+    exception: Exception,
+) -> None:
+    """
+    Trigger cooldown for a failed fallback deployment.
+
+    In the fallback path the normal failure-callback cooldown is skipped because the
+    Logging object sets has_logged_async_failure=True after the first failure and
+    blocks all subsequent failure callbacks. This helper ensures every failed
+    fallback deployment is evaluated for cooldown regardless.
+    """
+    try:
+        if is_advisor_orchestration_failure(exception):
+            verbose_router_logger.debug(
+                "Not triggering cooldown for fallback deployment: failure originated "
+                "from advisor orchestration, not the selected deployment."
+            )
+            return
+
+        exception_status: Final[str | int] = getattr(exception, "status_code", "")
+
+        # Generic API calls (files, batches, threads, rerank, ...) take a caller-supplied
+        # resource id, so a 404 there usually means "that id doesn't exist" rather than
+        # "this deployment is unhealthy". Left unguarded, one bad id would 404 every
+        # deployment in the fallback chain and cool all of them down from a single request.
+        if (
+            kwargs.get("original_generic_function") is not None
+            and cast_exception_status_to_int(exception_status) in _REQUEST_SCOPED_STATUS_CODES
+        ):
+            verbose_router_logger.debug(
+                "Not triggering cooldown for fallback deployment: status %s on a generic API "
+                "call is caller-attributable, not a deployment health signal.",
+                exception_status,
+            )
+            return
+
+        # The proxy's `x-litellm-timeout` header lets a caller set an arbitrarily short
+        # timeout, which litellm.Timeout reports as status 408 regardless of the deployment's
+        # actual health. Left unguarded, a caller could force a 408 on every deployment in
+        # the fallback chain from a single request with a near-zero timeout.
+        if kwargs.get("client_side_timeout") and cast_exception_status_to_int(exception_status) == 408:
+            verbose_router_logger.debug(
+                "Not triggering cooldown for fallback deployment: a caller-supplied "
+                "x-litellm-timeout caused this 408, not deployment health."
+            )
+            return
+
+        # Only Router._set_failed_deployment_id_on_exception()'s server-stamped id is
+        # trusted here: a metadata-bucket lookup (e.g. "metadata"/"litellm_metadata")
+        # can't reliably tell a caller-supplied bucket from a router-authored one
+        # without knowing this call's function_name, so a client with permission to
+        # set metadata could otherwise get an arbitrary deployment cooled down.
+        deployment_id: Final[str | None] = getattr(exception, "failed_deployment_id", None)
+
+        if deployment_id is None:
+            verbose_router_logger.debug("Cannot trigger cooldown for fallback: no failed_deployment_id on exception")
+            return
+
+        # Priority: deployment config > response header > router default, matching
+        # Router.deployment_callback_on_failure's precedence for the primary path.
+        deployment_dict: Final = litellm_router.get_model_info(id=deployment_id)
+        deployment_cooldown: Final = (
+            _first_present(
+                deployment_dict.get("model_info"), deployment_dict.get("litellm_params"), key="cooldown_time"
+            )
+            if deployment_dict is not None
+            else None
+        )
+        exception_headers: Final = litellm.litellm_core_utils.exception_mapping_utils._get_response_headers(
+            original_exception=exception
+        )
+        _get_retry_after: Final = (
+            litellm.utils._get_retry_after_from_exception_header  # pyright: ignore[reportPrivateUsage] - as router.py
+        )
+        header_cooldown: Final = (
+            _get_retry_after(response_headers=exception_headers) if exception_headers is not None else None
+        )
+        time_to_cooldown: Final = (
+            deployment_cooldown
+            if deployment_cooldown is not None and deployment_cooldown >= 0
+            else (
+                header_cooldown
+                if header_cooldown is not None and header_cooldown >= 0
+                else litellm_router.cooldown_time
+            )
+        )
+
+        increment_deployment_failures_for_current_minute(
+            litellm_router_instance=litellm_router,
+            deployment_id=deployment_id,
+        )
+        _set_cooldown_deployments(
+            litellm_router_instance=litellm_router,
+            exception_status=exception_status,
+            original_exception=exception,
+            deployment=deployment_id,
+            time_to_cooldown=time_to_cooldown,
+        )
+
+        verbose_router_logger.debug("Triggered cooldown for fallback deployment %s", deployment_id)
+    except Exception as e:  # noqa: BLE001 - best-effort cooldown trigger must never break the fallback response itself
+        verbose_router_logger.debug("Error triggering cooldown for fallback deployment: %s", e)
 
 
 def fallback_attempt_key(fallback_target: object) -> str | None:
@@ -131,6 +252,81 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
     return fallback_model_group, generic_fallback_idx
 
 
+PROVIDER_SCOPED_RESOURCE_KEYS: Final = ("input_file_id", "training_file", "batch_id", "file_id", "fine_tuning_job_id")
+PROVIDER_SCOPED_RESOURCE_FUNCTION_NAMES: Final = frozenset(
+    {
+        "_acreate_batch",
+        "_acancel_batch",
+        "acreate_fine_tuning_job",
+        "acancel_fine_tuning_job",
+        "aretrieve_fine_tuning_job",
+        "afile_content",
+        "afile_delete",
+    }
+)
+PROVIDER_SCOPED_CREATION_FUNCTION_NAMES: Final = frozenset({"_acreate_file"})
+
+
+def _get_fallback_target_model_group(fallback_entry: str | Mapping[str, object]) -> str | None:
+    if isinstance(fallback_entry, str):
+        return fallback_entry
+    target: Final = fallback_entry.get("model")
+    return target if isinstance(target, str) else None
+
+
+async def _is_fallback_target_authorized(
+    litellm_router: LitellmRouter,
+    fallback_entry: str | Mapping[str, object],
+    original_model_group: str,
+    kwargs: Mapping[str, object],
+) -> bool:
+    access_check: Final = litellm_router.fallback_access_check
+    target: Final = _get_fallback_target_model_group(fallback_entry)
+    if access_check is None or target is None or target == original_model_group:
+        return True
+    if await access_check(model=target, request_kwargs=kwargs, llm_router=litellm_router):
+        return True
+    verbose_router_logger.info(
+        "Skipping fallback to model_group = %s: caller is not authorized to call it",
+        mask_sensitive_structure(fallback_entry),
+    )
+    return False
+
+
+def references_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
+    """
+    True when a file, batch, or fine-tuning job operation names an id that only exists
+    under one provider's credentials.
+
+    Each of those ids lives in the account of the deployment that issued it. Handing it to
+    a different model group asks a provider about an id it never issued, which costs an
+    extra round trip that can only answer not-found. Generic calls dispatched through
+    `Router._ageneric_api_call_with_fallbacks` carry the real handler in
+    `original_generic_function`, so both slots are checked. Gating on the handler name
+    keeps completion-style requests eligible for cross-group fallback even when a caller
+    passes a stray extra body field that happens to share one of these key names.
+    """
+    handler_names: Final = tuple(
+        getattr(kwargs.get(function_key), "__name__", None)
+        for function_key in ("original_function", "original_generic_function")
+    )
+    if all(name not in PROVIDER_SCOPED_RESOURCE_FUNCTION_NAMES for name in handler_names):
+        return False
+    return any(kwargs.get(key) for key in PROVIDER_SCOPED_RESOURCE_KEYS)
+
+
+def creates_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
+    """
+    True when the request creates a resource that will live under one provider's credentials.
+
+    A file uploaded for batches or fine-tuning is stored in the account of the deployment
+    that handled it, and its id is only usable against the model group the caller named.
+    Letting the upload fall back to a different model group silently stores the file with
+    the wrong provider, and every later use of the returned id fails.
+    """
+    return getattr(kwargs.get("original_function"), "__name__", None) in PROVIDER_SCOPED_CREATION_FUNCTION_NAMES
+
+
 async def run_async_fallback(
     *args: tuple[Any],
     litellm_router: LitellmRouter,
@@ -176,6 +372,12 @@ async def run_async_fallback(
 
     error_from_fallbacks = original_exception
     fallback_errors = (get_fallback_error_info(original_exception),)
+    metadata_variable_name: Final = _get_router_metadata_variable_name(
+        function_name=getattr(kwargs.get("original_function"), "__name__", None)
+    )
+    same_model_group_only: Final = references_provider_scoped_resource(kwargs) or creates_provider_scoped_resource(
+        kwargs
+    )
     # Read out of kwargs and narrowed here rather than declared as a parameter: every caller
     # reaches this function by spreading a loosely-typed kwargs dict, so a declared parameter
     # would carry an annotation that no call site can actually be checked against.
@@ -187,6 +389,15 @@ async def run_async_fallback(
 
     for mg in fallback_model_group:
         if mg == original_model_group:
+            continue
+        if same_model_group_only and _get_fallback_target_model_group(mg) != original_model_group:
+            verbose_router_logger.info(
+                "Skipping fallback to model_group = %s: request names a resource owned by model_group = %s",
+                mask_sensitive_structure(mg),
+                original_model_group,
+            )
+            continue
+        if not await _is_fallback_target_authorized(litellm_router, mg, original_model_group, kwargs):
             continue
         attempt_key = fallback_attempt_key(mg)
         if attempt_key is not None:
@@ -205,10 +416,15 @@ async def run_async_fallback(
                 kwargs["model"] = mg
             elif isinstance(mg, dict):
                 kwargs.update(mg)
-            kwargs.setdefault("metadata", {}).update(
-                {"model_group": kwargs.get("model", None)}
-            )  # update model_group used, if fallbacks are done
             fallback_depth = fallback_depth + 1
+            _hop_metadata = dict(kwargs.get(metadata_variable_name) or {})
+            _original_model_group_stamp = _hop_metadata.pop("original_model_group", original_model_group)
+            _hop_metadata.pop("model_group", None)
+            _hop_metadata.pop("attempted_fallbacks", None)
+            _hop_metadata["original_model_group"] = _original_model_group_stamp
+            _hop_metadata["model_group"] = kwargs.get("model", None)
+            _hop_metadata["attempted_fallbacks"] = fallback_depth
+            kwargs[metadata_variable_name] = _hop_metadata
             kwargs["fallback_depth"] = fallback_depth
             kwargs["max_fallbacks"] = max_fallbacks
             kwargs["attempted_targets"] = attempted
@@ -236,6 +452,13 @@ async def run_async_fallback(
                 kwargs=kwargs,
                 original_exception=original_exception,
             )
+            logging_obj = kwargs.get("litellm_logging_obj")
+            if logging_obj is not None and logging_obj.model_call_details.get("has_logged_async_failure", False):
+                _trigger_cooldown_for_failed_deployment(
+                    litellm_router=litellm_router,
+                    kwargs=kwargs,
+                    exception=e,
+                )
     raise error_from_fallbacks
 
 

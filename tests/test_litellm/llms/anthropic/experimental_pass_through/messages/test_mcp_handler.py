@@ -1,10 +1,7 @@
-import os
-import sys
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
     anthropic_messages_handler,
@@ -61,7 +58,7 @@ def test_anthropic_messages_handler_skips_the_gateway_on_recursion():
         "litellm.llms.anthropic.experimental_pass_through.messages.mcp_handler.anthropic_messages_with_mcp",
         new=AsyncMock(return_value={"routed": True}),
     ) as routed:
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError, match='anthropic_messages_handler is not implemented for sync calls'):
             anthropic_messages_handler(
                 max_tokens=100,
                 messages=[{"role": "user", "content": "hi"}],
@@ -80,7 +77,7 @@ def test_anthropic_messages_handler_leaves_native_tools_alone():
         "litellm.llms.anthropic.experimental_pass_through.messages.mcp_handler.anthropic_messages_with_mcp",
         new=AsyncMock(return_value={"routed": True}),
     ) as routed:
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError, match='anthropic_messages_handler is not implemented for sync calls'):
             anthropic_messages_handler(
                 max_tokens=100,
                 messages=[{"role": "user", "content": "hi"}],

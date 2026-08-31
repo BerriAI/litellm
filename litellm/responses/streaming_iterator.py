@@ -5,11 +5,11 @@ import json
 import time
 import traceback
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, overload, runtime_checkable
 
 import httpx
 from openai._streaming import SSEDecoder
@@ -20,7 +20,7 @@ from litellm.constants import (
     LITELLM_MAX_STREAMING_DURATION_SECONDS,
     STREAM_SSE_DONE_STRING,
 )
-from litellm.exceptions import MidStreamFallbackError
+from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -42,12 +42,24 @@ from litellm.types.utils import CallTypes
 from litellm.utils import async_post_call_success_deployment_hook
 
 if TYPE_CHECKING:
+    from litellm.caching.caching_handler import LLMCachingHandler
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.responses.streaming_websocket import (
         PresidioGuardrailCallback,
         ResponsesBackendWebSocket,
         ResponsesClientWebSocket,
     )
+    from litellm.types.router import LiteLLM_Params
+
+
+class ProjectQuotaCallback(Protocol):
+    async def enforce_project_io_token_quota_for_frame(
+        self,
+        user_api_key_dict: UserAPIKeyAuth | None,
+        requested_model: str | None,
+        estimated_input_tokens: int,
+        estimated_output_tokens: int,
+    ) -> None: ...
 
 
 @lru_cache(maxsize=1)
@@ -67,6 +79,70 @@ def _is_json_array(value: object) -> TypeIs[list[object]]:  # guard-ok: trivial 
 
 def _is_str_mapping(value: object) -> TypeIs[dict[str, str]]:  # guard-ok: verifies every value is str
     return _is_json_object(value) and all(isinstance(item, str) for item in value.values())
+
+
+class _MutableJsonObject(Protocol):
+    @overload
+    def get(self, key: str, /) -> object | None: ...
+    @overload
+    def get(self, key: str, default: object, /) -> object: ...
+    def __getitem__(self, key: str, /) -> object: ...
+    def __setitem__(self, key: str, value: object, /) -> None: ...
+    def __contains__(self, key: object, /) -> bool: ...
+    def items(self) -> Iterable[tuple[str, object]]: ...
+
+
+class _GetsLitellmParams(Protocol):
+    def __call__(self, key: str, default: Mapping[str, object], /) -> LiteLLM_Params: ...
+
+
+class _PopsOptionalStr(Protocol):
+    def __call__(self, key: str, default: None, /) -> str | None: ...
+
+
+class _UnmasksPiiText(Protocol):
+    def __call__(self, text: str, pii_tokens: Mapping[str, str]) -> str: ...
+
+
+class _ShouldStoreResultInCache(Protocol):
+    def __call__(self, *, original_function: Callable[..., object] | None, kwargs: Mapping[str, object]) -> bool: ...
+
+
+class _PostStreamingDeploymentHook(Protocol):
+    def __call__(
+        self,
+        *,
+        request_data: Mapping[str, object],
+        response_chunk: ResponsesAPIStreamingResponse,
+        call_type: CallTypes | None,
+    ) -> Awaitable[ResponsesAPIStreamingResponse | None]: ...
+
+
+@runtime_checkable
+class _HasPostStreamingDeploymentHook(Protocol):
+    async_post_call_streaming_deployment_hook: _PostStreamingDeploymentHook
+
+
+def _typed_gets_litellm_params(fn: _GetsLitellmParams) -> _GetsLitellmParams:
+    return fn
+
+
+def _typed_pops_optional_str(fn: _PopsOptionalStr) -> _PopsOptionalStr:
+    return fn
+
+
+_SHOULD_STORE_RESULT_IN_CACHE_ATTR: Final = "_should_store_result_in_cache"
+_UNMASK_PII_TEXT_ATTR: Final = "_unmask_pii_text"
+
+
+def _load_json_object(payload: str | bytes) -> dict[str, object]:
+    """Parse a JSON payload that the caller consumes as an object."""
+    return json.loads(payload)
+
+
+def _load_json_value(payload: str | bytes) -> object:
+    """Parse a JSON payload whose top-level shape the caller narrows itself."""
+    return json.loads(payload)
 
 
 def _model_id_from_metadata(litellm_metadata: dict[str, object] | None) -> str | None:
@@ -185,7 +261,7 @@ class BaseResponsesAPIStreamingIterator:
         # This matches the stream wrapper in litellm/litellm_core_utils/streaming_handler.py
         _api_base: Final = get_api_base(
             model=model or "",
-            optional_params=self.logging_obj.model_call_details.get("litellm_params", {}),
+            optional_params=_typed_gets_litellm_params(self.logging_obj.model_call_details.get)("litellm_params", {}),
         )
         self._hidden_params: dict[str, object] = {
             "model_id": _model_id_from_metadata(litellm_metadata),
@@ -228,10 +304,10 @@ class BaseResponsesAPIStreamingIterator:
 
         try:
             # Parse the JSON chunk
-            parsed_chunk: Final = json.loads(chunk)
+            parsed_chunk: Final = _load_json_value(chunk)
 
             # Format as ResponsesAPIStreamingResponse
-            if isinstance(parsed_chunk, dict):
+            if _is_json_object(parsed_chunk):
                 if self.responses_api_provider_config is None:
                     raise ValueError("responses_api_provider_config is required to process live streaming chunks")
                 openai_responses_api_chunk: Final = self.responses_api_provider_config.transform_streaming_response(
@@ -313,8 +389,10 @@ class BaseResponsesAPIStreamingIterator:
                             if encrypted_content and isinstance(encrypted_content, str):
                                 model_id: Final = _model_id_from_metadata(self.litellm_metadata)
                                 if model_id:
-                                    wrapped_content = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
-                                        encrypted_content, model_id
+                                    wrapped_content: Final = (
+                                        ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                                            encrypted_content, model_id
+                                        )
                                     )
                                     setattr(item, "encrypted_content", wrapped_content)
 
@@ -336,7 +414,9 @@ class BaseResponsesAPIStreamingIterator:
                             usage_obj: Final[ResponseAPIUsage | None] = getattr(response_obj, "usage", None)
                             if usage_obj is not None:
                                 try:
-                                    cost: float | None = self.logging_obj._response_cost_calculator(result=response_obj)
+                                    cost: Final[float | None] = self.logging_obj._response_cost_calculator(
+                                        result=response_obj
+                                    )
                                     if cost is not None:
                                         setattr(usage_obj, "cost", cost)
                                 except Exception:
@@ -383,15 +463,20 @@ class BaseResponsesAPIStreamingIterator:
 
         end_time: Final = datetime.now()
         if is_async:
-            asyncio.create_task(
-                self.logging_obj.dispatch_success_handlers(
-                    logging_response,
-                    start_time=self.start_time,
-                    end_time=end_time,
-                    cache_hit=self._completed_response_cache_hit,
-                    prefer_async_handlers=True,
-                )
+            logging_coroutine: Final = self.logging_obj.dispatch_success_handlers(
+                logging_response,
+                start_time=self.start_time,
+                end_time=end_time,
+                cache_hit=self._completed_response_cache_hit,
+                prefer_async_handlers=True,
             )
+            deferred_dispatch_armed: Final = getattr(self.logging_obj, "_on_deferred_stream_complete", None) is not None
+            if deferred_dispatch_armed:
+                # End-of-stream guardrail scans write guardrail_information after
+                # the terminal event; dispatching now would snapshot metadata early.
+                self.logging_obj._deferred_stream_complete_args = (logging_coroutine,)
+            else:
+                asyncio.create_task(logging_coroutine)
         else:
             run_async_function(
                 async_function=self.logging_obj.async_success_handler,
@@ -510,7 +595,7 @@ class BaseResponsesAPIStreamingIterator:
         if response_obj is None:
             return
 
-        caching_handler: Final = getattr(self.logging_obj, "_llm_caching_handler", None)
+        caching_handler: Final[LLMCachingHandler | None] = getattr(self.logging_obj, "_llm_caching_handler", None)
         if caching_handler is None:
             return
 
@@ -528,19 +613,25 @@ class BaseResponsesAPIStreamingIterator:
         if preset_cache_key is not None:
             request_kwargs["cache_key"] = preset_cache_key
 
-        if not caching_handler._should_store_result_in_cache(
-            original_function=caching_handler.original_function,
+        should_store_result_in_cache: Final[_ShouldStoreResultInCache] = getattr(
+            caching_handler, _SHOULD_STORE_RESULT_IN_CACHE_ATTR
+        )
+        if not should_store_result_in_cache(
+            original_function=getattr(caching_handler, "original_function", None),
             kwargs=request_kwargs,
         ):
             return
 
-        if litellm.cache is None:
+        cache: Final = litellm.cache
+        if cache is None:
             return
 
         cached_response: Final = response_obj.model_dump_json()
         if is_async:
-            cache_write_task: Final = asyncio.create_task(
-                litellm.cache.async_add_cache(
+            from litellm.caching.caching_handler import create_cache_write_task
+
+            cache_write_task: Final = create_cache_write_task(
+                lambda: cache.async_add_cache(
                     cached_response,
                     dynamic_cache_object=getattr(caching_handler, "dual_cache", None),
                     **request_kwargs,
@@ -553,7 +644,7 @@ class BaseResponsesAPIStreamingIterator:
                 )
             )
         else:
-            litellm.cache.add_cache(
+            cache.add_cache(
                 cached_response,
                 dynamic_cache_object=getattr(caching_handler, "dual_cache", None),
                 **request_kwargs,
@@ -582,12 +673,15 @@ class BaseResponsesAPIStreamingIterator:
                     typed_call_type = None
 
             request_data: Final = self.request_data or getattr(self.logging_obj, "model_call_details", {})
-            callbacks: Final = getattr(litellm, "callbacks", None) or []
+            callbacks: Final[Sequence[object]] = getattr(litellm, "callbacks", None) or []
             hooks_ran = False
             for callback in callbacks:
-                if hasattr(callback, "async_post_call_streaming_deployment_hook"):
+                if isinstance(callback, _HasPostStreamingDeploymentHook):
                     hooks_ran = True
-                    result = await callback.async_post_call_streaming_deployment_hook(
+                    post_streaming_hook: _PostStreamingDeploymentHook = (
+                        callback.async_post_call_streaming_deployment_hook
+                    )
+                    result = await post_streaming_hook(
                         request_data=request_data,
                         response_chunk=chunk,
                         call_type=typed_call_type,
@@ -639,6 +733,8 @@ class BaseResponsesAPIStreamingIterator:
                 kwargs=request_payload,
                 start_time=self.start_time,
                 end_time=end_time,
+                # the provider call was timed to first byte, so the whole stream minus it is not overhead
+                include_overhead=False,
             )
         except Exception:
             # Non-blocking
@@ -1029,8 +1125,18 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         return evt
 
 
-def _dump_response_object(obj: Any) -> dict[str, Any]:
-    if hasattr(obj, "model_dump"):
+@runtime_checkable
+class _HasModelDump(Protocol):
+    def model_dump(self, *, exclude_none: bool = ...) -> dict[str, object]: ...
+
+
+@runtime_checkable
+class _HasModelDumpJson(Protocol):
+    def model_dump_json(self, *, exclude_none: bool = ...) -> str: ...
+
+
+def _dump_response_object(obj: object) -> Mapping[str, object]:
+    if isinstance(obj, _HasModelDump):
         return obj.model_dump()
     if _is_json_object(obj):
         return obj
@@ -1059,21 +1165,20 @@ def _build_content_part_done_event(
     item_id: str,
     output_index: int,
     content_index: int,
-    part_payload: dict[str, Any],
+    part_payload: Mapping[str, object],
 ) -> ResponsesAPIStreamingResponse | None:
     openai_types: Final = _get_openai_response_types()
     part_type: Final = part_payload.get("type")
     part: PART_UNION_TYPES
     if part_type == "output_text":
-        annotations: Final = [
-            openai_types.BaseLiteLLMOpenAIResponseObject(**annotation)
-            for annotation in part_payload.get("annotations", []) or []
-        ]
-        part = openai_types.ContentPartDonePartOutputText(
-            type="output_text",
-            text=str(part_payload.get("text") or ""),
-            annotations=annotations,
-            logprobs=part_payload.get("logprobs"),
+        raw_annotations: Final[object] = part_payload.get("annotations", []) or []
+        part = openai_types.ContentPartDonePartOutputText.model_validate(
+            {
+                "type": "output_text",
+                "text": str(part_payload.get("text") or ""),
+                "annotations": raw_annotations,
+                "logprobs": part_payload.get("logprobs"),
+            }
         )
     elif part_type == "refusal":
         part = openai_types.ContentPartDonePartRefusal(
@@ -1103,7 +1208,7 @@ def _add_text_like_part_events(
     item_id: str,
     output_index: int,
     content_index: int,
-    part_payload: dict[str, Any],
+    part_payload: Mapping[str, object],
     chunk_size: int,
 ) -> None:
     openai_types: Final = _get_openai_response_types()
@@ -1120,15 +1225,19 @@ def _add_text_like_part_events(
                     delta=text[i : i + chunk_size],
                 )
             )
-        for annotation_index, annotation in enumerate(part_payload.get("annotations", []) or []):
+        raw_annotation_items: Final = part_payload.get("annotations")
+        annotation_items: Final[Sequence[object]] = raw_annotation_items if _is_json_array(raw_annotation_items) else []
+        for annotation_index, annotation in enumerate(annotation_items):
             events.append(
-                openai_types.OutputTextAnnotationAddedEvent(
-                    type=openai_types.ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
-                    item_id=item_id,
-                    output_index=output_index,
-                    content_index=content_index,
-                    annotation_index=annotation_index,
-                    annotation=annotation,
+                openai_types.OutputTextAnnotationAddedEvent.model_validate(
+                    {
+                        "type": openai_types.ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
+                        "item_id": item_id,
+                        "output_index": output_index,
+                        "content_index": content_index,
+                        "annotation_index": annotation_index,
+                        "annotation": annotation,
+                    }
                 )
             )
         events.append(
@@ -1186,7 +1295,8 @@ def _build_synthetic_response_events(
     ]
 
     sequence_number = 0
-    for output_index, output_item in enumerate(getattr(transformed, "output", []) or []):
+    output_items: Final[Sequence[object]] = getattr(transformed, "output", []) or []
+    for output_index, output_item in enumerate(output_items):
         output_item_payload = _dump_response_object(output_item)
         item_id = str(output_item_payload.get("id") or transformed.id)
         item_type = output_item_payload.get("type")
@@ -1200,7 +1310,9 @@ def _build_synthetic_response_events(
         )
 
         if item_type == "message":
-            for content_index, part in enumerate(output_item_payload.get("content", []) or []):
+            raw_content_parts = output_item_payload.get("content")
+            content_parts: Sequence[object] = raw_content_parts if _is_json_array(raw_content_parts) else []
+            for content_index, part in enumerate(content_parts):
                 part_payload = _dump_response_object(part)
                 events.append(
                     openai_types.ContentPartAddedEvent(
@@ -1247,7 +1359,9 @@ def _build_synthetic_response_events(
                 )
             )
         elif item_type == "reasoning":
-            for summary_index, summary in enumerate(output_item_payload.get("summary", []) or []):
+            raw_summary_items = output_item_payload.get("summary")
+            summary_items: Sequence[object] = raw_summary_items if _is_json_array(raw_summary_items) else []
+            for summary_index, summary in enumerate(summary_items):
                 summary_payload = _dump_response_object(summary)
                 summary_text = str(summary_payload.get("text") or "")
                 for i in range(0, len(summary_text), chunk_size):
@@ -1308,6 +1422,84 @@ def _build_synthetic_response_events(
 
 from litellm._logging import verbose_logger
 
+# Conservative per-frame output-token floor used when a response.create
+# frame omits max_output_tokens, so a project OTPM quota can't be bypassed
+# by simply never declaring an output cap.
+_FRAME_NO_MAX_OUTPUT_TOKENS_FLOOR: Final = 1024
+
+# Rough chars-per-token ratio for estimating a frame's input tokens without
+# resolving a real per-model tokenizer, matching the conservative estimate
+# the proxy's own rate limiter uses for the same purpose.
+_FRAME_CHARS_PER_TOKEN_ESTIMATE: Final = 4
+
+
+def _extract_frame_quota_estimate_inputs(msg_obj: Mapping[str, object]) -> tuple[int, int | None]:
+    """Extract a rough input-token count and any explicit max_output_tokens
+    from a ``response.create`` frame, handling both wire shapes:
+      flat:   {"type": "response.create", "input": ..., "max_output_tokens": ...}
+      nested: {"type": "response.create", "response": {"input": ..., "max_output_tokens": ...}}
+    """
+    nested: Final = msg_obj.get("response")
+    params: Final[Mapping[str, object]] = (
+        nested
+        if _is_json_object(nested) and nested
+        else MappingProxyType(  # mutable-ok: immediately frozen filtered frame
+            {k: v for k, v in msg_obj.items() if k != "type"}
+        )
+    )
+    text_parts: Final[list[str]] = []  # mutable-ok: local accumulator built in one pass, not shared
+    pending: Final[list[object]] = [  # mutable-ok: explicit worklist avoids recursion
+        params.get("input"),
+        params.get("instructions"),
+    ]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, str):
+            text_parts.append(value)
+        elif _is_json_array(value):
+            for item in value:
+                if isinstance(item, str):
+                    text_parts.append(item)
+                elif _is_json_object(item):
+                    pending.append(item.get("content"))
+                    pending.append(item.get("text"))
+    total_chars: Final = sum(len(part) for part in text_parts)
+    estimated_input_tokens: Final = max(1, total_chars // _FRAME_CHARS_PER_TOKEN_ESTIMATE) if total_chars else 0
+
+    max_output_tokens: Final = params.get("max_output_tokens")
+    return estimated_input_tokens, max_output_tokens if isinstance(max_output_tokens, int) else None
+
+
+async def _enforce_frame_project_quota(
+    quota_callbacks: Sequence[ProjectQuotaCallback],
+    user_api_key_dict: UserAPIKeyAuth | None,
+    model: str | None,
+    raw_message: str,
+) -> None:
+    """Charge one response.create frame's estimated tokens against every
+    registered project ITPM/OTPM quota callback, in isolation from PII
+    masking / logging so a malformed frame still reaches those callbacks."""
+    if not quota_callbacks:
+        return
+    try:
+        msg_obj: Final = _load_json_value(raw_message)
+    except (json.JSONDecodeError, TypeError):
+        return
+    if not _is_json_object(msg_obj) or msg_obj.get("type") != "response.create":
+        return
+    estimated_input_tokens, explicit_max_output_tokens = _extract_frame_quota_estimate_inputs(msg_obj)
+    estimated_output_tokens: Final = (
+        explicit_max_output_tokens if explicit_max_output_tokens is not None else _FRAME_NO_MAX_OUTPUT_TOKENS_FLOOR
+    )
+    for callback in quota_callbacks:
+        await callback.enforce_project_io_token_quota_for_frame(
+            user_api_key_dict=user_api_key_dict,
+            requested_model=model,
+            estimated_input_tokens=estimated_input_tokens,
+            estimated_output_tokens=estimated_output_tokens,
+        )
+
+
 RESPONSES_WS_LOGGED_EVENT_TYPES: Final = [
     "response.created",
     "response.completed",
@@ -1340,8 +1532,9 @@ class ResponsesWebSocketStreaming:
         user_api_key_dict: UserAPIKeyAuth | None = None,
         request_data: dict[str, object] | None = None,
         first_message: str | None = None,
-        guardrail_callbacks: list[Any] | None = None,
+        guardrail_callbacks: Sequence[PresidioGuardrailCallback] | None = None,
         output_guardrail_callbacks: list[PresidioGuardrailCallback] | None = None,
+        quota_callbacks: Sequence[ProjectQuotaCallback] | None = None,
         authorized_model: str | None = None,
     ):
         self.websocket = websocket
@@ -1349,16 +1542,17 @@ class ResponsesWebSocketStreaming:
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
         self.request_data: dict[str, object] = request_data or {}
-        self.messages: list[dict[str, object]] = []
+        self.messages: list[_MutableJsonObject] = []
         self.input_messages: list[dict[str, object]] = []
         self.first_message = first_message
-        self.guardrail_callbacks: list[Any] = guardrail_callbacks or []
+        self.guardrail_callbacks: Sequence[PresidioGuardrailCallback] = guardrail_callbacks or []
         self.output_guardrail_callbacks: list[PresidioGuardrailCallback] = output_guardrail_callbacks or []
+        self.quota_callbacks: tuple[ProjectQuotaCallback, ...] = tuple(quota_callbacks) if quota_callbacks else ()
         # Model name authorized at connection time; enforced on every
         # response.create frame to prevent deployment-substitution attacks.
         self.authorized_model: str | None = authorized_model
 
-    def _should_store_event(self, event_obj: dict[str, object]) -> bool:
+    def _should_store_event(self, event_obj: _MutableJsonObject) -> bool:
         return event_obj.get("type") in RESPONSES_WS_LOGGED_EVENT_TYPES
 
     def _store_event(self, event: str | bytes | dict[str, object]) -> None:
@@ -1366,7 +1560,7 @@ class ResponsesWebSocketStreaming:
             event = event.decode("utf-8")
         if isinstance(event, str):
             try:
-                event_obj = json.loads(event)
+                event_obj = _load_json_object(event)
             except (json.JSONDecodeError, TypeError):
                 return
         else:
@@ -1379,7 +1573,7 @@ class ResponsesWebSocketStreaming:
         """Extract user input content from response.create for logging."""
         try:
             if isinstance(message, str):
-                msg_obj = json.loads(message)
+                msg_obj = _load_json_object(message)
             elif _is_json_object(message):
                 msg_obj = message
             else:
@@ -1449,7 +1643,8 @@ class ResponsesWebSocketStreaming:
                 # masked response.completed.
                 if self.output_guardrail_callbacks:
                     try:
-                        _evt_type = json.loads(response_str).get("type")
+                        _evt_payload: Mapping[str, object] = _load_json_object(response_str)
+                        _evt_type = _evt_payload.get("type")
                     except (json.JSONDecodeError, TypeError):
                         _evt_type = None
                     if _evt_type in self._DELTA_EVENT_TYPES or _evt_type in self._OUTPUT_DONE_EVENT_TYPES:
@@ -1471,7 +1666,7 @@ class ResponsesWebSocketStreaming:
         finally:
             await self._log_messages()
 
-    def _enforce_authorized_model(self, msg_obj: dict[str, object]) -> bool:
+    def _enforce_authorized_model(self, msg_obj: _MutableJsonObject) -> bool:
         """
         Overwrite any ``model`` field in a ``response.create`` frame with the
         connection-authorized model to prevent deployment-substitution attacks.
@@ -1513,7 +1708,7 @@ class ResponsesWebSocketStreaming:
         Non-``response.create`` messages are returned unchanged.
         """
         try:
-            msg_obj: Final = json.loads(message)
+            msg_obj: Final = _load_json_object(message)
         except (json.JSONDecodeError, TypeError):
             return message
 
@@ -1530,7 +1725,8 @@ class ResponsesWebSocketStreaming:
             self.request_data["metadata"] = {}
 
         modified = model_modified
-        for cb in self.guardrail_callbacks:
+        guardrail_cbs: Final[tuple[PresidioGuardrailCallback, ...]] = tuple(self.guardrail_callbacks)
+        for cb in guardrail_cbs:
             presidio_config = cb.get_presidio_settings_from_request_data(self.request_data)
             # response.create carries client text in two shapes:
             #   flat:   {"type": "response.create", "input": ..., "instructions": ...}
@@ -1539,7 +1735,7 @@ class ResponsesWebSocketStreaming:
             # forwarded unmasked regardless of where the client places it.
             nested_candidate = msg_obj.get("response")
             nested_response = nested_candidate if _is_json_object(nested_candidate) else None
-            text_containers: list[tuple[dict[str, object], str]] = []
+            text_containers: list[tuple[_MutableJsonObject, str]] = []
             for container in (msg_obj, nested_response):
                 if container is None:
                     continue
@@ -1636,16 +1832,17 @@ class ResponsesWebSocketStreaming:
 
         metadata: Final = self.request_data.get("metadata")
         raw_pii_tokens: Final = metadata.get("pii_tokens") if _is_json_object(metadata) else None
-        pii_tokens: Final[dict[str, str]] = raw_pii_tokens if _is_str_mapping(raw_pii_tokens) else {}
+        pii_tokens: Final[Mapping[str, str]] = raw_pii_tokens if _is_str_mapping(raw_pii_tokens) else {}
         if not pii_tokens:
             return response_str
 
         try:
-            evt_obj: Final = json.loads(response_str)
+            evt_obj: Final = _load_json_object(response_str)
         except (json.JSONDecodeError, TypeError):
             return response_str
 
         cb: Final = self.guardrail_callbacks[0]
+        unmask_pii_text: Final[_UnmasksPiiText] = getattr(cb, _UNMASK_PII_TEXT_ATTR)
         event_type: Final = evt_obj.get("type")
 
         if event_type == "response.completed":
@@ -1665,7 +1862,7 @@ class ResponsesWebSocketStreaming:
                         continue
                     text = content_block.get("text")
                     if isinstance(text, str):
-                        unmasked = cb._unmask_pii_text(text, pii_tokens)
+                        unmasked = unmask_pii_text(text, pii_tokens)
                         if unmasked != text:
                             content_block["text"] = unmasked
                             modified = True
@@ -1674,7 +1871,7 @@ class ResponsesWebSocketStreaming:
         if event_type in self._DELTA_EVENT_TYPES:
             delta: Final = evt_obj.get("delta")
             if isinstance(delta, str):
-                unmasked = cb._unmask_pii_text(delta, pii_tokens)
+                unmasked = unmask_pii_text(delta, pii_tokens)
                 if unmasked != delta:
                     evt_obj["delta"] = unmasked
                     return json.dumps(evt_obj)
@@ -1697,7 +1894,7 @@ class ResponsesWebSocketStreaming:
             return response_str
 
         try:
-            evt_obj: Final[Mapping[str, object]] = json.loads(response_str)
+            evt_obj: Final[Mapping[str, object]] = _load_json_object(response_str)
         except (json.JSONDecodeError, TypeError):
             return response_str
 
@@ -1761,10 +1958,39 @@ class ResponsesWebSocketStreaming:
 
         return json.dumps(evt_obj) if modified else response_str
 
+    async def _enforce_or_reject_frame(self, message: str) -> bool:
+        """Run the per-frame project quota check.
+
+        On rejection, sends an ``error`` event to the client and reports that
+        the frame must be dropped instead of forwarded, so the connection
+        stays open for the client to retry once the window resets.
+        """
+        try:
+            await _enforce_frame_project_quota(
+                self.quota_callbacks, self.user_api_key_dict, self.authorized_model, message
+            )
+        except RateLimitError as e:
+            try:
+                await self.websocket.send_text(
+                    json.dumps(  # mutable-ok: WebSocket wire payload requires JSON objects
+                        {  # mutable-ok: WebSocket wire payload requires JSON objects
+                            "type": "error",
+                            "error": {  # mutable-ok: nested WebSocket error object
+                                "type": "rate_limit_exceeded",
+                                "message": str(e),
+                            },
+                        }
+                    )
+                )
+            except Exception:  # noqa: BLE001, S110  # client may already be gone
+                pass
+            return False
+        return True
+
     async def client_to_backend(self) -> None:
         """Forward response.create events from client to backend."""
         try:
-            if self.first_message is not None:
+            if self.first_message is not None and await self._enforce_or_reject_frame(self.first_message):
                 masked_first: Final = await self._mask_response_create(self.first_message)
                 self._store_input(masked_first)
                 self._store_event(masked_first)
@@ -1772,6 +1998,8 @@ class ResponsesWebSocketStreaming:
 
             while True:
                 message = await self.websocket.receive_text()
+                if not await self._enforce_or_reject_frame(message):
+                    continue
                 masked = await self._mask_response_create(message)
                 self._store_input(masked)
                 self._store_event(masked)
@@ -1845,28 +2073,31 @@ class ManagedResponsesWebSocketHandler:
         model: str,
         logging_obj: LiteLLMLoggingObj,
         user_api_key_dict: UserAPIKeyAuth | None = None,
-        litellm_metadata: dict[str, Any] | None = None,
+        litellm_metadata: Mapping[str, object] | None = None,
         api_key: str | None = None,
         api_base: str | None = None,
         timeout: float | None = None,
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
+        quota_callbacks: Sequence[ProjectQuotaCallback] | None = None,
         **kwargs: object,
     ) -> None:
         self.websocket = websocket
         self.model = model
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
-        self.litellm_metadata: dict[str, Any] = litellm_metadata or {}
-        self.model_group: str | None = self.litellm_metadata.get("model_group") or self.litellm_metadata.get(
+        self.litellm_metadata: Mapping[str, object] = litellm_metadata or {}
+        raw_model_group: Final = self.litellm_metadata.get("model_group") or self.litellm_metadata.get(
             "deployment_model_name"
         )
+        self.model_group: str | None = raw_model_group if isinstance(raw_model_group, str) else None
         self.api_key = api_key
         self.api_base = api_base
         self.timeout = timeout
         self.custom_llm_provider = custom_llm_provider
         self._connection_provider = self._resolve_provider(model) or custom_llm_provider
         self.first_message = first_message
+        self.quota_callbacks: tuple[ProjectQuotaCallback, ...] = tuple(quota_callbacks) if quota_callbacks else ()
         # Carry through safe pass-through kwargs (e.g. extra_headers)
         self.extra_kwargs: dict[str, object] = {k: v for k, v in kwargs.items() if k not in _MANAGED_WS_SKIP_KWARGS}
         # In-memory session history: response_id → full accumulated message list.
@@ -1880,14 +2111,14 @@ class ManagedResponsesWebSocketHandler:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _serialize_chunk(chunk: Any) -> str | None:
+    def _serialize_chunk(chunk: object) -> str | None:
         """Serialize a streaming chunk to a JSON string for WebSocket transmission."""
         try:
-            if hasattr(chunk, "model_dump_json"):
+            if isinstance(chunk, _HasModelDumpJson):
                 return chunk.model_dump_json(exclude_none=True)
-            if hasattr(chunk, "model_dump"):
+            if isinstance(chunk, _HasModelDump):
                 return json.dumps(chunk.model_dump(exclude_none=True), default=str)
-            if isinstance(chunk, dict):
+            if _is_json_object(chunk):
                 return json.dumps(chunk, default=str)
             return json.dumps(str(chunk))
         except Exception as exc:
@@ -1923,7 +2154,7 @@ class ManagedResponsesWebSocketHandler:
         self._session_history[response_id] = messages
 
     @staticmethod
-    def _extract_response_id(completed_event: dict[str, object]) -> str | None:
+    def _extract_response_id(completed_event: _MutableJsonObject) -> str | None:
         """
         Pull the raw (decoded) response ID out of a ``response.completed`` event.
         Returns *None* if the event doesn't contain a usable ID.
@@ -1938,7 +2169,7 @@ class ManagedResponsesWebSocketHandler:
 
     @staticmethod
     def _extract_output_messages(
-        completed_event: dict[str, object],
+        completed_event: _MutableJsonObject,
     ) -> list[dict[str, object]]:
         """
         Convert the output items in a ``response.completed`` event into
@@ -1995,10 +2226,10 @@ class ManagedResponsesWebSocketHandler:
     # _process_response_create sub-methods
     # ------------------------------------------------------------------
 
-    async def _parse_message(self, raw_message: str) -> dict[str, object] | None:
+    async def _parse_message(self, raw_message: str) -> _MutableJsonObject | None:
         """Parse raw WS text; return the message dict or None (JSON error / ignored type)."""
         try:
-            msg_obj: Final = json.loads(raw_message)
+            msg_obj: Final = _load_json_object(raw_message)
         except json.JSONDecodeError:
             await self._send_error("Invalid JSON in response.create event", "invalid_request_error")
             return None
@@ -2008,7 +2239,7 @@ class ManagedResponsesWebSocketHandler:
         return msg_obj
 
     @staticmethod
-    def _is_warmup_frame(msg_obj: dict[str, object]) -> bool:
+    def _is_warmup_frame(msg_obj: _MutableJsonObject) -> bool:
         """Return True for a response.create whose generate flag is false."""
         nested: Final = msg_obj.get("response")
         source: Final = nested if _is_json_object(nested) and nested else msg_obj
@@ -2024,13 +2255,13 @@ class ManagedResponsesWebSocketHandler:
         return str(raw_id).startswith(_WARMUP_RESPONSE_ID_PREFIX)
 
     @staticmethod
-    def _warmup_source_params(msg_obj: dict[str, object]) -> dict[str, object]:
+    def _warmup_source_params(msg_obj: _MutableJsonObject) -> dict[str, object]:
         nested: Final = msg_obj.get("response")
         if _is_json_object(nested) and nested:
             return nested
         return {k: v for k, v in msg_obj.items() if k != "type"}
 
-    def _build_warmup_response(self, msg_obj: dict[str, object]) -> dict[str, object]:
+    def _build_warmup_response(self, msg_obj: _MutableJsonObject) -> dict[str, object]:
         """Build a minimal completed Responses API object for a warmup ack."""
         source: Final = self._warmup_source_params(msg_obj)
         wire_model: Final = source.get("model") or self.model_group or self.model
@@ -2048,7 +2279,7 @@ class ManagedResponsesWebSocketHandler:
             },
         }
 
-    async def _send_warmup_ack(self, msg_obj: dict[str, object]) -> None:
+    async def _send_warmup_ack(self, msg_obj: _MutableJsonObject) -> None:
         """
         Acknowledge a generate=false prewarm without calling the provider.
 
@@ -2071,7 +2302,7 @@ class ManagedResponsesWebSocketHandler:
             await self.websocket.send_text(serialized)
 
     @staticmethod
-    def _build_base_call_kwargs(msg_obj: dict[str, object]) -> dict[str, Any]:
+    def _build_base_call_kwargs(msg_obj: _MutableJsonObject) -> dict[str, Any]:
         """
         Extract Responses API params from the event, handling both wire formats:
           Nested: {"type": "response.create", "response": {"input": [...], ...}}
@@ -2180,7 +2411,7 @@ class ManagedResponsesWebSocketHandler:
         call_kwargs.setdefault("litellm_params", {})
         call_kwargs["litellm_params"]["proxy_server_request"] = proxy_server_request
 
-    async def _stream_and_forward(self, model: str, call_kwargs: dict[str, Any]) -> dict[str, object] | None:
+    async def _stream_and_forward(self, model: str, call_kwargs: dict[str, Any]) -> _MutableJsonObject | None:
         """
         Stream ``litellm.aresponses`` and forward every chunk over the WebSocket.
 
@@ -2188,7 +2419,7 @@ class ManagedResponsesWebSocketHandler:
         directly (before serialization) to avoid a redundant JSON round-trip on
         every chunk.  Returns the completed event dict, or ``None``.
         """
-        completed_event: dict[str, object] | None = (
+        completed_event: _MutableJsonObject | None = (
             None  # rebind-ok: captures the completed event once the stream yields it
         )
         stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
@@ -2202,7 +2433,7 @@ class ManagedResponsesWebSocketHandler:
                 continue
             if chunk_type == "response.completed" and completed_event is None:
                 try:
-                    completed_event = json.loads(serialized)
+                    completed_event = _load_json_object(serialized)
                 except Exception:
                     pass
             try:
@@ -2214,7 +2445,7 @@ class ManagedResponsesWebSocketHandler:
 
     def _save_turn_history(
         self,
-        completed_event: dict[str, object] | None,
+        completed_event: _MutableJsonObject | None,
         prior_history: list[dict[str, object]],
         current_messages: list[dict[str, object]],
     ) -> None:
@@ -2272,6 +2503,14 @@ class ManagedResponsesWebSocketHandler:
                 verbose_logger.debug("ManagedResponsesWS: error sending warmup ack: %s", exc)
             return
 
+        try:
+            await _enforce_frame_project_quota(
+                self.quota_callbacks, self.user_api_key_dict, self.model_group or self.model, raw_message
+            )
+        except RateLimitError as e:
+            await self._send_error(str(e), error_type="rate_limit_exceeded")
+            return
+
         call_kwargs: Final = self._build_base_call_kwargs(msg_obj)
         call_kwargs["stream"] = True
 
@@ -2279,13 +2518,14 @@ class ManagedResponsesWebSocketHandler:
         # reuse the router-resolved self.model; passing the alias raw to
         # litellm.aresponses fails in get_llm_provider. A genuinely different
         # provider-prefixed per-frame model is still honored.
-        requested_model: Final = call_kwargs.pop("model", None)
-        if requested_model is None or requested_model == self.model_group:
-            model = self.model
-        else:
-            model = requested_model
+        requested_model: Final[str | None] = _typed_pops_optional_str(call_kwargs.pop)("model", None)
+        model: Final[str] = (
+            self.model if requested_model is None or requested_model == self.model_group else requested_model
+        )
 
-        previous_response_id: Final[str | None] = call_kwargs.pop("previous_response_id", None)
+        previous_response_id: Final[str | None] = _typed_pops_optional_str(call_kwargs.pop)(
+            "previous_response_id", None
+        )
         current_messages: Final = self._input_to_messages(call_kwargs.get("input"))
 
         # Fetch history once; reused in both _apply_history and _save_turn_history

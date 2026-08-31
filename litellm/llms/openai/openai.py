@@ -1,12 +1,13 @@
 import time
 import types
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 from urllib.parse import urlparse
 
 import httpx
 
 if TYPE_CHECKING:
+    import tiktoken
     from aiohttp import ClientSession
 
 import openai
@@ -22,7 +23,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
@@ -46,7 +47,9 @@ from .chat.o_series_transformation import OpenAIOSeriesConfig
 from .common_utils import (
     BaseOpenAILLM,
     OpenAIError,
+    build_output_token_limit_response,
     drop_params_from_unprocessable_entity_error,
+    is_output_token_limit_error,
 )
 
 openaiOSeriesConfig: Final = OpenAIOSeriesConfig()
@@ -61,16 +64,17 @@ class MistralEmbeddingConfig:
     def __init__(
         self,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
     def get_config(cls):
+        config_attrs: Final[Mapping[str, object]] = cls.__dict__
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in config_attrs.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -153,7 +157,7 @@ class OpenAIConfig(BaseConfig):
         top_p: int | None = None,
         response_format: dict | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -261,7 +265,7 @@ class OpenAIConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -299,7 +303,7 @@ class OpenAIConfig(BaseConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "OpenAIChatCompletionResponseIterator":
         return OpenAIChatCompletionResponseIterator(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
@@ -435,6 +439,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             time_delta: Final = round(end_time - start_time, 2)
             e.message += f" - timeout value={timeout}, time taken={time_delta} seconds"
             raise e
+        except openai.BadRequestError as e:
+            if not is_output_token_limit_error(e):
+                raise
+            return build_output_token_limit_response(e=e, data=data, is_async=True)
         except Exception as e:
             raise e
 
@@ -468,6 +476,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             return headers, response
         except OpenAIError:
             raise
+        except openai.BadRequestError as e:
+            if not is_output_token_limit_error(e):
+                raise
+            return build_output_token_limit_response(e=e, data=data, is_async=False)
         except Exception as e:
             if raw_response is not None:
                 raise Exception(
@@ -478,14 +490,14 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
     async def _call_agentic_completion_hooks_openai(
         self,
-        response: Any,
+        response: object,
         model: str,
         messages: list[dict],
         optional_params: dict,
         logging_obj: LiteLLMLoggingObj,
         stream: bool,
         litellm_params: dict,
-    ) -> Any | None:
+    ) -> object | None:
         """
         Call agentic completion hooks for all custom loggers (OpenAI Chat Completions API).
 
@@ -536,7 +548,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
 
                         # For OpenAI Chat Completions, use the chat completion agentic loop method
-                        agentic_response = await callback.async_run_chat_completion_agentic_loop(
+                        agentic_response: object = await callback.async_run_chat_completion_agentic_loop(
                             tools=tool_calls,
                             model=model,
                             messages=messages,
@@ -580,7 +592,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         timeout: float | httpx.Timeout,
         optional_params: dict,
         litellm_params: dict,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
         model: str | None = None,
         messages: list | None = None,
         print_verbose: Callable | None = None,
@@ -1334,7 +1346,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         data: dict,
         model_response: ModelResponse,
         timeout: float,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
         api_base: str | None = None,
         client=None,
@@ -1354,9 +1366,21 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 client=client,
             )
 
-            if headers:
-                data["extra_headers"] = headers
-            response = await openai_aclient.images.generate(**data, timeout=timeout)
+            logging_obj.pre_call(
+                input=prompt,
+                api_key=openai_aclient.api_key,
+                additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+                    "headers": {"Authorization": f"Bearer {openai_aclient.api_key}"},  # mutable-ok: logged header map
+                    "api_base": str(openai_aclient.base_url),
+                    "acompletion": True,
+                    "complete_input_dict": data,
+                },
+            )
+
+            request_data: Final = (  # mutable-ok: the OpenAI SDK takes the request body as a dict
+                {**data, "extra_headers": headers} if headers else data
+            )
+            response = await openai_aclient.images.generate(**request_data, timeout=timeout)
             stringified_response: Final = response.model_dump()
             ## LOGGING
             logging_obj.post_call(
@@ -1385,7 +1409,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         prompt: str,
         timeout: float,
         optional_params: dict,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
         api_base: str | None = None,
         model_response: ImageResponse | None = None,
@@ -1439,9 +1463,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             )
 
             ## COMPLETION CALL
-            if headers:
-                data["extra_headers"] = headers
-            _response: Final = openai_client.images.generate(**data, timeout=timeout)
+            request_data: Final = (  # mutable-ok: the OpenAI SDK takes the request body as a dict
+                {**data, "extra_headers": headers} if headers else data
+            )
+            _response: Final = openai_client.images.generate(**request_data, timeout=timeout)
 
             response: Final = _response.model_dump()
             ## LOGGING
@@ -1490,6 +1515,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         project: str | None,
         max_retries: int,
         timeout: float | httpx.Timeout,
+        logging_obj: LiteLLMLoggingObj,
         aspeech: bool | None = None,
         client=None,
         shared_session: Optional["ClientSession"] = None,
@@ -1506,6 +1532,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 project=project,
                 max_retries=max_retries,
                 timeout=timeout,
+                logging_obj=logging_obj,
                 client=client,
                 shared_session=shared_session,
             )
@@ -1520,7 +1547,17 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             shared_session=shared_session,
         )
 
-        response: Final = cast(OpenAI, openai_client).audio.speech.create(
+        sync_client: Final = cast(OpenAI, openai_client)
+        logging_obj.pre_call(
+            input=input,
+            api_key=api_key,
+            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+                "complete_input_dict": speech_request_body(model, voice, optional_params),
+                "api_base": str(sync_client.base_url),
+            },
+        )
+
+        response: Final = sync_client.audio.speech.create(
             model=model,
             voice=voice,
             input=input,
@@ -1540,6 +1577,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         project: str | None,
         max_retries: int,
         timeout: float | httpx.Timeout,
+        logging_obj: LiteLLMLoggingObj,
         client=None,
         shared_session: Optional["ClientSession"] = None,
     ) -> HttpxBinaryResponseContent:
@@ -1554,6 +1592,15 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 client=client,
                 shared_session=shared_session,
             ),
+        )
+
+        logging_obj.pre_call(
+            input=input,
+            api_key=api_key,
+            additional_args={  # mutable-ok: loggers isinstance-check this payload as a dict
+                "complete_input_dict": speech_request_body(model, voice, optional_params),
+                "api_base": str(openai_client.base_url),
+            },
         )
 
         response: Final = await openai_client.audio.speech.create(
@@ -1590,7 +1637,7 @@ class OpenAIFilesAPI(BaseLLM):
         client: OpenAI | AsyncOpenAI | None = None,
         _is_async: bool = False,
     ) -> OpenAI | AsyncOpenAI | None:
-        received_args: Final = locals()
+        received_args: Final[Mapping[str, object]] = locals()
         openai_client: OpenAI | AsyncOpenAI | None = None
         if client is None:
             data: Final = {}
@@ -1628,7 +1675,7 @@ class OpenAIFilesAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | None = None,
-    ) -> OpenAIFileObject | Coroutine[Any, Any, OpenAIFileObject]:
+    ) -> OpenAIFileObject | Coroutine[None, None, OpenAIFileObject]:
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
@@ -1670,7 +1717,7 @@ class OpenAIFilesAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | None = None,
-    ) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
+    ) -> HttpxBinaryResponseContent | Coroutine[None, None, HttpxBinaryResponseContent]:
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
@@ -1948,7 +1995,7 @@ class OpenAIBatchesAPI(BaseLLM):
         client: OpenAI | AsyncOpenAI | None = None,
         _is_async: bool = False,
     ) -> OpenAI | AsyncOpenAI | None:
-        received_args: Final = locals()
+        received_args: Final[Mapping[str, object]] = locals()
         openai_client: OpenAI | AsyncOpenAI | None = None
         if client is None:
             data: Final = {}
@@ -1986,7 +2033,7 @@ class OpenAIBatchesAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | None = None,
-    ) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
+    ) -> LiteLLMBatch | Coroutine[None, None, LiteLLMBatch]:
         openai_client: Final[OpenAI | AsyncOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
@@ -2160,7 +2207,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client: OpenAI | None = None,
     ) -> OpenAI:
-        received_args: Final = locals()
+        received_args: Final[Mapping[str, object]] = locals()
         if client is None:
             data: Final = {}
             for k, v in received_args.items():
@@ -2185,7 +2232,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client: AsyncOpenAI | None = None,
     ) -> AsyncOpenAI:
-        received_args: Final = locals()
+        received_args: Final[Mapping[str, object]] = locals()
         if client is None:
             data: Final = {}
             for k, v in received_args.items():
@@ -2848,7 +2895,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: dict | None,
+        metadata: dict[str, str] | None,
         model: str | None,
         stream: bool | None,
         tools: Iterable[AssistantToolParam] | None,
@@ -2912,23 +2959,32 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: dict | None,
+        metadata: dict[str, str] | None,
         model: str | None,
         tools: Iterable[AssistantToolParam] | None,
         event_handler: AssistantEventHandler | None,
     ) -> AssistantStreamManager[AssistantEventHandler]:
-        data: Final[dict[str, Any]] = {
-            "thread_id": thread_id,
-            "assistant_id": assistant_id,
-            "additional_instructions": additional_instructions,
-            "instructions": instructions,
-            "metadata": metadata,
-            "model": model,
-            "tools": tools,
-        }
+        runs_stream: Final = client.beta.threads.runs.stream
         if event_handler is not None:
-            data["event_handler"] = event_handler
-        return client.beta.threads.runs.stream(**data)
+            return runs_stream(
+                thread_id=thread_id,
+                assistant_id=assistant_id,
+                additional_instructions=additional_instructions,
+                instructions=instructions,
+                metadata=metadata,
+                model=model,
+                tools=tools,
+                event_handler=event_handler,
+            )
+        return runs_stream(
+            thread_id=thread_id,
+            assistant_id=assistant_id,
+            additional_instructions=additional_instructions,
+            instructions=instructions,
+            metadata=metadata,
+            model=model,
+            tools=tools,
+        )
 
     # fmt: off
 
@@ -2984,7 +3040,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         assistant_id: str,
         additional_instructions: str | None,
         instructions: str | None,
-        metadata: dict | None,
+        metadata: dict[str, str] | None,
         model: str | None,
         stream: bool | None,
         tools: Iterable[AssistantToolParam] | None,

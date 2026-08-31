@@ -4,13 +4,19 @@ import {
 } from "@/components/add_model/build_complexity_router_config";
 import {
   ComplexityRouterConfigValue,
-  ComplexityTiers,
   ClassifierType,
   ClassifierLLMConfig,
   DEFAULT_SESSION_AFFINITY,
+  DEFAULT_DEPLOYMENT_AFFINITY,
+  usesLlmClassifier,
 } from "@/components/add_model/ComplexityRouterConfig";
 import { KeywordTierRule } from "@/components/add_model/KeywordTierRules";
 import { hydrateKeywordTierRules } from "@/components/add_model/complexity_router_keywords";
+import {
+  TierModelParams,
+  TierModelParamsByTier,
+  hydrateTierModelParams,
+} from "@/components/add_model/complexity_router_tiers";
 import { DEFAULT_ESCALATION_KEYWORDS } from "@/components/add_model/EscalationKeywords";
 import { DEFAULT_MATCH_THRESHOLD } from "@/components/add_model/SemanticKeywordMatching";
 import presetsRaw from "@/autorouter_presets.json";
@@ -39,10 +45,10 @@ export const getPresetByKey = (key: string): AutoRouterPreset | undefined => PRE
 // bundled config or a caller's actually-built config - the two need to agree, since a preset only
 // prefills once and the config is edited freely after (see AddAutoRouterTab.submitBlockedReason).
 export const getRequiredModels = (
-  config: Pick<ComplexityRouterConfigPayload, "tiers" | "classifier_llm_config" | "embedding_model">,
+  config: Pick<ComplexityRouterConfigPayload, "tiers" | "classifier_llm_config" | "embedding_model" | "default_model">,
 ): Set<string> => {
-  const { tiers, classifier_llm_config: classifier, embedding_model: embedding } = config;
-  const models = [...tiers.SIMPLE, ...tiers.MEDIUM, ...tiers.COMPLEX, ...tiers.REASONING, classifier?.model, embedding];
+  const { tiers, classifier_llm_config: classifier, embedding_model: embedding, default_model: pinned } = config;
+  const models = [...Object.values(tiers).flat(), classifier?.model, embedding, pinned];
   // Boolean(), not != null: an empty-string placeholder (e.g. classifier_llm_config seeded before a
   // model is chosen) is never a real model reference either.
   return new Set(models.filter((model): model is string => Boolean(model)));
@@ -53,7 +59,7 @@ export const getRequiredModels = (
 // differing only in that separator. Canonicalizing on "-" (the presets' own convention) lets both
 // spellings match without doing anything looser - two DIFFERENT model names never collide here,
 // only the punctuation within one version number does.
-const normalizeModelName = (model: string): string => model.replace(/(\d)\.(\d)/g, "$1-$2");
+export const normalizeModelName = (model: string): string => model.replace(/(\d)\.(\d)/g, "$1-$2");
 
 export interface DeploymentModelRef {
   modelGroup: string;
@@ -163,7 +169,7 @@ const resolveAvailableModel = (requiredModel: string, availability: ModelAvailab
 };
 
 export const getMissingModels = (
-  config: Pick<ComplexityRouterConfigPayload, "tiers" | "classifier_llm_config" | "embedding_model">,
+  config: Parameters<typeof getRequiredModels>[0],
   availability: ModelAvailability,
 ): string[] =>
   [...getRequiredModels(config)].filter((model) => resolveAvailableModel(model, availability) === undefined).sort();
@@ -177,23 +183,25 @@ export const getMissingModelsInPreset = (preset: AutoRouterPreset, availability:
 // Checks the config actually being built (whether it arrived via a preset prefill or was typed by
 // hand - the two are indistinguishable once the caller has started editing), not a preset's
 // original bundled model list. Only counts classifier_llm_config/embedding_model as referenced
-// when buildComplexityRouterConfig would actually emit them (classifierType === "llm",
+// when buildComplexityRouterConfig would actually emit them (usesLlmClassifier(classifierType),
 // semanticMatchingEnabled) - otherwise a dormant selection left over from a toggle no longer in
 // effect would block submit for a model that was never going to be submitted.
 export const getReferencedModelsError = (
   params: {
-    tiers: ComplexityTiers;
+    tiers: ComplexityRouterConfigPayload["tiers"];
     classifierType: ClassifierType;
     classifierLlmConfig: ClassifierLLMConfig | undefined;
     semanticMatchingEnabled: boolean;
     embeddingModel: string | undefined;
+    defaultModel?: string;
   },
   availability: ModelAvailability,
 ): string | null => {
   const missing = getMissingModels(
     {
       tiers: params.tiers,
-      classifier_llm_config: params.classifierType === "llm" ? params.classifierLlmConfig : undefined,
+      default_model: params.defaultModel,
+      classifier_llm_config: usesLlmClassifier(params.classifierType) ? params.classifierLlmConfig : undefined,
       embedding_model: params.semanticMatchingEnabled ? params.embeddingModel : undefined,
     },
     availability,
@@ -241,6 +249,25 @@ export const buildPresetPrefill = (
 ): PresetPrefill => {
   const resolve = (model: string): string => resolveAvailableModel(model, availability) ?? model;
   const resolveTier = (models: string[]): string[] => models.map(resolve);
+  // Params key on the model name the preset spells while every tier entry is rewritten to the
+  // caller's registered spelling, so the keys have to be rewritten the same way. Otherwise
+  // serializeTierModelConfigs drops them for naming a model the tier no longer holds.
+  //
+  // Two spellings in one tier can resolve to the same registered model, and one model holds one
+  // param set here and in the payload, so a collision has to collapse. Merge rather than replace:
+  // params only one spelling set still survive, and a key both set resolves last-wins, matching
+  // how hydrateTierModelParams already collapses two entries spelled identically.
+  const resolveParamKeys = (params: TierModelParamsByTier | undefined): TierModelParamsByTier | undefined =>
+    params &&
+    Object.fromEntries(
+      Object.entries(params).map(([tier, byModel]) => [
+        tier,
+        Object.entries(byModel).reduce<Record<string, TierModelParams>>((byResolved, [model, litellmParams]) => {
+          const resolved = resolve(model);
+          return { ...byResolved, [resolved]: { ...byResolved[resolved], ...litellmParams } };
+        }, {}),
+      ]),
+    );
 
   return {
     complexityRouterConfig: {
@@ -250,6 +277,7 @@ export const buildPresetPrefill = (
         COMPLEX: resolveTier(config.tiers.COMPLEX),
         REASONING: resolveTier(config.tiers.REASONING),
       },
+      tier_model_params: resolveParamKeys(hydrateTierModelParams(config.tiers, config.tier_model_configs)),
       tier_labels: hydrateTierLabels(config.tier_labels),
       classifier_type: config.classifier_type,
       classifier_llm_config: config.classifier_llm_config && {
@@ -257,9 +285,11 @@ export const buildPresetPrefill = (
         model: resolve(config.classifier_llm_config.model),
       },
       classifier_context_window_size: config.classifier_context_window_size,
+      classifier_context_budget_chars: config.classifier_context_budget_chars,
       classifier_context_per_turn_chars: config.classifier_context_per_turn_chars,
       classifier_context_include_assistant_turns: config.classifier_context_include_assistant_turns,
       session_affinity: config.session_affinity ?? DEFAULT_SESSION_AFFINITY,
+      deployment_affinity: config.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY,
       adaptive: config.adaptive,
       adaptive_weights: config.adaptive_weights,
       tier_distance_penalty: config.tier_distance_penalty,

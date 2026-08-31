@@ -15,13 +15,10 @@ Pydantic ValidationError (previously typed as Optional[str]).
 """
 
 import json
-import os
-import sys
 from unittest.mock import Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
@@ -208,9 +205,12 @@ async def test_async_iterator_error_after_first_chunk_carries_generated_content(
     )
 
     chunks = []
-    with pytest.raises(MidStreamFallbackError) as exc_info:
+    async def _drain():
         async for chunk in iterator:
             chunks.append(chunk)
+
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        await _drain()
     assert len(chunks) == 2
     assert exc_info.value.status_code == 500
     assert exc_info.value.is_pre_first_chunk is False

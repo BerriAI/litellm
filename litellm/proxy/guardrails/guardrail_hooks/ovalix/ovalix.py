@@ -25,6 +25,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
@@ -54,6 +55,7 @@ class OvalixGuardrailBlockedException(GuardrailRaisedException):
             guardrail_name=guardrail_name,
             message=message,
             should_wrap_with_default_message=should_wrap_with_default_message,
+            blocked_content=True,
         )
 
 
@@ -195,7 +197,7 @@ class OvalixGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"],
-        logging_obj: Any | None = None,
+        logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
         """
         Apply Ovalix guardrail to the given inputs (request or response text).

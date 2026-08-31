@@ -13,11 +13,13 @@ import asyncio
 import math
 import re
 import time
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -29,6 +31,10 @@ from litellm.constants import (
     DEFAULT_IN_MEMORY_TTL,
     DEFAULT_MAX_RECURSE_DEPTH,
     EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
+    END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
+    MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE,
+    REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
+    TAG_REGISTRY_MAX_SIZE,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
@@ -65,16 +71,28 @@ from litellm.proxy.auth.budget_throttle import (
     should_throttle_budget_exceeded,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
 from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     _safe_get_request_query_params,
 )
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import (
+    END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
+    MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL,
+    TAG_REGISTRY_OVERFLOW_SENTINEL,
     UserApiKeyCache,
+    end_user_cache_key,
+    end_user_restricted_registry_cache_key,
     get_management_object_ttl,
+    model_access_group_cache_key,
+    model_access_group_registry_cache_key,
+    model_access_group_spend_counter_key,
     object_permission_cache_key,
+    tag_cache_key,
+    tag_registry_cache_key,
+    team_membership_auth_cache_key,
+    team_membership_reservation_cache_key,
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.guardrails.tool_name_extraction import (
@@ -87,18 +105,21 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.prisma_protocols import RowT_co
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import (
     AccessGroupRepository,
     EndUserRepository,
     JWTKeyMappingRepository,
     ManagedVectorStoresRepository,
+    ModelAccessGroupBudgetRepository,
     TagRepository,
     TeamMembershipRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.router import Router
+from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.utils import get_utc_datetime
 
 from .auth_checks_organization import (
@@ -110,9 +131,191 @@ from .auth_utils import get_model_from_request, get_request_route_template
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
+
+
+class _PrismaDictableRow(Protocol):
+    def dict(self) -> Mapping[str, object]: ...
+
+
+class _PrismaJWTKeyMappingRow(Protocol):
+    token: str
+
+
+class _PrismaModelDumpRow(Protocol):
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
+class _PrismaTeamRow(Protocol):
+    def dict(self) -> Mapping[str, object]: ...
+
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
+class _PrismaVectorStoreRow(Protocol):
+    def dict(self) -> Mapping[str, object]: ...
+
+    def model_dump(self) -> Mapping[str, object]: ...
+
+    def __iter__(self) -> Iterator[tuple[str, object]]: ...
+
+
+class _PrismaUserRow(Protocol):
+    user_id: str
+
+    @property
+    def organization_memberships(self) -> Sequence[_PrismaModelDumpRow | None] | None: ...
+
+    @organization_memberships.setter
+    def organization_memberships(self, value: Sequence[_PrismaModelDumpRow] | None) -> None: ...
+
+    def __iter__(self) -> Iterator[tuple[str, object]]: ...
+
+
+class _PrismaAuthTable(Protocol[RowT_co]):
+    async def find_unique(
+        self, *, where: Mapping[str, object], include: Mapping[str, object] | None = None
+    ) -> RowT_co | None: ...
+
+    async def find_first(
+        self, *, where: Mapping[str, object], include: Mapping[str, object] | None = None
+    ) -> RowT_co | None: ...
+
+    async def find_many(
+        self,
+        *,
+        where: Mapping[str, object] | None = None,
+        include: Mapping[str, object] | None = None,
+        take: int | None = None,
+    ) -> Sequence[RowT_co]: ...
+
+    async def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> RowT_co | None: ...
+
+    async def create(self, *, data: Mapping[str, object], include: Mapping[str, object] | None = None) -> RowT_co: ...
+
+
+class _PrismaTableHolder(Protocol[RowT_co]):
+    @property
+    def table(self) -> _PrismaAuthTable[RowT_co]: ...
+
+
+def _dictable_table(repo: _PrismaTableHolder[_PrismaDictableRow]) -> _PrismaAuthTable[_PrismaDictableRow]:
+    return repo.table
+
+
+def _jwt_key_mapping_table(
+    repo: _PrismaTableHolder[_PrismaJWTKeyMappingRow],
+) -> _PrismaAuthTable[_PrismaJWTKeyMappingRow]:
+    return repo.table
+
+
+def _model_dump_table(repo: _PrismaTableHolder[_PrismaModelDumpRow]) -> _PrismaAuthTable[_PrismaModelDumpRow]:
+    return repo.table
+
+
+def _team_table(repo: _PrismaTableHolder[_PrismaTeamRow]) -> _PrismaAuthTable[_PrismaTeamRow]:
+    return repo.table
+
+
+def _vector_store_table(repo: _PrismaTableHolder[_PrismaVectorStoreRow]) -> _PrismaAuthTable[_PrismaVectorStoreRow]:
+    return repo.table
+
+
+def _user_table(repo: _PrismaTableHolder[_PrismaUserRow]) -> _PrismaAuthTable[_PrismaUserRow]:
+    return repo.table
+
+
+class _VectorStorePermissionsRow(Protocol):
+    @property
+    def vector_stores(self) -> Sequence[str] | None: ...
+
+
+def _object_permission_table(
+    repo: _PrismaTableHolder[_VectorStorePermissionsRow],
+) -> _PrismaAuthTable[_VectorStorePermissionsRow]:
+    return repo.table
+
+
+class _PrismaTagRow(Protocol):
+    tag_name: str
+
+    def dict(self) -> Mapping[str, object]: ...
+
+
+def _tag_table(repo: _PrismaTableHolder[_PrismaTagRow]) -> _PrismaAuthTable[_PrismaTagRow]:
+    return repo.table
+
+
+class _PrismaEndUserRow(Protocol):
+    user_id: str
+
+    def dict(self) -> Mapping[str, object]: ...
+
+
+def _end_user_table(repo: _PrismaTableHolder[_PrismaEndUserRow]) -> _PrismaAuthTable[_PrismaEndUserRow]:
+    return repo.table
+
+
+class _PrismaMaxBudgetRow(Protocol):
+    @property
+    def max_budget(self) -> float | None: ...
+
+
+class _PrismaModelAccessGroupBudgetRow(Protocol):
+    access_group_name: str
+
+    @property
+    def spend(self) -> float | None: ...
+
+    @property
+    def litellm_budget_table(self) -> _PrismaMaxBudgetRow | None: ...
+
+
+def _model_access_group_budget_table(
+    repo: _PrismaTableHolder[_PrismaModelAccessGroupBudgetRow],
+) -> _PrismaAuthTable[_PrismaModelAccessGroupBudgetRow]:
+    return repo.table
+
+
+class _MemberModelScope(Protocol):
+    @property
+    def allowed_models(self) -> Sequence[str] | None: ...
+
+
+class _TeamMembershipModelScope(Protocol):
+    @property
+    def litellm_budget_table(self) -> _MemberModelScope | None: ...
+
+
+def _member_allowed_models(membership: _TeamMembershipModelScope) -> Sequence[str]:
+    """The member's own model scope, read through a narrowed view of the membership row."""
+    budget_table: Final = membership.litellm_budget_table
+    return () if budget_table is None else (budget_table.allowed_models or ())
+
+
+class _RawCacheRead(Protocol):
+    async def async_get_cache(self, *, key: str) -> object: ...
+
+
+def _raw_cache(cache: _RawCacheRead) -> _RawCacheRead:
+    return cache
+
+
+def _typed_request_body(request_body: dict) -> Mapping[str, object]:
+    return request_body
+
+
+class _JsonLoadsObj(Protocol):
+    def __call__(self, data: str) -> object: ...
+
+
+def _typed_json_loads(fn: _JsonLoadsObj) -> _JsonLoadsObj:
+    return fn
+
+
+_safe_json_loads_obj: Final = _typed_json_loads(safe_json_loads)
 
 
 last_db_access_time: Final = LimitedSizeOrderedDict(max_size=100)
@@ -241,6 +444,16 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
                     zero_cost_cache[model_name] = False
                 return False
 
+            if _has_ptu_flat_cost(model_name, llm_router):
+                verbose_proxy_logger.debug(
+                    "Model %s prices reserved PTU capacity as a flat cost, so its zero per-token "
+                    "rate is not a free model (enforce budget)",
+                    safe_name,
+                )
+                if zero_cost_cache is not None:
+                    zero_cost_cache[model_name] = False
+                return False
+
             verbose_proxy_logger.debug(
                 "Model %s has zero cost explicitly configured (input: %s, output: %s)",
                 safe_name,
@@ -257,6 +470,24 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
 
     # All models checked have zero cost
     return True
+
+
+_NO_MODEL_INFO: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _has_ptu_flat_cost(model: str, llm_router: "Router") -> bool:
+    """Whether any deployment in the model group bills reserved PTU capacity as a flat cost.
+
+    Such a deployment carries an explicit zero per-token price so the flat cost is not charged
+    twice, which otherwise reads here as a free model and waives every budget check for it.
+    """
+    for deployment in llm_router.model_list:
+        if deployment.get("model_name") != model:
+            continue
+        model_info = deployment.get("model_info") or _NO_MODEL_INFO
+        if model_info.get("ptu_count") is not None and model_info.get("cost_per_ptu_per_hour") is not None:
+            return True
+    return False
 
 
 def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
@@ -279,6 +510,103 @@ def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
         if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
             return True
     return False
+
+
+_EMPTY_COST_ENTRY: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _is_positive_cost(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+
+
+def _entry_has_priced_metric(entry: Mapping[str, object]) -> bool:
+    if entry.get("tiered_pricing") is not None:
+        return True
+    for key, value in entry.items():
+        if "cost_per" not in key:
+            continue
+        if _is_positive_cost(value):
+            return True
+        if isinstance(value, dict) and any(_is_positive_cost(nested) for nested in value.values()):
+            return True
+    return False
+
+
+def _entry_declares_price(entry: Mapping[str, object]) -> bool:
+    return any("cost_per" in key or key == "tiered_pricing" for key in entry)
+
+
+def _model_group_has_pricing(model: str, llm_router: "Router") -> bool:
+    """
+    A model group counts as priced when a deployment overrides any *cost_per* field or
+    tiered_pricing in its litellm_params, even at zero, or when its resolved model info carries
+    tiered_pricing or a positive price on any billed metric (tokens, characters, seconds, pages,
+    images, queries, ...), so models billed by a non-token metric are not treated as unpriced.
+    """
+    for deployment in llm_router.get_model_list(model_name=model) or ():
+        litellm_params = deployment.get("litellm_params") or _EMPTY_COST_ENTRY
+        if _entry_declares_price(litellm_params):
+            return True
+
+        model_id = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")
+        if model_id is None:
+            continue
+
+        model_info = llm_router.get_deployment_model_info(
+            model_id=model_id, model_name=litellm_params.get("model") or ""
+        )
+        if model_info is not None and _entry_has_priced_metric(model_info):
+            return True
+
+    return False
+
+
+def _group_declares_explicit_cost(model: str, llm_router: "Router") -> bool:
+    """
+    Alias-aware counterpart to ``_is_cost_explicitly_configured``, which resolves the model group
+    the same way ``_model_group_has_pricing`` does. A deployment that prices itself through its
+    ``model_info`` block lands in the cost map under its deployment id rather than in its
+    litellm_params, and reaching that entry through the router's own resolution keeps an alias
+    pointing at such a group from being read as unpriced.
+    """
+    for deployment in llm_router.get_model_list(model_name=model) or ():
+        model_id = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")
+        if model_id is None:
+            continue
+        raw_entry = litellm.model_cost.get(model_id, _EMPTY_COST_ENTRY)
+        if "input_cost_per_token" in raw_entry or "output_cost_per_token" in raw_entry:
+            return True
+    return False
+
+
+def model_has_no_cost_mapping(model: str | None, llm_router: Router | None) -> bool:
+    if not model or llm_router is None:
+        return False
+
+    if llm_router.get_model_group_info(model_group=model) is None:
+        return False
+
+    if _model_group_has_pricing(model=model, llm_router=llm_router):
+        return False
+
+    return not _group_declares_explicit_cost(model=model, llm_router=llm_router)
+
+
+def _unpriced_models_in_request(model: str | list[str] | None, llm_router: Router | None) -> tuple[str, ...]:
+    candidates: Final = (model,) if isinstance(model, str) else tuple(model or ())
+    return tuple(
+        candidate for candidate in candidates if model_has_no_cost_mapping(model=candidate, llm_router=llm_router)
+    )
+
+
+def _unpriced_models_block_message(models: tuple[str, ...]) -> str:
+    names: Final = ", ".join(f"'{model}'" for model in models)
+    subject: Final = f"Model {names} has" if len(models) == 1 else f"Models {names} have"
+    return (
+        f"{subject} no pricing in the cost map, so litellm cannot price the request. "
+        "Requests for unpriced models are blocked because 'block_requests_for_models_without_pricing' "
+        "is enabled. Add pricing (input_cost_per_token/output_cost_per_token) to allow the request."
+    )
 
 
 async def _run_project_checks(
@@ -384,7 +712,7 @@ _GUARDRAIL_MODIFICATION_KEYS: Final[tuple] = (
 )
 
 
-def _guardrail_modification_check(request_body: dict, team_object: LiteLLM_TeamTable | None) -> None:
+def _guardrail_modification_check(request_body: Mapping[str, object], team_object: LiteLLM_TeamTable | None) -> None:
     """
     Reject user-supplied metadata flags that would modify guardrail behavior
     unless the team has explicit permission. Checked keys include the plural
@@ -399,7 +727,7 @@ def _guardrail_modification_check(request_body: dict, team_object: LiteLLM_TeamT
     """
     from litellm.proxy.guardrails.guardrail_helpers import can_modify_guardrails
 
-    def _coerce_to_dict(container: Any) -> dict | None:
+    def _coerce_to_dict(container: object) -> dict | None:
         """Accept dict or JSON-string (from multipart/form-data or extra_body).
 
         Without this, an attacker can smuggle guardrail keys past the check by
@@ -411,11 +739,11 @@ def _guardrail_modification_check(request_body: dict, team_object: LiteLLM_TeamT
         if isinstance(container, dict):
             return container
         if isinstance(container, str):
-            parsed: Final = safe_json_loads(container)
+            parsed: Final = _safe_json_loads_obj(container)
             return parsed if isinstance(parsed, dict) else None
         return None
 
-    def _user_requested_modification(container: Any) -> bool:
+    def _user_requested_modification(container: object) -> bool:
         coerced: Final = _coerce_to_dict(container)
         if coerced is None:
             return False
@@ -523,6 +851,7 @@ async def common_checks(
     1.1. If project is blocked
     2. If team can call model
     2.2 If project can call model
+    2.3 Which model access groups authorized this request
     3. If team is in budget
     3.0.2. If project is in budget
     3.0.3. If project is over soft budget (alert only)
@@ -550,6 +879,19 @@ async def common_checks(
         route not in BUDGET_ENFORCED_SIDE_EFFECT_ROUTES
         and (route in MODEL_DISCOVERY_ROUTES or not RouteChecks.is_llm_api_route(route=route))
     )
+
+    unpriced_models: Final = (
+        _unpriced_models_in_request(model=_model, llm_router=llm_router)
+        if litellm.block_requests_for_models_without_pricing and RouteChecks.is_llm_api_route(route=route)
+        else ()
+    )
+    if unpriced_models:
+        raise ProxyException(
+            message=_unpriced_models_block_message(unpriced_models),
+            type=ProxyErrorTypes.model_cost_map_missing,
+            param="model",
+            code=status.HTTP_403_FORBIDDEN,
+        )
 
     # 1. If team is blocked
     if team_object is not None and team_object.blocked is True:
@@ -627,6 +969,18 @@ async def common_checks(
             valid_token=valid_token,
             proxy_logging_obj=proxy_logging_obj,
         )
+
+    # 2.3 Which model access groups authorized this request
+    matched_model_access_groups: Final = await stamp_matched_model_access_groups(
+        model=_model,
+        valid_token=valid_token,
+        team_object=team_object,
+        project_object=project_object,
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
     # Run before apply_key_tags_pre_auth injects key metadata.tags into request_body.
     _reject_clientside_metadata_tags_check(general_settings, request_body, route)
@@ -707,6 +1061,13 @@ async def common_checks(
                     proxy_logging_obj=proxy_logging_obj,
                     valid_token=valid_token,
                 ),
+                _model_access_group_max_budget_check(
+                    matched_model_access_groups=matched_model_access_groups,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                )
+                if matched_model_access_groups
+                else None,
                 _user_max_budget_check(),
                 _check_team_member_budget(
                     team_object=team_object,
@@ -731,7 +1092,7 @@ async def common_checks(
 
     _enforce_user_param_check(general_settings, request, request_body, route)
     _global_proxy_budget_check(global_proxy_spend, skip_all_budget_checks, route)
-    _guardrail_modification_check(request_body, team_object)
+    _guardrail_modification_check(_typed_request_body(request_body), team_object)
 
     # 10 [OPTIONAL] Organization RBAC checks
     organization_role_based_access_check(user_object=user_object, route=route, request_body=request_body)
@@ -843,7 +1204,8 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
 
     Parameters:
     - user_route: str - the route the user is trying to call
-    - allowed_routes: List[str|LiteLLMRoutes] - the list of allowed routes for the user.
+    - allowed_routes: List[str|LiteLLMRoutes] - the list of allowed routes for the user. Entries are a route group name
+      (e.g. "openai_routes"), an exact route, or a trailing-wildcard prefix (e.g. "/internal-models/*").
     """
     from starlette.routing import compile_path
 
@@ -853,7 +1215,7 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
                 regex, _, _ = compile_path(template)
                 if regex.match(user_route):
                     return True
-        elif allowed_route == user_route:
+        elif RouteChecks.route_matches_wildcard_pattern(route=user_route, pattern=allowed_route):
             return True
     return False
 
@@ -955,7 +1317,7 @@ async def get_default_end_user_budget(
 
     # Fetch from database
     try:
-        budget_record: Final = await BudgetRepository(prisma_client).table.find_unique(
+        budget_record: Final = await _dictable_table(BudgetRepository(prisma_client)).find_unique(
             where={"budget_id": litellm.max_end_user_budget_id}
         )
 
@@ -1007,30 +1369,34 @@ async def get_team_member_default_budget(
 
     cache_key: Final = f"team_member_default_budget:{budget_id}"
 
-    cached_budget: Final = await user_api_key_cache.async_get_cache(key=cache_key)
-    if isinstance(cached_budget, LiteLLM_BudgetTable):
+    cached_budget: Final = await user_api_key_cache.async_get_cache(
+        key=cache_key,
+        model_type=LiteLLM_BudgetTable,
+    )
+    if cached_budget is not None:
         return cached_budget
-    if isinstance(cached_budget, dict):
-        return LiteLLM_BudgetTable.model_validate(cached_budget)
 
     try:
-        budget_record: Final = await BudgetRepository(prisma_client).table.find_unique(where={"budget_id": budget_id})
-
-        if budget_record is None:
-            verbose_proxy_logger.warning("Team-default member budget not found in database: %s", budget_id)
-            return None
-
-        await user_api_key_cache.async_set_cache(
-            key=cache_key,
-            value=budget_record.dict(),
-            ttl=get_management_object_ttl(user_api_key_cache),
+        budget_record: Final = await _dictable_table(BudgetRepository(prisma_client)).find_unique(
+            where={"budget_id": budget_id}
         )
-
-        return LiteLLM_BudgetTable.model_validate(budget_record.dict())
-
     except Exception:
         verbose_proxy_logger.exception("Error fetching team-default member budget %s", budget_id)
         return None
+
+    if budget_record is None:
+        verbose_proxy_logger.warning("Team-default member budget not found in database: %s", budget_id)
+        return None
+
+    budget: Final = LiteLLM_BudgetTable.model_validate(budget_record.dict())
+    await user_api_key_cache.async_set_cache(
+        key=cache_key,
+        value=budget,
+        model_type=LiteLLM_BudgetTable,
+        ttl=get_management_object_ttl(user_api_key_cache),
+    )
+
+    return budget
 
 
 async def _apply_default_budget_to_end_user(
@@ -1118,6 +1484,192 @@ async def _check_end_user_budget(
         )
 
 
+#: Columns whose non-null value makes an end-user row restrict something auth enforces. ``blocked``
+#: is separate: it restricts when true rather than when merely set.
+_RESTRICTED_COLUMNS: Final = ("budget_id", "allowed_model_region", "default_model", "object_permission_id")
+
+
+def _column_is_set(column: str) -> Mapping[str, object]:
+    """``column IS NOT NULL`` as a plain dict, which is the only shape prisma's builder accepts."""
+    return {column: {"not": None}}  # mutable-ok: prisma's query builder isinstance-checks for dict
+
+
+def _restricted_end_user_where() -> Mapping[str, object]:
+    """Prisma filter selecting every end-user row that carries a restriction auth enforces."""
+    return {"OR": [{"blocked": True}, *map(_column_is_set, _RESTRICTED_COLUMNS)]}  # mutable-ok: prisma needs dict/list
+
+
+class _RegistryNotCached:
+    """No cached registry answer, as distinct from the cached answer ``None`` (registry unusable)."""
+
+
+_REGISTRY_NOT_CACHED: Final = _RegistryNotCached()
+
+#: One lock per registry; module-level because the stampede to collapse is worker-wide.
+_TAG_REGISTRY_LOAD_LOCK: Final = asyncio.Lock()
+_END_USER_REGISTRY_LOAD_LOCK: Final = asyncio.Lock()
+_MODEL_ACCESS_GROUP_REGISTRY_LOAD_LOCK: Final = asyncio.Lock()
+
+
+async def _cached_registry(
+    cache_key: str,
+    overflow_sentinel: str,
+    user_api_key_cache: UserApiKeyCache,
+) -> frozenset[str] | None | _RegistryNotCached:
+    """The cached registry answer, or ``_REGISTRY_NOT_CACHED`` when the caller has to query."""
+    cached: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=cache_key)
+    if cached == overflow_sentinel:
+        return None
+    # Memory hands back the tuple that was written; Redis round-trips it through JSON as a list.
+    if isinstance(cached, (list, tuple)):
+        return frozenset(entry for entry in cached if isinstance(entry, str))
+    return _REGISTRY_NOT_CACHED
+
+
+async def _cache_registry_answer(
+    cache_key: str,
+    value: tuple[str, ...] | str,
+    ttl: float,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    """Best-effort: a cache backend failure must not turn a registry load into a failed request."""
+    try:
+        await user_api_key_cache.async_set_cache(key=cache_key, value=value, ttl=ttl)
+    except Exception as e:  # noqa: BLE001  # best-effort cache write: auth must survive a cache backend error
+        verbose_proxy_logger.warning("Failed to cache registry %s: %s", cache_key, e)
+
+
+async def _fetch_and_cache_registry(
+    cache_key: str,
+    overflow_sentinel: str,
+    max_size: int,
+    fetch_ids: Callable[[], Awaitable[tuple[str, ...]]],
+    user_api_key_cache: UserApiKeyCache,
+) -> frozenset[str] | None:
+    """The registry as the database has it, cached whole, or ``None`` when it is unusable."""
+    try:
+        registry_ids: Final = await fetch_ids()
+    except Exception as e:  # noqa: BLE001  # fail-safe: any registry load error must degrade to per-id lookups, never break auth
+        verbose_proxy_logger.warning(
+            "Registry %s could not be loaded from the database, so per-id lookups will run and the "
+            "registry query is suppressed for %ss: %s",
+            cache_key,
+            REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
+            e,
+        )
+        await _cache_registry_answer(
+            cache_key=cache_key,
+            value=overflow_sentinel,
+            ttl=REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
+            user_api_key_cache=user_api_key_cache,
+        )
+        return None
+
+    if len(registry_ids) > max_size:
+        await _cache_registry_answer(
+            cache_key=cache_key,
+            value=overflow_sentinel,
+            ttl=get_management_object_ttl(user_api_key_cache),
+            user_api_key_cache=user_api_key_cache,
+        )
+        return None
+
+    await _cache_registry_answer(
+        cache_key=cache_key,
+        value=registry_ids,
+        ttl=get_management_object_ttl(user_api_key_cache),
+        user_api_key_cache=user_api_key_cache,
+    )
+    return frozenset(registry_ids)
+
+
+async def _load_bounded_registry(
+    cache_key: str,
+    overflow_sentinel: str,
+    max_size: int,
+    load_lock: asyncio.Lock,
+    fetch_ids: Callable[[], Awaitable[tuple[str, ...]]],
+    user_api_key_cache: UserApiKeyCache,
+) -> frozenset[str] | None:
+    """
+    A bounded id set under one cache key, so an id outside it costs no DB read.
+
+    ``None`` = unusable (overflow or recent DB error): fall back to per-id lookups. An empty
+    frozenset is a real, cacheable answer. Loads are single-flighted to stop TTL-expiry stampedes.
+    """
+    cached: Final = await _cached_registry(cache_key, overflow_sentinel, user_api_key_cache)
+    if not isinstance(cached, _RegistryNotCached):
+        return cached
+
+    async with load_lock:
+        # The request that held the lock has since cached an answer for everyone waiting on it.
+        cached_after_wait: Final = await _cached_registry(cache_key, overflow_sentinel, user_api_key_cache)
+        if not isinstance(cached_after_wait, _RegistryNotCached):
+            return cached_after_wait
+
+        return await _fetch_and_cache_registry(
+            cache_key=cache_key,
+            overflow_sentinel=overflow_sentinel,
+            max_size=max_size,
+            fetch_ids=fetch_ids,
+            user_api_key_cache=user_api_key_cache,
+        )
+
+
+async def _load_end_user_restricted_registry(
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> frozenset[str] | None:
+    """The set of end-user ids whose ``LiteLLM_EndUserTable`` row carries a restriction."""
+
+    async def fetch_ids() -> tuple[str, ...]:
+        restricted_rows: Final = await _end_user_table(EndUserRepository(prisma_client)).find_many(
+            where=_restricted_end_user_where(),
+            take=END_USER_RESTRICTED_REGISTRY_MAX_SIZE + 1,
+        )
+        return tuple(row.user_id for row in restricted_rows)
+
+    return await _load_bounded_registry(
+        cache_key=end_user_restricted_registry_cache_key(),
+        overflow_sentinel=END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
+        max_size=END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
+        load_lock=_END_USER_REGISTRY_LOAD_LOCK,
+        fetch_ids=fetch_ids,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+
+async def _end_user_is_known_unrestricted(
+    end_user_id: str,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    token_end_user_max_budget: float | None,
+) -> bool:
+    """
+    True when the cached registry proves the id restricts nothing, so its row need not be read.
+
+    Every field ``get_end_user_object`` callers consume (budget, spend under that budget, region,
+    default model, object permission, blocked) is part of the registry predicate, so an id outside
+    it is indistinguishable from one with no row at all. The skip is off whenever mere existence of
+    the row is meaningful: ``max_end_user_budget_id`` grafts a default budget onto any row that
+    exists, ``validate_end_user_id_in_db`` rejects ids that resolve to no row, and a token-supplied
+    ``end_user_max_budget`` (a ``user_custom_auth`` callable can set one against an otherwise
+    unrestricted row) is enforced against the row's recorded spend.
+    """
+    if (
+        litellm.max_end_user_budget_id is not None
+        or litellm.validate_end_user_id_in_db
+        or token_end_user_max_budget is not None
+    ):
+        return False
+
+    registry: Final = await _load_end_user_restricted_registry(
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    return registry is not None and end_user_id not in registry
+
+
 @log_db_metrics
 async def get_end_user_object(
     end_user_id: str | None,
@@ -1126,6 +1678,7 @@ async def get_end_user_object(
     route: str | None = "",
     parent_otel_span: Span | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
+    token_end_user_max_budget: float | None = None,
 ) -> LiteLLM_EndUserTable | None:
     """
     Returns end user object from database or cache.
@@ -1140,6 +1693,9 @@ async def get_end_user_object(
         route: The request route
         parent_otel_span: Optional OpenTelemetry span for tracing
         proxy_logging_obj: Optional proxy logging object
+        token_end_user_max_budget: ``valid_token.end_user_max_budget``, when the caller holds a
+            token. Budget enforcement reads the row's spend, so a row that restricts nothing on
+            its own must still be loaded when the token carries a budget for it.
 
     Returns:
         LiteLLM_EndUserTable if found, None otherwise
@@ -1150,7 +1706,7 @@ async def get_end_user_object(
     if end_user_id is None:
         return None
 
-    _key: Final = f"end_user_id:{end_user_id}"
+    _key: Final = end_user_cache_key(end_user_id)
 
     # Check cache first
     cached_user_obj: Final = await user_api_key_cache.async_get_cache(
@@ -1169,9 +1725,17 @@ async def get_end_user_object(
 
         return return_obj
 
+    if await _end_user_is_known_unrestricted(
+        end_user_id=end_user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        token_end_user_max_budget=token_end_user_max_budget,
+    ):
+        return None
+
     # Fetch from database
     try:
-        response: Final = await EndUserRepository(prisma_client).table.find_unique(
+        response: Final = await _dictable_table(EndUserRepository(prisma_client)).find_unique(
             where={"user_id": end_user_id},
             include={"litellm_budget_table": True, "object_permission": True},
         )
@@ -1192,9 +1756,10 @@ async def get_end_user_object(
 
         # Save to cache
         await user_api_key_cache.async_set_cache(
-            key=f"end_user_id:{end_user_id}",
+            key=_key,
             value=_response,
             model_type=LiteLLM_EndUserTable,
+            ttl=get_management_object_ttl(user_api_key_cache),
         )
 
         return _response
@@ -1243,7 +1808,7 @@ async def resolve_and_validate_end_user_id(
         return raw_end_user_id
 
     cache_key: Final = f"end_user_validation:{raw_end_user_id}"
-    cached: Final = await user_api_key_cache.async_get_cache(key=cache_key)
+    cached: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=cache_key)
     if cached == "valid":
         return raw_end_user_id
     if cached == "invalid":
@@ -1314,6 +1879,166 @@ async def _end_user_id_exists_in_db(
     return False
 
 
+async def _load_tag_registry(
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> frozenset[str] | None:
+    """The set of tag names that have a row in ``LiteLLM_TagTable``."""
+
+    async def fetch_ids() -> tuple[str, ...]:
+        registry_rows: Final = await _tag_table(TagRepository(prisma_client)).find_many(
+            take=TAG_REGISTRY_MAX_SIZE + 1,
+        )
+        return tuple(row.tag_name for row in registry_rows)
+
+    return await _load_bounded_registry(
+        cache_key=tag_registry_cache_key(),
+        overflow_sentinel=TAG_REGISTRY_OVERFLOW_SENTINEL,
+        max_size=TAG_REGISTRY_MAX_SIZE,
+        load_lock=_TAG_REGISTRY_LOAD_LOCK,
+        fetch_ids=fetch_ids,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+
+async def _load_model_access_group_registry(
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> frozenset[str] | None:
+    """The set of model access group names that have a row in ``LiteLLM_ModelAccessGroupBudgetTable``."""
+
+    async def fetch_ids() -> tuple[str, ...]:
+        registry_rows: Final = await _model_access_group_budget_table(
+            ModelAccessGroupBudgetRepository(prisma_client)
+        ).find_many(take=MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE + 1)
+        return tuple(row.access_group_name for row in registry_rows)
+
+    return await _load_bounded_registry(
+        cache_key=model_access_group_registry_cache_key(),
+        overflow_sentinel=MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL,
+        max_size=MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE,
+        load_lock=_MODEL_ACCESS_GROUP_REGISTRY_LOAD_LOCK,
+        fetch_ids=fetch_ids,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+
+async def _fetch_uncached_model_access_group_budgets(
+    uncached_groups: Sequence[str],
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> tuple[tuple[str, ModelAccessGroupBudget], ...]:
+    """Budget rows for the groups a cache probe missed.
+
+    No registry gate here, unlike the tag path: the names only ever come from
+    ``matched_model_access_groups``, which :func:`collect_matched_model_access_groups` already
+    intersected with the registry, so a name that has no row cannot reach this.
+    """
+    if not uncached_groups:
+        return ()
+
+    try:
+        db_rows: Final = await _model_access_group_budget_table(
+            ModelAccessGroupBudgetRepository(prisma_client)
+        ).find_many(
+            where={"access_group_name": {"in": list(uncached_groups)}},
+            include={"litellm_budget_table": True},
+        )
+        fetched: Final = tuple((row.access_group_name, _model_access_group_budget(row)) for row in db_rows)
+        for fetched_name, fetched_obj in fetched:
+            await user_api_key_cache.async_set_cache(
+                key=model_access_group_cache_key(fetched_name),
+                value=fetched_obj,
+                model_type=ModelAccessGroupBudget,
+                ttl=get_management_object_ttl(user_api_key_cache),
+            )
+    except Exception as e:  # noqa: BLE001  # fail-safe: a budget fetch error must yield "no budget rows", never break auth
+        verbose_proxy_logger.debug("Error batch fetching model access group budgets from database: %s", e)
+        return ()
+    else:
+        return fetched
+
+
+def _model_access_group_budget(row: _PrismaModelAccessGroupBudgetRow) -> ModelAccessGroupBudget:
+    budget_table: Final = row.litellm_budget_table
+    return ModelAccessGroupBudget(
+        access_group_name=row.access_group_name,
+        spend=row.spend or 0.0,
+        max_budget=None if budget_table is None else budget_table.max_budget,
+    )
+
+
+@log_db_metrics
+async def get_model_access_group_budgets_batch(
+    access_group_names: Sequence[str],
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> dict[str, ModelAccessGroupBudget]:
+    """Budget rows for the given model access groups, served from cache where possible.
+
+    Shared by the two enforcement paths so they read one row per group per request: the
+    reservation counters when reservations are on, and :func:`_model_access_group_max_budget_check`
+    when ``disable_budget_reservation`` turns them off.
+    """
+    if prisma_client is None or not access_group_names:
+        return {}
+
+    probed: Final = [
+        (
+            group,
+            await user_api_key_cache.async_get_cache(
+                key=model_access_group_cache_key(group), model_type=ModelAccessGroupBudget
+            ),
+        )
+        for group in access_group_names
+    ]
+    fetched: Final = await _fetch_uncached_model_access_group_budgets(
+        uncached_groups=tuple(group for group, budget in probed if budget is None),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    return {group: budget for group, budget in (*probed, *fetched) if budget is not None}
+
+
+async def _fetch_uncached_tags(
+    uncached_tags: Sequence[str],
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> tuple[tuple[str, LiteLLM_TagTable], ...]:
+    """Rows for the tags a cache probe missed; names absent from the registry never reach the DB."""
+    if not uncached_tags:
+        return ()
+
+    registry: Final = await _load_tag_registry(
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    tags_to_fetch: Final = (
+        tuple(uncached_tags) if registry is None else tuple(tag for tag in uncached_tags if tag in registry)
+    )
+    if not tags_to_fetch:
+        return ()
+
+    try:
+        db_tags: Final = await _tag_table(TagRepository(prisma_client)).find_many(
+            where={"tag_name": {"in": list(tags_to_fetch)}},
+            include={"litellm_budget_table": True},
+        )
+        fetched: Final = tuple((db_tag.tag_name, LiteLLM_TagTable.model_validate(db_tag.dict())) for db_tag in db_tags)
+        for fetched_name, fetched_obj in fetched:
+            await user_api_key_cache.async_set_cache(
+                key=tag_cache_key(fetched_name),
+                value=fetched_obj,
+                model_type=LiteLLM_TagTable,
+                ttl=get_management_object_ttl(user_api_key_cache),
+            )
+    except Exception as e:  # noqa: BLE001  # fail-safe: a tag fetch error must yield "no budget objects", never break auth
+        verbose_proxy_logger.debug("Error batch fetching tags from database: %s", e)
+        return ()
+    else:
+        return fetched
+
+
 @log_db_metrics
 async def get_tag_objects_batch(
     tag_names: list[str],
@@ -1326,8 +2051,9 @@ async def get_tag_objects_batch(
     Batch fetch multiple tag objects from cache and db.
 
     Optimizes for latency by:
-    1. Fetching all cached tags in parallel
-    2. Batch fetching uncached tags in one DB query
+    1. Serving already-cached tags without touching the DB
+    2. Skipping tags that no ``LiteLLM_TagTable`` row exists for, via the cached name registry
+    3. Batch fetching the remaining uncached tags in one DB query
 
     Args:
         tag_names: List of tag names to fetch
@@ -1339,50 +2065,22 @@ async def get_tag_objects_batch(
     Returns:
         Dictionary mapping tag_name to LiteLLM_TagTable object
     """
-    if prisma_client is None:
+    if prisma_client is None or not tag_names:
         return {}
 
-    if not tag_names:
-        return {}
-
-    tag_objects: Final = {}
-    uncached_tags: Final = []
-
-    # Try to get all tags from cache first
-    for tag_name in tag_names:
-        cache_key = f"tag:{tag_name}"
-        cached_tag = await user_api_key_cache.async_get_cache(
-            key=cache_key,
-            model_type=LiteLLM_TagTable,
+    probed: Final = [
+        (
+            tag_name,
+            await user_api_key_cache.async_get_cache(key=tag_cache_key(tag_name), model_type=LiteLLM_TagTable),
         )
-        if cached_tag is not None:
-            tag_objects[tag_name] = cached_tag
-        else:
-            uncached_tags.append(tag_name)
-
-    # Batch fetch uncached tags from DB in one query
-    if uncached_tags:
-        try:
-            db_tags: Final = await TagRepository(prisma_client).table.find_many(
-                where={"tag_name": {"in": uncached_tags}},
-                include={"litellm_budget_table": True},
-            )
-
-            # Cache and add to tag_objects
-            for db_tag in db_tags:
-                tag_name = db_tag.tag_name
-                cache_key = f"tag:{tag_name}"
-                _tag_obj = LiteLLM_TagTable.model_validate(db_tag.dict())
-                await user_api_key_cache.async_set_cache(
-                    key=cache_key,
-                    value=_tag_obj,
-                    model_type=LiteLLM_TagTable,
-                )
-                tag_objects[tag_name] = _tag_obj
-        except Exception as e:
-            verbose_proxy_logger.debug("Error batch fetching tags from database: %s", e)
-
-    return tag_objects
+        for tag_name in tag_names
+    ]
+    fetched: Final = await _fetch_uncached_tags(
+        uncached_tags=tuple(tag_name for tag_name, tag_obj in probed if tag_obj is None),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    return {tag_name: tag_obj for tag_name, tag_obj in (*probed, *fetched) if tag_obj is not None}
 
 
 @log_db_metrics
@@ -1445,7 +2143,7 @@ async def get_team_membership(
     if user_id is None or team_id is None:
         return None
 
-    _key: Final = f"team_membership:{user_id}:{team_id}"
+    _key: Final = team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
 
     # check if in cache
     cached_membership_obj: Final = await user_api_key_cache.async_get_cache(
@@ -1457,7 +2155,7 @@ async def get_team_membership(
 
     # else, check db
     try:
-        response: Final = await TeamMembershipRepository(prisma_client).table.find_unique(
+        response: Final = await _dictable_table(TeamMembershipRepository(prisma_client)).find_unique(
             where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
             include={"litellm_budget_table": True},
         )
@@ -1524,7 +2222,7 @@ def _should_check_db(key: str, last_db_access_time: LimitedSizeOrderedDict, db_c
     return False
 
 
-def _update_last_db_access_time(key: str, value: Any | None, last_db_access_time: LimitedSizeOrderedDict):
+def _update_last_db_access_time(key: str, value: object | None, last_db_access_time: LimitedSizeOrderedDict):
     last_db_access_time[key] = (value, time.time())
 
 
@@ -1545,7 +2243,7 @@ def _get_role_based_permissions(
 
     for role_based_permission in role_based_permissions:
         if role_based_permission.role == rbac_role:
-            return getattr(role_based_permission, key)
+            return role_based_permission.models if key == "models" else role_based_permission.routes
 
     return None
 
@@ -1586,7 +2284,7 @@ async def _get_fuzzy_user_object(
     prisma_client: PrismaClient,
     sso_user_id: str | None = None,
     user_email: str | None = None,
-) -> LiteLLM_UserTable | None:
+) -> "_PrismaUserRow | None":
     """
     Checks if sso user is in db.
 
@@ -1600,7 +2298,7 @@ async def _get_fuzzy_user_object(
 
     response = None
     if sso_user_id is not None:
-        response = await UserRepository(prisma_client).table.find_unique(
+        response = await _user_table(UserRepository(prisma_client)).find_unique(
             where={"sso_user_id": sso_user_id},
             include={"organization_memberships": True},
         )
@@ -1608,14 +2306,14 @@ async def _get_fuzzy_user_object(
     if response is None and user_email is not None:
         # Use case-insensitive query to handle emails with different casing
         # This matches the pattern used in _check_duplicate_user_email
-        response = await UserRepository(prisma_client).table.find_first(
+        response = await _user_table(UserRepository(prisma_client)).find_first(
             where={"user_email": {"equals": user_email, "mode": "insensitive"}},
             include={"organization_memberships": True},
         )
 
         if response is not None and sso_user_id is not None:  # update sso_user_id
             asyncio.create_task(  # background task to update user with sso id
-                UserRepository(prisma_client).table.update(
+                _user_table(UserRepository(prisma_client)).update(
                     where={"user_id": response.user_id},
                     data={"sso_user_id": sso_user_id},
                 )
@@ -1698,7 +2396,7 @@ async def get_user_object(
         )
 
         if should_check_db:
-            response = await UserRepository(prisma_client).table.find_unique(
+            response = await _user_table(UserRepository(prisma_client)).find_unique(
                 where={"user_id": user_id}, include={"organization_memberships": True}
             )
 
@@ -1736,7 +2434,7 @@ async def get_user_object(
                         budget_duration=new_user_params["budget_duration"]
                     )
 
-                response = await UserRepository(prisma_client).table.create(
+                response = await _user_table(UserRepository(prisma_client)).create(
                     data=new_user_params,
                     include={"organization_memberships": True},
                 )
@@ -1802,7 +2500,7 @@ async def get_user_object(
 
 async def _cache_management_object(
     key: str,
-    value: BaseModel | dict[str, Any],
+    value: BaseModel | Mapping[str, object],
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None,
     *,
@@ -1880,6 +2578,154 @@ async def _cache_team_object(
             )
 
 
+async def invalidate_team_member_spend_state(
+    user_id: str,
+    team_id: str,
+    user_api_key_cache: UserApiKeyCache,
+    new_spend: float | None = None,
+) -> None:
+    """
+    Clear every cached read path for one team member's budget so a spend
+    reset or a raised cap takes effect on the next request instead of
+    waiting on the membership cache's TTL.
+
+    Two independently-keyed cache entries hold the same LiteLLM_TeamMembership
+    row: user_api_key_auth.py's admission check writes ``{team_id}_{user_id}``,
+    while budget_reservation.py's pre-call reservation and auth_checks.py's own
+    get_team_membership() (used by _check_team_member_budget) both write
+    ``team_membership:{user_id}:{team_id}``. Both formats must be invalidated
+    explicitly; writing one does not refresh the other. All keys are also
+    broadcast (LIT-3803): each worker's own in-memory copy (membership object,
+    spend counter, or the counter's own short-TTL DB-floor marker) survives
+    eviction elsewhere until its TTL, so the handling worker alone clearing its
+    copy leaves every other worker still enforcing the pre-reset budget.
+
+    ``new_spend`` is only passed by reset_team_member_spend_fn, which knows the
+    exact post-reset value: it is SET everywhere (matching /key/{key}/reset_spend's
+    own precedent) rather than deleted, so a worker's next read reflects it
+    directly instead of re-deriving it through a DB reseed. team_member_update
+    only changes the budget cap, not the tracked spend, so it passes no
+    new_spend; the live spend counter is untouched in that case (deleting it
+    would force a reseed from the DB's own spend column, which lags the live
+    counter via periodic batch writes, briefly under-enforcing the raised cap
+    against a spend value lower than what was actually tracked) and only the
+    membership caches carrying the new cap are invalidated.
+
+    The floor marker (``spend_db_floor:``, proxy_server.py's
+    _authoritative_floor_spend) caches the pre-reset DB spend for
+    SPEND_DB_FLOOR_CACHE_TTL_SECONDS; left stale after a real reset, a request
+    landing on the pod that cached it can read that higher floor and raise the
+    counter right back above the just-reset spend. It is overwritten here with
+    the post-reset floor (not merely deleted) and _authoritative_floor_spend
+    re-checks the marker after its DB read, so a floor read already in flight
+    on this pod when the reset commits cannot clobber it with the pre-reset
+    value. Both keys are broadcast as SETs carrying new_spend, not deletes:
+    every subscriber (remote pods AND this pod's own, which receives its own
+    message) writes the post-reset value, so the self-delivered message cannot
+    erase the guard just written here.
+
+    Raises HTTPException(503) if Redis still holds the stale pre-reset counter
+    after both the SET and the fallback DELETE fail: budget checks read Redis
+    first, so returning success would leave the old value authoritative for
+    every worker despite the DB write having committed.
+    """
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+        evict_and_broadcast,
+        publish_auth_cache_invalidation,
+    )
+
+    if new_spend is not None:
+        from litellm.proxy.proxy_server import SPEND_DB_FLOOR_CACHE_TTL_SECONDS, spend_counter_cache
+
+        spend_counter_key: Final = f"spend:team_member:{user_id}:{team_id}"
+        spend_db_floor_key: Final = f"spend_db_floor:{spend_counter_key}"
+
+        spend_counter_cache.in_memory_cache.set_cache(key=spend_counter_key, value=new_spend, ttl=60)
+        if spend_counter_cache.redis_cache is not None:
+            try:
+                await spend_counter_cache.redis_cache.async_set_cache(key=spend_counter_key, value=new_spend, ttl=60)
+            except Exception as e:  # noqa: BLE001  # fall back to deleting the stale entry before giving up
+                verbose_proxy_logger.warning(
+                    "Failed to set spend counter %s in Redis after reset: %s; deleting it instead so the next "
+                    "read reseeds from the DB rather than keeping the stale pre-reset value authoritative",
+                    spend_counter_key,
+                    e,
+                )
+                try:
+                    await spend_counter_cache.redis_cache.async_delete_cache(key=spend_counter_key)
+                except Exception:  # noqa: BLE001  # stale value now authoritative in Redis; surface instead of reporting success
+                    verbose_proxy_logger.warning(
+                        "Failed to delete stale spend counter %s in Redis after a failed reset write",
+                        spend_counter_key,
+                        exc_info=True,
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail={  # mutable-ok: HTTPException.detail takes a dict
+                            "error": "Spend was reset in the database, but Redis is unreachable and still "
+                            "holds the pre-reset counter. Retry once Redis is reachable."
+                        },
+                    ) from e
+
+        spend_counter_cache.in_memory_cache.set_cache(
+            key=spend_db_floor_key,
+            value=new_spend,
+            ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS,
+        )
+        await publish_auth_cache_invalidation(cache_key=spend_counter_key, new_value=new_spend, ttl=60)
+        await publish_auth_cache_invalidation(
+            cache_key=spend_db_floor_key,
+            new_value=new_spend,
+            ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS,
+        )
+
+    await evict_and_broadcast(
+        cache_keys=(
+            team_membership_auth_cache_key(team_id=team_id, user_id=user_id),
+            team_membership_reservation_cache_key(user_id=user_id, team_id=team_id),
+        ),
+        user_api_key_cache=user_api_key_cache,
+    )
+
+
+async def delete_cache_team_object(
+    team_id: str,
+    team_alias: str | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging | None,
+) -> None:
+    """
+    Evict both keys `_cache_team_object` writes.
+
+    `get_team_object` reads the id key and the JWT `team_alias_jwt_field` path reads the alias key,
+    so leaving either behind keeps a deleted team resolvable for auth until its TTL expires.
+
+    Mirrors `delete_cached_project_object`: evicting locally only reaches the worker handling the
+    delete, so every key is also broadcast to drop the other workers' in-memory copies.
+
+    Eviction is best-effort, matching `_cache_team_object`. `delete_team` calls this after the team
+    rows are already gone, so letting an unreachable cache backend raise here would fail a request
+    whose delete has committed.
+    """
+    keys: Final = (f"team_id:{team_id}", *((f"team_alias:{team_alias}",) if team_alias else ()))
+
+    for key in keys:
+        try:
+            user_api_key_cache.delete_cache(key=key)
+
+            ## UPDATE REDIS CACHE ##
+            if proxy_logging_obj is not None:
+                await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+        except Exception as e:  # noqa: BLE001  # best-effort invalidation: any cache backend error must not abort the delete
+            verbose_proxy_logger.warning(
+                "Failed to invalidate cached team entry %s on delete; "
+                "a deleted team may be served until its TTL expires: %s",
+                key,
+                e,
+            )
+        await publish_auth_cache_invalidation(cache_key=key)
+
+
 async def _cache_key_object(
     hashed_token: str,
     user_api_key_obj: UserAPIKeyAuth,
@@ -1906,18 +2752,102 @@ async def _delete_cache_key_object(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None,
 ):
+    """
+    Evict one key object, best-effort, matching `delete_cache_team_object` and
+    `delete_cache_key_objects`.
+
+    Every caller runs this after its own write has already committed, and the in-memory entry is
+    dropped before the Redis round trip. Letting a cache-backend error raise here therefore reports
+    failure for work that succeeded without making the cache any less stale; the leftover Redis
+    entry expires at its TTL either way.
+
+    Also broadcasts the eviction to every other worker (LIT-3803): auth serves this object
+    cache-first with no freshness check, so a worker that never receives the broadcast keeps
+    admitting requests against the pre-mutation object (e.g. a just-reset spend) until its own
+    copy's TTL expires.
+    """
     key: Final = hashed_token
 
-    user_api_key_cache.delete_cache(key=key)
+    try:
+        user_api_key_cache.delete_cache(key=key)
 
-    ## UPDATE REDIS CACHE ##
-    if proxy_logging_obj is not None:
-        await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+        ## UPDATE REDIS CACHE ##
+        if proxy_logging_obj is not None:
+            await proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache(key=key)
+    except Exception as e:  # noqa: BLE001  # best-effort: a cache error must not fail a committed write
+        verbose_proxy_logger.warning(
+            "Failed to invalidate cached key entry %s; a stale key object may be served until its TTL expires: %s",
+            key,
+            e,
+        )
+
+    await publish_auth_cache_invalidation(cache_key=key)
+
+
+async def delete_cache_key_objects(
+    hashed_tokens: Sequence[str],
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging | None,
+) -> None:
+    """
+    Evict a batch of key objects, for callers that delete keys in bulk rather than through
+    `/key/delete`. Auth resolves a cached key object without re-reading its team, so a key left
+    cached after its row is gone keeps buying access until its TTL expires.
+
+    Evicting locally only reaches this worker; `_delete_cache_key_object` itself broadcasts each
+    token, so a deleted key left in a peer worker's in-memory cache still authenticates there until
+    its TTL expires.
+
+    Best-effort per key: the rows are already deleted by the time this runs, so an unreachable
+    cache backend must not abort the caller partway through its own cascade.
+    """
+    results: Final = await asyncio.gather(
+        *(
+            _delete_cache_key_object(
+                hashed_token=hashed_token,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            for hashed_token in hashed_tokens
+        ),
+        return_exceptions=True,
+    )
+
+    for hashed_token, result in zip(hashed_tokens, results):
+        if isinstance(result, BaseException):
+            verbose_proxy_logger.warning(
+                "Failed to evict cached key entry for %s; a deleted key may authenticate until its TTL expires: %s",
+                hashed_token,
+                result,
+            )
+
+
+class _TeamNotFoundDetail(TypedDict):
+    error: ReadOnly[str]
+
+
+class TeamNotFoundError(HTTPException):
+    """The team row is provably absent, as opposed to merely unreadable.
+
+    ``get_team_object`` reports every failure as a 404, so a deleted team and a
+    database that would not answer are indistinguishable to its callers. Callers
+    that must not treat a degraded read as a definitive answer, such as the
+    authorization fallback in ``user_api_key_auth``, key on this subclass. It
+    stays a 404 carrying the same detail, so every other caller is unaffected.
+    """
+
+    def __init__(self, team_id: str) -> None:
+        detail: Final[_TeamNotFoundDetail] = {
+            "error": f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."
+        }
+        super().__init__(status_code=404, detail=detail)
 
 
 @log_db_metrics
-async def _get_team_db_check(team_id: str, prisma_client: PrismaClient, team_id_upsert: bool | None = None):
-    response = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
+async def _get_team_db_check(
+    team_id: str, prisma_client: PrismaClient, team_id_upsert: bool | None = None
+) -> "_PrismaTeamRow | None":
+    response = await _team_table(TeamRepository(prisma_client)).find_unique(where={"team_id": team_id})
 
     if response is None and team_id_upsert:
         from litellm.proxy.management_endpoints.team_endpoints import new_team
@@ -1936,8 +2866,8 @@ async def _get_team_db_check(team_id: str, prisma_client: PrismaClient, team_id_
     return response
 
 
-async def _get_team_object_from_db(team_id: str, prisma_client: PrismaClient):
-    return await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
+async def _get_team_object_from_db(team_id: str, prisma_client: PrismaClient) -> "_PrismaTeamRow | None":
+    return await _team_table(TeamRepository(prisma_client)).find_unique(where={"team_id": team_id})
 
 
 async def _get_team_object_from_user_api_key_cache(
@@ -1958,6 +2888,10 @@ async def _get_team_object_from_user_api_key_cache(
     )
     if should_check_db:
         response = await _get_team_db_check(team_id=team_id, prisma_client=prisma_client, team_id_upsert=team_id_upsert)
+        # The database answered and the row is not there. Distinct from every
+        # other failure here, which leaves the team's grant unknown.
+        if response is None:
+            raise TeamNotFoundError(team_id=team_id)
     else:
         response = None
 
@@ -2004,20 +2938,9 @@ async def _get_team_object_from_user_api_key_cache(
 
 async def _get_team_object_from_cache(
     key: str,
-    proxy_logging_obj: ProxyLogging | None,
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None,
 ) -> LiteLLM_TeamTableCachedObj | None:
-    ## INTERNAL USAGE CACHE (plain DualCache) — checked before UserApiKeyCache stores ##
-    if proxy_logging_obj is not None and proxy_logging_obj.internal_usage_cache.dual_cache:
-        cached_raw: Final = await proxy_logging_obj.internal_usage_cache.dual_cache.async_get_cache(
-            key=key, parent_otel_span=parent_otel_span
-        )
-        if cached_raw is not None:
-            from_internal: Final = CacheCodec.deserialize(cached_raw, LiteLLM_TeamTableCachedObj)
-            if from_internal is not None:
-                return from_internal
-
     decoded: Final = await user_api_key_cache.async_get_cache(
         key=key,
         parent_otel_span=parent_otel_span,
@@ -2053,7 +2976,6 @@ async def get_team_object(
     if not check_db_only:
         cached_team_obj: Final = await _get_team_object_from_cache(
             key=key,
-            proxy_logging_obj=proxy_logging_obj,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
         )
@@ -2079,6 +3001,8 @@ async def get_team_object(
             key=key,
             team_id_upsert=team_id_upsert,
         )
+    except TeamNotFoundError:
+        raise
     except Exception:
         raise HTTPException(
             status_code=404,
@@ -2148,7 +3072,7 @@ async def get_access_object(
 
     # Not in cache - fetch from DB
     try:
-        response: Final = await AccessGroupRepository(prisma_client).table.find_unique(
+        response: Final = await _dictable_table(AccessGroupRepository(prisma_client)).find_unique(
             where={"access_group_id": access_group_id}
         )
 
@@ -2214,7 +3138,6 @@ async def get_team_object_by_alias(
 
     cached_team_obj: Final = await _get_team_object_from_cache(
         key=cache_key,
-        proxy_logging_obj=proxy_logging_obj,
         user_api_key_cache=user_api_key_cache,
         parent_otel_span=parent_otel_span,
     )
@@ -2224,7 +3147,7 @@ async def get_team_object_by_alias(
 
     # Query database by team_alias
     try:
-        teams: Final = await TeamRepository(prisma_client).table.find_many(where={"team_alias": team_alias})
+        teams: Final = await _team_table(TeamRepository(prisma_client)).find_many(where={"team_alias": team_alias})
 
         if not teams:
             raise HTTPException(
@@ -2329,7 +3252,9 @@ async def get_org_object_by_alias(
 
     # Query database by organization_alias
     try:
-        orgs = await OrganizationRepository(prisma_client).table.find_many(where={"organization_alias": org_alias})
+        orgs = await _model_dump_table(OrganizationRepository(prisma_client)).find_many(
+            where={"organization_alias": org_alias}
+        )
 
         if not orgs:
             raise HTTPException(
@@ -2416,6 +3341,8 @@ class ExperimentalUIJWTToken:
         user_info: LiteLLM_UserTable,
         team_id: str | None = None,
         team_alias: str | None = None,
+        team_models: Sequence[str] | None = None,
+        team_model_aliases: Mapping[str, str] | None = None,
         max_budget: float | None = None,
     ) -> str:
         """
@@ -2428,6 +3355,8 @@ class ExperimentalUIJWTToken:
             user_info: User information from the database
             team_id: Team ID for the user (optional, uses user's team if available)
             team_alias: Team alias for the selected team, if available
+            team_models: Model allowlist granted by the selected team
+            team_model_aliases: Team model aliases for the selected team
 
         Returns:
             Encrypted JWT token string
@@ -2466,7 +3395,9 @@ class ExperimentalUIJWTToken:
             user_id=user_info.user_id,
             team_id=_team_id,
             team_alias=team_alias,
-            models=user_info.models,
+            team_models=list(team_models) if team_models is not None else [],
+            team_model_aliases=dict(team_model_aliases) if team_model_aliases is not None else None,
+            models=[] if _team_id is not None else user_info.models,
             max_parallel_requests=None,
             user_role=LitellmUserRoles(user_info.user_role),
             is_session_token=True,
@@ -2546,7 +3477,7 @@ async def get_jwt_key_mapping_object(
 
     Returns the hashed token (str) if a matching active mapping is found, else None.
     """
-    mapping: Final = await JWTKeyMappingRepository(prisma_client).table.find_first(
+    mapping: Final = await _jwt_key_mapping_table(JWTKeyMappingRepository(prisma_client)).find_first(
         where={
             "jwt_claim_name": jwt_claim_name,
             "jwt_claim_value": jwt_claim_value,
@@ -2674,7 +3605,7 @@ async def get_object_permission(
 
     # else, check db
     try:
-        response: Final = await ObjectPermissionRepository(prisma_client).table.find_unique(
+        response: Final = await _dictable_table(ObjectPermissionRepository(prisma_client)).find_unique(
             where={"object_permission_id": object_permission_id}
         )
 
@@ -2730,7 +3661,7 @@ async def get_managed_vector_store_rows_by_uuids(
     if not cache_misses:
         return result
 
-    rows: Final = await ManagedVectorStoresRepository(prisma_client).table.find_many(
+    rows: Final = await _vector_store_table(ManagedVectorStoresRepository(prisma_client)).find_many(
         where={"vector_store_id": {"in": cache_misses}},
         take=len(cache_misses),
     )
@@ -2804,11 +3735,11 @@ async def get_org_object(
         return deserialized_org
     # else, check db
     try:
-        query_kwargs: Final[dict[str, Any]] = {"where": {"organization_id": org_id}}
+        query_kwargs: Final[dict[str, Mapping[str, object]]] = {"where": {"organization_id": org_id}}
         if include_budget_table:
             query_kwargs["include"] = {"litellm_budget_table": True}
 
-        response: Final = await OrganizationRepository(prisma_client).table.find_unique(**query_kwargs)
+        response: Final = await _model_dump_table(OrganizationRepository(prisma_client)).find_unique(**query_kwargs)
     except Exception:
         # An operational failure (DB down, timeout, cache fault) is NOT the same fact as a confirmed
         # missing row, and relabelling it as "doesn't exist" made every caller unable to tell them
@@ -3113,6 +4044,192 @@ def _resolve_key_models_for_auth_check(valid_token: UserAPIKeyAuth) -> list[str]
             return []
         return list(valid_token.team_models or [])
     return models
+
+
+def _model_access_groups_serving_model(
+    model: str | Sequence[str],
+    llm_router: Router,
+    team_id: str | None,
+) -> frozenset[str]:
+    """Every model access group whose deployments serve the requested model(s)."""
+    requested: Final = (model,) if isinstance(model, str) else tuple(model)
+    return frozenset(
+        group
+        for requested_model in requested
+        for group in llm_router.get_model_access_groups(model_name=requested_model, team_id=team_id)
+    )
+
+
+async def _team_member_granted_models(
+    valid_token: UserAPIKeyAuth,
+    team_object: LiteLLM_TeamTable | None,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> Sequence[str]:
+    """The member's own ``allowed_models`` scope; empty when the member is not narrowed below the team."""
+    if team_object is None or valid_token.user_id is None:
+        return ()
+
+    team_membership: Final = await get_team_membership(
+        user_id=valid_token.user_id,
+        team_id=team_object.team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    return () if team_membership is None else _member_allowed_models(team_membership)
+
+
+async def _org_granted_models(
+    valid_token: UserAPIKeyAuth,
+    team_object: LiteLLM_TeamTable | None,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> Sequence[str]:
+    """The org allowlist reached through the key, or through its team when the key names no org."""
+    org_id: Final = valid_token.org_id or (team_object.organization_id if team_object is not None else None)
+    if org_id is None:
+        return ()
+
+    try:
+        org_object: Final = await get_org_object(
+            org_id=org_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:  # noqa: BLE001  # fail-safe: attribution degrades to "no org grant", it must never break auth
+        verbose_proxy_logger.debug("access group attribution: org lookup failed: %s", e)
+        return ()
+    return org_object.models if org_object is not None else ()
+
+
+async def _granted_model_lists(
+    valid_token: UserAPIKeyAuth,
+    team_object: LiteLLM_TeamTable | None,
+    project_object: LiteLLM_ProjectTableCachedObj | None,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> tuple[Sequence[str], ...]:
+    """One model allowlist per level that participates in authorizing the request."""
+    return (
+        _resolve_key_models_for_auth_check(valid_token=valid_token),
+        team_object.models if team_object is not None else (),
+        await _team_member_granted_models(
+            valid_token=valid_token,
+            team_object=team_object,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        ),
+        project_object.models if project_object is not None else (),
+        await _org_granted_models(
+            valid_token=valid_token,
+            team_object=team_object,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        ),
+    )
+
+
+async def collect_matched_model_access_groups(
+    model: str | Sequence[str] | None,
+    valid_token: UserAPIKeyAuth | None,
+    team_object: LiteLLM_TeamTable | None,
+    project_object: LiteLLM_ProjectTableCachedObj | None,
+    llm_router: Router | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> tuple[str, ...]:
+    """
+    The budgeted model access groups that authorized this request, sorted and deduplicated.
+
+    A group is charged only when its name appears on an allowlist the caller was granted -- key,
+    team, team-member scope, project or org -- *and* that group serves the requested model. Asking
+    for a model that merely belongs to a group attributes nothing, because nothing about the caller
+    named the group.
+
+    Levels are unioned, never ranked: a team granted ``*`` whose member is scoped to one group is
+    still a caller gated by that group. An unrestricted allowlist (empty, ``*``) names no group and
+    so contributes nothing.
+
+    The whole walk is gated on the budget registry, because collecting every match costs a full scan
+    of each allowlist where the plain access check stops at the first hit. An empty registry means no
+    group carries a budget, so there is nothing to attribute and no work worth doing.
+    """
+    if model is None or valid_token is None or llm_router is None or prisma_client is None:
+        return ()
+
+    registry: Final = await _load_model_access_group_registry(
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    if registry is not None and not registry:
+        return ()
+
+    covering_groups: Final = _model_access_groups_serving_model(
+        model=model,
+        llm_router=llm_router,
+        team_id=valid_token.team_id,
+    )
+    budgeted_groups: Final = covering_groups if registry is None else covering_groups & registry
+    if not budgeted_groups:
+        return ()
+
+    granted: Final = frozenset(
+        granted_model
+        for granted_models in await _granted_model_lists(
+            valid_token=valid_token,
+            team_object=team_object,
+            project_object=project_object,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        for granted_model in granted_models
+    )
+    return tuple(sorted(budgeted_groups & granted))
+
+
+async def stamp_matched_model_access_groups(
+    model: str | Sequence[str] | None,
+    valid_token: UserAPIKeyAuth | None,
+    team_object: LiteLLM_TeamTable | None,
+    project_object: LiteLLM_ProjectTableCachedObj | None,
+    llm_router: Router | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> tuple[str, ...]:
+    """Record the groups that authorized this request on its auth object, for the post-call spend
+    writer and the reservation counters, and hand them back for the budget check."""
+    if valid_token is None:
+        return ()
+
+    try:
+        matched: Final = await collect_matched_model_access_groups(
+            model=model,
+            valid_token=valid_token,
+            team_object=team_object,
+            project_object=project_object,
+            llm_router=llm_router,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:  # noqa: BLE001  # fail-safe: attribution is spend telemetry, it must never break auth
+        verbose_proxy_logger.debug("model access group attribution failed: %s", e)
+        return ()
+    if not matched:
+        return ()
+    matched_groups: Final = list(matched)  # mutable-ok: the auth field is typed list[str] | None
+    valid_token.matched_model_access_groups = matched_groups  # rebind-ok: request-scoped carrier for the writer
+    return matched
 
 
 async def can_key_call_model(
@@ -3709,6 +4826,7 @@ async def _virtual_key_multi_budget_check(
             max_budget=w["max_budget"],
             window_entity_type="Key",
             window_entity_id=valid_token.token,
+            window_duration=str(w["budget_duration"]),
             window_start=get_budget_window_start(w),
         )
         if math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
@@ -3763,7 +4881,7 @@ async def _virtual_key_soft_budget_check(
         )
 
 
-def _parse_email_list(raw: Any) -> list[str]:
+def _parse_email_list(raw: str | Sequence[object] | None) -> list[str]:
     """Parse emails from a list or comma-separated string."""
     if isinstance(raw, list):
         return [e.strip() for e in raw if isinstance(e, str) and e.strip()]
@@ -3773,7 +4891,7 @@ def _parse_email_list(raw: Any) -> list[str]:
 
 
 def _normalize_alert_emails(
-    cfg: dict[str, Any] | None,
+    cfg: Mapping[str, str | Sequence[object] | None] | None,
 ) -> dict[str, list[str]]:
     """Coerce user-supplied threshold→recipients mapping to Dict[str, List[str]].
 
@@ -3786,8 +4904,8 @@ def _normalize_alert_emails(
 
 
 def _merge_budget_alert_email_configs(
-    global_cfg: dict[str, Any] | None,
-    per_key_cfg: dict[str, Any] | None,
+    global_cfg: Mapping[str, str | Sequence[object] | None] | None,
+    per_key_cfg: Mapping[str, str | Sequence[object] | None] | None,
 ) -> dict[str, list[str]] | None:
     """
     Per-threshold additive merge: each threshold's recipient list is the union
@@ -4082,6 +5200,7 @@ async def _team_multi_budget_check(
             max_budget=w["max_budget"],
             window_entity_type="Team",
             window_entity_id=team_object.team_id,
+            window_duration=str(w["budget_duration"]),
             window_start=get_budget_window_start(w),
         )
         if math.isfinite(w["max_budget"]) and window_spend >= w["max_budget"]:
@@ -4294,7 +5413,7 @@ async def get_project_object(
         return deserialized_project
 
     # Fetch from DB
-    project_row: Final = await ProjectRepository(prisma_client).table.find_unique(
+    project_row: Final = await _model_dump_table(ProjectRepository(prisma_client)).find_unique(
         where={"project_id": project_id},
         include={"litellm_budget_table": True},
     )
@@ -4321,25 +5440,15 @@ async def delete_cached_project_object(
     user_api_key_cache: UserApiKeyCache,
 ) -> None:
     """
-    Every endpoint that mutates litellm_projecttable must call this: get_project_object
-    serves auth cache-first with no freshness check, so without invalidation a stale
-    project (e.g. a pre-update empty model allowlist) keeps being enforced until the
-    TTL expires (LIT-3803). Best-effort on both steps: the DB write has already
-    committed, so a cache backend error must not fail the endpoint; the stale entry
-    then expires via TTL.
+    Every endpoint that mutates litellm_projecttable must call this, or a stale project (e.g. a
+    pre-update empty model allowlist) keeps being enforced until the TTL expires (LIT-3803).
     """
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 
-    cache_key: Final = _project_cache_key(project_id)
-    try:
-        await user_api_key_cache.async_delete_cache(key=cache_key)
-    except Exception as e:  # noqa: BLE001  # best-effort eviction: any cache backend error must not fail the mutation
-        verbose_proxy_logger.warning(
-            "Failed to evict cached project entry %s; a stale project may be served until its TTL expires: %s",
-            cache_key,
-            e,
-        )
-    await publish_auth_cache_invalidation(cache_key=cache_key)
+    await evict_and_broadcast(
+        cache_keys=(_project_cache_key(project_id),),
+        user_api_key_cache=user_api_key_cache,
+    )
 
 
 async def _organization_max_budget_check(
@@ -4499,6 +5608,61 @@ async def _tag_max_budget_check(
             )
 
 
+async def _model_access_group_max_budget_check(
+    matched_model_access_groups: Sequence[str],
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    """Block the request when a model access group that authorized it is over its max budget.
+
+    Only the groups auth already matched are charged and therefore only they are checked, so a
+    request that no budgeted group authorized costs nothing here.
+
+    Like the tag check this is a plain read with no reservation, so concurrent requests can
+    overshoot the ceiling slightly. The reservation counters are the precise path; this one covers
+    the ``disable_budget_reservation`` case.
+
+    The ceiling is exclusive, unlike the tag check it otherwise mirrors: a pool whose recorded
+    spend has reached ``max_budget`` has nothing left to give, so the next request is refused.
+    Keys and organizations already draw the line there. A non-positive budget means no budget,
+    matching what the reservation path treats as unbudgeted.
+
+    Raises:
+        BudgetExceededError if a matched group is over its max budget.
+    """
+    if prisma_client is None or not matched_model_access_groups:
+        return
+
+    budgets: Final = await get_model_access_group_budgets_batch(
+        access_group_names=matched_model_access_groups,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+
+    from litellm.proxy.proxy_server import get_current_spend
+
+    for group in matched_model_access_groups:
+        budget = budgets.get(group)
+        if budget is None or budget.max_budget is None or budget.max_budget <= 0:
+            continue
+
+        group_spend = await get_current_spend(
+            counter_key=model_access_group_spend_counter_key(group),
+            fallback_spend=budget.spend,
+            max_budget=budget.max_budget,
+            fallback_authoritative=True,
+        )
+        if group_spend < budget.max_budget:
+            continue
+        raise litellm.BudgetExceededError(
+            current_cost=group_spend,
+            max_budget=budget.max_budget,
+            message=f"Budget has been exceeded! Model access group={group} Current cost: {group_spend}, Max budget: {budget.max_budget}",
+            entity_type=Litellm_EntityType.MODEL_ACCESS_GROUP.value,
+            entity_id=group,
+        )
+
+
 def is_model_allowed_by_pattern(model: str, allowed_model_pattern: str) -> bool:
     """
     Check if a model matches an allowed pattern.
@@ -4621,7 +5785,9 @@ async def vector_store_access_check(
     #########################################################
     # Check if the key can access the vector store
     if valid_token is not None and valid_token.object_permission_id is not None:
-        key_object_permission: Final = await ObjectPermissionRepository(prisma_client).table.find_unique(
+        key_object_permission: Final = await _object_permission_table(
+            ObjectPermissionRepository(prisma_client)
+        ).find_unique(
             where={"object_permission_id": valid_token.object_permission_id},
         )
         if key_object_permission is not None:
@@ -4633,7 +5799,9 @@ async def vector_store_access_check(
 
     # Check if the team can access the vector store
     if team_object is not None and team_object.object_permission_id is not None:
-        team_object_permission: Final = await ObjectPermissionRepository(prisma_client).table.find_unique(
+        team_object_permission: Final = await _object_permission_table(
+            ObjectPermissionRepository(prisma_client)
+        ).find_unique(
             where={"object_permission_id": team_object.object_permission_id},
         )
         if team_object_permission is not None:
@@ -4648,7 +5816,7 @@ async def vector_store_access_check(
 def _can_object_call_vector_stores(
     object_type: Literal["key", "team", "org"],
     vector_store_ids_to_run: list[str],
-    object_permissions: LiteLLM_ObjectPermissionTable | None,
+    object_permissions: _VectorStorePermissionsRow | None,
 ):
     """
     Raises ProxyException if the object (key, team, org) cannot access the specific vector store.
