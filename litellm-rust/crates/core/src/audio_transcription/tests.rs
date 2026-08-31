@@ -4,7 +4,8 @@ use std::thread;
 
 use serde_json::{Map, json};
 
-use super::{AudioTranscriptionRequest, audio_transcription};
+use super::audio_transcription;
+use super::types::AudioTranscriptionRequest;
 
 #[tokio::test]
 async fn bedrock_request_is_signed_and_contains_audio() {
@@ -41,10 +42,6 @@ async fn bedrock_request_is_signed_and_contains_audio() {
         extra_headers: None,
         optional_params,
         timeout: None,
-        callbacks: Vec::new(),
-        guardrails: Vec::new(),
-        request_metadata: Default::default(),
-        litellm_call_id: None,
     })
     .await
     .expect("transcription");

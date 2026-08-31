@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use litellm_ai_gateway::io::audio_transcription::{
+use litellm_core::audio_transcription::{
     AudioTranscriptionRequest, audio_transcription as run_audio_transcription,
 };
 use litellm_core::error::CoreResult;
@@ -47,10 +47,6 @@ fn prepare_transcription(
             extra_headers,
             optional_params,
             timeout,
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
-            request_metadata: Default::default(),
-            litellm_call_id: None,
         })
         .await
     })
