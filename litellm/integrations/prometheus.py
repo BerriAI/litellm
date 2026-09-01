@@ -3307,13 +3307,17 @@ class PrometheusLogger(CustomLogger):
         """
         increment metric when litellm.Router / load balancing logic places a deployment in cool down
         """
-        self.litellm_deployment_cooled_down.labels(
-            _sanitize_prometheus_label_value(litellm_model_name),
-            _sanitize_prometheus_label_value(model_id),
-            _sanitize_prometheus_label_value(api_base),
-            _sanitize_prometheus_label_value(api_provider),
-            _sanitize_prometheus_label_value(exception_status),
-        ).inc()
+        _labels: Final = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(metric_name="litellm_deployment_cooled_down"),
+            enum_values=UserAPIKeyLabelValues(
+                litellm_model_name=litellm_model_name,
+                model_id=model_id,
+                api_base=api_base,
+                api_provider=api_provider,
+                exception_status=exception_status,
+            ),
+        )
+        self.litellm_deployment_cooled_down.labels(**_labels).inc()
 
     def increment_callback_logging_failure(
         self,

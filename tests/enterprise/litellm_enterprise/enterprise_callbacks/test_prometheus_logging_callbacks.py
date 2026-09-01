@@ -1204,7 +1204,11 @@ def test_increment_deployment_cooled_down(prometheus_logger):
     )
 
     prometheus_logger.litellm_deployment_cooled_down.labels.assert_called_once_with(
-        "gpt-5-mini", "model-123", "https://api.openai.com", "openai", "429"
+        litellm_model_name="gpt-5-mini",
+        model_id="model-123",
+        api_base="https://api.openai.com",
+        api_provider="openai",
+        exception_status="429",
     )
     mock_chain.inc.assert_called_once()
 
