@@ -111,6 +111,7 @@ from litellm.types.mcp import MCPPostCallResponseObject
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
+    DEPLOYMENT_SCOPED_PRICING_FIELDS,
     CachingDetails,
     CallTypes,
     CostBreakdown,
@@ -255,6 +256,7 @@ _STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = frozenset(StandardLoggi
 
 # Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
 _CUSTOM_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields.keys())
+_MODEL_INFO_CUSTOM_PRICING_KEYS: Final[frozenset[str]] = _CUSTOM_PRICING_KEYS | DEPLOYMENT_SCOPED_PRICING_FIELDS
 
 sentry_sdk_instance = None
 capture_exception = None
@@ -5033,7 +5035,9 @@ def use_custom_pricing_for_model(litellm_params: dict | None) -> bool:
     """
     Check if the model uses custom pricing
 
-    Returns True if any of `SPECIAL_MODEL_INFO_PARAMS` are present in `litellm_params` or `model_info`
+    Returns True if any custom pricing field is present in `litellm_params`, or if
+    any custom pricing or deployment-scoped pricing field (such as
+    ``off_peak_pricing``) is present in the metadata ``model_info``
     """
     if litellm_params is None:
         return False
@@ -5051,7 +5055,7 @@ def use_custom_pricing_for_model(litellm_params: dict | None) -> bool:
         model_info: dict = metadata.get("model_info", {}) or {}
 
         if model_info:
-            matching_keys = _CUSTOM_PRICING_KEYS & model_info.keys()
+            matching_keys = _MODEL_INFO_CUSTOM_PRICING_KEYS & model_info.keys()
             for key in matching_keys:
                 if model_info.get(key) is not None:
                     return True
