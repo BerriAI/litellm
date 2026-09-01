@@ -3627,3 +3627,67 @@ def test_convert_gemini_tool_call_result_answers_tool_reference_only_result():
     )
 
     assert result == {"function_response": {"name": "ToolSearch", "response": {"content": ""}}}
+
+
+def test_convert_to_anthropic_tool_invoke_degrades_unpaired_server_tool_use():
+    """A replayed srvtoolu_ call whose server tool result is not available
+    (e.g. the Responses bridge replays items without provider_specific_fields)
+    must become a plain client tool_use so the client's tool_result can pair
+    with it. A dangling server_tool_use makes Anthropic 400 the request with
+    "unexpected `tool_use_id` found in `tool_result` blocks"."""
+    from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_tool_invoke
+
+    result = convert_to_anthropic_tool_invoke(
+        tool_calls=[
+            {
+                "id": "srvtoolu_01Unpaired",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "zig version"}'},
+            }
+        ],
+        web_search_results=None,
+        tool_results=None,
+    )
+
+    assert result == [
+        {
+            "type": "tool_use",
+            "id": "srvtoolu_01Unpaired",
+            "name": "web_search",
+            "input": {"query": "zig version"},
+        }
+    ]
+
+
+def test_convert_to_anthropic_tool_invoke_keeps_paired_server_tool_use():
+    """When the paired server tool result is available, the srvtoolu_ call is
+    still reconstructed as server_tool_use followed by its result block."""
+    from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_tool_invoke
+
+    server_result = {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu_01Paired",
+        "content": [{"type": "web_search_result", "url": "https://ziglang.org", "title": "Zig"}],
+    }
+
+    result = convert_to_anthropic_tool_invoke(
+        tool_calls=[
+            {
+                "id": "srvtoolu_01Paired",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "zig version"}'},
+            }
+        ],
+        web_search_results=[server_result],
+        tool_results=None,
+    )
+
+    assert result == [
+        {
+            "type": "server_tool_use",
+            "id": "srvtoolu_01Paired",
+            "name": "web_search",
+            "input": {"query": "zig version"},
+        },
+        server_result,
+    ]

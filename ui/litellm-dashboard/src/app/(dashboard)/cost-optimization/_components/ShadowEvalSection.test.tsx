@@ -97,6 +97,7 @@ import {
   useStopShadowEval,
   type ShadowEvalJob,
 } from "./useShadowEval";
+import { chooseSelectOption } from "../../../../../tests/test-utils";
 
 const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
   job_id: "job-1",
@@ -437,8 +438,7 @@ describe("ShadowEvalSection", () => {
     await user.click(within(keyList).getByText("prod-alpha"));
     await user.click(keyInput);
     await user.click(within(keyList).getByText("staging-beta"));
-    await user.click(screen.getByPlaceholderText("Select up to 4 auto-routers"));
-    await user.click(await screen.findByText("gpt-auto"));
+    await chooseSelectOption(user, screen.getByPlaceholderText("Select up to 4 auto-routers"), "gpt-auto");
 
     expect(screen.getByText("Start shadow eval")).toBeDisabled();
 
@@ -470,8 +470,7 @@ describe("ShadowEvalSection", () => {
     await user.click(screen.getByPlaceholderText("Search teams by alias"));
     const teamList = await screen.findByTestId("paginated-multi-select-list");
     await user.click(within(teamList).getByText("engineering"));
-    await user.click(screen.getByPlaceholderText("Select up to 4 auto-routers"));
-    await user.click(await screen.findByText("gpt-auto"));
+    await chooseSelectOption(user, screen.getByPlaceholderText("Select up to 4 auto-routers"), "gpt-auto");
     await user.click(screen.getByPlaceholderText("Select a judge model"));
     await user.click(await screen.findByRole("option", { name: /anthropic\/claude-sonnet-5/ }));
     await user.click(screen.getByText("Start shadow eval"));
@@ -502,8 +501,7 @@ describe("ShadowEvalSection", () => {
     await user.click(screen.getByPlaceholderText("Search keys by alias"));
     const keyList = await screen.findByTestId("paginated-multi-select-list");
     await user.click(within(keyList).getByText("prod-alpha"));
-    await user.click(screen.getByPlaceholderText("Select up to 4 auto-routers"));
-    await user.click(await screen.findByText("gpt-auto"));
+    await chooseSelectOption(user, screen.getByPlaceholderText("Select up to 4 auto-routers"), "gpt-auto");
     await user.click(screen.getByPlaceholderText("Select a judge model"));
     await user.click(await screen.findByRole("option", { name: /anthropic\/claude-sonnet-5/ }));
 
