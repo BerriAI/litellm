@@ -111,8 +111,8 @@ describe("ModelsAndEndpointsPage", () => {
   });
 
   it("keeps the full admin tab order for a real admin", () => {
-    const { getAllByRole } = renderPage();
-    expect(getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+    renderPage();
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
       "All Models",
       "Add Model",
       "Auto-Routers Beta",
@@ -128,15 +128,15 @@ describe("ModelsAndEndpointsPage", () => {
 
   it("hides the admin write-form tabs from a view-only admin, keeping the read views", () => {
     mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
-    const { getByRole, queryByRole } = renderPage();
-    expect(getByRole("tab", { name: "All Models" })).toBeInTheDocument();
-    expect(getByRole("tab", { name: "Health Status" })).toBeInTheDocument();
-    expect(queryByRole("tab", { name: "LLM Credentials" })).not.toBeInTheDocument();
-    expect(queryByRole("tab", { name: "Pass-Through Endpoints" })).not.toBeInTheDocument();
-    expect(queryByRole("tab", { name: "Model Retry Settings" })).not.toBeInTheDocument();
-    expect(queryByRole("tab", { name: "Model Group Alias" })).not.toBeInTheDocument();
-    expect(queryByRole("tab", { name: /Model Access Group Budgets/ })).not.toBeInTheDocument();
-    expect(queryByRole("tab", { name: "Price Data Reload" })).not.toBeInTheDocument();
+    renderPage();
+    expect(screen.getByRole("tab", { name: "All Models" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Health Status" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "LLM Credentials" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Pass-Through Endpoints" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Model Retry Settings" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Model Group Alias" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /Model Access Group Budgets/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Price Data Reload" })).not.toBeInTheDocument();
   });
 
   // Auto-routers are excluded from the All Models table, so this tab is their home: the only
