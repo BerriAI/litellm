@@ -543,7 +543,7 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
         _raise_if_ptu_cost_attribution_disabled(updated_patch.model_info.model_dump(exclude_none=True))
     merged_model_name: Final = updated_patch.model_name or db_model.model_name
     merged_litellm_params: Final = db_model.litellm_params.model_dump(exclude_none=True)
-    merged_model_info: Final = db_model.model_info.model_dump(exclude_none=True)
+    merged_model_info: Final[dict[str, object]] = db_model.model_info.model_dump(exclude_none=True)
 
     # update litellm params
     if updated_patch.litellm_params:
@@ -1982,7 +1982,7 @@ async def update_model(
 
             ### MERGE WITH EXISTING DATA ###
             merged_dictionary: Final = {}
-            _mp: Final = model_params.litellm_params.dict()
+            _mp: Final[dict[str, object]] = model_params.litellm_params.dict()
 
             for key, value in _mp.items():
                 if value is not None:

@@ -53,11 +53,12 @@ PROVIDERS: Final[list[dict]] = [
     {
         "id": "anthropic",
         "name": "Anthropic",
-        "description": "Claude Fable 5, Opus 5, Opus 4.8, Opus 4.7, Opus 4.6, Sonnet 5, Sonnet 4.6, Haiku 4.5",
+        "description": "Claude Fable 5.1, Fable 5, Opus 5, Opus 4.8, Opus 4.7, Opus 4.6, Sonnet 5, Sonnet 4.6, Haiku 4.5",
         "env_key": "ANTHROPIC_API_KEY",
         "key_hint": "sk-ant-...",
         "test_model": "claude-haiku-4-5-20251001",
         "models": [
+            "claude-fable-5-1",
             "claude-fable-5",
             "claude-opus-5",
             "claude-sonnet-5",
