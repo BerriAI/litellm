@@ -8,6 +8,7 @@ import {
 import { Page } from "../../fixtures/pages";
 import { navigateToPage, dismissFeedbackPopup, clickTeamId } from "../../helpers/navigation";
 import { captureRequestBody, readBack } from "../../helpers/roundTrip";
+import { masterKey } from "../../helpers/traffic";
 
 /**
  * Every identifier a roster is addressable by. Which of user_id / user_email is populated depends on
@@ -30,6 +31,23 @@ async function findKeyByAlias(page: PlaywrightPage, alias: string): Promise<Reco
     `/key/list?key_alias=${encodeURIComponent(alias)}&return_full_object=true&size=100`,
   );
   return body.keys.find((row) => row.key_alias === alias);
+}
+
+/** A member this test adds itself, so removing it costs the suite nothing on a retry or a re-run. */
+async function addRemovableMember(page: PlaywrightPage): Promise<string> {
+  const userId = `e2e-removable-${Date.now()}`;
+  const created = await page.request.post("/user/new", {
+    headers: { Authorization: `Bearer ${masterKey()}` },
+    data: { user_id: userId, user_role: "internal_user", auto_create_key: false },
+  });
+  expect(created.ok(), `POST /user/new failed (${created.status()}): ${await created.text()}`).toBe(true);
+
+  const added = await page.request.post("/team/member_add", {
+    headers: { Authorization: `Bearer ${masterKey()}` },
+    data: { team_id: E2E_TEAM_CRUD_ID, member: { user_id: userId, role: "user" } },
+  });
+  expect(added.ok(), `POST /team/member_add failed (${added.status()}): ${await added.text()}`).toBe(true);
+  return userId;
 }
 
 test.describe("Team Admin", () => {
@@ -92,6 +110,10 @@ test.describe("Team Admin", () => {
   });
 
   test("Team admin can remove a member from their team", async ({ page }) => {
+    // Removing the seeded member leaves nothing for the next attempt, so the retries CI runs with
+    // are guaranteed to fail and the suite cannot run twice against one database. Bring our own.
+    const memberId = await addRemovableMember(page);
+
     await navigateToPage(page, Page.Teams);
     await dismissFeedbackPopup(page);
 
@@ -99,9 +121,9 @@ test.describe("Team Admin", () => {
 
     await page.getByRole("tab", { name: "Members" }).click();
 
-    // Seeded members appear in the roster by user_id (members_with_roles has no
-    // email), so match the row on the user_id rather than the email.
-    const row = page.locator("tr", { hasText: "e2e-removable-member" }).first();
+    // Members appear in the roster by user_id (members_with_roles has no email), so match
+    // the row on the user_id rather than the email.
+    const row = page.locator("tr", { hasText: memberId }).first();
     await expect(row).toBeVisible({ timeout: 10_000 });
     await row.getByTestId("delete-member").click();
 
@@ -114,7 +136,7 @@ test.describe("Team Admin", () => {
     // Removing the wrong member is exactly what a success toast hides, so pin both halves.
     expect(remove.team_id, "delete targets the team being viewed").toBe(E2E_TEAM_CRUD_ID);
     expect([remove.user_id, remove.user_email], "delete identifies the member whose row was clicked").toContain(
-      "e2e-removable-member",
+      memberId,
     );
 
     await expect(page.getByText("Team member removed successfully").first()).toBeVisible({ timeout: 10_000 });
@@ -125,7 +147,7 @@ test.describe("Team Admin", () => {
         message: "removed member is still on the team",
         timeout: 15_000,
       })
-      .not.toContain("e2e-removable-member");
+      .not.toContain(memberId);
   });
 
   test("Team admin can create a team key with All Team Models", async ({ page }) => {

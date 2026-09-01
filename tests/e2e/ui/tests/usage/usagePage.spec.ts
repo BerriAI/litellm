@@ -1,10 +1,10 @@
-import { test, expect, type Locator, type Page as PlaywrightPage } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Locator, type Page as PlaywrightPage } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
 import {
-  CHAT_MODEL_A,
   createVirtualKey,
+  masterKey,
   sendChatCompletion,
   waitForKeyInDailyActivity,
   waitForSpendLog,
@@ -27,6 +27,29 @@ async function openUsage(page: PlaywrightPage): Promise<Locator> {
   return card;
 }
 
+/** The upstream fixtures/config.yml points its models at, so the mock server answers this too. */
+const MOCK_DEPLOYMENT = "openai/fake-gpt-4";
+
+/** A deployment whose traffic costs real money, so the key that used it outranks the $0 crowd. */
+async function createPricedDeployment(request: APIRequestContext, label: string): Promise<string> {
+  const modelName = `e2e-usage-priced-${label}`;
+  const res = await request.post("/model/new", {
+    headers: { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" },
+    data: {
+      model_name: modelName,
+      litellm_params: {
+        model: MOCK_DEPLOYMENT,
+        api_base: `http://127.0.0.1:${process.env.MOCK_LLM_PORT ?? "8090"}/v1`,
+        api_key: "fake-key",
+        input_cost_per_token: 0.01,
+        output_cost_per_token: 0.01,
+      },
+    },
+  });
+  expect(res.ok(), `POST /model/new failed (${res.status()}): ${await res.text()}`).toBe(true);
+  return modelName;
+}
+
 test.describe("Usage page", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
@@ -39,8 +62,13 @@ test.describe("Usage page", () => {
       key_alias: alias,
     });
 
+    // Top Virtual Keys ranks by spend, and every mock deployment costs $0, so once a run has more
+    // keys than the list shows, whether this one makes the cut is down to how ties happen to sort.
+    // Give it a priced deployment of its own so it earns its place.
+    const model = await createPricedDeployment(request, alias);
+
     const requestId = await sendChatCompletion(request, {
-      model: CHAT_MODEL_A,
+      model,
       prompt: `usage ping for ${alias}`,
       apiKey: key,
     });

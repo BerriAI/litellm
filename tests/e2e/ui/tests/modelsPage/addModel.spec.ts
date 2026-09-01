@@ -35,7 +35,10 @@ async function selectProvider(page: PlaywrightPage, providerName: string) {
   const providerDropdown = page.getByRole("combobox", { name: "Provider", exact: true });
   await providerDropdown.click();
   await providerDropdown.fill(providerName);
-  await page.getByRole("option").filter({ hasText: exactly(providerName) }).click();
+  await page
+    .getByRole("option")
+    .filter({ hasText: exactly(providerName) })
+    .click();
   await expect(providerDropdown).toHaveValue(providerName);
 }
 
@@ -78,6 +81,9 @@ test.describe("Add Model", () => {
   });
 
   test("Edit team model TPM and RPM limits", async ({ page }) => {
+    // /model/new refuses a team-scoped deployment on an unlicensed proxy, so without a license this
+    // fails in setup on a product gate rather than on a regression in the edit it covers.
+    test.skip(!process.env.LITELLM_LICENSE, "LITELLM_LICENSE not set in test env — team-scoped models are premium");
     const masterKey = users[Role.ProxyAdmin].password;
     const modelName = `e2e-team-model-${Date.now()}`;
 
@@ -348,7 +354,7 @@ test.describe("Add Model", () => {
       await page.waitForLoadState("networkidle");
 
       await page.getByPlaceholder("Search model names").fill("cohere");
-  
+
       // Clearer failure than timing out on a row assertion when the table is empty.
       await expect(page.getByTestId("pagination-range")).toHaveText(/Showing \d+-\d+ of \d+/, {
         timeout: 15_000,
@@ -356,10 +362,7 @@ test.describe("Add Model", () => {
 
       // Pin to one row carrying both the name and the team, so the sibling test's
       // team-less cohere row can't satisfy it.
-      const teamCohereRow = page
-        .getByRole("row")
-        .filter({ hasText: "cohere/" })
-        .filter({ hasText: E2E_TEAM_CRUD_ID });
+      const teamCohereRow = page.getByRole("row").filter({ hasText: "cohere/" }).filter({ hasText: E2E_TEAM_CRUD_ID });
       await expect(teamCohereRow).toHaveCount(1, { timeout: 15_000 });
     } finally {
       await deleteTeamScopedCohereModels();
