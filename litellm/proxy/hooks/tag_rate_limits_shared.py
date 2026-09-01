@@ -238,7 +238,7 @@ def extract_key_hash(request_kwargs: Mapping[str, object], metadata_variable_nam
     the plain name is already the hashed token (see `litellm_pre_call_utils.py`).
     """
     active: Final = request_kwargs.get(metadata_variable_name) or EMPTY_MAPPING
-    key_hash: Final = active.get("user_api_key")
+    key_hash: Final = active.get("user_api_key") if isinstance(active, Mapping) else None
     return key_hash if isinstance(key_hash, str) else None
 
 
@@ -249,7 +249,7 @@ def extract_key_alias(request_kwargs: Mapping[str, object], metadata_variable_na
     `metadata["user_api_key_alias"]` to `user_api_key_dict.key_alias`
     (see `litellm_pre_call_utils.py`)."""
     active: Final = request_kwargs.get(metadata_variable_name) or EMPTY_MAPPING
-    key_alias: Final = active.get("user_api_key_alias")
+    key_alias: Final = active.get("user_api_key_alias") if isinstance(active, Mapping) else None
     return key_alias if isinstance(key_alias, str) else None
 
 
