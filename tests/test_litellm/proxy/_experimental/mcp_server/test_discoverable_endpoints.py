@@ -10244,6 +10244,67 @@ class TestPerRequestRootPathDiscovery:
         )
         assert bare == "http://testserver/.well-known/oauth-protected-resource/mcp/github"
 
+    def test_user_oauth_challenge_url_routes_and_resource_matches_client_url(
+        self, _no_proxy_base_url, _isolated_mcp_registry
+    ):
+        """The reviewer's expected end-state, pinned end-to-end: an MCP endpoint
+        raising ``raise_user_oauth_challenge`` under a per-request prefix must
+        emit a resource_metadata URL the client can actually fetch, and the
+        document it returns must carry the same prefix the client originally
+        called. If either half breaks the client's discovery is dead."""
+        import re
+
+        from fastapi import FastAPI, HTTPException, Request
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+            raise_user_oauth_challenge,
+        )
+        from litellm.proxy.middleware.per_request_root_path_middleware import (
+            PerRequestRootPathMiddleware,
+            get_request_root_path,
+        )
+
+        server = _create_oauth2_server(
+            server_id="srv_a", name="server_a", server_name="server_a", alias="server_a"
+        )
+        _isolated_mcp_registry[server.server_id] = server
+
+        app = FastAPI()
+        app.include_router(router)
+
+        @app.post("/mcp/{name}")
+        def _mcp(name: str, request: Request):
+            try:
+                raise_user_oauth_challenge(server, root_path=get_request_root_path())
+            except HTTPException as exc:
+                return {"www_authenticate": exc.headers["WWW-Authenticate"]}
+
+        app.add_middleware(PerRequestRootPathMiddleware, root_paths=["/tenant-a", "/tenant-b"])
+        client = TestClient(app)
+
+        for prefix, mcp_url in (
+            ("/tenant-a", "http://testserver/tenant-a/mcp/server_a"),
+            ("/tenant-b", "http://testserver/tenant-b/mcp/server_a"),
+            ("", "http://testserver/mcp/server_a"),
+        ):
+            call = client.post(f"{prefix}/mcp/server_a")
+            assert call.status_code == 200, call.text
+            www = call.json()["www_authenticate"]
+            match = re.search(r'resource_metadata="([^"]+)"', www)
+            assert match, www
+            discovery = client.get(match.group(1))
+            # The challenge URL must route (a client that can't fetch it has
+            # no way to reach the resource metadata).
+            assert discovery.status_code == 200, (
+                f"challenge URL {match.group(1)} for prefix {prefix!r} 404s; "
+                "the client can't reach the resource metadata."
+            )
+            # And the doc's `resource` must equal the URL the client called
+            # (RFC 9728 §3 exact match): a mismatch bounces a strict client.
+            assert discovery.json()["resource"] == mcp_url, discovery.json()
+
 
 def _s256(verifier: str) -> str:
     return urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
