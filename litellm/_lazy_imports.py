@@ -371,7 +371,7 @@ def _lazy_import_sdk_module_alias(name: str) -> object:
     if name in _globals:
         return _globals[name]
     module: Final = importlib.import_module(_SDK_MODULE_ALIASES[name])
-    _globals[name] = module
+    _globals[name] = module  # rebind-ok: caches the resolved module alias on the package
     return module
 
 
