@@ -2863,6 +2863,8 @@ InternalCallOrigin = Literal[
     "shadow_eval_router",
     "shadow_eval_judge",
     "background_response_cost_poll",
+    "best_of_n_candidate",
+    "best_of_n_synthesizer",
 ]
 """Which internal litellm feature originated a billed sub-call, so a spend log row
 records that it is not traffic the caller sent."""
@@ -2871,6 +2873,18 @@ AUTOROUTER_CLASSIFIER_CALL_ORIGIN: Final[InternalCallOrigin] = "autorouter_class
 SHADOW_EVAL_ROUTER_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_router"
 SHADOW_EVAL_JUDGE_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_judge"
 BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN: Final[InternalCallOrigin] = "background_response_cost_poll"
+BEST_OF_N_CANDIDATE_CALL_ORIGIN: Final[InternalCallOrigin] = "best_of_n_candidate"
+BEST_OF_N_SYNTHESIZER_CALL_ORIGIN: Final[InternalCallOrigin] = "best_of_n_synthesizer"
+
+TPM_CHARGED_INTERNAL_CALL_ORIGINS: Final[frozenset[InternalCallOrigin]] = frozenset(
+    {BEST_OF_N_CANDIDATE_CALL_ORIGIN, BEST_OF_N_SYNTHESIZER_CALL_ORIGIN}
+)
+"""Internal origins whose token usage still charges the caller's TPM counters.
+
+A best_of_n fan-out is the synchronous service of the caller's own request, so its
+candidates and synthesizer consume real rate-limit headroom; background sub-calls
+(shadow evals, the auto-router classifier) stay exempt because they are not the
+caller's traffic."""
 
 
 class StandardLoggingRoutingDecision(TypedDict, total=False):
@@ -3669,6 +3683,7 @@ all_litellm_params = (
         "adaptive_router_default_model",
         "quality_router_config",
         "quality_router_default_model",
+        "best_of_n_config",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())

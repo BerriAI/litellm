@@ -28941,6 +28941,10 @@ export interface components {
             azure_ad_token?: string | null;
             /** Bedrock Tags */
             bedrock_tags?: unknown[] | null;
+            /** Best Of N Config */
+            best_of_n_config?: {
+                [key: string]: unknown;
+            } | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Cache Creation Input Audio Token Cost */
@@ -38749,6 +38753,10 @@ export interface components {
             azure_ad_token?: string | null;
             /** Bedrock Tags */
             bedrock_tags?: unknown[] | null;
+            /** Best Of N Config */
+            best_of_n_config?: {
+                [key: string]: unknown;
+            } | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Cache Creation Input Audio Token Cost */

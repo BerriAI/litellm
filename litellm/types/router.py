@@ -355,6 +355,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     quality_router_config: dict | None = None
     quality_router_default_model: str | None = None
 
+    # best-of-n router params
+    best_of_n_config: dict | None = None  # mutable-ok: matches the sibling strategy config fields above
+
     # Vector Store Params
     vector_store_id: str | None = None
     milvus_text_field: str | None = None

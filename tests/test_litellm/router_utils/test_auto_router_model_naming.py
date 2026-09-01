@@ -28,6 +28,9 @@ SEMANTIC_FIELDS = frozenset(
         ("auto_router/quality_router", "quality"),
         ("auto_router/auto_router/complexity_router", "semantic"),
         ("auto_router/", "semantic"),
+        ("best_of_n/max-quality", "best_of_n"),
+        ("best_of_n/", "best_of_n"),
+        ("bestofn/max-quality", None),
     ],
 )
 def test_classify_strategy_router_model(model, expected):
@@ -45,6 +48,10 @@ def test_classify_strategy_router_model(model, expected):
         ("auto_router/my-router", frozenset({"auto_router_config"}), "requires"),
         ("auto_router/adaptive_router", frozenset(), "requires"),
         ("auto_router/quality_router", frozenset(), "requires"),
+        ("best_of_n/max-quality", frozenset(), "requires"),
+        ("best_of_n/", frozenset({"best_of_n_config"}), "missing the router name"),
+        ("best_of_n/best_of_n/max-quality", frozenset({"best_of_n_config"}), "repeats"),
+        ("openai/gpt-4o", frozenset({"best_of_n_config"}), "does not start with"),
     ],
 )
 def test_validate_rejects_incoherent_writes(model, present_fields, expected_fragment):
@@ -231,6 +238,20 @@ def test_config_check_ignores_the_model_entirely():
                 "quality_router_config": {"available_models": ["q1"], "default_model": "qd"},
             },
             (("q1", "tier"), ("qd", "default")),
+        ),
+        (
+            {
+                "model": "best_of_n/max-quality",
+                "best_of_n_config": {
+                    "models": [{"model_name": "arm-a", "litellm_params": {"reasoning_effort": "high"}}, "arm-b"],
+                    "synthesizer": {"model_name": "synth"},
+                },
+            },
+            (("arm-a", "tier"), ("arm-b", "tier"), ("synth", "synthesizer")),
+        ),
+        (
+            {"model": "best_of_n/mq", "best_of_n_config": {"models": ["a", "b"], "synthesizer": "s"}},
+            (("a", "tier"), ("b", "tier"), ("s", "synthesizer")),
         ),
     ],
 )

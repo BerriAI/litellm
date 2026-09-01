@@ -5743,9 +5743,11 @@ async def test_configured_estimate_blocks_the_overrun_the_static_floor_admits(mo
 
 
 def test_internal_call_origin_success_ops_are_skipped():
-    """Internal sub-calls (auto-router classifier, shadow eval shadow/judge) bill spend
-    to the caller's key but must not consume its TPM counters: the same kwargs charge
-    ops without the origin stamp and none with it."""
+    """Background sub-calls (auto-router classifier, shadow eval shadow/judge) bill spend
+    to the caller's key but must not consume its TPM counters, while a best_of_n fan-out
+    is the synchronous service of the caller's own request and must consume them: the
+    same kwargs charge ops without the origin stamp and with a best_of_n origin, and
+    none with a background origin."""
     handler = _PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(DualCache())
     )
@@ -5775,9 +5777,63 @@ def test_internal_call_origin_success_ops_are_skipped():
         response_obj=response,
         rate_limit_type="output",
     )
+    fan_out_charged = handler._build_success_event_pipeline_operations(
+        kwargs=_kwargs({INTERNAL_CALL_ORIGIN_METADATA_KEY: "best_of_n_candidate"}),
+        response_obj=response,
+        rate_limit_type="output",
+    )
+    parent_kwargs = _kwargs({})
+    parent_kwargs["litellm_params"]["custom_llm_provider"] = "best_of_n"
+    parent_skipped = handler._build_success_event_pipeline_operations(
+        kwargs=parent_kwargs, response_obj=response, rate_limit_type="output"
+    )
 
     assert charged
     assert skipped == []
+    assert fan_out_charged
+    assert parent_skipped == []
+
+
+def test_best_of_n_parent_releases_its_reservation_instead_of_charging():
+    """The parent settles at zero actual tokens: an early skip would strand the pre-call
+    reservation in the TPM window, while charging would double-count the children."""
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    response = ModelResponse(
+        id="bon-parent-reservation",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="mq",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        choices=[],
+    )
+    kwargs = {
+        "standard_logging_object": {
+            "metadata": {"user_api_key_hash": hash_token("sk-bon-parent")}
+        },
+        "litellm_params": {"metadata": {}, "custom_llm_provider": "best_of_n"},
+        "model": "mq",
+        "litellm_call_id": "call-bon-parent",
+    }
+    stash = get_or_create_request_stash()
+    stash.owner_litellm_call_id = "call-bon-parent"
+    stash.reserved_tokens = 500
+    stash.reserved_scopes = frozenset(
+        handler._collect_tpm_scope_targets(
+            standard_logging_metadata=kwargs["standard_logging_object"]["metadata"],
+            kwargs=kwargs,
+            model_group=None,
+        )
+    )
+    assert stash.reserved_scopes
+
+    ops = handler._build_success_event_pipeline_operations(
+        kwargs=kwargs, response_obj=response, rate_limit_type="output"
+    )
+
+    assert ops
+    assert all(op["increment_value"] == -500 for op in ops)
 
 
 def _conflicting_budget_bodies() -> Dict[str, Dict[str, object]]:

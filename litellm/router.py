@@ -110,6 +110,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
 )
 from litellm.router_utils.auto_router_model_naming import (
     AUTO_ROUTER_MODEL_PREFIX,
+    PRE_ROUTING_STRATEGY_KINDS,
     classify_strategy_router_model,
 )
 from litellm.router_utils.batch_utils import (
@@ -264,6 +265,9 @@ if TYPE_CHECKING:
     from litellm.router_strategy.auto_router.auto_router import (
         AutoRouter,
         PreRoutingHookResponse,
+    )
+    from litellm.router_strategy.best_of_n_router.best_of_n_router import (
+        BestOfNRouter,
     )
     from litellm.router_strategy.complexity_router.complexity_router import (
         ComplexityRouter,
@@ -791,6 +795,7 @@ class Router:
         self.complexity_routers: dict[str, list[TaggedPreRoutingStrategy[ComplexityRouter]]] = {}
         self.adaptive_routers: dict[str, list[TaggedPreRoutingStrategy[AdaptiveRouter]]] = {}
         self.quality_routers: dict[str, list[TaggedPreRoutingStrategy[QualityRouter]]] = {}
+        self.best_of_n_router = self._register_best_of_n_provider()
         self.routing_plugins: list[RoutingPlugin] = list(plugins) if plugins else []
 
         # Initialize model_group_alias early since it's used in set_model_list
@@ -8520,6 +8525,11 @@ class Router:
         Guarded on the auto_router/ prefix so removing a *regular* deployment can't evict a
         router that merely shares its model_name.
         """
+        if self._is_best_of_n_deployment(litellm_params=deployment.litellm_params):
+            from litellm.router_utils.auto_router_model_naming import BEST_OF_N_MODEL_PREFIX
+
+            self.best_of_n_router.configs.pop(deployment.litellm_params.model[len(BEST_OF_N_MODEL_PREFIX) :], None)
+            return
         if not deployment.litellm_params.model.startswith("auto_router/"):
             return
         model_name: Final = deployment.model_name
@@ -8702,6 +8712,94 @@ class Router:
             strategy_label="Quality-router",
         )
 
+    def _register_best_of_n_provider(self) -> "BestOfNRouter":
+        """Bind this router's best-of-n handler as the ``best_of_n`` custom provider.
+
+        Registered before ``set_model_list`` runs so a ``best_of_n/`` deployment passes
+        provider validation in ``_add_deployment``. The provider map is process-global,
+        so the newest router replaces any earlier router's entry, matching how every
+        other global litellm setting behaves.
+        """
+        from litellm.router_strategy.best_of_n_router.best_of_n_router import (
+            BEST_OF_N_PROVIDER_NAME,
+            BestOfNRouter,
+        )
+        from litellm.utils import custom_llm_setup
+
+        handler: Final = BestOfNRouter(litellm_router_instance=self)
+        litellm.custom_provider_map = [  # mutable-ok: litellm.custom_provider_map contract is a list
+            *(item for item in litellm.custom_provider_map if item["provider"] != BEST_OF_N_PROVIDER_NAME),
+            {"provider": BEST_OF_N_PROVIDER_NAME, "custom_handler": handler},  # mutable-ok: CustomLLMItem TypedDict
+        ]
+        custom_llm_setup()
+        return handler
+
+    def _is_best_of_n_deployment(self, litellm_params: LiteLLM_Params) -> bool:
+        """True when this deployment opts in via the ``best_of_n/`` model prefix."""
+        return classify_strategy_router_model(litellm_params.model) == "best_of_n"
+
+    def init_best_of_n_deployment(self, deployment: Deployment) -> None:
+        """Parse this deployment's ``best_of_n_config`` and register it on the handler.
+
+        Arm and synthesizer reachability is validated by
+        ``_finalize_best_of_n_routers_if_configured`` once the whole model_list is
+        visible, mirroring the adaptive-router deferral: an arm listed after the
+        marker has not been processed yet when this runs.
+        """
+        from litellm.router_strategy.best_of_n_router.config import BestOfNRouterConfig
+        from litellm.router_utils.auto_router_model_naming import BEST_OF_N_MODEL_PREFIX
+
+        raw_config: Final = deployment.litellm_params.best_of_n_config
+        if raw_config is None:
+            raise ValueError(
+                "best_of_n_config is required for best_of_n deployments. Please set it in the litellm_params"
+            )
+        name: Final = deployment.litellm_params.model[len(BEST_OF_N_MODEL_PREFIX) :]
+        if name in self.best_of_n_router.configs:
+            raise ValueError(
+                f"best_of_n router '{name}' is already registered; each best_of_n deployment "
+                "needs a distinct litellm_params.model"
+            )
+        instance_key: Final = f"bon-{uuid.uuid4()}"
+        deployment.litellm_params.best_of_n_instance = instance_key  # rebind-ok: stamped pre-insertion
+        self.best_of_n_router.register(name, BestOfNRouterConfig.model_validate(raw_config), instance_key=instance_key)
+
+    def _finalize_best_of_n_routers_if_configured(self) -> None:
+        """Validate every registered best-of-n config against the finalized model_list.
+
+        Each arm and the synthesizer must resolve to at least one deployment on this
+        router, and none of them may resolve to a best_of_n deployment: an unguarded
+        cycle would recurse until the request timeout, multiplying spend per level.
+        Under ``ignore_invalid_deployments`` a faulty config is dropped with a warning
+        (its marker then refuses requests), matching how invalid deployments load.
+        """
+        faults: Final = tuple(
+            (name, f"{role} '{entry.model_name}' {fault}")
+            for name, config in self.best_of_n_router.configs.items()
+            for role, entry in (
+                *((f"arm {i + 1}", arm) for i, arm in enumerate(config.models)),
+                ("synthesizer", config.synthesizer),
+            )
+            if (fault := self._best_of_n_entry_fault(entry.model_name)) is not None
+        )
+        for name, fault in faults:
+            if not self.ignore_invalid_deployments:
+                raise ValueError(f"best_of_n/{name}: {fault}")
+            verbose_router_logger.warning(
+                "best_of_n/%s: %s. Dropping this best_of_n router and continuing.", name, fault
+            )
+            self.best_of_n_router.configs.pop(name, None)
+
+    def _best_of_n_entry_fault(self, model_name: str) -> str | None:
+        deployments: Final = self.get_model_list(model_name=model_name) or ()
+        if not deployments:
+            return "does not resolve to any deployment on this router"
+        param_maps: Final = tuple(p for d in deployments if (p := d.get("litellm_params")) is not None)
+        litellm_models: Final = tuple(str(p.get("model") or "") for p in param_maps)
+        if any(classify_strategy_router_model(m) == "best_of_n" for m in litellm_models):
+            return "resolves to a best_of_n deployment, which would recurse"
+        return None
+
     def deployment_is_active_for_environment(self, deployment: Deployment) -> bool:
         """
         Function to check if a llm deployment is active for a given environment. Allows using the same config.yaml across multople environments
@@ -8730,6 +8828,7 @@ class Router:
         self.quality_routers = {}
         self.complexity_routers = {}
         self.auto_routers = {}
+        self.best_of_n_router.reset()
         self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
@@ -8806,6 +8905,7 @@ class Router:
         # Deferred: build the AdaptiveRouter strategy now that all underlying
         # deployments have been registered.
         self._finalize_adaptive_router_if_configured()
+        self._finalize_best_of_n_routers_if_configured()
 
     def _add_deployment(self, deployment: Deployment) -> Deployment:
         import os
@@ -8926,6 +9026,9 @@ class Router:
         #########################################################
         if self._is_quality_router_deployment(litellm_params=deployment.litellm_params):
             self.init_quality_router_deployment(deployment=deployment)
+
+        if self._is_best_of_n_deployment(litellm_params=deployment.litellm_params):
+            self.init_best_of_n_deployment(deployment=deployment)
 
         return deployment
 
@@ -9193,6 +9296,8 @@ class Router:
                 )
             ):
                 self._finalize_adaptive_router_if_configured()
+            if self._is_best_of_n_deployment(litellm_params=deployment.litellm_params):
+                self._finalize_best_of_n_routers_if_configured()
             return deployment
         except Exception as e:
             if self.ignore_invalid_deployments:
@@ -11615,7 +11720,10 @@ class Router:
         if not isinstance(litellm_params, Mapping):
             return False
         deployment_model: Final = litellm_params.get("model")
-        return isinstance(deployment_model, str) and classify_strategy_router_model(deployment_model) is not None
+        return (
+            isinstance(deployment_model, str)
+            and classify_strategy_router_model(deployment_model) in PRE_ROUTING_STRATEGY_KINDS
+        )
 
     def _common_checks_available_deployment(
         self,
