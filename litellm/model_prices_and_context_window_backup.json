@@ -15108,6 +15108,7 @@
         "supports_vision": true
     },
     "databricks/databricks-deepseek-v4-flash-0731": {
+        "cache_creation_input_token_cost": 1.4e-07,
         "cache_read_input_token_cost": 2.8e-08,
         "input_cost_per_token": 1.4e-07,
         "input_dbu_cost_per_token": 2e-06,
@@ -15135,6 +15136,7 @@
         "supports_vision": false
     },
     "databricks/databricks-deepseek-v4-pro-0813": {
+        "cache_creation_input_token_cost": 1.31999e-06,
         "cache_read_input_token_cost": 1.3202e-07,
         "input_cost_per_token": 1.31999e-06,
         "input_dbu_cost_per_token": 1.8857e-05,
