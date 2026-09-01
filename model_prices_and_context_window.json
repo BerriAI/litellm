@@ -55124,5 +55124,61 @@
         "max_tokens": 40960,
         "mode": "embedding",
         "source": "https://docs.fireworks.ai/serverless/pricing"
+    },
+    "agnes_ai/agnes-2.5-flash": {
+        "max_tokens": 65536,
+        "max_input_tokens": 524288,
+        "max_output_tokens": 65536,
+        "input_cost_per_token": 0.00000003,
+        "output_cost_per_token": 0.00000015,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_streaming": true,
+        "supports_system_messages": true,
+        "source": "https://agnes-ai.com/en/docs/agnes-25-flash"
+    },
+    "agnes_ai/agnes-2.5-pro-beta": {
+        "max_tokens": 65536,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 65536,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0000003,
+        "input_cost_per_token_cache_hit": 0.00000001,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_vision": true,
+        "supports_streaming": true,
+        "supports_system_messages": true,
+        "source": "https://agnes-ai.com/en/docs/agnes-25-pro-beta"
+    },
+    "agnes_ai/agnes-image-2.5-flash": {
+        "litellm_provider": "openai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.010,
+        "source": "https://agnes-ai.com/en/docs/agnes-image-25-flash",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "agnes_ai/agnes-video-2.5": {
+        "litellm_provider": "openai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.025,
+        "output_cost_per_second_960p": 0.040,
+        "output_cost_per_second_2k": 0.055,
+        "source": "https://agnes-ai.com/en/docs/agnes-video-25",
+        "supported_modalities": [
+            "text",
+            "image",
+            "video",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
     }
+}
 }
