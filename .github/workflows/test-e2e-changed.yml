@@ -2,43 +2,50 @@ name: e2e-changed-tests
 
 on:
   pull_request:
-    paths:
-      - "tests/e2e/**"
 
 concurrency:
   group: e2e-changed-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
   detect:
     name: Detect changed e2e tests
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      pull-requests: read
     outputs:
       tests: ${{ steps.changed.outputs.tests }}
       any: ${{ steps.changed.outputs.any }}
     steps:
-      - name: List added or modified test files
+      - name: List the e2e test files this PR added or modified
         id: changed
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          SMOKE_TESTS: tests/e2e/access_control
         run: |
-          tests="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate \
-            --jq '.[] | select(.status != "removed") | .filename' \
+          files="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/files" --paginate \
+            --jq '.[] | select(.status != "removed") | .filename')"
+          tests="$(printf '%s\n' "${files}" \
             | grep -E '^tests/e2e/([A-Za-z0-9_.-]+/)*test_[A-Za-z0-9_.-]+\.py$' \
-            | grep -v '^tests/e2e/ui/' | sort -u | tr '\n' ' ' | sed 's/ $//')" || true
+            | grep -vE '^tests/e2e/(ui|claude_code|load)/' \
+            | sort -u | tr '\n' ' ' | sed 's/ $//')" || true
+          if [ -z "${tests}" ] && printf '%s\n' "${files}" | grep -v '^tests/e2e/ui/' \
+            | grep -qE '^(tests/e2e/|\.github/e2e-stack/|\.github/workflows/test-e2e-changed\.yml$)'; then
+            tests="${SMOKE_TESTS}"
+            echo "harness or stack changed without a test file; running the smoke suite"
+          fi
           echo "tests=${tests}" >> "${GITHUB_OUTPUT}"
           if [ -n "${tests}" ]; then
             echo "any=true" >> "${GITHUB_OUTPUT}"
-            echo "changed e2e tests: ${tests}"
+            echo "selected e2e tests: ${tests}"
           else
             echo "any=false" >> "${GITHUB_OUTPUT}"
-            echo "no changed e2e test files"
+            echo "no e2e changes; nothing to run"
           fi
 
   run:
@@ -46,7 +53,8 @@ jobs:
     needs: detect
     if: needs.detect.outputs.any == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
+    environment: e2e-changed
     permissions:
       contents: read
       id-token: write
@@ -90,8 +98,8 @@ jobs:
           .github/scripts/uv_sync_with_retries.sh --frozen \
             --extra proxy --extra proxy-runtime --extra extra_proxy \
             --extra semantic-router --extra bedrock-realtime \
-            --group ci --group e2e-dev
-          uv pip install redis==7.4.1 prometheus-client "pipecat-ai[openai]==1.4.0"
+            --group ci --group proxy-dev --group e2e-dev
+          uv pip install "pipecat-ai[openai]==1.4.0"
 
       - name: Generate Prisma client
         env:
@@ -115,10 +123,10 @@ jobs:
 
       - name: Fetch provider credentials from AWS Secrets Manager
         run: |
-          aws secretsmanager get-secret-value --secret-id berrie-litellm-stage-provider-keys \
+          aws secretsmanager get-secret-value --secret-id litellm-e2e-changed-provider-keys \
             --query SecretString --output text \
             | uv run --no-sync python .github/e2e-stack/secrets_to_env.py tests/e2e/.env
-          aws secretsmanager get-secret-value --secret-id litellm-license \
+          aws secretsmanager get-secret-value --secret-id litellm-e2e-changed-license \
             --query SecretString --output text \
             | jq -R -s '{"LITELLM_LICENSE": rtrimstr("\n")}' \
             | uv run --no-sync python .github/e2e-stack/secrets_to_env.py tests/e2e/.env
@@ -132,29 +140,28 @@ jobs:
           echo "::add-mask::${master_key}"
           cat "${RUNNER_TEMP}/litellm-e2e-stack/stack.env" >> "${GITHUB_ENV}"
 
-      - name: Run the changed tests
+      - name: Run the selected tests three times with retries off
         env:
           TESTS: ${{ needs.detect.outputs.tests }}
         run: |
           read -r -a test_files <<< "${TESTS}"
-          set +e
-          uv run --no-sync pytest "${test_files[@]}" -v -rA --tb=short -p no:cacheprovider
-          status=$?
-          set -e
-          if [ "${status}" = "5" ]; then
-            echo "changed files collected no runnable tests"
-            exit 0
-          fi
-          exit "${status}"
+          for pass in 1 2 3; do
+            echo "::group::pass ${pass} of 3"
+            set +e
+            uv run --no-sync pytest "${test_files[@]}" --reruns 0 -v -rA --tb=short -p no:cacheprovider
+            status=$?
+            set -e
+            echo "::endgroup::"
+            if [ "${status}" = "5" ]; then
+              echo "selected files collected no runnable tests"
+              exit 0
+            fi
+            if [ "${status}" != "0" ]; then
+              echo "::error::pass ${pass} of 3 failed with exit code ${status}"
+              exit "${status}"
+            fi
+          done
 
       - name: Show stack logs on failure
         if: failure()
         run: tail -n 200 "${RUNNER_TEMP}/litellm-e2e-stack/logs"/*.log
-
-      - name: Upload stack logs
-        if: failure()
-        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
-        with:
-          name: e2e-stack-logs
-          path: ${{ runner.temp }}/litellm-e2e-stack/logs/
-          retention-days: 7

@@ -67,12 +67,14 @@ wait_for "jaeger" "curl -fs http://127.0.0.1:${JAEGER_QUERY_PORT}/api/services >
 
 openssl genrsa -out "${CERTS_DIR}/ca.key" 2048 2>/dev/null
 openssl req -x509 -new -nodes -key "${CERTS_DIR}/ca.key" -sha256 -days 7 \
-  -subj "/CN=litellm-e2e-ca" -out "${CERTS_DIR}/ca.crt" 2>/dev/null
+  -subj "/CN=litellm-e2e-ca" \
+  -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" \
+  -out "${CERTS_DIR}/ca.crt" 2>/dev/null
 openssl genrsa -out "${CERTS_DIR}/server.key" 2048 2>/dev/null
 openssl req -new -key "${CERTS_DIR}/server.key" -subj "/CN=localhost" -out "${CERTS_DIR}/server.csr" 2>/dev/null
 openssl x509 -req -in "${CERTS_DIR}/server.csr" -CA "${CERTS_DIR}/ca.crt" -CAkey "${CERTS_DIR}/ca.key" \
   -CAcreateserial -days 7 -sha256 \
-  -extfile <(printf 'subjectAltName=DNS:localhost,IP:127.0.0.1') \
+  -extfile <(printf 'basicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:localhost,IP:127.0.0.1\n') \
   -out "${CERTS_DIR}/server.crt" 2>/dev/null
 chmod 644 "${CERTS_DIR}"/*.key "${CERTS_DIR}"/*.crt
 
@@ -90,10 +92,11 @@ wait_for "valkey" "${VALKEY_CLI} ping 2>/dev/null | grep -q PONG"
 ${VALKEY_CLI} cluster addslotsrange 0 16383 >/dev/null
 wait_for "valkey cluster" "${VALKEY_CLI} cluster info 2>/dev/null | grep -q cluster_state:ok"
 
-CONFIG_PATH="${REPO_ROOT}/tests/e2e/gateway/litellm-config.yml"
+CONFIG_SOURCE="${REPO_ROOT}/tests/e2e/gateway/stage_mirror_ci_config.yml"
+CONFIG_PATH="${CONFIG_SOURCE}"
 if [[ "${REDIS_PORT}" != "6379" ]]; then
   CONFIG_PATH="${STACK_DIR}/litellm-config.yml"
-  sed "s/port: 6379/port: ${REDIS_PORT}/" "${REPO_ROOT}/tests/e2e/gateway/litellm-config.yml" > "${CONFIG_PATH}"
+  sed "s/port: 6379/port: ${REDIS_PORT}/" "${CONFIG_SOURCE}" > "${CONFIG_PATH}"
 fi
 
 SERVER_ENV=(
