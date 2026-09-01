@@ -193,6 +193,38 @@ class AgenticLoopParams(TypedDict, total=False):
     """The LLM provider name (e.g., 'bedrock', 'anthropic')"""
 
 
+class OffPeakWindow(TypedDict, total=False):
+    """One off-peak rule: UTC time-of-day windows, optionally restricted to weekdays.
+
+    hours_utc is a "HH:MM-HH:MM" string in UTC, or a list of them; a window may wrap past
+    midnight and an equal-ended window covers the whole day. weekdays is a list of days the
+    rule applies on, as ISO-8601 numbers (1 = Monday .. 7 = Sunday) or English day names;
+    omitted means every day. The weekday is read on the calendar named by the block's
+    weekday_timezone.
+    """
+
+    hours_utc: ReadOnly[str | Sequence[str]]
+    weekdays: ReadOnly[Sequence[int | str]]
+
+
+class OffPeakPricing(TypedDict, total=False):
+    """Time-windowed off-peak rates for providers that discount by time of day (e.g. DeepSeek).
+
+    hours_utc is a "HH:MM-HH:MM" string in UTC, or a list of them for multiple daily windows,
+    applying on every day of the week; a window may wrap past midnight. windows adds
+    day-of-week-qualified rules (e.g. weekend-only whole-day off-peak), matched as a union
+    with hours_utc. weekday_timezone names the IANA calendar weekdays are read on, defaulting
+    to UTC. Any rate left unset falls back to the standard rate.
+    """
+
+    hours_utc: ReadOnly[str | Sequence[str]]
+    windows: ReadOnly[Sequence[OffPeakWindow]]
+    weekday_timezone: ReadOnly[str]
+    input_cost_per_token: ReadOnly[float]
+    output_cost_per_token: ReadOnly[float]
+    cache_read_input_token_cost: ReadOnly[float]
+
+
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     key: Required[str]  # the key in litellm.model_cost which is returned
 
@@ -225,6 +257,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     # Smallest prefix this model will actually cache, whatever caching mechanism its provider uses.
     # Absent means the provider-agnostic default applies; see MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
     prompt_cache_min_tokens: int | None
+    off_peak_pricing: ReadOnly[OffPeakPricing | None]  # time-windowed off-peak rates
     input_cost_per_character: float | None  # only for vertex ai models
     input_cost_per_audio_token: float | None
     input_cost_per_token_above_128k_tokens: float | None  # only for vertex ai models
@@ -2840,8 +2873,17 @@ RoutingDecisionCause = Literal[
     # never called. The matched sentinel rides in matched_keyword. Distinct from the keyword causes,
     # which are operator-authored rules; these sentinels ship with the router.
     "housekeeping",
+    # modality_routing replaced the decided placement: the request carries an image and the
+    # routed model does not accept image input, so the nearest higher capable tier or
+    # default_model served instead. The displaced placement rides in signals.
+    "modality_escalation",
     "session_affinity_pin",
     "session_affinity_escalation",
+    # classification_mode 'user_turn': the request is an agent loop's continuation turn (no new
+    # human ask), so the session's held routing decision was replayed and the classifier was never
+    # called. Distinct from "session_affinity_pin", which reports the session_affinity flag pinning
+    # every turn including new asks; this cause only appears when session_affinity is off.
+    "user_turn_continuation",
     "default_fallback",
     "keyword",
     "quality_tier",
@@ -2881,6 +2923,8 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_model: str
     classifier_cost: float
     escalated: bool
+    context_escalated: bool  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    context_escalation_original_tier: str  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
     reasoning_override_min_score: float  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     conversation_continuing: bool
@@ -2907,6 +2951,8 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "classifier_model",
         "classifier_cost",
         "escalated",
+        "context_escalated",
+        "context_escalation_original_tier",
         "tier_boundaries",
         "reasoning_override_min_score",
         "conversation_continuing",
@@ -3473,17 +3519,22 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
         return {k: v for k, v in model_info.items() if k not in cls.model_fields}
 
 
-SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = frozenset(
-    ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__
-) - frozenset(CustomPricingLiteLLMParams.model_fields)
+DEPLOYMENT_SCOPED_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"off_peak_pricing"})
+
+SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
+    frozenset(ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__)
+    - frozenset(CustomPricingLiteLLMParams.model_fields)
+    - DEPLOYMENT_SCOPED_PRICING_FIELDS
+)
 
 
 def shared_backend_model_info(model_info: dict[str, Any]) -> dict[str, Any]:
     """Return only the fields safe to register under a shared ``{provider}/{model}``
     key in ``litellm.model_cost``: cost-map schema fields (``ModelInfoBase``) minus
-    per-deployment pricing overrides. Per-deployment metadata (``id``,
-    ``access_via_team_ids``, arbitrary custom keys) never belongs on the shared key;
-    it stays under the deployment's unique model id.
+    per-deployment pricing overrides and deployment-scoped pricing blocks such as
+    ``off_peak_pricing``. Per-deployment metadata (``id``, ``access_via_team_ids``,
+    arbitrary custom keys) never belongs on the shared key; it stays under the
+    deployment's unique model id.
     """
     return {k: v for k, v in model_info.items() if k in SHARED_BACKEND_MODEL_INFO_FIELDS}
 
@@ -3758,6 +3809,8 @@ class LlmProviders(str, Enum):
     CODESTRAL = "codestral"
     TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
     DASHSCOPE = "dashscope"
+    QWENCLOUD = "qwencloud"
+    QWEN_AI_PLATFORM = "qwen_ai_platform"
     MODELSCOPE = "modelscope"
     MOONSHOT = "moonshot"
     PUBLICAI = "publicai"

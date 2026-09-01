@@ -417,7 +417,7 @@ def _extract_redirect_url(response: httpx.Response, request_url: str) -> str:
     return str(httpx.URL(request_url).join(location))
 
 
-def safe_get(client: Any, url: str, **kwargs: Any) -> Any:
+def safe_get(client: Any, url: str, **kwargs: Any) -> httpx.Response:
     """
     Fetch a user-supplied URL with SSRF protection on every redirect hop.
 
@@ -460,7 +460,7 @@ def safe_get(client: Any, url: str, **kwargs: Any) -> Any:
     raise SSRFError("Too many redirects")
 
 
-async def async_safe_get(client: Any, url: str, **kwargs: Any) -> Any:
+async def async_safe_get(client: Any, url: str, **kwargs: Any) -> httpx.Response:
     """Async version of safe_get."""
     if not getattr(litellm, "user_url_validation", True):
         kwargs.setdefault("follow_redirects", True)
