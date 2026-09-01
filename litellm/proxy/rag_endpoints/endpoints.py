@@ -717,7 +717,10 @@ async def rag_query(
             vector_store_id=retrieval_config["vector_store_id"],
             user_api_key_dict=user_api_key_dict,
         )
-        merged_retrieval_config: Final = {**store_data, **retrieval_config}  # mutable-ok: litellm.aquery requires a plain dict payload
+        merged_retrieval_config: Final = {
+            **store_data,
+            **retrieval_config,
+        }  # mutable-ok: litellm.aquery requires a plain dict payload
 
         # Add litellm data
         request_data: dict[str, object] = {}
