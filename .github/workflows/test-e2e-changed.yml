@@ -93,6 +93,9 @@ jobs:
         with:
           version: "0.10.9"
 
+      - name: Cache the Rust build
+        uses: ./.github/actions/cache-cargo-build
+
       - name: Install dependencies
         run: |
           .github/scripts/uv_sync_with_retries.sh --frozen \
@@ -101,9 +104,10 @@ jobs:
             --group ci --group proxy-dev --group e2e-dev
           uv pip install "pipecat-ai[openai]==1.4.0"
 
+      - name: Cache Prisma binaries
+        uses: ./.github/actions/cache-prisma-binaries
+
       - name: Generate Prisma client
-        env:
-          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
         run: uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Install Playwright chromium
