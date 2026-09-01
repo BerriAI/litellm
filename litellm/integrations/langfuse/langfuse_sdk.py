@@ -222,42 +222,54 @@ _live_clients: Final[WeakKeyDictionary[LangfuseResourceManager, WeakSet]] = Weak
 
 def _evict_if_stale_locked(
     *, public_key: object, secret_key: object, base_url: object
-) -> tuple[LangfuseResourceManager | None, LangfuseResourceManager | None]:
-    """Assumes ``LangfuseResourceManager._lock`` is held; returns the still-valid bundle and the evicted one."""
+) -> LangfuseResourceManager | None:
+    """Assumes ``LangfuseResourceManager._lock`` is held; returns the still-valid bundle, evicting a stale one."""
     if not public_key:
-        return None, None
+        return None
     cached: Final = LangfuseResourceManager._instances.get(public_key)  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
     if cached is None:
-        return None, None
+        return None
     if getattr(cached, "secret_key", None) == secret_key and getattr(cached, "base_url", None) == base_url:
-        return cached, None
-    return None, LangfuseResourceManager._instances.pop(public_key, None)  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
+        return cached
+    LangfuseResourceManager._instances.pop(public_key, None)  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
+    return None
 
 
-def _shutdown_abandoned_provider(resources: LangfuseResourceManager | None) -> None:
-    """Retire the provider litellm built for an evicted bundle, once no live client is still on it.
+def _retire_orphaned_providers() -> None:
+    """Shut down every provider litellm built whose bundle nothing uses any more.
 
-    Runs after the registry lock is released: provider shutdown flushes and joins the export
-    thread, which must never happen under the lock every other client init contends on. A
-    client still holding these resources tears them down itself in ``shutdown_langfuse_client``.
+    A rotated-out bundle whose last client is simply garbage collected, which is how the
+    prompt-management LRU drops clients, never reaches ``shutdown_langfuse_client``, and the
+    provider's own atexit hook would keep its export thread alive for the rest of the process.
+
+    Providers are snapshotted before the registry: a provider is only ever built and its
+    bundle registered inside one registry-locked block, so any provider seen in the first
+    snapshot is fully registered by the time the second one is taken. Runs outside both
+    locks because provider shutdown flushes and joins the export thread.
     """
-    if resources is None:
-        return
     with _LIVE_CLIENTS_LOCK:
-        holders: Final = _live_clients.get(resources)
-        if holders is not None and len(holders) > 0:
-            return
-        _live_clients.pop(resources, None)
-    provider: Final = getattr(resources, "tracer_provider", None)
-    if provider is not None and provider in _litellm_built_providers:
+        candidates: Final = tuple(_litellm_built_providers)
+        held: Final = tuple(
+            getattr(resources, "tracer_provider", None)
+            for resources, holders in _live_clients.items()
+            if len(holders) > 0
+        )
+    with LangfuseResourceManager._lock:  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
+        registered: Final = tuple(
+            getattr(resources, "tracer_provider", None)
+            for resources in LangfuseResourceManager._instances.values()  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
+        )
+    orphaned: Final = tuple(provider for provider in candidates if provider not in registered and provider not in held)
+    for provider in orphaned:
+        _litellm_built_providers.discard(provider)
         provider.shutdown()
 
 
 def evict_stale_langfuse_resources(*, public_key: str | None, secret_key: str | None, base_url: str | None) -> None:
     """Drop a cached client whose credentials no longer match the ones being requested."""
     with LangfuseResourceManager._lock:  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
-        _, abandoned = _evict_if_stale_locked(public_key=public_key, secret_key=secret_key, base_url=base_url)
-    _shutdown_abandoned_provider(abandoned)
+        _evict_if_stale_locked(public_key=public_key, secret_key=secret_key, base_url=base_url)
+    _retire_orphaned_providers()
 
 
 def _build_verified_span_exporter(*, public_key: object, secret_key: object, base_url: object) -> SpanExporter | None:
@@ -326,7 +338,7 @@ def acquire_langfuse_client(
         )
     )
     with LangfuseResourceManager._lock:  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
-        cached, abandoned = _evict_if_stale_locked(
+        cached: Final = _evict_if_stale_locked(
             public_key=public_key,
             secret_key=parameters.get("secret_key"),
             base_url=parameters.get("base_url"),
@@ -339,7 +351,7 @@ def acquire_langfuse_client(
             span_exporter=span_exporter,
         )
         register_langfuse_client(client)
-    _shutdown_abandoned_provider(abandoned)
+    _retire_orphaned_providers()
     return client
 
 
@@ -406,4 +418,6 @@ def shutdown_langfuse_client(client: Langfuse) -> None:
     client.shutdown()
     provider: Final = getattr(resources, "tracer_provider", None)
     if provider is not None and provider in _litellm_built_providers:
+        _litellm_built_providers.discard(provider)
         provider.shutdown()
+    _retire_orphaned_providers()

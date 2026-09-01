@@ -615,6 +615,40 @@ def test_rotation_keeps_a_still_live_client_exporting():
     assert _exports(client, exporter, "after-rotation")
 
 
+def test_a_client_dropped_without_shutdown_gets_its_provider_retired():
+    """The prompt-management LRU drops rotated-out clients without shutting them down.
+
+    Nothing ever calls ``shutdown_langfuse_client`` on such a client, so the next
+    lifecycle call has to reap the bundle instead of leaking its export thread.
+    """
+    import gc
+
+    client, exporter = _rotation_provider()
+    evict_stale_langfuse_resources(public_key=PUBLIC_KEY, secret_key="sk-rotated", base_url="http://127.0.0.1:2")
+    assert _exports(client, exporter, "still-held")
+
+    del client
+    gc.collect()
+    evict_stale_langfuse_resources(public_key="pk-unrelated", secret_key="sk", base_url="http://127.0.0.1:3")
+
+    assert exporter._stopped
+
+
+def test_the_registrys_current_bundle_is_not_reaped_when_its_clients_die():
+    """The registry hands its bundle to the next client on the same key, so a bundle
+    that is still current keeps its provider even after every client is collected."""
+    import gc
+
+    client, exporter = _rotation_provider()
+    del client
+    gc.collect()
+
+    evict_stale_langfuse_resources(public_key="pk-unrelated", secret_key="sk", base_url="http://127.0.0.1:3")
+
+    successor = Langfuse(public_key=PUBLIC_KEY, secret_key="sk-original", host="http://127.0.0.1:1")
+    assert _exports(successor, exporter, "after-collection")
+
+
 def test_ssl_exporter_is_only_built_with_custom_tls_material(monkeypatch, tmp_path):
     """v4 exports over its own OTLP channel, so litellm's CA bundle must be rebuilt onto it."""
     import litellm
@@ -639,7 +673,16 @@ def test_ssl_exporter_is_only_built_with_custom_tls_material(monkeypatch, tmp_pa
 
 def test_second_client_on_the_same_key_does_not_build_another_provider():
     """A discarded TracerProvider is pinned forever by its atexit hook."""
-    from litellm.integrations.langfuse.langfuse_sdk import acquire_langfuse_client
+    import gc
+
+    from litellm.integrations.langfuse.langfuse_sdk import (
+        _retire_orphaned_providers,
+        acquire_langfuse_client,
+    )
+
+    # reap earlier tests' orphans first, so the count below only moves if a provider is built
+    gc.collect()
+    _retire_orphaned_providers()
 
     pk = "pk-provider-reuse-test"
     LangfuseResourceManager._instances.pop(pk, None)
