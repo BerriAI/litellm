@@ -11,6 +11,10 @@ from unittest.mock import MagicMock, patch
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisPipelineIncrementOperation
 from litellm.router_strategy.base_routing_strategy import BaseRoutingStrategy
+from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
+from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
+from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
+from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 
 
 @pytest.fixture
@@ -59,9 +63,7 @@ async def test_increment_value_in_current_window(base_strategy, mock_dual_cache)
     await base_strategy._increment_value_in_current_window(key, value, ttl)
 
     # Verify in-memory cache was incremented
-    mock_dual_cache.in_memory_cache.async_increment.assert_called_once_with(
-        key=key, value=value, ttl=ttl
-    )
+    mock_dual_cache.in_memory_cache.async_increment.assert_called_once_with(key=key, value=value, ttl=ttl)
 
     # Verify operation was queued for Redis
     assert len(base_strategy.redis_increment_operation_queue) == 1
@@ -101,9 +103,7 @@ async def test_sync_in_memory_spend_with_redis(base_strategy, mock_dual_cache):
     # Mock the in-memory cache batch get responses for before snapshot
     in_memory_before_future: asyncio.Future[List[str]] = asyncio.Future()
     in_memory_before_future.set_result(["5.0"])  # Initial values
-    mock_dual_cache.in_memory_cache.async_batch_get_cache.return_value = (
-        in_memory_before_future
-    )
+    mock_dual_cache.in_memory_cache.async_batch_get_cache.return_value = in_memory_before_future
 
     # Mock Redis batch get response
     redis_future: asyncio.Future[Dict[str, str]] = asyncio.Future()
@@ -113,19 +113,14 @@ async def test_sync_in_memory_spend_with_redis(base_strategy, mock_dual_cache):
     # Mock in-memory get for after snapshot
     in_memory_after_future: asyncio.Future[Optional[str]] = asyncio.Future()
     in_memory_after_future.set_result("8.0")  # Value after potential updates
-    mock_dual_cache.in_memory_cache.async_get_cache.return_value = (
-        in_memory_after_future
-    )
+    mock_dual_cache.in_memory_cache.async_get_cache.return_value = in_memory_after_future
 
     await base_strategy._sync_in_memory_spend_with_redis()
 
     # Verify the final merged values
     set_cache_calls = mock_dual_cache.in_memory_cache.async_set_cache.call_args_list
     print(f"set_cache_calls: {set_cache_calls}")
-    assert any(
-        call.kwargs["key"] == "key1" and float(call.kwargs["value"]) == 18.0
-        for call in set_cache_calls
-    )
+    assert any(call.kwargs["key"] == "key1" and float(call.kwargs["value"]) == 18.0 for call in set_cache_calls)
 
     # Verify cache keys still exist
     assert len(base_strategy.in_memory_keys_to_update) == 1
@@ -146,3 +141,60 @@ async def test_cache_keys_management(base_strategy):
     # Test resetting cache keys
     base_strategy.reset_in_memory_keys_to_update()
     assert len(base_strategy.get_in_memory_keys_to_update()) == 0
+
+
+class TestRouterStrategyInstanceIsolation:
+    """Behavioral regression tests ensuring strategy handlers maintain isolated state when initialized with default arguments."""
+
+    def test_lowest_cost_isolated_routing_args(self) -> None:
+        """Verify LowestCostLoggingHandler instances do not share routing_args dict."""
+        mock_cache = MagicMock(spec=DualCache)
+        h1 = LowestCostLoggingHandler(router_cache=mock_cache)
+        h2 = LowestCostLoggingHandler(router_cache=mock_cache)
+
+        assert h1.routing_args is not h2.routing_args
+        assert h1.routing_args == {}
+
+        h1.routing_args["ttl"] = 999
+        assert "ttl" not in h2.routing_args
+
+    def test_lowest_latency_isolated_routing_args(self) -> None:
+        """Verify LowestLatencyLoggingHandler instances initialize independent RoutingArgs objects."""
+        mock_cache = MagicMock(spec=DualCache)
+        h1 = LowestLatencyLoggingHandler(router_cache=mock_cache)
+        h2 = LowestLatencyLoggingHandler(router_cache=mock_cache)
+
+        assert h1.routing_args is not h2.routing_args
+        assert h1.routing_args.ttl == 3600
+
+        h1.routing_args.ttl = 120
+        assert h2.routing_args.ttl == 3600
+
+    def test_lowest_tpm_isolated_routing_args(self) -> None:
+        """Verify LowestTPMLoggingHandler instances initialize independent RoutingArgs objects."""
+        mock_cache = MagicMock(spec=DualCache)
+        h1 = LowestTPMLoggingHandler(router_cache=mock_cache)
+        h2 = LowestTPMLoggingHandler(router_cache=mock_cache)
+
+        assert h1.routing_args is not h2.routing_args
+        assert h1.routing_args.ttl == 60
+
+        h1.routing_args.ttl = 300
+        assert h2.routing_args.ttl == 60
+
+    @pytest.mark.asyncio
+    async def test_lowest_tpm_v2_isolated_routing_args(self) -> None:
+        """Verify LowestTPMLoggingHandler_v2 instances initialize independent RoutingArgs objects."""
+        mock_cache = MagicMock(spec=DualCache)
+        h1 = LowestTPMLoggingHandler_v2(router_cache=mock_cache)
+        h2 = LowestTPMLoggingHandler_v2(router_cache=mock_cache)
+
+        try:
+            assert h1.routing_args is not h2.routing_args
+            assert h1.routing_args.ttl == 60
+
+            h1.routing_args.ttl = 300
+            assert h2.routing_args.ttl == 60
+        finally:
+            await h1.cleanup()
+            await h2.cleanup()
