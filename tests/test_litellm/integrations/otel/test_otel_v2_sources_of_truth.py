@@ -507,6 +507,28 @@ def test_llm_call_adapter_extracts_all_fields():
     assert data.identity.key_hash == "hsh"
 
 
+def test_llm_call_adapter_extracts_cache_tokens_from_usage_object():
+    payload = _sample_payload()
+    payload["metadata"] = {
+        **payload["metadata"],
+        "usage_object": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "cache_creation_input_tokens": 7,
+            "cache_read_input_tokens": 3,
+        },
+    }
+    data = LLMCallSpanData.from_standard_logging_payload(payload)
+    assert data.usage.cache_creation_input_tokens == 7
+    assert data.usage.cache_read_input_tokens == 3
+
+
+def test_llm_call_adapter_cache_tokens_none_without_usage_object():
+    data = LLMCallSpanData.from_standard_logging_payload(_sample_payload())
+    assert data.usage.cache_creation_input_tokens is None
+    assert data.usage.cache_read_input_tokens is None
+
+
 def test_llm_call_adapter_failure_path():
     payload = _sample_payload(
         status="failure",

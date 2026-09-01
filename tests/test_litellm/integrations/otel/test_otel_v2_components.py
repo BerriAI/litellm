@@ -3,6 +3,7 @@ baggage helpers, metrics, the typed coercion helpers, mapper branches, span-name
 builders, and the registry validator's failure paths. Needs the OTel SDK."""
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -225,6 +226,27 @@ def test_genai_mapper_all_request_params():
     assert attrs[GenAI.REQUEST_STOP_SEQUENCES] == ["STOP"]
     assert attrs[GenAI.REQUEST_SEED] == 42
     assert attrs["server.port"] == 443
+
+
+def test_genai_mapper_cache_token_attrs():
+    cached = replace(
+        _full_llm_call(),
+        usage=LLMUsage(
+            input_tokens=10,
+            output_tokens=5,
+            total_tokens=15,
+            cache_creation_input_tokens=7,
+            cache_read_input_tokens=3,
+        ),
+    )
+    attrs = GenAIMapper().map(cached)
+    assert attrs[GenAI.USAGE_CACHE_CREATION_INPUT_TOKENS] == 7
+    assert attrs[GenAI.USAGE_CACHE_READ_INPUT_TOKENS] == 3
+
+    # No cache usage keeps the span sparse: neither key present.
+    uncached = GenAIMapper().map(_full_llm_call())
+    assert GenAI.USAGE_CACHE_CREATION_INPUT_TOKENS not in uncached
+    assert GenAI.USAGE_CACHE_READ_INPUT_TOKENS not in uncached
 
 
 def test_genai_mapper_stamps_input_output_messages():
