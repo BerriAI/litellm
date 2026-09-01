@@ -33,6 +33,22 @@ def is_text_content_call_type(call_type: str) -> bool:
     return call_type in TEXT_CONTENT_CALL_TYPES
 
 
+# Call types whose request body carries no conversation at all. Embeddings carry
+# ``input`` — documents being indexed, not a prompt — which
+# :func:`build_inspection_messages` would lift into synthetic chat messages.
+#
+# Deny-list on purpose: ``TEXT_CONTENT_CALL_TYPES`` above omits conversational
+# call types (``anthropic_messages``, ``responses``, ``call_mcp_tool``), so a
+# blocking guardrail gated on that allow-list would stop inspecting real chat
+# traffic. Testing this instead leaves an unrecognised call type inspected.
+NON_CONVERSATIONAL_CALL_TYPES: Final[frozenset[str]] = frozenset({"embedding", "aembedding"})
+
+
+def is_non_conversational_call_type(call_type: str) -> bool:
+    """Return True if ``call_type``'s body carries no conversation to inspect."""
+    return call_type in NON_CONVERSATIONAL_CALL_TYPES
+
+
 TEXT_PART_TYPES: Final[frozenset[str]] = frozenset(
     {"text", "input_text", "output_text", "summary_text", "reasoning_text"}
 )

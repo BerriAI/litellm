@@ -1,5 +1,12 @@
 """Tests for the AIM guardrail's inspection-payload construction."""
 
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from httpx import Request, Response
+
+from litellm import DualCache
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.aim.aim import AimGuardrail
 
 
@@ -86,3 +93,70 @@ def test_aim_inspection_messages_preserves_safe_roles():
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "hello"},
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hook", ["pre_call", "moderation"])
+@pytest.mark.parametrize("call_type", ["embedding", "aembedding"])
+async def test_aim_skips_embeddings_without_calling_the_guardrail(hook: str, call_type: str):
+    """/embeddings is not a conversation, so neither hook should reach AIM."""
+    guardrail = AimGuardrail(api_key="hs-aim-key", guardrail_name="aim", event_hook="pre_call")
+    data = {"model": "text-embedding-3-small", "input": ["first chunk", "second chunk"]}
+
+    with patch(  # test-quality-ok: transport is litellm's aiohttp-backed handler; respx cannot intercept it
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post:
+        if hook == "pre_call":
+            result = await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(),
+                data=data,
+                call_type=call_type,
+            )
+        else:
+            result = await guardrail.async_moderation_hook(
+                data=data,
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type=call_type,
+            )
+
+    mock_post.assert_not_called()
+    assert result == {"model": "text-embedding-3-small", "input": ["first chunk", "second chunk"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_type",
+    ["completion", "acompletion", "responses", "aresponses", "anthropic_messages", "call_mcp_tool"],
+)
+async def test_aim_still_inspects_every_conversational_call_type(call_type: str):
+    """Deny-list, not allow-list: ``TEXT_CONTENT_CALL_TYPES`` omits these, so gating
+    on it would silently stop inspecting real chat traffic."""
+    guardrail = AimGuardrail(api_key="hs-aim-key", guardrail_name="aim", event_hook="pre_call")
+    data = {"messages": [{"role": "user", "content": "Hi my name is Brian"}]}
+
+    with patch(  # test-quality-ok: transport is litellm's aiohttp-backed handler; respx cannot intercept it
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=Response(
+            json={
+                "analysis_result": {"analysis_time_ms": 1, "policy_drill_down": {}},
+                "required_action": {
+                    "action_type": "block_action",
+                    "detection_message": "PII detected",
+                },
+            },
+            status_code=200,
+            request=Request(method="POST", url="http://aim"),
+        ),
+    ) as mock_post:
+        with pytest.raises(ProxyException, match="PII detected"):
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(),
+                data=data,
+                call_type=call_type,
+            )
+
+    mock_post.assert_called_once()
+

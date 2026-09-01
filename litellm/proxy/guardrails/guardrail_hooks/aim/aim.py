@@ -27,6 +27,7 @@ from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
     build_inspection_messages,
     has_non_string_content,
+    is_non_conversational_call_type,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
@@ -134,6 +135,12 @@ class AimGuardrail(CustomGuardrail):
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside AIM Pre-Call Hook")
+        # /embeddings carries ``input`` — documents being indexed, not a prompt — which
+        # the flatten lifts into synthetic chat messages. A verdict on that text then
+        # blocks or silently rewrites a request that was never a conversation.
+        if is_non_conversational_call_type(call_type):
+            verbose_proxy_logger.debug("Aim: skipping non-conversational call type %s", call_type)
+            return data
         return await self.call_aim_guardrail(data, hook="pre_call", key_alias=user_api_key_dict.key_alias)
 
     async def async_moderation_hook(
@@ -143,6 +150,9 @@ class AimGuardrail(CustomGuardrail):
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside AIM Moderation Hook")
+        if is_non_conversational_call_type(call_type):
+            verbose_proxy_logger.debug("Aim: skipping non-conversational call type %s", call_type)
+            return data
 
         await self.call_aim_guardrail(data, hook="moderation", key_alias=user_api_key_dict.key_alias)
         return data

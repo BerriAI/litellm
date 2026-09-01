@@ -4,6 +4,7 @@ from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
     build_inspection_messages,
     has_non_string_content,
+    is_non_conversational_call_type,
     iter_message_text,
     walk_user_text,
 )
@@ -617,3 +618,36 @@ def test_build_inspection_messages_custom_tool_call_output():
     }
     msgs = build_inspection_messages(data)
     assert any("custom-tool-leak" in m["content"] for m in msgs)
+
+
+# ── is_non_conversational_call_type ──────────────────────────────────────────────
+
+
+def test_is_non_conversational_call_type_flags_embeddings():
+    """An /embeddings body carries documents being indexed, not a prompt."""
+    assert is_non_conversational_call_type("embedding") is True
+    assert is_non_conversational_call_type("aembedding") is True
+
+
+def test_is_non_conversational_call_type_passes_every_conversational_call_type():
+    """Deliberately a deny-list: ``anthropic_messages``, ``responses`` and
+    ``call_mcp_tool`` carry conversations but are absent from
+    ``TEXT_CONTENT_CALL_TYPES``, so a guardrail gating on that allow-list would
+    stop inspecting them."""
+    for call_type in (
+        "completion",
+        "acompletion",
+        "text_completion",
+        "responses",
+        "aresponses",
+        "anthropic_messages",
+        "aanthropic_messages",
+        "call_mcp_tool",
+    ):
+        assert is_non_conversational_call_type(call_type) is False
+
+
+def test_is_non_conversational_call_type_defaults_to_inspecting_unknown_call_types():
+    """A call type this module has never heard of must still be inspected —
+    failing closed is the point of the deny-list."""
+    assert is_non_conversational_call_type("some_future_call_type") is False

@@ -32,6 +32,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
     build_inspection_messages,
+    is_non_conversational_call_type,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
@@ -154,6 +155,10 @@ class CatoNetworksGuardrail(CustomGuardrail):
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside Cato Pre-Call Hook")
+        # /embeddings carries documents being indexed, not a conversation to inspect.
+        if is_non_conversational_call_type(call_type):
+            verbose_proxy_logger.debug("Cato: skipping non-conversational call type %s", call_type)
+            return data
         return await self.call_cato_guardrail(
             data,
             hook="pre_call",
@@ -168,6 +173,9 @@ class CatoNetworksGuardrail(CustomGuardrail):
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside Cato Moderation Hook")
+        if is_non_conversational_call_type(call_type):
+            verbose_proxy_logger.debug("Cato: skipping non-conversational call type %s", call_type)
+            return data
         return await self.call_cato_guardrail(
             data,
             hook="moderation",
