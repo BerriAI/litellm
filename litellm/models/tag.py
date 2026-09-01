@@ -6,7 +6,6 @@ Canonical definition for ``litellm_tagtable``. Re-exported from
 """
 
 from datetime import datetime
-from typing import Final
 
 from pydantic import BaseModel, model_validator
 
@@ -28,20 +27,17 @@ class LiteLLM_TagTable(LiteLLMPydanticObjectBase):
 
     @model_validator(mode="before")
     @classmethod
-    def set_model_info(cls, values: object) -> object:
+    def set_model_info(cls, values):
         if isinstance(values, BaseModel):
-            raw: Final = values.model_dump()  # mutable-ok: pydantic before-validator dict payload
+            raw = values.model_dump()  # rebind-ok: normalize model input
         elif hasattr(values, "__dict__") and not isinstance(values, dict):
-            raw: Final = dict(values.__dict__)  # mutable-ok: object normalization for ORM/Prisma models
+            raw = dict(values.__dict__)  # rebind-ok: normalize object input  # mutable-ok: object normalization
         else:
-            raw: Final = values
+            raw = values  # rebind-ok: preserve input
 
         if isinstance(raw, dict):
-            updates: Final = {  # mutable-ok: default values for uninitialized fields
-                **({"spend": 0.0} if raw.get("spend") is None else {}),  # mutable-ok: conditional default
-                **({"models": []} if raw.get("models") is None else {}),  # mutable-ok: conditional default
-            }
-            if updates:
-                return {**raw, **updates}  # mutable-ok: merged normalized model dictionary
-            return raw
-        return values
+            if raw.get("spend") is None:
+                raw.update({"spend": 0.0})  # mutable-ok: default spend value
+            if raw.get("models") is None:
+                raw.update({"models": []})  # mutable-ok: default models value
+        return raw
