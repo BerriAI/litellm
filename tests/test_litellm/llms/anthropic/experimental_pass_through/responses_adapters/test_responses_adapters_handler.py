@@ -28,6 +28,40 @@ def test_build_responses_kwargs_derives_prompt_cache_key_from_user_id():
     assert responses_kwargs["prompt_cache_key"] == "session-abc"
 
 
+def test_build_responses_kwargs_derives_prompt_cache_key_from_json_user_id_metadata():
+    json_user_id = json.dumps(
+        {
+            "device_id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "account_uuid": "",
+            "session_id": "12345678-abcd-ef01-2345-6789abcdef01",
+        }
+    )
+    responses_kwargs = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5.6-luna",
+        metadata={"user_id": json_user_id},
+        extra_kwargs={"custom_llm_provider": "openai"},
+    )
+    assert responses_kwargs["user"] == json_user_id[:64]
+    assert responses_kwargs["prompt_cache_key"] == "12345678-abcd-ef01-2345-6789abcdef01"
+
+
+def test_build_responses_kwargs_derives_prompt_cache_key_from_dict_user_id():
+    dict_user_id = {
+        "device_id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "session_id": "sess-guid-999",
+    }
+    responses_kwargs = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5.6-luna",
+        metadata={"user_id": dict_user_id},
+        extra_kwargs={"custom_llm_provider": "openai"},
+    )
+    assert responses_kwargs["prompt_cache_key"] == "sess-guid-999"
+
+
 def test_build_responses_kwargs_prefers_explicit_prompt_cache_key_over_derived():
     responses_kwargs = _build_responses_kwargs(
         max_tokens=1024,

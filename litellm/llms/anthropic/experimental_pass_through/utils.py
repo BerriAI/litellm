@@ -1,3 +1,4 @@
+import json
 import os
 from collections.abc import Mapping
 from types import MappingProxyType
@@ -21,6 +22,23 @@ _THINKING_OFF: Final = "none"
 def prompt_cache_key_from_user_id(user_id: object) -> str | None:
     if user_id is None:
         return None
+    if isinstance(user_id, dict):
+        if session_id := user_id.get("session_id"):
+            return str(session_id)[:OPENAI_MAX_PROMPT_CACHE_KEY_LENGTH] or None
+        if user_key := user_id.get("user_id"):
+            return str(user_key)[:OPENAI_MAX_PROMPT_CACHE_KEY_LENGTH] or None
+    elif isinstance(user_id, str):
+        trimmed = user_id.strip()
+        if trimmed.startswith("{") and trimmed.endswith("}"):
+            try:
+                parsed = json.loads(trimmed)
+                if isinstance(parsed, dict):
+                    if session_id := parsed.get("session_id"):
+                        return str(session_id)[:OPENAI_MAX_PROMPT_CACHE_KEY_LENGTH] or None
+                    if user_key := parsed.get("user_id"):
+                        return str(user_key)[:OPENAI_MAX_PROMPT_CACHE_KEY_LENGTH] or None
+            except Exception:
+                pass
     return str(user_id)[:OPENAI_MAX_PROMPT_CACHE_KEY_LENGTH] or None
 
 
