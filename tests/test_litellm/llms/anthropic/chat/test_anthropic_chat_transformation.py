@@ -6312,3 +6312,45 @@ def test_forced_tool_choice_gating_driven_by_model_map_flag(local_model_cost_map
     )
 
     assert result["tool_choice"] == {"type": "auto"}
+
+
+def test_anthropic_drop_params_keeps_format_only_output_config(monkeypatch):
+    """``drop_params=True`` must not consume ``output_config.format``: the drop
+    gate is an effort gate and ``format`` is a structured-output field."""
+    monkeypatch.setattr(litellm, "drop_params", True)
+    config = AnthropicConfig()
+    schema_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"z": {"type": "integer"}}},
+    }
+
+    result = config.transform_request(
+        model="claude-3-haiku-20240307",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={"output_config": {"format": schema_format}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("output_config") == {"format": schema_format}
+
+
+def test_anthropic_drop_params_reduces_mixed_output_config_to_format(monkeypatch):
+    """``drop_params=True`` drops the effort key on unsupported models but keeps
+    ``format`` so structured outputs still reach the provider."""
+    monkeypatch.setattr(litellm, "drop_params", True)
+    config = AnthropicConfig()
+    schema_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"z": {"type": "integer"}}},
+    }
+
+    result = config.transform_request(
+        model="claude-3-haiku-20240307",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={"output_config": {"effort": "low", "format": schema_format}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("output_config") == {"format": schema_format}

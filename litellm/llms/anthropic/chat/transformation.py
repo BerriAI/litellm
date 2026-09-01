@@ -1994,19 +1994,35 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return data
 
     def _apply_output_config(self, data: dict, model: str, optional_params: dict) -> None:
-        """Validate and apply output_config to the request data."""
+        """Validate and apply output_config to the request data.
+
+        The ``drop_params`` gate here is an effort gate: ``format`` is a
+        structured-output field, not an effort field, so it survives the drop
+        and is vetted where it is consumed (the map's
+        ``supports_native_structured_output`` flag on emission paths).
+        """
         if "output_config" not in optional_params:
             return
         output_config: Final = optional_params.get("output_config")
         if not output_config or not isinstance(output_config, dict):
             return
-        if litellm.drop_params is True and not self._model_supports_effort_param(model, self._resolved_provider):
+        if (
+            litellm.drop_params is True
+            and any(key != "format" for key in output_config)
+            and not self._model_supports_effort_param(model, self._resolved_provider)
+        ):
             litellm.verbose_logger.warning(
                 DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
                 model,
             )
-            optional_params.pop("output_config", None)
-            data.pop("output_config", None)
+            preserved_format: Final = output_config.get("format")
+            if preserved_format is None:
+                optional_params.pop("output_config", None)
+                data.pop("output_config", None)
+                return
+            format_only: Final = {"format": preserved_format}  # mutable-ok: json body
+            optional_params["output_config"] = format_only  # rebind-ok: out-param store
+            data["output_config"] = format_only  # rebind-ok: out-param store
             return
         effort: Final = output_config.get("effort")
         valid_efforts: Final = ["high", "medium", "low", "xhigh", "max"]
