@@ -13,7 +13,7 @@ export const MOCK_RESPONSE_TEXT = "This is a mock response.";
 
 export const masterKey = (): string => process.env.LITELLM_MASTER_KEY || "sk-1234";
 
-const rootPath = (): string => process.env.SERVER_ROOT_PATH ?? "";
+export const rootPath = (): string => process.env.SERVER_ROOT_PATH ?? "";
 
 interface ChatOptions {
   model: string;
@@ -99,6 +99,9 @@ interface DailyActivityPage {
   metadata?: { total_pages?: number };
 }
 
+const requestsOnPage = (body: DailyActivityPage, keyToken: string): number =>
+  (body.results ?? []).reduce((sum, day) => sum + (day.breakdown?.api_keys?.[keyToken]?.metrics?.api_requests ?? 0), 0);
+
 /**
  * The route paginates its per-key breakdown. Reading only the first page finds a key while the
  * database is small and stops finding it once a run has generated more keys than one page holds,
@@ -108,23 +111,20 @@ async function keyRequestsInDailyActivity(
   request: APIRequestContext,
   query: string,
   keyToken: string,
+  page = 1,
+  seen = 0,
 ): Promise<number> {
-  let total = 0;
-  for (let page = 1; ; page++) {
-    const res = await request.get(`${rootPath()}/user/daily/activity?${query}&page=${page}`, {
-      headers: { Authorization: `Bearer ${masterKey()}` },
-    });
-    if (!res.ok()) {
-      return total;
-    }
-    const body = (await res.json()) as DailyActivityPage;
-    for (const day of body.results ?? []) {
-      total += day.breakdown?.api_keys?.[keyToken]?.metrics?.api_requests ?? 0;
-    }
-    if (page >= (body.metadata?.total_pages ?? 1)) {
-      return total;
-    }
+  const res = await request.get(`${rootPath()}/user/daily/activity?${query}&page=${page}`, {
+    headers: { Authorization: `Bearer ${masterKey()}` },
+  });
+  if (!res.ok()) {
+    return seen;
   }
+  const body = (await res.json()) as DailyActivityPage;
+  const total = seen + requestsOnPage(body, keyToken);
+  return page >= (body.metadata?.total_pages ?? 1)
+    ? total
+    : keyRequestsInDailyActivity(request, query, keyToken, page + 1, total);
 }
 
 /**
@@ -146,16 +146,17 @@ export async function waitForKeyInDailyActivity(
   const query = `start_date=${isoDay(start)}&end_date=${isoDay(now)}`;
 
   const deadline = Date.now() + timeoutMs;
-  let seen = 0;
-  while (Date.now() < deadline) {
-    seen = await keyRequestsInDailyActivity(request, query, keyToken);
+  for (;;) {
+    const seen = await keyRequestsInDailyActivity(request, query, keyToken);
     if (seen >= minRequests) {
       return;
     }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `key ${keyToken} reached ${seen} of ${minRequests} requests in /user/daily/activity across every page; ` +
+          "the daily spend rollup may not be running",
+      );
+    }
     await new Promise((r) => setTimeout(r, 3_000));
   }
-  throw new Error(
-    `key ${keyToken} reached ${seen} of ${minRequests} requests in /user/daily/activity across every page; ` +
-      "the daily spend rollup may not be running",
-  );
 }

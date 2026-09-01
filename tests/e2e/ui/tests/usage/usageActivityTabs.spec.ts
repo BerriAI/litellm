@@ -9,6 +9,7 @@ import {
   DEPLOYMENT_MODEL_B,
   createVirtualKey,
   masterKey,
+  rootPath,
   sendChatCompletion,
   waitForKeyInDailyActivity,
   waitForSpendLog,
@@ -102,7 +103,7 @@ test.describe("Usage page activity tabs", () => {
     const ownedAlias = `e2e-usage-owned-${stamp}`;
     const otherAlias = `e2e-usage-other-${stamp}`;
 
-    const userRes = await request.post("/user/new", {
+    const userRes = await request.post(`${rootPath()}/user/new`, {
       headers: { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" },
       data: { user_email: email, user_role: "internal_user", auto_create_key: false },
     });
