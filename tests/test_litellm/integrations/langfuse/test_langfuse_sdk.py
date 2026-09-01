@@ -649,6 +649,40 @@ def test_the_registrys_current_bundle_is_not_reaped_when_its_clients_die():
     assert _exports(successor, exporter, "after-collection")
 
 
+def test_a_sweep_overlapping_registration_and_rotation_keeps_the_live_provider():
+    """A sweep can snapshot providers before a client registers, then wait on the registry
+    lock while that client registers and a rotation evicts its fresh bundle. Holders are
+    re-read after the registry snapshot, so the stale first look must not win."""
+    import threading
+
+    from litellm.integrations.langfuse.langfuse_sdk import _retire_orphaned_providers
+
+    exporter = InMemorySpanExporter()
+    provider = build_isolated_tracer_provider(environment=None, release=None)
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    client = Langfuse(
+        public_key=PUBLIC_KEY,
+        secret_key="sk-original",
+        host="http://127.0.0.1:1",
+        tracer_provider=provider,
+        span_exporter=exporter,
+    )
+    registry_lock = LangfuseResourceManager._lock
+    registry_lock.acquire()
+    try:
+        sweeper = threading.Thread(target=_retire_orphaned_providers)
+        sweeper.start()
+        sweeper.join(timeout=0.5)  # parks on the registry lock once its provider snapshot is taken
+        register_langfuse_client(client)
+        LangfuseResourceManager._instances.pop(PUBLIC_KEY, None)  # the rotation that evicts the fresh bundle
+    finally:
+        registry_lock.release()
+    sweeper.join(timeout=5)
+    assert not sweeper.is_alive()
+
+    assert _exports(client, exporter, "after-racing-sweep")
+
+
 def test_ssl_exporter_is_only_built_with_custom_tls_material(monkeypatch, tmp_path):
     """v4 exports over its own OTLP channel, so litellm's CA bundle must be rebuilt onto it."""
     import litellm

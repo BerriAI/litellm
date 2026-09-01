@@ -191,7 +191,8 @@ def build_isolated_tracer_provider(*, environment: str | None, release: str | No
         resource=Resource.create(dict(attributes)),
         sampler=TraceIdRatioBased(sample_rate) if sample_rate < 1 else None,
     )
-    _litellm_built_providers.add(provider)
+    with _LIVE_CLIENTS_LOCK:
+        _litellm_built_providers.add(provider)
     return provider
 
 
@@ -242,22 +243,24 @@ def _retire_orphaned_providers() -> None:
     prompt-management LRU drops clients, never reaches ``shutdown_langfuse_client``, and the
     provider's own atexit hook would keep its export thread alive for the rest of the process.
 
-    Providers are snapshotted before the registry: a provider is only ever built and its
-    bundle registered inside one registry-locked block, so any provider seen in the first
-    snapshot is fully registered by the time the second one is taken. Runs outside both
-    locks because provider shutdown flushes and joins the export thread.
+    Holders are snapshotted last: a client is registered in the same registry-locked block
+    that builds its provider, so once the registry snapshot's lock has been acquired, the
+    client of any provider from the first snapshot is visible to the final one even when a
+    concurrent rotation already evicted its bundle again. Runs outside both locks because
+    provider shutdown flushes and joins the export thread.
     """
     with _LIVE_CLIENTS_LOCK:
         candidates: Final = tuple(_litellm_built_providers)
-        held: Final = tuple(
-            getattr(resources, "tracer_provider", None)
-            for resources, holders in _live_clients.items()
-            if len(holders) > 0
-        )
     with LangfuseResourceManager._lock:  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
         registered: Final = tuple(
             getattr(resources, "tracer_provider", None)
             for resources in LangfuseResourceManager._instances.values()  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
+        )
+    with _LIVE_CLIENTS_LOCK:
+        held: Final = tuple(
+            getattr(resources, "tracer_provider", None)
+            for resources, holders in _live_clients.items()
+            if len(holders) > 0
         )
     orphaned: Final = tuple(provider for provider in candidates if provider not in registered and provider not in held)
     for provider in orphaned:
