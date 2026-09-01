@@ -6,10 +6,10 @@ from typing import Final, cast
 from hypothesis import strategies as st
 from hypothesis.strategies import DrawFn, SearchStrategy
 
-from tests.route_parity.fixture_recorder import ProviderSpec
+from tests.route_parity.fixtures.recording import ProviderSpec
 from tests.test_litellm.ocr.fixtures.common import (
     OcrFixtureClient,
-    OcrFixtureTarget,
+    OcrRecordingTarget,
     image_document,
     invoke_with_api_key,
     public_document_strategy,
@@ -53,42 +53,41 @@ def vertex_deepseek_input_strategy(draw: DrawFn, project: str, location: str) ->
     )
 
 
-class VertexFixtureSource:
-    def targets(self, environ: Mapping[str, str], client: OcrFixtureClient) -> tuple[OcrFixtureTarget, ...]:
-        api_key: Final = environ.get("VERTEX_AI_API_KEY")
-        project: Final = environ.get("VERTEXAI_PROJECT") or environ.get("VERTEX_PROJECT")
-        location: Final = environ.get("VERTEXAI_LOCATION") or environ.get("VERTEX_LOCATION") or "us-central1"
-        if not api_key or not project:
-            return ()
-        upstream_base: Final = environ.get("VERTEX_AI_API_BASE") or f"https://{location}-aiplatform.googleapis.com"
-        invocation: Final = invoke_with_api_key(client, api_key)
-        return (
-            OcrFixtureTarget(
-                name="vertex-mistral",
-                provider_spec=ProviderSpec(upstream_base=upstream_base.rstrip("/")),
-                strategy=cast(
-                    SearchStrategy[OcrSdkInputBase],
-                    st.builds(
-                        _as_vertex_mistral,
-                        case_input=mistral_input_strategy(MISTRAL_MODEL),
-                        project=st.just(project),
-                        location=st.just(location),
-                    ),
-                ),
-                invocation=invocation,
-                required_inputs=cast(
-                    tuple[OcrSdkInputBase, ...],
-                    tuple(
-                        _as_vertex_mistral(case_input, project, location)
-                        for case_input in required_mistral_inputs(MISTRAL_MODEL)
-                    ),
+def vertex_recording_targets(environ: Mapping[str, str], client: OcrFixtureClient) -> tuple[OcrRecordingTarget, ...]:
+    api_key: Final = environ.get("VERTEX_AI_API_KEY")
+    project: Final = environ.get("VERTEXAI_PROJECT") or environ.get("VERTEX_PROJECT")
+    location: Final = environ.get("VERTEXAI_LOCATION") or environ.get("VERTEX_LOCATION") or "us-central1"
+    if not api_key or not project:
+        return ()
+    upstream_base: Final = environ.get("VERTEX_AI_API_BASE") or f"https://{location}-aiplatform.googleapis.com"
+    invocation: Final = invoke_with_api_key(client, api_key)
+    return (
+        OcrRecordingTarget(
+            name="vertex-mistral",
+            provider_spec=ProviderSpec(upstream_base=upstream_base.rstrip("/")),
+            strategy=cast(
+                SearchStrategy[OcrSdkInputBase],
+                st.builds(
+                    _as_vertex_mistral,
+                    case_input=mistral_input_strategy(MISTRAL_MODEL),
+                    project=st.just(project),
+                    location=st.just(location),
                 ),
             ),
-            OcrFixtureTarget(
-                name="vertex-deepseek",
-                provider_spec=ProviderSpec(upstream_base=upstream_base.rstrip("/")),
-                strategy=cast(SearchStrategy[OcrSdkInputBase], vertex_deepseek_input_strategy(project, location)),
-                invocation=invocation,
-                required_inputs=cast(tuple[OcrSdkInputBase, ...], _required_deepseek_inputs(project, location)),
+            invocation=invocation,
+            required_inputs=cast(
+                tuple[OcrSdkInputBase, ...],
+                tuple(
+                    _as_vertex_mistral(case_input, project, location)
+                    for case_input in required_mistral_inputs(MISTRAL_MODEL)
+                ),
             ),
-        )
+        ),
+        OcrRecordingTarget(
+            name="vertex-deepseek",
+            provider_spec=ProviderSpec(upstream_base=upstream_base.rstrip("/")),
+            strategy=cast(SearchStrategy[OcrSdkInputBase], vertex_deepseek_input_strategy(project, location)),
+            invocation=invocation,
+            required_inputs=cast(tuple[OcrSdkInputBase, ...], _required_deepseek_inputs(project, location)),
+        ),
+    )

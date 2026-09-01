@@ -10,7 +10,7 @@ from typing import Final
 
 from pydantic import JsonValue, TypeAdapter
 
-from tests.route_parity.fixture_recorder import _local_response_header
+from tests.route_parity.fixtures.recording import local_response_header
 from tests.route_parity.models import CapturedRequest
 from tests.route_parity.recorded_http import RecordedHttpResponse, RecordedHttpStreamResponse, RecordedResponse
 
@@ -102,7 +102,7 @@ class _ReplayHandler(BaseHTTPRequestHandler):
         self.send_response_only(response.status_code)
         for header in response.headers:
             if header.name.lower() not in EXCLUDED_RESPONSE_HEADERS:
-                self.send_header(header.name, _local_response_header(header.name, header.value, provider.url))
+                self.send_header(header.name, local_response_header(header.name, header.value, provider.url))
         if isinstance(response, RecordedHttpResponse):
             response_body: Final = response.body_bytes()
             self.send_header("content-length", str(len(response_body)))

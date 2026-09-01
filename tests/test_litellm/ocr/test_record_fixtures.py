@@ -7,13 +7,13 @@ from typing import Final
 
 import pytest
 
-from tests.route_parity.fixture_recorder import generate_case_inputs
-from tests.test_litellm.ocr.fixtures.generate import (
+from tests.route_parity.fixtures.inputs import generate_case_inputs
+from tests.route_parity.fixtures.pipeline import parse_recording_args
+from tests.test_litellm.ocr.fixtures.models import OcrSdkInputBase
+from tests.test_litellm.ocr.fixtures.record import (
     discover_targets,
-    parse_generator_args,
     require_targets,
 )
-from tests.test_litellm.ocr.fixtures.models import OcrSdkInputBase
 
 
 class _UnusedOcrClient:
@@ -33,13 +33,13 @@ _UNUSED_OCR_CLIENT: Final = _UnusedOcrClient()
 
 
 def test_parse_args_has_no_model_selection() -> None:
-    args: Final = parse_generator_args(["--examples", "2", "--concurrency", "3", "--fixture-dir", "/tmp/ocr"])
+    args: Final = parse_recording_args(["--examples", "2", "--concurrency", "3", "--fixture-dir", "/tmp/ocr"])
 
     assert args.examples == 2
     assert args.concurrency == 3
     assert args.fixture_dir == Path("/tmp/ocr")
     with pytest.raises(SystemExit):
-        parse_generator_args(["--model", "mistral/mistral-ocr-latest"])
+        parse_recording_args(["--model", "mistral/mistral-ocr-latest"])
 
 
 @pytest.mark.parametrize(
@@ -94,9 +94,9 @@ def test_azure_mistral_discovery_requires_and_normalizes_deployment_model() -> N
     }
     assert discover_targets(incomplete, _UNUSED_OCR_CLIENT) == ()
 
-    target: Final = discover_targets({**incomplete, "AZURE_AI_OCR_MODEL": "mistral-ocr-deployment"}, _UNUSED_OCR_CLIENT)[
-        0
-    ]
+    target: Final = discover_targets(
+        {**incomplete, "AZURE_AI_OCR_MODEL": "mistral-ocr-deployment"}, _UNUSED_OCR_CLIENT
+    )[0]
     assert target.required_inputs[0].canonical_input()["model"] == "azure_ai/mistral-ocr-deployment"
 
 

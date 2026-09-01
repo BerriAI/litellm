@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Final
@@ -12,16 +13,13 @@ import pytest
 from hypothesis import strategies as st
 from pydantic import BaseModel, ConfigDict
 
-from tests.route_parity.fixture_recorder import (
+from tests.route_parity.fixtures.pipeline import RecordingTarget, record_fixtures
+from tests.route_parity.fixtures.recording import ProviderSpec, record_upstream_responses
+from tests.route_parity.fixtures.store import (
     FIXTURE_SCHEMA_VERSION,
-    ProviderSpec,
-    fixture_cache_key,
-    generate_case_inputs,
-    record_case,
-    record_cases,
+    fixture_path,
     recorded_fixtures,
 )
-from tests.route_parity.json_file_cache import JsonFileCache
 from tests.route_parity.recorded_http import (
     HttpHeader,
     RecordedHttpStreamResponse,
@@ -51,6 +49,14 @@ class _ParityCase(BaseModel):
 
     litellm_input: _FixtureInput
     provider_responses: tuple[RecordedResponse, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _Invocation:
+    sdk_call: Callable[[str, _FixtureInput], object]
+
+    def execute(self, provider_url: str, case_input: _FixtureInput) -> None:
+        self.sdk_call(provider_url, case_input)
 
 
 class _ControlledUpstream(ThreadingHTTPServer):
@@ -195,54 +201,97 @@ def _polling_sdk_call(api_base: str, case_input: _FixtureInput) -> object:
     return completed
 
 
-def test_generate_case_inputs_is_deterministic() -> None:
-    strategy: Final = st.builds(_FixtureInput, identifier=st.integers().map(str))
-
-    assert generate_case_inputs(strategy, examples=4) == generate_case_inputs(strategy, examples=4)
-
-
-def test_record_cases_deduplicates_and_limits_concurrency(tmp_path: Path) -> None:
-    case_inputs: Final = (_case("one"), _case("two"), _case("one"), _case("three"))
+def test_recording_deduplicates_per_target_and_caps_global_concurrency(tmp_path: Path) -> None:
+    shared_input: Final = _case("shared")
     with _controlled_upstream() as upstream:
         spec: Final = ProviderSpec(upstream_base=upstream.url)
-        results: Final = record_cases(spec, tmp_path, case_inputs, _sdk_call, _ParityCase, max_concurrency=2)
+        targets: Final = (
+            RecordingTarget(
+                name="first",
+                provider_spec=spec,
+                strategy=st.just(shared_input),
+                invocation=_Invocation(_sdk_call),
+                required_inputs=(shared_input, shared_input),
+            ),
+            RecordingTarget(
+                name="second",
+                provider_spec=spec,
+                strategy=st.just(shared_input),
+                invocation=_Invocation(_sdk_call),
+                required_inputs=(shared_input,),
+            ),
+        )
+        summary: Final = record_fixtures(targets, tmp_path, examples=1, concurrency=2, case_type=_ParityCase)
 
-    assert len(results) == 3
-    assert upstream.request_count == 3
+    assert len(summary.recorded) == 2
+    assert {result.target_name for result in summary.recorded} == {"first", "second"}
+    assert summary.cached == ()
+    assert summary.failed == ()
+    assert upstream.request_count == 2
     assert upstream.max_active_requests == 2
-    assert len(recorded_fixtures(tmp_path, _ParityCase)) == 3
-    for fixture_path in tmp_path.glob("*.json"):
-        contents = fixture_path.read_text(encoding="utf-8")
+    assert len(recorded_fixtures(tmp_path, _ParityCase)) == 2
+    for path in tmp_path.rglob("*.json"):
+        contents = path.read_text(encoding="utf-8")
         assert f'"schema_version": {FIXTURE_SCHEMA_VERSION}' in contents
         assert '"recorded_at":' in contents
 
 
-def test_record_case_rejects_stale_fixture_before_provider_call(tmp_path: Path) -> None:
+def test_pipeline_rejects_stale_fixture_before_provider_call(tmp_path: Path) -> None:
     case_input: Final = _case("stale")
-    cache: Final = JsonFileCache(tmp_path)
-    fixture_path: Final = cache.put(fixture_cache_key(case_input), {"schema_version": 0})
+    directory: Final = tmp_path / "stale-target"
+    directory.mkdir()
+    path: Final = fixture_path(directory, case_input)
+    path.write_text('{"schema_version": 0}\n', encoding="utf-8")
+    target: Final = RecordingTarget(
+        name="stale-target",
+        provider_spec=ProviderSpec(upstream_base="http://127.0.0.1:1"),
+        strategy=st.just(case_input),
+        invocation=_Invocation(_sdk_call),
+    )
 
-    with pytest.raises(ValueError, match=f"{fixture_path} has schema_version 0, expected {FIXTURE_SCHEMA_VERSION}"):
-        record_case(
-            ProviderSpec(upstream_base="http://127.0.0.1:1"),
-            tmp_path,
-            case_input,
-            _sdk_call,
-            _ParityCase,
-        )
+    summary: Final = record_fixtures(
+        (target,),
+        tmp_path,
+        examples=1,
+        concurrency=1,
+        case_type=_ParityCase,
+    )
+
+    assert summary.recorded == ()
+    assert summary.cached == ()
+    assert len(summary.failed) == 1
+    assert str(summary.failed[0].error) == (
+        f"fixture {path} has schema_version 0, expected {FIXTURE_SCHEMA_VERSION}; "
+        "delete it and regenerate the fixture bundle"
+    )
 
 
-def test_streaming_response_records_and_replays_chunks(tmp_path: Path) -> None:
+def test_cached_fixture_is_reported_without_provider_call(tmp_path: Path) -> None:
+    case_input: Final = _case("cached")
     with _controlled_upstream() as upstream:
-        result: Final = record_case(
+        target: Final = RecordingTarget(
+            name="cached-target",
+            provider_spec=ProviderSpec(upstream_base=upstream.url),
+            strategy=st.just(case_input),
+            invocation=_Invocation(_sdk_call),
+        )
+        first: Final = record_fixtures((target,), tmp_path, 1, 1, _ParityCase)
+        second: Final = record_fixtures((target,), tmp_path, 1, 1, _ParityCase)
+
+    assert len(first.recorded) == 1
+    assert len(second.cached) == 1
+    assert upstream.request_count == 1
+
+
+def test_streaming_response_records_and_replays_chunks() -> None:
+    with _controlled_upstream() as upstream:
+        responses: Final = record_upstream_responses(
             ProviderSpec(upstream_base=upstream.url),
-            tmp_path,
             _case("stream"),
             _stream_sdk_call,
-            _ParityCase,
         )
 
-    response: Final = result.case.provider_responses[0]
+    response: Final = responses[0]
     assert isinstance(response, RecordedHttpStreamResponse)
     assert tuple(chunk.data_bytes() for chunk in response.chunks) == _SSE_CHUNKS
     assert isinstance(response.model_dump(mode="json")["chunks"], list)
@@ -256,17 +305,15 @@ def test_streaming_response_records_and_replays_chunks(tmp_path: Path) -> None:
     assert replayed_chunks == _SSE_CHUNKS
 
 
-def test_non_successful_provider_response_is_recorded(tmp_path: Path) -> None:
+def test_non_successful_provider_response_is_recorded() -> None:
     with _controlled_upstream() as upstream:
-        result: Final = record_case(
+        responses: Final = record_upstream_responses(
             ProviderSpec(upstream_base=upstream.url),
-            tmp_path,
             _case("provider-error"),
             _error_sdk_call,
-            _ParityCase,
         )
 
-    response: Final = result.case.provider_responses[0]
+    response: Final = responses[0]
     assert response.status_code == 429
 
 
@@ -285,21 +332,18 @@ def test_stream_response_model_rejects_buffered_body() -> None:
 
 @pytest.mark.parametrize("sdk_call", (_multi_sdk_call, _polling_sdk_call))
 def test_multiple_provider_calls_record_and_replay_in_order(
-    tmp_path: Path,
     sdk_call: Callable[[str, _FixtureInput], object],
 ) -> None:
     with _controlled_upstream() as upstream:
-        result: Final = record_case(
+        responses: Final = record_upstream_responses(
             ProviderSpec(upstream_base=upstream.url),
-            tmp_path,
             _case(sdk_call.__name__),
             sdk_call,
-            _ParityCase,
         )
 
-    assert len(result.case.provider_responses) == 2
+    assert len(responses) == 2
     with replay_server() as provider:
-        for response in result.case.provider_responses:
+        for response in responses:
             provider.enqueue_response(response)
         sdk_call(provider.url, _case(sdk_call.__name__))
         requests: Final = provider.take_requests(2)

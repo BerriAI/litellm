@@ -9,7 +9,7 @@ from urllib.parse import quote
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 
-from tests.route_parity.fixture_generator import FixtureTarget
+from tests.route_parity.fixtures.pipeline import RecordingTarget
 from tests.test_litellm.ocr.fixtures.models import (
     JsonSchemaDefinition,
     JsonSchemaResponseFormat,
@@ -18,7 +18,7 @@ from tests.test_litellm.ocr.fixtures.models import (
     OcrSdkInputBase,
 )
 
-OcrFixtureTarget = FixtureTarget[OcrSdkInputBase]
+OcrRecordingTarget = RecordingTarget[OcrSdkInputBase]
 
 
 class OcrFixtureClient(Protocol):

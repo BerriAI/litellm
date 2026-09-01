@@ -6,10 +6,10 @@ from typing import Final, cast
 from hypothesis import strategies as st
 from hypothesis.strategies import DrawFn, SearchStrategy
 
-from tests.route_parity.fixture_recorder import ProviderSpec
+from tests.route_parity.fixtures.recording import ProviderSpec
 from tests.test_litellm.ocr.fixtures.common import (
     OcrFixtureClient,
-    OcrFixtureTarget,
+    OcrRecordingTarget,
     annotation_format,
     image_document,
     invoke_with_api_key,
@@ -80,19 +80,18 @@ def required_mistral_inputs(model: str) -> tuple[MistralOcrSdkInput, ...]:
     return tuple(MistralOcrSdkInput.model_validate({"model": model, "document": document, **case}) for case in cases)
 
 
-class MistralFixtureSource:
-    def targets(self, environ: Mapping[str, str], client: OcrFixtureClient) -> tuple[OcrFixtureTarget, ...]:
-        api_key: Final = environ.get("MISTRAL_API_KEY")
-        if not api_key:
-            return ()
-        configured: Final = environ.get("MISTRAL_API_BASE", "https://api.mistral.ai").rstrip("/")
-        upstream_base: Final = configured.removesuffix("/v1")
-        return (
-            OcrFixtureTarget(
-                name="mistral-ocr",
-                provider_spec=ProviderSpec(upstream_base=upstream_base),
-                strategy=cast(SearchStrategy[OcrSdkInputBase], mistral_input_strategy(MISTRAL_MODEL)),
-                invocation=invoke_with_api_key(client, api_key),
-                required_inputs=cast(tuple[OcrSdkInputBase, ...], required_mistral_inputs(MISTRAL_MODEL)),
-            ),
-        )
+def mistral_recording_targets(environ: Mapping[str, str], client: OcrFixtureClient) -> tuple[OcrRecordingTarget, ...]:
+    api_key: Final = environ.get("MISTRAL_API_KEY")
+    if not api_key:
+        return ()
+    configured: Final = environ.get("MISTRAL_API_BASE", "https://api.mistral.ai").rstrip("/")
+    upstream_base: Final = configured.removesuffix("/v1")
+    return (
+        OcrRecordingTarget(
+            name="mistral-ocr",
+            provider_spec=ProviderSpec(upstream_base=upstream_base),
+            strategy=cast(SearchStrategy[OcrSdkInputBase], mistral_input_strategy(MISTRAL_MODEL)),
+            invocation=invoke_with_api_key(client, api_key),
+            required_inputs=cast(tuple[OcrSdkInputBase, ...], required_mistral_inputs(MISTRAL_MODEL)),
+        ),
+    )

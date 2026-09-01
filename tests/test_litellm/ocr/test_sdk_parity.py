@@ -18,7 +18,7 @@ from litellm.rust_bridge import get_native_bridge
 from litellm.rust_bridge import ocr as rust_ocr_bridge
 from litellm.rust_bridge.ocr import RustAocr, RustOcr
 from tests.route_parity.compare import assert_model_parity, assert_parity, assert_request_parity
-from tests.route_parity.fixture_recorder import recorded_fixtures
+from tests.route_parity.fixtures.store import recorded_fixtures
 from tests.route_parity.inprocess import run_in_process
 from tests.route_parity.models import (
     SDKCommand,

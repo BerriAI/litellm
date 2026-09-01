@@ -34,6 +34,25 @@
 - Provider responses are replayed unchanged, so the parity test does not fuzz or validate provider behavior
 - Because Hypothesis does not run the parity assertion directly, parity failures are not automatically shrunk
 
+## Recording fixtures
+
+The recording command runs four explicit stages:
+
+1. Generate deterministic SDK inputs for every configured OCR target
+2. Build target-scoped, deduplicated recording jobs
+3. Record upstream responses through one globally bounded worker pool
+4. Persist each fixture and report whether it was recorded, cached, or failed
+
+Run it with:
+
+```shell
+uv run python -m tests.test_litellm.ocr.fixtures.record --examples 4 --concurrency 4
+```
+
+`--concurrency` caps all provider calls across all targets. Each completed job is reported immediately, and the final
+summary reports recorded, cached, and failed totals. Independent jobs finish after a failure, then the command exits
+nonzero if any job failed
+
 ## OCR input boundaries
 
 OCR strategies generate only public `litellm.ocr()` and `litellm.aocr()` inputs. Every case contains the normalized

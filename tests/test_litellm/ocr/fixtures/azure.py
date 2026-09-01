@@ -6,10 +6,10 @@ from typing import Final, cast
 from hypothesis import strategies as st
 from hypothesis.strategies import DrawFn, SearchStrategy
 
-from tests.route_parity.fixture_recorder import ProviderSpec
+from tests.route_parity.fixtures.recording import ProviderSpec
 from tests.test_litellm.ocr.fixtures.common import (
     OcrFixtureClient,
-    OcrFixtureTarget,
+    OcrRecordingTarget,
     invoke_with_api_key,
     pdf_document,
     public_document_strategy,
@@ -71,45 +71,45 @@ def azure_document_intelligence_input_strategy(draw: DrawFn) -> AzureDocumentInt
     )
 
 
-class AzureMistralFixtureSource:
-    def targets(self, environ: Mapping[str, str], client: OcrFixtureClient) -> tuple[OcrFixtureTarget, ...]:
-        api_key: Final = environ.get("AZURE_AI_API_KEY")
-        upstream_base: Final = environ.get("AZURE_AI_API_BASE")
-        configured_model: Final = environ.get("AZURE_AI_OCR_MODEL")
-        if not api_key or not upstream_base or not configured_model:
-            return ()
-        model: Final = configured_model if configured_model.startswith("azure_ai/") else f"azure_ai/{configured_model}"
-        return (
-            OcrFixtureTarget(
-                name="azure-mistral",
-                provider_spec=ProviderSpec(upstream_base=upstream_base.rstrip("/")),
-                strategy=cast(
-                    SearchStrategy[OcrSdkInputBase],
-                    mistral_input_strategy(MISTRAL_MODEL).map(lambda case_input: _as_azure_mistral(case_input, model)),
-                ),
-                invocation=invoke_with_api_key(client, api_key),
-                required_inputs=cast(
-                    tuple[OcrSdkInputBase, ...],
-                    tuple(
-                        _as_azure_mistral(case_input, model) for case_input in required_mistral_inputs(MISTRAL_MODEL)
-                    ),
-                ),
+def azure_mistral_recording_targets(
+    environ: Mapping[str, str], client: OcrFixtureClient
+) -> tuple[OcrRecordingTarget, ...]:
+    api_key: Final = environ.get("AZURE_AI_API_KEY")
+    upstream_base: Final = environ.get("AZURE_AI_API_BASE")
+    configured_model: Final = environ.get("AZURE_AI_OCR_MODEL")
+    if not api_key or not upstream_base or not configured_model:
+        return ()
+    model: Final = configured_model if configured_model.startswith("azure_ai/") else f"azure_ai/{configured_model}"
+    return (
+        OcrRecordingTarget(
+            name="azure-mistral",
+            provider_spec=ProviderSpec(upstream_base=upstream_base.rstrip("/")),
+            strategy=cast(
+                SearchStrategy[OcrSdkInputBase],
+                mistral_input_strategy(MISTRAL_MODEL).map(lambda case_input: _as_azure_mistral(case_input, model)),
             ),
-        )
+            invocation=invoke_with_api_key(client, api_key),
+            required_inputs=cast(
+                tuple[OcrSdkInputBase, ...],
+                tuple(_as_azure_mistral(case_input, model) for case_input in required_mistral_inputs(MISTRAL_MODEL)),
+            ),
+        ),
+    )
 
 
-class AzureDocumentIntelligenceFixtureSource:
-    def targets(self, environ: Mapping[str, str], client: OcrFixtureClient) -> tuple[OcrFixtureTarget, ...]:
-        api_key: Final = environ.get("AZURE_DOCUMENT_INTELLIGENCE_API_KEY")
-        upstream_base: Final = environ.get("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT")
-        if not api_key or not upstream_base:
-            return ()
-        return (
-            OcrFixtureTarget(
-                name="azure-document-intelligence",
-                provider_spec=ProviderSpec(upstream_base=upstream_base.rstrip("/")),
-                strategy=cast(SearchStrategy[OcrSdkInputBase], azure_document_intelligence_input_strategy()),
-                invocation=invoke_with_api_key(client, api_key),
-                required_inputs=cast(tuple[OcrSdkInputBase, ...], _required_document_intelligence_inputs()),
-            ),
-        )
+def azure_document_intelligence_recording_targets(
+    environ: Mapping[str, str], client: OcrFixtureClient
+) -> tuple[OcrRecordingTarget, ...]:
+    api_key: Final = environ.get("AZURE_DOCUMENT_INTELLIGENCE_API_KEY")
+    upstream_base: Final = environ.get("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT")
+    if not api_key or not upstream_base:
+        return ()
+    return (
+        OcrRecordingTarget(
+            name="azure-document-intelligence",
+            provider_spec=ProviderSpec(upstream_base=upstream_base.rstrip("/")),
+            strategy=cast(SearchStrategy[OcrSdkInputBase], azure_document_intelligence_input_strategy()),
+            invocation=invoke_with_api_key(client, api_key),
+            required_inputs=cast(tuple[OcrSdkInputBase, ...], _required_document_intelligence_inputs()),
+        ),
+    )

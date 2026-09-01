@@ -1,26 +1,16 @@
 from __future__ import annotations
 
-import hashlib
-import os
 import queue
 import threading
 from collections.abc import Callable, Generator, Iterable
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
-from typing import Final, Generic, Protocol, TypeVar, cast
+from typing import Final, TypeVar, cast
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
-import pytest
-from hypothesis import given, settings
-from hypothesis.strategies import SearchStrategy
-from pydantic import AwareDatetime, BaseModel, ConfigDict, ValidationError
 
-from tests.route_parity.json_file_cache import JsonFileCache, canonical_json
 from tests.route_parity.recorded_http import (
     HttpHeader,
     RecordedHttpResponse,
@@ -29,7 +19,6 @@ from tests.route_parity.recorded_http import (
     RecordedStreamChunk,
 )
 
-FIXTURE_SCHEMA_VERSION: Final = 1
 _PARITY_PROVIDER_HOST: Final = "parity-provider.invalid"
 
 _HOP_BY_HOP_HEADERS: Final = frozenset(
@@ -46,31 +35,12 @@ _HOP_BY_HOP_HEADERS: Final = frozenset(
 )
 
 
-class FixtureInput(Protocol):
-    def canonical_input(self) -> dict[str, object]: ...
-
-
-InputT = TypeVar("InputT", bound=FixtureInput)
-CaseT = TypeVar("CaseT", bound=BaseModel)
+InputT = TypeVar("InputT")
 
 
 @dataclass(frozen=True, slots=True)
 class ProviderSpec:
     upstream_base: str
-
-
-@dataclass(frozen=True, slots=True)
-class RecorderResult(Generic[CaseT]):
-    case: CaseT
-    cache_hit: bool
-
-
-class FixtureEnvelope(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    schema_version: int
-    recorded_at: AwareDatetime
-    case: dict[str, object]
 
 
 def _excluded_headers(headers: tuple[tuple[str, str], ...]) -> frozenset[str]:
@@ -100,7 +70,7 @@ def _normalized_response_header(name: str, value: str) -> str:
     return urlunsplit(("http", _PARITY_PROVIDER_HOST, parsed.path, parsed.query, parsed.fragment))
 
 
-def _local_response_header(name: str, value: str, provider_url: str) -> str:
+def local_response_header(name: str, value: str, provider_url: str) -> str:
     if name.lower() not in {"location", "operation-location"}:
         return value
     parsed: Final = urlsplit(value)
@@ -193,7 +163,7 @@ class _RecordingHandler(BaseHTTPRequestHandler):
         provider: Final = self.server
         assert isinstance(provider, _RecordingProvider)
         for header in headers:
-            self.send_header(header.name, _local_response_header(header.name, header.value, provider.url))
+            self.send_header(header.name, local_response_header(header.name, header.value, provider.url))
         self.send_header("transfer-encoding", "chunked")
         self.end_headers()
         chunks: Final = tuple(self._relay_chunks(upstream.iter_bytes()))
@@ -219,7 +189,7 @@ class _RecordingHandler(BaseHTTPRequestHandler):
         provider: Final = self.server
         assert isinstance(provider, _RecordingProvider)
         for header in headers:
-            self.send_header(header.name, _local_response_header(header.name, header.value, provider.url))
+            self.send_header(header.name, local_response_header(header.name, header.value, provider.url))
         self.send_header("content-length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -241,23 +211,6 @@ def _recording_provider(spec: ProviderSpec) -> Generator[_RecordingProvider]:
         thread.join(timeout=5)
 
 
-def generate_case_inputs(strategy: SearchStrategy[InputT], examples: int) -> tuple[InputT, ...]:
-    generated: Final[queue.SimpleQueue[InputT | None]] = queue.SimpleQueue()
-
-    @settings(max_examples=examples, deadline=None, derandomize=True)
-    @given(case_input=strategy)
-    def generate_case(case_input: InputT) -> None:
-        generated.put(case_input)
-
-    generate_case()
-    generated.put(None)
-    return tuple(iter(generated.get, None))
-
-
-def fixture_cache_key(case_input: FixtureInput) -> dict[str, object]:
-    return case_input.canonical_input()
-
-
 def _invoke_and_take_responses(
     recorder: _RecordingProvider,
     case_input: InputT,
@@ -273,118 +226,10 @@ def _invoke_and_take_responses(
     return recorder.take_responses()
 
 
-def _load_fixture(raw_fixture: dict[str, object], path: Path, case_type: type[CaseT]) -> CaseT:
-    schema_version: Final = raw_fixture.get("schema_version")
-    if schema_version != FIXTURE_SCHEMA_VERSION:
-        raise ValueError(
-            f"fixture {path} has schema_version {schema_version!r}, expected {FIXTURE_SCHEMA_VERSION}; "
-            "delete it and regenerate the fixture bundle"
-        )
-    try:
-        envelope: Final = FixtureEnvelope.model_validate(raw_fixture)
-        return case_type.model_validate(envelope.case)
-    except ValidationError as error:
-        raise ValueError(f"invalid parity fixture {path} ({len(error.errors())} validation errors)") from error
-
-
-def record_case(
+def record_upstream_responses(
     spec: ProviderSpec,
-    root: Path,
     case_input: InputT,
     sdk_call: Callable[[str, InputT], object],
-    case_type: type[CaseT],
-) -> RecorderResult[CaseT]:
-    cache: Final = JsonFileCache(root)
-    cache_key: Final = fixture_cache_key(case_input)
-    cached: Final = cache.get(cache_key)
-    if cached is not None:
-        return RecorderResult(case=_load_fixture(cached, cache.path_for(cache_key), case_type), cache_hit=True)
-
+) -> tuple[RecordedResponse, ...]:
     with _recording_provider(spec) as recorder:
-        upstream_responses: Final = _invoke_and_take_responses(recorder, case_input, sdk_call)
-
-    case: Final = case_type.model_validate({"litellm_input": case_input, "provider_responses": upstream_responses})
-    envelope: Final = FixtureEnvelope(
-        schema_version=FIXTURE_SCHEMA_VERSION,
-        recorded_at=datetime.now(timezone.utc),
-        case=cast(dict[str, object], case.model_dump(mode="json", exclude_unset=True)),
-    )
-    cache.put(cache_key, cast(dict[str, object], envelope.model_dump(mode="json", exclude_unset=True)))
-    return RecorderResult(case=case, cache_hit=False)
-
-
-def record_cases(
-    spec: ProviderSpec,
-    root: Path,
-    case_inputs: tuple[InputT, ...],
-    sdk_call: Callable[[str, InputT], object],
-    case_type: type[CaseT],
-    max_concurrency: int,
-) -> tuple[RecorderResult[CaseT], ...]:
-    if max_concurrency < 1:
-        raise ValueError("max_concurrency must be at least 1")
-    unique_inputs: Final = tuple(
-        {canonical_json(fixture_cache_key(case_input)): case_input for case_input in case_inputs}.values()
-    )
-    with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
-        futures: Final = tuple(
-            executor.submit(record_case, spec, root, case_input, sdk_call, case_type) for case_input in unique_inputs
-        )
-        return tuple(future.result() for future in futures)
-
-
-def fixture_directory(configured: Path | None, env_value: str | None, default: Path) -> Path:
-    return (configured or Path(env_value or default)).expanduser()
-
-
-def recorded_fixtures(directory: Path, case_type: type[CaseT]) -> tuple[CaseT, ...]:
-    cache: Final = JsonFileCache(directory)
-    return tuple(_load_fixture(raw_fixture, path, case_type) for path, raw_fixture in cache.values_with_paths())
-
-
-def fixture_id(case_input: FixtureInput, prefix: str) -> str:
-    input_json: Final = canonical_json(case_input.canonical_input())
-    digest: Final = hashlib.sha256(input_json.encode("utf-8")).hexdigest()[:8]
-    return f"{prefix}-{digest}"
-
-
-def parametrize_recorded_fixtures(
-    metafunc: pytest.Metafunc,
-    *,
-    fixture_name: str,
-    case_type: type[CaseT],
-    env_var: str,
-    default_directory: Path,
-    regeneration_command: str,
-    id_builder: Callable[[CaseT], str],
-) -> None:
-    if fixture_name not in metafunc.fixturenames:
-        return
-    configured: Final = os.environ.get(env_var)
-    if configured == "":
-        raise pytest.UsageError(f"{env_var} is set but empty")
-    directory: Final = Path(configured).expanduser() if configured is not None else default_directory
-    try:
-        fixtures: Final = recorded_fixtures(directory, case_type)
-    except (ValidationError, ValueError) as error:
-        raise pytest.UsageError(
-            f"Invalid parity fixture bundle at {directory}. "
-            "Each fixture must use the current versioned envelope. "
-            f"Record fresh fixtures in an empty directory with: `{regeneration_command}`. "
-            f"Validation details: {error}"
-        ) from error
-    if fixtures:
-        metafunc.parametrize(fixture_name, fixtures, ids=tuple(id_builder(fixture) for fixture in fixtures))
-        return
-    if configured is not None:
-        raise pytest.UsageError(f"no recorded fixtures in {directory}")
-    metafunc.parametrize(
-        fixture_name,
-        (
-            pytest.param(
-                None,
-                marks=pytest.mark.skip(reason=f"no recorded fixtures in {directory}"),
-                id="no-recorded-fixtures",
-            ),
-        ),
-    )
+        return _invoke_and_take_responses(recorder, case_input, sdk_call)
