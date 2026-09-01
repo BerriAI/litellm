@@ -226,6 +226,35 @@ test.describe("Add Model", () => {
     });
     expect(createCred.ok(), `POST /credentials failed (${createCred.status()}): ${await createCred.text()}`).toBe(true);
 
+    // Multi-instance stacks propagate a new credential to the probe-serving instances on a periodic
+    // sync; consecutive successes guard against a load balancer alternating synced and stale replicas
+    let consecutiveProbeSuccesses = 0;
+    await expect
+      .poll(
+        async () => {
+          const probe = await page.request.post("/health/test_connection", {
+            headers: auth,
+            data: {
+              litellm_params: {
+                model: "openai/fake-gpt-4",
+                custom_llm_provider: "openai",
+                litellm_credential_name: credentialName,
+              },
+              model_info: {},
+              mode: "chat",
+            },
+          });
+          const healthy = probe.ok() && (await probe.json()).status === "success";
+          consecutiveProbeSuccesses = healthy ? consecutiveProbeSuccesses + 1 : 0;
+          return consecutiveProbeSuccesses;
+        },
+        {
+          message: `stored credential ${credentialName} never became usable for a connection test`,
+          timeout: 60_000,
+        },
+      )
+      .toBeGreaterThanOrEqual(3);
+
     try {
       await navigateToPage(page, Page.Models);
       await page.getByRole("tab", { name: "Add Model" }).click();
