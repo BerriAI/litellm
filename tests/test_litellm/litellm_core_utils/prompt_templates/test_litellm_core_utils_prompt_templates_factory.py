@@ -3627,3 +3627,151 @@ def test_convert_gemini_tool_call_result_answers_tool_reference_only_result():
     )
 
     assert result == {"function_response": {"name": "ToolSearch", "response": {"content": ""}}}
+
+
+def test_anthropic_messages_pt_drops_empty_but_signed_thinking_block():
+    """An empty-but-signed thinking block must still be dropped."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "What's 2+2?"},
+        {
+            "role": "assistant",
+            "content": "4",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "",
+                    "signature": "sig_abc123_looks_valid",
+                }
+            ],
+        },
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages,
+        model="claude-sonnet-4-5-20250929",
+        llm_provider="anthropic",
+    )
+
+    assistant_msg = result[1]
+    assert isinstance(assistant_msg["content"], list)
+    content_types = [block.get("type") for block in assistant_msg["content"]]
+    assert "thinking" not in content_types, "empty-text thinking block must be dropped even though it has a signature"
+
+
+def test_anthropic_messages_pt_keeps_non_empty_signed_thinking_block():
+    """Regression: a non-empty, signed thinking block passes through unchanged."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "What's 2+2?"},
+        {
+            "role": "assistant",
+            "content": "4",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Let me add these numbers together.",
+                    "signature": "sig_abc123_looks_valid",
+                }
+            ],
+        },
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages,
+        model="claude-sonnet-4-5-20250929",
+        llm_provider="anthropic",
+    )
+
+    assistant_msg = result[1]
+    assert isinstance(assistant_msg["content"], list)
+    thinking_block = next((b for b in assistant_msg["content"] if b.get("type") == "thinking"), None)
+    assert thinking_block is not None, "non-empty signed thinking block must be kept"
+    assert thinking_block["thinking"] == "Let me add these numbers together."
+    assert thinking_block["signature"] == "sig_abc123_looks_valid"
+
+
+def test_anthropic_messages_pt_keeps_redacted_thinking_block():
+    """Regression: redacted_thinking blocks are unaffected by the emptiness check."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "What's 2+2?"},
+        {
+            "role": "assistant",
+            "content": "4",
+            "thinking_blocks": [
+                {
+                    "type": "redacted_thinking",
+                    "data": "encrypted_opaque_blob",
+                }
+            ],
+        },
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages,
+        model="claude-sonnet-4-5-20250929",
+        llm_provider="anthropic",
+    )
+
+    assistant_msg = result[1]
+    assert isinstance(assistant_msg["content"], list)
+    content_types = [block.get("type") for block in assistant_msg["content"]]
+    assert "redacted_thinking" in content_types, "redacted_thinking blocks must always be kept"
+
+
+def test_anthropic_messages_pt_drops_unsigned_thinking_block():
+    """Regression: an unsigned thinking block is still dropped, regardless of text."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        anthropic_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "What's 2+2?"},
+        {
+            "role": "assistant",
+            "content": "4",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Let me add these numbers together.",
+                    "signature": "",
+                }
+            ],
+        },
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages,
+        model="claude-sonnet-4-5-20250929",
+        llm_provider="anthropic",
+    )
+
+    assistant_msg = result[1]
+    assert isinstance(assistant_msg["content"], list)
+    content_types = [block.get("type") for block in assistant_msg["content"]]
+    assert "thinking" not in content_types, "unsigned thinking block must still be dropped"
+
+
+def test_is_unsignable_thinking_block_treats_whitespace_only_as_empty():
+    """Whitespace-only `thinking` text is treated as empty and dropped."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _is_unsignable_thinking_block,
+    )
+
+    whitespace_only_block = {
+        "type": "thinking",
+        "thinking": "   \n\t  ",
+        "signature": "sig_abc123_looks_valid",
+    }
+
+    assert _is_unsignable_thinking_block(whitespace_only_block) is True
