@@ -483,6 +483,8 @@ class TestSingulrResponsePayload:
             "tool_calls": [
                 {"id": None, "type": "function", "function": {"name": "f", "arguments": "{}"}},
                 {"id": "call_2", "type": "function", "function": None},
+                {"id": "call_3", "type": "function", "function": {"name": None, "arguments": "{}"}},
+                {"id": "call_4", "type": "function", "function": {"name": "f", "arguments": None}},
             ],
         }
         with patch.object(singulr_guardrail.async_handler, "post", return_value=resp) as mock_post:
@@ -526,6 +528,25 @@ class TestSingulrAllowAction:
         inputs = {"texts": ["Here is your answer."]}
         with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
             result = await singulr_guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="response",
+            )
+            assert result is inputs
+
+    @pytest.mark.asyncio
+    async def test_response_returns_inputs_unchanged_when_api_unreachable_and_block_on_error_false(self):
+        guardrail = SingulrGuardrail(
+            singulr_api_base="https://api.test.singulr.ai",
+            singulr_api_key="test_token_1234",
+            guardrail_name="test-singulr",
+            block_on_error=False,
+        )
+        inputs = {"texts": ["Here is your answer."]}
+        with patch.object(
+            guardrail.async_handler, "post", side_effect=httpx.TransportError("unreachable")
+        ):
+            result = await guardrail.apply_guardrail(
                 inputs=inputs,
                 request_data={},
                 input_type="response",
@@ -616,6 +637,25 @@ class TestSingulrMcpRequest:
                     input_type="request",
                 )
             assert exc_info.value.blocked_content is True
+
+    @pytest.mark.asyncio
+    async def test_mcp_request_is_a_noop_when_api_unreachable_and_block_on_error_false(self):
+        guardrail = SingulrGuardrail(
+            singulr_api_base="https://api.test.singulr.ai",
+            singulr_api_key="test_token_1234",
+            guardrail_name="test-singulr",
+            block_on_error=False,
+        )
+        request_data = {"mcp_tool_name": "search_docs", "mcp_arguments": {"query": "reset password"}}
+        with patch.object(
+            guardrail.async_handler, "post", side_effect=httpx.TransportError("unreachable")
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": []},
+                request_data=request_data,
+                input_type="request",
+            )
+        assert result == {"texts": []}
 
 
 class TestSingulrMcpResponse:
@@ -721,6 +761,26 @@ class TestSingulrMcpResponse:
             )
         sent_payload = mock_post.call_args.kwargs["json"]
         assert sent_payload["metadata"] == {"user_api_key_alias": "top-level-alias"}
+
+    @pytest.mark.asyncio
+    async def test_mcp_response_returns_inputs_unchanged_when_api_unreachable_and_block_on_error_false(self):
+        guardrail = SingulrGuardrail(
+            singulr_api_base="https://api.test.singulr.ai",
+            singulr_api_key="test_token_1234",
+            guardrail_name="test-singulr",
+            block_on_error=False,
+        )
+        request_data = {"call_type": "call_mcp_tool", "mcp_tool_name": "search_docs"}
+        inputs = {"texts": ["leaked secret"]}
+        with patch.object(
+            guardrail.async_handler, "post", side_effect=httpx.TransportError("unreachable")
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data=request_data,
+                input_type="response",
+            )
+        assert result is inputs
 
 
 # ---------------------------------------------------------------------------
@@ -859,6 +919,35 @@ class TestSingulrLoggingHook:
         guardrail_information = updated_kwargs["standard_logging_object"]["guardrail_information"]
         assert guardrail_information[0]["guardrail_status"] == "guardrail_intervened"
 
+    @pytest.mark.asyncio
+    async def test_unexpected_exception_is_swallowed_without_recording_guardrail_information(self, singulr_guardrail):
+        """A non-guardrail exception (e.g. a bug in a downstream integration)
+        must not propagate out of the logging_only hook, and must not record
+        standard_logging_guardrail_information since no verdict was reached."""
+        kwargs = {"messages": [{"role": "user", "content": "hi"}]}
+        with patch.object(singulr_guardrail.async_handler, "post", side_effect=RuntimeError("boom")):
+            updated_kwargs, result = await singulr_guardrail.async_logging_hook(
+                kwargs=kwargs, result=None, call_type="acompletion"
+            )
+        assert result is None
+        assert "standard_logging_object" not in updated_kwargs
+
+    @pytest.mark.asyncio
+    async def test_appends_to_existing_guardrail_information_list(self, singulr_guardrail):
+        resp = _make_response({"should_block": False})
+        existing_entry = {"guardrail_name": "other-guardrail"}
+        kwargs = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "standard_logging_object": {"guardrail_information": [existing_entry]},
+        }
+        with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
+            updated_kwargs, _ = await singulr_guardrail.async_logging_hook(
+                kwargs=kwargs, result=None, call_type="acompletion"
+            )
+        guardrail_information = updated_kwargs["standard_logging_object"]["guardrail_information"]
+        assert guardrail_information[0] is existing_entry
+        assert guardrail_information[1]["guardrail_name"] == "test-singulr"
+
     def test_sync_logging_hook_returns_kwargs_and_result_unchanged_when_loop_running(self, singulr_guardrail):
         """logging_hook is the sync entrypoint used outside an event loop;
         inside a running loop it must no-op rather than deadlock or raise."""
@@ -869,6 +958,39 @@ class TestSingulrLoggingHook:
             return singulr_guardrail.logging_hook(kwargs=kwargs, result=None, call_type="acompletion")
 
         returned_kwargs, returned_result = asyncio.run(_drive())
+        assert returned_result is None
+        assert returned_kwargs == {"messages": [{"role": "user", "content": "hi"}]}
+
+    def test_sync_logging_hook_creates_a_new_event_loop_when_none_is_set(self, singulr_guardrail):
+        """A thread with no current event loop must get a fresh one instead
+        of raising RuntimeError out of the sync entrypoint."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        resp = _make_response({"should_block": False})
+
+        def _run():
+            kwargs = {"messages": [{"role": "user", "content": "hi"}]}
+            with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
+                return singulr_guardrail.logging_hook(kwargs=kwargs, result=None, call_type="acompletion")
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            returned_kwargs, returned_result = pool.submit(_run).result()
+        assert returned_result is None
+        guardrail_information = returned_kwargs["standard_logging_object"]["guardrail_information"]
+        assert guardrail_information[0]["guardrail_status"] == "success"
+
+    def test_sync_logging_hook_swallows_unexpected_exception(self, singulr_guardrail):
+        """A bug surfacing from async_logging_hook itself, not just the
+        Singulr API call, must not propagate out of the sync entrypoint."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _run():
+            kwargs = {"messages": [{"role": "user", "content": "hi"}]}
+            with patch.object(singulr_guardrail, "async_logging_hook", side_effect=RuntimeError("boom")):
+                return singulr_guardrail.logging_hook(kwargs=kwargs, result=None, call_type="acompletion")
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            returned_kwargs, returned_result = pool.submit(_run).result()
         assert returned_result is None
         assert returned_kwargs == {"messages": [{"role": "user", "content": "hi"}]}
 
@@ -1101,6 +1223,9 @@ class TestSingulrHttpStatusError:
 class TestSingulrConfigModel:
     def test_ui_friendly_name(self):
         assert SingulrGuardrailConfigModel.ui_friendly_name() == "Singulr"
+
+    def test_get_config_model_returns_singulr_config_model(self):
+        assert SingulrGuardrail.get_config_model() is SingulrGuardrailConfigModel
 
 
 # ---------------------------------------------------------------------------
