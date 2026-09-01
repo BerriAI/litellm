@@ -109,7 +109,7 @@ def use_litellm_rust(
     if configuring_responses_websocket:
         from litellm.rust_bridge.responses_websocket import set_rust_responses_websocket
 
-        set_rust_responses_websocket(connection=responses_websocket)
+        set_rust_responses_websocket(connection=responses_websocket if enabled else None)
 
 
 def rust_ocr_enabled() -> bool:

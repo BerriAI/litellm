@@ -12,5 +12,6 @@ pub mod realtime;
 pub mod responses;
 pub mod router;
 pub mod routing_utils;
+pub mod streaming;
 
 pub use error::Error;

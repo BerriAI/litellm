@@ -65,6 +65,45 @@ where
     })
 }
 
+pub(super) fn run_sync_with<T, F, C>(py: Python<'_>, future: F, convert: C) -> PyResult<Py<PyAny>>
+where
+    T: Send + 'static,
+    F: Future<Output = Result<T, Error>> + Send + 'static,
+    C: FnOnce(Python<'_>, T) -> PyResult<Py<PyAny>>,
+{
+    if Handle::try_current().is_ok() {
+        return Err(PyRuntimeError::new_err(
+            "synchronous native routes cannot run from a Tokio context; use the async route",
+        ));
+    }
+
+    let result = release_gil(py, move || {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(wait_for_sync_result(future))
+    })?;
+    let result = map_core_result(result, crate::errors::fallback_route_error_to_pyerr)?;
+    std::panic::catch_unwind(AssertUnwindSafe(|| convert(py, result))).map_err(panic_to_pyerr)?
+}
+
+pub(super) fn run_async_with<T, F, C>(
+    py: Python<'_>,
+    future: F,
+    convert: C,
+) -> PyResult<Bound<'_, PyAny>>
+where
+    T: Send + 'static,
+    F: Future<Output = Result<T, Error>> + Send + 'static,
+    C: FnOnce(Python<'_>, T) -> PyResult<Py<PyAny>> + Send + 'static,
+{
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let result = catch_route_panic(future).await?;
+        let result = map_core_result(result, crate::errors::fallback_route_error_to_pyerr)?;
+        Python::attach(|py| {
+            std::panic::catch_unwind(AssertUnwindSafe(|| convert(py, result)))
+                .map_err(panic_to_pyerr)?
+        })
+    })
+}
+
 fn map_core_result<T>(result: Result<T, Error>, map_error: fn(Error) -> PyErr) -> PyResult<T> {
     match result {
         Ok(value) => Ok(value),

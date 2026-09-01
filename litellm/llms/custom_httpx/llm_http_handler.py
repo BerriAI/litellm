@@ -6506,7 +6506,9 @@ class BaseLLMHTTPHandler:
                     from litellm.rust_bridge import responses_websocket as rust_responses_websocket
 
                     rust_backend: Final = await rust_responses_websocket.connect(
-                        url=ws_url,
+                        provider="openai",
+                        api_key=api_key,
+                        api_base=api_base,
                         headers={str(key): str(value) for key, value in headers.items()},
                         timeout=timeout,
                     )
