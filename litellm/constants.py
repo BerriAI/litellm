@@ -630,6 +630,8 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "nscale",
     "nebius",
     "dashscope",
+    "qwencloud",
+    "qwen_ai_platform",
     "modelscope",
     "moonshot",
     "publicai",
@@ -799,6 +801,7 @@ openai_compatible_endpoints: Final[list] = [
     "inference.api.nscale.com/v1",
     "api.studio.nebius.ai/v1",
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "https://api-inference.modelscope.cn/v1",
     "https://api.moonshot.ai/v1",
     "https://api.publicai.co/v1",
@@ -872,6 +875,8 @@ openai_compatible_providers: Final[list] = [
     "nscale",
     "nebius",
     "dashscope",
+    "qwencloud",
+    "qwen_ai_platform",
     "modelscope",
     "moonshot",
     "v0",
@@ -902,6 +907,8 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "featherless_ai",
     "nebius",
     "dashscope",
+    "qwencloud",
+    "qwen_ai_platform",
     "modelscope",
     "moonshot",
     "publicai",
@@ -1109,7 +1116,7 @@ nebius_models: Final[set] = set(
     ]
 )
 
-dashscope_models: Final[set] = set(
+dashscope_models: Final[frozenset] = frozenset(
     [
         "qwen-turbo",
         "qwen-plus",
@@ -1123,6 +1130,10 @@ dashscope_models: Final[set] = set(
         "qwen3-30b-a3b",
     ]
 )
+
+qwencloud_models: Final[frozenset] = frozenset(dashscope_models)
+
+qwen_ai_platform_models: Final[frozenset] = frozenset(dashscope_models)
 
 nebius_embedding_models: Final[set] = set(
     [
