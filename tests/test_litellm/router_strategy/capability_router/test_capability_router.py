@@ -84,6 +84,22 @@ def test_policy_falls_back_if_no_model_qualifies_or_price_is_unknown() -> None:
     )
 
 
+def test_probability_must_be_strictly_above_threshold() -> None:
+    parsed = CapabilityRouterConfig.model_validate(config())
+    verdict = CapabilityClassifierVerdict.model_validate(
+        {
+            "candidates": [
+                {"model": "small", "p_solve": 0.7, "reason": "on the boundary"},
+                {"model": "frontier", "p_solve": 0.7, "reason": "on the boundary"},
+            ]
+        }
+    )
+
+    assert select_capability_model(parsed, verdict, {"small": 0.01, "frontier": 0.05}).reason == (
+        "no_qualified_candidate"
+    )
+
+
 def test_router_registers_capability_strategy() -> None:
     router = Router(
         model_list=[

@@ -43,7 +43,7 @@ def select_capability_model(
     verdict: CapabilityClassifierVerdict,
     estimated_costs: Mapping[str, float | None],
 ) -> CapabilityRoutingDecision:
-    """Choose the cheapest candidate at or above the configured probability."""
+    """Choose the cheapest candidate above the configured probability."""
     configured_models = tuple(candidate.model for candidate in config.candidates)
     scores = {candidate.model: candidate for candidate in verdict.candidates}
     if set(scores) != set(configured_models):
@@ -55,7 +55,7 @@ def select_capability_model(
             p_solve=scores[model].p_solve,
             reason=scores[model].reason,
             estimated_cost=estimated_costs.get(model),
-            qualified=scores[model].p_solve >= config.probability_threshold,
+            qualified=scores[model].p_solve > config.probability_threshold,
         )
         for model in configured_models
     )
