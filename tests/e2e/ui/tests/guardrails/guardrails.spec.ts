@@ -29,9 +29,7 @@ test.describe("Guardrails", () => {
     await page.keyboard.type("pre_call");
     await expect(page.getByRole("option", { name: "pre_call" })).toBeAttached({ timeout: 5_000 });
     await page.keyboard.press("Enter");
-    await expect(dialog.locator('[data-slot="combobox-chip"]').filter({ hasText: "pre_call" })).toBeVisible({
-      timeout: 5_000,
-    });
+    await expect(dialog.getByText("pre_call", { exact: true })).toBeVisible({ timeout: 5_000 });
     await dialog.getByText("Create guardrail", { exact: true }).click();
 
     await dialog.getByLabel("presidio_analyzer_api_base").fill("http://127.0.0.1:9999");
@@ -46,7 +44,7 @@ test.describe("Guardrails", () => {
     await dialog.getByRole("button", { name: "Create Guardrail" }).click();
     await expect(page.getByText("Guardrail created successfully").first()).toBeVisible({ timeout: 15_000 });
 
-    const row = page.locator("table tbody tr").filter({ hasText: guardrailName });
+    const row = page.getByRole("row").filter({ hasText: guardrailName });
     await expect(row).toHaveCount(1, { timeout: 15_000 });
 
     await navigateToPage(page, Page.Teams);
@@ -78,6 +76,6 @@ test.describe("Guardrails", () => {
 
     await page.reload();
     await expect(page.getByRole("button", { name: /Add New Guardrail/i })).toBeVisible({ timeout: 20_000 });
-    await expect(page.locator("table tbody tr").filter({ hasText: guardrailName })).toHaveCount(0);
+    await expect(page.getByRole("row").filter({ hasText: guardrailName })).toHaveCount(0);
   });
 });

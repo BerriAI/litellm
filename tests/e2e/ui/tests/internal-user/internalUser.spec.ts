@@ -44,35 +44,34 @@ test.describe("Internal User", () => {
     const suffix = Date.now();
     const auth = { Authorization: `Bearer ${masterKey()}` };
 
-    let apiKey = "";
+    await navigateToPage(page, Page.ApiKeys);
+
+    await page.getByRole("button", { name: /Create New Key/i }).click();
+    await expect(page.getByText("Key Ownership")).toBeVisible({ timeout: 10_000 });
+
+    await expect(page.getByRole("radio", { name: "You", exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("radio", { name: "Another User" })).toHaveCount(0);
+
+    const keyName = `e2e-internal-team-key-${suffix}`;
+    await page.getByLabel(/Key Name/).fill(keyName);
+
+    const teamSelect = page.getByTestId("team-dropdown").getByRole("combobox");
+    await teamSelect.click();
+    await page.keyboard.type(E2E_TEAM_KEYGEN_ALIAS);
+    await page.getByRole("option", { name: E2E_TEAM_KEYGEN_ALIAS }).first().click();
+
+    await page.getByRole("combobox", { name: "Select models" }).click();
+    await page.getByRole("option", { name: "All Team Models", exact: true }).click();
+    await page.keyboard.press("Escape");
+
+    await page.getByRole("button", { name: "Create Key", exact: true }).click();
+
+    await expect(page.getByText("Save your Key")).toBeVisible({ timeout: 10_000 });
+    const apiKey = (await page.getByRole("dialog", { name: "Save your Key" }).locator("pre").innerText()).trim();
+    expect(apiKey).toMatch(/^sk-/);
+    await page.keyboard.press("Escape");
+
     try {
-      await navigateToPage(page, Page.ApiKeys);
-
-      await page.getByRole("button", { name: /Create New Key/i }).click();
-      await expect(page.getByText("Key Ownership")).toBeVisible({ timeout: 10_000 });
-
-      await expect(page.getByRole("radio", { name: "You", exact: true })).toBeVisible({ timeout: 10_000 });
-      await expect(page.getByRole("radio", { name: "Another User" })).toHaveCount(0);
-
-      const keyName = `e2e-internal-team-key-${suffix}`;
-      await page.getByLabel(/Key Name/).fill(keyName);
-
-      const teamSelect = page.getByTestId("team-dropdown").getByRole("combobox");
-      await teamSelect.click();
-      await page.keyboard.type(E2E_TEAM_KEYGEN_ALIAS);
-      await page.locator('[data-slot="combobox-content"]:visible').getByText(E2E_TEAM_KEYGEN_ALIAS).first().click();
-
-      await page.getByRole("combobox", { name: "Select models" }).click();
-      await page.getByRole("option", { name: "All Team Models", exact: true }).click();
-      await page.keyboard.press("Escape");
-
-      await page.getByRole("button", { name: "Create Key", exact: true }).click();
-
-      await expect(page.getByText("Save your Key")).toBeVisible({ timeout: 10_000 });
-      apiKey = (await page.getByRole("dialog", { name: "Save your Key" }).locator("pre").innerText()).trim();
-      expect(apiKey).toMatch(/^sk-/);
-      await page.keyboard.press("Escape");
-
       await openPlayground(page);
       await keySourceSelect(page).click();
       await onlyVisible(page.getByRole("option", { name: "Virtual Key" })).click({ timeout: 15_000 });
@@ -86,9 +85,7 @@ test.describe("Internal User", () => {
 
       await expect(page.getByText(MOCK_RESPONSE_TEXT, { exact: false }).first()).toBeVisible({ timeout: 60_000 });
     } finally {
-      if (apiKey) {
-        await request.post("/key/delete", { headers: auth, data: { keys: [apiKey] } });
-      }
+      await request.post("/key/delete", { headers: auth, data: { keys: [apiKey] } });
     }
   });
 
