@@ -2,7 +2,6 @@ import json
 
 import pytest
 
-
 from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALLS_CACHE,
     LiteLLMCompletionResponsesConfig,
@@ -3411,6 +3410,8 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._tool_args_by_call_id = {}
         iterator._tool_item_id_by_call_id = {}
         iterator._tool_call_id_by_index = {}
+        iterator._streamed_tool_call_ids_in_order = []
+        iterator._resolved_tool_call_id_by_position = {}
         iterator._ambiguous_tool_call_indexes = set()
         iterator._next_tool_output_index = 1
         iterator._final_tool_events_queued = False
