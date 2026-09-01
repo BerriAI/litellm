@@ -11684,6 +11684,23 @@ class TestPreRoutingTierDrivesFallbacks:
             await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
 
     @pytest.mark.asyncio
+    async def test_a_chain_keyed_on_the_router_name_rescues_when_no_tier_chain_exists(self):
+        """The documented contract: configs keyed on the requested name keep working behind auto-routers."""
+        router = self._router([{"smart-router": ["backup-a"]}])
+
+        response = await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
+
+        assert response.choices[0].message.content == "from backup-a"
+
+    @pytest.mark.asyncio
+    async def test_the_tier_chain_wins_over_the_router_name_chain(self):
+        router = self._router([{"tier1": ["backup-a"]}, {"smart-router": ["backup-b"]}])
+
+        response = await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
+
+        assert response.choices[0].message.content == "from backup-a"
+
+    @pytest.mark.asyncio
     async def test_a_request_without_a_pre_routing_hook_still_uses_its_own_group(self):
         router = self._router([{"tier1": ["backup-a"]}])
 

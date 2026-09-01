@@ -1184,3 +1184,28 @@ class TestPreRoutingSelectionIsPerHop:
         record_pre_routing_selection(kwargs, "tier1")
 
         assert get_pre_routing_selection(kwargs) == "tier1"
+
+
+class TestOrderedFallbackLookupGroups:
+    def test_tier_first_then_requested_group_deduped(self):
+        from litellm.router_utils.fallback_event_handlers import (
+            PRE_ROUTING_SELECTED_MODEL_KEY,
+            fallback_lookup_groups,
+        )
+
+        kwargs = {"litellm_metadata": {PRE_ROUTING_SELECTED_MODEL_KEY: "tier1"}}
+        assert fallback_lookup_groups(kwargs, "smart-router") == ("tier1", "smart-router")
+        assert fallback_lookup_groups(kwargs, "tier1") == ("tier1",)
+        assert fallback_lookup_groups({}, "smart-router") == ("smart-router",)
+        assert fallback_lookup_groups({}, None) == ()
+
+    def test_first_resolving_group_wins_and_generic_idx_survives_a_miss(self):
+        from litellm.router_utils.fallback_event_handlers import (
+            get_fallback_model_group_for_lookup_groups,
+        )
+
+        fallbacks = [{"tier1": ["backup-a"]}, {"smart-router": ["backup-b"]}, {"*": ["backup-c"]}]
+        assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier1", "smart-router")) == (["backup-a"], None)
+        assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier9", "smart-router")) == (["backup-b"], None)
+        assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier9", "no-such")) == (["backup-c"], 2)
+        assert get_fallback_model_group_for_lookup_groups([{"tier1": ["backup-a"]}], ("no", "nope")) == (None, None)
