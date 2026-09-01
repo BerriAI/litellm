@@ -362,8 +362,8 @@ describe("AddAutoRouterTab", () => {
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
     expandDetailedConfiguration();
-    await user.click(screen.getByText("Advanced: Affinity"));
-    expect(await screen.findByRole("switch", { name: "Pin a session to its first model" })).not.toBeChecked();
+    await user.click(screen.getByText("Advanced: Classification Method"));
+    expect(await screen.findByRole("radio", { name: /Once per session/ })).not.toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
@@ -468,8 +468,8 @@ describe("AddAutoRouterTab", () => {
 
     await user.type(screen.getByPlaceholderText(/smart_router/i), "affinity-router");
     expandDetailedConfiguration();
-    await user.click(screen.getByText("Advanced: Affinity"));
-    await user.click(await screen.findByRole("switch", { name: "Pin a session to its first model" }));
+    await user.click(screen.getByText("Advanced: Classification Method"));
+    await user.click(await screen.findByRole("radio", { name: /Once per session/ }));
 
     await user.click(screen.getByRole("button", { name: /add auto router/i }));
 
@@ -477,6 +477,44 @@ describe("AddAutoRouterTab", () => {
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
       session_affinity: true,
     });
+  });
+
+  it("carries every new user message through to the create payload", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "user-turn-router");
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Classification Method"));
+    await user.click(await screen.findByRole("radio", { name: /Every new user message/ }));
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      classification_mode: "user_turn",
+    });
+  });
+
+  it("writes every_request into the create payload when the default frequency stays selected", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "default-timing-router");
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Classification Method"));
+    expect(await screen.findByRole("radio", { name: /Every request/ })).toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(
+      vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config.classification_mode,
+    ).toBe("every_request");
   });
 
   it("defaults a new router to deployment affinity on, matching the backend field default", async () => {
