@@ -47,9 +47,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
     logged_failure: int = 0
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
 
-    def __init__(self, router_cache: DualCache, routing_args: dict = {}):
+    def __init__(self, router_cache: DualCache, routing_args: dict | None = None):
         self.router_cache = router_cache
-        self.routing_args = RoutingArgs(**routing_args)
+        self.routing_args = RoutingArgs(**(routing_args or {}))
         BaseRoutingStrategy.__init__(
             self,
             dual_cache=router_cache,
