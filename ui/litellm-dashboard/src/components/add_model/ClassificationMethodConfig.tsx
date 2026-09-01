@@ -111,7 +111,7 @@ const HowClassificationWorks: React.FC<{ value: ComplexityRouterConfigValue }> =
         <strong className="block mb-2 font-semibold">How Classification Works</strong>
         <span className="text-[13px] text-muted-foreground">{scoringExplanation(value)}</span>
         {scorerRuns && ranges && (
-          <ul style={{ marginTop: 8, marginBottom: 0, paddingLeft: 20, fontSize: 13, color: "rgba(0, 0, 0, 0.45)" }}>
+          <ul className="mt-2 pl-5 text-[13px] text-muted-foreground">
             <li>
               <strong>{effectiveTierLabel("SIMPLE", value.tier_labels)}</strong>: Score &lt; {ranges.simpleMedium}
             </li>

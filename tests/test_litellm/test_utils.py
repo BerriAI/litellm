@@ -5785,3 +5785,33 @@ class TestHuggingFaceConfigFetch:
         assert _get_max_position_embeddings("some-org/some-model") == 512
         request_timeout = hf_config_route.calls.last.request.extensions["timeout"]
         assert request_timeout["read"] == HF_CONFIG_FETCH_TIMEOUT_SECONDS
+
+
+class TestIsVisionExplicitlyDisabled:
+    """github_copilot and chatgpt run an OAuth device flow inside get_llm_provider; the
+    explicit-disable lookup must adopt the declared prefix instead of resolving it, exactly
+    as _supports_factory does, or a capability check on a copilot deployment blocks routing
+    on a device-code prompt."""
+
+    @pytest.mark.parametrize("model", ["github_copilot/gpt-4o", "chatgpt/gpt-5"])
+    def test_never_resolves_an_authenticating_prefix(self, model, monkeypatch):
+        from litellm.utils import is_vision_explicitly_disabled
+
+        lookups: list = []
+
+        def _record(*args, **kwargs):
+            lookups.append((args, kwargs))
+            raise RuntimeError("provider resolution must not run for an authenticating provider")
+
+        monkeypatch.setattr(litellm, "get_llm_provider", _record)
+
+        assert is_vision_explicitly_disabled(model) is False
+        assert lookups == []
+
+    def test_explicit_false_detected_and_absent_reads_enabled(self):
+        from litellm.utils import is_vision_explicitly_disabled
+
+        assert (
+            is_vision_explicitly_disabled("fireworks_ai/accounts/fireworks/models/deepseek-v4-flash-0731") is True
+        )
+        assert is_vision_explicitly_disabled("anthropic/claude-sonnet-4-5") is False

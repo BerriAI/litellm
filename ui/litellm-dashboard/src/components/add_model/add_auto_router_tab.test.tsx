@@ -373,6 +373,71 @@ describe("AddAutoRouterTab", () => {
     });
   });
 
+  it("carries a context-window escalation opt-out through to the create payload", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "ctx-window-router");
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Context Window Escalation"));
+    const toggle = await screen.findByRole("switch", { name: "Escalate oversized prompts to a tier that fits" });
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      enable_context_window_escalation: false,
+    });
+  });
+
+  it("clamps the context-window buffer to 1 and keeps an untouched buffer out of the payload", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "ctx-buffer-router");
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Context Window Escalation"));
+    const buffer = await screen.findByLabelText("Window fit buffer");
+    fireEvent.change(buffer, { target: { value: "1.5" } });
+    fireEvent.blur(buffer, { target: { value: "1.5" } });
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    const config = vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config;
+    expect(config).toMatchObject({ context_window_escalation_buffer: 1 });
+    expect(config).not.toHaveProperty("enable_context_window_escalation");
+  });
+
+  it("clearing the buffer removes it from the payload so the router tracks the backend default", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "ctx-clear-router");
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Context Window Escalation"));
+    const buffer = await screen.findByLabelText("Window fit buffer");
+    fireEvent.change(buffer, { target: { value: "0.8" } });
+    fireEvent.blur(buffer, { target: { value: "0.8" } });
+    fireEvent.change(buffer, { target: { value: "" } });
+    fireEvent.blur(buffer, { target: { value: "" } });
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).not.toHaveProperty(
+      "context_window_escalation_buffer",
+    );
+  });
+
   // The scalar floor is the one scorer knob with no group dict behind it, so its wiring into the create
   // payload is only proven end to end. 0 is the case a truthy check would silently drop.
   it("carries a reasoning override floor of 0 through to the create payload", async () => {
