@@ -169,12 +169,6 @@ ANTHROPIC_DIRECT_MODELS: Tuple[ModelEntry, ...] = (
         mode="adaptive",
         required_env=_ANTHROPIC_REQ,
         caps=_CAPS_XHIGH_MAX,
-        fail_reason=(
-            "claude-fable-5-1 access on the CI Anthropic account is not yet "
-            "confirmed for this brand-new release; Anthropic returns "
-            "not_found_error until the account has access, so this cell stays "
-            "loud in CI. Remove this fail_reason once access is confirmed."
-        ),
     ),
     ModelEntry(
         alias="claude-fable-5",
