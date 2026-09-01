@@ -3144,3 +3144,47 @@ def test_test_model_connection_reads_no_credential_when_the_request_names_none(m
     assert response.json()["status"] == "success", response.text
     assert route.calls[0].request.headers["authorization"] == "Bearer sk-from-the-request"
     prisma_client.db.litellm_credentialstable.find_unique.assert_not_awaited()
+
+
+def test_test_model_connection_prefers_the_stored_credential_over_a_stale_copy_in_memory(monkeypatch):
+    """The database is the source of truth: a key rotated on another instance must win over the
+    copy this instance is still holding."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-for-this-test")
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="rotated-cred",
+                credential_values={"api_key": "sk-revoked-key"},
+                credential_info={},
+            )
+        ],
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_credentialstable.find_unique = AsyncMock(
+        return_value=_stored_credential_row("rotated-cred", {"api_key": "sk-rotated-key"})
+    )
+
+    with (
+        patch(  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", prisma_client
+        ),
+        respx.mock(assert_all_called=True) as respx_mock,
+    ):
+        route = respx_mock.post(host="api.openai.com", path="/v1/chat/completions").respond(
+            json=_chat_completion_response()
+        )
+        response = _test_connection_client().post(
+            "/health/test_connection",
+            json={
+                "mode": "chat",
+                "litellm_params": {"model": "openai/gpt-4o", "litellm_credential_name": "rotated-cred"},
+            },
+        )
+
+    assert response.json()["status"] == "success", response.text
+    assert route.calls[0].request.headers["authorization"] == "Bearer sk-rotated-key"
