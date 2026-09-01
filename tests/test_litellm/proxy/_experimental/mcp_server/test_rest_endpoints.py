@@ -952,6 +952,123 @@ class TestListToolsRestAPI:
         assert scope_inputs == [session_auth]
         assert reload_calls == []
 
+    async def test_single_server_response_includes_paginated_upstream_tools(
+        self,
+        monkeypatch,
+    ):
+        """The REST tools/list path should include tools beyond the upstream first page."""
+        import litellm.experimental_mcp_client.client as mcp_client_module
+        from mcp.types import ListToolsResult, PaginatedRequestParams
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        stub_server = MCPServer(
+            server_id="server-1",
+            name="stub",
+            server_name="stub",
+            alias="stub",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            mcp_info={"server_name": "stub"},
+        )
+        stub_server.available_on_public_internet = True
+
+        mock_transport_ctx = AsyncMock()
+        mock_transport_ctx.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock()))
+        mock_transport_ctx.__aexit__ = AsyncMock(return_value=None)
+        monkeypatch.setattr(
+            mcp_client_module,
+            "streamable_http_client",
+            MagicMock(return_value=mock_transport_ctx),
+            raising=False,
+        )
+
+        mock_session_ctx = AsyncMock()
+        mock_session_instance = AsyncMock()
+        mock_session_instance.initialize = AsyncMock(return_value=None)
+        mock_session_instance.list_tools.side_effect = [
+            ListToolsResult(
+                tools=[
+                    MCPTool(
+                        name="first_page_tool",
+                        description="First page tool",
+                        inputSchema={},
+                    )
+                ],
+                nextCursor="page-2",
+            ),
+            ListToolsResult(
+                tools=[
+                    MCPTool(
+                        name="second_page_tool",
+                        description="Second page tool",
+                        inputSchema={},
+                    )
+                ]
+            ),
+        ]
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session_instance)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=None)
+        monkeypatch.setattr(
+            mcp_client_module,
+            "ClientSession",
+            MagicMock(return_value=mock_session_ctx),
+            raising=False,
+        )
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "filter_server_ids_by_ip_with_info",
+            lambda server_ids, client_ip: (server_ids, 0),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id="server-1",
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+        assert set(result.keys()) == {"tools", "error", "message"}
+        assert [tool.name for tool in result["tools"]] == [
+            "first_page_tool",
+            "second_page_tool",
+        ]
+        assert result["error"] is None
+        assert result["message"] == "Successfully retrieved tools"
+
+        assert mock_session_instance.list_tools.call_count == 2
+        second_call_params = mock_session_instance.list_tools.call_args_list[1].kwargs["params"]
+        assert isinstance(second_call_params, PaginatedRequestParams)
+        assert second_call_params.cursor == "page-2"
+
     async def test_include_disabled_tools_is_admin_only(self, monkeypatch):
         """include_disabled_tools skips the allowlist filter only for PROXY_ADMIN;
         a non-admin passing it stays filtered so the REST endpoint can't be used
