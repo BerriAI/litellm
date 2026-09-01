@@ -1541,6 +1541,8 @@ async def test_proxy_admin_still_told_the_team_is_unknown():
         # the same integration registered for a second event: identical values
         # flatten to the identical dict, so there is nothing to redirect
         ({"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}, [{"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], False),
+        # the same credential under its other spelling is the same credential
+        ({"langfuse_secret": "sk"}, [{"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], False),
         # the same shape with one value moved is the redirect again
         ({"langfuse_host": "http://attacker.invalid", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}, [{"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], True),
     ],
