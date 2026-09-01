@@ -2352,7 +2352,7 @@
   },
   "src/components/view_logs/GuardrailViewer/GuardrailViewer.tsx": {
     "no-nested-ternary": {
-      "count": 4
+      "count": 3
     }
   },
   "src/components/view_logs/LogDetailsDrawer/LogDetailContent.tsx": {
