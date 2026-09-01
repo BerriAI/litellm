@@ -512,6 +512,13 @@ class ProxyExtrasDBManager:
         try:
             import psycopg
         except ImportError:
+            logger.warning(
+                "psycopg is not installed; skipping the LiteLLM_SpendLogs "
+                "partition check. If this table is partitioned (see "
+                "db_scripts/partition_spend_logs.sql), schema reconciliation "
+                "will try to rewrite its primary key and fail. Install the "
+                "litellm[extra_proxy] extra, which now includes psycopg."
+            )
             return False
 
         cleaned_url = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
