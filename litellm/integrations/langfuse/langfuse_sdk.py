@@ -213,25 +213,51 @@ class DiscardingSpanExporter(SpanExporter):
         return True
 
 
+_LIVE_CLIENTS_LOCK: Final = threading.Lock()
+# litellm clients still using each SDK resource bundle; the bundle is torn down with the last one.
+# Both sides are weak so a throwaway client (a health probe, an alerting lookup) that is simply
+# garbage-collected stops holding the bundle open rather than inflating a counter forever.
+_live_clients: Final[WeakKeyDictionary[LangfuseResourceManager, WeakSet]] = WeakKeyDictionary()
+
+
 def _evict_if_stale_locked(
     *, public_key: object, secret_key: object, base_url: object
-) -> LangfuseResourceManager | None:
-    """Assumes ``LangfuseResourceManager._lock`` is held; returns the still-valid cached bundle, if any."""
+) -> tuple[LangfuseResourceManager | None, LangfuseResourceManager | None]:
+    """Assumes ``LangfuseResourceManager._lock`` is held; returns the still-valid bundle and the evicted one."""
     if not public_key:
-        return None
+        return None, None
     cached: Final = LangfuseResourceManager._instances.get(public_key)  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
     if cached is None:
-        return None
+        return None, None
     if getattr(cached, "secret_key", None) == secret_key and getattr(cached, "base_url", None) == base_url:
-        return cached
-    LangfuseResourceManager._instances.pop(public_key, None)  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
-    return None
+        return cached, None
+    return None, LangfuseResourceManager._instances.pop(public_key, None)  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
+
+
+def _shutdown_abandoned_provider(resources: LangfuseResourceManager | None) -> None:
+    """Retire the provider litellm built for an evicted bundle, once no live client is still on it.
+
+    Runs after the registry lock is released: provider shutdown flushes and joins the export
+    thread, which must never happen under the lock every other client init contends on. A
+    client still holding these resources tears them down itself in ``shutdown_langfuse_client``.
+    """
+    if resources is None:
+        return
+    with _LIVE_CLIENTS_LOCK:
+        holders: Final = _live_clients.get(resources)
+        if holders is not None and len(holders) > 0:
+            return
+        _live_clients.pop(resources, None)
+    provider: Final = getattr(resources, "tracer_provider", None)
+    if provider is not None and provider in _litellm_built_providers:
+        provider.shutdown()
 
 
 def evict_stale_langfuse_resources(*, public_key: str | None, secret_key: str | None, base_url: str | None) -> None:
     """Drop a cached client whose credentials no longer match the ones being requested."""
     with LangfuseResourceManager._lock:  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
-        _evict_if_stale_locked(public_key=public_key, secret_key=secret_key, base_url=base_url)
+        _, abandoned = _evict_if_stale_locked(public_key=public_key, secret_key=secret_key, base_url=base_url)
+    _shutdown_abandoned_provider(abandoned)
 
 
 def _build_verified_span_exporter(*, public_key: object, secret_key: object, base_url: object) -> SpanExporter | None:
@@ -300,7 +326,7 @@ def acquire_langfuse_client(
         )
     )
     with LangfuseResourceManager._lock:  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
-        cached: Final = _evict_if_stale_locked(
+        cached, abandoned = _evict_if_stale_locked(
             public_key=public_key,
             secret_key=parameters.get("secret_key"),
             base_url=parameters.get("base_url"),
@@ -313,14 +339,8 @@ def acquire_langfuse_client(
             span_exporter=span_exporter,
         )
         register_langfuse_client(client)
+    _shutdown_abandoned_provider(abandoned)
     return client
-
-
-_LIVE_CLIENTS_LOCK: Final = threading.Lock()
-# litellm clients still using each SDK resource bundle; the bundle is torn down with the last one.
-# Both sides are weak so a throwaway client (a health probe, an alerting lookup) that is simply
-# garbage-collected stops holding the bundle open rather than inflating a counter forever.
-_live_clients: Final[WeakKeyDictionary[LangfuseResourceManager, WeakSet]] = WeakKeyDictionary()
 
 
 def register_langfuse_client(client: Langfuse) -> None:

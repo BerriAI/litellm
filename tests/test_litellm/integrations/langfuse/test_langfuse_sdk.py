@@ -23,9 +23,9 @@ from litellm.integrations.langfuse.langfuse import (
 )
 from litellm.integrations.langfuse.langfuse_sdk import (
     AS_ROOT_ATTRIBUTE,
-    _litellm_built_providers,
     PUBLIC_ATTRIBUTE,
     RELEASE_ATTRIBUTE,
+    _litellm_built_providers,
     build_isolated_tracer_provider,
     evict_stale_langfuse_resources,
     open_trace_context,
@@ -570,6 +570,49 @@ def test_shutdown_of_a_stale_client_does_not_deregister_the_live_one():
 
     assert stale_resources is not live._resources
     assert LangfuseResourceManager._instances.get(PUBLIC_KEY) is live._resources
+
+
+def _rotation_provider():
+    """A litellm-built provider on the lifecycle public key, exporting in memory."""
+    exporter = InMemorySpanExporter()
+    provider = build_isolated_tracer_provider(environment=None, release=None)
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    client = Langfuse(
+        public_key=PUBLIC_KEY,
+        secret_key="sk-original",
+        host="http://127.0.0.1:1",
+        tracer_provider=provider,
+        span_exporter=exporter,
+    )
+    register_langfuse_client(client)
+    assert _exports(client, exporter, "before-rotation")
+    return client, exporter
+
+
+def test_rotation_retires_the_provider_no_client_is_left_on():
+    """Prompt management builds throwaway clients from request credentials.
+
+    Alternating the secret for one public key evicts a bundle nobody holds any
+    more, and its export thread has to go with it or every rotation leaks one.
+    """
+    import gc
+
+    client, exporter = _rotation_provider()
+    del client
+    gc.collect()
+
+    evict_stale_langfuse_resources(public_key=PUBLIC_KEY, secret_key="sk-rotated", base_url="http://127.0.0.1:2")
+
+    assert exporter._stopped
+
+
+def test_rotation_keeps_a_still_live_client_exporting():
+    """The evicted bundle is only retired when nothing is on it; a live logger must survive."""
+    client, exporter = _rotation_provider()
+
+    evict_stale_langfuse_resources(public_key=PUBLIC_KEY, secret_key="sk-rotated", base_url="http://127.0.0.1:2")
+
+    assert _exports(client, exporter, "after-rotation")
 
 
 def test_ssl_exporter_is_only_built_with_custom_tls_material(monkeypatch, tmp_path):
