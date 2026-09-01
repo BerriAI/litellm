@@ -21,7 +21,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 MAIN_MAP = REPO_ROOT / "model_prices_and_context_window.json"
 BACKUP_MAP = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
 
