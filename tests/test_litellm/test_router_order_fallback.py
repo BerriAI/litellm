@@ -11,6 +11,7 @@ from typing import Final, Optional
 
 import httpx
 import pytest
+from openai import AsyncOpenAI
 
 import litellm
 from litellm import Router
@@ -600,9 +601,11 @@ async def test_text_completion_order_fallback_hop_does_not_send_target_order_ups
             },
         )
 
-    session: Final = httpx.AsyncClient(transport=httpx.MockTransport(_upstream))
-    litellm.in_memory_llm_clients_cache.flush_cache()
-    litellm.aclient_session = session
+    upstream_client: Final = AsyncOpenAI(
+        api_key="key",
+        base_url="http://upstream.test",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(_upstream)),
+    )
     router = Router(
         model_list=[
             {
@@ -629,11 +632,9 @@ async def test_text_completion_order_fallback_hop_does_not_send_target_order_ups
         num_retries=0,
     )
     try:
-        response = await router.atext_completion(model="test-model", prompt="hi")
+        response = await router.atext_completion(model="test-model", prompt="hi", client=upstream_client)
     finally:
-        litellm.aclient_session = None
-        litellm.in_memory_llm_clients_cache.flush_cache()
-        await session.aclose()
+        await upstream_client.close()
 
     assert response._hidden_params["model_id"] == "2"
     assert upstream_bodies
