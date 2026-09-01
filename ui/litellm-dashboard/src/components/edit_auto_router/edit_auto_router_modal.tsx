@@ -96,6 +96,7 @@ export interface StoredComplexityRouterConfig {
   classifier_context_budget_chars?: unknown;
   classifier_context_include_assistant_turns?: unknown;
   classifier_fallback?: unknown;
+  classification_mode?: unknown;
   tier_boundaries?: unknown;
   token_thresholds?: unknown;
   dimension_weights?: unknown;
@@ -165,6 +166,10 @@ export const hydrateComplexityRouterConfig = (
       typeof parsedConfig.heuristic_first_max_tier === "string" && parsedConfig.heuristic_first_max_tier.trim() !== ""
         ? parsedConfig.heuristic_first_max_tier
         : undefined,
+    classification_mode:
+      parsedConfig.classification_mode === "user_turn" || parsedConfig.classification_mode === "every_request"
+        ? parsedConfig.classification_mode
+        : undefined,
     tier_boundaries: hydrateTierBoundaries(parsedConfig.tier_boundaries),
     token_thresholds: hydrateTokenThresholds(parsedConfig.token_thresholds),
     dimension_weights: hydrateDimensionWeights(parsedConfig.dimension_weights),
@@ -207,6 +212,7 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "classifier_fallback",
   "classification_prompt",
   "heuristic_first_max_tier",
+  "classification_mode",
   "session_affinity",
   "deployment_affinity",
   "adaptive",
@@ -294,6 +300,7 @@ export const buildUpdatedComplexityRouterConfig = (
     planModeMinTier: value.plan_mode_min_tier,
     classificationPrompt: value.classification_prompt,
     heuristicFirstMaxTier: value.heuristic_first_max_tier,
+    classificationMode: value.classification_mode,
     tierLabels: value.tier_labels,
     classifierType: value.classifier_type,
     classifierLlmConfig: value.classifier_llm_config,
