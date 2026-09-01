@@ -648,6 +648,33 @@ def test_get_token_base_cost_applies_off_peak_pricing():
     assert peak[4] == 1e-7
 
 
+def test_get_token_base_cost_non_mapping_off_peak_block_bills_standard_rates():
+    """A truthy non-mapping off_peak_pricing value (a bare string or a list in
+    YAML) must bill standard rates rather than raising, matching how every
+    other malformed piece of the block behaves.
+    """
+    from datetime import datetime, timezone
+    from typing import cast
+
+    from litellm.types.utils import ModelInfo
+
+    usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+    when = datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc)
+
+    for malformed_block in ("16:00-19:00", ["16:00-19:00"], 5e-7, True):
+        model_info = cast(
+            ModelInfo,
+            {
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "off_peak_pricing": malformed_block,
+            },
+        )
+        result = _get_token_base_cost(model_info, usage, current_time=when)
+        assert result[0] == 1e-6
+        assert result[1] == 2e-6
+
+
 def test_get_token_base_cost_off_peak_falls_back_to_standard_when_unset():
     from datetime import datetime, timezone
     from typing import cast
