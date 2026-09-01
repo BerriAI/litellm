@@ -60,14 +60,16 @@ test.describe("Team Admin", () => {
 
   test.afterEach(async ({ page }) => {
     // Runs on the failure path too, which a call at the end of the test body would not. Ids are
-    // claimed before the user is created, so one that never persisted is skipped rather than
-    // failing an otherwise clean run.
+    // claimed before the user is created, so the delete is attempted unconditionally and only its
+    // own 404 counts as never persisted; any other answer is a cleanup failure worth reporting
+    // rather than a reason to leave the user behind.
     for (const userId of createdMembers.splice(0)) {
-      const auth = { Authorization: `Bearer ${masterKey()}` };
-      const info = await page.request.get(`/user/info?user_id=${encodeURIComponent(userId)}`, { headers: auth });
-      if (!info.ok()) continue;
-      const deleted = await page.request.post("/user/delete", { headers: auth, data: { user_ids: [userId] } });
-      expect(deleted.ok(), `POST /user/delete for ${userId} (${deleted.status()})`).toBe(true);
+      const deleted = await page.request.post("/user/delete", {
+        headers: { Authorization: `Bearer ${masterKey()}` },
+        data: { user_ids: [userId] },
+      });
+      const settled = deleted.ok() || deleted.status() === 404;
+      expect(settled, `POST /user/delete for ${userId} (${deleted.status()}): ${await deleted.text()}`).toBe(true);
     }
   });
 
