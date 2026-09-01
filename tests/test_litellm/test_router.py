@@ -4491,73 +4491,93 @@ def test_get_deployment_credentials_with_provider_includes_bucket_name():
     assert credentials["custom_llm_provider"] == "vertex_ai"
 
 
-def test_get_deployment_credentials_with_provider_resolves_credential_name():
-    """
-    Test that get_deployment_credentials_with_provider correctly resolves
-    litellm_credential_name to actual credential values (for UI-created models).
-    """
-    from litellm.types.utils import CredentialItem
-
-    # Setup credential list with a test credential
-    litellm.credential_list = [
-        CredentialItem(
-            credential_name="test-azure-cred",
-            credential_info={"custom_llm_provider": "azure"},
-            credential_values={
-                "api_key": "resolved-api-key",
-                "api_base": "https://resolved.openai.azure.com",
+@pytest.mark.parametrize(
+    ("credential_values_by_name", "deployment_auth", "expected_auth"),
+    [
+        pytest.param(
+            {
+                "saved": {
+                    "api_key": "saved-key",
+                    "api_base": "https://saved.example.com",
+                    "api_version": "2024-02-01",
+                }
+            },
+            {"api_key": "inline-key"},
+            {
+                "api_key": "saved-key",
+                "api_base": "https://saved.example.com",
                 "api_version": "2024-02-01",
             },
-        )
-    ]
+            id="saved-name-overrides-inline",
+        ),
+        pytest.param(
+            {"other": {"api_key": "other-key"}},
+            {},
+            None,
+            id="missing-name-without-fallback-fails-closed",
+        ),
+        pytest.param(
+            {"other": {"api_key": "other-key"}},
+            {"api_key": "inline-key"},
+            {"api_key": "inline-key"},
+            id="stale-name-keeps-inline-key",
+        ),
+        pytest.param(
+            {},
+            {"aws_role_name": "deployment-role", "aws_region_name": "us-west-2"},
+            {"aws_role_name": "deployment-role", "aws_region_name": "us-west-2"},
+            id="empty-worker-keeps-deployment-auth",
+        ),
+        pytest.param(
+            {"saved": {}},
+            {},
+            {},
+            id="empty-saved-credential-allows-ambient-auth",
+        ),
+    ],
+)
+def test_get_deployment_credentials_with_provider_named_credential_states(
+    credential_values_by_name: dict[str, dict[str, str]],
+    deployment_auth: dict[str, str],
+    expected_auth: dict[str, str] | None,
+) -> None:
+    from litellm.types.utils import CredentialItem
 
     router = litellm.Router(
         model_list=[
             {
-                "model_name": "azure-gpt-4",
+                "model_name": "configured-model",
                 "litellm_params": {
-                    "model": "azure/gpt-4",
-                    "litellm_credential_name": "test-azure-cred",
-                },
-            }
-        ],
-    )
-
-    credentials = router.get_deployment_credentials_with_provider(
-        model_id="azure-gpt-4"
-    )
-
-    assert credentials is not None
-    assert credentials["api_key"] == "resolved-api-key"
-    assert credentials["api_base"] == "https://resolved.openai.azure.com"
-    assert credentials["api_version"] == "2024-02-01"
-    assert credentials["custom_llm_provider"] == "azure"
-    # Ensure credential name is removed after resolution
-    assert "litellm_credential_name" not in credentials
-
-    # Cleanup
-    litellm.credential_list = []
-
-
-def test_get_deployment_credentials_with_provider_fails_closed_for_missing_named_credential():
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "embedding-model",
-                "litellm_params": {
-                    "model": "azure/text-embedding-3-small",
-                    "litellm_credential_name": "deleted-credential",
+                    "model": "bedrock/anthropic.claude-3-sonnet",
+                    "litellm_credential_name": "saved",
+                    "s3_bucket_name": "configured-bucket",
+                    **deployment_auth,
                 },
             }
         ]
     )
+    credential_list = [
+        CredentialItem(
+            credential_name=name,
+            credential_info={},
+            credential_values=values,
+        )
+        for name, values in credential_values_by_name.items()
+    ]
 
-    with patch.object(  # test-quality-ok: CredentialAccessor reads the process-global credential list
-        litellm, "credential_list", []
-    ):
-        credentials = router.get_deployment_credentials_with_provider(model_id="embedding-model")
+    with patch.object(litellm, "credential_list", credential_list):
+        result = router.get_deployment_credentials_with_provider(model_id="configured-model")
 
-    assert credentials is None
+    if expected_auth is None:
+        assert result is None
+        return
+
+    assert result == {
+        **expected_auth,
+        "s3_bucket_name": "configured-bucket",
+        "model": "bedrock/anthropic.claude-3-sonnet",
+        "custom_llm_provider": "bedrock",
+    }
 
 
 def test_get_deployment_credentials_with_provider_bedrock_batch_fields():
@@ -4646,6 +4666,26 @@ def _team_wildcard_model(api_key: str, model_id: str = "team-wildcard-id") -> di
             "team_public_model_name": "openai/*",
         },
     }
+
+
+def _router_with_foreign_specific_and_shared_wildcards() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/gpt-*",
+                "litellm_params": {"model": "openai/gpt-*", "api_key": "team-b-key"},
+                "model_info": {
+                    "id": "team-b-specific-wildcard",
+                    "team_id": "team-b",
+                    "team_public_model_name": "openai/gpt-*",
+                },
+            },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "shared-key"},
+            },
+        ]
+    )
 
 
 def test_get_deployment_credentials_with_provider_team_wildcard_priority():
@@ -4795,6 +4835,64 @@ def test_get_deployment_credentials_with_provider_rejects_other_team_exact_id():
     )
 
 
+def test_foreign_exact_deployment_id_is_not_reinterpreted_as_a_shared_wildcard():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-b-model",
+                "litellm_params": {"model": "openai/gpt-5.2", "api_key": "team-b-key"},
+                "model_info": {
+                    "id": "openai/team-b-deployment",
+                    "team_id": "team-b",
+                },
+            },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "shared-key"},
+            },
+        ]
+    )
+
+    assert (
+        router.get_deployment_credentials_with_provider(
+            model_id="openai/team-b-deployment", team_id="team-a"
+        )
+        is None
+    )
+
+
+def test_team_public_model_name_beats_colliding_shared_model_name_for_owner():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "model_name_team-a_private-id",
+                "litellm_params": {"model": "openai/gpt-5.2", "api_key": "team-a-key"},
+                "model_info": {
+                    "id": "private-id",
+                    "team_id": "team-a",
+                    "team_public_model_name": "friendly-model",
+                },
+            },
+            {
+                "model_name": "friendly-model",
+                "litellm_params": {"model": "openai/gpt-5.2", "api_key": "shared-key"},
+            },
+        ]
+    )
+
+    owner_credentials = router.get_deployment_credentials_with_provider(
+        model_id="friendly-model", team_id="team-a"
+    )
+    other_team_credentials = router.get_deployment_credentials_with_provider(
+        model_id="friendly-model", team_id="team-b"
+    )
+
+    assert owner_credentials is not None
+    assert owner_credentials["api_key"] == "team-a-key"
+    assert other_team_credentials is not None
+    assert other_team_credentials["api_key"] == "shared-key"
+
+
 def test_deployment_usable_by_team_helpers():
     """
     Direct coverage of the team-ownership filter: a team-scoped deployment is
@@ -4886,6 +4984,15 @@ def test_get_deployment_credentials_with_provider_skips_other_team_wildcard():
     )
     assert owner_credentials is not None
     assert owner_credentials["api_key"] == "team-b-key"
+
+
+def test_foreign_specific_wildcard_falls_back_to_broader_shared_wildcard():
+    credentials = _router_with_foreign_specific_and_shared_wildcards().get_deployment_credentials_with_provider(
+        model_id="openai/gpt-5.2", team_id="team-a"
+    )
+
+    assert credentials is not None
+    assert credentials["api_key"] == "shared-key"
 
 
 def test_team_wildcard_credentials_not_usable_after_delete_deployment():
@@ -6342,6 +6449,50 @@ def test_access_group_block_via_litellm_model_branch_does_not_use_default_fallba
                 }
             },
         )
+
+
+def test_common_checks_rejects_foreign_exact_deployment_id_for_team():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-b-model",
+                "litellm_params": {"model": "openai/gpt-5.2", "api_key": "team-b-key"},
+                "model_info": {
+                    "id": "team-b-deployment",
+                    "team_id": "team-b",
+                },
+            }
+        ]
+    )
+    team_a_auth = UserAPIKeyAuth(
+        api_key="team-a-key",
+        team_id="team-a",
+        models=[],
+        team_models=[],
+    )
+
+    with pytest.raises(litellm.BadRequestError):
+        router._common_checks_available_deployment(
+            model="team-b-deployment",
+            request_kwargs={
+                "metadata": {
+                    "user_api_key_team_id": "team-a",
+                    "user_api_key_auth": team_a_auth,
+                }
+            },
+        )
+
+
+def test_common_checks_skips_foreign_specific_wildcard_for_team():
+    _, deployments = _router_with_foreign_specific_and_shared_wildcards()._common_checks_available_deployment(
+        model="openai/gpt-5.2",
+        request_kwargs={"metadata": {"user_api_key_team_id": "team-a"}},
+    )
+
+    assert isinstance(deployments, list)
+    assert [deployment["litellm_params"]["api_key"] for deployment in deployments] == ["shared-key"]
 
 
 def test_try_early_resolve_deployments_for_model_not_in_names():

@@ -159,7 +159,7 @@ class Harness:
         return dict(self.router_acreate.call_args.kwargs)
 
 
-def _creds_lookup(*, model_id: str) -> Dict[str, str]:
+def _creds_lookup(*, model_id: str, team_id: Optional[str] = None) -> Dict[str, str]:
     # KeyError on an unknown/hardcoded model_id - the bug cannot hide.
     return dict(CREDS[model_id])
 
@@ -232,6 +232,10 @@ def set_body(harness: Harness, body: Dict[str, Any]) -> None:
     harness.body["body"] = body
 
 
+def _team_a_user() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(api_key="sk-test", team_id="team-a")
+
+
 async def call_create(
     harness: Harness,
     *,
@@ -289,6 +293,42 @@ async def test_create__model_encoded_file_id(harness):
     # 4. OUTPUT SHAPE - ids re-encoded with the model; input_file_id restored.
     assert resp.id == encode_file_id_with_model("batch-provider-id", "azure/gpt-4o", id_type="batch")
     assert resp.input_file_id == AZURE_FILE_ID
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "expected_model_id"),
+    [
+        pytest.param(
+            {
+                "input_file_id": AZURE_FILE_ID,
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+            },
+            "azure/gpt-4o",
+            id="encoded-file-id",
+        ),
+        pytest.param(
+            {
+                "input_file_id": "file-plain",
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+                "model": "vertex-model",
+            },
+            "vertex-model",
+            id="body-model",
+        ),
+    ],
+)
+async def test_create__model_routing__scopes_credentials_to_callers_team(harness, body, expected_model_id):
+    set_body(harness, body)
+
+    await call_create(harness, user=_team_a_user())
+
+    harness.creds_resolver.assert_called_once_with(
+        model_id=expected_model_id,
+        team_id="team-a",
+    )
 
 
 @pytest.mark.asyncio
@@ -1220,6 +1260,20 @@ async def test_retrieve__model_encoded_id(retrieve_harness):
 
 
 @pytest.mark.asyncio
+async def test_retrieve__model_encoded_id__scopes_credentials_to_callers_team(retrieve_harness):
+    await call_retrieve(
+        retrieve_harness,
+        AZURE_BATCH_ID,
+        user=_team_a_user(),
+    )
+
+    retrieve_harness.creds_resolver.assert_called_once_with(
+        model_id="azure/gpt-4o",
+        team_id="team-a",
+    )
+
+
+@pytest.mark.asyncio
 async def test_retrieve__model_encoded_id__forwards_decoded_model_not_deployment(
     retrieve_harness,
 ):
@@ -1758,6 +1812,20 @@ async def test_list__model_from_body_routes_and_encodes(list_harness):
     assert resp.data[1].id == encode_file_id_with_model("batch-2", "azure/gpt-4o", id_type="batch")
 
 
+@pytest.mark.asyncio
+async def test_list__model_from_body__scopes_credentials_to_callers_team(list_harness):
+    await call_list(
+        list_harness,
+        body={"model": "azure/gpt-4o"},
+        user=_team_a_user(),
+    )
+
+    list_harness.creds_resolver.assert_called_once_with(
+        model_id="azure/gpt-4o",
+        team_id="team-a",
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Branch 3 - target_model_names (function param or body) -> llm_router. Routes
 # to the FIRST model in the comma list; `model` is stripped from data first.
@@ -2064,6 +2132,20 @@ async def test_cancel__model_encoded_id(cancel_harness):
     # write-back tagged as a cancel.
     assert cancel_harness.update_batch_in_db.call_count == 1
     assert cancel_harness.update_batch_in_db.call_args.kwargs["operation"] == "cancel"
+
+
+@pytest.mark.asyncio
+async def test_cancel__model_encoded_id__scopes_credentials_to_callers_team(cancel_harness):
+    await call_cancel(
+        cancel_harness,
+        AZURE_BATCH_ID,
+        user=_team_a_user(),
+    )
+
+    cancel_harness.creds_resolver.assert_called_once_with(
+        model_id="azure/gpt-4o",
+        team_id="team-a",
+    )
 
 
 @pytest.mark.asyncio

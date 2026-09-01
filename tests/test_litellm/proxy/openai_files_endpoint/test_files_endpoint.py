@@ -1979,6 +1979,81 @@ def test_get_file_content_routed_provider_skips_streaming_when_resolved_provider
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
 
 
+def test_get_file_content_keeps_bedrock_metadata_for_empty_named_credential(mocker: MockerFixture, monkeypatch):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="bedrock-ambient-auth",
+                credential_info={"custom_llm_provider": "bedrock"},
+                credential_values={},
+            )
+        ],
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-batch-model",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "litellm_credential_name": "bedrock-ambient-auth",
+                    "aws_region_name": "us-east-1",
+                    "s3_bucket_name": "configured-batch-bucket",
+                },
+                "model_info": {"id": "bedrock-batch-deployment"},
+            }
+        ]
+    )
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+    provider_call = mocker.patch.object(
+        litellm,
+        "afile_content",
+        new=mocker.AsyncMock(
+            return_value=HttpxBinaryResponseContent(
+                response=httpx.Response(
+                    status_code=200,
+                    content=b"bedrock-bytes",
+                    headers={"content-type": "application/octet-stream"},
+                )
+            )
+        ),
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+    )
+
+    try:
+        response = client.get(
+            "/v1/files/file-abc123/content?model=bedrock-batch-deployment",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert response.content == b"bedrock-bytes"
+    provider_call.assert_awaited_once()
+    call_kwargs = provider_call.await_args.kwargs
+    credentials = call_kwargs["_litellm_internal_model_credentials"]
+    assert call_kwargs["custom_llm_provider"] == "bedrock"
+    assert credentials["s3_bucket_name"] == "configured-batch-bucket"
+    assert credentials["aws_region_name"] == "us-east-1"
+    assert credentials["model"] == "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
 def test_get_file_content_non_openai_provider_skips_streaming_handler(
     mocker: MockerFixture, monkeypatch, llm_router: Router
 ):
@@ -2439,6 +2514,81 @@ def test_list_files_resolves_wildcard_deployment_credentials(
     assert captured_kwargs.get("api_key") == "wildcard-openai-key"
     assert captured_kwargs.get("custom_llm_provider") == "openai"
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("caller_team_id", "expected_status", "expected_api_key"),
+    [
+        pytest.param("team-b", 200, "team-b-key", id="owner"),
+        pytest.param("team-a", 400, None, id="other-team"),
+        pytest.param(None, 400, None, id="teamless"),
+    ],
+)
+def test_list_files_scopes_exact_deployment_id_to_owning_team(
+    mocker: MockerFixture,
+    monkeypatch,
+    caller_team_id: str | None,
+    expected_status: int,
+    expected_api_key: str | None,
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "team-b-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "team-b-key",
+                },
+                "model_info": {
+                    "id": "team-b-deployment",
+                    "team_id": "team-b",
+                    "team_public_model_name": "team-b-model",
+                },
+            },
+            {
+                "model_name": "*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "shared-wildcard-key",
+                },
+            },
+        ]
+    )
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_success_hook = mocker.AsyncMock(return_value=[])
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+    provider_call = mocker.patch.object(litellm, "afile_list", new=mocker.AsyncMock(return_value=[]))
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+        team_id=caller_team_id,
+        team_models=[],
+        models=[],
+    )
+
+    try:
+        response = client.get(
+            "/v1/files?target_model_names=team-b-deployment",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == expected_status, response.text
+    if expected_api_key is None:
+        provider_call.assert_not_awaited()
+    else:
+        provider_call.assert_awaited_once()
+        assert provider_call.await_args.kwargs["api_key"] == expected_api_key
 
 
 def test_list_files_model_routing_does_not_forward_custom_llm_provider_twice(
