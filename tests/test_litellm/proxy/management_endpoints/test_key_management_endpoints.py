@@ -8312,15 +8312,17 @@ async def test_key_does_not_override_explicit_budget_duration():
 @patch(
     "litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key"
 )
-async def test_rotate_master_key_model_data_valid_for_prisma(
+async def test_rotate_master_key_reencrypts_model_params_in_place(
     mock_rotate_mcp,
 ):
     """
-    Test that _rotate_master_key produces valid data for Prisma create_many().
-
-    Regression test for: master key rotation fails with Prisma validation error
-    because created_at/updated_at are None (non-nullable DateTime) and
-    litellm_params/model_info are JSON strings (create_many expects dicts).
+    Regression test for: master key rotation wipes every non-credential column
+    on LiteLLM_ProxyModelTable. Rotation used to rebuild the table via
+    delete_many + create_many from Deployment objects, which carry no
+    blocked/created_at/created_by/updated_at/updated_by, so every rotation
+    reset blocked to False (silently unblocking blocked models) and rewrote the
+    audit columns. Rotation must instead update only litellm_params (the sole
+    encrypted column) on each existing row, keyed by model_id.
     """
     from unittest.mock import AsyncMock, MagicMock
 
@@ -8352,6 +8354,7 @@ async def test_rotate_master_key_model_data_valid_for_prisma(
     mock_tx.litellm_proxymodeltable = MagicMock()
     mock_tx.litellm_proxymodeltable.delete_many = AsyncMock()
     mock_tx.litellm_proxymodeltable.create_many = AsyncMock()
+    mock_tx.litellm_proxymodeltable.update_many = AsyncMock()
     mock_prisma_client.db.tx = MagicMock(
         return_value=AsyncMock(
             __aenter__=AsyncMock(return_value=mock_tx),
@@ -8400,36 +8403,33 @@ async def test_rotate_master_key_model_data_valid_for_prisma(
             new_master_key="sk-new-master-key",
         )
 
-    # Verify create_many was called
-    mock_tx.litellm_proxymodeltable.create_many.assert_called_once()
+    # Rotation must never rewrite whole rows: no delete + recreate
+    mock_tx.litellm_proxymodeltable.delete_many.assert_not_called()
+    mock_tx.litellm_proxymodeltable.create_many.assert_not_called()
 
-    # Get the data passed to create_many
-    call_args = mock_tx.litellm_proxymodeltable.create_many.call_args
-    created_models = call_args.kwargs.get("data") or call_args[1].get("data")
+    mock_tx.litellm_proxymodeltable.update_many.assert_called_once()
+    call_args = mock_tx.litellm_proxymodeltable.update_many.call_args
 
-    assert len(created_models) == 1
-    model_data = created_models[0]
+    assert call_args.kwargs["where"] == {
+        "model_id": "model-1"
+    }, "the re-encrypted params must land on the same row, keyed by model_id"
 
-    # Verify timestamps are NOT present (Prisma @default(now()) should apply)
-    assert (
-        "created_at" not in model_data
-    ), "created_at should be excluded so Prisma @default(now()) applies"
-    assert (
-        "updated_at" not in model_data
-    ), "updated_at should be excluded so Prisma @default(now()) applies"
+    update_data = call_args.kwargs["data"]
+    assert set(update_data.keys()) == {"litellm_params"}, (
+        "rotation must touch only the encrypted litellm_params column; writing any "
+        f"other column wipes it (blocked, audit columns), got {sorted(update_data.keys())}"
+    )
 
-    # Verify litellm_params and model_info are prisma.Json wrappers, NOT JSON strings
     import prisma
 
     assert isinstance(
-        model_data["litellm_params"], prisma.Json
-    ), f"litellm_params should be prisma.Json for create_many(), got {type(model_data['litellm_params'])}"
-    assert isinstance(
-        model_data["model_info"], prisma.Json
-    ), f"model_info should be prisma.Json for create_many(), got {type(model_data['model_info'])}"
-
-    # Verify delete_many was called inside the transaction (before create_many)
-    mock_tx.litellm_proxymodeltable.delete_many.assert_called_once()
+        update_data["litellm_params"], prisma.Json
+    ), f"litellm_params should be prisma.Json for update_many(), got {type(update_data['litellm_params'])}"
+    reencrypted_params = update_data["litellm_params"].data
+    assert set(reencrypted_params.keys()) >= {"model", "api_key"}
+    assert (
+        reencrypted_params["api_key"] != "sk-decrypted-key"
+    ), "api_key must be stored re-encrypted under the new master key, not in plaintext"
 
 
 async def test_default_key_generate_params_duration(monkeypatch):

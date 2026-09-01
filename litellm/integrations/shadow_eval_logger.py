@@ -592,7 +592,12 @@ _JOBS_CACHE_KEY: Final = "shadow_eval:active_jobs"
 
 
 class ShadowEvalLogger(CustomLogger):
-    """Fires blind pairwise shadow evaluations for keys with an active shadow-eval job."""
+    """Fires blind pairwise shadow evaluations for targets with an active shadow-eval job.
+
+    A job targets a virtual key, a team, or a user; a request qualifies for a job when
+    any of its resolved identities (key hash, team id, user id) matches the job's
+    target, so team and user jobs cover JWT-authenticated traffic, which carries no
+    key hash at all."""
 
     def __init__(
         self,
@@ -617,10 +622,10 @@ class ShadowEvalLogger(CustomLogger):
         # generation; the refill absorbs written rows and resets.
         self._job_starts: dict[str, int] = {}  # mutable-ok: per-generation counter
 
-    async def _active_jobs(self) -> Mapping[str, tuple[ActiveShadowEvalJob, ...]]:
-        """Active jobs by api_key_id, cache-first. A key holds at most one job per
-        direction, so the value is a collection. A DB fault returns empty without
-        caching, so sampling pauses for that request and the next one retries."""
+    async def _active_jobs(self) -> Mapping[tuple[str, str], tuple[ActiveShadowEvalJob, ...]]:
+        """Active jobs by (target_type, target_id), cache-first. A target holds at most
+        one job per direction, so the value is a collection. A DB fault returns empty
+        without caching, so sampling pauses for that request and the next one retries."""
         cached: Final = await self._jobs_cache.async_get_cache(_JOBS_CACHE_KEY)
         if cached is not None:
             return cached  # pyright: ignore[reportReturnType]  # cache stores exactly this mapping shape
@@ -652,10 +657,10 @@ class ShadowEvalLogger(CustomLogger):
                 )
                 for row in grouped or []
             }
-            by_key: Final = tuple(
+            by_target: Final = tuple(
                 sorted(
                     (
-                        (str(record.api_key_id), job)
+                        ((str(record.target_type), str(record.target_id)), job)
                         for record in records or []
                         if (job := _as_active_job(record, *attempt_stats.get(str(record.id), (0, 0.0)))) is not None
                     ),
@@ -663,7 +668,7 @@ class ShadowEvalLogger(CustomLogger):
                 )
             )
             jobs: Final = MappingProxyType(
-                {key: tuple(job for _, job in group) for key, group in groupby(by_key, key=itemgetter(0))}
+                {target: tuple(job for _, job in group) for target, group in groupby(by_target, key=itemgetter(0))}
             )
             await self._jobs_cache.async_set_cache(_JOBS_CACHE_KEY, jobs)
             self._job_starts = {}  # rebind-ok: new generation, counts absorbed into the fill
@@ -720,8 +725,18 @@ class ShadowEvalLogger(CustomLogger):
             if should_redact_message_logging(dict(kwargs)):  # mutable-ok: predicate takes a plain dict
                 return
             metadata: Final = payload.get("metadata") or _EMPTY_METADATA
-            api_key_hash: Final = metadata.get("user_api_key_hash")
-            if not api_key_hash:
+            # Each identity the request resolved to is a candidate target; JWT-auth
+            # requests carry no key hash but do carry a team and user.
+            targets: Final = tuple(
+                (target_type, str(value))
+                for target_type, value in (
+                    ("key", metadata.get("user_api_key_hash")),
+                    ("team", metadata.get("user_api_key_team_id")),
+                    ("user", metadata.get("user_api_key_user_id")),
+                )
+                if value
+            )
+            if not targets:
                 return
             request_id: Final = payload.get("id") or ""
             if not request_id:
@@ -731,8 +746,11 @@ class ShadowEvalLogger(CustomLogger):
                 return  # only surfaces this table can normalize are comparable; unknown types fail closed
             if ops.wire_params and _request_mutating_guardrail_ran(request_metadata):
                 return  # the wire-body snapshot predates the rewrite; replaying it would resurrect stripped content
+            active_jobs: Final = await self._active_jobs()
             eligible: Final = self._sampled_jobs(
-                (await self._active_jobs()).get(str(api_key_hash), ()), request_metadata, request_id
+                tuple(job for target in targets for job in active_jobs.get(target, ())),
+                request_metadata,
+                request_id,
             )
             if not eligible:
                 return
@@ -1056,7 +1074,7 @@ class ShadowEvalLogger(CustomLogger):
         )
 
 
-_EMPTY_JOBS: Final[Mapping[str, tuple[ActiveShadowEvalJob, ...]]] = MappingProxyType({})
+_EMPTY_JOBS: Final[Mapping[tuple[str, str], tuple[ActiveShadowEvalJob, ...]]] = MappingProxyType({})
 
 
 def _default_prisma_provider() -> "PrismaClient | None":

@@ -186,6 +186,12 @@ describe("RoutingDecisionCard", () => {
     expect(screen.queryByText("housekeeping")).not.toBeInTheDocument();
   });
 
+  it("labels a modality escalation instead of showing the raw cause token", () => {
+    render(<RoutingDecisionCard decision={{ ...heuristic, cause: "modality_escalation" }} />);
+    expect(screen.getByText("Escalated for image input")).toBeInTheDocument();
+    expect(screen.queryByText("modality_escalation")).not.toBeInTheDocument();
+  });
+
   it("shows the escalation keyword", () => {
     render(
       <RoutingDecisionCard decision={{ ...heuristic, escalated: true, escalation_keyword: "LITELLM ESCALATE" }} />,
