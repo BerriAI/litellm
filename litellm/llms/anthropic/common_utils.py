@@ -865,13 +865,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 f"Failed to fetch models from Anthropic. Status code: {response.status_code}, Response: {response.text}"
             )
 
-        models: Final = response.json()["data"]
+        models: Final[Sequence[Mapping[str, str]]] = response.json()["data"]
 
-        litellm_model_names: Final = []
-        for model in models:
-            stripped_model_name = model["id"]
-            litellm_model_name = "anthropic/" + stripped_model_name
-            litellm_model_names.append(litellm_model_name)
+        litellm_model_names: Final = ["anthropic/" + model["id"] for model in models]
         return litellm_model_names
 
     def get_token_counter(self) -> BaseTokenCounter | None:
@@ -1077,7 +1073,7 @@ def strip_empty_content_blocks_from_anthropic_messages(
     return out
 
 
-def _is_empty_text_block(block: Any) -> bool:
+def _is_empty_text_block(block: object) -> bool:
     if not isinstance(block, dict) or block.get("type") != "text":
         return False
     text: Final = block.get("text")
@@ -1131,7 +1127,7 @@ def normalize_anthropic_tool_use_id(raw_id: str) -> str:
     return sanitized or "tool_use_id"
 
 
-def _sanitize_tool_use_id_content_block(block: Any) -> Any:
+def _sanitize_tool_use_id_content_block(block: object) -> object:
     if not isinstance(block, dict):
         return block
     block_type: Final = block.get("type")

@@ -35,6 +35,22 @@ def mock_mcp_client_ip():
         yield
 
 
+@pytest.fixture(autouse=True)
+def isolate_global_mcp_registry():
+    """Restore the module-global MCP server registry after each test.
+
+    Tests here register servers on ``global_mcp_server_manager`` directly; without a
+    restore, entries leak into other test modules sharing the same worker and break
+    assertions over the full registry contents.
+    """
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    snapshot = dict(global_mcp_server_manager.registry)
+    yield
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry.update(snapshot)
+
+
 def _mock_callback_request(base_url: str = "http://localhost:3000/"):
     """Return a MagicMock Request for callback/authorize same-origin tests.
 
