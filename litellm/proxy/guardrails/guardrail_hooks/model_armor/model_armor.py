@@ -62,6 +62,17 @@ GUARDRAIL_NAME: Final = "model_armor"
 # Only these carry the finished output; response.created carries an empty body
 _RESPONSES_TERMINAL_EVENT_TYPES: Final = frozenset({"response.completed", "response.incomplete", "response.failed"})
 
+# Every event whose ``delta`` is model output already on its way to the client
+_RESPONSES_DELTA_EVENT_TYPES: Final = frozenset(
+    {
+        "response.output_text.delta",
+        "response.refusal.delta",
+        "response.function_call_arguments.delta",
+        "response.custom_tool_call_input.delta",
+        "response.reasoning_summary_text.delta",
+    }
+)
+
 
 class _StreamSurface(Enum):
     """Wire format of a buffered streaming response, which decides how it is read and how it is refused."""
@@ -968,6 +979,34 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         return self._extract_content_from_response(assembled_response)
 
     @staticmethod
+    def _responses_delta_text(all_chunks: Sequence[object]) -> str:
+        """Text a ``/v1/responses`` stream has already spelled out in its delta events."""
+        return "".join(
+            delta
+            for chunk in all_chunks
+            if getattr(chunk, "type", None) in _RESPONSES_DELTA_EVENT_TYPES
+            and isinstance(delta := getattr(chunk, "delta", None), str)
+        )
+
+    def _streaming_content_to_scan(
+        self,
+        assembled_response: object,
+        all_chunks: Sequence[object],
+        surface: _StreamSurface,
+    ) -> str:
+        """Text to scan for a buffered stream, which is whatever the client is about to receive.
+
+        ``response.failed`` and ``response.incomplete`` are terminal like ``response.completed`` but
+        report a turn that broke mid-generation, so their body can be empty while the deltas ahead of
+        them already spelled the answer out. Reading the body alone finds nothing to scan there and
+        releases those deltas untouched, so an empty body falls back to the deltas themselves.
+        """
+        content: Final = self._extract_streaming_content(assembled_response)
+        if content or surface is not _StreamSurface.RESPONSES:
+            return content
+        return self._responses_delta_text(all_chunks)
+
+    @staticmethod
     def _apply_sanitized_content(assembled_response: ModelResponse, sanitized_content: str) -> None:
         """Replace every non-empty choice message with the Model Armor sanitized text."""
         for choice in assembled_response.choices:
@@ -1080,7 +1119,9 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             return
 
         # Extract content
-        content: Final = self._extract_streaming_content(assembled_response)
+        content: Final = self._streaming_content_to_scan(
+            assembled_response=assembled_response, all_chunks=all_chunks, surface=surface
+        )
 
         if not content:
             verbose_proxy_logger.debug("Model Armor: No text content in streaming response, skipping guardrail")

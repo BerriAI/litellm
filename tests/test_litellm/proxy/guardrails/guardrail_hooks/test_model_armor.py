@@ -4552,3 +4552,66 @@ async def test_streaming_status_records_a_surface_that_cannot_carry_the_rewrite_
     assert b"4111-1111-1111-1111" not in body
     assert b"Streaming response blocked by Model Armor" in body
     assert request_data["metadata"]["_model_armor_status"] == "blocked"
+
+
+def _responses_api_events_truncated(terminal: str):
+    """A /v1/responses stream whose text went out as deltas and whose terminal event reports no body.
+
+    ``response.failed`` and ``response.incomplete`` are terminal like ``response.completed``, but a
+    turn that broke mid-generation reports an empty ``output`` while the deltas ahead of it already
+    spelled the answer out to the client.
+    """
+    from litellm.types.llms.openai import (
+        OutputTextDeltaEvent,
+        ResponseFailedEvent,
+        ResponseIncompleteEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    empty_body = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        model="gpt-4o-mini",
+        object="response",
+        output=[],
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+    )
+    terminal_event = (
+        ResponseFailedEvent(type=ResponsesAPIStreamEvents.RESPONSE_FAILED, response=empty_body)
+        if terminal == "failed"
+        else ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=empty_body)
+    )
+    return (
+        OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            delta="my card is 4111-1111-1111-1111",
+        ),
+        terminal_event,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal", ["failed", "incomplete"])
+async def test_streaming_responses_terminal_event_without_a_body_still_scans_the_deltas(terminal):
+    """A /v1/responses turn that broke mid-generation has still delivered its deltas.
+
+    Reading only the terminal body would find nothing to scan and hand every buffered delta to the
+    client untouched, so the deltas themselves are what gets scanned.
+    """
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_BLOCK)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, _responses_api_events_truncated(terminal))
+
+    post.assert_called_once()
+    assert "4111-1111-1111-1111" in post.call_args.kwargs["json"]["modelResponseData"]["text"]
+    rendered = "".join(str(item) for item in delivered)
+    assert "4111-1111-1111-1111" not in rendered
+    assert "Streaming response blocked by Model Armor" in rendered
