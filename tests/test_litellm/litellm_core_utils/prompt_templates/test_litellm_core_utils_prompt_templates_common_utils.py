@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     add_system_prompt_to_messages,
+    demote_or_drop_midturn_system_messages,
     get_file_ids_from_messages,
     get_format_from_file_id,
     handle_any_messages_to_chat_completion_str_messages_conversion,
@@ -1480,3 +1481,42 @@ class TestRequestContainsImageContent:
         for _ in range(50):
             nested = {"type": "tool_result", "content": [nested]}
         assert request_contains_image_content([{"role": "user", "content": [nested]}]) is False
+
+
+def _midturn_msgs():
+    return [
+        {"role": "system", "content": "lead"},
+        {"role": "user", "content": "hi"},
+        {"role": "system", "content": "trailing schema"},
+    ]
+
+
+class TestDemoteOrDropMidturnSystemMessages:
+    def test_default_unchanged(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_DEMOTE_MIDTURN_SYSTEM", raising=False)
+        out = demote_or_drop_midturn_system_messages(_midturn_msgs())
+        assert [m["role"] for m in out] == ["system", "user", "system"]
+
+    def test_junk_value_unchanged(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_DEMOTE_MIDTURN_SYSTEM", "maybe")
+        out = demote_or_drop_midturn_system_messages(_midturn_msgs())
+        assert [m["role"] for m in out] == ["system", "user", "system"]
+
+    def test_demote_rewrites_as_user(self, monkeypatch):
+        for val in ("true", "demote"):
+            monkeypatch.setenv("LITELLM_DEMOTE_MIDTURN_SYSTEM", val)
+            out = demote_or_drop_midturn_system_messages(_midturn_msgs())
+            assert [m["role"] for m in out] == ["system", "user", "user"]
+            assert out[2]["content"] == "trailing schema"
+
+    def test_drop_removes(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_DEMOTE_MIDTURN_SYSTEM", "drop")
+        out = demote_or_drop_midturn_system_messages(_midturn_msgs())
+        assert [m["role"] for m in out] == ["system", "user"]
+
+    def test_leading_system_preserved_and_idempotent(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_DEMOTE_MIDTURN_SYSTEM", "true")
+        once = demote_or_drop_midturn_system_messages(_midturn_msgs())
+        twice = demote_or_drop_midturn_system_messages(once)
+        assert once == twice  # idempotent
+        assert once[0] == {"role": "system", "content": "lead"}
