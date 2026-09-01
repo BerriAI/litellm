@@ -595,6 +595,30 @@ def test_inherit_builtin_base_rates_for_off_peak_carries_threshold_rates():
     )
 
 
+def test_inherit_builtin_base_rates_for_off_peak_carries_companion_billing_fields():
+    """Billing rules that are not literal cost rates, like the web search
+    billing unit, must ride along, or grounding and regional uplifts would
+    bill differently through the deployment entry than through the shared
+    backend entry.
+    """
+    backend_model = "gemini-3-pro-image"
+    raw_entry = litellm.model_cost[backend_model]
+    assert raw_entry.get("web_search_billing_unit") is not None
+
+    model_info = {
+        "off_peak_pricing": {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-07},
+    }
+
+    Router._inherit_builtin_base_rates_for_off_peak(
+        model_info=model_info,
+        backend_model=backend_model,
+        custom_llm_provider=None,
+    )
+
+    assert model_info["web_search_billing_unit"] == raw_entry["web_search_billing_unit"]
+    assert model_info["input_cost_per_token"] == raw_entry["input_cost_per_token"]
+
+
 def test_inherit_builtin_base_rates_for_off_peak_tiered_only_backend_stores_no_zero():
     """A tiered-only backend has no flat token rates; get_model_info synthesizes
     zeros for them, and storing those would mark the deployment explicitly
