@@ -493,7 +493,7 @@ class TestMilvusVectorStore:
         ]
 
     @pytest.mark.asyncio
-    async def test_grpc_search_uses_async_pymilvus_client(self):
+    async def test_async_grpc_search_infers_vector_field_and_requests_text_by_default(self):
         mock_client = MagicMock()
         mock_client.search = AsyncMock(
             return_value=[
@@ -515,7 +515,6 @@ class TestMilvusVectorStore:
             vector_store_search_optional_params=cast(
                 VectorStoreSearchOptionalRequestParams,
                 {
-                    "annsField": "book_intro_vector",
                     "max_num_results": 2,
                 },
             ),
@@ -533,7 +532,46 @@ class TestMilvusVectorStore:
             {},
         )
         assert mock_client.search.await_args.kwargs["limit"] == 2
+        assert mock_client.search.await_args.kwargs["anns_field"] is None
+        assert mock_client.search.await_args.kwargs["output_fields"] == ["book_intro_text"]
         assert response["data"][0]["content"][0]["text"] == "async result"
+
+    def test_grpc_search_always_requests_configured_text_field(self):
+        mock_client = MagicMock()
+        mock_client.search.return_value = [
+            [
+                {
+                    "id": 9,
+                    "distance": 0.87,
+                    "entity": {
+                        "body": "result text",
+                        "category": "reference",
+                    },
+                }
+            ]
+        ]
+        config = MilvusGRPCVectorStoreConfig(
+            sync_client=mock_client,
+            embedding_fn=MagicMock(return_value=MOCK_EMBEDDING_RESPONSE),
+        )
+
+        response = config.execute_search_vector_store_request(
+            query="what is machine learning?",
+            vector_store_id="documents",
+            vector_store_search_optional_params=cast(
+                VectorStoreSearchOptionalRequestParams,
+                {"outputFields": ["category"]},
+            ),
+            litellm_logging_obj=MagicMock(),
+            litellm_params={
+                "api_base": "http://localhost:19530",
+                "litellm_embedding_model": "text-embedding-3-large",
+                "milvus_text_field": "body",
+            },
+        )
+
+        assert mock_client.search.call_args.kwargs["output_fields"] == ["category", "body"]
+        assert response["data"][0]["content"][0]["text"] == "result text"
 
     @pytest.mark.parametrize(
         "optional_params",

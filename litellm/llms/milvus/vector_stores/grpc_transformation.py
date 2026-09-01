@@ -25,7 +25,6 @@ from .transformation import MILVUS_OPTIONAL_PARAMS
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-DEFAULT_ANNS_FIELD: Final = "book_intro_vector"
 DEFAULT_LIMIT: Final = 10
 DEFAULT_TEXT_FIELD: Final = "text"
 _EMPTY_EMBEDDING_CONFIG: Final[Mapping[str, object]] = MappingProxyType({})
@@ -41,7 +40,7 @@ class _SyncMilvusClient(Protocol):
         self,
         collection_name: str,
         data: list[list[float]],  # mutable-ok: PyMilvus requires nested list search data
-        anns_field: str,
+        anns_field: str | None,
         limit: int,
         filter: str,
         offset: int | None,
@@ -61,7 +60,7 @@ class _AsyncMilvusClient(Protocol):
         self,
         collection_name: str,
         data: list[list[float]],  # mutable-ok: PyMilvus requires nested list search data
-        anns_field: str,
+        anns_field: str | None,
         limit: int,
         filter: str,
         offset: int | None,
@@ -168,7 +167,7 @@ class _MilvusSearchParams(BaseModel):
 class _MilvusSearchOptions(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
-    anns_field: str = Field(default=DEFAULT_ANNS_FIELD, alias="annsField")
+    anns_field: str | None = Field(default=None, alias="annsField")
     limit: int = Field(default=DEFAULT_LIMIT, ge=1, le=50)
     max_num_results: int | None = Field(default=None, ge=1, le=50)
     filters: Mapping[str, object] | None = None
@@ -184,6 +183,12 @@ class _MilvusSearchOptions(BaseModel):
     @property
     def result_limit(self) -> int:
         return self.max_num_results or self.limit
+
+    def output_fields_with_text(self, text_field: str) -> list[str]:
+        output_fields: Final = self.output_fields or ()
+        if "*" in output_fields or text_field in output_fields:
+            return list(output_fields)
+        return [*output_fields, text_field]
 
 
 class _EmbeddingItem(BaseModel):
@@ -339,9 +344,7 @@ class MilvusGRPCVectorStoreConfig(BaseDirectVectorStoreConfig):
             filter=options.filter_expression,
             offset=options.offset,
             group_by_field=options.grouping_field,
-            output_fields=list(options.output_fields)  # mutable-ok: PyMilvus requires list output fields
-            if options.output_fields is not None
-            else None,
+            output_fields=options.output_fields_with_text(params.text_field),
             search_params=dict(options.search_params)  # mutable-ok: PyMilvus requires dict search params
             if options.search_params is not None
             else None,
@@ -369,9 +372,7 @@ class MilvusGRPCVectorStoreConfig(BaseDirectVectorStoreConfig):
             filter=options.filter_expression,
             offset=options.offset,
             group_by_field=options.grouping_field,
-            output_fields=list(options.output_fields)  # mutable-ok: PyMilvus requires list output fields
-            if options.output_fields is not None
-            else None,
+            output_fields=options.output_fields_with_text(params.text_field),
             search_params=dict(options.search_params)  # mutable-ok: PyMilvus requires dict search params
             if options.search_params is not None
             else None,
