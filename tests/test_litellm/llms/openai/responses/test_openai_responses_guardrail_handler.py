@@ -828,6 +828,24 @@ class MockPassThroughGuardrail(CustomGuardrail):
         return inputs
 
 
+class MockRecordingGuardrail(MockPassThroughGuardrail):
+    """Pass-through guardrail that records every apply_guardrail inputs payload"""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.seen_inputs: List[GenericGuardrailAPIInputs] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.seen_inputs.append(inputs)
+        return inputs
+
+
 class TestOpenAIResponsesHandlerStreamingOutputProcessing:
     """Test streaming output processing functionality"""
 
@@ -1103,6 +1121,80 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
 
         output_text = result[-1]["response"]["output"][0]["content"][0]["text"]
         assert output_text == original_text
+
+    @pytest.mark.asyncio
+    async def test_failed_stream_scans_delta_text(self):
+        """A stream ending in response.failed has text only in delta events; the
+        fallback scan must assemble and scan it instead of skipping on an empty string."""
+        handler = OpenAIResponsesHandler()
+        guardrail = MockRecordingGuardrail(guardrail_name="test")
+
+        responses_so_far = [
+            {"type": "response.created", "response": {"id": "resp_123"}},
+            {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_123"}},
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_123",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "Hello",
+            },
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_123",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": " world",
+            },
+            {"type": "response.failed", "response": {"id": "resp_123", "status": "failed"}},
+        ]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=responses_so_far,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        assert result == responses_so_far
+        assert [inputs.get("texts") for inputs in guardrail.seen_inputs] == [["Hello world"]]
+
+    def test_get_streaming_string_so_far_prefers_done_text_over_deltas(self):
+        """The done event repeats the whole part, so deltas must not be double counted;
+        a part with no done event yet still contributes its joined deltas."""
+        handler = OpenAIResponsesHandler()
+
+        events = [
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "Hello",
+            },
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": " world",
+            },
+            {
+                "type": "response.output_text.done",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "text": "Hello world",
+            },
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_2",
+                "output_index": 1,
+                "content_index": 0,
+                "delta": "; unfinished",
+            },
+        ]
+
+        assert handler.get_streaming_string_so_far(events) == "Hello world; unfinished"
 
 
 class TestGetStructuredMessages:

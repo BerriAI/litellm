@@ -5595,6 +5595,156 @@ async def test_streaming_end_of_stream_block_emits_error_frame_instead_of_trunca
     assert payload["error"]["provider_specific_fields"]["guardrailIdentifier"] == "test-guardrail"
 
 
+def _responses_stream_events() -> list:
+    from litellm.types.llms.openai import (
+        OutputTextDeltaEvent,
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    deltas = [
+        OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_lit6457",
+            output_index=0,
+            content_index=0,
+            delta=part,
+        )
+        for part in ("Hello", " world")
+    ]
+    completed = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=ResponsesAPIResponse(
+            id="resp_lit6457",
+            created_at=1234567890,
+            model="gpt-4o",
+            object="response",
+            status="completed",
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg_lit6457",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Hello world"}],
+                }
+            ],
+        ),
+    )
+    return [*deltas, completed]
+
+
+@pytest.mark.asyncio
+async def test_responses_api_stream_scans_output_and_replays_buffered_events():
+    """Streamed /v1/responses events must be scanned via the unified translation
+    layer, not fed to stream_chunk_builder (which raises APIError on them)."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-responses-stream",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+    )
+    stream_events = _responses_stream_events()
+    order = []
+    yielded = []
+
+    async def record_scan(*args, **kwargs):
+        order.append("scan")
+        return {"action": "NONE", "assessments": [], "outputs": []}
+
+    async def mock_stream():
+        for event in stream_events:
+            yield event
+
+    with patch.object(guardrail, "make_bedrock_api_request", AsyncMock(side_effect=record_scan)):
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/responses"),
+            response=mock_stream(),
+            request_data={"model": "gpt-4o", "input": "hi"},
+        ):
+            order.append("chunk")
+            yielded.append(chunk)
+
+    assert order == ["scan", "chunk", "chunk", "chunk"]
+    assert len(yielded) == len(stream_events)
+    assert all(emitted is original for emitted, original in zip(yielded, stream_events))
+
+
+def _responses_failed_stream_events() -> list:
+    from litellm.types.llms.openai import (
+        OutputTextDeltaEvent,
+        ResponseFailedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    deltas = [
+        OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_lit6457_failed",
+            output_index=0,
+            content_index=0,
+            delta=part,
+        )
+        for part in ("Hello", " world")
+    ]
+    failed = ResponseFailedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_FAILED,
+        response=ResponsesAPIResponse(
+            id="resp_lit6457_failed",
+            created_at=1234567890,
+            model="gpt-4o",
+            object="response",
+            status="failed",
+            output=[],
+        ),
+    )
+    return [*deltas, failed]
+
+
+@pytest.mark.asyncio
+async def test_responses_api_failed_stream_scans_delta_text_before_replay():
+    """A responses stream that dies mid-generation carries its text only in delta
+    events; the end-of-stream scan must still see that text instead of skipping
+    on an empty assembled string and replaying the buffer unmoderated."""
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-responses-failed-stream",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+    )
+    stream_events = _responses_failed_stream_events()
+    order = []
+    scan_payloads = []
+    yielded = []
+
+    async def record_scan(*args, **kwargs):
+        order.append("scan")
+        scan_payloads.append(str(args) + str(kwargs))
+        return {"action": "NONE", "assessments": [], "outputs": []}
+
+    async def mock_stream():
+        for event in stream_events:
+            yield event
+
+    with patch.object(guardrail, "make_bedrock_api_request", AsyncMock(side_effect=record_scan)):
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/responses"),
+            response=mock_stream(),
+            request_data={"model": "gpt-4o", "input": "hi"},
+        ):
+            order.append("chunk")
+            yielded.append(chunk)
+
+    assert order == ["scan", "chunk", "chunk", "chunk"]
+    assert "Hello world" in scan_payloads[0]
+    assert len(yielded) == len(stream_events)
+    assert all(emitted is original for emitted, original in zip(yielded, stream_events))
+
+
 @pytest.mark.asyncio
 async def test_apply_guardrail_debug_log_masks_signed_request_headers():
     import logging

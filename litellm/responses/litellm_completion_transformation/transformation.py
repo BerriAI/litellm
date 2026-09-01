@@ -93,6 +93,7 @@ from .custom_tools import (
     convert_custom_tool_to_function_tool,
     extract_custom_tool_names,
     is_custom_tool_call,
+    openai_shaped_tool_call_item_id,
     serialize_tool_call_arguments,
     unwrap_custom_tool_arguments,
     validated_allowed_callers,
@@ -2034,7 +2035,7 @@ class LiteLLMCompletionResponsesConfig:
                     custom_item = CustomToolCallOutputItem(
                         type="custom_tool_call",
                         call_id=tool_id,
-                        id=tool_id,
+                        id=openai_shaped_tool_call_item_id("custom_tool_call", tool_id),
                         name=tool_name,
                         input=input_str,
                         status=function_definition.get("status") or "completed",
@@ -2065,7 +2066,7 @@ class LiteLLMCompletionResponsesConfig:
                         name=tool_name,
                         arguments=tool_arguments,
                         call_id=tool_id,
-                        id=tool_id,
+                        id=openai_shaped_tool_call_item_id("function_call", tool_id),
                         type="function_call",
                         status=function_definition.get("status") or "completed",
                     )
@@ -2502,8 +2503,7 @@ class LiteLLMCompletionResponsesConfig:
                     choice=choice,
                 )
                 message_output_items.extend(image_generation_items)
-            else:
-                # Regular message output
+            elif choice.message.content is not None:
                 message_output_items.append(
                     GenericResponseOutputItem(
                         type="message",
