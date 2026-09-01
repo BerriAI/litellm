@@ -1,6 +1,8 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
@@ -26,6 +28,66 @@ else:
     LiteLLMLoggingObj = Any
 
 
+class VertexRagPageSpan(TypedDict, total=False):
+    """Page range a retrieved chunk came from, as ``:retrieveContexts`` returns it."""
+
+    firstPage: ReadOnly[int]
+    lastPage: ReadOnly[int]
+
+
+class VertexRagContext(TypedDict, total=False):
+    """One retrieved chunk in a Vertex AI RAG ``:retrieveContexts`` response."""
+
+    text: ReadOnly[str]
+    sourceUri: ReadOnly[str]
+    sourceDisplayName: ReadOnly[str]
+    score: ReadOnly[float]
+    pageSpan: ReadOnly[VertexRagPageSpan]
+
+
+class VertexRagContextGroup(TypedDict, total=False):
+    contexts: ReadOnly[list[VertexRagContext]]
+
+
+class VertexRagRetrieveContextsResponse(TypedDict, total=False):
+    contexts: ReadOnly[VertexRagContextGroup]
+
+
+class VertexRagCorpusResponse(TypedDict, total=False):
+    """A RAG corpus resource, as ``POST /ragCorpora`` returns it."""
+
+    name: ReadOnly[str]
+    display_name: ReadOnly[str]
+    createTime: ReadOnly[object]
+    labels: ReadOnly[object]
+
+
+class _SearchQueryView(TypedDict):
+    """Holds the logged search query so the model call detail reads back as ``str``."""
+
+    query: ReadOnly[str]
+
+
+class _RetrieveContextsSource(Protocol):
+    """An HTTP response whose JSON body is a Vertex AI RAG ``:retrieveContexts`` result."""
+
+    def json(self) -> VertexRagRetrieveContextsResponse: ...
+
+
+class _RagCorpusSource(Protocol):
+    """An HTTP response whose JSON body is a Vertex AI RAG corpus resource."""
+
+    def json(self) -> VertexRagCorpusResponse: ...
+
+
+def _retrieve_contexts_payload(response: _RetrieveContextsSource) -> VertexRagRetrieveContextsResponse:
+    return response.json()
+
+
+def _rag_corpus_payload(response: _RagCorpusSource) -> VertexRagCorpusResponse:
+    return response.json()
+
+
 class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
     """
     Configuration for Vertex AI Vector Store RAG API
@@ -36,10 +98,10 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
     def __init__(self):
         super().__init__()
 
-    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: Mapping[str, object]) -> BaseVectorStoreAuthCredentials:
         # Get credentials and project info
-        vertex_credentials = self.get_vertex_ai_credentials(dict(litellm_params))
-        vertex_project = self.get_vertex_ai_project(dict(litellm_params))
+        vertex_credentials: Final = self.get_vertex_ai_credentials(dict(litellm_params))
+        vertex_project: Final = self.get_vertex_ai_project(dict(litellm_params))
 
         # Get access token using the base class method
         access_token, project_id = self._ensure_access_token(
@@ -61,45 +123,47 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
             "write": [("POST", "/ragCorpora")],
         }
 
-    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
+    def validate_environment(
+        self, headers: dict[str, str], litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, str]:
         """
         Validate and set up authentication for Vertex AI RAG API
         """
         litellm_params = litellm_params or GenericLiteLLMParams()
 
-        auth_headers = self.get_auth_credentials(litellm_params.model_dump())
+        auth_headers: Final = self.get_auth_credentials(litellm_params.model_dump())
         headers.update(auth_headers.get("headers", {}))
         return headers
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        litellm_params: dict,
+        api_base: str | None,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the Base endpoint for Vertex AI RAG API
         """
-        vertex_location = self.get_vertex_ai_location(litellm_params)
-        vertex_project = self.get_vertex_ai_project(litellm_params)
+        vertex_location: Final = self.get_vertex_ai_location(litellm_params)
+        vertex_project: Final = self.get_vertex_ai_project(litellm_params)
 
         if api_base:
             return api_base.rstrip("/")
 
         # Vertex AI RAG API endpoint for retrieveContexts
-        base_url = get_vertex_base_url(vertex_location)
+        base_url: Final = get_vertex_base_url(vertex_location)
         return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}"
 
     def transform_search_vector_store_request(
         self,
         vector_store_id: str,
-        query: Union[str, List[str]],
+        query: str | list[str],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
-        router: Optional["Router"] = None,
-    ) -> Tuple[str, Dict[str, Any]]:
+        extra_body: Mapping[str, object] | None = None,
+        router: "Router | None" = None,
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform search request for Vertex AI RAG API
         """
@@ -108,11 +172,11 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
             query = " ".join(query)
 
         # Vertex AI RAG API endpoint for retrieving contexts
-        url = f"{api_base}:retrieveContexts"
+        url: Final = f"{api_base}:retrieveContexts"
 
         # Use helper methods to get project and location, then construct full rag corpus path
-        vertex_project = self.get_vertex_ai_project(litellm_params)
-        vertex_location = self.get_vertex_ai_location(litellm_params)
+        vertex_project: Final = self.get_vertex_ai_project(litellm_params)
+        vertex_location: Final = self.get_vertex_ai_location(litellm_params)
 
         # Handle both full corpus path and just corpus ID
         if vector_store_id.startswith("projects/"):
@@ -122,35 +186,34 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
             # Just the corpus ID, construct full path
             full_rag_corpus = f"projects/{vertex_project}/locations/{vertex_location}/ragCorpora/{vector_store_id}"
 
-        # Build the request body for Vertex AI RAG API
-        request_body: Dict[str, Any] = {
-            "vertex_rag_store": {"rag_resources": [{"rag_corpus": full_rag_corpus}]},
-            "query": {"text": query},
-        }
-
         #########################################################
         # Update logging object with details of the request
         #########################################################
         litellm_logging_obj.model_call_details["query"] = query
 
         # Add optional parameters
-        max_num_results = vector_store_search_optional_params.get("max_num_results")
-        if max_num_results is not None:
-            request_body["query"]["rag_retrieval_config"] = {"top_k": max_num_results}
+        max_num_results: Final = vector_store_search_optional_params.get("max_num_results")
+        filters: Final = vector_store_search_optional_params.get("filters")
+        ranking_options: Final = vector_store_search_optional_params.get("ranking_options")
+        rag_retrieval_config: Final[Mapping[str, object]] = {
+            key: value
+            for key, value in (
+                ("top_k", max_num_results),
+                ("filter", filters),
+                ("ranking", ranking_options),
+            )
+            if value is not None
+        }
 
-        # Add filters if provided
-        filters = vector_store_search_optional_params.get("filters")
-        if filters is not None:
-            if "rag_retrieval_config" not in request_body["query"]:
-                request_body["query"]["rag_retrieval_config"] = {}
-            request_body["query"]["rag_retrieval_config"]["filter"] = filters
-
-        # Add ranking options if provided
-        ranking_options = vector_store_search_optional_params.get("ranking_options")
-        if ranking_options is not None:
-            if "rag_retrieval_config" not in request_body["query"]:
-                request_body["query"]["rag_retrieval_config"] = {}
-            request_body["query"]["rag_retrieval_config"]["ranking"] = ranking_options
+        query_body: Final[Mapping[str, object]] = {
+            key: value
+            for key, value in (("text", query), ("rag_retrieval_config", rag_retrieval_config or None))
+            if value is not None
+        }
+        request_body: Final[dict[str, object]] = {
+            "vertex_rag_store": {"rag_resources": [{"rag_corpus": full_rag_corpus}]},
+            "query": query_body,
+        }
 
         return url, request_body
 
@@ -161,12 +224,13 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         Transform Vertex AI RAG API response to standard vector store search response
         """
         try:
-            response_json = response.json()
+            response_json: Final = _retrieve_contexts_payload(response)
             # Extract contexts from Vertex AI response - handle nested structure
-            contexts = response_json.get("contexts", {}).get("contexts", [])
+            context_group: Final[VertexRagContextGroup] = response_json.get("contexts", {})
+            contexts: Final = context_group.get("contexts", [])
 
             # Transform contexts to standard format
-            search_results = []
+            search_results: Final[list[VectorStoreSearchResult]] = []
             for context in contexts:
                 content = [
                     VectorStoreResultContent(
@@ -184,7 +248,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
                 filename = source_display_name if source_display_name else "Unknown Document"
 
                 # Build attributes with available metadata
-                attributes = {}
+                attributes: dict[str, object] = {}
                 if source_uri:
                     attributes["sourceUri"] = source_uri
                 if source_display_name:
@@ -204,9 +268,10 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
                 )
                 search_results.append(result)
 
+            query_view: Final[_SearchQueryView] = {"query": litellm_logging_obj.model_call_details.get("query", "")}
             return VectorStoreSearchResponse(
                 object="vector_store.search_results.page",
-                search_query=litellm_logging_obj.model_call_details.get("query", ""),
+                search_query=query_view["query"],
                 data=search_results,
             )
 
@@ -221,22 +286,24 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> Tuple[str, Dict[str, Any]]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform create request for Vertex AI RAG Corpus
         """
-        url = f"{api_base}/ragCorpora"  # Base URL for creating RAG corpus
-
-        # Build the request body for Vertex AI RAG Corpus creation
-        request_body: Dict[str, Any] = {
-            "display_name": vector_store_create_optional_params.get("name", "litellm-vector-store"),
-            "description": "Vector store created via LiteLLM",
-        }
+        url: Final = f"{api_base}/ragCorpora"  # Base URL for creating RAG corpus
 
         # Add metadata if provided
-        metadata = vector_store_create_optional_params.get("metadata")
-        if metadata is not None:
-            request_body["labels"] = metadata
+        metadata: Final = vector_store_create_optional_params.get("metadata")
+
+        request_body: Final[dict[str, object]] = {
+            key: value
+            for key, value in (
+                ("display_name", vector_store_create_optional_params.get("name", "litellm-vector-store")),
+                ("description", "Vector store created via LiteLLM"),
+                ("labels", metadata),
+            )
+            if value is not None
+        }
 
         return url, request_body
 
@@ -245,11 +312,11 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         Transform Vertex AI RAG Corpus creation response to standard vector store response
         """
         try:
-            response_json = response.json()
+            response_json: Final = _rag_corpus_payload(response)
 
             # Extract the corpus ID from the response name
-            corpus_name = response_json.get("name", "")
-            corpus_id = corpus_name.split("/")[-1] if "/" in corpus_name else corpus_name
+            corpus_name: Final = response_json.get("name", "")
+            corpus_id: Final = corpus_name.split("/")[-1] if "/" in corpus_name else corpus_name
 
             # Handle createTime conversion
             create_time = response_json.get("createTime", 0)
@@ -258,7 +325,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
                 from datetime import datetime
 
                 try:
-                    dt = datetime.fromisoformat(create_time.replace("Z", "+00:00"))
+                    dt: Final = datetime.fromisoformat(create_time.replace("Z", "+00:00"))
                     create_time = int(dt.timestamp())
                 except ValueError:
                     create_time = 0
@@ -266,8 +333,8 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
                 create_time = 0
 
             # Handle labels safely
-            labels = response_json.get("labels", {})
-            metadata = labels if isinstance(labels, dict) else {}
+            labels: Final = response_json.get("labels", {})
+            metadata: Final = labels if isinstance(labels, dict) else {}
 
             return VectorStoreCreateResponse(
                 id=corpus_id,

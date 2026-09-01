@@ -112,3 +112,37 @@ class TestProviderSpecificHeaderUtils:
             provider_specific_header, None
         )
         assert result == {}
+
+    def test_get_provider_specific_headers_scopes_each_entry_independently(self):
+        """Entries in a list each carry their own provider scope."""
+        scoped_headers: list[ProviderSpecificHeader] = [
+            {
+                "custom_llm_provider": "anthropic,bedrock,vertex_ai",
+                "extra_headers": {"anthropic-beta": "context-1m-2025-08-07"},
+            },
+            {
+                "custom_llm_provider": "anthropic",
+                "extra_headers": {"authorization": "Bearer sk-ant-oat01-fake-token"},
+            },
+        ]
+
+        assert ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            scoped_headers, "anthropic"
+        ) == {
+            "anthropic-beta": "context-1m-2025-08-07",
+            "authorization": "Bearer sk-ant-oat01-fake-token",
+        }
+        assert ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            scoped_headers, "bedrock"
+        ) == {"anthropic-beta": "context-1m-2025-08-07"}
+        assert (
+            ProviderSpecificHeaderUtils.get_provider_specific_headers(
+                scoped_headers, "openai"
+            )
+            == {}
+        )
+
+    def test_get_provider_specific_headers_empty_list(self):
+        """An empty list of scoped entries contributes nothing."""
+        result = ProviderSpecificHeaderUtils.get_provider_specific_headers([], "anthropic")
+        assert result == {}

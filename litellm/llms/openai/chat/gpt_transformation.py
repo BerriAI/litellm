@@ -3,23 +3,9 @@ Support for gpt model family
 """
 
 import json
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncIterator,
-    Coroutine,
-    Dict,
-    Iterator,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    Union,
-    cast,
-    overload,
-)
-
 import os
+from collections.abc import AsyncIterator, Coroutine, Iterator
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, overload
 from urllib.parse import urlparse
 
 import httpx
@@ -31,7 +17,11 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _handle_invalid_parallel_tool_calls,
     _should_convert_tool_call_to_json_mode,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import get_tool_call_names
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    drop_tool_reference_parts_from_tool_messages,
+    get_tool_call_names,
+    hoist_images_from_tool_messages,
+)
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
@@ -50,18 +40,22 @@ from litellm.types.llms.openai import (
     OpenAIMessageContentListBlock,
 )
 from litellm.types.utils import (
+    ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
     Choices,
     Function,
     Message,
     ModelResponse,
     ModelResponseStream,
+    chat_completion_tool_call_from_dict,
 )
 from litellm.utils import convert_to_model_response_object
 
 from ..common_utils import OpenAIError
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.llms.base_llm.base_utils import BaseTokenCounter
     from litellm.types.llms.openai import ChatCompletionToolParam
@@ -101,33 +95,33 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     # Add a class variable to track if this is the base class
     _is_base_class = True
 
-    frequency_penalty: Optional[int] = None
-    function_call: Optional[Union[str, dict]] = None
-    functions: Optional[list] = None
-    logit_bias: Optional[dict] = None
-    max_tokens: Optional[int] = None
-    n: Optional[int] = None
-    presence_penalty: Optional[int] = None
-    stop: Optional[Union[str, list]] = None
-    temperature: Optional[int] = None
-    top_p: Optional[int] = None
-    response_format: Optional[dict] = None
+    frequency_penalty: int | None = None
+    function_call: str | dict | None = None
+    functions: list | None = None
+    logit_bias: dict | None = None
+    max_tokens: int | None = None
+    n: int | None = None
+    presence_penalty: int | None = None
+    stop: str | list | None = None
+    temperature: int | None = None
+    top_p: int | None = None
+    response_format: dict | None = None
 
     def __init__(
         self,
-        frequency_penalty: Optional[int] = None,
-        function_call: Optional[Union[str, dict]] = None,
-        functions: Optional[list] = None,
-        logit_bias: Optional[dict] = None,
-        max_tokens: Optional[int] = None,
-        n: Optional[int] = None,
-        presence_penalty: Optional[int] = None,
-        stop: Optional[Union[str, list]] = None,
-        temperature: Optional[int] = None,
-        top_p: Optional[int] = None,
-        response_format: Optional[dict] = None,
+        frequency_penalty: int | None = None,
+        function_call: str | dict | None = None,
+        functions: list | None = None,
+        logit_bias: dict | None = None,
+        max_tokens: int | None = None,
+        n: int | None = None,
+        presence_penalty: int | None = None,
+        stop: str | list | None = None,
+        temperature: int | None = None,
+        top_p: int | None = None,
+        response_format: dict | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -139,7 +133,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         return super().get_config()
 
     def get_supported_openai_params(self, model: str) -> list:
-        base_params = [
+        base_params: Final = [
             "frequency_penalty",
             "logit_bias",
             "logprobs",
@@ -172,19 +166,23 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             "store",
         ]  # works across all models
 
-        model_specific_params = []
+        model_specific_params: Final = []
         if model != "gpt-3.5-turbo-16k" and model != "gpt-4":  # gpt-4 does not support 'response_format'
             model_specific_params.append("response_format")
 
-        # Normalize model name for responses API (e.g., "responses/gpt-4.1" -> "gpt-4.1")
-        model_for_check = model.split("responses/", 1)[1] if "responses/" in model else model
-        if (
-            model_for_check in litellm.open_ai_chat_completion_models
-        ) or model_for_check in litellm.open_ai_text_completion_models:
+        if OpenAIGPTConfig.is_openai_catalog_model(model):
             model_specific_params.append(
                 "user"
             )  # user is not a param supported by all openai-compatible endpoints - e.g. azure ai
         return base_params + model_specific_params
+
+    @staticmethod
+    def is_openai_catalog_model(model: str) -> bool:
+        model_for_check: Final = model.split("responses/", 1)[1] if "responses/" in model else model
+        return (
+            model_for_check in litellm.open_ai_chat_completion_models
+            or model_for_check in litellm.open_ai_text_completion_models
+        )
 
     def _map_openai_params(
         self,
@@ -204,7 +202,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         Returns:
             dict: Updated optional_params with supported non-default parameters.
         """
-        supported_openai_params = self.get_supported_openai_params(model)
+        supported_openai_params: Final = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():
             if param in supported_openai_params:
                 optional_params[param] = value
@@ -225,34 +223,34 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         )
 
     def contains_pdf_url(self, content_item: ChatCompletionFileObjectFile) -> bool:
-        potential_pdf_url_starts = ["https://", "http://", "www."]
-        file_id = content_item.get("file_id")
+        potential_pdf_url_starts: Final = ["https://", "http://", "www."]
+        file_id: Final = content_item.get("file_id")
         if file_id and any(file_id.startswith(start) for start in potential_pdf_url_starts):
             return True
         return False
 
     def _handle_pdf_url(self, content_item: ChatCompletionFileObjectFile) -> ChatCompletionFileObjectFile:
-        content_copy = content_item.copy()
-        file_id = content_copy.get("file_id")
+        content_copy: Final = content_item.copy()
+        file_id: Final = content_copy.get("file_id")
         if file_id is not None:
-            base64_data = convert_url_to_base64(file_id)
+            base64_data: Final = convert_url_to_base64(file_id)
             content_copy["file_data"] = base64_data
             content_copy["filename"] = "my_file.pdf"
             content_copy.pop("file_id")
         return content_copy
 
     async def _async_handle_pdf_url(self, content_item: ChatCompletionFileObjectFile) -> ChatCompletionFileObjectFile:
-        file_id = content_item.get("file_id")
+        file_id: Final = content_item.get("file_id")
         if file_id is not None:  # check for file id being url done in _handle_pdf_url
-            base64_data = await async_convert_url_to_base64(file_id)
+            base64_data: Final = await async_convert_url_to_base64(file_id)
             content_item["file_data"] = base64_data
             content_item["filename"] = "my_file.pdf"
             content_item.pop("file_id")
         return content_item
 
     def _common_file_data_check(self, content_item: ChatCompletionFileObjectFile) -> ChatCompletionFileObjectFile:
-        file_data = content_item.get("file_data")
-        filename = content_item.get("filename")
+        file_data: Final = content_item.get("file_data")
+        filename: Final = content_item.get("filename")
         if file_data is not None and filename is None:
             content_item["filename"] = "my_file.pdf"
         return content_item
@@ -261,7 +259,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         self,
         content_item: OpenAIMessageContentListBlock,
     ) -> OpenAIMessageContentListBlock:
-        litellm_specific_params = {"format"}
+        litellm_specific_params: Final = {"format"}
         if content_item.get("type") == "image_url":
             content_item = cast(ChatCompletionImageObject, content_item)
             if isinstance(content_item["image_url"], str):
@@ -269,25 +267,21 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                     "url": content_item["image_url"],
                 }
             elif isinstance(content_item["image_url"], dict):
-                new_image_url_obj = ChatCompletionImageUrlObject(
-                    **{  # type: ignore
-                        k: v for k, v in content_item["image_url"].items() if k not in litellm_specific_params
-                    }
+                new_image_url_obj: Final = ChatCompletionImageUrlObject(
+                    **{k: v for k, v in content_item["image_url"].items() if k not in litellm_specific_params}
                 )
                 content_item["image_url"] = new_image_url_obj
         elif content_item.get("type") == "file":
             content_item = cast(ChatCompletionFileObject, content_item)
-            file_obj = content_item.get("file")
+            file_obj: Final = content_item.get("file")
             if file_obj is None:
                 raise litellm.BadRequestError(
                     message="Content block has type='file' but is missing the required 'file' field",
                     model=None,
                     llm_provider="openai",
                 )
-            new_file_obj = ChatCompletionFileObjectFile(
-                **{  # type: ignore
-                    k: v for k, v in file_obj.items() if k not in litellm_specific_params
-                }
+            new_file_obj: Final = ChatCompletionFileObjectFile(
+                **{k: v for k, v in file_obj.items() if k not in litellm_specific_params}
             )
             content_item["file"] = new_file_obj
 
@@ -298,11 +292,11 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         content_item: OpenAIMessageContentListBlock,
     ) -> OpenAIMessageContentListBlock:
         content_item = self._apply_common_transform_content_item(content_item)
-        content_item_type = content_item.get("type")
-        potential_file_obj = content_item.get("file")
+        content_item_type: Final = content_item.get("type")
+        potential_file_obj: Final = content_item.get("file")
         if content_item_type == "file" and potential_file_obj:
             file_obj = cast(ChatCompletionFileObjectFile, potential_file_obj)
-            content_item_typed = cast(ChatCompletionFileObject, content_item)
+            content_item_typed: Final = cast(ChatCompletionFileObject, content_item)
             if self.contains_pdf_url(file_obj):
                 file_obj = self._handle_pdf_url(file_obj)
             file_obj = self._common_file_data_check(file_obj)
@@ -314,11 +308,11 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         self, content_item: OpenAIMessageContentListBlock, is_async: bool = False
     ) -> OpenAIMessageContentListBlock:
         content_item = self._apply_common_transform_content_item(content_item)
-        content_item_type = content_item.get("type")
-        potential_file_obj = content_item.get("file")
+        content_item_type: Final = content_item.get("type")
+        potential_file_obj: Final = content_item.get("file")
         if content_item_type == "file" and potential_file_obj:
             file_obj = cast(ChatCompletionFileObjectFile, potential_file_obj)
-            content_item_typed = cast(ChatCompletionFileObject, content_item)
+            content_item_typed: Final = cast(ChatCompletionFileObject, content_item)
             if self.contains_pdf_url(file_obj):
                 file_obj = await self._async_handle_pdf_url(file_obj)
             file_obj = self._common_file_data_check(file_obj)
@@ -330,59 +324,61 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
     @overload
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]: 
+        self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, list[AllMessageValues]]: 
         ...
 
     @overload
     def _transform_messages(
         self,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]:
+    ) -> list[AllMessageValues]:
         ...
 
     # fmt: on
 
     def _transform_messages(
-        self, messages: List[AllMessageValues], model: str, is_async: bool = False
-    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
+        self, messages: list[AllMessageValues], model: str, is_async: bool = False
+    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
         """OpenAI no longer supports image_url as a string, so we need to convert it to a dict"""
+        stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(messages)
+        hoisted_messages: Final = hoist_images_from_tool_messages(stripped_messages)
 
         async def _async_transform():
-            for message in messages:
+            for message in hoisted_messages:
                 message_content = message.get("content")
                 message_role = message.get("role")
 
                 if message_role == "user" and message_content and isinstance(message_content, list):
-                    message_content_types = cast(List[OpenAIMessageContentListBlock], message_content)
+                    message_content_types = cast(list[OpenAIMessageContentListBlock], message_content)
                     for i, content_item in enumerate(message_content_types):
                         message_content_types[i] = await self._async_transform_content_item(
                             cast(OpenAIMessageContentListBlock, content_item),
                         )
-            return messages
+            return hoisted_messages
 
         if is_async:
             return _async_transform()
         else:
-            for message in messages:
+            for message in hoisted_messages:
                 message_content = message.get("content")
                 message_role = message.get("role")
                 if message_role == "user" and message_content and isinstance(message_content, list):
-                    message_content_types = cast(List[OpenAIMessageContentListBlock], message_content)
+                    message_content_types = cast(list[OpenAIMessageContentListBlock], message_content)
                     for i, content_item in enumerate(message_content):
                         message_content_types[i] = self._transform_content_item(
                             cast(OpenAIMessageContentListBlock, content_item)
                         )
-            return messages
+            return hoisted_messages
 
     def remove_cache_control_flag_from_messages_and_tools(
         self,
         model: str,  # allows overrides to selectively run this
-        messages: List[AllMessageValues],
-        tools: Optional[List["ChatCompletionToolParam"]] = None,
-    ) -> Tuple[List[AllMessageValues], Optional[List["ChatCompletionToolParam"]]]:
+        messages: list[AllMessageValues],
+        tools: list["ChatCompletionToolParam"] | None = None,
+    ) -> tuple[list[AllMessageValues], list["ChatCompletionToolParam"] | None]:
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             filter_value_from_dict,
         )
@@ -391,13 +387,13 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         for i, message in enumerate(messages):
             messages[i] = cast(
                 AllMessageValues,
-                filter_value_from_dict(message, "cache_control"),  # type: ignore
+                filter_value_from_dict(message, "cache_control"),
             )
         if tools is not None:
             for i, tool in enumerate(tools):
                 tools[i] = cast(
                     ChatCompletionToolParam,
-                    filter_value_from_dict(tool, "cache_control"),  # type: ignore
+                    filter_value_from_dict(tool, "cache_control"),
                 )
         return messages, tools
 
@@ -417,7 +413,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         resolved_api_base = api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
         if not resolved_api_base:
             return False
-        hostname = urlparse(resolved_api_base).hostname
+        hostname: Final = urlparse(resolved_api_base).hostname
         if hostname is None:
             return False
         return hostname != "openai.com" and not hostname.endswith(".openai.com")
@@ -425,7 +421,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -457,7 +453,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     async def async_transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -491,7 +487,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
     def _check_and_fix_if_content_is_tool_call(
         self, content: str, optional_params: dict
-    ) -> Optional[ChatCompletionMessageToolCall]:
+    ) -> ChatCompletionMessageToolCall | None:
         """
         Check if the content is a tool call
         """
@@ -499,9 +495,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
         if not self._passed_in_tools(optional_params):
             return None
-        tool_call_names = get_tool_call_names(optional_params.get("tools", []))
+        tool_call_names: Final = get_tool_call_names(optional_params.get("tools", []))
         try:
-            json_content = json.loads(content)
+            json_content: Final = json.loads(content)
             if json_content.get("type") == "function" and json_content.get("name") in tool_call_names:
                 return ChatCompletionMessageToolCall(
                     function=Function(
@@ -522,21 +518,23 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
     def _transform_choices(
         self,
-        choices: List[OpenAIChatCompletionChoices],
-        json_mode: Optional[bool] = None,
-        optional_params: Optional[dict] = None,
-    ) -> List[Choices]:
-        transformed_choices = []
+        choices: list[OpenAIChatCompletionChoices],
+        json_mode: bool | None = None,
+        optional_params: dict | None = None,
+    ) -> list[Choices]:
+        transformed_choices: Final = []
 
         for choice in choices:
             ## HANDLE JSON MODE - anthropic returns single function call]
             tool_calls = choice["message"].get("tool_calls", None)
-            new_tool_calls: Optional[List[ChatCompletionMessageToolCall]] = None
+            new_tool_calls: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None = (
+                None  # mutable-ok: holds _handle_invalid_parallel_tool_calls' list; Message.__init__ expects list
+            )
             message_content = choice["message"].get("content", None)
             if tool_calls is not None:
                 _openai_tool_calls = []
                 for _tc in tool_calls:
-                    _openai_tc = ChatCompletionMessageToolCall(**_tc)  # type: ignore
+                    _openai_tc = chat_completion_tool_call_from_dict(_tc)
                     _openai_tool_calls.append(_openai_tc)
                 fixed_tool_calls = _handle_invalid_parallel_tool_calls(_openai_tool_calls)
 
@@ -548,14 +546,14 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                     choice["message"]["content"] = None  # remove the content
                     new_tool_calls = [new_tool_call]
 
-            translated_message: Optional[Message] = None
-            finish_reason: Optional[str] = None
+            translated_message: Message | None = None
+            finish_reason: str | None = None
             if new_tool_calls and _should_convert_tool_call_to_json_mode(
                 tool_calls=new_tool_calls,
                 convert_tool_call_to_json_mode=json_mode,
             ):
                 # to support response_format on claude models
-                json_mode_content_str: Optional[str] = str(new_tool_calls[0]["function"].get("arguments", "")) or None
+                json_mode_content_str: str | None = str(new_tool_calls[0]["function"].get("arguments", "")) or None
                 if json_mode_content_str is not None:
                     translated_message = Message(content=json_mode_content_str)
                     finish_reason = "stop"
@@ -600,12 +598,12 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        encoding: "tiktoken.Encoding | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         """
         Transform the response from the API.
@@ -624,16 +622,16 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response = raw_response.json()
+            completion_response: Final = raw_response.json()
         except Exception as e:
-            response_headers = getattr(raw_response, "headers", None)
+            response_headers: Final = getattr(raw_response, "headers", None)
             raise OpenAIError(
-                message="Unable to get json response - {}, Original Response: {}".format(str(e), raw_response.text),
+                message=f"Unable to get json response - {e}, Original Response: {raw_response.text}",
                 status_code=raw_response.status_code,
                 headers=response_headers,
             )
-        raw_response_headers = dict(raw_response.headers)
-        final_response_obj = convert_to_model_response_object(
+        raw_response_headers: Final = dict(raw_response.headers)
+        final_response_obj: Final = convert_to_model_response_object(
             response_object=completion_response,
             model_response_object=model_response,
             hidden_params={"headers": raw_response_headers},
@@ -642,9 +640,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
         return cast(ModelResponse, final_response_obj)
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return OpenAIError(
             status_code=status_code,
             message=error_message,
@@ -653,12 +649,12 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for the API call.
@@ -668,7 +664,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         """
         if api_base is None:
             api_base = "https://api.openai.com"
-        endpoint = "chat/completions"
+        endpoint: Final = "chat/completions"
 
         # Remove trailing slash from api_base if present
         api_base = api_base.rstrip("/")
@@ -683,11 +679,11 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if api_key is not None:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -698,7 +694,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
         return headers
 
-    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         """
         Calls OpenAI's `/v1/models` endpoint and returns the list of models.
         """
@@ -709,12 +705,12 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             api_key = get_secret_str("OPENAI_API_KEY")
 
         # Strip api_base to just the base URL (scheme + host + port)
-        parsed_url = httpx.URL(api_base)
+        parsed_url: Final = httpx.URL(api_base)
         base_url = f"{parsed_url.scheme}://{parsed_url.host}"
         if parsed_url.port:
             base_url += f":{parsed_url.port}"
 
-        response = litellm.module_level_client.get(
+        response: Final = litellm.module_level_client.get(
             url=f"{base_url}/v1/models",
             headers={"Authorization": f"Bearer {api_key}"},
         )
@@ -722,15 +718,15 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         if response.status_code != 200:
             raise Exception(f"Failed to get models: {response.text}")
 
-        models = response.json()["data"]
+        models: Final = response.json()["data"]
         return [model["id"] for model in models]
 
     @staticmethod
-    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+    def get_api_key(api_key: str | None = None) -> str | None:
         return api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
 
     @staticmethod
-    def get_api_base(api_base: Optional[str] = None) -> Optional[str]:
+    def get_api_base(api_base: str | None = None) -> str | None:
         return (
             api_base
             or litellm.api_base
@@ -740,7 +736,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         )
 
     @staticmethod
-    def get_base_model(model: Optional[str] = None) -> Optional[str]:
+    def get_base_model(model: str | None = None) -> str | None:
         return model
 
     def get_token_counter(self) -> Optional["BaseTokenCounter"]:
@@ -752,15 +748,23 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ) -> Any:
         return OpenAIChatCompletionStreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
             json_mode=json_mode,
         )
+
+
+class OpenAIUnknownModelConfig(OpenAIGPTConfig):
+    """A model the openai provider does not recognize is typically a LiteLLM proxy alias, so
+    forward reasoning_effort and let the server decide whether it is supported."""
+
+    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: inherited contract
+        return super().get_supported_openai_params(model) + ["reasoning_effort"]  # mutable-ok: inherited contract
 
 
 class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
@@ -784,23 +788,23 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
         return choices
 
     @staticmethod
-    def _extract_error_from_chunk(chunk: dict) -> Optional[tuple[str, int]]:
+    def _extract_error_from_chunk(chunk: dict) -> tuple[str, int] | None:
         """OpenAI-compatible backends (vLLM, sglang) can return an HTTP 200
         stream whose body carries an error payload, e.g.
         ``data: {"error": {"message": "...", "code": 400}}``."""
-        error = chunk.get("error")
+        error: Final = chunk.get("error")
         if not error:
             return None
         if not isinstance(error, dict):
             return str(error), 500
-        message = error.get("message")
-        code = error.get("code")
-        status_code = code if isinstance(code, int) and 400 <= code < 600 else 500
+        message: Final = error.get("message")
+        code: Final = error.get("code")
+        status_code: Final = code if isinstance(code, int) and 400 <= code < 600 else 500
         return (message if isinstance(message, str) else json.dumps(error)), status_code
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
-            error_details = self._extract_error_from_chunk(chunk)
+            error_details: Final = self._extract_error_from_chunk(chunk)
             if error_details is not None:
                 error_message, error_status_code = error_details
                 raise OpenAIError(
@@ -810,7 +814,7 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
             choices = chunk.get("choices", [])
             choices = self._map_reasoning_to_reasoning_content(choices)
 
-            kwargs: Dict[str, Any] = {
+            kwargs: Final[dict[str, Any]] = {
                 "id": chunk.get("id"),
                 "object": "chat.completion.chunk",
                 "created": chunk.get("created"),

@@ -1,7 +1,7 @@
-from typing import Any, Dict
+from typing import Any
 
 
-class CBFRecord(Dict[str, Any]):
+class CBFRecord(dict[str, Any]):
     """CloudZero Billing Format (CBF) record structure.
 
     This class represents a CBF record that is created from LiteLLM usage data
@@ -29,8 +29,6 @@ class CBFRecord(Dict[str, Any]):
     - resource/tag:{key}: Various resource tags for dimensions and metrics (Optional[str])
     """
 
-    pass
-
 
 # Type alias for better readability in function signatures
-CBFRecordDict = Dict[str, Any]
+CBFRecordDict = dict[str, Any]

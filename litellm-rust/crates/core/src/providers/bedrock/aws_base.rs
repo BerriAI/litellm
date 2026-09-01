@@ -12,13 +12,15 @@ use aws_sigv4::http_request::{
 };
 use aws_sigv4::sign::v4;
 use aws_smithy_runtime_api::client::identity::Identity;
+use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use super::constants::{
-    AWS_ACCESS_KEY_ID, AWS_EXTERNAL_ID, AWS_PROFILE_NAME, AWS_REGION_NAME, AWS_ROLE_ARN,
-    AWS_ROLE_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_NAME, AWS_SESSION_TOKEN, AWS_STS_ENDPOINT,
-    AWS_WEB_IDENTITY_TOKEN, AWS_WEB_IDENTITY_TOKEN_FILE, BEDROCK_SERVICE,
-    DEFAULT_SESSION_NAME_PREFIX,
+    AWS_ACCESS_KEY_ID, AWS_EXTERNAL_ID, AWS_PROFILE_NAME, AWS_REGION, AWS_REGION_NAME,
+    AWS_ROLE_ARN, AWS_ROLE_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_NAME, AWS_SESSION_TOKEN,
+    AWS_SIGNED_HEADER_NAMES, AWS_STS_ENDPOINT, AWS_WEB_IDENTITY_TOKEN, AWS_WEB_IDENTITY_TOKEN_FILE,
+    BEDROCK_SERVICE, DEFAULT_BEDROCK_REGION, DEFAULT_SESSION_NAME_PREFIX,
+    SIGV4_COMPUTED_HEADER_NAMES,
 };
 
 const STATIC_CREDENTIALS_TTL: Duration = Duration::from_secs(3600 - 60);
@@ -401,6 +403,33 @@ fn default_session_name() -> String {
     format!("{DEFAULT_SESSION_NAME_PREFIX}-{seconds}")
 }
 
+/// The subset of `headers` SigV4 should cover.
+///
+/// Python signs only these and reattaches the rest afterwards, so a forwarded
+/// client header cannot change the canonical request and invalidate the
+/// signature. Signing everything instead makes the request 403 on a header the
+/// caller supplied, on a deployment that works on the Python path.
+pub fn aws_signature_headers(headers: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    headers
+        .iter()
+        .filter(|(name, _)| {
+            let name = name.to_ascii_lowercase();
+            AWS_SIGNED_HEADER_NAMES.contains(&name.as_str())
+                || name.starts_with("x-amz-")
+                || name.starts_with("x-amzn-")
+        })
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect()
+}
+
+/// Whether the signer produces `name` itself.
+///
+/// Python's reattach loop skips these, so a caller-supplied copy never reaches
+/// the wire next to the computed one.
+pub fn is_sigv4_computed_header(name: &str) -> bool {
+    SIGV4_COMPUTED_HEADER_NAMES.contains(&name.to_ascii_lowercase().as_str())
+}
+
 pub fn sign_bedrock_post(
     url: &str,
     body: &[u8],
@@ -441,6 +470,121 @@ pub fn sign_bedrock_post(
         .collect())
 }
 
+/// Model-id and region parsing shared by every Bedrock route.
+pub fn bedrock_model_id_and_region(model: &str) -> (String, Option<String>) {
+    let mut stripped = model;
+    for prefix in ["bedrock/converse/", "bedrock/", "converse/"] {
+        if let Some(value) = stripped.strip_prefix(prefix) {
+            stripped = value;
+            break;
+        }
+    }
+    let mut region = None;
+    if let Some((candidate, remainder)) = stripped.split_once('/')
+        && is_bedrock_region(candidate)
+    {
+        region = Some(candidate.to_string());
+        stripped = remainder;
+    }
+    for prefix in ["nova-2/", "nova/"] {
+        if let Some(value) = stripped.strip_prefix(prefix) {
+            stripped = value;
+            break;
+        }
+    }
+    if region.is_none() {
+        // Python splits the whole ARN and takes field 3, the region. Stripping
+        // `arn:` first shifts every field down one, so the region is field 2
+        // here; field 3 is the account id.
+        region = stripped
+            .strip_prefix("arn:")
+            .and_then(|value| value.split(':').nth(2))
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+    }
+    (stripped.to_string(), region)
+}
+
+fn is_bedrock_region(value: &str) -> bool {
+    value.len() > 3
+        && value.contains('-')
+        && value
+            .chars()
+            .all(|char| char.is_ascii_alphanumeric() || char == '-')
+}
+
+pub fn resolve_bedrock_region(
+    model_region: Option<&str>,
+    optional_params: &Map<String, Value>,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> String {
+    if let Some(region) = optional_params
+        .get("aws_region_name")
+        .and_then(Value::as_str)
+    {
+        return region.to_string();
+    }
+    if let Some(region) = model_region {
+        return region.to_string();
+    }
+    env_lookup(AWS_REGION_NAME)
+        .or_else(|| env_lookup(AWS_REGION))
+        .unwrap_or_else(|| DEFAULT_BEDROCK_REGION.to_string())
+}
+
+pub fn aws_auth_config(
+    optional_params: &Map<String, Value>,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> AwsAuthConfig {
+    let value = |key: &str| {
+        optional_params
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    let env = |key: &str| env_lookup(key);
+    AwsAuthConfig {
+        access_key_id: value("aws_access_key_id").or_else(|| env("AWS_ACCESS_KEY_ID")),
+        secret_access_key: value("aws_secret_access_key").or_else(|| env("AWS_SECRET_ACCESS_KEY")),
+        session_token: value("aws_session_token").or_else(|| env("AWS_SESSION_TOKEN")),
+        region_name: value("aws_region_name").or_else(|| env(AWS_REGION_NAME)),
+        session_name: value("aws_session_name").or_else(|| env("AWS_SESSION_NAME")),
+        profile_name: value("aws_profile_name").or_else(|| env("AWS_PROFILE_NAME")),
+        role_name: value("aws_role_name").or_else(|| env("AWS_ROLE_NAME")),
+        web_identity_token: value("aws_web_identity_token")
+            .or_else(|| env("AWS_WEB_IDENTITY_TOKEN")),
+        sts_endpoint: value("aws_sts_endpoint").or_else(|| env("AWS_STS_ENDPOINT")),
+        external_id: value("aws_external_id").or_else(|| env("AWS_EXTERNAL_ID")),
+    }
+}
+
+/// Credentials a host resolved through its own chain and handed down verbatim.
+///
+/// A host with its own resolution (LiteLLM's Python `BaseAWSLLM`, which reads
+/// profiles, STS and boto sessions) passes the result here so the core signs
+/// with exactly those. Without this the core would re-derive from ambient
+/// state, where an unrelated `AWS_ROLE_NAME` or `AWS_PROFILE_NAME` in the
+/// environment outranks explicit keys in [`classify_auth`] and the two sides
+/// would sign as different principals.
+pub fn host_supplied_credentials(optional_params: &Map<String, Value>) -> Option<Credentials> {
+    let value = |key: &str| {
+        optional_params
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    let access_key_id = value("aws_access_key_id")?;
+    let secret_access_key = value("aws_secret_access_key")?;
+    Some(Credentials::new(
+        access_key_id,
+        secret_access_key,
+        value("aws_session_token").map(str::to_string),
+        None,
+        "litellm-host-supplied",
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -456,6 +600,18 @@ mod tests {
             br#"{"input":"hello"}"#.to_vec(),
             BTreeMap::from([("Content-Type".to_string(), "application/json".to_string())]),
         )
+    }
+
+    #[test]
+    fn reads_the_region_field_of_a_model_arn_not_the_account_id() {
+        // Python's `_get_aws_region_from_model_arn` splits the whole ARN and
+        // takes field 3. Stripping `arn:` first shifts every field down one, so
+        // the region is field 2 here. Taking field 3 after the strip returns
+        // the account id, which is not a region at all.
+        let (_, region) = bedrock_model_id_and_region(
+            "bedrock/arn:aws:bedrock:us-west-2:123456789012:foundation-model/anthropic.claude-v2",
+        );
+        assert_eq!(region.as_deref(), Some("us-west-2"));
     }
 
     #[test]
@@ -608,6 +764,52 @@ mod tests {
             "arn:aws:iam::123456789012:user/demo",
             "arn:aws:iam::123456789012:role/demo"
         ));
+    }
+
+    #[test]
+    fn a_forwarded_client_header_is_not_folded_into_the_signature() {
+        // Python signs only the AWS header set, so a header a caller forwarded
+        // cannot change the canonical request. Signing it instead makes the
+        // request 403 the moment anything on the wire rewrites or drops it.
+        let (url, body, mut headers) = parity_inputs();
+        headers.insert("x-request-id".to_string(), "abc-123".to_string());
+        headers.insert("Accept-Encoding".to_string(), "gzip".to_string());
+        headers.insert("x-amzn-trace-id".to_string(), "Root=1-abc".to_string());
+        let signable = aws_signature_headers(&headers);
+
+        assert!(!signable.contains_key("x-request-id"));
+        assert!(!signable.contains_key("Accept-Encoding"));
+        // The AWS-prefixed one is genuinely part of the signature.
+        assert!(signable.contains_key("x-amzn-trace-id"));
+        assert!(signable.contains_key("Content-Type"));
+
+        let credentials = Credentials::new(
+            "AKIDEXAMPLE",
+            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+            None,
+            None,
+            "test",
+        );
+        let signed = sign_bedrock_post(
+            &url,
+            &body,
+            &signable,
+            "us-east-1",
+            &credentials,
+            SystemTime::UNIX_EPOCH,
+        )
+        .expect("signs");
+        let authorization = signed
+            .get("Authorization")
+            .expect("carries an authorization header");
+        assert!(
+            !authorization.contains("x-request-id"),
+            "forwarded header reached SignedHeaders: {authorization}"
+        );
+        assert!(
+            !authorization.contains("accept-encoding"),
+            "forwarded header reached SignedHeaders: {authorization}"
+        );
     }
 
     #[test]

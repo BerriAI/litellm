@@ -4,15 +4,8 @@ HTTP Handler for Interactions API requests.
 This module handles the HTTP communication for the Google Interactions API.
 """
 
-from typing import (
-    Any,
-    AsyncIterator,
-    Coroutine,
-    Dict,
-    Iterator,
-    Optional,
-    Union,
-)
+from collections.abc import AsyncIterator, Coroutine, Iterator
+from typing import Any, Final
 
 import httpx
 
@@ -62,17 +55,17 @@ class _BaseHTTPHandler:
     def _sync_client(
         self,
         litellm_params: GenericLiteLLMParams,
-        client: Optional[HTTPHandler],
+        client: HTTPHandler | None,
     ) -> HTTPHandler:
         return client or _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
 
     def _async_client(
         self,
         litellm_params: GenericLiteLLMParams,
-        client: Optional[AsyncHTTPHandler],
+        client: AsyncHTTPHandler | None,
     ) -> AsyncHTTPHandler:
         # GenericLiteLLMParams.get uses getattr; an unset field is None, not the default.
-        custom_llm_provider = litellm_params.get("custom_llm_provider") or "gemini"
+        custom_llm_provider: Final = litellm_params.get("custom_llm_provider") or "gemini"
         return client or get_async_httpx_client(
             llm_provider=litellm.LlmProviders(custom_llm_provider),
             params={"ssl_verify": litellm_params.get("ssl_verify", None)},
@@ -100,24 +93,20 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        model: Optional[str] = None,
-        agent: Optional[str] = None,
-        input: Optional[InteractionInput] = None,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[HTTPHandler] = None,
+        model: str | None = None,
+        agent: str | None = None,
+        input: InteractionInput | None = None,
+        extra_headers: dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | None = None,
         _is_async: bool = False,
-        stream: Optional[bool] = None,
-    ) -> Union[
-        InteractionsAPIResponse,
-        Iterator[InteractionsAPIStreamingResponse],
-        Coroutine[
-            Any,
-            Any,
-            Union[InteractionsAPIResponse, AsyncIterator[InteractionsAPIStreamingResponse]],
-        ],
-    ]:
+        stream: bool | None = None,
+    ) -> (
+        InteractionsAPIResponse
+        | Iterator[InteractionsAPIStreamingResponse]
+        | Coroutine[Any, Any, InteractionsAPIResponse | AsyncIterator[InteractionsAPIStreamingResponse]]
+    ):
         """
         Create a new interaction (synchronous or async based on _is_async flag).
 
@@ -144,13 +133,13 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         else:
             sync_httpx_client = client
 
-        headers = interactions_api_config.validate_environment(
+        headers: Final = interactions_api_config.validate_environment(
             headers=extra_headers or {},
             model=model or "",
             litellm_params=litellm_params,
         )
 
-        api_base = interactions_api_config.get_complete_url(
+        api_base: Final = interactions_api_config.get_complete_url(
             api_base=litellm_params.api_base or "",
             model=model,
             agent=agent,
@@ -158,7 +147,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
             stream=stream,
         )
 
-        data = interactions_api_config.transform_request(
+        data: Final = interactions_api_config.transform_request(
             model=model,
             agent=agent,
             input=input,
@@ -219,15 +208,15 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        model: Optional[str] = None,
-        agent: Optional[str] = None,
-        input: Optional[InteractionInput] = None,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[AsyncHTTPHandler] = None,
-        stream: Optional[bool] = None,
-    ) -> Union[InteractionsAPIResponse, AsyncIterator[InteractionsAPIStreamingResponse]]:
+        model: str | None = None,
+        agent: str | None = None,
+        input: InteractionInput | None = None,
+        extra_headers: dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: AsyncHTTPHandler | None = None,
+        stream: bool | None = None,
+    ) -> InteractionsAPIResponse | AsyncIterator[InteractionsAPIStreamingResponse]:
         """
         Create a new interaction (async version).
         """
@@ -239,13 +228,13 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         else:
             async_httpx_client = client
 
-        headers = interactions_api_config.validate_environment(
+        headers: Final = interactions_api_config.validate_environment(
             headers=extra_headers or {},
             model=model or "",
             litellm_params=litellm_params,
         )
 
-        api_base = interactions_api_config.get_complete_url(
+        api_base: Final = interactions_api_config.get_complete_url(
             api_base=litellm_params.api_base or "",
             model=model,
             agent=agent,
@@ -253,7 +242,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
             stream=stream,
         )
 
-        data = interactions_api_config.transform_request(
+        data: Final = interactions_api_config.transform_request(
             model=model,
             agent=agent,
             input=input,
@@ -310,7 +299,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
     def _create_sync_streaming_iterator(
         self,
         response: httpx.Response,
-        model: Optional[str],
+        model: str | None,
         logging_obj: LiteLLMLoggingObj,
         interactions_api_config: BaseInteractionsAPIConfig,
     ) -> SyncInteractionsAPIStreamingIterator:
@@ -329,7 +318,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
     def _create_async_streaming_iterator(
         self,
         response: httpx.Response,
-        model: Optional[str],
+        model: str | None,
         logging_obj: LiteLLMLoggingObj,
         interactions_api_config: BaseInteractionsAPIConfig,
     ) -> InteractionsAPIStreamingIterator:
@@ -356,11 +345,11 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[HTTPHandler] = None,
+        extra_headers: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> Union[InteractionsAPIResponse, Coroutine[Any, Any, InteractionsAPIResponse]]:
+    ) -> InteractionsAPIResponse | Coroutine[Any, Any, InteractionsAPIResponse]:
         """Get an interaction by ID."""
         if _is_async:
             return self.async_get_interaction(
@@ -378,7 +367,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         else:
             sync_httpx_client = client
 
-        headers = interactions_api_config.validate_environment(
+        headers: Final = interactions_api_config.validate_environment(
             headers=extra_headers or {},
             model="",
             litellm_params=litellm_params,
@@ -398,7 +387,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         )
 
         try:
-            response = sync_httpx_client.get(
+            response: Final = sync_httpx_client.get(
                 url=url,
                 headers=headers,
                 params=params,
@@ -418,9 +407,9 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[AsyncHTTPHandler] = None,
+        extra_headers: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: AsyncHTTPHandler | None = None,
     ) -> InteractionsAPIResponse:
         """Get an interaction by ID (async version)."""
         if client is None:
@@ -431,7 +420,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         else:
             async_httpx_client = client
 
-        headers = interactions_api_config.validate_environment(
+        headers: Final = interactions_api_config.validate_environment(
             headers=extra_headers or {},
             model="",
             litellm_params=litellm_params,
@@ -451,7 +440,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         )
 
         try:
-            response = await async_httpx_client.get(
+            response: Final = await async_httpx_client.get(
                 url=url,
                 headers=headers,
                 params=params,
@@ -475,11 +464,11 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[HTTPHandler] = None,
+        extra_headers: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> Union[DeleteInteractionResult, Coroutine[Any, Any, DeleteInteractionResult]]:
+    ) -> DeleteInteractionResult | Coroutine[Any, Any, DeleteInteractionResult]:
         """Delete an interaction by ID."""
         if _is_async:
             return self.async_delete_interaction(
@@ -497,7 +486,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         else:
             sync_httpx_client = client
 
-        headers = interactions_api_config.validate_environment(
+        headers: Final = interactions_api_config.validate_environment(
             headers=extra_headers or {},
             model="",
             litellm_params=litellm_params,
@@ -517,7 +506,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         )
 
         try:
-            response = sync_httpx_client.delete(
+            response: Final = sync_httpx_client.delete(
                 url=url,
                 headers=headers,
                 timeout=timeout or request_timeout,
@@ -538,9 +527,9 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[AsyncHTTPHandler] = None,
+        extra_headers: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: AsyncHTTPHandler | None = None,
     ) -> DeleteInteractionResult:
         """Delete an interaction by ID (async version)."""
         if client is None:
@@ -551,7 +540,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         else:
             async_httpx_client = client
 
-        headers = interactions_api_config.validate_environment(
+        headers: Final = interactions_api_config.validate_environment(
             headers=extra_headers or {},
             model="",
             litellm_params=litellm_params,
@@ -571,7 +560,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         )
 
         try:
-            response = await async_httpx_client.delete(
+            response: Final = await async_httpx_client.delete(
                 url=url,
                 headers=headers,
                 timeout=timeout or request_timeout,
@@ -596,11 +585,11 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[HTTPHandler] = None,
+        extra_headers: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> Union[CancelInteractionResult, Coroutine[Any, Any, CancelInteractionResult]]:
+    ) -> CancelInteractionResult | Coroutine[Any, Any, CancelInteractionResult]:
         """Cancel an interaction by ID."""
         if _is_async:
             return self.async_cancel_interaction(
@@ -618,7 +607,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         else:
             sync_httpx_client = client
 
-        headers = interactions_api_config.validate_environment(
+        headers: Final = interactions_api_config.validate_environment(
             headers=extra_headers or {},
             model="",
             litellm_params=litellm_params,
@@ -638,7 +627,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         )
 
         try:
-            response = sync_httpx_client.post(
+            response: Final = sync_httpx_client.post(
                 url=url,
                 headers=headers,
                 json=data,
@@ -659,9 +648,9 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: Optional[Dict[str, Any]] = None,
-        timeout: Optional[Union[float, httpx.Timeout]] = None,
-        client: Optional[AsyncHTTPHandler] = None,
+        extra_headers: dict[str, Any] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: AsyncHTTPHandler | None = None,
     ) -> CancelInteractionResult:
         """Cancel an interaction by ID (async version)."""
         if client is None:
@@ -672,7 +661,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         else:
             async_httpx_client = client
 
-        headers = interactions_api_config.validate_environment(
+        headers: Final = interactions_api_config.validate_environment(
             headers=extra_headers or {},
             model="",
             litellm_params=litellm_params,
@@ -692,7 +681,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
         )
 
         try:
-            response = await async_httpx_client.post(
+            response: Final = await async_httpx_client.post(
                 url=url,
                 headers=headers,
                 json=data,
@@ -708,4 +697,4 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
 
 
 # Initialize the HTTP handler singleton
-interactions_http_handler = InteractionsHTTPHandler()
+interactions_http_handler: Final = InteractionsHTTPHandler()

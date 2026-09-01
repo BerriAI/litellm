@@ -16,8 +16,8 @@ logic.
 """
 
 import json
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Mapping, Sequence
+from typing import Final
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -26,14 +26,14 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParamFunctionChunk,
 )
 
-_MAX_ARGUMENTS_LEN = 1_000_000
+_MAX_ARGUMENTS_LEN: Final = 1_000_000
 
 
-def extract_custom_tool_names(tools: list[Any] | None) -> set[str]:
+def extract_custom_tool_names(tools: Sequence[object] | None) -> set[str]:
     """Extract names of tools originally defined as ``type: "custom"``."""
     if not tools:
         return set()
-    names: set[str] = set()
+    names: Final[set[str]] = set()
     for tool in tools:
         if isinstance(tool, dict) and tool.get("type") == "custom" and "name" in tool:
             names.add(tool["name"])
@@ -43,6 +43,21 @@ def extract_custom_tool_names(tools: list[Any] | None) -> set[str]:
 def is_custom_tool_call(tool_name: str, custom_tool_names: set[str]) -> bool:
     """Check if a tool call name corresponds to a custom tool."""
     return tool_name in custom_tool_names
+
+
+def serialize_tool_call_arguments(raw_arguments: object, default: str = "") -> str:
+    """Render tool call arguments as the JSON string tool-call schemas require.
+
+    Arguments normally arrive already JSON-encoded, but clients and providers
+    also send the decoded object. ``str()`` on a dict yields a Python repr with
+    single quotes, which every downstream JSON parser rejects with errors like
+    "Expecting ',' delimiter".
+    """
+    if isinstance(raw_arguments, str):
+        return raw_arguments or default
+    if raw_arguments is None:
+        return default
+    return json.dumps(raw_arguments, default=str)
 
 
 def unwrap_custom_tool_arguments(arguments: str) -> str:
@@ -59,7 +74,7 @@ def unwrap_custom_tool_arguments(arguments: str) -> str:
     if len(arguments) > _MAX_ARGUMENTS_LEN:
         return arguments
     try:
-        parsed = json.loads(arguments)
+        parsed: Final = json.loads(arguments)
         if isinstance(parsed, dict) and "content" in parsed:
             return str(parsed["content"])
     except (json.JSONDecodeError, TypeError, ValueError):
@@ -73,7 +88,7 @@ def build_tool_call_item_kwargs(
     arguments_or_input: str,
     status: str,
     custom_tool_names: set[str],
-) -> dict[str, Any]:
+) -> dict[str, str]:
     """Build kwargs for an output item dict that is either a ``function_call``
     or a ``custom_tool_call`` depending on whether *name* is in
     *custom_tool_names*.
@@ -84,9 +99,9 @@ def build_tool_call_item_kwargs(
     This centralises the branching logic so the streaming iterator and the
     non-streaming transformation share a single code path.
     """
-    custom = is_custom_tool_call(name, custom_tool_names)
-    item_type = "custom_tool_call" if custom else "function_call"
-    kwargs: dict[str, Any] = {
+    custom: Final = is_custom_tool_call(name, custom_tool_names)
+    item_type: Final = "custom_tool_call" if custom else "function_call"
+    kwargs: Final[dict[str, str]] = {
         "type": item_type,
         "id": call_id,
         "call_id": call_id,
@@ -108,10 +123,10 @@ class _CustomToolFormat(BaseModel):
     definition: str = ""
 
 
-_ALLOWED_CALLERS_ADAPTER = TypeAdapter(list[str] | None)
+_ALLOWED_CALLERS_ADAPTER: Final = TypeAdapter(list[str] | None)
 
 
-def _validated_allowed_callers(value: object) -> list[str] | None:
+def validated_allowed_callers(value: object) -> list[str] | None:
     try:
         return _ALLOWED_CALLERS_ADAPTER.validate_python(value, strict=True)
     except ValidationError as exc:
@@ -120,7 +135,7 @@ def _validated_allowed_callers(value: object) -> list[str] | None:
 
 def _grammar_suffix(fmt: object) -> str:
     try:
-        parsed = _CustomToolFormat.model_validate(fmt)
+        parsed: Final = _CustomToolFormat.model_validate(fmt)
     except ValidationError:
         return ""
     if not parsed.definition:
@@ -139,12 +154,12 @@ def convert_custom_tool_to_function_tool(tool: Mapping[str, object]) -> ChatComp
     """
     if tool.get("type") != "custom":
         return None
-    raw_name = tool.get("name")
-    name = raw_name if isinstance(raw_name, str) else ""
-    raw_description = tool.get("description")
+    raw_name: Final = tool.get("name")
+    name: Final = raw_name if isinstance(raw_name, str) else ""
+    raw_description: Final = tool.get("description")
     description = (raw_description if isinstance(raw_description, str) else "") + _grammar_suffix(tool.get("format"))
-    allowed_callers = _validated_allowed_callers(tool.get("allowed_callers"))
-    function_chunk = ChatCompletionToolParamFunctionChunk(
+    allowed_callers: Final = validated_allowed_callers(tool.get("allowed_callers"))
+    function_chunk: Final = ChatCompletionToolParamFunctionChunk(
         name=name,
         description=description,
         parameters={

@@ -1,7 +1,9 @@
 import json
-from typing import Any, Coroutine, Dict, Optional, Union
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING, Final, Protocol
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.litellm_core_utils.url_utils import (
@@ -13,16 +15,52 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
-from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
+from litellm.llms.vertex_ai.common_utils import VertexAIError, get_vertex_base_url
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.types.llms.openai import CreateBatchRequest
 from litellm.types.llms.vertex_ai import (
     VERTEX_CREDENTIALS_TYPES,
     VertexAIBatchPredictionJob,
+    VertexBatchPredictionResponse,
 )
 from litellm.types.utils import LiteLLMBatch
 
 from .transformation import VertexAIBatchTransformation
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+
+class _VertexBatchJsonSource(Protocol):
+    """An HTTP response whose JSON body is a single Vertex AI batch prediction job."""
+
+    def json(self) -> VertexBatchPredictionResponse: ...
+
+
+class _VertexBatchListJsonSource(Protocol):
+    """An HTTP response whose JSON body is a page of Vertex AI batch prediction jobs."""
+
+    def json(self) -> dict[str, object]: ...
+
+
+class _VertexBatchPayloadView(TypedDict):
+    """Holds one decoded batch prediction job so the payload reads back typed."""
+
+    payload: ReadOnly[VertexBatchPredictionResponse]
+
+
+class _FetchedResponseView(TypedDict):
+    """Holds one ``safe_get`` result so the response reads back as ``httpx.Response``."""
+
+    response: ReadOnly[httpx.Response]
+
+
+def _vertex_batch_payload(response: _VertexBatchJsonSource) -> VertexBatchPredictionResponse:
+    return response.json()
+
+
+def _vertex_batch_list_payload(response: _VertexBatchListJsonSource) -> dict[str, object]:
+    return response.json()
 
 
 class VertexAIBatchPrediction(VertexLLM):
@@ -34,14 +72,14 @@ class VertexAIBatchPrediction(VertexLLM):
         self,
         _is_async: bool,
         create_batch_data: CreateBatchRequest,
-        api_base: Optional[str],
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-    ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
-        sync_handler = _get_httpx_client()
+        api_base: str | None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+        vertex_project: str | None,
+        vertex_location: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+    ) -> LiteLLMBatch | Coroutine[object, object, LiteLLMBatch]:
+        sync_handler: Final = _get_httpx_client()
 
         access_token, project_id = self._ensure_access_token(
             credentials=vertex_credentials,
@@ -49,7 +87,7 @@ class VertexAIBatchPrediction(VertexLLM):
             custom_llm_provider="vertex_ai",
         )
 
-        default_api_base = self.create_vertex_batch_url(
+        default_api_base: Final = self.create_vertex_batch_url(
             vertex_location=vertex_location or "us-central1",
             vertex_project=vertex_project or project_id,
         )
@@ -73,12 +111,12 @@ class VertexAIBatchPrediction(VertexLLM):
             vertex_api_version="v1",
         )
 
-        headers = {
+        headers: Final = {
             "Content-Type": "application/json; charset=utf-8",
             "Authorization": f"Bearer {access_token}",
         }
 
-        vertex_batch_request: VertexAIBatchPredictionJob = (
+        vertex_batch_request: Final[VertexAIBatchPredictionJob] = (
             VertexAIBatchTransformation.transform_openai_batch_request_to_vertex_ai_batch_request(
                 request=create_batch_data
             )
@@ -91,16 +129,14 @@ class VertexAIBatchPrediction(VertexLLM):
                 headers=headers,
             )
 
-        response = sync_handler.post(
+        response: Final = sync_handler.post(
             url=api_base,
             headers=headers,
             data=json.dumps(vertex_batch_request),
         )
 
-        if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
-
-        _json_response = response.json()
+        payload_view: Final[_VertexBatchPayloadView] = {"payload": response.json()}
+        _json_response: Final = payload_view["payload"]
         vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_response_to_openai_batch_response(
             response=_json_response
         )
@@ -110,29 +146,28 @@ class VertexAIBatchPrediction(VertexLLM):
         self,
         vertex_batch_request: VertexAIBatchPredictionJob,
         api_base: str,
-        headers: Dict[str, str],
+        headers: dict[str, str],
     ) -> LiteLLMBatch:
-        client = get_async_httpx_client(
+        client: Final = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.VERTEX_AI,
         )
         try:
-            response = await client.post(
+            response: Final = await client.post(
                 url=api_base,
                 headers=headers,
                 data=json.dumps(vertex_batch_request),
             )
         except httpx.HTTPStatusError as e:
-            error_body = e.response.text
+            error_body: Final = e.response.text
             litellm.verbose_logger.error(
                 "Vertex AI batch create failed: status=%s, body=%s",
                 e.response.status_code,
                 error_body[:1000],
             )
             raise
-        if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
 
-        _json_response = response.json()
+        payload_view: Final[_VertexBatchPayloadView] = {"payload": response.json()}
+        _json_response: Final = payload_view["payload"]
         vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_response_to_openai_batch_response(
             response=_json_response
         )
@@ -145,22 +180,22 @@ class VertexAIBatchPrediction(VertexLLM):
     ) -> str:
         """Return the base url for the vertex garden models"""
         #  POST https://LOCATION-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/LOCATION/batchPredictionJobs
-        base_url = get_vertex_base_url(vertex_location)
+        base_url: Final = get_vertex_base_url(vertex_location)
         return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/batchPredictionJobs"
 
     def retrieve_batch(
         self,
         _is_async: bool,
         batch_id: str,
-        api_base: Optional[str],
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        logging_obj: Optional[Any] = None,
-    ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
-        sync_handler = _get_httpx_client()
+        api_base: str | None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+        vertex_project: str | None,
+        vertex_location: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+        logging_obj: "LiteLLMLoggingObj | None" = None,
+    ) -> LiteLLMBatch | Coroutine[object, object, LiteLLMBatch]:
+        sync_handler: Final = _get_httpx_client()
 
         access_token, project_id = self._ensure_access_token(
             credentials=vertex_credentials,
@@ -174,7 +209,7 @@ class VertexAIBatchPrediction(VertexLLM):
         )
 
         # Append batch_id to the URL
-        encoded_batch_id = encode_url_path_segment(batch_id, field_name="batch_id")
+        encoded_batch_id: Final = encode_url_path_segment(batch_id, field_name="batch_id")
         default_api_base = f"{default_api_base}/{encoded_batch_id}"
 
         if len(default_api_base.split(":")) > 1:
@@ -196,7 +231,7 @@ class VertexAIBatchPrediction(VertexLLM):
             vertex_api_version="v1",
         )
 
-        headers = {
+        headers: Final = {
             "Content-Type": "application/json; charset=utf-8",
             "Authorization": f"Bearer {access_token}",
         }
@@ -235,28 +270,32 @@ class VertexAIBatchPrediction(VertexLLM):
         # rebind / private / cloud-metadata targets are rejected; the
         # proxy auth gate already blocks malicious clientside ``api_base``
         # at the boundary — this is defense-in-depth for SDK callers.
-        response = safe_get(
-            sync_handler,
-            api_base,
-            headers=headers,
-        )
+        fetched: Final[_FetchedResponseView] = {
+            "response": safe_get(
+                sync_handler,
+                api_base,
+                headers=headers,
+            )
+        }
+        response: Final = fetched["response"]
 
         if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
+            raise VertexAIError(
+                status_code=response.status_code, message=f"Error: {response.status_code} {response.text}"
+            )
 
-        _json_response = response.json()
         vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_response_to_openai_batch_response(
-            response=_json_response
+            response=_vertex_batch_payload(response)
         )
         return vertex_batch_response
 
     async def _async_retrieve_batch(
         self,
         api_base: str,
-        headers: Dict[str, str],
-        logging_obj: Optional[Any] = None,
+        headers: dict[str, str],
+        logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> LiteLLMBatch:
-        client = get_async_httpx_client(
+        client: Final = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.VERTEX_AI,
         )
 
@@ -286,33 +325,37 @@ class VertexAIBatchPrediction(VertexLLM):
         # request kwargs, so wrap the fetch in ``async_safe_get`` to reject
         # DNS-rebind / private / cloud-metadata targets. Defense-in-depth
         # behind the proxy auth gate's clientside ``api_base`` check.
-        response = await async_safe_get(
-            client,
-            api_base,
-            headers=headers,
-        )
+        fetched: Final[_FetchedResponseView] = {
+            "response": await async_safe_get(
+                client,
+                api_base,
+                headers=headers,
+            )
+        }
+        response: Final = fetched["response"]
         if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
+            raise VertexAIError(
+                status_code=response.status_code, message=f"Error: {response.status_code} {response.text}"
+            )
 
-        _json_response = response.json()
         vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_response_to_openai_batch_response(
-            response=_json_response
+            response=_vertex_batch_payload(response)
         )
         return vertex_batch_response
 
     def list_batches(
         self,
         _is_async: bool,
-        after: Optional[str],
-        limit: Optional[int],
-        api_base: Optional[str],
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
+        after: str | None,
+        limit: int | None,
+        api_base: str | None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+        vertex_project: str | None,
+        vertex_location: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
     ):
-        sync_handler = _get_httpx_client()
+        sync_handler: Final = _get_httpx_client()
 
         access_token, project_id = self._ensure_access_token(
             credentials=vertex_credentials,
@@ -320,7 +363,7 @@ class VertexAIBatchPrediction(VertexLLM):
             custom_llm_provider="vertex_ai",
         )
 
-        default_api_base = self.create_vertex_batch_url(
+        default_api_base: Final = self.create_vertex_batch_url(
             vertex_location=vertex_location or "us-central1",
             vertex_project=vertex_project or project_id,
         )
@@ -340,16 +383,14 @@ class VertexAIBatchPrediction(VertexLLM):
             url=default_api_base,
         )
 
-        headers = {
+        headers: Final = {
             "Content-Type": "application/json; charset=utf-8",
             "Authorization": f"Bearer {access_token}",
         }
 
-        params: Dict[str, Any] = {}
-        if limit is not None:
-            params["pageSize"] = str(limit)
-        if after is not None:
-            params["pageToken"] = after
+        limit_params: Final[dict[str, str]] = {"pageSize": str(limit)} if limit is not None else {}
+        after_params: Final[dict[str, str]] = {"pageToken": after} if after is not None else {}
+        params: Final = {**limit_params, **after_params}
 
         if _is_async is True:
             return self._async_list_batches(
@@ -358,17 +399,19 @@ class VertexAIBatchPrediction(VertexLLM):
                 params=params,
             )
 
-        response = sync_handler.get(
+        response: Final = sync_handler.get(
             url=api_base,
             headers=headers,
             params=params,
         )
 
         if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
+            raise VertexAIError(
+                status_code=response.status_code, message=f"Error: {response.status_code} {response.text}"
+            )
 
-        _json_response = response.json()
-        vertex_batch_response = (
+        _json_response: Final = _vertex_batch_list_payload(response)
+        vertex_batch_response: Final = (
             VertexAIBatchTransformation.transform_vertex_ai_batch_list_response_to_openai_list_response(
                 response=_json_response
             )
@@ -378,22 +421,24 @@ class VertexAIBatchPrediction(VertexLLM):
     async def _async_list_batches(
         self,
         api_base: str,
-        headers: Dict[str, str],
-        params: Dict[str, Any],
+        headers: dict[str, str],
+        params: dict[str, str],
     ):
-        client = get_async_httpx_client(
+        client: Final = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.VERTEX_AI,
         )
-        response = await client.get(
+        response: Final = await client.get(
             url=api_base,
             headers=headers,
             params=params,
         )
         if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
+            raise VertexAIError(
+                status_code=response.status_code, message=f"Error: {response.status_code} {response.text}"
+            )
 
-        _json_response = response.json()
-        vertex_batch_response = (
+        _json_response: Final = _vertex_batch_list_payload(response)
+        vertex_batch_response: Final = (
             VertexAIBatchTransformation.transform_vertex_ai_batch_list_response_to_openai_list_response(
                 response=_json_response
             )
@@ -404,27 +449,27 @@ class VertexAIBatchPrediction(VertexLLM):
         self,
         _is_async: bool,
         batch_id: str,
-        api_base: Optional[str],
-        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
-        vertex_project: Optional[str],
-        vertex_location: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-    ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
+        api_base: str | None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+        vertex_project: str | None,
+        vertex_location: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+    ) -> LiteLLMBatch | Coroutine[object, object, LiteLLMBatch]:
         access_token, project_id = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
             custom_llm_provider="vertex_ai",
         )
 
-        default_api_base = self.create_vertex_batch_url(
+        default_api_base: Final = self.create_vertex_batch_url(
             vertex_location=vertex_location or "us-central1",
             vertex_project=vertex_project or project_id,
         )
 
-        encoded_batch_id = encode_url_path_segment(batch_id, field_name="batch_id")
-        retrieve_api_base_default = f"{default_api_base}/{encoded_batch_id}"
-        cancel_api_base_default = f"{retrieve_api_base_default}:cancel"
+        encoded_batch_id: Final = encode_url_path_segment(batch_id, field_name="batch_id")
+        retrieve_api_base_default: Final = f"{default_api_base}/{encoded_batch_id}"
+        cancel_api_base_default: Final = f"{retrieve_api_base_default}:cancel"
 
         _, api_base = self._check_custom_proxy(
             api_base=api_base,
@@ -445,7 +490,7 @@ class VertexAIBatchPrediction(VertexLLM):
         else:
             retrieve_api_base = api_base.rsplit(":cancel", 1)[0].rstrip("/")
 
-        headers = {
+        headers: Final = {
             "Content-Type": "application/json; charset=utf-8",
             "Authorization": f"Bearer {access_token}",
         }
@@ -458,9 +503,9 @@ class VertexAIBatchPrediction(VertexLLM):
                 timeout=timeout,
             )
 
-        sync_handler = _get_httpx_client()
+        sync_handler: Final = _get_httpx_client()
         try:
-            response = sync_handler.post(
+            sync_handler.post(
                 url=api_base,
                 headers=headers,
                 data=json.dumps({}),
@@ -474,11 +519,8 @@ class VertexAIBatchPrediction(VertexLLM):
             )
             raise
 
-        if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
-
         # HTTPHandler.get() does not accept a timeout parameter
-        retrieve_response = sync_handler.get(
+        retrieve_response: Final = sync_handler.get(
             url=retrieve_api_base,
             headers=headers,
         )
@@ -488,11 +530,13 @@ class VertexAIBatchPrediction(VertexLLM):
                 retrieve_response.status_code,
                 retrieve_response.text[:1000],
             )
-            raise Exception(f"Error: {retrieve_response.status_code} {retrieve_response.text}")
+            raise VertexAIError(
+                status_code=retrieve_response.status_code,
+                message=f"Error: {retrieve_response.status_code} {retrieve_response.text}",
+            )
 
-        _json_response = retrieve_response.json()
         vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_response_to_openai_batch_response(
-            response=_json_response
+            response=_vertex_batch_payload(retrieve_response)
         )
         return vertex_batch_response
 
@@ -500,14 +544,14 @@ class VertexAIBatchPrediction(VertexLLM):
         self,
         api_base: str,
         retrieve_api_base: str,
-        headers: Dict[str, str],
-        timeout: Union[float, httpx.Timeout] = 600.0,
+        headers: dict[str, str],
+        timeout: float | httpx.Timeout = 600.0,
     ) -> LiteLLMBatch:
-        client = get_async_httpx_client(
+        client: Final = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.VERTEX_AI,
         )
         try:
-            response = await client.post(
+            await client.post(
                 url=api_base,
                 headers=headers,
                 data=json.dumps({}),
@@ -520,11 +564,9 @@ class VertexAIBatchPrediction(VertexLLM):
                 e.response.text[:1000],
             )
             raise
-        if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} {response.text}")
 
         # AsyncHTTPHandler.get() does not accept a timeout parameter
-        retrieve_response = await client.get(
+        retrieve_response: Final = await client.get(
             url=retrieve_api_base,
             headers=headers,
         )
@@ -534,10 +576,12 @@ class VertexAIBatchPrediction(VertexLLM):
                 retrieve_response.status_code,
                 retrieve_response.text[:1000],
             )
-            raise Exception(f"Error: {retrieve_response.status_code} {retrieve_response.text}")
+            raise VertexAIError(
+                status_code=retrieve_response.status_code,
+                message=f"Error: {retrieve_response.status_code} {retrieve_response.text}",
+            )
 
-        _json_response = retrieve_response.json()
         vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_response_to_openai_batch_response(
-            response=_json_response
+            response=_vertex_batch_payload(retrieve_response)
         )
         return vertex_batch_response

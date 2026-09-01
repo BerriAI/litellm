@@ -25,17 +25,17 @@ def test_search_threads_router_to_handler():
     logger = MagicMock()
 
     with (
-        patch(
+        patch(  # test-quality-ok: stubs provider config resolution; the seam under test is the router kwarg threading
             "litellm.vector_stores.main.ProviderConfigManager.get_provider_vector_stores_config",
             return_value=MagicMock(),
         ),
-        patch.object(
+        patch.object(  # test-quality-ok: the handler call is the observable boundary for the router kwarg contract
             vector_stores_main.base_llm_http_handler,
             "vector_store_search_handler",
             return_value=MOCK_SEARCH_RESPONSE,
         ) as mock_handler,
     ):
-        search(
+        response = search(
             vector_store_id="bkt:idx",
             query="q",
             custom_llm_provider="s3_vectors",
@@ -43,6 +43,7 @@ def test_search_threads_router_to_handler():
             litellm_logging_obj=logger,
         )
 
+    assert response == MOCK_SEARCH_RESPONSE
     mock_handler.assert_called_once()
     assert mock_handler.call_args.kwargs["router"] is mock_router
 
@@ -54,11 +55,11 @@ def test_search_router_not_in_litellm_params():
     logger = MagicMock()
 
     with (
-        patch(
+        patch(  # test-quality-ok: stubs provider config resolution; the seam under test is litellm_params contents
             "litellm.vector_stores.main.ProviderConfigManager.get_provider_vector_stores_config",
             return_value=MagicMock(),
         ),
-        patch.object(
+        patch.object(  # test-quality-ok: the handler call is where a leaked router in litellm_params would surface
             vector_stores_main.base_llm_http_handler,
             "vector_store_search_handler",
             return_value=MOCK_SEARCH_RESPONSE,

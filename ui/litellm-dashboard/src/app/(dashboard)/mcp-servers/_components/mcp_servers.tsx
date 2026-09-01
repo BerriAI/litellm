@@ -15,16 +15,16 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import NewBadge from "@/components/common_components/NewBadge";
 import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPServerHealth } from "@/app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { deleteMCPServer } from "@/components/networking";
 import { MCPSubmissionsTab } from "./MCPSubmissionsTab";
 import { MCPToolsetsTab } from "./MCPToolsetsTab";
-import CreateMCPServer from "./create_mcp_server";
+import CreateMCPServer from "./CreateMCPServer";
+import ImportMCPServers from "./ImportMCPServers";
 import MCPConnect from "./mcp_connect";
 import MCPServerCard from "./MCPServerCard";
 import { MCPServerView } from "./mcp_server_view";
@@ -149,6 +149,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [filteredServers, setFilteredServers] = useState<MCPServer[]>([]);
   const [isModalVisible, setModalVisible] = useState(false);
   const [isDiscoveryVisible, setDiscoveryVisible] = useState(false);
+  const [isImportVisible, setImportVisible] = useState(false);
   const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
@@ -350,7 +351,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     try {
       setIsDeletingServer(true);
       await deleteMCPServer(accessToken, serverIdToDelete);
-      NotificationsManager.success("Deleted MCP Server successfully");
+      toast.success("Deleted MCP Server successfully");
       // If the user is currently viewing the detail page of the server they
       // just deleted, return them to the All Servers list. Otherwise the
       // detail view would stay mounted, fall back to an empty stub server,
@@ -413,7 +414,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   }, [refetch]);
 
   if (!accessToken || !userRole || !userID) {
-    return <div className="p-6 text-center text-gray-500">Missing required authentication parameters.</div>;
+    return <div className="p-6 text-center text-muted-foreground">Missing required authentication parameters.</div>;
   }
 
   return (
@@ -483,9 +484,14 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           </div>
           <div className="flex items-center gap-2">
             {isAdminRole(userRole) && (
-              <Button className="shrink-0" onClick={() => setDiscoveryVisible(true)}>
-                + Add New MCP Server
-              </Button>
+              <>
+                <Button className="shrink-0" variant="secondary" onClick={() => setImportVisible(true)}>
+                  Import from JSON
+                </Button>
+                <Button className="shrink-0" onClick={() => setDiscoveryVisible(true)}>
+                  + Add New MCP Server
+                </Button>
+              </>
             )}
             {!isAdminRole(userRole) && (
               <Button
@@ -501,6 +507,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             )}
           </div>
         </div>
+        <ImportMCPServers
+          accessToken={accessToken}
+          open={isImportVisible}
+          onClose={() => setImportVisible(false)}
+          onImported={() => refetch()}
+        />
         <MCPDiscovery
           isVisible={isDiscoveryVisible}
           onClose={() => setDiscoveryVisible(false)}
@@ -517,35 +529,33 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           accessToken={accessToken}
         />
         <Tabs defaultValue="servers" className="mt-2 w-full">
-          <TabsList className="w-full justify-start">
-            <TabsTrigger value="servers" className="flex-none">
+          <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0">
+            <TabsTrigger value="servers" className="flex-none rounded-none px-4 py-2">
               All Servers
             </TabsTrigger>
-            <TabsTrigger value="toolsets" className="flex-none">
+            <TabsTrigger value="toolsets" className="flex-none rounded-none px-4 py-2">
               Toolsets
             </TabsTrigger>
-            <TabsTrigger value="connect" className="flex-none">
+            <TabsTrigger value="connect" className="flex-none rounded-none px-4 py-2">
               Connect
             </TabsTrigger>
             {isAdminRole(userRole) && (
-              <TabsTrigger value="semantic-filter" className="flex-none">
+              <TabsTrigger value="semantic-filter" className="flex-none rounded-none px-4 py-2">
                 Semantic Filter
               </TabsTrigger>
             )}
             {isAdminRole(userRole) && (
-              <TabsTrigger value="network-settings" className="flex-none">
+              <TabsTrigger value="network-settings" className="flex-none rounded-none px-4 py-2">
                 Network Settings
               </TabsTrigger>
             )}
             {isAdminRole(userRole) && (
-              <TabsTrigger value="submitted" className="flex-none">
-                <span className="flex items-center gap-2">
-                  Submitted MCPs <NewBadge />
-                </span>
+              <TabsTrigger value="submitted" className="flex-none rounded-none px-4 py-2">
+                Submitted MCPs
               </TabsTrigger>
             )}
           </TabsList>
-          <TabsContent value="servers">
+          <TabsContent value="servers" keepMounted>
             {selectedServerId ? (
               <MCPServerView
                 key={selectedServerId}
@@ -705,24 +715,24 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
               </div>
             )}
           </TabsContent>
-          <TabsContent value="toolsets">
+          <TabsContent value="toolsets" keepMounted>
             <MCPToolsetsTab accessToken={accessToken} userRole={userRole} />
           </TabsContent>
-          <TabsContent value="connect">
+          <TabsContent value="connect" keepMounted>
             <MCPConnect />
           </TabsContent>
           {isAdminRole(userRole) && (
-            <TabsContent value="semantic-filter">
+            <TabsContent value="semantic-filter" keepMounted>
               <MCPSemanticFilterSettings accessToken={accessToken} />
             </TabsContent>
           )}
           {isAdminRole(userRole) && (
-            <TabsContent value="network-settings">
+            <TabsContent value="network-settings" keepMounted>
               <MCPNetworkSettings accessToken={accessToken} />
             </TabsContent>
           )}
           {isAdminRole(userRole) && (
-            <TabsContent value="submitted">
+            <TabsContent value="submitted" keepMounted>
               <MCPSubmissionsTab accessToken={accessToken} />
             </TabsContent>
           )}

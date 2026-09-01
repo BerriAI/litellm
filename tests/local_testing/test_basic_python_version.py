@@ -1,7 +1,6 @@
 import asyncio
 import os
 import subprocess
-import sys
 import time
 import traceback
 
@@ -9,9 +8,6 @@ import pytest
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 
 def _run_uv(*args: str, **kwargs) -> subprocess.CompletedProcess:
@@ -142,11 +138,80 @@ def test_cli_extra_is_a_thin_client_install():
     assert not leaked, f"`cli` extra leaks proxy-server deps onto laptops: {leaked}"
 
 
+AIOHTTP_POOL_POISONING_RANGE = ">=3.14.0,<3.14.2"
+AIOHTTP_POOL_POISONING_RELEASES = ("3.14.0", "3.14.1")
+
+
+def _load_toml(path):
+    try:
+        import tomllib as tomli
+    except ImportError:
+        try:
+            import tomli
+        except ImportError:
+            pytest.skip("tomli/tomllib not available - skipping dependency check")
+
+    with open(path, "rb") as f:
+        return tomli.load(f)
+
+
+def _declared_aiohttp_specifier():
+    from packaging.requirements import Requirement
+
+    pyproject = _load_toml(os.path.join(PROJECT_ROOT, "pyproject.toml"))
+    for requirement in pyproject["project"]["dependencies"]:
+        parsed = Requirement(requirement)
+        if parsed.name.lower() == "aiohttp":
+            return parsed.specifier
+    pytest.fail("aiohttp is no longer a declared runtime dependency of litellm")
+
+
+def _locked_aiohttp_version():
+    lock = _load_toml(os.path.join(PROJECT_ROOT, "uv.lock"))
+    for package in lock["package"]:
+        if package["name"].lower() == "aiohttp":
+            return package["version"]
+    pytest.fail("aiohttp is missing from uv.lock")
+
+
+def test_declared_aiohttp_floor_excludes_pool_poisoning_releases():
+    """aiohttp 3.14.0/3.14.1 re-arm the sock_read timer on a keep-alive connection
+    after it is back in the idle pool, so the next request to reuse it fails
+    instantly with a bogus timeout (aio-libs/aiohttp#12953, fixed in 3.14.2).
+
+    The wheel's own metadata is what pip resolves against, so the floor declared
+    here - not just the lockfile - has to exclude that range.
+    """
+    specifier = _declared_aiohttp_specifier()
+
+    admitted = [v for v in AIOHTTP_POOL_POISONING_RELEASES if specifier.contains(v)]
+    assert not admitted, (
+        f"litellm declares aiohttp{specifier}, which still admits {admitted}. "
+        "Those releases poison pooled keep-alive connections and cause "
+        "cross-provider sub-millisecond 'Connection timed out' failures; "
+        "keep the floor at >=3.14.2."
+    )
+
+
+def test_locked_aiohttp_version_is_not_pool_poisoning():
+    """uv.lock is what the published Docker images install (uv sync --frozen), so a
+    lock that drifts back onto 3.14.0/3.14.1 ships the regression regardless of
+    what pyproject.toml declares.
+    """
+    from packaging.specifiers import SpecifierSet
+
+    locked = _locked_aiohttp_version()
+
+    assert not SpecifierSet(AIOHTTP_POOL_POISONING_RANGE).contains(locked), (
+        f"uv.lock resolves aiohttp {locked}, which is inside the pool-poisoning "
+        f"range {AIOHTTP_POOL_POISONING_RANGE} (aio-libs/aiohttp#12953). "
+        "Re-run `uv lock` against an aiohttp>=3.14.2 floor."
+    )
+
+
 import os
 import subprocess
-import time
 
-import pytest
 import requests
 
 
@@ -240,14 +305,16 @@ def _run_proxy_server_smoke_test(extra_proxy_args=None):
 
 
 def test_litellm_proxy_server_config_no_general_settings():
-    """Exercises the default (v1) migration resolver."""
+    """Exercises the default (v2) migration resolver."""
     _run_proxy_server_smoke_test()
 
 
-def test_litellm_proxy_server_config_no_general_settings_v2_resolver():
-    """Exercises the opt-in v2 migration resolver.
+def test_litellm_proxy_server_config_no_general_settings_legacy_resolver():
+    """Exercises the legacy (v1) migration resolver against a real database.
 
-    Runs in a separate CI job against a local Postgres to avoid collisions
-    with the v1 variant when they share a database.
+    v2 is the default, so the no-arg test above already covers it. This one is
+    the only place the v1 opt-out gets real-DB migration plus proxy-boot
+    coverage, and it runs in a separate CI job against its own Postgres to
+    avoid collisions with the default variant.
     """
-    _run_proxy_server_smoke_test(extra_proxy_args=["--use_v2_migration_resolver"])
+    _run_proxy_server_smoke_test(extra_proxy_args=["--use_legacy_migration_resolver"])

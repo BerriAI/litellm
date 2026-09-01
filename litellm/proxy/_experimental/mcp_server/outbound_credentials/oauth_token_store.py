@@ -18,7 +18,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Final, Protocol
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -43,7 +43,7 @@ class OAuthToken:
     scopes: tuple[str, ...] = ()
 
     def __repr__(self) -> str:
-        has_refresh = self.refresh_token is not None
+        has_refresh: Final = self.refresh_token is not None
         return f"OAuthToken(access_token=***, expires_at={self.expires_at!r}, has_refresh_token={has_refresh}, scopes={self.scopes!r})"
 
 
@@ -119,8 +119,8 @@ class InMemoryTokenCacheBackend:
         self._cache: dict[tuple[str, str], tuple[OAuthToken, float]] = {}
 
     async def get(self, user_id: str, server_id: str) -> OAuthToken | None:
-        key = (user_id, server_id)
-        hit = self._cache.get(key)
+        key: Final = (user_id, server_id)
+        hit: Final = self._cache.get(key)
         if hit is None:
             return None
         token, valid_until = hit
@@ -130,7 +130,7 @@ class InMemoryTokenCacheBackend:
         return None
 
     async def set(self, user_id: str, server_id: str, token: OAuthToken, ttl_seconds: float) -> None:
-        key = (user_id, server_id)
+        key: Final = (user_id, server_id)
         if key not in self._cache and len(self._cache) >= self._max_size:
             # Evict the oldest entry (insertion order), rather than clearing the whole cache and
             # forcing every key to re-read the store at once.
@@ -175,11 +175,11 @@ class CachedOAuthTokenStore:
         return self._default_ttl_seconds
 
     async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
-        hit = await self._backend.get(user_id, server_id)
+        hit: Final = await self._backend.get(user_id, server_id)
         if hit is not None:
             return hit
 
-        token = await self._inner.fetch(user_id, server_id)
+        token: Final = await self._inner.fetch(user_id, server_id)
         if token is None:
             # Never cache "not authorized": drop any stale entry and re-read on the next call, so
             # a token stored after the OAuth flow is seen immediately rather than after a TTL.
@@ -229,7 +229,7 @@ class InProcessRefreshCoordinator:
         refresh: Callable[[], Awaitable[OAuthToken | None]],
         reread: Callable[[], Awaitable[OAuthToken | None]],
     ) -> OAuthToken | None:
-        key = (user_id, server_id)
+        key: Final = (user_id, server_id)
         task = self._inflight.get(key)
         if task is None:
             # The task is detached from the caller, so a cancelled caller does not abort the refresh.
@@ -273,12 +273,12 @@ class RefreshingTokenStore:
         return token.expires_at is not None and self._clock() >= token.expires_at - self._expiry_skew_seconds
 
     async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
-        token = await self._inner.fetch(user_id, server_id)
+        token: Final = await self._inner.fetch(user_id, server_id)
         if token is None or not self._is_expired(token):
             return token
 
         async def refresh_latest_token() -> OAuthToken | None:
-            latest_token = await self._inner.fetch(user_id, server_id)
+            latest_token: Final = await self._inner.fetch(user_id, server_id)
             if latest_token is None or not self._is_expired(latest_token):
                 return latest_token
             return await self._refresher.refresh(user_id, server_id, latest_token)
@@ -287,7 +287,7 @@ class RefreshingTokenStore:
             # A loser re-reads what the winner persisted. If the winner's refresh failed, the store
             # still holds the expired token; surface None (-> challenge) like the winner did rather
             # than the stale bearer the upstream would 401.
-            latest_token = await self._inner.fetch(user_id, server_id)
+            latest_token: Final = await self._inner.fetch(user_id, server_id)
             if latest_token is None or self._is_expired(latest_token):
                 return None
             return latest_token

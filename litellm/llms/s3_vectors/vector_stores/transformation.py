@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -39,7 +39,7 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             "write": [],
         }
 
-    def get_supported_openai_params(self, model: str) -> List[VECTOR_STORE_OPENAI_PARAMS]:
+    def get_supported_openai_params(self, model: str) -> list[VECTOR_STORE_OPENAI_PARAMS]:
         return ["max_num_results"]
 
     def map_openai_params(
@@ -53,35 +53,35 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
                 optional_params["maxResults"] = value
         return optional_params
 
-    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
         headers = headers or {}
         headers.setdefault("Content-Type", "application/json")
         return headers
 
-    def get_complete_url(self, api_base: Optional[str], litellm_params: dict) -> str:
+    def get_complete_url(self, api_base: str | None, litellm_params: dict) -> str:
         # Resolve region the same way the ingestion path does:
         # dynamic param -> AWS_REGION_NAME -> AWS_REGION -> default (us-west-2)
-        aws_region_name = self.get_aws_region_name_for_non_llm_api_calls(litellm_params.get("aws_region_name"))
+        aws_region_name: Final = self.get_aws_region_name_for_non_llm_api_calls(litellm_params.get("aws_region_name"))
         return f"https://s3vectors.{aws_region_name}.api.aws"
 
-    def _resolve_query_embedding_router(self, embedding_model: str, router: Optional["Router"]) -> Optional["Router"]:
+    def _resolve_query_embedding_router(self, embedding_model: str, router: "Router | None") -> "Router | None":
         """Return the router iff it serves ``embedding_model`` as a deployment."""
         if router is None:
             return None
-        model_list = [dict(m) for m in (router.get_model_list() or [])]
+        model_list: Final = [dict(m) for m in (router.get_model_list() or ())]  # mutable-ok: resolve_embedding_router requires list[dict]
         return resolve_embedding_router(embedding_model=embedding_model, llm_router=router, llm_model_list=model_list)
 
     def transform_search_vector_store_request(
         self,
         vector_store_id: str,
-        query: Union[str, List[str]],
+        query: str | list[str],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
-        router: Optional["Router"] = None,
-    ) -> Tuple[str, Dict]:
+        extra_body: dict[str, Any] | None = None,
+        router: "Router | None" = None,
+    ) -> tuple[str, dict]:
         """Sync version - generates embedding synchronously."""
         # For S3 Vectors, vector_store_id should be in format: bucket_name:index_name
         # If not in that format, try to construct it from litellm_params
@@ -92,7 +92,7 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             bucket_name, index_name = vector_store_id.split(":", 1)
         else:
             # Try to get bucket_name from litellm_params
-            bucket_name_from_params = litellm_params.get("vector_bucket_name")
+            bucket_name_from_params: Final = litellm_params.get("vector_bucket_name")
             if not bucket_name_from_params or not isinstance(bucket_name_from_params, str):
                 raise ValueError(
                     "vector_store_id must be in format 'bucket_name:index_name' for S3 Vectors, "
@@ -105,20 +105,22 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             query = " ".join(query)
 
         # Generate embedding for the query
-        embedding_model = litellm_params.get("embedding_model", "text-embedding-3-small")
-        embedding_router = self._resolve_query_embedding_router(embedding_model=embedding_model, router=router)
+        embedding_model: Final = litellm_params.get("embedding_model", "text-embedding-3-small")
+        embedding_router: Final = self._resolve_query_embedding_router(embedding_model=embedding_model, router=router)
 
         import litellm as litellm_module
 
-        if embedding_router is not None:
-            embedding_response = embedding_router.embedding(model=embedding_model, input=[query])
-        else:
-            embedding_response = litellm_module.embedding(model=embedding_model, input=[query])
-        query_embedding = embedding_response.data[0]["embedding"]
+        embedding_input: Final = [query]  # mutable-ok: the embedding API takes list input
+        embedding_response: Final = (
+            embedding_router.embedding(model=embedding_model, input=embedding_input)
+            if embedding_router is not None
+            else litellm_module.embedding(model=embedding_model, input=embedding_input)
+        )
+        query_embedding: Final = embedding_response.data[0]["embedding"]
 
-        url = f"{api_base}/QueryVectors"
+        url: Final = f"{api_base}/QueryVectors"
 
-        request_body: Dict[str, Any] = {
+        request_body: Final[dict[str, Any]] = {
             "vectorBucketName": bucket_name,
             "indexName": index_name,
             "queryVector": {"float32": query_embedding},
@@ -133,14 +135,14 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
     async def atransform_search_vector_store_request(
         self,
         vector_store_id: str,
-        query: Union[str, List[str]],
+        query: str | list[str],
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
-        router: Optional["Router"] = None,
-    ) -> Tuple[str, Dict]:
+        extra_body: dict[str, Any] | None = None,
+        router: "Router | None" = None,
+    ) -> tuple[str, dict]:
         """Async version - generates embedding asynchronously."""
         # For S3 Vectors, vector_store_id should be in format: bucket_name:index_name
         # If not in that format, try to construct it from litellm_params
@@ -151,7 +153,7 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             bucket_name, index_name = vector_store_id.split(":", 1)
         else:
             # Try to get bucket_name from litellm_params
-            bucket_name_from_params = litellm_params.get("vector_bucket_name")
+            bucket_name_from_params: Final = litellm_params.get("vector_bucket_name")
             if not bucket_name_from_params or not isinstance(bucket_name_from_params, str):
                 raise ValueError(
                     "vector_store_id must be in format 'bucket_name:index_name' for S3 Vectors, "
@@ -164,20 +166,22 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             query = " ".join(query)
 
         # Generate embedding for the query asynchronously
-        embedding_model = litellm_params.get("embedding_model", "text-embedding-3-small")
-        embedding_router = self._resolve_query_embedding_router(embedding_model=embedding_model, router=router)
+        embedding_model: Final = litellm_params.get("embedding_model", "text-embedding-3-small")
+        embedding_router: Final = self._resolve_query_embedding_router(embedding_model=embedding_model, router=router)
 
         import litellm as litellm_module
 
-        if embedding_router is not None:
-            embedding_response = await embedding_router.aembedding(model=embedding_model, input=[query])
-        else:
-            embedding_response = await litellm_module.aembedding(model=embedding_model, input=[query])
-        query_embedding = embedding_response.data[0]["embedding"]
+        embedding_input: Final = [query]  # mutable-ok: the embedding API takes list input
+        embedding_response: Final = (
+            await embedding_router.aembedding(model=embedding_model, input=embedding_input)
+            if embedding_router is not None
+            else await litellm_module.aembedding(model=embedding_model, input=embedding_input)
+        )
+        query_embedding: Final = embedding_response.data[0]["embedding"]
 
-        url = f"{api_base}/QueryVectors"
+        url: Final = f"{api_base}/QueryVectors"
 
-        request_body: Dict[str, Any] = {
+        request_body: Final[dict[str, Any]] = {
             "vectorBucketName": bucket_name,
             "indexName": index_name,
             "queryVector": {"float32": query_embedding},
@@ -192,11 +196,11 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
     def sign_request(
         self,
         headers: dict,
-        optional_params: Dict,
-        request_data: Dict,
+        optional_params: dict,
+        request_data: dict,
         api_base: str,
-        api_key: Optional[str] = None,
-    ) -> Tuple[dict, Optional[bytes]]:
+        api_key: str | None = None,
+    ) -> tuple[dict, bytes | None]:
         return self._sign_request(
             service_name="s3vectors",
             headers=headers,
@@ -210,8 +214,8 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj
     ) -> VectorStoreSearchResponse:
         try:
-            response_data = response.json()
-            results: List[VectorStoreSearchResult] = []
+            response_data: Final = response.json()
+            results: Final[list[VectorStoreSearchResult]] = []
 
             for item in response_data.get("vectors", []) or []:
                 metadata = item.get("metadata", {}) or {}
@@ -264,7 +268,7 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         self,
         vector_store_create_optional_params,
         api_base: str,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         raise NotImplementedError
 
     def transform_create_vector_store_response(self, response: httpx.Response):

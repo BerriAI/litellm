@@ -1,12 +1,8 @@
-import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLogger
 from litellm.types.utils import StandardLoggingPayload
@@ -20,6 +16,13 @@ def mock_env_vars(monkeypatch):
     monkeypatch.setenv("AZURE_STORAGE_TENANT_ID", "test-tenant-id")
     monkeypatch.setenv("AZURE_STORAGE_CLIENT_ID", "test-client-id")
     monkeypatch.setenv("AZURE_STORAGE_CLIENT_SECRET", "test-client-secret")
+    monkeypatch.delenv("AZURE_STORAGE_ENDPOINT_SUFFIX", raising=False)
+
+
+@pytest.fixture
+def mock_gov_env_vars(mock_env_vars, monkeypatch):
+    """Point the logger at an Azure Government storage account"""
+    monkeypatch.setenv("AZURE_STORAGE_ENDPOINT_SUFFIX", "core.usgovcloudapi.net")
 
 
 @pytest.mark.asyncio
@@ -99,3 +102,76 @@ async def test_async_upload_payload_to_azure_blob_storage(mock_env_vars):
 
         # Verify raise_for_status was called on all responses
         assert mock_response.raise_for_status.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_async_upload_payload_uses_configured_endpoint_suffix(mock_gov_env_vars):
+    """
+    AZURE_STORAGE_ENDPOINT_SUFFIX must reach the Entra-ID REST upload path so a
+    sovereign-cloud account is addressed instead of the commercial dfs host.
+    """
+    with patch(
+        "litellm.integrations.azure_storage.azure_storage.get_async_httpx_client"
+    ) as mock_get_client:
+        mock_http_client = AsyncMock()
+        mock_response = MagicMock()
+        mock_http_client.put.return_value = mock_response
+        mock_http_client.patch.return_value = mock_response
+        mock_get_client.return_value = mock_http_client
+
+        logger = AzureBlobStorageLogger()
+        logger.azure_auth_token = "mock-azure-ad-token"
+        logger.token_expiry = None
+
+        test_payload: StandardLoggingPayload = {"id": "gov-log-id"}
+
+        await logger.async_upload_payload_to_azure_blob_storage(test_payload)
+
+        expected_base_url = (
+            "https://test-account.dfs.core.usgovcloudapi.net/test-container/gov-log-id.json"
+        )
+        assert mock_http_client.put.call_args[0][0] == f"{expected_base_url}?resource=file"
+        assert (
+            mock_http_client.patch.call_args_list[0][0][0]
+            == f"{expected_base_url}?action=append&position=0"
+        )
+        assert mock_http_client.patch.call_args_list[1][0][0].startswith(
+            f"{expected_base_url}?action=flush"
+        )
+
+
+@pytest.mark.asyncio
+async def test_service_client_uses_configured_endpoint_suffix(mock_gov_env_vars):
+    """
+    The account key path builds its own account_url; the Azure SDK derives the blob
+    host from it, so the suffix has to be applied here too.
+    """
+    fake_aio_module = MagicMock()
+
+    with patch.dict(
+        sys.modules, {"azure.storage.filedatalake.aio": fake_aio_module}
+    ):
+        logger = AzureBlobStorageLogger()
+        await logger.get_service_client()
+
+    assert (
+        fake_aio_module.DataLakeServiceClient.call_args.kwargs["account_url"]
+        == "https://test-account.dfs.core.usgovcloudapi.net"
+    )
+
+
+@pytest.mark.asyncio
+async def test_service_client_defaults_to_commercial_endpoint(mock_env_vars):
+    """Unset AZURE_STORAGE_ENDPOINT_SUFFIX keeps the pre-existing commercial host"""
+    fake_aio_module = MagicMock()
+
+    with patch.dict(
+        sys.modules, {"azure.storage.filedatalake.aio": fake_aio_module}
+    ):
+        logger = AzureBlobStorageLogger()
+        await logger.get_service_client()
+
+    assert (
+        fake_aio_module.DataLakeServiceClient.call_args.kwargs["account_url"]
+        == "https://test-account.dfs.core.windows.net"
+    )

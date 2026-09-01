@@ -14,7 +14,7 @@ import {
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
+import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
 import { cn } from "@/lib/cva.config";
 
 import {
@@ -216,7 +216,7 @@ export function AllModelsTable({
                 <span
                   className={cn(
                     "size-2 shrink-0 rounded-full",
-                    selectedTeamValue === PERSONAL_TEAM_VALUE ? "bg-blue-500" : "bg-green-500",
+                    selectedTeamValue === PERSONAL_TEAM_VALUE ? "bg-info" : "bg-success",
                   )}
                 />
                 <span className="text-muted-foreground">Team</span>
@@ -224,8 +224,15 @@ export function AllModelsTable({
               </SelectTrigger>
               <SelectContent>
                 {teamOptions.map((option) => (
-                  <SelectItem key={option.value} value={option.value} disabled={isLoadingTeams}>
-                    {option.label}
+                  <SelectItem
+                    key={option.value}
+                    value={option.value}
+                    disabled={isLoadingTeams}
+                    className="[&>div]:min-w-0"
+                  >
+                    <span data-slot="select-item-label" className="min-w-0 truncate" title={option.label}>
+                      {option.label}
+                    </span>
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -242,7 +249,7 @@ export function AllModelsTable({
               </SelectContent>
             </Select>
 
-            <Separator orientation="vertical" className="mx-0.5 h-5" />
+            <ToolbarSeparator className="mx-0.5" />
 
             <Button
               variant="outline"

@@ -6,7 +6,7 @@ containing content blocks, unlike standard Voyage embeddings which use
 /v1/embeddings and a string/list `input` field.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Final
 
 import httpx
 
@@ -23,7 +23,7 @@ class VoyageMultimodalEmbeddingError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Union[dict, httpx.Headers] = {},
+        headers: dict | httpx.Headers = {},
     ):
         self.status_code = status_code
         self.message = message
@@ -47,12 +47,12 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         if api_base:
             if not api_base.endswith("/multimodalembeddings"):
@@ -78,11 +78,11 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if api_key is None:
             api_key = (
@@ -98,8 +98,8 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
             )
         return {"Authorization": f"Bearer {api_key}"}
 
-    def _normalize_content_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
-        item_type = item.get("type")
+    def _normalize_content_item(self, item: dict[str, Any]) -> dict[str, Any]:
+        item_type: Final = item.get("type")
         if item_type == "image_url":
             image_url = item.get("image_url")
             if isinstance(image_url, dict):
@@ -115,11 +115,11 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
             return {"type": "image_url", "image_url": image_url}
         return item
 
-    def _normalize_input_item(self, item: Any) -> Dict[str, Any]:
+    def _normalize_input_item(self, item: Any) -> dict[str, Any]:
         if isinstance(item, str):
             return {"content": [{"type": "text", "text": item}]}
         if isinstance(item, dict) and "content" in item:
-            content = item.get("content") or []
+            content: Final = item.get("content") or []
             return {
                 **item,
                 "content": [self._normalize_content_item(content_item) for content_item in content],
@@ -133,7 +133,7 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
-        inputs = input if isinstance(input, list) else [input]
+        inputs: Final = input if isinstance(input, list) else [input]
         return {
             "inputs": [self._normalize_input_item(item) for item in inputs],
             "model": model,
@@ -146,13 +146,13 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         request_data: dict = {},
         optional_params: dict = {},
         litellm_params: dict = {},
     ) -> EmbeddingResponse:
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception:
             raise VoyageMultimodalEmbeddingError(message=raw_response.text, status_code=raw_response.status_code)
 
@@ -160,15 +160,13 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         model_response.data = raw_response_json.get("data")
         model_response.object = raw_response_json.get("object")
 
-        usage_payload = raw_response_json.get("usage", {})
-        total_tokens = usage_payload.get("total_tokens", 0)
+        usage_payload: Final = raw_response_json.get("usage", {})
+        total_tokens: Final = usage_payload.get("total_tokens", 0)
         model_response.usage = Usage(
             prompt_tokens=total_tokens,
             total_tokens=total_tokens,
         )
         return model_response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return VoyageMultimodalEmbeddingError(message=error_message, status_code=status_code, headers=headers)

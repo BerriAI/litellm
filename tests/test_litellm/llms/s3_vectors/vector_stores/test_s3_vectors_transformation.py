@@ -100,7 +100,7 @@ class TestS3VectorsVectorStoreConfig:
         mock_logging_obj.model_call_details = {}
         router = _mock_router(["my-embedding-model"])
 
-        with patch("litellm.aembedding", new=AsyncMock()) as mock_bare_aembedding:
+        with patch("litellm.aembedding", new=AsyncMock()) as mock_bare_aembedding:  # test-quality-ok: guards that the bare-embedding path is not taken; dispatch seam is the behavior under test
             url, request_body = await config.atransform_search_vector_store_request(
                 vector_store_id="test-bucket:test-index",
                 query="test query",
@@ -127,7 +127,7 @@ class TestS3VectorsVectorStoreConfig:
         router = _mock_router(["some-other-model"])
 
         mock_bare = AsyncMock(return_value=Mock(data=[{"embedding": [0.4, 0.5]}]))
-        with patch("litellm.aembedding", new=mock_bare):
+        with patch("litellm.aembedding", new=mock_bare):  # test-quality-ok: stubs the bare-embedding fallback whose request body the test asserts on
             _, request_body = await config.atransform_search_vector_store_request(
                 vector_store_id="test-bucket:test-index",
                 query="test query",
@@ -151,7 +151,7 @@ class TestS3VectorsVectorStoreConfig:
         mock_logging_obj.model_call_details = {}
 
         mock_bare = AsyncMock(return_value=Mock(data=[{"embedding": [0.6, 0.7]}]))
-        with patch("litellm.aembedding", new=mock_bare):
+        with patch("litellm.aembedding", new=mock_bare):  # test-quality-ok: stubs the bare-embedding fallback whose request body the test asserts on
             _, request_body = await config.atransform_search_vector_store_request(
                 vector_store_id="test-bucket:test-index",
                 query="test query",
@@ -172,7 +172,7 @@ class TestS3VectorsVectorStoreConfig:
         mock_logging_obj.model_call_details = {}
         router = _mock_router(["my-embedding-model"], sync=True)
 
-        with patch("litellm.embedding", new=MagicMock()) as mock_bare_embedding:
+        with patch("litellm.embedding", new=MagicMock()) as mock_bare_embedding:  # test-quality-ok: guards that the bare-embedding path is not taken; dispatch seam is the behavior under test
             _, request_body = config.transform_search_vector_store_request(
                 vector_store_id="test-bucket:test-index",
                 query="test query",
@@ -195,7 +195,7 @@ class TestS3VectorsVectorStoreConfig:
         mock_logging_obj.model_call_details = {}
 
         mock_bare = MagicMock(return_value=Mock(data=[{"embedding": [0.8, 0.9]}]))
-        with patch("litellm.embedding", new=mock_bare):
+        with patch("litellm.embedding", new=mock_bare):  # test-quality-ok: stubs the bare-embedding fallback whose request body the test asserts on
             _, request_body = config.transform_search_vector_store_request(
                 vector_store_id="test-bucket:test-index",
                 query="test query",

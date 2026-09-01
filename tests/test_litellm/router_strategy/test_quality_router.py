@@ -9,14 +9,11 @@ Covers:
 - Decision metadata stash + Router.set_response_headers lift.
 """
 
-import os
-import sys
 from typing import Any, Dict, List
 from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.router_strategy.quality_router.config import (
     DEFAULT_COMPLEXITY_TO_QUALITY,
@@ -397,6 +394,58 @@ class TestPreRoutingHook:
         )
         assert resp is not None
         assert resp.model == "haiku"  # the configured default_model
+
+    @pytest.mark.asyncio
+    async def test_trivial_message_not_escalated_by_agent_system_prompt(self, quality_router):
+        """QualityRouter delegates to ComplexityRouter's shared scorer
+        (`self._scorer.classify`), so a system-prompt scoring bug there is inherited here
+        too. A real agent-harness system prompt (tool-use rules, git workflow, markdown
+        formatting -- ordinary CLI-agent boilerplate, ~1.6KB) must not push a trivial "hi"
+        past tier 1: the system prompt is a per-session constant, identical on every
+        request in the session, and carries no signal about how requests differ. Before
+        the fix this system prompt alone supplied 5 codePresence + 2 technicalTerms
+        keyword matches, saturating both dimensions and crossing the default
+        simple_medium boundary (0.15) purely from harness text, independent of the ask."""
+        agent_system_prompt = (
+            "You are Claude Code, Anthropic's official CLI for Claude.\n"
+            "You are an interactive agent that helps users with software engineering tasks.\n\n"
+            "IMPORTANT: Assist with authorized security testing, defensive security, CTF challenges,\n"
+            "and educational contexts. Refuse requests for destructive techniques. Dual-use security\n"
+            "tools (C2 frameworks, credential testing, exploit development) require authorization.\n\n"
+            "# Harness\n"
+            "- Text you output outside of tool use is displayed as Github-flavored markdown.\n"
+            "- Tools run behind a user-selected permission mode; a denied call means the user declined.\n"
+            "- The system may send updates or reminders. Hooks may intercept tool calls.\n"
+            "- Prefer the dedicated file/search tools over shell commands when one fits. Independent\n"
+            "  tool calls can run in parallel in one response.\n"
+            "- Reference code as `file_path:line_number` - it is clickable.\n\n"
+            "Write code that reads like the surrounding code: match its comment density, naming, idiom.\n\n"
+            "For actions that are hard to reverse, confirm first unless durably authorized. Before\n"
+            "deleting or overwriting, look at the target. Report outcomes faithfully: if tests fail,\n"
+            "say so with the output; if a step was skipped, say that.\n\n"
+            "# Git\n"
+            "- Interactive flags (-i, e.g. git rebase -i, git add -i) are not supported.\n"
+            "- Use the `gh` CLI for GitHub operations (PRs, issues, API).\n"
+            "- Commit or push only when the user asks. If on the default branch, branch first.\n"
+            "- End git commit messages with a Co-Authored-By trailer.\n"
+            "- End PR bodies with a generated-with footer.\n\n"
+            "# Environment\n"
+            "- Primary working directory: /Users/tin\n"
+            "- Is a git repository: false\n"
+            "- Platform: darwin\n"
+            "- You are powered by the model claude-opus-5.\n"
+        )
+        messages = [
+            {"role": "system", "content": agent_system_prompt},
+            {"role": "user", "content": "hi"},
+        ]
+        resp = await quality_router.async_pre_routing_hook(
+            model="quality-router-test",
+            request_kwargs={},
+            messages=messages,
+        )
+        assert resp is not None
+        assert resp.model == "haiku"  # tier 1, same as with no system prompt at all
 
 
 # ─── Keyword override ──────────────────────────────────────────────────────
@@ -1031,3 +1080,53 @@ class TestRouterQualityDeploymentMethods:
         )
         router.init_quality_router_deployment(deployment)
         assert "auto_router/quality_router/test-router" in router.quality_routers
+
+
+class TestRoutingDecisionProvenance:
+    """Every quality-router path must attach a routing_decision to its hook response,
+    including the no-user-message default path that previously recorded nothing."""
+
+    @pytest.mark.asyncio
+    async def test_quality_tier_decision(self, quality_router):
+        resp = await quality_router.async_pre_routing_hook(
+            model="quality-router-test",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert resp is not None
+        decision = resp.routing_decision
+        assert decision is not None
+        assert decision["router_model_name"] == "quality-router-test"
+        assert decision["router_type"] == "quality"
+        assert decision["cause"] == "quality_tier"
+        assert decision["routed_model"] == "haiku"
+        assert decision["tier"] == "1"
+        assert isinstance(decision["score"], float)
+
+    @pytest.mark.asyncio
+    async def test_keyword_decision_carries_matched_keyword(self, keyword_router):
+        resp = await keyword_router.async_pre_routing_hook(
+            model="quality-router-test",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "please write python for me"}],
+        )
+        assert resp is not None
+        decision = resp.routing_decision
+        assert decision is not None
+        assert decision["cause"] == "keyword"
+        assert decision["matched_keyword"] == "python"
+        assert decision["routed_model"] == resp.model
+
+    @pytest.mark.asyncio
+    async def test_no_user_message_decision_is_default_fallback(self, quality_router):
+        resp = await quality_router.async_pre_routing_hook(
+            model="quality-router-test",
+            request_kwargs={},
+            messages=[{"role": "system", "content": "You are a helpful assistant."}],
+        )
+        assert resp is not None
+        decision = resp.routing_decision
+        assert decision is not None
+        assert decision["cause"] == "default_fallback"
+        assert decision["routed_model"] == "haiku"
+        assert "tier" not in decision

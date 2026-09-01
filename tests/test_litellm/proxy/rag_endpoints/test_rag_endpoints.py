@@ -6,16 +6,11 @@ Covers:
 """
 
 import io
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -358,14 +353,14 @@ def test_rag_query_merges_managed_store_params(client_internal_user):
         model="gpt-4o-mini",
     )
 
-    with patch(
+    with patch(  # test-quality-ok: aquery is the endpoint's downstream boundary; the forwarded config is what the test asserts
         "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
         new_callable=AsyncMock,
         return_value=mock_response,
-    ) as mock_aquery, patch.object(litellm, "vector_store_registry", mock_registry), patch(
+    ) as mock_aquery, patch.object(litellm, "vector_store_registry", mock_registry), patch(  # test-quality-ok: seeds the managed-store registry the merge under test reads and stubs the access assert covered by auth tests
         "litellm.proxy.rag_endpoints.endpoints.assert_user_can_access_vector_store_id",
         new=AsyncMock(),
-    ), patch(
+    ), patch(  # test-quality-ok: stubs the direct-endpoint access assert covered by auth tests
         "litellm.proxy.vector_store_endpoints.endpoints.assert_user_can_access_vector_store",
         new=AsyncMock(),
     ):
@@ -407,14 +402,14 @@ def test_rag_query_user_retrieval_config_wins_over_store(client_internal_user):
         model="gpt-4o-mini",
     )
 
-    with patch(
+    with patch(  # test-quality-ok: aquery is the endpoint's downstream boundary; the forwarded config is what the test asserts
         "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
         new_callable=AsyncMock,
         return_value=mock_response,
-    ) as mock_aquery, patch.object(litellm, "vector_store_registry", mock_registry), patch(
+    ) as mock_aquery, patch.object(litellm, "vector_store_registry", mock_registry), patch(  # test-quality-ok: seeds the managed-store registry the merge under test reads and stubs the access assert covered by auth tests
         "litellm.proxy.rag_endpoints.endpoints.assert_user_can_access_vector_store_id",
         new=AsyncMock(),
-    ), patch(
+    ), patch(  # test-quality-ok: stubs the direct-endpoint access assert covered by auth tests
         "litellm.proxy.vector_store_endpoints.endpoints.assert_user_can_access_vector_store",
         new=AsyncMock(),
     ):
@@ -430,3 +425,90 @@ def test_rag_query_user_retrieval_config_wins_over_store(client_internal_user):
     assert response.status_code == 200, response.json()
     forwarded_config = mock_aquery.await_args.kwargs["retrieval_config"]
     assert forwarded_config["aws_region_name"] == "us-east-1"
+EICAR = r"X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
+INGEST_REQUEST = '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'
+
+
+def _multipart_ingest_request(*, filename: str, content: bytes, content_type: str):
+    from starlette.requests import Request
+
+    boundary = "litellmuploadtestboundary"
+    head = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        f"Content-Type: {content_type}\r\n\r\n"
+    ).encode()
+    tail = (
+        f"\r\n--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="request"\r\n\r\n'
+        f"{INGEST_REQUEST}\r\n"
+        f"--{boundary}--\r\n"
+    ).encode()
+    body = head + content + tail
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/rag/ingest",
+        "headers": [
+            (b"content-type", f"multipart/form-data; boundary={boundary}".encode()),
+            (b"content-length", str(len(body)).encode()),
+        ],
+        "state": {},
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(scope, receive)
+
+
+class TestVectorStoreUploadControls:
+    """End-to-end enforcement of pentest M4 upload controls on /v1/rag/ingest."""
+
+    def test_eicar_upload_blocked_by_malware_scanner(self, client_internal_user):
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            files={"file": ("clean_name.txt", io.BytesIO(EICAR.encode()), "text/plain")},
+            data={"request": INGEST_REQUEST},
+        )
+        assert response.status_code == 400, response.text
+        assert response.json()["detail"]["reason"] == "malware_detected"
+
+    def test_executable_upload_rejected(self, client_internal_user):
+        elf = b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 40
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            files={"file": ("doc.txt", io.BytesIO(elf), "text/plain")},
+            data={"request": INGEST_REQUEST},
+        )
+        assert response.status_code == 400, response.text
+        assert response.json()["detail"]["reason"] == "executable_not_allowed"
+
+    def test_zip_archive_upload_rejected(self, client_internal_user):
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            files={"file": ("doc.pdf", io.BytesIO(b"PK\x03\x04\x14\x00\x00\x00payload"), "application/pdf")},
+            data={"request": INGEST_REQUEST},
+        )
+        assert response.status_code == 400, response.text
+        assert response.json()["detail"]["reason"] == "archive_not_allowed"
+
+    async def test_clean_text_upload_gets_server_generated_filename(self):
+        from litellm.proxy.rag_endpoints.endpoints import parse_rag_ingest_request
+        from litellm.proxy.rag_endpoints.upload_security import EicarTestMalwareScanner
+
+        request = _multipart_ingest_request(
+            filename="../../etc/passwd",
+            content=b"benign document text\n",
+            content_type="text/plain",
+        )
+        _options, file_data, _url, _file_id = await parse_rag_ingest_request(
+            request, scanner=EicarTestMalwareScanner()
+        )
+        assert file_data is not None
+        server_filename, content_bytes, secured_content_type = file_data
+        assert server_filename != "../../etc/passwd"
+        assert "/" not in server_filename and "\\" not in server_filename
+        assert server_filename.endswith(".txt")
+        assert secured_content_type == "text/plain"
+        assert content_bytes == b"benign document text\n"

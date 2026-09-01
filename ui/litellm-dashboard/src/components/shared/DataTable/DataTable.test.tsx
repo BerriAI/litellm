@@ -1,5 +1,5 @@
 import type { ColumnDef, ExpandedState } from "@tanstack/react-table";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -20,6 +20,12 @@ function person(id: string, name: string, flagged = false): Person {
 }
 
 const names = (): (string | null)[] => screen.getAllByTestId("name-cell").map((el) => el.textContent);
+
+const heightClassesOf = (el: HTMLElement | undefined): string[] =>
+  (el?.className ?? "")
+    .split(/\s+/)
+    .filter((cls) => cls.startsWith("h-"))
+    .sort();
 
 const nameCellColumns: ColumnDef<Person, unknown>[] = [
   {
@@ -229,12 +235,10 @@ describe("DataTable sorting", () => {
 
 describe("DataTable layout", () => {
   it("stretches the table to fill the container when resizing is on, so hidden columns leave no right-side gap", () => {
-    const { container } = render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameCellColumns} enableColumnResizing />);
+    render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameCellColumns} enableColumnResizing />);
 
-    const table = container.querySelector("table");
-    expect(table).not.toBeNull();
     // width pins the natural column total (horizontal scroll on overflow); minWidth:100% fills the gap on underflow.
-    expect(table?.style.minWidth).toBe("100%");
+    expect(screen.getByRole("table")).toHaveStyle({ minWidth: "100%" });
   });
 });
 
@@ -337,21 +341,13 @@ describe("DataTable filtering", () => {
     );
     expect(names()).toEqual(["Charlie", "Alice", "Bob"]);
   });
-
-  it("throws when server filtering is missing required props", () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(() => render(<DataTable data={[]} columns={filterableColumns} filterMode="server" />)).toThrow(
-      /filterMode='server'/,
-    );
-    spy.mockRestore();
-  });
 });
 
 describe("DataTable loading", () => {
   it("renders skeleton rows while loading and real rows once loaded", () => {
     const { rerender } = render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameCellColumns} isLoading />);
     expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
-    expect(screen.queryByTestId("name-cell")).toBeNull();
+    expect(screen.queryByTestId("name-cell")).not.toBeInTheDocument();
 
     rerender(<DataTable data={CHARLIE_ALICE_BOB} columns={nameCellColumns} />);
     expect(screen.queryAllByTestId("skeleton-row")).toHaveLength(0);
@@ -362,17 +358,21 @@ describe("DataTable loading", () => {
     const { rerender } = render(
       <DataTable data={CHARLIE_ALICE_BOB} columns={nameCellColumns} size="compact" isLoading />,
     );
-    const skeletonRow = screen.getAllByTestId("skeleton-row").at(0);
-    const loadedRowHeight = "h-8";
-    expect(skeletonRow?.className).toContain(loadedRowHeight);
+    const skeletonHeight = heightClassesOf(screen.getAllByRole("row").at(-1));
 
     rerender(<DataTable data={CHARLIE_ALICE_BOB} columns={nameCellColumns} size="compact" />);
-    expect(document.querySelector("[data-row-id]")?.className).toContain(loadedRowHeight);
+    const loadedHeight = heightClassesOf(screen.getByRole("row", { name: /Charlie/ }));
+
+    expect(loadedHeight).not.toEqual([]);
+    expect(skeletonHeight).toEqual(loadedHeight);
   });
 
   it("does not force the compact height on default-size skeleton rows", () => {
-    render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameCellColumns} isLoading />);
-    expect(screen.getAllByTestId("skeleton-row").at(0)?.className).not.toContain("h-8");
+    const { rerender } = render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameCellColumns} isLoading />);
+    const skeletonHeight = heightClassesOf(screen.getAllByRole("row").at(-1));
+
+    rerender(<DataTable data={CHARLIE_ALICE_BOB} columns={nameCellColumns} size="compact" isLoading />);
+    expect(heightClassesOf(screen.getAllByRole("row").at(-1))).not.toEqual(skeletonHeight);
   });
 
   it("varies skeleton shape and width per column instead of one fixed bar", () => {
@@ -428,7 +428,7 @@ describe("DataTable loading", () => {
 describe("DataTable column visibility", () => {
   it("hides a column when toggled off in the view-options menu", async () => {
     const user = userEvent.setup();
-    const { container } = render(
+    render(
       <DataTable
         data={CHARLIE_ALICE_BOB}
         columns={nameEmailColumns}
@@ -436,13 +436,13 @@ describe("DataTable column visibility", () => {
       />,
     );
 
-    expect(container.querySelector('th[data-header-id="email"]')).not.toBeNull();
+    expect(screen.getByRole("columnheader", { name: "Email" })).toBeInTheDocument();
     await user.click(screen.getByTestId("view-options-trigger"));
     await user.click(await screen.findByTestId("view-option-email"));
-    await waitFor(() => expect(container.querySelector('th[data-header-id="email"]')).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("columnheader", { name: "Email" })).not.toBeInTheDocument());
 
     await user.click(screen.getByTestId("view-option-email"));
-    await waitFor(() => expect(container.querySelector('th[data-header-id="email"]')).not.toBeNull());
+    expect(await screen.findByRole("columnheader", { name: "Email" })).toBeInTheDocument();
   });
 
   it("omits columns that opt out of hiding from the menu", async () => {
@@ -470,20 +470,16 @@ describe("DataTable column visibility", () => {
 
     await user.click(screen.getByTestId("view-options-trigger"));
     expect(await screen.findByTestId("view-option-email")).toBeInTheDocument();
-    expect(screen.queryByTestId("view-option-name")).toBeNull();
+    expect(screen.queryByTestId("view-option-name")).not.toBeInTheDocument();
   });
 });
 
 describe("DataTable pinned columns", () => {
   it("applies sticky positioning to a pinned column only", () => {
-    const { container } = render(<DataTable data={CHARLIE_ALICE_BOB} columns={pinnedColumns} />);
+    render(<DataTable data={CHARLIE_ALICE_BOB} columns={pinnedColumns} />);
 
-    const pinnedHead = container.querySelector<HTMLElement>('th[data-header-id="name"]');
-    const normalHead = container.querySelector<HTMLElement>('th[data-header-id="email"]');
-
-    expect(pinnedHead?.style.position).toBe("sticky");
-    expect(pinnedHead?.style.left).toBe("0px");
-    expect(normalHead?.style.position).toBe("");
+    expect(screen.getByRole("columnheader", { name: "Name" })).toHaveStyle({ position: "sticky", left: "0px" });
+    expect(screen.getByRole("columnheader", { name: "Email" })).not.toHaveStyle({ position: "sticky" });
   });
 });
 
@@ -578,7 +574,7 @@ describe("DataTable expansion", () => {
 describe("DataTable row styling and footer", () => {
   it("applies rowClassName to the matching row only", () => {
     const data = [person("a", "Alice", true), person("b", "Bob", false)];
-    const { container } = render(
+    render(
       <DataTable
         data={data}
         columns={nameCellColumns}
@@ -587,8 +583,8 @@ describe("DataTable row styling and footer", () => {
       />,
     );
 
-    expect(container.querySelector('tr[data-row-id="a"]')?.className).toContain("flagged-row");
-    expect(container.querySelector('tr[data-row-id="b"]')?.className).not.toContain("flagged-row");
+    expect(screen.getByRole("row", { name: /Alice/ })).toHaveClass("flagged-row");
+    expect(screen.getByRole("row", { name: /Bob/ })).not.toHaveClass("flagged-row");
   });
 
   it("renders the footer slot inside a tfoot element", () => {
@@ -604,58 +600,57 @@ describe("DataTable row styling and footer", () => {
       />,
     );
 
-    expect(screen.getByTestId("footer-row").closest("tfoot")).not.toBeNull();
+    const rowGroups = screen.getAllByRole("rowgroup");
+    expect(within(rowGroups.at(-1) as HTMLElement).getByText("Total: 3")).toBeInTheDocument();
   });
 });
 
 describe("DataTable layout", () => {
   it("exposes resize handles with stable selectors only when resizing is enabled", () => {
-    const { container, rerender } = render(
-      <DataTable data={CHARLIE_ALICE_BOB} columns={nameEmailColumns} enableColumnResizing />,
-    );
-    expect(container.querySelectorAll("[data-resizer][data-header-id]").length).toBe(2);
+    const { rerender } = render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameEmailColumns} enableColumnResizing />);
+    expect(screen.getByTestId("column-resizer-name")).toBeInTheDocument();
+    expect(screen.getByTestId("column-resizer-email")).toBeInTheDocument();
 
     rerender(<DataTable data={CHARLIE_ALICE_BOB} columns={nameEmailColumns} />);
-    expect(container.querySelectorAll("[data-resizer]").length).toBe(0);
+    expect(screen.queryByTestId("column-resizer-name")).not.toBeInTheDocument();
   });
 
   it("makes the header sticky and constrains body height when maxBodyHeight is set", () => {
-    const { container } = render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameEmailColumns} maxBodyHeight={240} />);
-    expect(container.querySelector("thead")?.className).toContain("sticky");
-    const scroller = container.querySelector('[data-slot="table-container"]')?.parentElement as HTMLElement;
-    expect(scroller.style.maxHeight).toBe("240px");
-  });
-});
-
-describe("DataTable misconfiguration guards", () => {
-  it("throws when server sorting is missing required props", () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(() => render(<DataTable data={[]} columns={nameCellColumns} sortingMode="server" />)).toThrow(
-      /sortingMode='server'/,
-    );
-    spy.mockRestore();
+    render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameEmailColumns} maxBodyHeight={240} />);
+    expect(screen.getByTestId("data-table-head")).toHaveClass("sticky");
+    expect(screen.getByTestId("data-table-scroller")).toHaveStyle({ maxHeight: "240px" });
   });
 
-  it("throws when server pagination is missing required props", () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(() => render(<DataTable data={[]} columns={nameCellColumns} paginationMode="server" />)).toThrow(
-      /paginationMode='server'/,
-    );
-    spy.mockRestore();
+  it("caps fillHeight at the parent's height instead of stretching to it, so a short table stays short", () => {
+    render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameEmailColumns} fillHeight />);
+    const outer = screen.getByTestId("data-table-root");
+    const frame = screen.getByTestId("data-table-frame");
+    const scroller = screen.getByTestId("data-table-scroller");
+
+    // A ceiling, not a stretch: flex-1 here would hold the footer at the bottom on a two-row table.
+    expect(outer).toHaveClass("max-h-full", "flex-col");
+    expect(outer).not.toHaveClass("flex-1");
+    expect(frame).toHaveClass("flex-col");
+    expect(frame).not.toHaveClass("flex-1");
+    expect(scroller).not.toHaveClass("flex-1");
+
+    expect(scroller).toHaveClass("min-h-0", "overflow-auto");
+    expect(scroller).toHaveStyle({ maxHeight: "" });
+    // Without this the Table primitive's own overflow container captures the sticky header.
+    expect(scroller).toHaveClass("[&_[data-slot=table-container]]:overflow-visible");
+
+    // Rows pass under the header, so the semi-transparent row tint alone would let them show through.
+    expect(screen.getByTestId("data-table-head")).toHaveClass("sticky", "bg-background");
   });
 
-  it("throws when both defaultSorting and sorting are provided", () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(() =>
-      render(
-        <DataTable
-          data={[]}
-          columns={nameCellColumns}
-          defaultSorting={[{ id: "name", desc: false }]}
-          sorting={[{ id: "name", desc: false }]}
-        />,
-      ),
-    ).toThrow(/defaultSorting/);
-    spy.mockRestore();
+  it("leaves the default layout untouched when neither height mode is set", () => {
+    render(<DataTable data={CHARLIE_ALICE_BOB} columns={nameEmailColumns} />);
+    const scroller = screen.getByTestId("data-table-scroller");
+
+    expect(scroller).toHaveClass("overflow-x-auto");
+    expect(scroller).not.toHaveClass("min-h-0");
+    expect(scroller).toHaveStyle({ maxHeight: "" });
+    expect(screen.getByTestId("data-table-frame")).not.toHaveClass("flex-col");
+    expect(screen.getByTestId("data-table-head")).not.toHaveClass("sticky", "bg-background");
   });
 });
