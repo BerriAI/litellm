@@ -686,6 +686,106 @@ async def test_run_model_health_check_skips_complexity_router_deployment():
     assert result == {}
 
 
+@pytest.mark.asyncio
+async def test_run_model_health_check_skips_fusion_deployment():
+    fake_ahealth_check = AsyncMock(return_value={})
+    model = {
+        "litellm_params": {
+            "model": "fusion_router",
+            "fusion_router_config": {
+                "panel_models": ["panel-a", "panel-b"],
+                "aggregator_model": "aggregator",
+            },
+        },
+        "model_info": {},
+    }
+
+    with patch.object(  # test-quality-ok: verifies the Fusion marker never crosses the provider boundary
+        hc_module.litellm, "ahealth_check", fake_ahealth_check
+    ):
+        result = await hc_module._run_model_health_check(model)
+
+    fake_ahealth_check.assert_not_called()
+    assert result == {}
+
+
+def _fusion_health_fixture(on_quorum_failure="fail"):
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "panel-a",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x"},
+                "model_info": {"id": "panel-a-1"},
+            },
+            {
+                "model_name": "panel-b",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x"},
+                "model_info": {"id": "panel-b-1"},
+            },
+            {
+                "model_name": "aggregator",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-x"},
+                "model_info": {"id": "aggregator-1"},
+            },
+            {
+                "model_name": "fusion/quality",
+                "litellm_params": {
+                    "model": "fusion_router",
+                    "fusion_router_config": {
+                        "panel_models": ["panel-a", "panel-b"],
+                        "aggregator_model": "aggregator",
+                        "min_successful_panelists": 2,
+                        "on_quorum_failure": on_quorum_failure,
+                    },
+                },
+                "model_info": {"id": "fusion-1"},
+            },
+        ]
+    )
+
+
+def test_fusion_health_uses_panel_quorum_and_aggregator_health():
+    router = _fusion_health_fixture()
+    healthy = [{"model_id": "fusion-1"}, {"model_id": "panel-a-1"}, {"model_id": "aggregator-1"}]
+    unhealthy = [{"model_id": "panel-b-1", "error": "boom"}]
+
+    new_healthy, new_unhealthy = hc_module._finalize_strategy_router_endpoints(
+        healthy, unhealthy, router.model_list, router, ()
+    )
+
+    assert {endpoint["model_id"] for endpoint in new_healthy} == {"panel-a-1", "aggregator-1"}
+    fusion_failure = next(endpoint for endpoint in new_unhealthy if endpoint["model_id"] == "fusion-1")
+    assert "panel quorum cannot be met" in fusion_failure["error"]
+
+    healthy = [{"model_id": "fusion-1"}, {"model_id": "panel-a-1"}, {"model_id": "panel-b-1"}]
+    unhealthy = [{"model_id": "aggregator-1", "error": "boom"}]
+    _, new_unhealthy = hc_module._finalize_strategy_router_endpoints(healthy, unhealthy, router.model_list, router, ())
+    fusion_failure = next(endpoint for endpoint in new_unhealthy if endpoint["model_id"] == "fusion-1")
+    assert fusion_failure["error"] == "aggregator model 'aggregator' has no healthy deployment"
+
+
+def test_resilient_fusion_health_allows_panel_failure_and_dependency_probe_finds_all_members():
+    router = _fusion_health_fixture(on_quorum_failure="aggregator_only")
+    marker = next(deployment for deployment in router.model_list if deployment["model_info"]["id"] == "fusion-1")
+    probes = hc_module._dependency_deployments_to_probe([marker], router.model_list, router)
+    assert {deployment["model_info"]["id"] for deployment in probes} == {
+        "panel-a-1",
+        "panel-b-1",
+        "aggregator-1",
+    }
+
+    healthy = [{"model_id": "fusion-1"}, {"model_id": "aggregator-1"}]
+    unhealthy = [
+        {"model_id": "panel-a-1", "error": "boom"},
+        {"model_id": "panel-b-1", "error": "boom"},
+    ]
+    new_healthy, new_unhealthy = hc_module._finalize_strategy_router_endpoints(
+        healthy, unhealthy, router.model_list, router, ()
+    )
+    assert {endpoint["model_id"] for endpoint in new_healthy} == {"fusion-1", "aggregator-1"}
+    assert {endpoint["model_id"] for endpoint in new_unhealthy} == {"panel-a-1", "panel-b-1"}
+
+
 def _router_health_fixture():
     """A real Router whose SIMPLE tier, default and classifier can each be pointed at a dead
     group. That group has two replicas, so a verdict reached on only one of them is visible."""

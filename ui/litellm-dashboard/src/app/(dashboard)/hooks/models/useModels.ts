@@ -39,6 +39,7 @@ export const useModelsInfo = (
   sortOrder?: string,
   excludeAutoRouters: boolean = false,
   modelName?: string,
+  excludeFusionRouters: boolean = false,
 ) => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<PaginatedModelInfoResponse>({
@@ -57,6 +58,7 @@ export const useModelsInfo = (
         // Part of the key: callers that exclude auto-routers must not share a cache entry
         // with callers that keep them.
         ...(excludeAutoRouters && { excludeAutoRouters: "true" }),
+        ...(excludeFusionRouters && { excludeFusionRouters: "true" }),
       },
     }),
     queryFn: async () =>
@@ -73,12 +75,14 @@ export const useModelsInfo = (
         sortOrder,
         excludeAutoRouters,
         modelName,
+        excludeFusionRouters,
       ),
     enabled: Boolean(accessToken && userId && userRole),
   });
 };
 
 const AUTO_ROUTER_MODEL_PREFIX = "auto_router/";
+const FUSION_ROUTER_MODEL = "fusion_router";
 const AUTO_ROUTER_LOOKUP_PAGE_SIZE = 1000;
 const NO_AUTO_ROUTERS: ReadonlySet<string> = new Set<string>();
 
@@ -99,6 +103,7 @@ export interface AutoRouterDeployment extends AutoRouterCandidateDeployment {
     adaptive_router_default_model?: string | null;
     quality_router_config?: unknown;
     quality_router_default_model?: string | null;
+    fusion_router_config?: unknown;
   } | null;
   model_info?: {
     id?: string | null;
@@ -115,6 +120,11 @@ export interface AutoRouterDeployment extends AutoRouterCandidateDeployment {
 export const isAutoRouterDeployment = (deployment: AutoRouterCandidateDeployment): boolean =>
   Boolean(deployment?.litellm_params?.model?.startsWith(AUTO_ROUTER_MODEL_PREFIX));
 
+export const isFusionRouterDeployment = (deployment: AutoRouterCandidateDeployment): boolean => {
+  const model = deployment?.litellm_params?.model;
+  return model === FUSION_ROUTER_MODEL || Boolean(model?.startsWith(`${FUSION_ROUTER_MODEL}/`));
+};
+
 export const selectAutoRouterModelGroups = (deployments: AutoRouterCandidateDeployment[]): ReadonlySet<string> =>
   new Set(
     deployments
@@ -126,13 +136,23 @@ export const selectAutoRouterModelGroups = (deployments: AutoRouterCandidateDepl
 export const selectAutoRouterDeployments = (deployments: AutoRouterDeployment[]): AutoRouterDeployment[] =>
   deployments.filter(isAutoRouterDeployment);
 
+export const selectFusionRouterDeployments = (deployments: AutoRouterDeployment[]): AutoRouterDeployment[] =>
+  deployments.filter(isFusionRouterDeployment);
+
 export const selectPlainModelGroups = (deployments: AutoRouterCandidateDeployment[]): ReadonlySet<string> => {
   const autoRouterGroups = selectAutoRouterModelGroups(deployments);
+  const fusionRouterGroups = new Set(
+    deployments
+      .filter(isFusionRouterDeployment)
+      .map((deployment) => deployment.model_name)
+      .filter((modelName): modelName is string => Boolean(modelName)),
+  );
   return new Set(
     deployments
       .map((deployment) => deployment.model_name)
       .filter((modelName): modelName is string => Boolean(modelName))
-      .filter((modelName) => !autoRouterGroups.has(modelName)),
+      .filter((modelName) => !autoRouterGroups.has(modelName))
+      .filter((modelName) => !fusionRouterGroups.has(modelName)),
   );
 };
 
@@ -204,6 +224,23 @@ export const useAutoRouters = (): UseQueryResult<AutoRouterDeployment[], Error> 
     enabled: Boolean(accessToken && userId && userRole),
     select: selectAutoRouterDeployments,
   });
+};
+
+export const useFusionRouters = (): UseQueryResult<AutoRouterDeployment[], Error> => {
+  const { accessToken, userId, userRole } = useAuthorized();
+  return useQuery<AutoRouterDeployment[], Error, AutoRouterDeployment[]>({
+    queryKey: autoRouterListKey(userId, userRole),
+    queryFn: async () => await fetchAllModelDeployments(accessToken!, userId!, userRole!),
+    enabled: Boolean(accessToken && userId && userRole),
+    select: selectFusionRouterDeployments,
+  });
+};
+
+export const useInvalidateFusionRouters = (): (() => Promise<void>) => {
+  const queryClient = useQueryClient();
+  return async () => {
+    await queryClient.invalidateQueries({ queryKey: modelKeys.lists() });
+  };
 };
 
 export const useInvalidateAutoRouters = (): (() => Promise<void>) => {

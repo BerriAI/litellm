@@ -13474,6 +13474,16 @@ def _is_auto_router_model(model: Mapping[str, object]) -> bool:
     return isinstance(litellm_model, str) and litellm_model.startswith("auto_router/")
 
 
+def _is_fusion_router_model(model: Mapping[str, object]) -> bool:
+    litellm_params: Final = model.get("litellm_params")
+    if not isinstance(litellm_params, Mapping):
+        return False
+    litellm_model: Final = litellm_params.get("model")
+    return isinstance(litellm_model, str) and (
+        litellm_model == "fusion_router" or litellm_model.startswith("fusion_router/")
+    )
+
+
 def _paginate_models_response(
     all_models: list[dict[str, Any]],
     page: int,
@@ -13784,6 +13794,10 @@ async def model_info_v2(
             "existing callers are unaffected"
         ),
     ),
+    exclude_fusion_routers: bool | None = fastapi.Query(
+        False,
+        description="Omit Fusion virtual-model deployments. Defaults to false for compatibility.",
+    ),
 ):
     """
     Paginated model metadata for proxy deployments (pricing, provider, team access).
@@ -13956,6 +13970,10 @@ async def model_info_v2(
     # truthy sentinel object rather than False.
     if exclude_auto_routers is True:
         all_models = [m for m in all_models if not _is_auto_router_model(m)]
+    if exclude_fusion_routers is True:
+        all_models = [  # mutable-ok: model-info pagination consumes a list  # rebind-ok: this filter refines collected rows
+            model for model in all_models if not _is_fusion_router_model(model)
+        ]
 
     # Update total count to include agents
     search_total_count = len(all_models)

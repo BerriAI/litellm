@@ -128,7 +128,6 @@ def test_v1_model_info_no_model_list_error(client, auth_as, null_router, path):
     assert "LLM Model List not loaded" in response.text
 
 
-
 def test_get_proxy_model_info_surfaces_supports_parallel_function_calling(local_model_cost_map):
     """``GET /v1/model/info`` enriches each deployment through ``_get_proxy_model_info``; a registry
     entry declaring parallel function calling must land in ``model_info`` instead of null."""
@@ -161,9 +160,7 @@ def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch
     router.get_model_list = MagicMock(return_value=[deployment])
     monkeypatch.setattr(model_checks, "get_provider_models", fake_get_provider_models)
 
-    expanded_deployments = proxy_server.expand_wildcard_deployments_for_model_info(
-        [deployment]
-    )
+    expanded_deployments = proxy_server.expand_wildcard_deployments_for_model_info([deployment])
     allowed_model_names = proxy_server._get_v1_model_info_allowed_model_names(
         user_api_key_dict=UserAPIKeyAuth(
             api_key="sk-test",
@@ -342,6 +339,11 @@ def mixed_auto_router_router(monkeypatch):
             "litellm_params": {"model": "anthropic/claude-opus-4-6"},
             "model_info": {"id": "plain-2", "db_model": False},
         },
+        {
+            "model_name": "fusion/coding",
+            "litellm_params": {"model": "fusion_router"},
+            "model_info": {"id": "fusion-1", "db_model": True},
+        },
     ]
     from unittest.mock import AsyncMock
 
@@ -376,7 +378,7 @@ def test_v2_model_info_includes_auto_routers_by_default(client, auth_as, mixed_a
     assert response.status_code == 200
     payload = response.json()
     assert "tri-tier-router" in _model_names(payload)
-    assert payload["total_count"] == 5
+    assert payload["total_count"] == 6
 
 
 def test_v2_model_info_excludes_every_auto_router_strategy(client, auth_as, mixed_auto_router_router):
@@ -386,7 +388,7 @@ def test_v2_model_info_excludes_every_auto_router_strategy(client, auth_as, mixe
         response = client.get("/v2/model/info", params={"exclude_auto_routers": "true"})
     assert response.status_code == 200
     payload = response.json()
-    assert _model_names(payload) == ["gpt-4o-mini", "claude-opus"]
+    assert _model_names(payload) == ["gpt-4o-mini", "claude-opus", "fusion/coding"]
 
 
 def test_v2_model_info_exclude_auto_routers_shrinks_total_count(client, auth_as, mixed_auto_router_router):
@@ -395,22 +397,38 @@ def test_v2_model_info_exclude_auto_routers_shrinks_total_count(client, auth_as,
     with auth_as():
         response = client.get("/v2/model/info", params={"exclude_auto_routers": "true"})
     payload = response.json()
-    assert payload["total_count"] == 2
+    assert payload["total_count"] == 3
     assert len(payload["data"]) == payload["total_count"]
 
 
-def test_v2_model_info_exclude_auto_routers_paginates_over_the_filtered_set(
-    client, auth_as, mixed_auto_router_router
-):
+def test_v2_model_info_exclude_auto_routers_paginates_over_the_filtered_set(client, auth_as, mixed_auto_router_router):
     """Page size applies to the filtered list, so no page silently comes back short."""
     with auth_as():
-        response = client.get(
-            "/v2/model/info", params={"exclude_auto_routers": "true", "page": 1, "size": 1}
-        )
+        response = client.get("/v2/model/info", params={"exclude_auto_routers": "true", "page": 1, "size": 1})
     payload = response.json()
-    assert payload["total_count"] == 2
-    assert payload["total_pages"] == 2
+    assert payload["total_count"] == 3
+    assert payload["total_pages"] == 3
     assert len(payload["data"]) == 1
+
+
+def test_v2_model_info_excludes_fusion_models_independently(client, auth_as, mixed_auto_router_router):
+    with auth_as():
+        response = client.get("/v2/model/info", params={"exclude_fusion_routers": "true"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert "fusion/coding" not in _model_names(payload)
+    assert "tri-tier-router" in _model_names(payload)
+    assert payload["total_count"] == 5
+
+
+def test_v2_model_info_can_exclude_both_virtual_model_types(client, auth_as, mixed_auto_router_router):
+    with auth_as():
+        response = client.get(
+            "/v2/model/info",
+            params={"exclude_auto_routers": "true", "exclude_fusion_routers": "true"},
+        )
+    assert response.status_code == 200
+    assert _model_names(response.json()) == ["gpt-4o-mini", "claude-opus"]
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Final, TypeVar
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm.fusion_router import FusionRouterConfig, fusion_router_dependencies, is_fusion_router_model
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -272,9 +273,15 @@ def _narrow_to_target(
 
 
 def _is_strategy_router_deployment(litellm_params: Mapping[str, object]) -> bool:
-    """True for strategy-router deployments."""
+    """True for virtual deployments whose health comes from their dependencies."""
     model: Final[object] = litellm_params.get("model", "")
-    return isinstance(model, str) and classify_strategy_router_model(model) is not None
+    return isinstance(model, str) and (
+        classify_strategy_router_model(model) is not None or is_fusion_router_model(model)
+    )
+
+
+def _routing_dependencies(litellm_params: Mapping[str, object]) -> tuple[StrategyRouterDependency, ...]:
+    return strategy_router_dependencies(litellm_params) + fusion_router_dependencies(litellm_params)
 
 
 def _is_marker(deployment: Mapping[str, object]) -> bool:
@@ -330,10 +337,36 @@ def _strategy_router_dependency_error(
     params: Final = deployment.get("litellm_params")
     if not isinstance(params, Mapping):
         return None
+    model: Final = params.get("model")
+    if isinstance(model, str) and is_fusion_router_model(model):
+        raw_config: Final = params.get("fusion_router_config")
+        if not isinstance(raw_config, Mapping):
+            return "Fusion model has no fusion_router_config"
+        try:
+            config: Final = FusionRouterConfig.model_validate(raw_config)
+        except ValidationError:
+            return "Fusion model has an invalid fusion_router_config"
+        dependencies: Final = fusion_router_dependencies(params)
+        aggregator: Final = next(dependency for dependency in dependencies if dependency.role == "aggregator")
+        aggregator_failure: Final = _dependency_failure(aggregator, router, unhealthy_ids)
+        if aggregator_failure is not None:
+            return aggregator_failure
+        if config.on_quorum_failure == "aggregator_only":
+            return None
+        panel_dependencies: Final = tuple(dependency for dependency in dependencies if dependency.role == "panel")
+        usable_panel_count: Final = sum(
+            _dependency_failure(dependency, router, unhealthy_ids) is None for dependency in panel_dependencies
+        )
+        if usable_panel_count < config.min_successful_panelists:
+            return (
+                f"panel quorum cannot be met: {usable_panel_count} of "
+                f"{config.min_successful_panelists} required panel models are healthy"
+            )
+        return None
     return next(
         (
             failure
-            for dependency in strategy_router_dependencies(params)
+            for dependency in _routing_dependencies(params)
             if (failure := _dependency_failure(dependency, router, unhealthy_ids))
         ),
         None,
@@ -375,7 +408,7 @@ def _dependency_deployments_to_probe(
             dependency.model_name
             for deployment in frontier
             if isinstance(params := deployment.get("litellm_params"), Mapping)
-            for dependency in strategy_router_dependencies(params)
+            for dependency in _routing_dependencies(params)
         )
         fresh_ids = (
             frozenset(ident for name in names for ident in (_resolved_deployment_ids(router, name) or ())) - reached

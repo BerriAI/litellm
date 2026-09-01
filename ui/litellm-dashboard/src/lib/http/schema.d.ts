@@ -29225,6 +29225,10 @@ export interface components {
             default_api_key_rpm_limit?: number | null;
             /** Default Api Key Tpm Limit */
             default_api_key_tpm_limit?: number | null;
+            /** Fusion Router Config */
+            fusion_router_config?: {
+                [key: string]: unknown;
+            } | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
@@ -39221,6 +39225,10 @@ export interface components {
             default_api_key_rpm_limit?: number | null;
             /** Default Api Key Tpm Limit */
             default_api_key_tpm_limit?: number | null;
+            /** Fusion Router Config */
+            fusion_router_config?: {
+                [key: string]: unknown;
+            } | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
@@ -66182,6 +66190,8 @@ export interface operations {
                 sortOrder?: string | null;
                 /** @description Omit auto-router deployments (litellm model prefixed `auto_router/`). They select among deployments rather than being deployments themselves, so a caller rendering a deployment list can leave them out. Defaults to false, so existing callers are unaffected */
                 exclude_auto_routers?: boolean | null;
+                /** @description Omit Fusion virtual-model deployments. Defaults to false for compatibility. */
+                exclude_fusion_routers?: boolean | null;
             };
             header?: never;
             path?: never;

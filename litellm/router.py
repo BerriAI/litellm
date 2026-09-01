@@ -54,6 +54,7 @@ from litellm.constants import (
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
+from litellm.fusion_router import FusionRouter, build_fusion_router, is_fusion_router_model
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.core_helpers import (
@@ -849,6 +850,7 @@ class Router:
         self.complexity_routers: dict[str, list[TaggedPreRoutingStrategy[ComplexityRouter]]] = {}
         self.adaptive_routers: dict[str, list[TaggedPreRoutingStrategy[AdaptiveRouter]]] = {}
         self.quality_routers: dict[str, list[TaggedPreRoutingStrategy[QualityRouter]]] = {}
+        self.fusion_routers: dict[str, FusionRouter] = {}  # mutable-ok: hot reload updates the Fusion registry
         self.routing_plugins: list[RoutingPlugin] = list(plugins) if plugins else []
 
         # Initialize model_group_alias early since it's used in set_model_list
@@ -1641,16 +1643,21 @@ class Router:
     def _initialize_core_endpoints(self):
         """Helper to initialize core router endpoints."""
         self.amoderation = self.factory_function(litellm.amoderation, call_type="moderation")
-        self.aanthropic_messages = self.factory_function(litellm.anthropic_messages, call_type="anthropic_messages")
-        self.anthropic_messages = self.factory_function(litellm.anthropic_messages, call_type="anthropic_messages")
+        self._base_aanthropic_messages = self.factory_function(
+            litellm.anthropic_messages, call_type="anthropic_messages"
+        )
+        self.aanthropic_messages = self._fusion_aware_aanthropic_messages
+        self.anthropic_messages = self._fusion_aware_aanthropic_messages
         self.agenerate_content = self.factory_function(litellm.agenerate_content, call_type="agenerate_content")
         self.aadapter_generate_content = self.factory_function(
             litellm.aadapter_generate_content, call_type="aadapter_generate_content"
         )
-        self.aresponses = self.factory_function(litellm.aresponses, call_type="aresponses")
+        self._base_aresponses = self.factory_function(litellm.aresponses, call_type="aresponses")
+        self.aresponses = self._fusion_aware_aresponses
         self.afile_delete = self.factory_function(litellm.afile_delete, call_type="afile_delete")
         self.afile_content = self.factory_function(litellm.afile_content, call_type="afile_content")
-        self.responses = self.factory_function(litellm.responses, call_type="responses")
+        self._base_responses = self.factory_function(litellm.responses, call_type="responses")
+        self.responses = self._fusion_aware_responses
         self.aget_responses = self.factory_function(litellm.aget_responses, call_type="aget_responses")
         self.acancel_responses = self.factory_function(litellm.acancel_responses, call_type="acancel_responses")
         self.acompact_responses = self.factory_function(litellm.acompact_responses, call_type="acompact_responses")
@@ -2258,6 +2265,23 @@ class Router:
         """
         try:
             verbose_router_logger.debug("router.completion(model=%s,..)", model)
+            registered_model_name: Final = self._get_model_from_alias(model=model) or model
+            if registered_model_name in self.fusion_routers:
+                if kwargs.get("stream") is True:
+                    raise litellm.BadRequestError(
+                        message="Synchronous streaming is not supported for Fusion models; use Router.acompletion",
+                        model=model,
+                        llm_provider="",
+                    )
+                return run_async_function(
+                    self.acompletion,
+                    model=model,
+                    messages=cast(  # cast-ok: the public completion message shape is a valid acompletion subset
+                        list[AllMessageValues], messages
+                    ),
+                    stream=False,
+                    **kwargs,
+                )
             kwargs["model"] = model
             kwargs["messages"] = messages
             kwargs["original_function"] = self._completion
@@ -2496,6 +2520,7 @@ class Router:
         **kwargs,
     ):
         try:
+            fusion_depth: Final = kwargs.pop("_fusion_depth", 0)
             kwargs["model"] = model
             kwargs["messages"] = messages
             kwargs["stream"] = stream
@@ -2505,14 +2530,30 @@ class Router:
             request_priority: Final = kwargs.get("priority") or self.default_priority
             start_time: Final = time.time()
             _is_prompt_management_model: Final = self._is_prompt_management_model(model)
+            registered_model_name: Final = self._get_model_from_alias(model=model) or model
+            fusion_router: Final = self.fusion_routers.get(registered_model_name)
 
-            if _is_prompt_management_model:
+            if fusion_router is not None:
+                if fusion_depth:
+                    raise litellm.BadRequestError(
+                        message="Fusion models cannot use another Fusion model as a panel or aggregator",
+                        model=model,
+                        llm_provider="",
+                    )
+                response = (  # rebind-ok: one mutually exclusive dispatch branch assigns it
+                    await fusion_router.acompletion(
+                        messages=messages,
+                        stream=stream,
+                        request_kwargs=kwargs,
+                    )
+                )
+            elif _is_prompt_management_model:
                 return await self._prompt_management_factory(
                     model=model,
                     messages=messages,
                     kwargs=kwargs,
                 )
-            if request_priority is not None and isinstance(request_priority, int):
+            elif request_priority is not None and isinstance(request_priority, int):
                 response = await self.schedule_acompletion(**kwargs)
             else:
                 response = await self.async_function_with_fallbacks(**kwargs)
@@ -5116,6 +5157,254 @@ class Router:
             if deployment is not None:
                 self._stamp_failed_deployment_id_with_effective_model_info(e, deployment, kwargs)
             raise e
+
+    async def _fusion_aware_aanthropic_messages(
+        self,
+        model: str,
+        messages: list[dict[str, object]],  # mutable-ok: mirrors the public Anthropic Messages contract
+        max_tokens: int,
+        metadata: Mapping[str, object] | None = None,
+        stop_sequences: list[str] | None = None,  # mutable-ok: mirrors the public Anthropic Messages contract
+        stream: bool | None = False,
+        system: str | list[dict[str, object]] | None = None,  # mutable-ok: mirrors the public Anthropic contract
+        temperature: float | None = None,
+        thinking: dict[str, object] | None = None,  # mutable-ok: mirrors the public Anthropic Messages contract
+        tool_choice: dict[str, object] | None = None,  # mutable-ok: mirrors the public Anthropic Messages contract
+        tools: list[dict[str, object]] | None = None,  # mutable-ok: mirrors the public Anthropic Messages contract
+        top_k: int | None = None,
+        top_p: float | None = None,
+        output_format: dict[str, object] | None = None,  # mutable-ok: mirrors the public Anthropic Messages contract
+        **kwargs: object,  # kwargs-ok: pass-through compatibility requires provider extension keywords
+    ) -> object:
+        """Run an Anthropic Messages request through Fusion's chat-level core."""
+        typed_metadata: Final = (
+            dict(metadata)  # mutable-ok: the Anthropic adapter requires a native metadata mapping
+            if metadata is not None
+            else None
+        )
+        registered_model_name: Final = self._get_model_from_alias(model=model) or model
+        if registered_model_name not in self.fusion_routers:
+            return await self._base_aanthropic_messages(
+                model=model,
+                messages=messages,
+                max_tokens=max_tokens,
+                metadata=typed_metadata,
+                stop_sequences=stop_sequences,
+                stream=stream,
+                system=system,
+                temperature=temperature,
+                thinking=thinking,
+                tool_choice=tool_choice,
+                tools=tools,
+                top_k=top_k,
+                top_p=top_p,
+                output_format=output_format,
+                **kwargs,  # pyright: ignore[reportArgumentType]  # base endpoint validates provider extensions
+            )
+
+        from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+            ANTHROPIC_ADAPTER,
+            LiteLLMMessagesToCompletionTransformationHandler,
+            _extract_proxy_litellm_metadata,  # pyright: ignore[reportPrivateUsage]  # reuse canonical adapter metadata parsing
+            _prepare_context_managed_request,  # pyright: ignore[reportPrivateUsage]  # reuse canonical context pipeline
+        )
+        from litellm.llms.anthropic.experimental_pass_through.utils import (
+            local_model_name,
+        )
+
+        handler_kwargs: Final = {  # mutable-ok: the Anthropic adapter requires a native keyword mapping
+            key: value
+            for key, value in kwargs.items()
+            if key not in frozenset(("context_management", "litellm_router"))
+        }
+        context_management: Final = kwargs.get("context_management")
+        proxy_litellm_metadata, user_api_key_auth = _extract_proxy_litellm_metadata(handler_kwargs)
+        additional_drop_params: Final = handler_kwargs.get("additional_drop_params")
+        polyfill_result: Final = await _prepare_context_managed_request(
+            model=model,
+            messages=messages,
+            tools=tools,
+            system=system,
+            context_management_spec=cast(  # cast-ok: the Anthropic adapter validates context management downstream
+                dict[str, object] | list[dict[str, object]] | None, context_management
+            ),
+            litellm_metadata=proxy_litellm_metadata,
+            additional_drop_params=cast(  # cast-ok: the Anthropic adapter validates drop parameters downstream
+                list[str] | None, additional_drop_params
+            ),
+            llm_router=self,
+            user_api_key_auth=user_api_key_auth,
+        )
+        effective_messages: Final = polyfill_result.messages if polyfill_result is not None else messages
+        effective_system: Final = polyfill_result.system if polyfill_result is not None else system
+        completion_kwargs, tool_name_mapping = (
+            LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(  # pyright: ignore[reportPrivateUsage]  # bridge uses the canonical Anthropic translation
+                max_tokens=max_tokens,
+                messages=effective_messages,
+                model=model,
+                metadata=typed_metadata,
+                stop_sequences=stop_sequences,
+                stream=stream,
+                system=effective_system,
+                temperature=temperature,
+                thinking=thinking,
+                tool_choice=tool_choice,
+                tools=tools,
+                top_k=top_k,
+                top_p=top_p,
+                output_format=output_format,
+                extra_kwargs=handler_kwargs,
+            )
+        )
+        completion_response: Final = await self.acompletion(  # pyright: ignore[reportCallIssue]  # adapter payload is validated before dispatch
+            **completion_kwargs
+        )
+        if stream:
+            transformed_stream: Final = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
+                completion_response,
+                model=local_model_name(
+                    model,
+                    cast(  # cast-ok: the adapter accepts only the optional provider-name string
+                        str | None, handler_kwargs.get("custom_llm_provider")
+                    ),
+                ),
+                tool_name_mapping=tool_name_mapping,
+                polyfill_result=polyfill_result,
+                is_async=True,
+            )
+            if transformed_stream is not None:
+                return transformed_stream
+            raise ValueError("Failed to transform Fusion stream to Anthropic format")
+
+        anthropic_response: Final = ANTHROPIC_ADAPTER.translate_completion_output_params(
+            cast(  # cast-ok: the non-streaming branch excludes CustomStreamWrapper
+                ModelResponse, completion_response
+            ),
+            tool_name_mapping=tool_name_mapping,
+            polyfill_result=polyfill_result,
+        )
+        if anthropic_response is not None:
+            return anthropic_response
+        raise ValueError("Failed to transform Fusion response to Anthropic format")
+
+    async def _fusion_aware_aresponses(
+        self,
+        model: str,
+        input: object,
+        stream: bool | None = False,
+        **kwargs: object,  # kwargs-ok: Responses compatibility requires provider extension keywords
+    ) -> object:
+        registered_model_name: Final = self._get_model_from_alias(model=model) or model
+        if registered_model_name not in self.fusion_routers:
+            return await self._base_aresponses(
+                model=model,
+                input=input,
+                stream=stream,
+                **kwargs,  # pyright: ignore[reportArgumentType]  # base endpoint validates provider extensions
+            )
+        if kwargs.get("background") is True:
+            raise litellm.BadRequestError(
+                message="Background Responses are not supported for Fusion models",
+                model=model,
+                llm_provider="",
+            )
+
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+        from litellm.responses.litellm_completion_transformation.transformation import (
+            LiteLLMCompletionResponsesConfig,
+        )
+        from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIOptionalRequestParams
+
+        response_input: Final = cast(  # cast-ok: the Responses transformer validates the public input payload
+            str | ResponseInputParam, input
+        )
+        responses_api_request: Final = cast(  # cast-ok: kwargs mirror the public Responses optional request contract
+            ResponsesAPIOptionalRequestParams, kwargs
+        )
+        transform_kwargs: Final = {  # mutable-ok: the Responses transformer requires native keyword arguments
+            key: value for key, value in kwargs.items() if key != "extra_headers"
+        }
+        initial_completion_request: Final = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+                model=model,
+                input=response_input,
+                responses_api_request=responses_api_request,
+                stream=stream,
+                extra_headers=cast(  # cast-ok: the transformer accepts the optional header mapping
+                    Mapping[str, object] | None, kwargs.get("extra_headers")
+                ),
+                **transform_kwargs,  # pyright: ignore[reportArgumentType]  # transformer validates extension keywords
+            )
+        )
+        previous_response_id: Final = responses_api_request.get("previous_response_id")
+        completion_request: Final = (
+            await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+                previous_response_id=previous_response_id,
+                litellm_completion_request=initial_completion_request,
+            )
+            if previous_response_id
+            else initial_completion_request
+        )
+        completion_response: Final = await self.acompletion(  # pyright: ignore[reportCallIssue]  # transformed request is validated by the Responses adapter
+            **{  # mutable-ok: acompletion consumes a native keyword mapping  # pyright: ignore[reportArgumentType]  # explicit fields override transformed values
+                **kwargs,
+                **completion_request,
+                "model": model,
+                "stream": bool(stream),
+                "_skip_responses_api_bridge": True,
+            }
+        )
+        if isinstance(completion_response, ModelResponse):
+            return LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                chat_completion_response=completion_response,
+                request_input=response_input,
+                responses_api_request=responses_api_request,
+            )
+        if isinstance(completion_response, CustomStreamWrapper):
+            raw_litellm_metadata: Final = kwargs.get("litellm_metadata")
+            return LiteLLMCompletionStreamingIterator(
+                model=model,
+                litellm_custom_stream_wrapper=completion_response,
+                request_input=response_input,
+                responses_api_request=responses_api_request,
+                litellm_metadata=(
+                    dict(raw_litellm_metadata)  # mutable-ok: the streaming iterator requires a native metadata dict
+                    if isinstance(raw_litellm_metadata, Mapping)
+                    else {}  # mutable-ok: the streaming iterator requires a native metadata dict
+                ),
+            )
+        raise ValueError(f"Unexpected Fusion response type: {type(completion_response)}")
+
+    def _fusion_aware_responses(
+        self,
+        model: str,
+        input: object,
+        stream: bool | None = False,
+        **kwargs: object,  # kwargs-ok: Responses compatibility requires provider extension keywords
+    ) -> object:
+        registered_model_name: Final = self._get_model_from_alias(model=model) or model
+        if registered_model_name not in self.fusion_routers:
+            return self._base_responses(
+                model=model,
+                input=input,
+                stream=stream,
+                **kwargs,  # pyright: ignore[reportArgumentType]  # base endpoint validates provider extensions
+            )
+        if stream:
+            raise litellm.BadRequestError(
+                message="Synchronous Responses streaming is not supported for Fusion models; use Router.aresponses",
+                model=model,
+                llm_provider="",
+            )
+        return run_async_function(
+            self._fusion_aware_aresponses,
+            model=model,
+            input=input,
+            stream=False,
+            **kwargs,
+        )
 
     async def _aresponses_with_streaming_fallbacks(
         self, original_function: Callable, **kwargs: Any
@@ -8982,6 +9271,10 @@ class Router:
         if self._unregister_pre_routing_strategy(self.adaptive_routers, model_name, tags):
             self._sync_adaptive_router_hooks()
 
+    def _unregister_fusion_router_for_deployment(self, deployment: Deployment) -> None:
+        if is_fusion_router_model(deployment.litellm_params.model):
+            self.fusion_routers.pop(deployment.model_name, None)
+
     def _finalize_adaptive_router_if_configured(self) -> None:
         """Locate every adaptive-router deployment in the finalized model_list and
         build an AdaptiveRouter for each. Safe no-op when none are configured.
@@ -9155,6 +9448,18 @@ class Router:
             strategy_label="Quality-router",
         )
 
+    def init_fusion_router_deployment(self, deployment: Deployment) -> None:
+        raw_config: Final = deployment.litellm_params.fusion_router_config
+        if not isinstance(raw_config, Mapping):
+            raise TypeError("fusion_router_config is required for Fusion model deployments")
+        if deployment.model_name in self.fusion_routers:
+            raise ValueError(f"Fusion model {deployment.model_name!r} is already configured")
+        self.fusion_routers[deployment.model_name] = build_fusion_router(
+            model_name=deployment.model_name,
+            raw_config=raw_config,
+            completion=self.acompletion,
+        )
+
     def deployment_is_active_for_environment(self, deployment: Deployment) -> bool:
         """
         Function to check if a llm deployment is active for a given environment. Allows using the same config.yaml across multople environments
@@ -9181,6 +9486,7 @@ class Router:
         # Reset per-strategy router registries so hot-reload doesn't leave
         # stale routers pointing at the old model_list.
         self.quality_routers = {}
+        self.fusion_routers = {}  # mutable-ok: set_model_list resets the hot-reload registry
         self.complexity_routers = {}
         self.auto_routers = {}
         self._provider_unresolved_deployments = ()
@@ -9274,7 +9580,8 @@ class Router:
             if split_litellm_model in litellm._known_custom_logger_compatible_callbacks:
                 is_prompt_management_model = True
 
-        if is_prompt_management_model:
+        is_fusion_router: Final = is_fusion_router_model(litellm_model)
+        if is_prompt_management_model or is_fusion_router:
             # For prompt management models, skip LLM provider validation
             # The actual model will be resolved at runtime from the prompt file
             _model = litellm_model
@@ -9380,6 +9687,9 @@ class Router:
         #########################################################
         if self._is_quality_router_deployment(litellm_params=deployment.litellm_params):
             self.init_quality_router_deployment(deployment=deployment)
+
+        if is_fusion_router:
+            self.init_fusion_router_deployment(deployment=deployment)
 
         return deployment
 
@@ -9638,6 +9948,7 @@ class Router:
                 # Free the outgoing deployment's pre-routing strategy slot (keyed by the
                 # OLD model_name/tags) before the re-add below re-registers it.
                 self._unregister_pre_routing_strategy_for_deployment(deployment=_deployment_on_router)
+                self._unregister_fusion_router_for_deployment(deployment=_deployment_on_router)
 
             # if the model_id is not in router
             self.add_deployment(deployment=deployment)
@@ -9861,9 +10172,9 @@ class Router:
                 if _budget_limiter is not None:
                     _budget_limiter.unregister_deployment_budget(model_id=id)
                 try:
-                    self._unregister_pre_routing_strategy_for_deployment(
-                        deployment=item if isinstance(item, Deployment) else Deployment(**item)
-                    )
+                    removed_deployment: Final = item if isinstance(item, Deployment) else Deployment(**item)
+                    self._unregister_pre_routing_strategy_for_deployment(deployment=removed_deployment)
+                    self._unregister_fusion_router_for_deployment(deployment=removed_deployment)
                 except Exception:
                     verbose_router_logger.exception(
                         "delete_deployment: could not release pre-routing strategies for model_id=%s; "

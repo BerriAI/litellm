@@ -2902,6 +2902,7 @@ RoutingDecisionCause = Literal[
 
 InternalCallOrigin = Literal[
     "autorouter_classifier",
+    "fusion_panel",
     "shadow_eval_router",
     "shadow_eval_judge",
     "background_response_cost_poll",
@@ -2910,6 +2911,7 @@ InternalCallOrigin = Literal[
 records that it is not traffic the caller sent."""
 
 AUTOROUTER_CLASSIFIER_CALL_ORIGIN: Final[InternalCallOrigin] = "autorouter_classifier"
+FUSION_PANEL_CALL_ORIGIN: Final[InternalCallOrigin] = "fusion_panel"
 SHADOW_EVAL_ROUTER_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_router"
 SHADOW_EVAL_JUDGE_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_judge"
 BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN: Final[InternalCallOrigin] = "background_response_cost_poll"
@@ -3719,6 +3721,7 @@ all_litellm_params = (
         "adaptive_router_default_model",
         "quality_router_config",
         "quality_router_default_model",
+        "fusion_router_config",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())

@@ -24,7 +24,7 @@ AUTO_ROUTER_MODEL_PREFIX: Final = "auto_router/"
 
 StrategyRouterKind = Literal["semantic", "complexity", "adaptive", "quality"]
 
-StrategyRouterDependencyRole: TypeAlias = Literal["tier", "default", "classifier", "embedding"]
+StrategyRouterDependencyRole: TypeAlias = Literal["tier", "default", "classifier", "embedding", "panel", "aggregator"]
 
 
 @dataclass(frozen=True, slots=True)

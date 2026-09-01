@@ -6,10 +6,10 @@ import datetime
 import enum
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, Generic, Literal, TypeAlias, TypeVar, get_type_hints
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, field_validator, model_validator
 from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._uuid import uuid
@@ -27,6 +27,18 @@ from .utils import (
     ModelResponse,
     StandardLoggingRoutingDecision,
 )
+
+FusionRouterConfigValue: TypeAlias = Annotated[
+    object | None,
+    WithJsonSchema(  # mutable-ok: Pydantic's JSON-schema metadata requires native mappings
+        {  # mutable-ok: Pydantic's JSON-schema metadata requires a native mapping
+            "anyOf": [  # mutable-ok: Pydantic's JSON-schema metadata requires a native array
+                {"additionalProperties": True, "type": "object"},  # mutable-ok: OpenAPI object schema
+                {"type": "null"},  # mutable-ok: OpenAPI nullable schema
+            ]
+        }
+    ),
+]
 
 
 class ConfigurableClientsideParamsCustomAuth(TypedDict):
@@ -371,6 +383,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     quality_router_config: dict | None = None
     quality_router_default_model: str | None = None
 
+    # fusion-router params
+    fusion_router_config: FusionRouterConfigValue = None
+
     # Vector Store Params
     vector_store_id: str | None = None
     milvus_text_field: str | None = None
@@ -525,6 +540,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
 
     # per-deployment cooldown override
     cooldown_time: float | None
+    fusion_router_config: FusionRouterConfigValue  # writable-ok: deployment updates replace the config object
 
 
 class DeploymentTypedDict(TypedDict, total=False):

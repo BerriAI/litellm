@@ -114,6 +114,7 @@ const AllModelsTab = ({
     // lists and manages them. Excluded server-side so total_count stays honest.
     true,
     modelNameForQuery,
+    true,
   );
   const isLoading = isLoadingModelsInfo || isLoadingModelCostMap;
 

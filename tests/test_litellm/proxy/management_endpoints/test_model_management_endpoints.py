@@ -4007,6 +4007,84 @@ class TestStrategyRouterWriteValidation:
             model_info={"id": model_id},
         )
 
+    def test_fusion_create_requires_valid_config(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+
+        violation = _strategy_router_write_violation(
+            incoming_params=LiteLLM_Params(model="fusion_router"),
+            existing_params=None,
+        )
+        assert violation is not None
+        assert "fusion_router_config is required" in violation
+
+        violation = _strategy_router_write_violation(
+            incoming_params=LiteLLM_Params(
+                model="fusion_router",
+                fusion_router_config={"panel_models": ["one"], "aggregator_model": "aggregator"},
+            ),
+            existing_params=None,
+        )
+        assert violation is not None
+        assert "panel_models" in violation
+
+    def test_fusion_config_only_patch_is_validated_against_stored_marker(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        stored = LiteLLM_Params(
+            model="fusion_router",
+            fusion_router_config={"panel_models": ["panel-a", "panel-b"], "aggregator_model": "aggregator"},
+        )
+        assert (
+            _strategy_router_write_violation(
+                incoming_params=updateLiteLLMParams(
+                    fusion_router_config={
+                        "panel_models": ["panel-a", "panel-b", "panel-c"],
+                        "aggregator_model": "aggregator",
+                        "min_successful_panelists": 3,
+                    }
+                ),
+                existing_params=stored,
+            )
+            is None
+        )
+
+    def test_empty_fusion_config_patch_does_not_fall_back_to_stored_config(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        stored = LiteLLM_Params(
+            model="fusion_router",
+            fusion_router_config={"panel_models": ["panel-a", "panel-b"], "aggregator_model": "aggregator"},
+        )
+        violation = _strategy_router_write_violation(
+            incoming_params=updateLiteLLMParams(fusion_router_config={}),
+            existing_params=stored,
+        )
+        assert violation is not None
+        assert "panel_models" in violation
+
+    def test_fusion_config_on_regular_model_is_rejected(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _strategy_router_write_violation,
+        )
+
+        violation = _strategy_router_write_violation(
+            incoming_params=LiteLLM_Params(
+                model="openai/gpt-4o",
+                fusion_router_config={"panel_models": ["panel-a", "panel-b"], "aggregator_model": "aggregator"},
+            ),
+            existing_params=None,
+        )
+        assert violation is not None
+        assert "only valid" in violation
+
     def test_double_prefix_rejected_against_stored_params(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             _strategy_router_write_violation,

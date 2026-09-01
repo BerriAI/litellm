@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.fusion_router import is_fusion_router_model, validate_fusion_router_write
 from litellm.litellm_core_utils.ptu_pricing import (
     CUSTOM_PRICING_FIELDS,
     PTU_EMPTIED_PRICING_FIELDS,
@@ -243,6 +244,22 @@ def _strategy_router_write_violation(
     """
     if incoming_params is None:
         return None
+    incoming_model: Final = incoming_params.model
+    existing_model: Final = existing_params.model if existing_params is not None else None
+    effective_model: Final = incoming_model or existing_model
+    incoming_fusion_config: Final = incoming_params.fusion_router_config
+    existing_fusion_config: Final = existing_params.fusion_router_config if existing_params is not None else None
+    if (
+        incoming_fusion_config is not None
+        or (isinstance(incoming_model, str) and is_fusion_router_model(incoming_model))
+        or (isinstance(existing_model, str) and is_fusion_router_model(existing_model))
+    ):
+        fusion_violation: Final = validate_fusion_router_write(
+            model=effective_model,
+            raw_config=(incoming_fusion_config if incoming_fusion_config is not None else existing_fusion_config),
+        )
+        if fusion_violation is not None:
+            return fusion_violation
     config_violation: Final = validate_complexity_router_config_write(
         complexity_router_config=incoming_params.complexity_router_config
     )
