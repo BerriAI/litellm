@@ -21,6 +21,8 @@ ENV_KEY: Final = "env"
 API_KEY_HELPER_KEY: Final = "apiKeyHelper"
 ANTHROPIC_BASE_URL_KEY: Final = "ANTHROPIC_BASE_URL"
 ANTHROPIC_API_KEY_KEY: Final = "ANTHROPIC_API_KEY"
+ENABLE_TOOL_SEARCH_KEY: Final = "ENABLE_TOOL_SEARCH"
+ENABLE_TOOL_SEARCH_VALUE: Final = "true"
 
 CLAUDE_SETTINGS_PATH: Final = Path.home() / ".claude" / "settings.json"
 BACKUP_PATH: Final = Path.home() / ".litellm" / "claude_settings_backup.json"
@@ -70,12 +72,15 @@ def merge_claude_settings(
 
     Only env.ANTHROPIC_BASE_URL and the top-level apiKeyHelper are overridden; a
     stray env.ANTHROPIC_API_KEY is dropped so it cannot outrank the helper-issued
-    token (same reasoning as build_agent_env in agents.py). Every other key is
-    preserved untouched.
+    token (same reasoning as build_agent_env in agents.py). ENABLE_TOOL_SEARCH
+    defaults to true because Claude Code turns tool search off when
+    ANTHROPIC_BASE_URL is not a first-party Anthropic host; an existing value is
+    left alone. Every other key is preserved untouched.
     """
     raw_env: Final = settings.get(ENV_KEY, {})
     base_env: Final = raw_env if isinstance(raw_env, dict) else {}
     env: Final = {
+        ENABLE_TOOL_SEARCH_KEY: ENABLE_TOOL_SEARCH_VALUE,
         **{key: value for key, value in base_env.items() if key != ANTHROPIC_API_KEY_KEY},
         ANTHROPIC_BASE_URL_KEY: base_url.rstrip("/"),
     }
@@ -144,6 +149,8 @@ __all__ = (
     "AUTOROUTE_BACKUP_PATH",
     "BACKUP_PATH",
     "CLAUDE_SETTINGS_PATH",
+    "ENABLE_TOOL_SEARCH_KEY",
+    "ENABLE_TOOL_SEARCH_VALUE",
     "ENV_KEY",
     "SETTINGS_FILE_OWNERS",
     "ClaudeSettingsError",
