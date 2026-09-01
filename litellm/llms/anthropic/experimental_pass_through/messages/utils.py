@@ -1,10 +1,39 @@
+from collections.abc import Mapping
 from functools import lru_cache
-from typing import Any, Final, cast, get_type_hints
+from typing import TYPE_CHECKING, Any, Final, cast, get_type_hints
 
 from litellm.types.llms.anthropic import AnthropicMessagesRequestOptionalParams
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
+
+if TYPE_CHECKING:
+    from litellm.exceptions import ContentPolicyViolationError
+
+
+def get_safeguard_refusal_stop_details(response: object) -> Mapping[str, Any] | None:
+    """
+    Return the ``stop_details`` of an Anthropic Messages response refused by a
+    safeguard (``stop_reason: "refusal"`` carrying ``stop_details``:
+    https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback),
+    or None for any other response, a plain refusal without ``stop_details`` included.
+    """
+    if not isinstance(response, dict) or response.get("stop_reason") != "refusal":
+        return None
+    stop_details: Final = response.get("stop_details")
+    return stop_details if isinstance(stop_details, dict) else None
+
+
+def safeguard_refusal_error(model: str, stop_details: Mapping[str, object]) -> "ContentPolicyViolationError":
+    """The exception a safeguard-refused Anthropic response converts into so the
+    content-policy fallback chain can re-dispatch it."""
+    from litellm.exceptions import ContentPolicyViolationError
+
+    return ContentPolicyViolationError(
+        message=f"Anthropic safeguard refusal (category: {stop_details.get('category')}).",
+        model=model,
+        llm_provider="anthropic",
+    )
 
 
 @lru_cache(maxsize=1)
@@ -100,14 +129,12 @@ def mock_response(
             model=model,
         )
     return AnthropicMessagesResponse(
-        **{
-            "content": [{"text": mock_response, "type": "text"}],
-            "id": "msg_013Zva2CMHLNnXjNJJKqJ2EF",
-            "model": "claude-sonnet-4-20250514",
-            "role": "assistant",
-            "stop_reason": "end_turn",
-            "stop_sequence": None,
-            "type": "message",
-            "usage": {"input_tokens": 2095, "output_tokens": 503},
-        }
+        content=[{"text": mock_response, "type": "text"}],
+        id="msg_013Zva2CMHLNnXjNJJKqJ2EF",
+        model="claude-sonnet-4-20250514",
+        role="assistant",
+        stop_reason="end_turn",
+        stop_sequence=None,
+        type="message",
+        usage={"input_tokens": 2095, "output_tokens": 503},
     )

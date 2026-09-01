@@ -214,6 +214,91 @@ def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
     return False
 
 
+PRE_ROUTING_SELECTED_MODEL_KEY: Final = "pre_routing_selected_model"
+_ROUTER_METADATA_BUCKETS: Final = ("metadata", "litellm_metadata")
+
+
+def record_pre_routing_selection(request_kwargs: Mapping[str, Any] | None, selected_model: str) -> None:
+    """
+    Remember which model a pre-routing hook picked, so fallback lookup can key off it.
+
+    Fallback resolution runs on an outer kwargs dict that ``**kwargs`` already copied, so
+    writing the model there is invisible by the time routing picks a tier. The metadata
+    buckets are nested dicts shared by reference across those copies, which is how the
+    router already carries values back up.
+
+    The write goes through the proxy-internal bucket resolver, never into both buckets:
+    on /v1/messages the top-level ``metadata`` dict is the provider's own request field,
+    so a blanket write would forward the tier stamp upstream.
+    """
+    from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
+
+    if request_kwargs is None:
+        return
+    bucket: Final = request_kwargs.get(get_metadata_variable_name_from_kwargs(request_kwargs))
+    if isinstance(bucket, dict):
+        bucket[PRE_ROUTING_SELECTED_MODEL_KEY] = selected_model
+
+
+def clear_pre_routing_selection(request_kwargs: Mapping[str, object] | None) -> None:
+    """
+    Drop any selection the router did not make itself on this hop.
+
+    The buckets carry whatever the caller sent, so an inbound value is the caller
+    choosing a fallback chain rather than the router choosing a tier. A fallback hop
+    also inherits the previous hop's selection, which would key its own failure off
+    the tier that already failed. Clearing at the start of every hop leaves only a
+    value the pre-routing hook wrote while routing that hop.
+    """
+    if request_kwargs is None:
+        return
+    for bucket in (request_kwargs.get(name) for name in _ROUTER_METADATA_BUCKETS):
+        if isinstance(bucket, dict) and PRE_ROUTING_SELECTED_MODEL_KEY in bucket:
+            del bucket[PRE_ROUTING_SELECTED_MODEL_KEY]
+
+
+def get_pre_routing_selection(kwargs: Mapping[str, Any]) -> str | None:
+    """The model a pre-routing hook selected for this request, if one did."""
+    buckets: Final = (kwargs.get(name) for name in _ROUTER_METADATA_BUCKETS)
+    selections: Final = (bucket.get(PRE_ROUTING_SELECTED_MODEL_KEY) for bucket in buckets if isinstance(bucket, dict))
+    return next((selected for selected in selections if isinstance(selected, str) and selected), None)
+
+
+def fallback_lookup_groups(kwargs: Mapping[str, Any], model_group: str | None) -> tuple[str, ...]:
+    """
+    Ordered keys for resolving a fallback chain: the tier a pre-routing hook selected wins,
+    and the requested group still resolves when no tier-keyed chain exists, so configs keyed
+    on the router name (the documented contract) keep working behind auto-routers.
+    """
+    ordered: Final = (get_pre_routing_selection(kwargs), model_group)
+    return tuple(dict.fromkeys(group for group in ordered if group))
+
+
+def _resolved_a_specific_chain(
+    fallbacks: list[Any],  # mutable-ok: mirrors get_fallback_model_group's contract
+    result: tuple[list[str] | None, int | None],  # mutable-ok: mirrors get_fallback_model_group's contract
+) -> bool:
+    resolved, generic_idx = result
+    if resolved is None:
+        return False
+    return generic_idx is None or resolved is not fallbacks[generic_idx]["*"]
+
+
+def get_fallback_model_group_for_lookup_groups(
+    fallbacks: list[Any],  # mutable-ok: mirrors get_fallback_model_group's contract
+    lookup_groups: tuple[str, ...],
+) -> tuple[list[str] | None, int | None]:  # mutable-ok: mirrors get_fallback_model_group's contract
+    """
+    First lookup group with a specifically-keyed chain wins; the generic "*" chain applies
+    only after every group missed, so a catch-all cannot shadow a later group's own chain.
+    """
+    results: Final = tuple(get_fallback_model_group(fallbacks=fallbacks, model_group=group) for group in lookup_groups)
+    specific: Final = next((result for result in results if _resolved_a_specific_chain(fallbacks, result)), None)
+    if specific is not None:
+        return specific
+    return next((result for result in results if result[0] is not None), (None, None))
+
+
 def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[list[str] | None, int | None]:
     """
     Returns:
