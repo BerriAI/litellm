@@ -43,9 +43,16 @@ async def arerank(
     """
     Async: Reranks a list of documents based on their relevance to the query
     """
+    _custom_llm_provider: str | None = None  # rebind-ok: set by the get_llm_provider unpack; read in the except
     try:
         loop: Final = asyncio.get_event_loop()
         kwargs["arerank"] = True
+
+        _, _custom_llm_provider, _, _ = litellm.get_llm_provider(  # rebind-ok: see pre-declaration above
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=kwargs.get("api_base", None),
+        )
 
         func: Final = partial(
             rerank,
@@ -70,7 +77,11 @@ async def arerank(
             response = init_response
         return response
     except Exception as e:
-        raise e
+        raise exception_type(
+            model=model,
+            custom_llm_provider=_custom_llm_provider or custom_llm_provider,
+            original_exception=e,
+        )
 
 
 @client
@@ -115,6 +126,7 @@ def rerank(
     model_info: Final = kwargs.get("model_info", None)
     user: Final = kwargs.get("user", None)
     client: Final = kwargs.get("client", None)
+    _custom_llm_provider: str | None = None  # rebind-ok: set by the get_llm_provider unpack; read in the except
     try:
         _is_async: Final = kwargs.pop("arerank", False) is True
         optional_params: Final = GenericLiteLLMParams(**kwargs)
@@ -127,7 +139,7 @@ def rerank(
 
         (
             model,
-            _custom_llm_provider,
+            _custom_llm_provider,  # rebind-ok: see pre-declaration above
             dynamic_api_key,
             dynamic_api_base,
         ) = litellm.get_llm_provider(
@@ -538,4 +550,8 @@ def rerank(
         return response
     except Exception as e:
         verbose_logger.error("Error in rerank: %s", e)
-        raise exception_type(model=model, custom_llm_provider=custom_llm_provider, original_exception=e)
+        raise exception_type(
+            model=model,
+            custom_llm_provider=_custom_llm_provider or custom_llm_provider,
+            original_exception=e,
+        )
