@@ -4498,3 +4498,57 @@ async def test_streaming_deidentify_match_logs_masked_run_as_success_not_blocked
         await _drain_surface_hook(guardrail, _chat_completion_chunks(), request_data=request_data)
 
     assert request_data["metadata"]["_model_armor_status"] == "success"
+
+
+# A de-identify template that matched but handed back no rewrite, e.g. because the transformation
+# itself failed. The match still says the buffered original carries what it matched on
+_MODEL_ARMOR_DEIDENTIFIED_NO_TEXT = {
+    "sanitizationResult": {
+        "filterMatchState": "MATCH_FOUND",
+        "filterResults": {
+            "sdp": {"sdpFilterResult": {"deidentifyResult": {"matchState": "MATCH_FOUND"}}}
+        },
+    }
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunks, case", [(None, "chat_completions"), (_ANTHROPIC_SSE_CHUNKS, "anthropic_sse")])
+async def test_streaming_deidentify_match_without_a_rewrite_fails_closed(chunks, case):
+    """Allowing sanitization past the block check is a promise to apply the redaction. When Model
+    Armor matches but returns no sanitized text there is nothing to apply, and yielding the
+    buffered chunks would hand back exactly what it matched on."""
+    guardrail = _surface_guardrail(mask_response_content=True)
+    post = _armor_post_mock(_MODEL_ARMOR_DEIDENTIFIED_NO_TEXT)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(
+            guardrail, _chat_completion_chunks() if chunks is None else chunks
+        )
+
+    body = _delivered_bytes(delivered)
+    assert b"4111-1111-1111-1111" not in body, case
+    assert b"Streaming response blocked by Model Armor" in body, case
+
+
+@pytest.mark.asyncio
+async def test_streaming_status_records_a_surface_that_cannot_carry_the_rewrite_as_blocked():
+    """The Responses surface has no assembled body to rewrite, so a de-identify match ends as a
+    refusal. The status stamped on metadata feeds the spend log and has to say so rather than
+    reporting the success the block check alone would have implied."""
+    guardrail = _surface_guardrail(mask_response_content=True)
+    request_data = {
+        "model": "gpt-4o-mini",
+        "input": "show me a card",
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_DEIDENTIFIED)):
+        delivered = await _drain_surface_hook(
+            guardrail, _responses_api_events(), request_data=request_data
+        )
+
+    body = _delivered_bytes(delivered)
+    assert b"4111-1111-1111-1111" not in body
+    assert b"Streaming response blocked by Model Armor" in body
+    assert request_data["metadata"]["_model_armor_status"] == "blocked"

@@ -348,19 +348,9 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         else:
             return {"modelResponseData": {"byteItem": {"byteDataType": file_type, "byteData": base64_data}}}
 
-    def _should_block_content(self, armor_response: dict, allow_sanitization: bool = False) -> bool:
+    def _should_block_content(self, armor_response: Mapping[str, Any], allow_sanitization: bool = False) -> bool:
         """Check if Model Armor response indicates content should be blocked, including both inspectResult and deidentifyResult."""
-        sanitization_result: Final = armor_response.get("sanitizationResult", {})
-        filter_results: Final = sanitization_result.get("filterResults", {})
-
-        # filterResults can be a dict (named keys) or a list (array of filter result dicts)
-        filter_result_items = []
-        if isinstance(filter_results, dict):
-            filter_result_items = list(filter_results.values())
-        elif isinstance(filter_results, list):
-            filter_result_items = filter_results
-
-        for filt in filter_result_items:
+        for filt in self._filter_result_items(armor_response):
             # Check RAI, PI/Jailbreak, Malicious URI, CSAM, Virus scan as before
             if filt.get("raiFilterResult", {}).get("matchState") == "MATCH_FOUND":
                 return True
@@ -384,22 +374,12 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         # Fallback dict code removed; all cases handled above
         return False
 
-    def _get_sanitized_content(self, armor_response: dict) -> str | None:
+    def _get_sanitized_content(self, armor_response: Mapping[str, Any]) -> str | None:
         """
         Get the sanitized content from a Model Armor response, if available.
         Looks for sanitized text in deidentifyResult, and falls back to root-level fields if not found.
         """
-        result: Final = armor_response.get("sanitizationResult", {})
-        filter_results: Final = result.get("filterResults", {})
-
-        # filterResults can be a dict (single filter) or a list (multiple filters)
-        filters: Final = (
-            list(filter_results.values())
-            if isinstance(filter_results, dict)
-            else filter_results
-            if isinstance(filter_results, list)
-            else []
-        )
+        filters: Final = self._filter_result_items(armor_response)
 
         # Prefer sanitized text from deidentifyResult if present
         for filter_entry in filters:
@@ -422,6 +402,61 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         # Fallback: if Model Armor put sanitized text at the root, use it
         return armor_response.get("sanitizedText") or armor_response.get("text")
+
+    @staticmethod
+    def _filter_result_items(armor_response: Mapping[str, Any]) -> Sequence[Any]:
+        """Every filter result in a scan response.
+
+        filterResults is a dict of named filters on most templates and a list on some, so both
+        shapes are flattened to the same list of filter entries.
+        """
+        filter_results: Final = armor_response.get("sanitizationResult", {}).get("filterResults", {})
+        if isinstance(filter_results, dict):
+            return list(filter_results.values())
+        if isinstance(filter_results, list):
+            return filter_results
+        return []
+
+    def _has_deidentify_match(self, armor_response: Mapping[str, Any]) -> bool:
+        """Whether an SDP de-identify filter matched, i.e. Model Armor owes this response a redaction."""
+        for filter_entry in self._filter_result_items(armor_response):
+            sdp = filter_entry.get("sdpFilterResult")
+            if sdp and sdp.get("deidentifyResult", {}).get("matchState") == "MATCH_FOUND":
+                return True
+        return False
+
+    def _resolve_streaming_outcome(
+        self,
+        armor_response: Mapping[str, Any],
+        assembled_response: object,
+        content: str,
+    ) -> tuple[bool, str | None]:
+        """Whether to block the buffered stream, and the rewrite to emit when it is not blocked.
+
+        A de-identify match only reaches here unblocked because masking is on, so the redaction it
+        stands for has to be both resolvable and emittable. Where it is neither, the buffered
+        original still carries what Model Armor matched on, so this fails closed instead of
+        releasing it.
+        """
+        if self._should_block_content(armor_response, allow_sanitization=self.mask_response_content):
+            return True, None
+        if not self.mask_response_content:
+            return False, None
+
+        sanitized_content: Final = self._get_sanitized_content(armor_response)
+        if not sanitized_content:
+            # No rewrite to apply. Harmless unless a match is outstanding, in which case applying
+            # nothing would hand back the very content that matched
+            return self._has_deidentify_match(armor_response), None
+        if sanitized_content == content:
+            return False, None
+        if not isinstance(assembled_response, ModelResponse):
+            verbose_proxy_logger.warning(
+                "Model Armor: sanitized content cannot be re-emitted on this streaming endpoint, "
+                "blocking the response instead"
+            )
+            return True, None
+        return False, sanitized_content
 
     @staticmethod
     def _append_armor_response(existing: object, armor_response: Mapping[str, object]) -> object:
@@ -1061,23 +1096,26 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 request_data=request_data,
             )
 
+            # Decide the outcome before recording it. Mirrors the non-streaming sibling: with
+            # masking on, a de-identify match is a redaction to apply rather than a refusal, but
+            # that only holds while the redaction can actually be delivered
+            blocked, sanitized_content = self._resolve_streaming_outcome(
+                armor_response=armor_response,
+                assembled_response=assembled_response,
+                content=content,
+            )
+
             # Attach Model Armor response & status to this request's metadata to avoid race conditions
             if isinstance(request_data, dict):
                 _, metadata = get_or_create_metadata_bucket(request_data)
                 metadata["_model_armor_response"] = self._build_logging_response(armor_response)
-                metadata["_model_armor_status"] = (
-                    "blocked"
-                    if self._should_block_content(armor_response, allow_sanitization=self.mask_response_content)
-                    else "success"
-                )
+                metadata["_model_armor_status"] = "blocked" if blocked else "success"
 
             # Add guardrail to applied_guardrails BEFORE potential blocking
             # This ensures guardrail is recorded even when it blocks the request
             add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
 
-            # Check if blocked. Mirrors the non-streaming sibling: with masking on, a de-identify
-            # match is a redaction to apply below, not a refusal
-            if self._should_block_content(armor_response, allow_sanitization=self.mask_response_content):
+            if blocked:
                 raise HTTPException(
                     status_code=400,
                     detail=self._build_block_error_detail(
@@ -1086,35 +1124,18 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                     ),
                 )
 
-            # Apply sanitization if enabled
-            if self.mask_response_content:
-                sanitized_content: Final = self._get_sanitized_content(armor_response)
-                if sanitized_content and sanitized_content != content:
-                    if not isinstance(assembled_response, ModelResponse):
-                        verbose_proxy_logger.warning(
-                            "Model Armor: sanitized content cannot be re-emitted on this "
-                            "streaming endpoint, blocking the response instead"
-                        )
-                        raise HTTPException(
-                            status_code=400,
-                            detail=self._build_block_error_detail(
-                                "Streaming response blocked by Model Armor",
-                                armor_response,
-                            ),
-                        )
+            if sanitized_content is not None and isinstance(assembled_response, ModelResponse):
+                self._apply_sanitized_content(assembled_response, sanitized_content)
 
-                    # Update assembled response
-                    self._apply_sanitized_content(assembled_response, sanitized_content)
-
-                    # Return sanitized stream
-                    if surface is _StreamSurface.ANTHROPIC_MESSAGES:
-                        for sse_chunk in anthropic_sse_chunks_from_response(assembled_response):
-                            yield sse_chunk
-                        return
-                    mock_response: Final = MockResponseIterator(model_response=assembled_response)
-                    async for chunk in mock_response:
-                        yield chunk
+                # Return sanitized stream
+                if surface is _StreamSurface.ANTHROPIC_MESSAGES:
+                    for sse_chunk in anthropic_sse_chunks_from_response(assembled_response):
+                        yield sse_chunk
                     return
+                mock_response: Final = MockResponseIterator(model_response=assembled_response)
+                async for chunk in mock_response:
+                    yield chunk
+                return
 
         except ModelArmorAPIError as e:
             if self.optional_params.get("fail_on_error", True):
