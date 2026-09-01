@@ -16,7 +16,6 @@ from unittest.mock import MagicMock
 
 def test_qostodian_nexus_initialization_with_defaults():
     """Test QostodianNexus initializes with default values."""
-    import os
     from unittest.mock import patch
     from litellm.proxy.guardrails.guardrail_hooks.qohash import QostodianNexus
 
@@ -171,7 +170,6 @@ def test_qostodian_nexus_get_config_model():
 
 def test_qostodian_nexus_env_vars():
     """Test that QOSTODIAN_NEXUS_API_BASE env var is picked up correctly."""
-    import os
     from unittest.mock import patch
     from litellm.proxy.guardrails.guardrail_hooks.qohash import QostodianNexus
 

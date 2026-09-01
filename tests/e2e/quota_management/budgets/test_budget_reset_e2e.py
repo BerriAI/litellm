@@ -102,21 +102,6 @@ class TestBudgetResetPerLevel:
         _drive_to_block(client, key)
         _poll_until_serves_again(client, key)
 
-    @pytest.mark.covers("quota_management.budget.internal_user.resets_after_window")
-    def test_team_member_key_user_budget_resets_after_window(
-        self, client: BudgetClient, resources: ResourceManager
-    ) -> None:
-        user_id = client.create_user(max_budget=TINY_CAP, budget_duration=WINDOW)
-        resources.defer(lambda: client.delete_user(user_id))
-        team_id = client.create_team(alias=f"e2e-user-team-reset-{unique_marker()}")
-        resources.defer(lambda: client.delete_team(team_id))
-        client.add_team_member(team_id, user_id, max_budget_in_team=100.0)
-        key = client.generate_key(team_id=team_id, user_id=user_id)
-        resources.defer(lambda: client.delete_key(key))
-
-        _drive_to_block(client, key)
-        _poll_until_serves_again(client, key)
-
 
 class TestKeyBudgetResetAcrossKeyKinds:
     """The tiny max_budget and its 30s window sit on the key itself while the user,

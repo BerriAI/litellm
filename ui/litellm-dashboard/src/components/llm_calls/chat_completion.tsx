@@ -1,9 +1,26 @@
 import openai from "openai";
-import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import { ChatCompletion, ChatCompletionChunk, ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { VectorStoreSearchResponse } from "../chat_ui/types";
 import { getProxyBaseUrl } from "@/components/networking";
 import { MCPServer, MCPToolset, type MCPEvent } from "@/components/mcp_tools/types";
+import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
+
+const completionAsSingleChunk = (completion: ChatCompletion): ChatCompletionChunk =>
+  ({
+    id: completion.id,
+    object: "chat.completion.chunk",
+    created: completion.created,
+    model: completion.model,
+    usage: completion.usage,
+    choices: [
+      {
+        index: 0,
+        finish_reason: completion.choices[0]?.finish_reason ?? null,
+        delta: completion.choices[0]?.message ?? {},
+      },
+    ],
+  }) as unknown as ChatCompletionChunk;
 
 export async function makeOpenAIChatCompletionRequest(
   chatHistory: { role: string; content: string | any[] }[],
@@ -31,6 +48,7 @@ export async function makeOpenAIChatCompletionRequest(
   onMCPEvent?: (event: MCPEvent) => void,
   mockTestFallbacks?: boolean,
   mcpToolsets?: MCPToolset[],
+  streamingEnabled: boolean = true,
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
@@ -55,10 +73,7 @@ export async function makeOpenAIChatCompletionRequest(
     const startTime = Date.now();
     let firstTokenReceived = false;
     let timeToFirstToken: number | undefined = undefined;
-
-    // For collecting complete response text
-    let fullResponseContent = "";
-    let fullReasoningContent = "";
+    let servedFromResponseCache = false;
 
     // Track MCP metadata cumulatively across chunks
     let mcpMetadata: {
@@ -111,26 +126,31 @@ export async function makeOpenAIChatCompletionRequest(
       }
     }
 
-    // @ts-ignore
-    const response = await client.chat.completions.create(
-      {
-        model: selectedModel,
-        stream: true,
-        stream_options: {
-          include_usage: true,
-        },
-        litellm_trace_id: traceId,
-        messages: chatHistory as ChatCompletionMessageParam[],
-        ...(vector_store_ids ? { vector_store_ids } : {}),
-        ...(guardrails ? { guardrails } : {}),
-        ...(policies ? { policies } : {}),
-        ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
-        ...(temperature !== undefined ? { temperature } : {}),
-        ...(max_tokens !== undefined ? { max_tokens } : {}),
-        ...(mockTestFallbacks ? { mock_testing_fallbacks: true } : {}),
-      },
-      { signal },
-    );
+    const requestBody = {
+      model: selectedModel,
+      litellm_trace_id: traceId,
+      messages: chatHistory as ChatCompletionMessageParam[],
+      ...(vector_store_ids ? { vector_store_ids } : {}),
+      ...(guardrails ? { guardrails } : {}),
+      ...(policies ? { policies } : {}),
+      ...(tools.length > 0 ? { tools, tool_choice: "auto" as const } : {}),
+      ...(temperature !== undefined ? { temperature } : {}),
+      ...(max_tokens !== undefined ? { max_tokens } : {}),
+      ...(mockTestFallbacks ? { mock_testing_fallbacks: true } : {}),
+    };
+
+    const response: AsyncIterable<ChatCompletionChunk> | ChatCompletionChunk[] = streamingEnabled
+      ? await client.chat.completions.create(
+          { ...requestBody, stream: true, stream_options: { include_usage: true } },
+          { signal },
+        )
+      : await (async () => {
+          const nonStreamingResponse = await client.chat.completions
+            .create({ ...requestBody, stream: false }, { signal })
+            .withResponse();
+          servedFromResponseCache = nonStreamingResponse.response.headers.get("x-litellm-cache-key") !== null;
+          return [completionAsSingleChunk(nonStreamingResponse.data)];
+        })();
 
     for await (const chunk of response) {
       // Process content and measure time to first token
@@ -142,7 +162,7 @@ export async function makeOpenAIChatCompletionRequest(
       if (!firstTokenReceived && (chunk.choices[0]?.delta?.content || (delta && delta.reasoning_content))) {
         firstTokenReceived = true;
         timeToFirstToken = Date.now() - startTime;
-        if (onTimingData) {
+        if (onTimingData && streamingEnabled) {
           onTimingData(timeToFirstToken);
         }
       }
@@ -151,7 +171,6 @@ export async function makeOpenAIChatCompletionRequest(
       if (chunk.choices[0]?.delta?.content) {
         const content = chunk.choices[0].delta.content;
         updateUI(content, chunk.model);
-        fullResponseContent += content;
       }
 
       // Process image generation if present
@@ -165,7 +184,6 @@ export async function makeOpenAIChatCompletionRequest(
         if (onReasoningContent) {
           onReasoningContent(reasoningContent);
         }
-        fullReasoningContent += reasoningContent;
       }
 
       // Check for search results in provider_specific_fields
@@ -216,6 +234,8 @@ export async function makeOpenAIChatCompletionRequest(
           completionTokens: chunkWithUsage.usage.completion_tokens,
           promptTokens: chunkWithUsage.usage.prompt_tokens,
           totalTokens: chunkWithUsage.usage.total_tokens,
+          ...extractPromptCacheTokens(chunkWithUsage.usage),
+          ...(servedFromResponseCache ? { servedFromResponseCache: true } : {}),
         };
 
         // Check for reasoning tokens

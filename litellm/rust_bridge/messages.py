@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Awaitable, Final, Protocol, Union, cast
+from typing import Final, Protocol, cast
 
 import httpx
 
@@ -70,7 +71,7 @@ def load_rust_messages() -> RustMessages | None:
         return _STATE.messages
     from litellm.rust_bridge import get_native_bridge
 
-    native_bridge = get_native_bridge()
+    native_bridge: Final = get_native_bridge()
     if native_bridge is None:
         return None
     return cast(RustMessages, getattr(native_bridge, "messages", None))
@@ -81,7 +82,7 @@ def load_rust_amessages() -> RustAmessages | None:
         return _STATE.amessages
     from litellm.rust_bridge import get_native_bridge
 
-    native_bridge = get_native_bridge()
+    native_bridge: Final = get_native_bridge()
     if native_bridge is None:
         return None
     return cast(RustAmessages, getattr(native_bridge, "amessages", None))
@@ -95,9 +96,9 @@ def messages(
     api_base: str | None,
     custom_llm_provider: str | None,
     extra_headers: dict[str, object] | None,
-    timeout: Union[float, httpx.Timeout] | None,
+    timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
-    rust_messages = load_rust_messages()
+    rust_messages: Final = load_rust_messages()
     if rust_messages is None:
         return None
     return rust_messages(
@@ -119,9 +120,9 @@ async def amessages(
     api_base: str | None,
     custom_llm_provider: str | None,
     extra_headers: dict[str, object] | None,
-    timeout: Union[float, httpx.Timeout] | None,
+    timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
-    rust_amessages = load_rust_amessages()
+    rust_amessages: Final = load_rust_amessages()
     if rust_amessages is None:
         return None
     return await rust_amessages(

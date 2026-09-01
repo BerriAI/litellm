@@ -1,4 +1,5 @@
 import traceback
+from typing import Final
 
 from litellm._logging import verbose_logger
 
@@ -15,7 +16,9 @@ class TraceloopLogger:
             from traceloop.sdk.tracing.tracing import TracerWrapper
         except ModuleNotFoundError as e:
             verbose_logger.error(
-                f"Traceloop not installed, try running 'pip install traceloop-sdk' to fix this error: {e}\n{traceback.format_exc()}"
+                "Traceloop not installed, try running 'pip install traceloop-sdk' to fix this error: %s\n%s",
+                e,
+                traceback.format_exc(),
             )
             raise e
 
@@ -42,12 +45,12 @@ class TraceloopLogger:
         try:
             print_verbose(f"Traceloop Logging - Enters logging function for model {kwargs}")
 
-            tracer = self.tracer_wrapper.get_tracer()
+            tracer: Final = self.tracer_wrapper.get_tracer()
 
-            optional_params = kwargs.get("optional_params", {})
+            optional_params: Final = kwargs.get("optional_params", {})
             start_time = int(start_time.timestamp())
             end_time = int(end_time.timestamp())
-            span = tracer.start_span("litellm.completion", kind=SpanKind.CLIENT, start_time=start_time)
+            span: Final = tracer.start_span("litellm.completion", kind=SpanKind.CLIENT, start_time=start_time)
 
             if span.is_recording():
                 span.set_attribute(SpanAttributes.LLM_REQUEST_MODEL, kwargs.get("model"))
@@ -82,7 +85,7 @@ class TraceloopLogger:
                     )
                 if "temperature" in optional_params:
                     span.set_attribute(
-                        SpanAttributes.LLM_REQUEST_TEMPERATURE,  # type: ignore
+                        SpanAttributes.LLM_REQUEST_TEMPERATURE,
                         kwargs.get("temperature"),
                     )
 
@@ -97,7 +100,7 @@ class TraceloopLogger:
                     )
 
                 span.set_attribute(SpanAttributes.LLM_RESPONSE_MODEL, response_obj.get("model"))
-                usage = response_obj.get("usage")
+                usage: Final = response_obj.get("usage")
                 if usage:
                     span.set_attribute(
                         SpanAttributes.LLM_USAGE_TOTAL_TOKENS,

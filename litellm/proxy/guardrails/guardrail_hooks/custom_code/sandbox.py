@@ -14,8 +14,11 @@ We subclass it to permit those specific nodes, while keeping every other
 restriction intact.
 """
 
+import ast
 import operator
-from typing import Any, Dict
+from collections.abc import Callable, Mapping
+from types import CodeType
+from typing import Final
 
 from RestrictedPython import (
     RestrictingNodeTransformer,
@@ -45,20 +48,20 @@ class AsyncAwareTransformer(RestrictingNodeTransformer):
     ``node_contents_visit`` so their children still get transformed.
     """
 
-    def visit_AsyncFunctionDef(self, node: Any) -> Any:
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AST:
         return self.visit_FunctionDef(node)
 
-    def visit_AsyncFor(self, node: Any) -> Any:
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> ast.AST:
         return self.node_contents_visit(node)
 
-    def visit_AsyncWith(self, node: Any) -> Any:
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> ast.AST:
         return self.node_contents_visit(node)
 
-    def visit_Await(self, node: Any) -> Any:
+    def visit_Await(self, node: ast.Await) -> ast.AST:
         return self.node_contents_visit(node)
 
 
-_INPLACE_OPS: Dict[str, Any] = {
+_INPLACE_OPS: Final[Mapping[str, Callable[[object, object], object]]] = {
     "+=": operator.iadd,
     "-=": operator.isub,
     "*=": operator.imul,
@@ -75,18 +78,18 @@ _INPLACE_OPS: Dict[str, Any] = {
 }
 
 
-def _inplacevar_(op: str, x: Any, y: Any) -> Any:
+def _inplacevar_(op: str, x: object, y: object) -> object:
     # RestrictedPython rewrites ``x += 1`` on a simple name into
     # ``x = _inplacevar_("+=", x, 1)``. The package deliberately ships no
     # default, so we dispatch through ``operator``'s in-place helpers, which
     # honour Python's normal ``__iadd__``/``__add__`` fallback.
-    fn = _INPLACE_OPS.get(op)
+    fn: Final = _INPLACE_OPS.get(op)
     if fn is None:
         raise SyntaxError(f"augmented assignment {op!r} is not supported")
     return fn(x, y)
 
 
-def _build_sandbox_builtins() -> Dict[str, Any]:
+def _build_sandbox_builtins() -> dict[str, object]:
     # ``limited_builtins`` overrides ``list``/``tuple``/``range`` from
     # ``safe_builtins`` with bounds-checking variants (e.g. ``limited_range``
     # rejects ``range(10**18)``). ``utility_builtins`` adds ``set``,
@@ -98,25 +101,26 @@ def _build_sandbox_builtins() -> Dict[str, Any]:
     }
 
 
-def build_sandbox_globals() -> Dict[str, Any]:
+def build_sandbox_globals() -> dict[str, object]:
     """Assemble the globals dict for executing guardrail code.
 
     Includes the LiteLLM-provided primitives (``regex_match``, ``http_get``,
     ``allow``/``block``/``modify``, etc.) plus the RestrictedPython guards
     that the compiled bytecode expects to find by name.
     """
-    sandbox: Dict[str, Any] = get_custom_code_primitives().copy()
-    sandbox["__builtins__"] = _build_sandbox_builtins()
-    sandbox["_getattr_"] = safer_getattr
-    sandbox["_getitem_"] = default_guarded_getitem
-    sandbox["_getiter_"] = default_guarded_getiter
-    sandbox["_iter_unpack_sequence_"] = guarded_iter_unpack_sequence
-    sandbox["_write_"] = full_write_guard
-    sandbox["_inplacevar_"] = _inplacevar_
-    return sandbox
+    return {
+        **get_custom_code_primitives(),
+        "__builtins__": _build_sandbox_builtins(),
+        "_getattr_": safer_getattr,
+        "_getitem_": default_guarded_getitem,
+        "_getiter_": default_guarded_getiter,
+        "_iter_unpack_sequence_": guarded_iter_unpack_sequence,
+        "_write_": full_write_guard,
+        "_inplacevar_": _inplacevar_,
+    }
 
 
-def compile_sandboxed(source: str, filename: str = "<guardrail>") -> Any:
+def compile_sandboxed(source: str, filename: str = "<guardrail>") -> CodeType:
     """Compile guardrail source with RestrictedPython's AST transformer.
 
     Raises ``SyntaxError`` on either a Python syntax error or a restricted

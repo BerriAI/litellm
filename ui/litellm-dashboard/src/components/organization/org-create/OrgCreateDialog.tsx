@@ -6,8 +6,8 @@ import * as React from "react";
 import { organizationKeys } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { ModelSelect } from "@/components/ModelSelect/ModelSelect";
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
-import NotificationsManager from "@/components/molecules/notifications_manager";
-import { FieldGroup } from "@/components/shared/form/field";
+import { toast } from "@/lib/toast";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -51,12 +51,12 @@ export const OrgCreateDialog = ({
   const mutation = useMutation({
     mutationFn: (body: OrgCreateBody) => createOrganization(body),
     onSuccess: () => {
-      NotificationsManager.success("Organization created successfully");
+      toast.success("Organization created successfully");
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
       closeAndReset();
     },
     onError: (error: unknown) =>
-      NotificationsManager.fromBackend(error instanceof Error ? error.message : "Failed to create organization"),
+      toast.fromError(error instanceof Error ? error.message : "Failed to create organization"),
   });
 
   const handleOpenChange = (nextOpen: boolean) => {
@@ -79,7 +79,7 @@ export const OrgCreateDialog = ({
           <DialogTitle>Create Organization</DialogTitle>
         </DialogHeader>
 
-        <form onSubmit={onSubmit}>
+        <form onSubmit={onSubmit} noValidate>
           <FieldGroup>
             <FormField control={form.control} name="organization_alias" label="Organization Name">
               {({ ref, ...field }) => <Input {...field} ref={ref} />}
@@ -97,7 +97,7 @@ export const OrgCreateDialog = ({
             </FormField>
 
             <FormField control={form.control} name="max_budget" label="Max Budget (USD)">
-              {({ ref, ...field }) => <Input {...field} ref={ref} type="number" step={0.01} min={0} />}
+              {({ ref, ...field }) => <Input {...field} ref={ref} type="number" step="any" min={0} />}
             </FormField>
 
             <FormField control={form.control} name="budget_duration" label="Reset Budget">

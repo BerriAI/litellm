@@ -133,6 +133,50 @@ def test_get_key_models_passes_include_model_access_groups():
     assert "model2" in result
 
 
+def test_get_key_models_keeps_literal_model_colliding_with_group_name():
+    """A name that is BOTH a deployed model and an access group grants both at
+    runtime (_check_model_access_helper unions them), so the listing must keep
+    the literal model alongside the group members instead of dropping it."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.model_checks import get_key_models
+
+    user_api_key_dict = UserAPIKeyAuth(models=["beta-models"], api_key="test-key")
+
+    result = get_key_models(
+        user_api_key_dict=user_api_key_dict,
+        proxy_model_list=["beta-models", "member-a", "unrelated"],
+        model_access_groups={"beta-models": ["member-a"]},
+        include_model_access_groups=False,
+    )
+    assert sorted(result) == ["beta-models", "member-a"]
+
+
+def test_get_team_models_keeps_literal_model_colliding_with_group_name():
+    """Team flavor of the collision case: literal deployment survives group expansion."""
+    from litellm.proxy.auth.model_checks import get_team_models
+
+    result = get_team_models(
+        team_models=["beta-models"],
+        proxy_model_list=["beta-models", "member-a", "unrelated"],
+        model_access_groups={"beta-models": ["member-a"]},
+        include_model_access_groups=False,
+    )
+    assert sorted(result) == ["beta-models", "member-a"]
+
+
+def test_get_team_models_drops_group_name_that_is_not_a_deployed_model():
+    """No collision: a pure access-group name is still replaced by its members."""
+    from litellm.proxy.auth.model_checks import get_team_models
+
+    result = get_team_models(
+        team_models=["beta-models"],
+        proxy_model_list=["member-a", "unrelated"],
+        model_access_groups={"beta-models": ["member-a"]},
+        include_model_access_groups=False,
+    )
+    assert result == ["member-a"]
+
+
 def test_get_key_models_does_not_mutate_input():
     """
     get_key_models must not mutate user_api_key_dict.models in-place.
@@ -656,7 +700,6 @@ def test_expand_wildcard_deployments_non_wildcard_passthrough():
 
 def test_expand_wildcard_deployments_openai_wildcard():
     """openai/* should expand into ≥1 known openai model entries."""
-    from unittest.mock import patch
 
     from litellm.proxy.auth.model_checks import (
         expand_wildcard_deployments_for_model_info,
@@ -709,3 +752,54 @@ def test_expand_wildcard_invalid_litellm_params_passthrough():
     # Even if LiteLLM_Params construction fails the deployment should survive
     result = expand_wildcard_deployments_for_model_info([deployment])
     assert result == [deployment]
+
+
+def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
+    """models_by_provider was a frozen import-time snapshot of set unions, so cost map
+    reloads (which call add_known_models) never reached wildcard expansion until a
+    process restart (LIT-4947)."""
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    fake_model = "vertex_ai/gemini-lit4947-regression"
+    captured_reference = litellm.models_by_provider
+    assert fake_model not in litellm.models_by_provider["vertex_ai"]
+    try:
+        litellm.add_known_models(
+            model_cost_map={
+                fake_model: {"litellm_provider": "vertex_ai-language-models", "mode": "chat"}
+            }
+        )
+        assert fake_model in litellm.models_by_provider["vertex_ai"]
+        assert litellm.models_by_provider is captured_reference
+        assert fake_model in captured_reference["vertex_ai"]
+        assert fake_model in get_known_models_from_wildcard("vertex_ai/*")
+    finally:
+        litellm.vertex_language_models.discard(fake_model)
+        litellm.add_known_models(model_cost_map={})
+    assert fake_model not in litellm.models_by_provider["vertex_ai"]
+
+def test_get_complete_model_list_drops_no_default_models_sentinel():
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    result = get_complete_model_list(
+        key_models=["no-default-models", "model-a"],
+        team_models=[],
+        proxy_model_list=["model-a", "model-b"],
+        user_model=None,
+        infer_model_from_keys=False,
+    )
+    assert result == ["model-a"]
+
+
+def test_get_complete_model_list_sentinel_only_grants_nothing():
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    result = get_complete_model_list(
+        key_models=["no-default-models"],
+        team_models=["no-default-models"],
+        proxy_model_list=["model-a", "model-b"],
+        user_model=None,
+        infer_model_from_keys=False,
+    )
+    assert result == []

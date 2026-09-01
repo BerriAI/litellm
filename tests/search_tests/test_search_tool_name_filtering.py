@@ -6,10 +6,7 @@ which search tool configuration to use, but should not be sent to external
 search provider APIs.
 """
 
-import sys
-import os
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.types.utils import all_litellm_params
 from litellm.utils import filter_out_litellm_params

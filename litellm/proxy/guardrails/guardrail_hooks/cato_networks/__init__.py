@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -14,7 +14,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         CatoNetworksGuardrail,
     )
 
-    _cato_callback = CatoNetworksGuardrail(
+    _cato_callback: Final = CatoNetworksGuardrail(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
         guardrail_name=guardrail.get("guardrail_name", ""),
@@ -27,11 +27,11 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return _cato_callback
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.CATO_NETWORKS.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.CATO_NETWORKS.value: CatoNetworksGuardrail,
 }

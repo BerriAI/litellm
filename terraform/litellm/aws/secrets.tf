@@ -10,6 +10,7 @@ resource "random_password" "master_key" {
 # user (see rds.tf header). Runtime services authenticate via IAM tokens
 # and never read this secret.
 resource "random_password" "db_master_password" {
+  count       = var.create_database ? 1 : 0
   length      = 32
   special     = false
   min_lower   = 4
@@ -130,6 +131,7 @@ resource "aws_secretsmanager_secret_version" "billing_metrics_ca_cert" {
 }
 
 resource "aws_secretsmanager_secret" "db_master_password" {
+  count                   = var.create_database ? 1 : 0
   name                    = "${local.name}-db-master-password"
   description             = "Aurora master-user password - bootstrap only. Runtime auth is IAM-token."
   recovery_window_in_days = 0
@@ -138,12 +140,50 @@ resource "aws_secretsmanager_secret" "db_master_password" {
 }
 
 resource "aws_secretsmanager_secret_version" "db_master_password" {
-  secret_id = aws_secretsmanager_secret.db_master_password.id
+  count     = var.create_database ? 1 : 0
+  secret_id = aws_secretsmanager_secret.db_master_password[0].id
   secret_string = jsonencode({
     username = var.db_master_username
-    password = random_password.db_master_password.result
-    host     = aws_rds_cluster.this.endpoint
-    port     = aws_rds_cluster.this.port
+    password = random_password.db_master_password[0].result
+    host     = aws_rds_cluster.this[0].endpoint
+    port     = aws_rds_cluster.this[0].port
     dbname   = var.db_name
   })
+}
+
+# Bring-your-own connection strings. Both hold credentials, so they go to
+# Secrets Manager and reach the containers as ECS `secrets` rather than as
+# plain-text env in the task definition.
+resource "aws_secretsmanager_secret" "database_url" {
+  count = local.byo_database ? 1 : 0
+
+  name                    = "${local.name}-database-url"
+  description             = "DATABASE_URL for an existing Postgres, used when create_database = false."
+  recovery_window_in_days = 0
+
+  tags = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "database_url" {
+  count = local.byo_database ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.database_url[0].id
+  secret_string = var.database_url
+}
+
+resource "aws_secretsmanager_secret" "redis_url" {
+  count = local.byo_redis ? 1 : 0
+
+  name                    = "${local.name}-redis-url"
+  description             = "REDIS_URL for an existing Redis, used when create_redis = false."
+  recovery_window_in_days = 0
+
+  tags = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "redis_url" {
+  count = local.byo_redis ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.redis_url[0].id
+  secret_string = var.redis_url
 }

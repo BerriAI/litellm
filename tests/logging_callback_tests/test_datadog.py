@@ -1,6 +1,5 @@
 import io
 import os
-import sys
 
 from litellm.integrations.datadog.datadog_handler import (
     get_datadog_source,
@@ -11,7 +10,6 @@ from litellm.integrations.datadog.datadog_handler import (
     get_datadog_tags,
 )
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import asyncio
 import gzip

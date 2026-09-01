@@ -130,7 +130,7 @@ def test_fallback_login_invalid_method_405(client):
 
 
 def test_login_form_success_redirects_with_token_cookie(client, monkeypatch):
-    """Pin: POST /login with valid form returns a 303 redirect to /ui/ and
+    """Pin: POST /login with valid form returns a 303 redirect to /ui and
     sets the 'token' cookie."""
     _install_login_mocks(monkeypatch)
     response = client.post(
@@ -142,7 +142,7 @@ def test_login_form_success_redirects_with_token_cookie(client, monkeypatch):
     set_cookie = response.headers.get("set-cookie", "")
     shape = {
         "status": response.status_code,
-        "location_has_ui": "/ui/" in location,
+        "location_has_ui": "/ui" in location,
         "location_has_login_success": "login=success" in location,
         "has_token_cookie": "token=" in set_cookie,
     }
@@ -190,7 +190,7 @@ def test_v2_login_success_returns_token_and_redirect(client, monkeypatch):
     body = response.json()
     set_cookie = response.headers.get("set-cookie", "")
     shape = {
-        "redirect_url_has_ui": "/ui/" in body.get("redirect_url", ""),
+        "redirect_url_has_ui": "/ui" in body.get("redirect_url", ""),
         "redirect_url_has_login_success": "login=success" in body.get("redirect_url", ""),
         "token_in_body": bool(body.get("token")),
         "token_cookie_set": "token=" in set_cookie,
@@ -359,7 +359,7 @@ def test_v3_login_exchange_success_returns_token_and_redirect(client, monkeypatc
 
     cached_payload = {
         "token": "jwt-token-xyz",
-        "redirect_url": "https://litellm.example.invalid/ui/?login=success",
+        "redirect_url": "https://litellm.example.invalid/ui?login=success",
     }
     fake_cache = MagicMock()
     fake_cache.async_get_cache = AsyncMock(return_value=cached_payload)
@@ -382,7 +382,7 @@ def test_v3_login_exchange_success_returns_token_and_redirect(client, monkeypatc
     }
     assert shape == {
         "token": "jwt-token-xyz",
-        "redirect_url": "https://litellm.example.invalid/ui/?login=success",
+        "redirect_url": "https://litellm.example.invalid/ui?login=success",
         "token_cookie_set": True,
         "cache_deleted_once": True,
     }
@@ -443,7 +443,7 @@ def test_login_form_survives_stale_control_plane_return_to(client, monkeypatch):
     assert response.status_code == 303, "login must not break on a stale return_to cookie"
     location = response.headers.get("location", "")
     assert "old-cp.example.com" not in location
-    assert "/ui/" in location
+    assert "/ui" in location
 
 
 def test_login_form_ignores_open_redirect_return_to(client, monkeypatch):
@@ -459,4 +459,4 @@ def test_login_form_ignores_open_redirect_return_to(client, monkeypatch):
     assert response.status_code == 303
     location = response.headers.get("location", "")
     assert "evil.example.com" not in location
-    assert "/ui/" in location  # dashboard fallback
+    assert "/ui" in location  # dashboard fallback

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -11,13 +11,13 @@ if TYPE_CHECKING:
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
 
-    guardrail_name = guardrail.get("guardrail_name")
+    guardrail_name: Final = guardrail.get("guardrail_name")
 
     # Note: api_key and profile_name can be None - handler will use env vars or API key's linked profile
     if not guardrail_name:
         raise ValueError("PANW Prisma AIRS: guardrail_name is required")
 
-    _panw_callback = PanwPrismaAirsHandler(
+    _panw_callback: Final = PanwPrismaAirsHandler(
         **{
             **litellm_params.model_dump(exclude_unset=True),
             "guardrail_name": guardrail_name,
@@ -30,11 +30,11 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return _panw_callback
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.PANW_PRISMA_AIRS.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.PANW_PRISMA_AIRS.value: PanwPrismaAirsHandler,
 }

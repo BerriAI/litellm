@@ -19,7 +19,10 @@ async fn handle(...) -> impl IntoResponse { ... }
 When a route has business logic worth testing without axum, put it in a sibling
 `service` (a file, or a folder if the route grows). The route file stays the
 **axum surface** (router + handler + any socket/SSE adapter); `service` is plain
-Rust with **no axum types**. `realtime/` is the example:
+Rust with **no axum types**, and its job is to pick the deployment and call the
+`core` route entrypoint (see `messages/service.rs` calling
+`litellm_core::messages::messages`). Never build a provider request, resolve a
+key, or perform the provider call here. `realtime/` is the older example:
 ```
 realtime/
   mod.rs       # axum surface: router() + handler + the WS<->events adapter
@@ -33,6 +36,8 @@ genuinely gets hard to read.
   `crate::auth::RequireMasterKey` to its arguments; it runs during extraction.
   Never re-implement the check per route.
 - **Handlers contain no business logic; `service` contains no axum types.**
+- **No provider handlers in this crate.** Transforms, auth headers, and the
+  provider HTTP call live in `core/src/<route>/`.
 - A route owns its paths in its own `router()`; `mod.rs` only merges.
 - Cross-cutting concerns (logging, CORS, timeouts) → Tower layers in `mod.rs`,
   not duplicated in handlers.

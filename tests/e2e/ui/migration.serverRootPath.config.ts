@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { UI_BASE_URL } from "./constants";
 
 /**
  * App Router migration smoke under a non-root mount. Boot the proxy with the same
@@ -15,7 +16,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: "list",
   use: {
-    baseURL: "http://localhost:4000",
+    baseURL: UI_BASE_URL,
     trace: "on-first-retry",
     actionTimeout: 15 * 1000,
     navigationTimeout: 30 * 1000,

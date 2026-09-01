@@ -1,4 +1,5 @@
 import * as networking from "@/components/networking";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import ModelHubTable from "./ModelHubTable";
@@ -199,6 +200,41 @@ describe("ModelHubTable", () => {
     const modelHubPublicModelsCallOrder = modelHubPublicModelsCallMock.mock.invocationCallOrder[0];
 
     expect(getUiConfigCallOrder).toBeLessThan(modelHubPublicModelsCallOrder);
+  });
+
+  describe("hub tabs", () => {
+    const renderHub = async () => {
+      vi.mocked(networking.modelHubCall).mockResolvedValue({
+        data: [{ model_group: "claude-opus-4-8", providers: ["anthropic"], mode: "chat" }],
+      });
+      vi.mocked(networking.getConfigFieldSetting).mockResolvedValue({ field_value: false });
+      vi.mocked(networking.getAgentsList).mockResolvedValue({ agents: [] });
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+      vi.mocked(networking.getUiSettings).mockResolvedValue({ values: {} });
+      mockUseUISettings.mockReturnValue({ data: { values: {} }, isLoading: false });
+
+      const user = userEvent.setup();
+      renderWithProviders(
+        <ModelHubTable accessToken="test-token" publicPage={false} premiumUser={false} userRole="Admin" />,
+      );
+      return { user, search: await screen.findByPlaceholderText("Search model names...") };
+    };
+
+    it("keeps the model filter typed on the Model Hub tab after visiting another hub", async () => {
+      const { user, search } = await renderHub();
+
+      await user.type(search, "opus");
+      await user.click(screen.getByRole("tab", { name: "Agent Hub" }));
+      await user.click(screen.getByRole("tab", { name: "Model Hub" }));
+
+      expect(await screen.findByPlaceholderText("Search model names...")).toHaveValue("opus");
+    });
+
+    it("renders the hub strip as underlined tabs rather than a segmented pill", async () => {
+      await renderHub();
+
+      expect(screen.getByRole("tablist")).toHaveAttribute("data-variant", "line");
+    });
   });
 
   describe("authentication redirect behavior", () => {

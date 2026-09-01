@@ -1,7 +1,7 @@
-import { DateRangePickerValue } from "@tremor/react";
+import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useEffect, useState } from "react";
-import NotificationsManager from "@/components/molecules/notifications_manager";
-import UsageDatePicker from "@/components/shared/usage_date_picker";
+import { toast } from "@/lib/toast";
+import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { BarChart } from "@/components/shared/charts";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,21 +15,44 @@ import {
   ComboboxItem,
   ComboboxList,
   ComboboxValue,
+  useComboboxAnchor,
 } from "@/components/ui/combobox";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import { RefreshCw } from "lucide-react";
-import { adminGlobalCacheActivity, cachingHealthCheckCall } from "@/components/networking";
+import { cachingHealthCheckCall } from "@/components/networking";
+import { useCacheActivity, type CacheActivityGroup } from "@/app/(dashboard)/hooks/caching/useCacheActivity";
 
 // Import the new component
 import { CacheHealthTab } from "./cache_health";
 import CacheSettings from "./cache_settings";
 import CoordinationRedisSettings from "./coordination_redis_settings";
+import { ErrorDrilldownCard } from "./ErrorDrilldown";
+
+const REQUEST_SERIES = {
+  apiRequests: "LLM API requests",
+  cacheHits: "Cache hit",
+  failed: "Failed requests",
+} as const;
+
+const toChartDatum = (group: CacheActivityGroup) => ({
+  name: group.call_type,
+  [REQUEST_SERIES.apiRequests]: group.api_requests,
+  [REQUEST_SERIES.cacheHits]: group.cache_hits,
+  [REQUEST_SERIES.failed]: group.failed_requests,
+  "Cached Completion Tokens": group.cached_completion_tokens,
+  "Generated Completion Tokens": group.generated_completion_tokens,
+});
 
 const formatDateWithoutTZ = (date: Date | undefined) => {
   if (!date) return undefined;
   return date.toISOString().split("T")[0];
 };
+
+const resolveDrilldownCallType = (selected: string | null, groups: readonly CacheActivityGroup[]): string | null =>
+  selected !== null && groups.some((group) => group.call_type === selected && group.failed_requests > 0)
+    ? selected
+    : null;
 
 function valueFormatterNumbers(number: number) {
   const formatter = new Intl.NumberFormat("en-US", {
@@ -49,61 +72,14 @@ interface CachePageProps {
   premiumUser: boolean;
 }
 
-interface cacheDataItem {
-  api_key: string;
-  model: string;
-  cache_hit_true_rows: number;
-  cached_completion_tokens: number;
-  total_rows: number;
-  generated_completion_tokens: number;
-  call_type: string;
-
-  // Add other properties as needed
-}
-
-type uiData = {
-  name: string;
-  "LLM API requests": number;
-  "Cache hit": number;
-  "Cached Completion Tokens": number;
-  "Generated Completion Tokens": number;
-};
-
-interface CacheHealthResponse {
-  status?: string;
-  cache_type?: string;
-  ping_response?: boolean;
-  set_cache_response?: string;
-  litellm_cache_params?: string;
-  error?: {
-    message: string;
-    type: string;
-    param: string;
-    code: string;
-  };
-}
-
 // Helper function to deep-parse a JSON string if possible
-const deepParse = (input: any) => {
-  let parsed = input;
-  if (typeof parsed === "string") {
-    try {
-      parsed = JSON.parse(parsed);
-    } catch {
-      return parsed;
-    }
-  }
-  return parsed;
-};
 
 const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole, userID, premiumUser }) => {
-  const [filteredData, setFilteredData] = useState<uiData[]>([]);
+  const anchor1 = useComboboxAnchor();
+  const anchor2 = useComboboxAnchor();
   const [selectedApiKeys, setSelectedApiKeys] = useState<string[]>([]);
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
-  const [data, setData] = useState<cacheDataItem[]>([]);
-  const [cachedResponses, setCachedResponses] = useState("0");
-  const [cachedTokens, setCachedTokens] = useState("0");
-  const [cacheHitRatio, setCacheHitRatio] = useState("0");
+  const [errorDrilldownCallType, setErrorDrilldownCallType] = useState<string | null>(null);
 
   const [dateValue, setDateValue] = useState<DateRangePickerValue>({
     from: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
@@ -113,125 +89,30 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
   const [lastRefreshed, setLastRefreshed] = useState("");
   const [healthCheckResponse, setHealthCheckResponse] = useState<any>("");
 
-  useEffect(() => {
-    if (!accessToken || !dateValue) {
-      return;
-    }
-    const fetchData = async () => {
-      const response = await adminGlobalCacheActivity(
-        accessToken,
-        formatDateWithoutTZ(dateValue.from),
-        formatDateWithoutTZ(dateValue.to),
-      );
-      setData(response);
-    };
-    fetchData();
-
-    const currentDate = new Date();
-    setLastRefreshed(currentDate.toLocaleString());
-  }, [accessToken]);
-
-  const uniqueApiKeys = Array.from(new Set(data.map((item) => item?.api_key ?? "")));
-  const uniqueModels = Array.from(new Set(data.map((item) => item?.model ?? "")));
-  const uniqueCallTypes = Array.from(new Set(data.map((item) => item?.call_type ?? "")));
-
-  const updateCachingData = async (startTime: Date | undefined, endTime: Date | undefined) => {
-    if (!startTime || !endTime || !accessToken) {
-      return;
-    }
-
-    let new_cache_data = await adminGlobalCacheActivity(
-      accessToken,
-      formatDateWithoutTZ(startTime),
-      formatDateWithoutTZ(endTime),
-    );
-
-    setData(new_cache_data);
-  };
+  const { data: activity, refetch } = useCacheActivity({
+    startDate: formatDateWithoutTZ(dateValue.from),
+    endDate: formatDateWithoutTZ(dateValue.to),
+    keyAliases: selectedApiKeys,
+    models: selectedModels,
+  });
 
   useEffect(() => {
-    let newData: cacheDataItem[] = data;
-    if (selectedApiKeys.length > 0) {
-      newData = newData.filter((item) => selectedApiKeys.includes(item.api_key));
-    }
+    setLastRefreshed(new Date().toLocaleString());
+  }, []);
 
-    if (selectedModels.length > 0) {
-      newData = newData.filter((item) => selectedModels.includes(item.model));
-    }
-
-    /* 
-    Data looks like this 
-    [{"api_key":"sk-test-mock-key-001","call_type":"acompletion","model":"llama3-8b-8192","total_rows":13,"cache_hit_true_rows":0},
-    {"api_key":"sk-test-mock-key-002","call_type":"None","model":"chatgpt-v-2","total_rows":1,"cache_hit_true_rows":0},
-    {"api_key":"sk-test-mock-key-123","call_type":"acompletion","model":"gpt-3.5-turbo","total_rows":19,"cache_hit_true_rows":0},
-    {"api_key":"sk-test-mock-key-123","call_type":"aimage_generation","model":"","total_rows":3,"cache_hit_true_rows":0},
-    {"api_key":"sk-test-mock-key-003","call_type":"None","model":"chatgpt-v-2","total_rows":1,"cache_hit_true_rows":0},
-    {"api_key":"sk-test-mock-key-004","call_type":"","model":"chatgpt-v-2","total_rows":1,"cache_hit_true_rows":0},
-    {"api_key":"sk-test-mock-key-005","call_type":"","model":"chatgpt-v-2","total_rows":1,"cache_hit_true_rows":0},
-    */
-
-    // What data we need for bar chat
-    // ui_data = [
-    //     {
-    //         name: "Call Type",
-    //         Cache hit: 20,
-    //         LLM API requests: 10,
-    //     }
-    // ]
-
-    let llm_api_requests = 0;
-    let cache_hits = 0;
-    let cached_tokens = 0;
-    const processedData = newData.reduce((acc: uiData[], item) => {
-      if (!item.call_type) {
-        item.call_type = "Unknown";
-      }
-
-      llm_api_requests += (item.total_rows || 0) - (item.cache_hit_true_rows || 0);
-      cache_hits += item.cache_hit_true_rows || 0;
-      cached_tokens += item.cached_completion_tokens || 0;
-
-      const existingItem = acc.find((i) => i.name === item.call_type);
-      if (existingItem) {
-        existingItem["LLM API requests"] += (item.total_rows || 0) - (item.cache_hit_true_rows || 0);
-        existingItem["Cache hit"] += item.cache_hit_true_rows || 0;
-        existingItem["Cached Completion Tokens"] += item.cached_completion_tokens || 0;
-        existingItem["Generated Completion Tokens"] += item.generated_completion_tokens || 0;
-      } else {
-        acc.push({
-          name: item.call_type,
-          "LLM API requests": (item.total_rows || 0) - (item.cache_hit_true_rows || 0),
-          "Cache hit": item.cache_hit_true_rows || 0,
-          "Cached Completion Tokens": item.cached_completion_tokens || 0,
-          "Generated Completion Tokens": item.generated_completion_tokens || 0,
-        });
-      }
-      return acc;
-    }, []);
-
-    // set header cache statistics
-    setCachedResponses(valueFormatterNumbers(cache_hits));
-    setCachedTokens(valueFormatterNumbers(cached_tokens));
-    let allRequests = cache_hits + llm_api_requests;
-    if (allRequests > 0) {
-      let cache_hit_ratio = ((cache_hits / allRequests) * 100).toFixed(2);
-      setCacheHitRatio(cache_hit_ratio);
-    } else {
-      setCacheHitRatio("0");
-    }
-
-    setFilteredData(processedData);
-  }, [selectedApiKeys, selectedModels, dateValue, data]);
+  const uniqueApiKeys = activity?.filter_options.key_aliases ?? [];
+  const uniqueModels = activity?.filter_options.models ?? [];
+  const chartData = (activity?.groups ?? []).map(toChartDatum);
+  const activeDrilldownCallType = resolveDrilldownCallType(errorDrilldownCallType, activity?.groups ?? []);
 
   const handleRefreshClick = () => {
-    // Update the 'lastRefreshed' state to the current date and time
-    const currentDate = new Date();
-    setLastRefreshed(currentDate.toLocaleString());
+    refetch();
+    setLastRefreshed(new Date().toLocaleString());
   };
 
   const runCachingHealthCheck = async () => {
     try {
-      NotificationsManager.info("Running cache health check...");
+      toast.info("Running cache health check...");
       setHealthCheckResponse("");
       const response = await cachingHealthCheckCall(accessToken !== null ? accessToken : "");
       setHealthCheckResponse(response);
@@ -257,26 +138,28 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
     }
   };
 
+  const totals = activity?.totals;
+  const hasRequests = totals != null && totals.api_requests + totals.cache_hits + totals.failed_requests > 0;
   const statCards = [
-    { label: "Cache Hit Ratio", value: `${cacheHitRatio}%` },
-    { label: "Cache Hits", value: cachedResponses },
-    { label: "Cached Completion Tokens", value: cachedTokens },
+    { label: "Cache Hit Ratio", value: `${hasRequests ? totals.cache_hit_ratio.toFixed(2) : "0"}%` },
+    { label: "Cache Hits", value: valueFormatterNumbers(totals?.cache_hits ?? 0) },
+    { label: "Cached Completion Tokens", value: valueFormatterNumbers(totals?.cached_completion_tokens ?? 0) },
   ];
 
   return (
     <Tabs defaultValue="analytics" className="mt-2 mb-8 w-full gap-2 p-8">
-      <div className="mt-2 flex w-full items-center justify-between">
-        <TabsList>
-          <TabsTrigger value="analytics" className="flex-none">
+      <div className="mt-2 flex w-full items-center justify-between border-b">
+        <TabsList variant="line" className="h-auto rounded-none p-0">
+          <TabsTrigger value="analytics" className="flex-none rounded-none px-4 py-2">
             Cache Analytics
           </TabsTrigger>
-          <TabsTrigger value="health" className="flex-none">
+          <TabsTrigger value="health" className="flex-none rounded-none px-4 py-2">
             Cache Health
           </TabsTrigger>
-          <TabsTrigger value="settings" className="flex-none">
+          <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
             Cache Settings
           </TabsTrigger>
-          <TabsTrigger value="coordination" className="flex-none">
+          <TabsTrigger value="coordination" className="flex-none rounded-none px-4 py-2">
             Coordination Redis
           </TabsTrigger>
         </TabsList>
@@ -289,7 +172,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
         </div>
       </div>
 
-      <TabsContent value="analytics">
+      <TabsContent value="analytics" keepMounted>
         <Card>
           <CardContent>
             <p className="text-sm text-muted-foreground">
@@ -315,14 +198,14 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
               Metrics&quot; on the Usage page or individual requests in the Logs page.
             </p>
 
-            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div className="mt-4 grid grid-cols-1 items-center gap-4 md:grid-cols-[1fr_1fr_auto]">
               <Combobox
                 multiple
                 items={uniqueApiKeys}
                 value={selectedApiKeys}
                 onValueChange={(keys: string[]) => setSelectedApiKeys(keys)}
               >
-                <ComboboxChips>
+                <ComboboxChips render={<div ref={anchor1} />}>
                   <ComboboxValue>
                     {(keys: string[]) =>
                       keys.map((key) => (
@@ -332,9 +215,9 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                       ))
                     }
                   </ComboboxValue>
-                  <ComboboxChipsInput placeholder="Select Virtual Keys" className="border-0 bg-transparent" />
+                  <ComboboxChipsInput placeholder="Select Virtual Keys" />
                 </ComboboxChips>
-                <ComboboxContent>
+                <ComboboxContent anchor={anchor1}>
                   <ComboboxEmpty>No virtual keys found</ComboboxEmpty>
                   <ComboboxList>
                     {(key: string) => (
@@ -352,7 +235,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                 value={selectedModels}
                 onValueChange={(models: string[]) => setSelectedModels(models)}
               >
-                <ComboboxChips>
+                <ComboboxChips render={<div ref={anchor2} />}>
                   <ComboboxValue>
                     {(models: string[]) =>
                       models.map((model) => (
@@ -362,9 +245,9 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                       ))
                     }
                   </ComboboxValue>
-                  <ComboboxChipsInput placeholder="Select Models" className="border-0 bg-transparent" />
+                  <ComboboxChipsInput placeholder="Select Models" />
                 </ComboboxChips>
-                <ComboboxContent>
+                <ComboboxContent anchor={anchor2}>
                   <ComboboxEmpty>No models found</ComboboxEmpty>
                   <ComboboxList>
                     {(model: string) => (
@@ -376,11 +259,10 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                 </ComboboxContent>
               </Combobox>
 
-              <UsageDatePicker
+              <AdvancedDatePicker
                 value={dateValue}
                 onValueChange={(value) => {
                   setDateValue(value);
-                  updateCachingData(value.from, value.to);
                 }}
               />
             </div>
@@ -403,17 +285,33 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
                 <CardTitle className="text-base font-semibold">Cache Hits vs API Requests</CardTitle>
               </CardHeader>
               <CardContent>
+                <p className="text-sm text-muted-foreground">
+                  Click a red failed-requests segment to see which error codes caused those failures.
+                </p>
                 <BarChart
-                  data={filteredData}
+                  data={chartData}
                   stack={true}
                   index="name"
                   valueFormatter={valueFormatterNumbers}
-                  categories={["LLM API requests", "Cache hit"]}
-                  colors={["sky", "teal"]}
+                  categories={[REQUEST_SERIES.apiRequests, REQUEST_SERIES.cacheHits, REQUEST_SERIES.failed]}
+                  colors={["sky", "teal", "red"]}
                   yAxisWidth={48}
+                  className="mt-2"
+                  onValueChange={(item) => {
+                    if (item.categoryClicked === REQUEST_SERIES.failed) setErrorDrilldownCallType(item.name);
+                  }}
                 />
               </CardContent>
             </Card>
+
+            {activeDrilldownCallType !== null && (
+              <ErrorDrilldownCard
+                callType={activeDrilldownCallType}
+                buckets={activity?.error_breakdown ?? []}
+                valueFormatter={valueFormatterNumbers}
+                onClose={() => setErrorDrilldownCallType(null)}
+              />
+            )}
 
             <Card className="mt-6">
               <CardHeader>
@@ -423,7 +321,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
               </CardHeader>
               <CardContent>
                 <BarChart
-                  data={filteredData}
+                  data={chartData}
                   stack={true}
                   index="name"
                   valueFormatter={valueFormatterNumbers}
@@ -437,7 +335,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
         </Card>
       </TabsContent>
 
-      <TabsContent value="health">
+      <TabsContent value="health" keepMounted>
         <CacheHealthTab
           accessToken={accessToken}
           healthCheckResponse={healthCheckResponse}
@@ -445,11 +343,11 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
         />
       </TabsContent>
 
-      <TabsContent value="settings">
+      <TabsContent value="settings" keepMounted>
         <CacheSettings accessToken={accessToken} userRole={userRole} userID={userID} />
       </TabsContent>
 
-      <TabsContent value="coordination">
+      <TabsContent value="coordination" keepMounted>
         <CoordinationRedisSettings />
       </TabsContent>
     </Tabs>

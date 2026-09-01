@@ -186,6 +186,35 @@ async def test_team_keys_skip_personal_budget():
 
 
 @pytest.mark.asyncio
+async def test_team_keys_enforce_personal_budget_when_flag_enabled():
+    """This hook is the third personal-budget gate alongside common_checks and the
+    reservation path, so apply_user_budget_to_team_keys has to reach it too or an
+    opted-in deployment enforces in two places out of three."""
+    handler = _PROXY_MaxBudgetLimiter()
+    user_api_key_dict = _make_user_api_key_auth(
+        user_max_budget=10.0,
+        team_id="team-1",
+    )
+
+    with patch.dict(
+        "litellm.proxy.proxy_server.general_settings",
+        {"apply_user_budget_to_team_keys": True},
+    ), patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new=AsyncMock(return_value=999.0),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=DualCache(),
+                data={},
+                call_type="completion",
+            )
+
+    assert exc_info.value.status_code == 429
+
+
+@pytest.mark.asyncio
 async def test_no_max_budget_passes():
     handler = _PROXY_MaxBudgetLimiter()
     user_api_key_dict = UserAPIKeyAuth(

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
@@ -14,23 +14,24 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         PromptSecurityGuardrail,
     )
 
-    _prompt_security_callback = PromptSecurityGuardrail(
+    _prompt_security_callback: Final = PromptSecurityGuardrail(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
+        file_sanitization_fail_open=getattr(litellm_params, "file_sanitization_fail_open", None),
     )
     litellm.logging_callback_manager.add_litellm_callback(_prompt_security_callback)
 
     return _prompt_security_callback
 
 
-guardrail_initializer_registry = {
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.PROMPT_SECURITY.value: initialize_guardrail,
 }
 
 
-guardrail_class_registry = {
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.PROMPT_SECURITY.value: PromptSecurityGuardrail,
 }

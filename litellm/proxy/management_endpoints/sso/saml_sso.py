@@ -27,7 +27,7 @@ import hashlib
 import os
 import secrets
 import time
-from typing import cast
+from typing import Final, cast
 from urllib.parse import parse_qsl
 
 from fastapi import HTTPException, Request, status
@@ -49,25 +49,25 @@ try:
 except ImportError:
     SAML_AVAILABLE = False
 
-SAML_LOGIN_ROUTE = "sso/saml/login"
-SAML_CALLBACK_ROUTE = "sso/saml/callback"
-SAML_METADATA_ROUTE = "sso/saml/metadata"
+SAML_LOGIN_ROUTE: Final = "sso/saml/login"
+SAML_CALLBACK_ROUTE: Final = "sso/saml/callback"
+SAML_METADATA_ROUTE: Final = "sso/saml/metadata"
 
-_SAML_AUTHN_STATE_COOKIE = "litellm_saml_authn"
-_SAML_IDP_SETTINGS_CACHE_PREFIX = "saml_idp_settings"
-_SAML_AUTHN_REQUEST_CACHE_PREFIX = "saml_authn_request"
-_SAML_CONSUMED_ASSERTION_CACHE_PREFIX = "saml_consumed_assertion"
-_SAML_AUTHN_REQUEST_TTL_SECONDS = 600
-_SAML_IDP_METADATA_TTL_SECONDS = 3600
-_SAML_METADATA_FETCH_TIMEOUT_SECONDS = 10
-_SAML_MAX_POST_BYTES = 5 * 1024 * 1024
+_SAML_AUTHN_STATE_COOKIE: Final = "litellm_saml_authn"
+_SAML_IDP_SETTINGS_CACHE_PREFIX: Final = "saml_idp_settings"
+_SAML_AUTHN_REQUEST_CACHE_PREFIX: Final = "saml_authn_request"
+_SAML_CONSUMED_ASSERTION_CACHE_PREFIX: Final = "saml_consumed_assertion"
+_SAML_AUTHN_REQUEST_TTL_SECONDS: Final = 600
+_SAML_IDP_METADATA_TTL_SECONDS: Final = 3600
+_SAML_METADATA_FETCH_TIMEOUT_SECONDS: Final = 10
+_SAML_MAX_POST_BYTES: Final = 5 * 1024 * 1024
 # The replay guard tracks each assertion's NotOnOrAfter so it spans the full
 # validity window; the floor covers IdPs that issue hour-long assertions or omit
 # the timestamp, and the cap bounds cache growth.
-_SAML_REPLAY_GUARD_DEFAULT_TTL_SECONDS = 3600
-_SAML_REPLAY_GUARD_MAX_TTL_SECONDS = 86400
+_SAML_REPLAY_GUARD_DEFAULT_TTL_SECONDS: Final = 3600
+_SAML_REPLAY_GUARD_MAX_TTL_SECONDS: Final = 86400
 
-_EMAIL_ATTRIBUTE_CANDIDATES = (
+_EMAIL_ATTRIBUTE_CANDIDATES: Final = (
     "urn:oid:0.9.2342.19200300.100.1.3",
     "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
     "email",
@@ -75,14 +75,14 @@ _EMAIL_ATTRIBUTE_CANDIDATES = (
     "mail",
     "Email",
 )
-_FIRST_NAME_ATTRIBUTE_CANDIDATES = (
+_FIRST_NAME_ATTRIBUTE_CANDIDATES: Final = (
     "urn:oid:2.5.4.42",
     "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname",
     "givenName",
     "first_name",
     "firstName",
 )
-_LAST_NAME_ATTRIBUTE_CANDIDATES = (
+_LAST_NAME_ATTRIBUTE_CANDIDATES: Final = (
     "urn:oid:2.5.4.4",
     "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/surname",
     "sn",
@@ -90,8 +90,8 @@ _LAST_NAME_ATTRIBUTE_CANDIDATES = (
     "last_name",
     "lastName",
 )
-_ROLE_ATTRIBUTE_CANDIDATES = ("role", "roles", "litellm_role")
-_TEAM_IDS_ATTRIBUTE_CANDIDATES = ("teams", "team_ids", "groups")
+_ROLE_ATTRIBUTE_CANDIDATES: Final = ("role", "roles", "litellm_role")
+_TEAM_IDS_ATTRIBUTE_CANDIDATES: Final = ("teams", "team_ids", "groups")
 
 
 def _saml_unavailable_error() -> HTTPException:
@@ -119,14 +119,14 @@ class SAMLAuthHandler:
 
     @staticmethod
     def _bool_env(name: str, default: bool) -> bool:
-        raw = SAMLAuthHandler._env(name)
+        raw: Final = SAMLAuthHandler._env(name)
         if raw is None:
             return default
         return raw.strip().lower() in ("true", "1", "yes", "on")
 
     @staticmethod
     def _base_url(request: Request) -> str:
-        base = get_custom_url(request_base_url=str(request.base_url))
+        base: Final = get_custom_url(request_base_url=str(request.base_url))
         return base if base.endswith("/") else base + "/"
 
     @staticmethod
@@ -147,17 +147,17 @@ class SAMLAuthHandler:
 
     @staticmethod
     async def _load_idp_settings(cache: DualCache) -> dict[str, object]:
-        metadata_url = SAMLAuthHandler._env("SAML_IDP_METADATA_URL")
-        metadata_xml = SAMLAuthHandler._env("SAML_IDP_METADATA_XML")
-        source = metadata_url or metadata_xml
+        metadata_url: Final = SAMLAuthHandler._env("SAML_IDP_METADATA_URL")
+        metadata_xml: Final = SAMLAuthHandler._env("SAML_IDP_METADATA_XML")
+        source: Final = metadata_url or metadata_xml
         if source is None:
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail="SAML SSO is not configured. Set SAML_IDP_METADATA_URL or SAML_IDP_METADATA_XML.",
             )
 
-        cache_key = f"{_SAML_IDP_SETTINGS_CACHE_PREFIX}:{hashlib.sha256(source.encode()).hexdigest()}"
-        cached = cache.get_cache(key=cache_key)
+        cache_key: Final = f"{_SAML_IDP_SETTINGS_CACHE_PREFIX}:{hashlib.sha256(source.encode()).hexdigest()}"
+        cached: Final = cache.get_cache(key=cache_key)
         if isinstance(cached, dict):
             return cast(dict[str, object], cached)  # cast-ok: untyped python3-saml
 
@@ -171,7 +171,7 @@ class SAMLAuthHandler:
         else:
             parsed = OneLogin_Saml2_IdPMetadataParser.parse(cast(str, metadata_xml))  # cast-ok: untyped python3-saml
 
-        idp_settings = cast(dict[str, object], parsed)  # cast-ok: untyped python3-saml
+        idp_settings: Final = cast(dict[str, object], parsed)  # cast-ok: untyped python3-saml
         if not idp_settings.get("idp"):
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
@@ -182,7 +182,7 @@ class SAMLAuthHandler:
 
     @staticmethod
     def _build_settings(request: Request, idp_settings: dict[str, object]) -> dict[str, object]:
-        sp_settings: dict[str, object] = {
+        sp_settings: Final[dict[str, object]] = {
             "strict": SAMLAuthHandler._bool_env("SAML_STRICT", True),
             "debug": False,
             "sp": {
@@ -209,9 +209,9 @@ class SAMLAuthHandler:
 
     @staticmethod
     def _prepare_request_data(request: Request, post_data: dict[str, str] | None = None) -> dict[str, object]:
-        base = SAMLAuthHandler._base_url(request)
+        base: Final = SAMLAuthHandler._base_url(request)
         scheme, _, host_part = base.partition("://")
-        host = host_part.split("/", 1)[0]
+        host: Final = host_part.split("/", 1)[0]
         return {
             "https": "on" if scheme == "https" else "off",
             "http_host": host,
@@ -228,9 +228,9 @@ class SAMLAuthHandler:
     ) -> "OneLogin_Saml2_Auth":
         if not SAML_AVAILABLE:
             raise _saml_unavailable_error()
-        idp_settings = await SAMLAuthHandler._load_idp_settings(cache)
-        settings = SAMLAuthHandler._build_settings(request, idp_settings)
-        request_data = SAMLAuthHandler._prepare_request_data(request, post_data)
+        idp_settings: Final = await SAMLAuthHandler._load_idp_settings(cache)
+        settings: Final = SAMLAuthHandler._build_settings(request, idp_settings)
+        request_data: Final = SAMLAuthHandler._prepare_request_data(request, post_data)
         try:
             return OneLogin_Saml2_Auth(request_data, old_settings=settings)
         except Exception as e:  # noqa: BLE001 - toolkit exposes no common exception base; fail closed
@@ -243,17 +243,17 @@ class SAMLAuthHandler:
     async def build_login_redirect(
         request: Request, cache: DualCache, relay_state: str | None = None
     ) -> RedirectResponse:
-        auth = await SAMLAuthHandler._build_auth(request, cache)
-        redirect_url = cast(str, auth.login(return_to=relay_state))  # cast-ok: untyped python3-saml
-        response = RedirectResponse(url=redirect_url, status_code=303)
-        request_id = cast(str | None, auth.get_last_request_id())  # cast-ok: untyped python3-saml
+        auth: Final = await SAMLAuthHandler._build_auth(request, cache)
+        redirect_url: Final = cast(str, auth.login(return_to=relay_state))  # cast-ok: untyped python3-saml
+        response: Final = RedirectResponse(url=redirect_url, status_code=303)
+        request_id: Final = cast(str | None, auth.get_last_request_id())  # cast-ok: untyped python3-saml
         if request_id is not None:
             cache.set_cache(
                 key=f"{_SAML_AUTHN_REQUEST_CACHE_PREFIX}:{request_id}",
                 value="1",
                 ttl=_SAML_AUTHN_REQUEST_TTL_SECONDS,
             )
-            secure = SAMLAuthHandler._is_https(request)
+            secure: Final = SAMLAuthHandler._is_https(request)
             response.set_cookie(
                 key=_SAML_AUTHN_STATE_COOKIE,
                 value=request_id,
@@ -268,11 +268,11 @@ class SAMLAuthHandler:
     async def build_sp_metadata(request: Request, cache: DualCache) -> str:
         if not SAML_AVAILABLE:
             raise _saml_unavailable_error()
-        idp_settings = await SAMLAuthHandler._load_idp_settings(cache)
-        settings = SAMLAuthHandler._build_settings(request, idp_settings)
-        saml_settings = OneLogin_Saml2_Settings(settings, sp_validation_only=True)
-        metadata = cast(str, saml_settings.get_sp_metadata())  # cast-ok: untyped python3-saml
-        errors = cast(list[str], saml_settings.validate_metadata(metadata))  # cast-ok: untyped python3-saml
+        idp_settings: Final = await SAMLAuthHandler._load_idp_settings(cache)
+        settings: Final = SAMLAuthHandler._build_settings(request, idp_settings)
+        saml_settings: Final = OneLogin_Saml2_Settings(settings, sp_validation_only=True)
+        metadata: Final = cast(str, saml_settings.get_sp_metadata())  # cast-ok: untyped python3-saml
+        errors: Final = cast(list[str], saml_settings.validate_metadata(metadata))  # cast-ok: untyped python3-saml
         if errors:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -286,7 +286,7 @@ class SAMLAuthHandler:
 
         Bounds both Content-Length-declared and chunked requests so an unauthenticated
         caller cannot force unbounded buffering while decoding the SAMLResponse."""
-        declared = request.headers.get("content-length")
+        declared: Final = request.headers.get("content-length")
         if declared is not None and declared.isdigit() and int(declared) > _SAML_MAX_POST_BYTES:
             raise HTTPException(
                 status_code=status.HTTP_413_CONTENT_TOO_LARGE,
@@ -306,8 +306,8 @@ class SAMLAuthHandler:
 
     @staticmethod
     async def handle_acs(request: Request, cache: DualCache, post_data: dict[str, str]) -> CustomOpenID:
-        auth = await SAMLAuthHandler._build_auth(request, cache, post_data=post_data)
-        browser_request_id = request.cookies.get(_SAML_AUTHN_STATE_COOKIE)
+        auth: Final = await SAMLAuthHandler._build_auth(request, cache, post_data=post_data)
+        browser_request_id: Final = request.cookies.get(_SAML_AUTHN_STATE_COOKIE)
         try:
             auth.process_response(request_id=browser_request_id)
         except Exception as e:  # noqa: BLE001 - toolkit exposes no common exception base; fail closed
@@ -316,9 +316,9 @@ class SAMLAuthHandler:
                 detail=f"Could not process SAML response: {e}",
             )
 
-        errors = cast(list[str], auth.get_errors())  # cast-ok: untyped python3-saml
+        errors: Final = cast(list[str], auth.get_errors())  # cast-ok: untyped python3-saml
         if errors or not auth.is_authenticated():
-            reason = auth.get_last_error_reason()
+            reason: Final = auth.get_last_error_reason()
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=f"SAML authentication failed: {reason or ', '.join(errors)}",
@@ -329,10 +329,10 @@ class SAMLAuthHandler:
 
     @staticmethod
     def _replay_guard_ttl(auth: "OneLogin_Saml2_Auth") -> int:
-        not_on_or_after = auth.get_last_assertion_not_on_or_after()
+        not_on_or_after: Final = auth.get_last_assertion_not_on_or_after()
         if not isinstance(not_on_or_after, int):
             return _SAML_REPLAY_GUARD_DEFAULT_TTL_SECONDS
-        remaining = not_on_or_after - int(time.time())
+        remaining: Final = not_on_or_after - int(time.time())
         return min(
             max(remaining, _SAML_REPLAY_GUARD_DEFAULT_TTL_SECONDS),
             _SAML_REPLAY_GUARD_MAX_TTL_SECONDS,
@@ -343,13 +343,13 @@ class SAMLAuthHandler:
         """The request id this response answers, read from the Response element or, when the
         IdP only stamps it on the bearer SubjectConfirmationData, from there. A non-None value
         marks the response as solicited (SP-initiated) and so requiring browser binding."""
-        value = cast(str | None, auth.get_last_response_in_response_to())  # cast-ok: untyped python3-saml
+        value: Final = cast(str | None, auth.get_last_response_in_response_to())  # cast-ok: untyped python3-saml
         if value:
             return value
-        xml = cast(bytes | None, auth.get_last_response_xml())  # cast-ok: untyped python3-saml
+        xml: Final = cast(bytes | None, auth.get_last_response_xml())  # cast-ok: untyped python3-saml
         if not xml:
             return None
-        root = OneLogin_Saml2_XML.to_etree(xml)
+        root: Final = OneLogin_Saml2_XML.to_etree(xml)
         for node in OneLogin_Saml2_XML.query(root, "//saml:SubjectConfirmationData[@InResponseTo]"):
             irt = cast(str | None, node.get("InResponseTo"))  # cast-ok: untyped python3-saml
             if irt:
@@ -362,10 +362,10 @@ class SAMLAuthHandler:
         cache: DualCache,
         browser_request_id: str | None,
     ) -> None:
-        in_response_to = SAMLAuthHandler._response_in_response_to(auth)
+        in_response_to: Final = SAMLAuthHandler._response_in_response_to(auth)
 
         if in_response_to is not None:
-            authn_key = f"{_SAML_AUTHN_REQUEST_CACHE_PREFIX}:{in_response_to}"
+            authn_key: Final = f"{_SAML_AUTHN_REQUEST_CACHE_PREFIX}:{in_response_to}"
             if cache.get_cache(key=authn_key) is None:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -395,14 +395,14 @@ class SAMLAuthHandler:
                 ),
             )
 
-        assertion_id = cast(str | None, auth.get_last_assertion_id())  # cast-ok: untyped python3-saml
+        assertion_id: Final = cast(str | None, auth.get_last_assertion_id())  # cast-ok: untyped python3-saml
         if assertion_id is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="SAML assertion is missing the required ID attribute.",
             )
-        consumed_key = f"{_SAML_CONSUMED_ASSERTION_CACHE_PREFIX}:{assertion_id}"
-        consumed_count = await cache.async_increment_cache(
+        consumed_key: Final = f"{_SAML_CONSUMED_ASSERTION_CACHE_PREFIX}:{assertion_id}"
+        consumed_count: Final = await cache.async_increment_cache(
             key=consumed_key, value=1, ttl=SAMLAuthHandler._replay_guard_ttl(auth)
         )
         if consumed_count is not None and consumed_count > 1:
@@ -413,8 +413,8 @@ class SAMLAuthHandler:
 
     @staticmethod
     def _result_from_auth(auth: "OneLogin_Saml2_Auth") -> CustomOpenID:
-        attributes = cast(dict[str, list[str]], auth.get_attributes())  # cast-ok: untyped python3-saml
-        name_id = cast(str | None, auth.get_nameid())  # cast-ok: untyped python3-saml
+        attributes: Final = cast(dict[str, list[str]], auth.get_attributes())  # cast-ok: untyped python3-saml
+        name_id: Final = cast(str | None, auth.get_nameid())  # cast-ok: untyped python3-saml
 
         email = SAMLAuthHandler._attribute_value(attributes, "SAML_ATTRIBUTE_EMAIL", _EMAIL_ATTRIBUTE_CANDIDATES)
         if email is None and name_id is not None and "@" in name_id:
@@ -429,27 +429,29 @@ class SAMLAuthHandler:
                 ),
             )
 
-        user_id = SAMLAuthHandler._attribute_value(attributes, "SAML_ATTRIBUTE_USER_ID", ()) or name_id or email
+        user_id: Final = SAMLAuthHandler._attribute_value(attributes, "SAML_ATTRIBUTE_USER_ID", ()) or name_id or email
         if user_id is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="SAML assertion did not contain a usable subject (NameID) or email.",
             )
 
-        first_name = SAMLAuthHandler._attribute_value(
+        first_name: Final = SAMLAuthHandler._attribute_value(
             attributes, "SAML_ATTRIBUTE_FIRST_NAME", _FIRST_NAME_ATTRIBUTE_CANDIDATES
         )
-        last_name = SAMLAuthHandler._attribute_value(
+        last_name: Final = SAMLAuthHandler._attribute_value(
             attributes, "SAML_ATTRIBUTE_LAST_NAME", _LAST_NAME_ATTRIBUTE_CANDIDATES
         )
         role_value = SAMLAuthHandler._attribute_value(attributes, "SAML_ATTRIBUTE_ROLE", _ROLE_ATTRIBUTE_CANDIDATES)
-        team_ids = SAMLAuthHandler._attribute_values(
+        team_ids: Final = SAMLAuthHandler._attribute_values(
             attributes, "SAML_ATTRIBUTE_TEAM_IDS", _TEAM_IDS_ATTRIBUTE_CANDIDATES
         )
 
-        display_name = " ".join(part for part in (first_name, last_name) if part) or email
+        display_name: Final = " ".join(part for part in (first_name, last_name) if part) or email
 
-        verbose_proxy_logger.info(f"SAML login: subject={user_id}, email={email}, attributes={list(attributes.keys())}")
+        verbose_proxy_logger.info(
+            "SAML login: subject=%s, email=%s, attributes=%s", user_id, email, list(attributes.keys())
+        )
 
         try:
             return CustomOpenID(
@@ -475,7 +477,7 @@ class SAMLAuthHandler:
         env_override: str,
         candidates: tuple[str, ...],
     ) -> str | None:
-        values = SAMLAuthHandler._attribute_values(attributes, env_override, candidates)
+        values: Final = SAMLAuthHandler._attribute_values(attributes, env_override, candidates)
         return values[0] if values else None
 
     @staticmethod
@@ -484,8 +486,8 @@ class SAMLAuthHandler:
         env_override: str,
         candidates: tuple[str, ...],
     ) -> list[str]:
-        override = SAMLAuthHandler._env(env_override)
-        keys = (override, *candidates) if override else candidates
+        override: Final = SAMLAuthHandler._env(env_override)
+        keys: Final = (override, *candidates) if override else candidates
         for key in keys:
             values = attributes.get(key)
             if values:

@@ -3,8 +3,6 @@
 import ApiKeysDashboard from "@/app/(dashboard)/api-keys/ApiKeysDashboard";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { proxyBaseUrl } from "@/components/networking";
-import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
-import { internalUserRoles } from "@/utils/roles";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   buildLoginUrlWithReturn,
@@ -19,7 +17,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef } from "react";
 
 function CreateKeyPageContent() {
-  const { authLoading, token, userRole, userID } = useAuth();
+  const { authLoading, token } = useAuth();
 
   const router = useRouter();
   const searchParams = useSearchParams()!;
@@ -28,7 +26,6 @@ function CreateKeyPageContent() {
 
   // Track if we've already attempted a return URL redirect to prevent race conditions
   const hasAttemptedReturnRedirectRef = useRef(false);
-  const didReturnRedirectRef = useRef(false);
 
   const redirectToLogin = authLoading === false && token === null;
 
@@ -78,7 +75,6 @@ function CreateKeyPageContent() {
       // Only redirect if the return URL is different from the current URL
       // This prevents infinite redirect loops
       if (normalizedReturnUrl !== normalizedCurrentUrl) {
-        didReturnRedirectRef.current = true;
         window.location.replace(safeUrl.href);
       }
     }
@@ -87,26 +83,10 @@ function CreateKeyPageContent() {
   useEffect(() => {
     if (!token) {
       hasAttemptedReturnRedirectRef.current = false;
-      didReturnRedirectRef.current = false;
     }
   }, [token]);
 
-  const isPostLoginLanding = searchParams.get("login") === "success";
-  const isSignedIn = !authLoading && Boolean(token);
-  const isAwaitingRole = isPostLoginLanding && isSignedIn && userRole === "";
-  const shouldCheckForKeys = isPostLoginLanding && isSignedIn && internalUserRoles.includes(userRole);
-  const { data: keysData, isLoading: keysLoading } = useKeys(1, 1, { userID }, shouldCheckForKeys);
-  const isKeylessLanding = shouldCheckForKeys && !keysLoading && keysData?.keys?.length === 0;
-  const isResolvingKeylessLanding = (shouldCheckForKeys && keysLoading) || isKeylessLanding;
-  const isResolvingLanding = isAwaitingRole || isResolvingKeylessLanding;
-
-  useEffect(() => {
-    if (isKeylessLanding && !didReturnRedirectRef.current) {
-      router.replace(migratedHref("connect"));
-    }
-  }, [isKeylessLanding, router]);
-
-  const isRedirecting = redirectToLogin || isLegacyRedirect || isResolvingLanding;
+  const isRedirecting = redirectToLogin || isLegacyRedirect;
 
   if (authLoading || isRedirecting) {
     return <LoadingScreen />;

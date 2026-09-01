@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Final
 
 import polars as pl
 
@@ -24,15 +24,15 @@ class FocusLiteLLMDatabase:
     async def get_usage_data(
         self,
         *,
-        limit: Optional[int] = None,
-        start_time_utc: Optional[datetime] = None,
-        end_time_utc: Optional[datetime] = None,
+        limit: int | None = None,
+        start_time_utc: datetime | None = None,
+        end_time_utc: datetime | None = None,
     ) -> pl.DataFrame:
         """Return usage data for the requested window."""
-        client = self._ensure_prisma_client()
+        client: Final = self._ensure_prisma_client()
 
-        where_clauses: list[str] = []
-        query_params: list[Any] = []
+        where_clauses: Final[list[str]] = []
+        query_params: Final[list[Any]] = []
         placeholder_index = 1
         if start_time_utc:
             where_clauses.append(f"dus.updated_at >= ${placeholder_index}::timestamptz")
@@ -50,7 +50,7 @@ class FocusLiteLLMDatabase:
         limit_clause = ""
         if limit is not None:
             try:
-                limit_value = int(limit)
+                limit_value: Final = int(limit)
             except (TypeError, ValueError) as exc:  # pragma: no cover - defensive guard
                 raise ValueError("limit must be an integer") from exc
             if limit_value < 0:
@@ -58,7 +58,7 @@ class FocusLiteLLMDatabase:
             limit_clause = f" LIMIT ${placeholder_index}"
             query_params.append(limit_value)
 
-        query = f"""
+        query: Final = f"""
         SELECT
             dus.id,
             dus.date,
@@ -95,23 +95,23 @@ class FocusLiteLLMDatabase:
         """
 
         try:
-            db_response = await client.db.query_raw(query, *query_params)
+            db_response: Final = await client.db.query_raw(query, *query_params)
             return pl.DataFrame(db_response, infer_schema_length=None)
         except Exception as exc:
             raise RuntimeError(f"Error retrieving usage data: {exc}") from exc
 
-    async def get_table_info(self) -> Dict[str, Any]:
+    async def get_table_info(self) -> dict[str, Any]:
         """Return metadata about the spend table for diagnostics."""
-        client = self._ensure_prisma_client()
+        client: Final = self._ensure_prisma_client()
 
-        info_query = """
+        info_query: Final = """
         SELECT column_name, data_type, is_nullable
         FROM information_schema.columns
         WHERE table_name = 'LiteLLM_DailyUserSpend'
         ORDER BY ordinal_position;
         """
         try:
-            columns_response = await client.db.query_raw(info_query)
+            columns_response: Final = await client.db.query_raw(info_query)
             return {"columns": columns_response, "table_name": "LiteLLM_DailyUserSpend"}
         except Exception as exc:
             raise RuntimeError(f"Error getting table info: {exc}") from exc

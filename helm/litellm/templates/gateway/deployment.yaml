@@ -7,6 +7,10 @@ metadata:
     {{- include "litellm.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: gateway
 spec:
+  {{- with .Values.gateway.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "litellm.gateway.selectorLabels" . | nindent 6 }}
@@ -21,9 +25,16 @@ spec:
         {{- end }}
       labels:
         {{- include "litellm.gateway.selectorLabels" . | nindent 8 }}
+        {{- with .Values.gateway.podLabels }}
+        {{- include "litellm.podLabels" (dict "podLabels" . "componentName" "gateway") | nindent 8 }}
+        {{- end }}
     spec:
       serviceAccountName: {{ include "litellm.gateway.serviceAccountName" . }}
       automountServiceAccountToken: {{ .Values.serviceAccounts.gateway.automount }}
+      {{- with .Values.gateway.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -32,6 +43,10 @@ spec:
         - name: gateway
           image: "{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
+          {{- with .Values.gateway.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: http
               containerPort: 4000
@@ -72,8 +87,19 @@ spec:
           readinessProbe:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- with .Values.gateway.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.gateway.lifecycle }}
+          lifecycle:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           resources:
             {{- toYaml .Values.gateway.resources | nindent 12 }}
+      {{- with .Values.gateway.extraContainers }}
+        {{- tpl (toYaml .) $ | nindent 8 }}
+      {{- end }}
       {{- if or .Values.gateway.config.create .Values.gateway.volumes .Values.billingMetrics.enabled }}
       volumes:
         {{- if .Values.gateway.config.create }}
@@ -103,5 +129,9 @@ spec:
       {{- with .Values.gateway.topologySpreadConstraints }}
       topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- $gracePeriod := .Values.gateway.terminationGracePeriodSeconds }}
+      {{- if not (or (kindIs "invalid" $gracePeriod) (eq (printf "%v" $gracePeriod) "")) }}
+      terminationGracePeriodSeconds: {{ $gracePeriod }}
       {{- end }}
 {{- end }}

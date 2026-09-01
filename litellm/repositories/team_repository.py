@@ -3,119 +3,153 @@ Team repository for database operations on LiteLLM_TeamTable.
 """
 
 import json
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type
+from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
 
 from litellm.models.team import LiteLLM_TeamTable, Member
-from litellm.repositories.base_repository import BaseRepository
+from litellm.repositories.base_repository import (
+    BaseRepository,
+    DbRecord,
+    record_to_dict,
+)
+from litellm.repositories.prisma_protocols import TableActions
 
 if TYPE_CHECKING:
     from prisma import Prisma
+    from prisma import models as prisma_models
 
-_MEMBERS_WITH_ROLES_ADAPTER = TypeAdapter(list[Member])
+
+class _TeamArrays(Protocol):
+    """The string array columns of a team row, which the domain model leaves untyped."""
+
+    @property
+    def members(self) -> Sequence[str]: ...
+
+    @property
+    def admins(self) -> Sequence[str]: ...
+
+    @property
+    def models(self) -> Sequence[str]: ...
+
+
+def _team_arrays(team: LiteLLM_TeamTable) -> _TeamArrays:
+    """View a team's untyped list columns as sequences of ids."""
+    return team
+
+
+_MEMBERS_WITH_ROLES_ADAPTER: Final = TypeAdapter(list[Member])
+_JSON_ENCODED_TEAM_FIELDS: Final = (
+    "metadata",
+    "model_spend",
+    "model_max_budget",
+    "router_settings",
+    "budget_limits",
+    "members_with_roles",
+)
 
 
 class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
     """Repository for team database operations."""
 
     @property
-    def table(self) -> Any:
+    def table(self) -> TableActions["prisma_models.LiteLLM_TeamTable"]:
         return self.prisma_client.db.litellm_teamtable
 
     @property
-    def deleted_table(self) -> Any:
+    def deleted_table(self) -> TableActions["prisma_models.LiteLLM_DeletedTeamTable"]:
         return self.prisma_client.db.litellm_deletedteamtable
 
     @property
-    def model_class(self) -> Type[LiteLLM_TeamTable]:
+    def model_class(self) -> type[LiteLLM_TeamTable]:
         return LiteLLM_TeamTable
 
-    def _to_model(self, record: Any) -> Optional[LiteLLM_TeamTable]:
+    def _to_model(self, record: DbRecord | None) -> LiteLLM_TeamTable | None:
         """Convert a database record to a Team model."""
         if record is None:
             return None
 
-        data = record.dict() if hasattr(record, "dict") else dict(record)
+        data: Final = {
+            field: json.loads(value) if field in _JSON_ENCODED_TEAM_FIELDS and isinstance(value, str) else value
+            for field, value in record_to_dict(record).items()
+        }
 
-        json_fields = [
-            "metadata",
-            "model_spend",
-            "model_max_budget",
-            "router_settings",
-            "budget_limits",
-            "members_with_roles",
-        ]
-        for field in json_fields:
-            if isinstance(data.get(field), str):
-                data[field] = json.loads(data[field])
+        return LiteLLM_TeamTable.model_validate(data)
 
-        return LiteLLM_TeamTable(**data)
+    async def get_members_with_roles_locked(self, tx: "Prisma", team_id: str) -> list[Member] | None:
+        """Return the team's members_with_roles. The caller must already hold
+        ``TEAM_ADVISORY_LOCK_SQL`` for this team_id on ``tx`` before calling this.
 
-    async def get_members_with_roles_locked(self, tx: "Prisma", team_id: str) -> List[Member]:
-        """Return the team's members_with_roles, locking the row FOR UPDATE.
+        ``None`` when the team row is gone, which is only possible under that lock if
+        a delete committed before this read, as opposed to ``[]`` for a team that
+        simply has no members.
 
-        Must be called inside a transaction so the row lock is held until
-        commit. This serializes concurrent membership writers on the team row
-        so the losing writer appends onto the winner's committed result instead
-        of overwriting it from a stale snapshot.
+        A plain read is enough here because the advisory lock, not a row lock, is what
+        serializes this against a concurrent writer: ``SELECT ... FOR UPDATE`` would
+        additionally take a row lock on ``LiteLLM_TeamTable``, and the access-group
+        endpoints lock an access group and then a team row, so a team-row-first lock
+        here can deadlock with them. The advisory lock cannot, since those endpoints
+        never take it.
         """
-        rows = await tx.query_raw(
-            'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = $1 FOR UPDATE',
+        rows: Final = await tx.query_raw(
+            'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = $1',
             team_id,
         )
-        raw_value = rows[0]["members_with_roles"] if rows else None
-        parsed = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
+        if not rows:
+            return None
+        raw_value: Final[object] = rows[0]["members_with_roles"]
+        parsed: Final[object] = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
         if not parsed:
             return []
         return _MEMBERS_WITH_ROLES_ADAPTER.validate_python(parsed)
 
-    async def find_by_id(self, team_id: str, id_field: str = "team_id") -> Optional[LiteLLM_TeamTable]:
+    async def find_by_id(self, team_id: str, id_field: str = "team_id") -> LiteLLM_TeamTable | None:
         return await super().find_by_id(team_id, id_field)
 
-    async def find_by_alias(self, team_alias: str) -> Optional[LiteLLM_TeamTable]:
+    async def find_by_alias(self, team_alias: str) -> LiteLLM_TeamTable | None:
         """Find a team by alias."""
-        records = await self.table.find_many(where={"team_alias": team_alias})
+        records: Final = await self.table.find_many(where={"team_alias": team_alias})
         if records:
             return self._to_model(records[0])
         return None
 
-    async def find_by_organization_id(self, organization_id: str) -> List[LiteLLM_TeamTable]:
+    async def find_by_organization_id(self, organization_id: str) -> list[LiteLLM_TeamTable]:
         """Find all teams belonging to an organization."""
-        records = await self.table.find_many(where={"organization_id": organization_id})
+        records: Final = await self.table.find_many(where={"organization_id": organization_id})
         return self._to_model_list(records)
 
-    async def find_by_member(self, user_id: str) -> List[LiteLLM_TeamTable]:
+    async def find_by_member(self, user_id: str) -> list[LiteLLM_TeamTable]:
         """Find all teams where user is a member."""
-        records = await self.table.find_many(where={"members": {"has": user_id}})
+        records: Final = await self.table.find_many(where={"members": {"has": user_id}})
         return self._to_model_list(records)
 
-    async def find_by_admin(self, user_id: str) -> List[LiteLLM_TeamTable]:
+    async def find_by_admin(self, user_id: str) -> list[LiteLLM_TeamTable]:
         """Find all teams where user is an admin."""
-        records = await self.table.find_many(where={"admins": {"has": user_id}})
+        records: Final = await self.table.find_many(where={"admins": {"has": user_id}})
         return self._to_model_list(records)
 
     async def create_team(
         self,
         team_id: str,
-        team_alias: Optional[str] = None,
-        organization_id: Optional[str] = None,
-        admins: Optional[List[str]] = None,
-        members: Optional[List[str]] = None,
-        members_with_roles: Optional[Dict[str, Any]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        max_budget: Optional[float] = None,
-        soft_budget: Optional[float] = None,
-        models: Optional[List[str]] = None,
-        max_parallel_requests: Optional[int] = None,
-        tpm_limit: Optional[int] = None,
-        rpm_limit: Optional[int] = None,
-        budget_duration: Optional[str] = None,
-        object_permission_id: Optional[str] = None,
+        team_alias: str | None = None,
+        organization_id: str | None = None,
+        admins: list[str] | None = None,
+        members: list[str] | None = None,
+        members_with_roles: Mapping[str, object] | None = None,
+        metadata: Mapping[str, object] | None = None,
+        max_budget: float | None = None,
+        soft_budget: float | None = None,
+        models: list[str] | None = None,
+        max_parallel_requests: int | None = None,
+        tpm_limit: int | None = None,
+        rpm_limit: int | None = None,
+        budget_duration: str | None = None,
+        object_permission_id: str | None = None,
     ) -> LiteLLM_TeamTable:
         """Create a new team."""
-        data: Dict[str, Any] = {"team_id": team_id}
+        data: Final[dict[str, object]] = {"team_id": team_id}
         if team_alias is not None:
             data["team_alias"] = team_alias
         if organization_id is not None:
@@ -150,24 +184,24 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
     async def update_team(
         self,
         team_id: str,
-        team_alias: Optional[str] = None,
-        organization_id: Optional[str] = None,
-        admins: Optional[List[str]] = None,
-        members: Optional[List[str]] = None,
-        members_with_roles: Optional[Dict[str, Any]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        max_budget: Optional[float] = None,
-        soft_budget: Optional[float] = None,
-        models: Optional[List[str]] = None,
-        max_parallel_requests: Optional[int] = None,
-        tpm_limit: Optional[int] = None,
-        rpm_limit: Optional[int] = None,
-        budget_duration: Optional[str] = None,
-        blocked: Optional[bool] = None,
-        object_permission_id: Optional[str] = None,
-    ) -> Optional[LiteLLM_TeamTable]:
+        team_alias: str | None = None,
+        organization_id: str | None = None,
+        admins: list[str] | None = None,
+        members: list[str] | None = None,
+        members_with_roles: Mapping[str, object] | None = None,
+        metadata: Mapping[str, object] | None = None,
+        max_budget: float | None = None,
+        soft_budget: float | None = None,
+        models: list[str] | None = None,
+        max_parallel_requests: int | None = None,
+        tpm_limit: int | None = None,
+        rpm_limit: int | None = None,
+        budget_duration: str | None = None,
+        blocked: bool | None = None,
+        object_permission_id: str | None = None,
+    ) -> LiteLLM_TeamTable | None:
         """Update a team."""
-        data: Dict[str, Any] = {}
+        data: Final[dict[str, object]] = {}
         if team_alias is not None:
             data["team_alias"] = team_alias
         if organization_id is not None:
@@ -204,19 +238,19 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
     async def delete_team(
         self,
         team_id: str,
-        deleted_by: Optional[str] = None,
-        deleted_by_api_key: Optional[str] = None,
-        litellm_changed_by: Optional[str] = None,
-    ) -> Optional[LiteLLM_TeamTable]:
+        deleted_by: str | None = None,
+        deleted_by_api_key: str | None = None,
+        litellm_changed_by: str | None = None,
+    ) -> LiteLLM_TeamTable | None:
         """Delete a team and archive it to the deleted teams table.
 
         Uses a transaction to ensure atomicity of the archive-then-delete operation.
         """
-        team = await self.find_by_id(team_id)
+        team: Final = await self.find_by_id(team_id)
         if team is None:
             return None
 
-        archive_data = self._build_archive_data(team)
+        archive_data: Final = self._build_archive_data(team)
         archive_data["deleted_by"] = deleted_by
         archive_data["deleted_by_api_key"] = deleted_by_api_key
         archive_data["litellm_changed_by"] = litellm_changed_by
@@ -228,9 +262,9 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
 
         return team
 
-    def _build_archive_data(self, team: LiteLLM_TeamTable) -> Dict[str, Any]:
+    def _build_archive_data(self, team: LiteLLM_TeamTable) -> dict[str, object]:
         """Build archive data dict with only columns that exist in LiteLLM_DeletedTeamTable."""
-        data: Dict[str, Any] = {"team_id": team.team_id}
+        data: Final[dict[str, object]] = {"team_id": team.team_id}
         if team.team_alias is not None:
             data["team_alias"] = team.team_alias
         if team.organization_id is not None:
@@ -274,81 +308,81 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
         data["allow_team_guardrail_config"] = team.allow_team_guardrail_config
         return data
 
-    async def update_spend(self, team_id: str, spend: float) -> Optional[LiteLLM_TeamTable]:
+    async def update_spend(self, team_id: str, spend: float) -> LiteLLM_TeamTable | None:
         """Update team spend."""
         return await self.update(team_id, {"spend": spend}, id_field="team_id")
 
-    async def add_member(self, team_id: str, user_id: str) -> Optional[LiteLLM_TeamTable]:
+    async def add_member(self, team_id: str, user_id: str) -> LiteLLM_TeamTable | None:
         """Add a member to a team using atomic array push operation."""
         if not await self.exists(team_id, id_field="team_id"):
             return None
 
-        record = await self.table.update(
+        record: Final = await self.table.update(
             where={"team_id": team_id},
             data={"members": {"push": user_id}},
         )
         return self._to_model(record)
 
-    async def remove_member(self, team_id: str, user_id: str) -> Optional[LiteLLM_TeamTable]:
+    async def remove_member(self, team_id: str, user_id: str) -> LiteLLM_TeamTable | None:
         """Remove a member from a team.
 
         Note: Prisma doesn't support atomic array removal, so we use a
         read-modify-write pattern here. For high-concurrency scenarios,
         consider using raw SQL with array_remove().
         """
-        team = await self.find_by_id(team_id)
+        team: Final = await self.find_by_id(team_id)
         if team is None:
             return None
 
-        members = [m for m in team.members if m != user_id]
+        members: Final = [m for m in _team_arrays(team).members if m != user_id]
         return await self.update(team_id, {"members": members}, id_field="team_id")
 
-    async def add_admin(self, team_id: str, user_id: str) -> Optional[LiteLLM_TeamTable]:
+    async def add_admin(self, team_id: str, user_id: str) -> LiteLLM_TeamTable | None:
         """Add an admin to a team using atomic array push operation."""
         if not await self.exists(team_id, id_field="team_id"):
             return None
 
-        record = await self.table.update(
+        record: Final = await self.table.update(
             where={"team_id": team_id},
             data={"admins": {"push": user_id}},
         )
         return self._to_model(record)
 
-    async def remove_admin(self, team_id: str, user_id: str) -> Optional[LiteLLM_TeamTable]:
+    async def remove_admin(self, team_id: str, user_id: str) -> LiteLLM_TeamTable | None:
         """Remove an admin from a team.
 
         Note: Prisma doesn't support atomic array removal, so we use a
         read-modify-write pattern here. For high-concurrency scenarios,
         consider using raw SQL with array_remove().
         """
-        team = await self.find_by_id(team_id)
+        team: Final = await self.find_by_id(team_id)
         if team is None:
             return None
 
-        admins = [a for a in team.admins if a != user_id]
+        admins: Final = [a for a in _team_arrays(team).admins if a != user_id]
         return await self.update(team_id, {"admins": admins}, id_field="team_id")
 
-    async def add_models(self, team_id: str, models: List[str]) -> Optional[LiteLLM_TeamTable]:
+    async def add_models(self, team_id: str, models: list[str]) -> LiteLLM_TeamTable | None:
         """Add models to a team's allowed models list using atomic array push."""
         if not await self.exists(team_id, id_field="team_id"):
             return None
 
-        record = await self.table.update(
+        record: Final = await self.table.update(
             where={"team_id": team_id},
             data={"models": {"push": models}},
         )
         return self._to_model(record)
 
-    async def remove_models(self, team_id: str, models: List[str]) -> Optional[LiteLLM_TeamTable]:
+    async def remove_models(self, team_id: str, models: list[str]) -> LiteLLM_TeamTable | None:
         """Remove models from a team's allowed models list.
 
         Note: Prisma doesn't support atomic array removal, so we use a
         read-modify-write pattern here. For high-concurrency scenarios,
         consider using raw SQL with array_remove().
         """
-        team = await self.find_by_id(team_id)
+        team: Final = await self.find_by_id(team_id)
         if team is None:
             return None
 
-        current_models = [m for m in team.models if m not in models]
+        current_models: Final = [m for m in _team_arrays(team).models if m not in models]
         return await self.update(team_id, {"models": current_models}, id_field="team_id")

@@ -3,43 +3,43 @@ Translate from OpenAI's `/v1/audio/transcriptions` to Groq's `/v1/audio/transcri
 """
 
 import types
-from typing import List, Optional, Union
+from typing import Final
 
 import litellm
 
 
 class GroqSTTConfig:
-    frequency_penalty: Optional[int] = None
-    function_call: Optional[Union[str, dict]] = None
-    functions: Optional[list] = None
-    logit_bias: Optional[dict] = None
-    max_tokens: Optional[int] = None
-    n: Optional[int] = None
-    presence_penalty: Optional[int] = None
-    stop: Optional[Union[str, list]] = None
-    temperature: Optional[int] = None
-    top_p: Optional[int] = None
-    response_format: Optional[dict] = None
-    tools: Optional[list] = None
-    tool_choice: Optional[Union[str, dict]] = None
+    frequency_penalty: int | None = None
+    function_call: str | dict | None = None
+    functions: list | None = None
+    logit_bias: dict | None = None
+    max_tokens: int | None = None
+    n: int | None = None
+    presence_penalty: int | None = None
+    stop: str | list | None = None
+    temperature: int | None = None
+    top_p: int | None = None
+    response_format: dict | None = None
+    tools: list | None = None
+    tool_choice: str | dict | None = None
 
     def __init__(
         self,
-        frequency_penalty: Optional[int] = None,
-        function_call: Optional[Union[str, dict]] = None,
-        functions: Optional[list] = None,
-        logit_bias: Optional[dict] = None,
-        max_tokens: Optional[int] = None,
-        n: Optional[int] = None,
-        presence_penalty: Optional[int] = None,
-        stop: Optional[Union[str, list]] = None,
-        temperature: Optional[int] = None,
-        top_p: Optional[int] = None,
-        response_format: Optional[dict] = None,
-        tools: Optional[list] = None,
-        tool_choice: Optional[Union[str, dict]] = None,
+        frequency_penalty: int | None = None,
+        function_call: str | dict | None = None,
+        functions: list | None = None,
+        logit_bias: dict | None = None,
+        max_tokens: int | None = None,
+        n: int | None = None,
+        presence_penalty: int | None = None,
+        stop: str | list | None = None,
+        temperature: int | None = None,
+        top_p: int | None = None,
+        response_format: dict | None = None,
+        tools: list | None = None,
+        tool_choice: str | dict | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -70,7 +70,7 @@ class GroqSTTConfig:
             "language",
         ]
 
-    def get_supported_openai_response_formats_stt(self) -> List[str]:
+    def get_supported_openai_response_formats_stt(self) -> list[str]:
         return ["json", "verbose_json", "text"]
 
     def map_openai_params_stt(
@@ -80,7 +80,7 @@ class GroqSTTConfig:
         model: str,
         drop_params: bool,
     ) -> dict:
-        response_formats = self.get_supported_openai_response_formats_stt()
+        response_formats: Final = self.get_supported_openai_response_formats_stt()
         for param, value in non_default_params.items():
             if param == "response_format":
                 if value in response_formats:
@@ -90,9 +90,7 @@ class GroqSTTConfig:
                         pass
                     else:
                         raise litellm.utils.UnsupportedParamsError(
-                            message="Groq doesn't support response_format={}. To drop unsupported openai params from the call, set `litellm.drop_params = True`".format(
-                                value
-                            ),
+                            message=f"Groq doesn't support response_format={value}. To drop unsupported openai params from the call, set `litellm.drop_params = True`",
                             status_code=400,
                         )
             else:

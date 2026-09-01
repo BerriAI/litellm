@@ -767,7 +767,7 @@ class TestErrorHandling:
                 "API Error", request=MagicMock(), response=MagicMock(status_code=500)
             ),
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='Generic Guardrail API failed: API Error') as exc_info:
                 await generic_guardrail.apply_guardrail(
                     inputs={"texts": ["test"]},
                     request_data=mock_request_data_input,
@@ -786,7 +786,7 @@ class TestErrorHandling:
             "post",
             side_effect=httpx.RequestError("Connection failed", request=MagicMock()),
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='Generic Guardrail API failed: Connection failed') as exc_info:
                 await generic_guardrail.apply_guardrail(
                     inputs={"texts": ["test"]},
                     request_data=mock_request_data_input,
@@ -810,7 +810,7 @@ class TestErrorHandling:
             "post",
             side_effect=httpx.RequestError("Connection failed", request=MagicMock()),
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(Exception, match='Generic Guardrail API failed: Connection failed') as exc_info:
                 await guardrail.apply_guardrail(
                     inputs={"texts": ["test"]},
                     request_data=mock_request_data_input,

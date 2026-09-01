@@ -1,11 +1,6 @@
-import os
-import sys
 import json
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,

@@ -4,20 +4,28 @@ Rules for `litellm-rust/crates/core`.
 
 ## Responsibility
 
-`core` owns shared data types, typed errors, and deterministic helper contracts.
-It must stay pure and host-independent.
+`core` is the LiteLLM SDK in Rust: it makes the LLM call. Every top-level
+LiteLLM call has a public entrypoint here, named after the route
+(`messages::messages()` is the Rust equivalent of `litellm.messages()`), and
+calling it returns a typed non-streaming response.
 
 Allowed:
+- The public entrypoint for a route, plus its `<route>_stream` variant when the
+  route supports streaming.
+- Provider resolution, auth header construction, URL building, and the provider
+  HTTP call (shared reused client, connect + request timeouts).
 - Shared request/response structs.
 - Typed errors with stable, non-sensitive messages.
 - Deterministic validation helpers.
 - Serialization helpers that intentionally mirror Python output shape.
 - Route templates that match Python base config responsibilities, such as
-  `ocr::transformation::OcrProviderConfig`.
+  `messages::transformation::AnthropicMessagesProviderConfig`.
 
 Not allowed:
-- Network, filesystem, database, cache, or environment access.
-- Secret reads or auth/header construction.
+- Serving HTTP: axum routers, extractors, and other transport concerns.
+- Filesystem, database, or cache access.
+- Config file reading or rollout state; the host resolves those and passes them
+  in. Env reads are limited to credential fallback in a route's `prepare.rs`.
 - Logging callbacks, tracing spans, spend writes, or customer callbacks.
 - Provider-specific branching that belongs in `providers`.
 - Panics for user/provider-controlled input.
@@ -33,9 +41,20 @@ typed field on a struct, not a raw string threaded through the API.
 
 ## Structure
 
-Use route names directly under `src/`: `ocr`, future `messages`,
+Use route names directly under `src/`: `messages`, `ocr`, future
 `chat_completions`, `embeddings`, and similar top-level LiteLLM calls. Do not
 invent broad names like `engine` for route contracts.
+
+`src/messages` is the reference shape for a route module:
+
+```
+mod.rs             pub async fn messages(..) (+ messages_stream)
+types.rs           request/response types
+transformation.rs  the provider template trait
+prepare.rs         provider resolution, auth headers, URL
+handler.rs         the provider call
+client.rs          the shared reqwest client
+```
 
 ## Parity Rules
 

@@ -8,14 +8,10 @@ These tests verify that:
 """
 
 import os
-import sys
 from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase

@@ -13,7 +13,7 @@ def test_create_aiohttp_transport_sets_enable_cleanup_closed_when_needed(monkeyp
     ) as mock_tcp_connector:
         with patch.object(
             http_handler_module, "ClientSession", return_value=session_mock
-        ):
+        ), patch.object(http_handler_module, "DummyCookieJar", return_value=MagicMock(name="cookie_jar")):
             transport = http_handler_module.AsyncHTTPHandler._create_aiohttp_transport(
                 shared_session=None
             )
@@ -36,7 +36,7 @@ def test_create_aiohttp_transport_omits_enable_cleanup_closed_when_not_needed(
     ) as mock_tcp_connector:
         with patch.object(
             http_handler_module, "ClientSession", return_value=session_mock
-        ):
+        ), patch.object(http_handler_module, "DummyCookieJar", return_value=MagicMock(name="cookie_jar")):
             transport = http_handler_module.AsyncHTTPHandler._create_aiohttp_transport(
                 shared_session=None
             )

@@ -1,7 +1,7 @@
 """Payload builders for Opik traces and spans."""
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Final
 
 from litellm import _logging
 from litellm.integrations.opik import utils
@@ -12,17 +12,17 @@ from . import types
 def build_trace_payload(
     project_name: str,
     trace_id: str,
-    response_obj: Dict[str, Any],
+    response_obj: dict[str, Any],
     start_time: datetime,
     end_time: datetime,
     input_data: Any,
     output_data: Any,
-    metadata: Dict[str, Any],
-    tags: List[str],
-    thread_id: Optional[str],
+    metadata: dict[str, object],
+    tags: list[str],
+    thread_id: str | None,
 ) -> types.TracePayload:
     """Build a complete trace payload."""
-    trace_name = response_obj.get("object", "unknown type")
+    trace_name: Final[str] = response_obj.get("object", "unknown type")
 
     return types.TracePayload(
         project_name=project_name,
@@ -41,27 +41,27 @@ def build_trace_payload(
 def build_span_payload(
     project_name: str,
     trace_id: str,
-    parent_span_id: Optional[str],
-    response_obj: Dict[str, Any],
+    parent_span_id: str | None,
+    response_obj: dict[str, Any],
     start_time: datetime,
     end_time: datetime,
     input_data: Any,
     output_data: Any,
-    metadata: Dict[str, Any],
-    tags: List[str],
-    usage: Dict[str, int],
-    provider: Optional[str] = None,
-    cost: Optional[float] = None,
+    metadata: dict[str, object],
+    tags: list[str],
+    usage: dict[str, int],
+    provider: str | None = None,
+    cost: float | None = None,
 ) -> types.SpanPayload:
     """Build a complete span payload."""
-    span_id = utils.create_uuid7()
+    span_id: Final = utils.create_uuid7()
 
-    model = response_obj.get("model", "unknown-model")
-    obj_type = response_obj.get("object", "unknown-object")
-    created = response_obj.get("created", 0)
-    span_name = f"{model}_{obj_type}_{created}"
+    model: Final[str] = response_obj.get("model", "unknown-model")
+    obj_type: Final[str] = response_obj.get("object", "unknown-object")
+    created: Final[int] = response_obj.get("created", 0)
+    span_name: Final = f"{model}_{obj_type}_{created}"
 
-    _logging.verbose_logger.debug(f"OpikLogger creating span with id {span_id} for trace {trace_id}")
+    _logging.verbose_logger.debug("OpikLogger creating span with id %s for trace %s", span_id, trace_id)
 
     return types.SpanPayload(
         id=span_id,

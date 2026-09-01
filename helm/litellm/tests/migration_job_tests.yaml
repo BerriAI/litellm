@@ -1,0 +1,190 @@
+suite: test migrations Job ServiceAccount resolution and pod hardening
+templates:
+  - migrations-job.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: borrows the namespace default account when no ServiceAccount is configured
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: default
+
+  - it: falls back to the namespace default account when the chart creates the backend ServiceAccount
+    set:
+      serviceAccounts.backend.create: true
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: default
+      - notEqual:
+          path: spec.template.spec.serviceAccountName
+          value: RELEASE-NAME-litellm-backend
+
+  - it: keeps sharing an existing backend ServiceAccount the chart does not create
+    set:
+      serviceAccounts.backend.create: false
+      serviceAccounts.backend.name: existing-backend-sa
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: existing-backend-sa
+
+  - it: prefers an explicit migration ServiceAccount over the created backend one
+    set:
+      serviceAccounts.backend.create: true
+      migrationJob.serviceAccountName: migrations-sa
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: migrations-sa
+
+  - it: prefers an explicit migration ServiceAccount over an existing backend one
+    set:
+      serviceAccounts.backend.create: false
+      serviceAccounts.backend.name: existing-backend-sa
+      migrationJob.serviceAccountName: migrations-sa
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: migrations-sa
+
+  - it: mounts no ServiceAccount token by default
+    asserts:
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+
+  - it: mounts a ServiceAccount token when the operator asks for one
+    set:
+      migrationJob.automountServiceAccountToken: true
+    asserts:
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: true
+
+  - it: keeps the token off the Job when the backend disables automounting
+    set:
+      serviceAccounts.backend.create: true
+      serviceAccounts.backend.automount: false
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: default
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+
+  - it: renders no hardening fields by default
+    asserts:
+      - isNull:
+          path: spec.template.spec.securityContext
+      - isNull:
+          path: spec.template.spec.containers[0].securityContext
+      - isNull:
+          path: spec.template.spec.volumes
+      - isNull:
+          path: spec.template.spec.containers[0].volumeMounts
+      - equal:
+          path: spec.template.metadata.labels
+          value:
+            app.kubernetes.io/name: litellm
+            app.kubernetes.io/instance: RELEASE-NAME
+            app.kubernetes.io/managed-by: Helm
+            helm.sh/chart: litellm-0.1.0
+            app.kubernetes.io/component: migrations
+
+  - it: renders pod-level and container-level securityContext in their own scopes
+    set:
+      migrationJob.podSecurityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      migrationJob.securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext
+          value:
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
+      - equal:
+          path: spec.template.spec.containers[0].securityContext
+          value:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
+  - it: renders volumes on the pod and volumeMounts on the migration container
+    set:
+      migrationJob.volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+      migrationJob.volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes
+          value:
+            - name: tmp
+              emptyDir:
+                sizeLimit: 64Mi
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts
+          value:
+            - name: tmp
+              mountPath: /tmp
+
+  - it: merges podLabels with the chart labels on the Job pod
+    set:
+      migrationJob.podLabels:
+        egress-policy: restricted
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels['egress-policy']
+          value: restricted
+      - equal:
+          path: spec.template.metadata.labels['app.kubernetes.io/component']
+          value: migrations
+
+  - it: accepts a podLabel that reuses a chart label, since the Job selector is controller-generated
+    set:
+      migrationJob.podLabels:
+        app.kubernetes.io/component: batch-migrations
+    asserts:
+      - notFailedTemplate: {}
+      - equal:
+          path: spec.template.metadata.labels['app.kubernetes.io/component']
+          value: batch-migrations
+
+  - it: bounds the Job with a deadline by default, so a blocked migration cannot stall the release forever
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 1800
+
+  - it: honours an operator-supplied deadline
+    set:
+      migrationJob.activeDeadlineSeconds: 600
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 600
+
+  - it: omits the deadline entirely when it is nulled out, restoring the unbounded behaviour
+    set:
+      migrationJob.activeDeadlineSeconds: null
+    asserts:
+      - notExists:
+          path: spec.activeDeadlineSeconds

@@ -86,7 +86,6 @@ class TestOllamaChatConfigResponseFormat:
     def test_transform_request_loads_config_parameters(self):
         """Test that transform_request loads config parameters without overriding existing optional_params"""
         # Set config parameters on the class
-        import litellm
 
         litellm.OllamaChatConfig(num_ctx=8000, temperature=0.0)
 
@@ -383,7 +382,6 @@ class TestOllamaToolCalling:
         import json
         from unittest.mock import MagicMock
 
-        import litellm
         from litellm.types.utils import Choices, Message, ModelResponse
 
         config = OllamaChatConfig()
