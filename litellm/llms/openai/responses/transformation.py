@@ -1,10 +1,11 @@
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast, get_type_hints
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
 from pydantic import BaseModel, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -35,6 +36,36 @@ else:
 _NO_TOOL_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 _MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("gpt-4", "gpt-3.5", "chatgpt-4o", "o1", "o3", "o4")
 _PROVIDERS_WITH_COMBINATOR_REJECTING_VALIDATOR: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
+
+
+class _DeleteResponseBody(TypedDict):
+    """Decoded body of the Responses API delete call."""
+
+    id: ReadOnly[str | None]
+    object: ReadOnly[str | None]
+    deleted: ReadOnly[bool | None]
+
+
+class _DeleteResponse(Protocol):
+    """The delete call's HTTP response, read for the decoded body it carries."""
+
+    def json(self) -> _DeleteResponseBody: ...
+
+
+class _JsonObjectResponse(Protocol):
+    """A Responses API HTTP response, read for the JSON object it decodes to."""
+
+    def json(self) -> dict[str, object]: ...
+
+
+def _delete_response_body(response: _DeleteResponse) -> _DeleteResponseBody:
+    """Decode a delete response body into the id, object and deleted fields it carries."""
+    return response.json()
+
+
+def _json_object_body(response: _JsonObjectResponse) -> dict[str, object]:
+    """Decode a Responses API response body into its JSON object form."""
+    return response.json()
 
 
 class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
@@ -469,7 +500,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return None
 
     @staticmethod
-    def get_event_model_class(event_type: str) -> Any:
+    def get_event_model_class(event_type: str) -> type[BaseLiteLLMOpenAIResponseObject]:
         """
         Returns the appropriate event model class based on the event type.
 
@@ -583,7 +614,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         Transform the delete response API response into a DeleteResponseResult
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _delete_response_body(raw_response)
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
         return DeleteResponseResult(**raw_response_json)
@@ -618,7 +649,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         Transform the get response API response into a ResponsesAPIResponse
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _json_object_body(raw_response)
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
         raw_response_headers: Final = dict(raw_response.headers)
@@ -646,7 +677,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     ) -> tuple[str, dict]:
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
         url: Final = f"{api_base}/{encoded_response_id}/input_items"
-        params: Final[dict[str, Any]] = {}
+        params: Final[dict[str, object]] = {}
         if after is not None:
             params["after"] = after
         if before is not None:
@@ -665,7 +696,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> dict:
         try:
-            return raw_response.json()
+            return _json_object_body(raw_response)
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
 
@@ -699,7 +730,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         Transform the cancel response API response into a ResponsesAPIResponse
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _json_object_body(raw_response)
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
         raw_response_headers: Final = dict(raw_response.headers)

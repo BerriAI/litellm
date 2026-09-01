@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 
 import httpx
 from pydantic import ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
@@ -125,7 +126,25 @@ else:
 _ANTHROPIC_TOOL_NAME_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
 _ANTHROPIC_TOOL_NAME_MAX_LEN: Final = 128
 
-_ENUM_TYPE_CHECKS: Final[Mapping[str, Callable[[Any], bool]]] = MappingProxyType(
+
+class _AnthropicUsageIteration(TypedDict, total=False):
+    """One entry of the ``usage.iterations`` array on an Anthropic response."""
+
+    input_tokens: ReadOnly[int | None]
+    output_tokens: ReadOnly[int | None]
+    cache_creation_input_tokens: ReadOnly[int | None]
+    cache_read_input_tokens: ReadOnly[int | None]
+
+
+class _AnthropicToolResultBlock(TypedDict, total=False):
+    """A ``*_tool_result`` content block on an Anthropic response."""
+
+    type: ReadOnly[str]
+    tool_use_id: ReadOnly[str]
+    content: ReadOnly[object]
+
+
+_ENUM_TYPE_CHECKS: Final[Mapping[str, Callable[[object], bool]]] = MappingProxyType(
     {
         "null": lambda v: v is None,
         "boolean": lambda v: isinstance(v, bool),
@@ -440,7 +459,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         optional_params.pop("speed", None)
 
     @staticmethod
-    def _raise_invalid_reasoning_effort(model: str, value: Any, llm_provider: str) -> NoReturn:
+    def _raise_invalid_reasoning_effort(model: str, value: object, llm_provider: str) -> NoReturn:
         """Raise a ``BadRequestError`` for an unrecognised ``reasoning_effort``.
 
         Args:
@@ -2059,22 +2078,22 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         self, completion_response: dict
     ) -> tuple[
         str,
-        list[Any] | None,
+        list[object] | None,
         list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None,
         str | None,
         list[ChatCompletionToolCallChunk],
-        list[Any] | None,
-        list[Any] | None,
-        list[Any] | None,
+        list[object] | None,
+        list[_AnthropicToolResultBlock] | None,
+        list[object] | None,
     ]:
         text_content = ""
-        citations: list[Any] | None = None
+        citations: list[object] | None = None
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None = None
         reasoning_content: str | None = None
         tool_calls: Final[list[ChatCompletionToolCallChunk]] = []
-        web_search_results: list[Any] | None = None
-        tool_results: list[Any] | None = None
-        compaction_blocks: list[Any] | None = None
+        web_search_results: list[object] | None = None
+        tool_results: list[_AnthropicToolResultBlock] | None = None
+        compaction_blocks: list[object] | None = None
         for idx, content in enumerate(completion_response["content"]):
             if content["type"] == "text":
                 text_content += content["text"]
@@ -2284,7 +2303,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         raw_speed: Final = _usage.get("speed")
         resolved_speed: Final = raw_speed if isinstance(raw_speed, str) else speed
 
-        iterations: Final[list[Any] | None] = _usage.get("iterations")
+        iterations: Final[Sequence[_AnthropicUsageIteration] | None] = _usage.get("iterations")
         if iterations:
             prompt_tokens = sum(it.get("input_tokens", 0) or 0 for it in iterations)
             completion_tokens = sum(it.get("output_tokens", 0) or 0 for it in iterations)
@@ -2377,7 +2396,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     def _build_code_interpreter_results(
         self,
-        tool_results: list[Any],
+        tool_results: Sequence[_AnthropicToolResultBlock],
         code_by_id: dict[str, str],
         container_id: str | None,
     ) -> list[OutputCodeInterpreterCall]:
@@ -2403,11 +2422,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def _build_provider_specific_fields(
         self,
         completion_response: dict,
-        citations: list[Any] | None,
+        citations: Sequence[object] | None,
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None,
-        web_search_results: list[Any] | None,
-        tool_results: list[Any] | None,
-        compaction_blocks: list[Any] | None,
+        web_search_results: Sequence[object] | None,
+        tool_results: Sequence[_AnthropicToolResultBlock] | None,
+        compaction_blocks: Sequence[object] | None,
         tool_calls: list[ChatCompletionToolCallChunk],
     ) -> dict[str, Any]:
         provider_specific_fields: Final[dict[str, Any]] = {
