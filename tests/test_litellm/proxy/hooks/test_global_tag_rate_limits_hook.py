@@ -611,6 +611,127 @@ async def test_apply_to_models_accounts_when_a_fallback_retry_re_admits_with_a_d
 
 
 @pytest.mark.asyncio
+async def test_apply_to_models_enforces_for_a_comma_separated_batch_model(time_controller, monkeypatch):
+    """Bugbot finding: a caller can dodge a chain-wide apply_to_models cap by
+    routing through Router.abatch_completion's comma-separated `model` --
+    admission checks the individual names, not the raw joined string, which
+    would never match any configured apply_to_models entry."""
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "concurrency_limits": {
+                "limits": [
+                    {
+                        "name": "chain_cap",
+                        "tag_id": "end_user_id",
+                        "limit": 1,
+                        "period_seconds": 60,
+                        "apply_to_models": ["opus-chain"],
+                    }
+                ]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    await hook.async_pre_call_hook(
+        user_api_key_dict=_key(),
+        cache=DualCache(),
+        data={**_data(["end_user_id:u1"], call_id="call-1"), "model": "opus-chain"},
+        call_type="acompletion",
+    )
+    with pytest.raises(ProxyRateLimitError):
+        await hook.async_pre_call_hook(
+            user_api_key_dict=_key(),
+            cache=DualCache(),
+            data={**_data(["end_user_id:u1"], call_id="call-2"), "model": "opus-chain,other-model"},
+            call_type="acompletion",
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_to_models_accounts_dollar_spend_from_a_batch_admission(time_controller, monkeypatch):
+    """Same gap as above, at success-time accounting: the batch admission's
+    own admitted_models must record each individual name, not the joined
+    string, or the spend never lands in the chain-scoped bucket at all."""
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "dollar_limits": {
+                "limits": [
+                    {
+                        "name": "chain_spend",
+                        "tag_id": "end_user_id",
+                        "limit": 10.0,
+                        "period_seconds": 86400,
+                        "apply_to_models": ["opus-chain"],
+                    }
+                ]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    await hook.async_pre_call_hook(
+        user_api_key_dict=_key(),
+        cache=DualCache(),
+        data={**_data(["end_user_id:u1"], call_id="call-1"), "model": "opus-chain,other-model"},
+        call_type="acompletion",
+    )
+    kwargs = {
+        "litellm_call_id": "call-1",
+        "metadata": {"tags": ["end_user_id:u1"]},
+        "standard_logging_object": {"total_tokens": 0, "response_cost": 12.0},
+    }
+    await hook.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=0, end_time=0)
+    await asyncio.sleep(0)
+
+    with pytest.raises(ProxyRateLimitError):
+        await hook.async_pre_call_hook(
+            user_api_key_dict=_key(),
+            cache=DualCache(),
+            data={**_data(["end_user_id:u1"], call_id="call-2"), "model": "opus-chain"},
+            call_type="acompletion",
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_to_models_batch_split_requires_the_acompletion_call_type(time_controller, monkeypatch):
+    """route_llm_request.py only splits a comma-separated model for
+    call_type acompletion -- any other call type never reaches
+    Router.abatch_completion, so a comma there is just a literal (if odd)
+    model name and must not be split."""
+    monkeypatch.setattr(
+        litellm,
+        "global_tag_rate_limits",
+        {
+            "concurrency_limits": {
+                "limits": [
+                    {
+                        "name": "chain_cap",
+                        "tag_id": "end_user_id",
+                        "limit": 1,
+                        "period_seconds": 60,
+                        "apply_to_models": ["opus-chain"],
+                    }
+                ]
+            }
+        },
+    )
+    hook = _make_hook(time_controller)
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=_key(),
+        cache=DualCache(),
+        data={**_data(["end_user_id:u1"], call_id="call-1"), "model": "opus-chain,other-model"},
+        call_type="embedding",
+    )
+    assert result is not None
+
+
+@pytest.mark.asyncio
 async def test_a_rejected_admission_attempts_model_does_not_drive_later_accounting(time_controller, monkeypatch):
     """
     A fallback retry's FIRST attempt can itself be rejected (by this same
