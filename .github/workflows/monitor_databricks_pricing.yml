@@ -38,6 +38,7 @@ jobs:
         if: steps.monitor.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN_FOR_PUSH: ${{ secrets.GITHUB_TOKEN }}
         run: |
           BRANCH="monitor-dbx-pricing-$(date +'%Y-%m-%d')"
           git config user.name "github-actions[bot]"
@@ -49,7 +50,7 @@ jobs:
 Automated daily monitor detected changed DBU rates on
 https://www.databricks.com/product/pricing/foundation-model-serving
 Updated entries: databricks/databricks-deepseek-v4-*"
-          git push origin "$BRANCH"
+          git push "https://x-access-token:${GITHUB_TOKEN_FOR_PUSH}@github.com/${GITHUB_REPOSITORY}.git" "$BRANCH"
           gh pr create --repo "${{ github.repository }}" \
             --base litellm_internal_staging \
             --head "$BRANCH" \
