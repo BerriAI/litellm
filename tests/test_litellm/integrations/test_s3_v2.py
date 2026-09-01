@@ -1174,12 +1174,11 @@ def test_create_s3_batch_logging_element_flat_key_for_arn_response_id():
 # object keys bounded to S3's 1024 UTF-8 byte limit
 # --------------------------------------------------------------
 def _oversized_response_id() -> str:
-    """A Responses API id long enough on its own to blow past the 1024 byte cap."""
     return "resp_" + "A" * 1100
 
 
 def test_s3_object_key_at_the_byte_limit_is_left_alone():
-    """A key that still fits must stay byte-identical, hash-free."""
+    """A key that still fits is left byte-identical."""
     from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
     from litellm.integrations.s3 import get_s3_object_key
 
@@ -1194,8 +1193,7 @@ def test_s3_object_key_at_the_byte_limit_is_left_alone():
 
 
 def test_s3_object_key_is_bounded_for_oversized_response_id():
-    """The reported failure: an oversized Responses API id pushed the key past
-    1024 bytes and S3 rejected the PUT with a 400."""
+    """An oversized Responses API id is shortened to a readable head plus a digest."""
     import hashlib
 
     from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
@@ -1218,13 +1216,12 @@ def test_s3_object_key_is_bounded_for_oversized_response_id():
         ("a" * 900, ""),
         ("input", "team-" + "b" * 900 + "/"),
         ("c" * 600, "team-" + "d" * 600 + "/key-" + "e" * 600 + "/"),
-        # many short segments: the whole-segment trim lands right at the budget edge,
-        # so this pins the byte arithmetic (date segment included) rather than just the cap
+        # many short segments, so the trim lands exactly on the budget edge
         ("", "ssss/" * 200),
     ],
 )
 def test_s3_object_key_is_bounded_for_long_paths_and_aliases(s3_path: str, prefix: str):
-    """Long configured paths, team aliases and key aliases must not reintroduce the overflow."""
+    """Long paths, team aliases and key aliases stay within the cap."""
     from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
     from litellm.integrations.s3 import get_s3_object_key
 
@@ -1237,14 +1234,12 @@ def test_s3_object_key_is_bounded_for_long_paths_and_aliases(s3_path: str, prefi
 
     assert len(key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES
     assert key.endswith(".json")
-    # lifecycle rules and prefix-scoped IAM policies are written against `<prefix>/<date>/<file>`
     assert "/2026-08-24/" in key or key.startswith("2026-08-24/")
     assert "/" not in key.rsplit("2026-08-24/", 1)[1]
 
 
 def test_s3_object_key_trimmed_prefixes_stay_distinct_per_operator():
-    """Two configured prefixes that only differ past the trim point must not collapse into one
-    folder, or one operator's records land on top of another's."""
+    """Prefixes that differ only past the trim point keep separate folders."""
     from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
     from litellm.integrations.s3 import get_s3_object_key
 
@@ -1259,15 +1254,13 @@ def test_s3_object_key_trimmed_prefixes_stay_distinct_per_operator():
         for suffix in ("-one", "-two")
     ]
 
-    # both prefixes trim to the same 900+ byte head, so only the digest keeps them apart
     assert keys[0] != keys[1]
     assert all(key.startswith("input/team-" + "b" * 900) for key in keys)
     assert all(len(key.encode("utf-8")) == MAX_S3_OBJECT_KEY_BYTES for key in keys)
 
 
 def test_s3_object_key_bounded_prefix_never_splits_a_multibyte_character():
-    """A multibyte prefix is trimmed on a character boundary, so the surviving head is a
-    verbatim prefix of what the operator configured rather than a mangled partial character."""
+    """A multibyte prefix is trimmed on a character boundary."""
     from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
     from litellm.integrations.s3 import get_s3_object_key
 
@@ -1281,14 +1274,12 @@ def test_s3_object_key_bounded_prefix_never_splits_a_multibyte_character():
     )
 
     assert len(key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES
-    # a byte slice would end on half a character, and decoding it with errors="replace"
-    # would leave U+FFFD where the operator's path used to be
     assert key.startswith(s3_path[:100])
     assert "\ufffd" not in key
 
 
 def test_s3_object_key_stays_unique_for_ids_sharing_a_head():
-    """Shortening must not collide: two ids with the same visible head keep distinct keys."""
+    """Ids sharing a visible head still get distinct keys."""
     from litellm.integrations.s3 import get_s3_object_key
 
     start_time = datetime(2026, 8, 24, 6, 18, 41, 948021)
@@ -1306,8 +1297,7 @@ def test_s3_object_key_stays_unique_for_ids_sharing_a_head():
 
 
 def test_s3_object_key_bounding_matches_the_documented_layout():
-    """The bounded key is a readable head of the file name plus the sha256 of the whole name,
-    under the configured prefix and date folders, so a reader can recompute it from the payload."""
+    """The bounded key is `<prefix>/<date>/<head>_<sha256>.json`."""
     import hashlib
 
     from litellm.integrations.s3 import get_s3_object_key
@@ -1326,8 +1316,7 @@ def test_s3_object_key_bounding_matches_the_documented_layout():
 
 
 def test_s3_object_key_keeps_the_configured_prefix_when_only_the_id_overflows():
-    """The id is what runs away, so it gets shortened first: an 940 byte configured prefix
-    survives whole and the key spends the rest of the budget rather than trimming folders."""
+    """A 940 byte configured prefix survives whole when only the id overflows."""
     from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
     from litellm.integrations.s3 import get_s3_object_key
 
@@ -1345,8 +1334,7 @@ def test_s3_object_key_keeps_the_configured_prefix_when_only_the_id_overflows():
 
 
 def test_s3_object_key_spends_the_whole_budget_when_the_prefix_must_be_trimmed():
-    """Trimming has to stop at the byte limit, not at the nearest folder boundary, or hundreds
-    of bytes of the operator's configured path are thrown away for nothing."""
+    """A trimmed prefix keeps every byte the budget allows, not whole segments."""
     from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
     from litellm.integrations.s3 import get_s3_object_key
 
@@ -1360,13 +1348,11 @@ def test_s3_object_key_spends_the_whole_budget_when_the_prefix_must_be_trimmed()
     )
 
     assert len(key.encode("utf-8")) == MAX_S3_OBJECT_KEY_BYTES
-    # the second segment is where the trim lands, so it must survive as far as the budget allows
     assert key.startswith("p" * 400 + "/" + "q" * 500)
 
 
 def test_s3_object_key_keeps_a_single_segment_path_as_far_as_it_fits():
-    """A configured path with no folder separator must not be discarded wholesale, or the object
-    lands at the bucket root outside the s3_path a prefix scoped IAM policy allows."""
+    """A path with no separator is kept as far as it fits, never dropped to the bucket root."""
     from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
     from litellm.integrations.s3 import get_s3_object_key
 
@@ -1382,8 +1368,7 @@ def test_s3_object_key_keeps_a_single_segment_path_as_far_as_it_fits():
 
 
 def test_create_s3_batch_logging_element_bounds_key_and_keeps_full_response_id():
-    """End to end through the s3_v2 element builder: the key is bounded while the
-    uploaded payload still carries the untouched response id."""
+    """The batch element bounds the key and keeps the full response id in the payload."""
     from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
 
     logger = S3Logger(s3_use_team_prefix=True, s3_use_key_prefix=True)
@@ -1403,8 +1388,7 @@ def test_create_s3_batch_logging_element_bounds_key_and_keeps_full_response_id()
 
 
 def test_s3_object_download_filename_is_bounded_for_oversized_response_id():
-    """S3 caps combined metadata headers at 2048 bytes, so the Content-Disposition
-    filename has to be bounded too or the PUT still fails with MetadataTooLarge."""
+    """The Content-Disposition filename is bounded too, or the PUT fails with MetadataTooLarge."""
     from litellm.constants import MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES
     from litellm.integrations.s3 import get_s3_object_download_filename
 
@@ -1416,8 +1400,7 @@ def test_s3_object_download_filename_is_bounded_for_oversized_response_id():
 
 
 def test_s3_object_download_filenames_stay_distinct_when_shortened():
-    """Shortened filenames must not collide, or two records downloaded from the
-    console arrive as the same file."""
+    """Shortened filenames stay distinct."""
     from litellm.integrations.s3 import get_s3_object_download_filename
 
     start_time = datetime(2026, 8, 24, 6, 18, 41, 948021)
@@ -1430,7 +1413,7 @@ def test_s3_object_download_filenames_stay_distinct_when_shortened():
 
 
 def test_s3_object_download_filename_short_id_is_unchanged():
-    """Ordinary response ids keep the exact filename they had before."""
+    """An ordinary response id keeps the filename it had before."""
     from litellm.integrations.s3 import get_s3_object_download_filename
 
     file_name = get_s3_object_download_filename(datetime(2026, 8, 24, 6, 18, 41, 948021), "resp_abc123")
@@ -1439,7 +1422,7 @@ def test_s3_object_download_filename_short_id_is_unchanged():
 
 
 def test_create_s3_batch_logging_element_bounds_the_download_filename():
-    """The element the uploader signs carries a bounded Content-Disposition filename."""
+    """The batch element carries a bounded Content-Disposition filename."""
     from litellm.constants import MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES
 
     logger = S3Logger()
@@ -1453,8 +1436,7 @@ def test_create_s3_batch_logging_element_bounds_the_download_filename():
 
 @pytest.mark.asyncio
 async def test_audit_log_object_key_is_bounded_for_a_long_configured_path():
-    """Audit logs build a key from the same configured s3_path, so they need the same bound
-    or the audit PUT is the one that comes back 400 and the record disappears."""
+    """Audit log keys are bounded by the same builder."""
     from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
 
     logger = S3Logger()
@@ -1468,8 +1450,7 @@ async def test_audit_log_object_key_is_bounded_for_a_long_configured_path():
 
 
 def test_s3_object_download_filename_drops_characters_that_break_the_header():
-    """The filename is interpolated into `Content-Disposition: inline; filename="..."`, so a
-    quote or a path separator in the response id must not escape the quoted string."""
+    """A quote or separator in the response id cannot escape the quoted header value."""
     from litellm.integrations.s3 import get_s3_object_download_filename
 
     file_name = get_s3_object_download_filename(datetime(2026, 8, 24, 6, 18, 41, 948021), 'resp_a"b/c')

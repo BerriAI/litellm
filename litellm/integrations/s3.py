@@ -217,7 +217,7 @@ def _truncate_to_utf8_bytes(value: str, max_bytes: int) -> str:
 
 
 def get_s3_object_download_filename(start_time: datetime, response_id: str) -> str:
-    """Content-Disposition filename, bounded because S3 caps a request's metadata headers at 2048 bytes."""
+    """Content-Disposition filename for the uploaded object, bounded to the metadata header cap."""
     sanitized_response_id: Final = response_id.replace("/", "_").replace('"', "_")
     file_name: Final = f"time-{start_time.strftime('%Y-%m-%dT%H-%M-%S-%f')}_{response_id}"
     sanitized_file_name: Final = f"time-{start_time.strftime('%Y-%m-%dT%H-%M-%S-%f')}_{sanitized_response_id}"
@@ -258,9 +258,8 @@ def get_s3_object_key(
     if len(s3_object_key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES:
         return s3_object_key
 
-    # S3 rejects an over-limit key with a 400 and the record is dropped. Spend the whole budget:
-    # shorten the response id first, and only trim the operator's configured prefix if that is the
-    # part that does not fit, so lifecycle rules and prefix-scoped IAM policies keep matching.
+    # shorten the response id first and only trim the configured prefix if that is what does not
+    # fit, so prefix scoped IAM policies and lifecycle rules keep matching
     budget: Final = MAX_S3_OBJECT_KEY_BYTES - len(date_segment.encode("utf-8")) - len(b".json")
     prefix_bytes: Final = len(configured_prefix.encode("utf-8"))
     if prefix_bytes + S3_MIN_BOUNDED_FILE_NAME_BYTES <= budget:

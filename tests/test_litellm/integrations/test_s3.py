@@ -158,8 +158,7 @@ def test_non_string_key_id_is_dropped_and_valid_algorithm_is_kept():
 
 
 def test_put_object_key_and_filename_are_bounded_for_an_oversized_response_id():
-    """The reported failure hits the sync logger too: an oversized Responses API id pushed
-    the key past S3's 1024 byte limit, so the PUT came back 400 and the record was dropped."""
+    """The sync logger bounds both the key and the Content-Disposition filename."""
     mock_s3_client = _run_log_event(
         {"s3_bucket_name": "test-bucket", "s3_region_name": "us-west-2", "s3_path": "logs"},
         response_id="resp_" + "A" * 1100,
@@ -173,8 +172,7 @@ def test_put_object_key_and_filename_are_bounded_for_an_oversized_response_id():
 
 
 def test_put_object_keeps_the_configured_path_intact_when_only_the_id_has_to_shrink():
-    """A long configured s3_path must survive whole whenever the id can be shortened instead,
-    or a prefix scoped IAM policy stops matching and the PUT is denied."""
+    """A long configured s3_path survives whole when the id can be shortened instead."""
     long_path = "litellm-prod-logs/" + "t" * 921
     mock_s3_client = _run_log_event(
         {"s3_bucket_name": "test-bucket", "s3_region_name": "us-west-2", "s3_path": long_path},
