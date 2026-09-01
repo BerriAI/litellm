@@ -769,3 +769,62 @@ class TestMoonshotResponseSchemaSupport:
     def test_supports_response_schema_utility_reports_true(self, model_cost_map, monkeypatch):
         monkeypatch.setattr(litellm, "model_cost", model_cost_map)
         assert litellm.utils.supports_response_schema(model="moonshot/kimi-k2.5") is True
+
+
+class TestMoonshotReasoningEffort:
+    """Moonshot documents reasoning_effort as a top-level chat completions field for its reasoning
+    models, defaulting to max, but the OpenAI base list this config subtracts from never carried it,
+    so an explicit level raised UnsupportedParamsError before it reached the wire."""
+
+    @pytest.fixture(autouse=True)
+    def force_local_model_cost(self, monkeypatch):
+        monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
+
+    @pytest.mark.parametrize("model", ["kimi-k3", "kimi-k2.5", "kimi-k2.6", "kimi-k2-thinking"])
+    def test_reasoning_model_supports_reasoning_effort(self, model):
+        assert "reasoning_effort" in MoonshotChatConfig().get_supported_openai_params(model)
+
+    @pytest.mark.parametrize("model", ["moonshot-v1-8k", "kimi-latest", "kimi-k2-turbo-preview"])
+    def test_non_reasoning_model_does_not_support_reasoning_effort(self, model):
+        assert "reasoning_effort" not in MoonshotChatConfig().get_supported_openai_params(model)
+
+    @pytest.mark.parametrize("effort", ["low", "high", "max"])
+    def test_declared_effort_reaches_optional_params(self, effort):
+        optional_params = litellm.get_optional_params(
+            model="kimi-k3",
+            custom_llm_provider="moonshot",
+            reasoning_effort=effort,
+            drop_params=False,
+        )
+
+        assert optional_params["reasoning_effort"] == effort
+
+    def test_non_reasoning_model_still_rejects_reasoning_effort(self):
+        with pytest.raises(litellm.UnsupportedParamsError):
+            litellm.get_optional_params(
+                model="moonshot-v1-8k",
+                custom_llm_provider="moonshot",
+                reasoning_effort="high",
+                drop_params=False,
+            )
+
+    def test_bridge_effort_dict_is_unwrapped_to_the_level_string(self):
+        optional_params = MoonshotChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": {"effort": "high", "summary": "detailed"}},
+            optional_params={},
+            model="kimi-k3",
+            drop_params=False,
+        )
+
+        assert optional_params["reasoning_effort"] == "high"
+
+    @pytest.mark.parametrize("value", [{"summary": "detailed"}, {"effort": 3}, 7])
+    def test_effort_without_a_level_string_is_omitted(self, value):
+        optional_params = MoonshotChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": value},
+            optional_params={},
+            model="kimi-k3",
+            drop_params=False,
+        )
+
+        assert "reasoning_effort" not in optional_params

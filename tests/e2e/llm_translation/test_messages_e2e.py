@@ -24,13 +24,32 @@ from models import (
 )
 from pydantic import BaseModel
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.replayable]
 
 
 class _OptionalMessagesBody(BaseModel):
     model: str | None = None
     messages: list[ChatMessage] | None = None
     max_tokens: int | None = None
+
+
+class _MessagesEventDelta(BaseModel):
+    text: str = ""
+
+
+class _MessagesEventUsage(BaseModel):
+    output_tokens: int | None = None
+
+
+class _MessagesStreamEvent(BaseModel):
+    """One Anthropic SSE event, keeping only what the stream's shape is asserted on.
+
+    ``delta.text`` is populated on ``content_block_delta`` and absent on the
+    ``message_delta`` that closes the turn, which is the event carrying ``usage``."""
+
+    type: str
+    delta: _MessagesEventDelta | None = None
+    usage: _MessagesEventUsage | None = None
 
 
 ANTHROPIC_BACKEND = "anthropic/claude-haiku-4-5"
@@ -137,13 +156,14 @@ class TestAnthropicMessages:
     def test_messages_streams_completion(
         self, endpoints_client: EndpointsClient, resources: ResourceManager
     ) -> None:
-        """Stays on a live Anthropic deployment in every mode: the edge buffers a
-        streamed response into one body, so chunk fidelity waits on LIT-5742."""
-        model, key = self._register(
-            endpoints_client,
-            resources,
-            LiteLLMParamsBody(model=ANTHROPIC_BACKEND, api_key="os.environ/ANTHROPIC_API_KEY"),
-        )
+        """Edge-wired like its non-streaming siblings, so record and replay both
+        carry the streamed response.
+
+        Asserts the shape of the event sequence, not just that deltas and a stop
+        appeared somewhere in it: the answer arrives across several deltas, and the
+        usage event sits between the last of them and ``message_stop``. A replay that
+        coalesced the response into one buffered body could not satisfy either."""
+        model, key = self._register(endpoints_client, resources)
 
         result = endpoints_client.proxy.messages_stream(
             key,
@@ -151,18 +171,42 @@ class TestAnthropicMessages:
                 model=model,
                 max_tokens=64,
                 stream=True,
-                messages=[ChatMessage(role="user", content="Count from one to three.")],
+                messages=[ChatMessage(role="user", content="Count from 1 to 20, one number per line.")],
             ),
         )
         require_successful_call(result)
         assert result.is_streaming, f"response was not streamed: {result.headers}"
         assert not result.stream_error, f"stream errored: {result.stream_error}"
         assert result.stream_events, "stream produced no SSE events"
-        assert any("content_block_delta" in event for event in result.stream_events), (
-            "stream carried no content deltas"
+
+        events = [
+            _MessagesStreamEvent.model_validate_json(event) for event in result.stream_events
+        ]
+        types = [event.type for event in events]
+        delta_positions = [
+            index for index, event in enumerate(events) if event.type == "content_block_delta"
+        ]
+        assert len(delta_positions) >= 2, (
+            f"stream carried {len(delta_positions)} content deltas, so it was not "
+            f"incremental: {types}"
         )
-        assert any("message_stop" in event for event in result.stream_events), (
-            "stream never reached message_stop"
+        text = "".join(
+            event.delta.text
+            for event in events
+            if event.type == "content_block_delta" and event.delta is not None
+        )
+        assert text.strip(), f"content deltas assembled to no text: {result.stream_events[:5]}"
+
+        usage_positions = [
+            index
+            for index, event in enumerate(events)
+            if event.type == "message_delta" and event.usage is not None
+        ]
+        assert usage_positions, f"stream never reported usage: {types}"
+        assert "message_stop" in types, f"stream never reached message_stop: {types}"
+        stop_position = types.index("message_stop")
+        assert delta_positions[-1] < usage_positions[0] < stop_position, (
+            f"usage did not land between the last content delta and message_stop: {types}"
         )
 
     @pytest.mark.covers("llm.messages.anthropic.tool_use.nonstream.works")

@@ -8,6 +8,7 @@ import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
+import { regenerateKeyCall } from "../networking";
 
 // Resolve debounced values synchronously so an applied filter lands in the useKeys query within the test tick.
 vi.mock("@tanstack/react-pacer/debouncer", async () => {
@@ -24,6 +25,11 @@ vi.mock("@tanstack/react-pacer/debouncer", async () => {
 });
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
+vi.mock("../networking", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../networking")>()),
+  regenerateKeyCall: vi.fn(),
+}));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: vi.fn(() => ({
@@ -201,6 +207,8 @@ it("left-anchors the create-key CTA below the title, between the header and the 
   renderWithProviders(<VirtualKeysTable headerActions={<button>Create New Key</button>} />);
 
   const heading = screen.getByRole("heading", { name: "Virtual Keys" });
+  expect(screen.getByText("Every key that authenticates requests to the gateway.")).toBeInTheDocument();
+  expect(document.querySelector(".lucide-key-round")).not.toBeNull();
   const ctas = screen.getAllByRole("button", { name: "Create New Key" });
   expect(ctas).toHaveLength(1);
   const cta = ctas[0];
@@ -387,6 +395,28 @@ it("renders KeyInfoView when the URL has ?key= for a key on the current page, wi
     expect(lastKeyParam(onUrlUpdate)).toBeNull();
   });
   expect(screen.getByTestId("pagination-range")).toBeInTheDocument();
+});
+
+it("repoints ?key= to the rotated hash once the regenerate dialog is dismissed", async () => {
+  const user = userEvent.setup();
+  vi.mocked(regenerateKeyCall).mockResolvedValue({
+    key: "sk-rotated-plaintext",
+    token: null,
+    token_id: "rotated-hash-456",
+  });
+  const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+  renderWithProviders(<VirtualKeysTable />, { searchParams: { key: mockKey.token }, onUrlUpdate });
+
+  await user.click(await screen.findByRole("button", { name: /regenerate key/i }));
+  await user.click(await screen.findByRole("button", { name: /^Regenerate$/ }));
+  expect(await screen.findAllByText("sk-rotated-plaintext")).not.toHaveLength(0);
+  expect(lastKeyParam(onUrlUpdate)).toBeUndefined();
+
+  await user.click(screen.getAllByRole("button", { name: "Close" })[0]);
+
+  await waitFor(() => {
+    expect(lastKeyParam(onUrlUpdate)).toBe("rotated-hash-456");
+  });
 });
 
 it("fetches the key by id when the URL has ?key= for a key not in the loaded page", async () => {

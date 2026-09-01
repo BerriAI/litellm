@@ -1,8 +1,9 @@
 """
 Pure-logic contract tests for litellm/proxy/video_endpoints/utils.py
 
-Three helpers the video proxy endpoints lean on:
+Four helpers the video proxy endpoints lean on:
   - extract_model_from_target_model_names: first model from a comma string / list
+  - video_reference_to_id: normalize a video reference (dict / bare id / JSON string) to an id
   - get_custom_provider_from_data: provider precedence (top-level > extra_body)
   - encode_character_id_in_response: re-encode a response id in place
 
@@ -20,6 +21,7 @@ from litellm.proxy.video_endpoints.utils import (
     encode_character_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
+    video_reference_to_id,
 )
 from litellm.types.videos.utils import (
     decode_character_id_with_provider,
@@ -51,6 +53,31 @@ def test_extract_model__str_and_list(value, expected):
 @pytest.mark.parametrize("value", [None, 123, {"a": 1}, 4.5])
 def test_extract_model__non_str_non_list_is_none(value):
     assert extract_model_from_target_model_names(value) is None
+
+
+# =========================================================================== #
+# video_reference_to_id
+# =========================================================================== #
+
+
+@pytest.mark.parametrize(
+    "video_ref,expected",
+    [
+        ({"id": "video_123"}, "video_123"),  # dict reference -> its id
+        ({"id": ""}, ""),  # dict with empty id
+        ({}, ""),  # dict missing id -> default empty
+        ({"other": "x"}, ""),  # dict without id key
+        ("video_123", "video_123"),  # bare id string (not valid JSON) -> itself
+        ('{"id": "video_9"}', "video_9"),  # JSON-encoded dict -> its id
+        ('{"other": 1}', ""),  # JSON-encoded dict without id -> empty
+        ("[1, 2]", "[1, 2]"),  # JSON parses to non-dict -> original string
+        (None, ""),  # non-str, non-dict
+        (123, ""),  # non-str, non-dict
+        (["video_123"], ""),  # list is neither dict nor str
+    ],
+)
+def test_video_reference_to_id(video_ref, expected):
+    assert video_reference_to_id(video_ref) == expected
 
 
 # =========================================================================== #

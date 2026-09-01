@@ -1387,7 +1387,7 @@ def test_bedrock_messages_maps_reasoning_effort_for_adaptive_model(
         )
 
     assert "reasoning_effort" not in result
-    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("thinking") == {"type": "adaptive", "display": "summarized"}
     assert result.get("output_config") == {"effort": expected_effort}
 
 
@@ -2935,7 +2935,7 @@ def test_bedrock_messages_thinking_shape_follows_exact_bedrock_entry_flag(
         )
 
     result = transform()
-    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("thinking") == {"type": "adaptive", "display": "summarized"}
     assert result.get("output_config") == {"effort": "medium"}
 
     monkeypatch.setitem(litellm.model_cost[model], "supports_adaptive_thinking", False)
@@ -3066,17 +3066,21 @@ def test_bedrock_invoke_messages_allows_converted_websearch_function_tool():
 async def test_bedrock_sse_wrapper_dispatches_logging_on_client_disconnect():
     """
     Regression test for LIT-5839: closing the outer bedrock_sse_wrapper
-    mid-stream (what the proxy does on a client disconnect) must close the
-    inner async_sse_wrapper deterministically so the partial-stream logging
-    fires. `completion_start_time` is only stamped on the logging object by
-    that dispatch, so it observing a value proves the whole chain ran.
+    mid-stream (what the proxy does on a client disconnect) must not lose the
+    stream's spend logging. Since the detached-pump relay, the upstream read
+    survives the disconnect and billing fires once the provider stream ends,
+    so the dispatch is awaited after releasing the upstream instead of being
+    observed synchronously at aclose(). `completion_start_time` is only
+    stamped on the logging object by that dispatch, so it observing a value
+    proves the whole chain ran.
     """
     cfg = AmazonAnthropicClaudeMessagesConfig()
+    release_upstream = asyncio.Event()
 
-    async def _hanging_stream():
+    async def _gated_stream():
         yield {"type": "message_start", "message": {"id": "msg_1", "usage": {"input_tokens": 25, "output_tokens": 1}}}
         yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "partial"}}
-        await asyncio.Event().wait()
+        await release_upstream.wait()
 
     logging_obj = LiteLLMLoggingObj(
         model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
@@ -3087,11 +3091,16 @@ async def test_bedrock_sse_wrapper_dispatches_logging_on_client_disconnect():
         litellm_call_id="test_bedrock_sse_wrapper_disconnect_logging",
         function_id="test_bedrock_sse_wrapper_disconnect_logging",
     )
-    wrapped = cfg.bedrock_sse_wrapper(_hanging_stream(), litellm_logging_obj=logging_obj, request_body={})
+    wrapped = cfg.bedrock_sse_wrapper(_gated_stream(), litellm_logging_obj=logging_obj, request_body={})
     await wrapped.__anext__()
     await wrapped.__anext__()
     assert logging_obj.completion_start_time is None
 
     await wrapped.aclose()
+    release_upstream.set()
 
+    for _ in range(500):
+        if logging_obj.completion_start_time is not None:
+            break
+        await asyncio.sleep(0.01)
     assert logging_obj.completion_start_time is not None

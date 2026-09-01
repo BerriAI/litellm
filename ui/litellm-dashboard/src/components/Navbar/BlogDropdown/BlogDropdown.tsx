@@ -85,7 +85,7 @@ export const BlogDropdown: React.FC = () => {
       <DropdownMenuTrigger
         openOnHover
         closeDelay={100}
-        render={<Button variant="ghost" className={`${NAV_PRODUCT_LINK_CLASS} border-0! bg-transparent!`} />}
+        render={<Button variant="ghost" className={`${NAV_PRODUCT_LINK_CLASS} border-0!`} />}
       >
         Blog
         <ChevronDown className="size-2.5 text-muted-foreground" aria-hidden />

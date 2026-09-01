@@ -95,6 +95,22 @@ class LLMUsage:
     input_tokens: int | None = None
     output_tokens: int | None = None
     total_tokens: int | None = None
+    cache_creation_input_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
+
+    @classmethod
+    def from_standard_logging_payload(cls, payload: StandardLoggingPayload) -> LLMUsage:
+        # Cache token counts only exist on the raw provider usage object under metadata
+        metadata: Final[Mapping[str, object]] = payload.get("metadata") or {}
+        raw_usage: Final = metadata.get("usage_object")
+        usage_object: Final[Mapping[str, object]] = raw_usage if isinstance(raw_usage, Mapping) else {}
+        return cls(
+            input_tokens=as_int(payload.get("prompt_tokens")),
+            output_tokens=as_int(payload.get("completion_tokens")),
+            total_tokens=as_int(payload.get("total_tokens")),
+            cache_creation_input_tokens=as_int(usage_object.get("cache_creation_input_tokens")),
+            cache_read_input_tokens=as_int(usage_object.get("cache_read_input_tokens")),
+        )
 
 
 @dataclass(frozen=True)
@@ -190,6 +206,15 @@ class GuardrailSpanData:
     guardrail_id: str | None = None
     policy_template: str | None = None
     detection_method: str | None = None
+    # Provider-reported billable usage counters (JSON-serialized) and the USD cost
+    # priced from them by the provider hook (``guardrail_usage`` /
+    # ``guardrail_cost`` on ``StandardLoggingGuardrailInformation``).
+    usage_json: str | None = None
+    cost: float | None = None
+    # Whether ``cost`` participates in the request's billed spend (absent means
+    # billed, the default; False means report-only). Mirrors
+    # ``guardrail_cost_in_spend`` so trace consumers can avoid double-counting.
+    cost_in_spend: bool | None = None
     # Set when the guardrail intervened/blocked or failed, so the emitter marks
     # the span ERROR — a blocking guardrail is an error outcome for that span.
     error: SpanError | None = None
@@ -209,6 +234,8 @@ class GuardrailSpanData:
         get: Final = cast(Mapping[str, object], entry).get
         status: Final = as_str(get("guardrail_status"))
         response: Final = get("guardrail_response")
+        usage: Final = get("guardrail_usage")
+        in_spend: Final = get("guardrail_cost_in_spend")
         error: Final = (
             SpanError(error_type=status, message=as_str(get("guardrail_action")))
             if status in cls._ERROR_STATUSES
@@ -231,6 +258,9 @@ class GuardrailSpanData:
             guardrail_id=as_str(get("guardrail_id")),
             policy_template=as_str(get("policy_template")),
             detection_method=as_str(get("detection_method")),
+            usage_json=_json_or_none(usage) if usage is not None else None,
+            cost=as_float(get("guardrail_cost")),
+            cost_in_spend=in_spend if isinstance(in_spend, bool) else None,
             error=error,
         )
 
@@ -349,11 +379,7 @@ class LLMCallSpanData:
             response_model=context.response_model,
             response_id=as_str(response.get("id")),
             request_params=LLMRequestParams.from_model_parameters(params),
-            usage=LLMUsage(
-                input_tokens=as_int(payload.get("prompt_tokens")),
-                output_tokens=as_int(payload.get("completion_tokens")),
-                total_tokens=as_int(payload.get("total_tokens")),
-            ),
+            usage=LLMUsage.from_standard_logging_payload(payload),
             finish_reasons=finish_reasons,
             error=_parse_error(payload),
             response_cost=as_float(payload.get("response_cost")),

@@ -6,10 +6,13 @@ Provider-specific Pass-Through Endpoints
 Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 """
 
+from __future__ import annotations
+
+import hmac
 import json
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, cast
 
@@ -25,11 +28,18 @@ from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
 )
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
+from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth, user_api_key_auth_websocket
+from litellm.proxy.auth.user_api_key_auth import (
+    _get_bearer_token,
+    user_api_key_auth,
+    user_api_key_auth_websocket,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
@@ -44,6 +54,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     create_websocket_passthrough_route,
     websocket_passthrough_request,
 )
+from litellm.proxy.utils import ProxyLogging as ProxyLoggingType
 from litellm.proxy.utils import is_known_model
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_proxy_admin_for_vector_store_index_management,
@@ -63,13 +74,17 @@ from litellm.utils import ProviderConfigManager
 from .passthrough_endpoint_router import PassthroughEndpointRouter
 
 if TYPE_CHECKING:
+    from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
     from litellm.router import Router
+
+    ProxyConfig = _ProxyConfig  # rebind-ok: conditional type alias
+else:
+    ProxyConfig = Any  # rebind-ok: runtime fallback
 
 vertex_llm_base: Final = VertexBase()
 router: Final = APIRouter()
 openai_passthrough_router: Final = APIRouter()
 default_vertex_config: Final = None
-
 passthrough_endpoint_router: Final = PassthroughEndpointRouter()
 
 
@@ -104,6 +119,36 @@ def is_passthrough_request_streaming(request_body: object) -> bool:
     if not isinstance(request_body, dict):
         return False
     return bool(request_body.get("stream", False))
+
+
+def get_passthrough_router_request_metadata(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, Any]:
+    """
+    Build the request metadata carrying key-level spend attribution and the
+    pre-call budget reservation for a router-model passthrough request.
+
+    Router-model passthrough branches call ``allm_passthrough_route`` directly,
+    bypassing ``add_litellm_data_to_request``. Without this metadata the cost
+    callback cannot attribute spend to the calling key and never releases the
+    budget reservation minted at auth time, so the shared spend counter drifts
+    up until the key falsely trips ``BudgetExceededError``.
+
+    The payload rides the ``litellm_metadata`` bucket, not ``metadata``: the
+    router hop ``_ageneric_api_call_with_fallbacks`` canonicalises this call
+    type into ``litellm_metadata``, and the cost callback reads spend
+    attribution from that bucket while only backfilling ``user_api_key*`` keys
+    from ``metadata``. Passing ``metadata=`` would silently drop the secondary
+    attribution fields the helper sets (``agent_id``,
+    ``user_api_end_user_max_budget``) before the callback ever sees them.
+    """
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    request_data: Final = {"litellm_metadata": {}}  # mutable-ok: builder + litellm mutate this in place
+    LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        data=request_data,
+        user_api_key_dict=user_api_key_dict,
+        _metadata_variable_name="litellm_metadata",
+    )
+    return request_data["litellm_metadata"]
 
 
 async def llm_passthrough_factory_proxy_route(
@@ -346,6 +391,7 @@ async def vllm_proxy_route(
                 params=None,
                 headers=None,
                 cookies=None,
+                litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict),
             ),
         )
 
@@ -457,8 +503,14 @@ async def milvus_proxy_route(
     request_body: Final = await get_request_body(request)
 
     # check collectionName
-    collection_name: Final = cast(str | None, request_body.get("collectionName"))
-    extra_headers = {}
+    _raw_collection_name: Final = request_body.get("collectionName")
+    if _raw_collection_name is not None and not isinstance(_raw_collection_name, str):
+        raise HTTPException(
+            status_code=400,
+            detail=f"collectionName must be a string. Got {type(_raw_collection_name).__name__}",
+        )
+    collection_name: str | None = _raw_collection_name  # rebind-ok: locally scoped conversion
+    extra_headers = {}  # mutable-ok: dict for extra headers; rebind-ok: reassigned later from credentials
     base_target_url: str | None = None
     if not collection_name:
         raise HTTPException(
@@ -1020,7 +1072,7 @@ async def bedrock_proxy_route(
     except ImportError:
         raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
-    aws_region_name: Final = litellm.utils.get_secret(secret_name="AWS_REGION_NAME")
+    aws_region_name: Final = get_secret_str(secret_name="AWS_REGION_NAME")
     if not _is_bedrock_agent_runtime_route(endpoint=endpoint):
         return await bedrock_llm_proxy_route(
             endpoint=endpoint,
@@ -1035,7 +1087,7 @@ async def bedrock_proxy_route(
             detail="bedrock-agent-runtime pass-through is disabled on this proxy.",
         )
 
-    base_target_url: Final = f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
+    base_target_url: Final = f"https://bedrock-agent-runtime.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}"
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
@@ -1168,7 +1220,7 @@ async def comprehend_medical_proxy_route(
             "X-Amz-Target": f"{COMPREHEND_MEDICAL_TARGET_PREFIX}.{operation}",
         }
     )
-    target_url: Final = f"https://comprehendmedical.{aws_region_name}.amazonaws.com/"
+    target_url: Final = f"https://comprehendmedical.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}/"
     _request: Final = AWSRequest(method="POST", url=target_url, data=json.dumps(data), headers=headers)
     sigv4.add_auth(_request)
     prepped: Final = _request.prepare()
@@ -1235,7 +1287,7 @@ def _resolve_vertex_model_from_router(
         vertex_location: Current vertex location (may be from URL)
 
     Returns:
-        Tuple of (encoded_endpoint, endpoint, vertex_project, vertex_location)
+        tuple of (encoded_endpoint, endpoint, vertex_project, vertex_location)
         with resolved values from router config
     """
     if not llm_router:
@@ -1475,6 +1527,7 @@ async def azure_proxy_route(
                     params=None,
                     headers=None,
                     cookies=None,
+                    litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict),
                 )
 
                 if is_streaming_request:
@@ -1663,7 +1716,7 @@ def get_vertex_ai_allowed_incoming_headers(request: Request) -> dict:
 
 
 def get_vertex_pass_through_handler(
-    call_type: Literal["discovery", "aiplatform"],
+    call_type: Literal["discovery", "aiplatform"],  # noqa: UP037
 ) -> BaseVertexAIPassThroughHandler:
     if call_type == "discovery":
         return VertexAIDiscoveryPassThroughHandler()
@@ -1687,7 +1740,7 @@ def _override_vertex_params_from_router_credentials(
         vertex_location: Current vertex location (from URL)
 
     Returns:
-        Tuple of (vertex_project, vertex_location) with overridden values if applicable
+        tuple of (vertex_project, vertex_location) with overridden values if applicable
     """
     if router_credentials is None:
         return vertex_project, vertex_location
@@ -1726,6 +1779,109 @@ def _override_vertex_params_from_router_credentials(
     return vertex_project, vertex_location
 
 
+_CREDENTIALLESS_VERTEX_MISSING_CREDENTIAL_DETAIL: Final = (
+    "No Vertex AI credential is configured on this proxy and the request carried no upstream "
+    "Google credential. The LiteLLM virtual key is not forwarded to Google. Configure a Vertex "
+    "credential (DEFAULT_VERTEXAI_PROJECT / DEFAULT_VERTEXAI_LOCATION / DEFAULT_VERTEXAI_CREDENTIALS, "
+    "or a model with use_in_pass_through: true), or send your own Google OAuth token in the "
+    "Authorization header."
+)
+
+
+def _normalize_credential_value(value: str) -> str:
+    """Reduce a header value to the bare token, matching how ``user_api_key_auth``
+    reads a caller's key.
+
+    Reuses the auth module's ``_get_bearer_token`` so the caller-key comparison
+    strips exactly the schemes authentication accepts (``Bearer`` / ``bearer`` /
+    ``Basic`` / ``AWS4-HMAC-SHA256`` credential), rather than re-deriving a
+    narrower normalization here. ``_get_bearer_token`` returns ``""`` for a value
+    with no recognized scheme prefix, so a bare token (or a real Google
+    credential that carries no scheme) falls back to its own value.
+    """
+    return _get_bearer_token(value) or value
+
+
+_VERTEX_UPSTREAM_CREDENTIAL_HEADERS: Final = frozenset({"authorization", "x-goog-api-key"})
+_HEADERS_NEVER_FORWARDED_TO_VERTEX: Final = frozenset({"content-length", "host"}) | (
+    SpecialHeaders.litellm_credential_header_names() - _VERTEX_UPSTREAM_CREDENTIAL_HEADERS
+)
+
+
+_MAPPED_ROUTE_CALLER_KEY_HEADER: Final = "litellm_user_api_key"
+
+
+def _operator_configured_caller_key_header_names() -> tuple[str, ...]:
+    """Operator-configured header names ``user_api_key_auth`` reads the caller's key from."""
+    from litellm.proxy.proxy_server import general_settings
+
+    custom_key_header: Final = general_settings.get("litellm_key_header_name")
+    override: Final = (custom_key_header.lower(),) if isinstance(custom_key_header, str) else ()
+    pass_through_endpoints: Final = general_settings.get("pass_through_endpoints")
+    endpoints: Final = pass_through_endpoints if isinstance(pass_through_endpoints, list) else ()
+    pass_through: Final = tuple(
+        dict.fromkeys(
+            headers["litellm_user_api_key"].lower()
+            for endpoint in endpoints
+            if isinstance(endpoint, dict)
+            for headers in (endpoint.get("headers"),)
+            if isinstance(headers, dict) and isinstance(headers.get("litellm_user_api_key"), str)
+        )
+    )
+    return override + pass_through
+
+
+def _is_authenticated_caller_jwt(value: str, jwt_claims: Mapping[str, object]) -> bool:
+    """Whether a header value is the JWT whose claims ``user_api_key_auth`` stored as ``jwt_claims``."""
+    presented_claims: Final = JWTHandler.get_unverified_claims(value)
+    if presented_claims is None:
+        return False
+    return all(
+        presented_claims.get(name) == claim
+        for name, claim in jwt_claims.items()
+        if name not in JWTHandler.LITELLM_INTERNAL_CLAIMS
+    )
+
+
+def _is_authenticated_caller_secret(value: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
+    """Whether a header value is the master key, the JWT that authenticated, or the key stored as ``api_key``."""
+    from litellm.proxy.proxy_server import master_key
+
+    normalized: Final = _normalize_credential_value(value)
+    if master_key is not None and hmac.compare_digest(normalized.encode(), master_key.encode()):
+        return True
+    jwt_claims: Final = user_api_key_dict.jwt_claims
+    if jwt_claims and _is_authenticated_caller_jwt(normalized, jwt_claims):
+        return True
+    authenticated_key: Final = user_api_key_dict.api_key
+    if authenticated_key is None:
+        return False
+    if master_key is None and not normalized.startswith("sk-"):
+        return False
+    stored_representation: Final = UserAPIKeyAuth._safe_hash_litellm_api_key(normalized)  # pyright: ignore[reportPrivateUsage]  # the exact transform auth applied when it stored api_key
+    return hmac.compare_digest(stored_representation.encode(), authenticated_key.encode())
+
+
+def _forwarded_headers_for_credentialless_vertex_passthrough(
+    request: Request, user_api_key_dict: UserAPIKeyAuth
+) -> Mapping[str, str]:
+    """Caller headers to forward on the bring-your-own-credentials Vertex branch, minus LiteLLM secrets."""
+    incoming: Final = _safe_get_request_headers(request)
+    never_forwarded: Final = _HEADERS_NEVER_FORWARDED_TO_VERTEX.union(
+        (_MAPPED_ROUTE_CALLER_KEY_HEADER, *_operator_configured_caller_key_header_names())
+    )
+    forwarded: Final = MappingProxyType(
+        {
+            name: value
+            for name, value in incoming.items()
+            if name not in never_forwarded and not _is_authenticated_caller_secret(value, user_api_key_dict)
+        }
+    )
+    if "authorization" not in forwarded and "x-goog-api-key" not in forwarded:
+        raise HTTPException(status_code=401, detail=_CREDENTIALLESS_VERTEX_MISSING_CREDENTIAL_DETAIL)
+    return forwarded
+
+
 async def _prepare_vertex_auth_headers(
     request: Request,
     vertex_credentials: Any | None,
@@ -1734,7 +1890,8 @@ async def _prepare_vertex_auth_headers(
     vertex_location: str | None,
     base_target_url: str | None,
     get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
-) -> tuple[dict, str | None, bool, str | None, str | None]:
+    user_api_key_dict: UserAPIKeyAuth,
+) -> tuple[Mapping[str, str], str | None, bool, str | None, str | None]:
     """
     Prepare authentication headers for Vertex AI pass-through requests.
 
@@ -1746,25 +1903,27 @@ async def _prepare_vertex_auth_headers(
         vertex_location: Vertex location
         base_target_url: Base URL for the Vertex AI service
         get_vertex_pass_through_handler: Handler for the specific Vertex AI service
+        user_api_key_dict: The caller's resolved authentication, so only the secret that
+            authenticated them is stripped on the credential-less branch
 
     Returns:
-        Tuple containing:
+        tuple containing:
             - headers: dict - Authentication headers to use
-            - base_target_url: Optional[str] - Updated base target URL
+            - base_target_url: str | None - Updated base target URL
             - headers_passed_through: bool - Whether headers were passed through from request
-            - vertex_project: Optional[str] - Updated vertex project ID
-            - vertex_location: Optional[str] - Updated vertex location
+            - vertex_project: str | None - Updated vertex project ID
+            - vertex_location: str | None - Updated vertex location
     """
     vertex_llm_base: Final = VertexBase()
     headers_passed_through = False
 
     # Use headers from the incoming request if no vertex credentials are found
     if (vertex_credentials is None or vertex_credentials.vertex_project is None) and router_credentials is None:
-        headers = _safe_get_request_headers(request).copy()
+        headers = _forwarded_headers_for_credentialless_vertex_passthrough(request, user_api_key_dict)
         headers_passed_through = True
-        verbose_proxy_logger.debug("default_vertex_config  not set, incoming request headers %s", headers)
-        headers.pop("content-length", None)
-        headers.pop("host", None)
+        verbose_proxy_logger.debug(
+            "default_vertex_config not set, forwarding caller-provided headers %s", tuple(headers.keys())
+        )
     else:
         if router_credentials is not None:
             vertex_credentials_str = None
@@ -1850,7 +2009,7 @@ async def _base_vertex_proxy_route(
 
     encoded_endpoint = httpx.URL(endpoint).path
     verbose_proxy_logger.debug("requested endpoint %s", endpoint)
-    headers: dict = {}
+    headers: Mapping[str, str] = {}
     api_key_to_use = get_litellm_virtual_key(request=request)
     user_api_key_dict = await user_api_key_auth(
         request=request,
@@ -1920,6 +2079,7 @@ async def _base_vertex_proxy_route(
         vertex_location=vertex_location,
         base_target_url=base_target_url,
         get_vertex_pass_through_handler=get_vertex_pass_through_handler,
+        user_api_key_dict=user_api_key_dict,
     )
 
     if base_target_url is None:
@@ -2400,7 +2560,7 @@ def _vertex_publisher_model_suffix(model: str) -> str:
     return f"{VERTEX_PUBLISHER_MODEL_PREFIX}{model.rsplit('/', 1)[-1]}"
 
 
-def _get_llm_router() -> "Router | None":
+def _get_llm_router() -> Router | None:
     from litellm.proxy.proxy_server import llm_router
 
     return llm_router
@@ -2440,7 +2600,7 @@ def _resolve_vertex_live_credentials(
 def _build_vertex_live_setup_model_rewriter(
     vertex_project: str | None,
     vertex_location: str | None,
-    llm_router: "Router | None",
+    llm_router: Router | None,
 ) -> Callable[[str], str] | None:
     """
     Rewrite the ``setup`` frame's model into the full Vertex resource path the Live API requires.
@@ -2460,7 +2620,7 @@ def _build_vertex_live_setup_model_rewriter(
     return rewrite
 
 
-def _resolve_alias_to_upstream_model(setup_model: str, llm_router: "Router | None") -> str:
+def _resolve_alias_to_upstream_model(setup_model: str, llm_router: Router | None) -> str:
     """
     The Live SDK wraps whatever the caller typed as ``models/<name>``, so a gateway alias arrives prefixed
     """
@@ -2648,6 +2808,238 @@ def create_generic_websocket_passthrough_endpoint(
         _forward_headers=forward_headers,
         cost_per_request=cost_per_request,
     )
+
+
+@router.api_route(
+    "/gigachat/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],  # mutable-ok: FastAPI route methods
+    tags=["Gigachat Pass-through", "pass-through"],  # mutable-ok: FastAPI route tags
+)
+async def gigachat_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> Response:
+    """
+    [Docs](https://docs.litellm.ai/docs/pass_through/gigachat)
+    """
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    ## check for streaming
+    request_body: Final[dict[str, object]] = await get_request_body(request)
+    is_router_model = False  # rebind-ok: conditionally set to True when model uses router
+
+    raw_model: Final = request_body.get("model")
+    model: Final = raw_model if isinstance(raw_model, str) else None
+    if model:
+        is_router_model = is_passthrough_request_using_router_model(
+            request_body, llm_router
+        )  # rebind-ok: conditionally set to True
+    elif any(word in endpoint for word in ("completions", "embeddings")):
+        raise HTTPException(
+            status_code=400, detail={"error": "Model is required in request body"}
+        )  # mutable-ok: HTTPException detail dict
+
+    # If router model, use dedicated router passthrough handler
+    # This uses the same common processing path as non-router models
+    if model and is_router_model and llm_router:
+        return await handle_gigachat_passthrough_router_model(
+            model=model,
+            endpoint=endpoint,
+            request=request,
+            request_body=request_body,
+            fastapi_response=fastapi_response,
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+
+    verbose_proxy_logger.debug(
+        "Gigachat passthrough: Using direct Gigachat model '%s' for endpoint '%s'", model, endpoint
+    )
+
+    from litellm.llms.gigachat.authenticator import get_access_token
+    from litellm.llms.gigachat.utils import GIGACHAT_BASE_URL
+
+    base_target_url: Final = get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
+    request_path: Final = httpx.URL(endpoint).path
+    encoded_endpoint: Final = request_path if request_path.startswith("/") else f"/{request_path}"
+
+    base_url: Final = httpx.URL(base_target_url)
+    updated_url: Final = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
+    )
+
+    is_streaming_request: Final = await is_streaming_request_fn(request)
+
+    endpoint_func: Final = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(updated_url),
+        custom_headers={"Authorization": f"Bearer {get_access_token()}"},
+        is_streaming_request=is_streaming_request,
+    )
+    return await endpoint_func(
+        request,
+        fastapi_response,
+        user_api_key_dict,
+    )
+
+
+async def handle_gigachat_passthrough_router_model(
+    model: str,
+    endpoint: str,
+    request: Request,
+    request_body: dict,
+    fastapi_response: Response,
+    llm_router: litellm.Router,
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLoggingType,
+    general_settings: dict,
+    proxy_config: ProxyConfig,
+    select_data_generator: Callable,
+    user_model: str | None,
+    user_temperature: float | None,
+    user_request_timeout: float | None,
+    user_max_tokens: int | None,
+    user_api_base: str | None,
+    version: str | None,
+) -> Response | StreamingResponse:
+    """
+    Handle Gigachat passthrough for router models (models defined in config.yaml).
+
+    Uses the same common processing path as non-router models to ensure
+    metadata and hooks are properly initialized.
+
+    Args:
+        model: The router model name (e.g., "gigachat/gigachat-2")
+        endpoint: The Gigachat endpoint path (e.g., "/chat/completions")
+        request: The FastAPI request object
+        request_body: The parsed request body
+        llm_router: The LiteLLM router instance
+        user_api_key_dict: The user API key authentication dictionary
+        proxy_logging_obj: Proxy logging
+        general_settings: Proxy general settings
+        proxy_config: Proxy config
+        select_data_generator: Select data generator function
+        (additional args for common processing)
+
+    Returns:
+        Response or StreamingResponse depending on endpoint type
+    """
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    # Detect streaming based on request body
+    is_streaming: Final = request_body.get("stream", False)  # pyright: ignore[reportUnknownVariableType]  # request_body is dict[Unknown, Unknown]
+
+    data: dict[str, Any] = await _read_request_body(
+        request=request
+    )  # mutable-ok: mutated in place by proxy pipeline; pyright: ignore[reportExplicitAny]  # Any needed for proxy pipeline
+    if user_api_key_dict is not None:
+        auth_metadata: Final = {
+            metadata_key: value
+            for metadata_key, value in (
+                ("user_api_key_user_id", getattr(user_api_key_dict, "user_id", None)),
+                ("user_api_key_team_id", getattr(user_api_key_dict, "team_id", None)),
+                ("user_api_key_org_id", getattr(user_api_key_dict, "org_id", None)),
+                ("agent_id", getattr(user_api_key_dict, "agent_id", None)),
+            )
+            if value is not None
+        }
+        existing_metadata: Final = data.get("metadata")
+        data["metadata"] = {
+            **(existing_metadata if isinstance(existing_metadata, dict) else {}),
+            **auth_metadata,
+        }
+
+    verbose_proxy_logger.debug(
+        "Gigachat router passthrough: model='%s', endpoint='%s', streaming=%s", model, endpoint, is_streaming
+    )
+
+    # Use the common processing path (same as non-router models)
+    # This ensures all metadata, hooks, and logging are properly initialized
+
+    data["model"] = model
+    data["method"] = request.method
+    data["endpoint"] = endpoint
+    data["json"] = request_body
+    data["custom_llm_provider"] = "gigachat"
+
+    # Remove sensitive keys from data
+    keys: Final = [  # mutable-ok: list of keys to remove from data
+        "gigachat_auth_url",
+        "gigachat_access_token",
+        "gigachat_scope",
+        "api_base",
+        "api_key",
+    ]
+    for key in keys:
+        data.pop(key, None)
+
+    client: Final = get_async_httpx_client(
+        llm_provider=LlmProviders.GIGACHAT,
+        params={  # mutable-ok: httpx client params
+            "timeout": httpx.Timeout(timeout=600.0, connect=5.0),
+        },
+    )
+
+    data["client"] = client
+    base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+
+    # Use the common passthrough processing to handle metadata and hooks
+    # This also handles all response formatting (streaming/non-streaming) and exceptions
+    try:
+        result = await base_llm_response_processor.base_passthrough_process_llm_request(  # rebind-ok: assigned once in try block
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=model,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:  # noqa: BLE001 # Safe catch-all for handle exception
+        # Use common exception handling
+        raise await base_llm_response_processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    else:
+        if isinstance(result, StreamingResponse):
+            if result.headers.get("Content-Type") is None:
+                result.headers["Content-Type"] = "text/event-stream; charset=utf-8"
+
+        return result
 
 
 @router.api_route(

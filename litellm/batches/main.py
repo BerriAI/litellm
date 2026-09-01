@@ -390,7 +390,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
     custom_llm_provider: Literal[
         "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "litellm_proxy", "anthropic"
     ] = "openai",
-    logging_obj: Any | None = None,
+    logging_obj: LiteLLMLoggingObj | None = None,
 ):
     api_base: str | None = None
     if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:

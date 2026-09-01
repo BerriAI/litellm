@@ -66,6 +66,7 @@ describe("KeySavingsTab", () => {
     const firstDay: Partial<SpendMetrics> = {
       compression_savings_spend: 1.5,
       prompt_caching_savings_spend: 0.25,
+      gateway_injected_caching_savings_spend: 0.1,
       autorouter_savings_spend: 2,
       compression_saved_tokens: 400,
       cache_read_input_tokens: 300,
@@ -74,6 +75,7 @@ describe("KeySavingsTab", () => {
     const secondDay: Partial<SpendMetrics> = {
       compression_savings_spend: 0.5,
       prompt_caching_savings_spend: 0.75,
+      gateway_injected_caching_savings_spend: 0.3,
       autorouter_savings_spend: 1,
       compression_saved_tokens: 600,
       cache_read_input_tokens: 200,
@@ -85,10 +87,13 @@ describe("KeySavingsTab", () => {
 
     renderTab();
 
-    expect(screen.getByTestId("summary-card-total-saved")).toHaveTextContent("$6.00");
+    expect(screen.getByTestId("summary-card-total-saved")).toHaveTextContent("$5.40");
     expect(screen.getByTestId("summary-card-compression-savings")).toHaveTextContent("$2.00");
     expect(screen.getByTestId("summary-card-compression-savings")).toHaveTextContent("1,000 tokens compressed");
-    expect(screen.getByTestId("summary-card-prompt-caching-savings")).toHaveTextContent("$1.00");
+    // the card leads with what LiteLLM's own injection earned and carries the total beneath it,
+    // so a key whose caching came mostly from its own cache_control does not read as gateway-earned
+    expect(screen.getByTestId("summary-card-prompt-caching-savings")).toHaveTextContent("$0.40");
+    expect(screen.getByTestId("summary-card-prompt-caching-savings")).toHaveTextContent("$1.00Total");
     expect(screen.getByTestId("summary-card-auto-router-savings")).toHaveTextContent("$3.00");
   });
 

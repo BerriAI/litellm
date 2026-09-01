@@ -14,6 +14,8 @@ from operator import itemgetter
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, TypeVar
 
+from typing_extensions import ReadOnly, TypedDict
+
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 from litellm.proxy.utils import PrismaClient
@@ -45,6 +47,18 @@ class _UsageUnitKey(NamedTuple):
 class _MetricsKey(NamedTuple):
     guardrail_id: str
     date: str
+
+
+class _UsageUnitCompoundKey(TypedDict):
+    guardrail_id: ReadOnly[str]
+    date: ReadOnly[str]
+    team_id: ReadOnly[str]
+    api_key: ReadOnly[str]
+    usage_unit: ReadOnly[str]
+
+
+class _UsageUnitWhereUnique(TypedDict):
+    guardrail_id_date_team_id_api_key_usage_unit: ReadOnly[_UsageUnitCompoundKey]
 
 
 class PendingRollups:
@@ -229,7 +243,7 @@ async def _upsert_usage_unit_row(prisma_client: PrismaClient, key: _UsageUnitKey
         "usage_unit": key.usage_unit,
         "units": units,
     }
-    where: Final[prisma_types.LiteLLM_DailyGuardrailUsageUnitsWhereUniqueInput] = {
+    where: Final[_UsageUnitWhereUnique] = {
         "guardrail_id_date_team_id_api_key_usage_unit": {
             "guardrail_id": key.guardrail_id,
             "date": key.date,

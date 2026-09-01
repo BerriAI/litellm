@@ -188,7 +188,7 @@ test.describe("Add Model", () => {
     await expect(resultsModal).toBeHidden({ timeout: 5_000 });
 
     const created = await captureRequestBody(page, { method: "POST", urlIncludes: "/model/new" }, async () => {
-      await page.getByRole("button", { name: "Add Model" }).last().click();
+      await page.getByTestId("add-model-btn").click();
     });
     expect(created.model_name, "the model is created under the name that was typed").toBe(publicName);
     expect(created.litellm_params?.api_base, "the api base survives the form").toBe(MOCK_LLM_BASE);
@@ -254,7 +254,7 @@ test.describe("Add Model", () => {
 
     // Click Add Model button by its text
     const created = await captureRequestBody(page, { method: "POST", urlIncludes: "/model/new" }, async () => {
-      await page.getByRole("button", { name: "Add Model" }).last().click();
+      await page.getByTestId("add-model-btn").click();
     });
     // The form sends custom_llm_provider separately from the name, so both halves have to arrive.
     expect(created.model_name, "the selected model is what goes on the wire").toBe("claude-haiku-4-5");
@@ -267,11 +267,9 @@ test.describe("Add Model", () => {
     // Navigate to All Models tab
     await page.getByRole("tab", { name: "All Models" }).click();
     await page.waitForLoadState("networkidle");
-    await page.waitForTimeout(2000);
 
     // Search for the model we just added
     await page.getByPlaceholder("Search model names").fill("claude-haiku-4-5");
-    await page.waitForTimeout(1000);
 
     // Verify the model appears in the results count (not "Showing 0 results")
     await expect(page.getByTestId("pagination-range")).toHaveText(/Showing \d+-\d+ of \d+/, {
@@ -279,8 +277,9 @@ test.describe("Add Model", () => {
     });
 
     // Verify the model name appears in the table body
-    const tableBody = page.locator("table tbody");
-    await expect(tableBody.getByText("claude-haiku-4-5").first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole("row").filter({ hasText: "claude-haiku-4-5" })).not.toHaveCount(0, {
+      timeout: 15_000,
+    });
 
     // A row proves the name is there, not what the deployment routes to.
     const stored = await findDeploymentByName(page, "claude-haiku-4-5");
@@ -333,11 +332,11 @@ test.describe("Add Model", () => {
       const teamDropdown = page.getByTestId("team-dropdown").getByRole("combobox");
       await expect(teamDropdown).toBeVisible({ timeout: 5_000 });
       await teamDropdown.click();
-      const teamOption = page.locator('[data-slot="combobox-content"]:visible').getByText(E2E_TEAM_CRUD_ID).first();
+      const teamOption = page.getByRole("option", { name: E2E_TEAM_CRUD_ID }).first();
       await expect(teamOption).toBeVisible({ timeout: 5_000 });
       await teamOption.click();
 
-      await page.getByRole("button", { name: "Add Model" }).last().click();
+      await page.getByTestId("add-model-btn").click();
 
       // Scope to the toast container so a stale toast can't satisfy this.
       await expect(page.locator("[data-sonner-toast]").getByText("created successfully").last()).toBeVisible({
@@ -347,12 +346,9 @@ test.describe("Add Model", () => {
       // The Models table renders team-scoped models with the team id in the row.
       await page.getByRole("tab", { name: "All Models" }).click();
       await page.waitForLoadState("networkidle");
-      // networkidle fires before the table finishes re-rendering.
-      await page.waitForTimeout(2000);
 
       await page.getByPlaceholder("Search model names").fill("cohere");
-      await page.waitForTimeout(1000);
-
+  
       // Clearer failure than timing out on a row assertion when the table is empty.
       await expect(page.getByTestId("pagination-range")).toHaveText(/Showing \d+-\d+ of \d+/, {
         timeout: 15_000,
@@ -361,7 +357,7 @@ test.describe("Add Model", () => {
       // Pin to one row carrying both the name and the team, so the sibling test's
       // team-less cohere row can't satisfy it.
       const teamCohereRow = page
-        .locator("table tbody tr")
+        .getByRole("row")
         .filter({ hasText: "cohere/" })
         .filter({ hasText: E2E_TEAM_CRUD_ID });
       await expect(teamCohereRow).toHaveCount(1, { timeout: 15_000 });
@@ -387,7 +383,7 @@ test.describe("Add Model", () => {
 
     // Click Add Model button by its text
     const created = await captureRequestBody(page, { method: "POST", urlIncludes: "/model/new" }, async () => {
-      await page.getByRole("button", { name: "Add Model" }).last().click();
+      await page.getByTestId("add-model-btn").click();
     });
     // A wildcard with the star stripped becomes a plain "cohere" deployment that matches nothing.
     expect(created.model_name, "the wildcard route goes on the wire intact").toBe("cohere/*");
@@ -398,11 +394,9 @@ test.describe("Add Model", () => {
     // Navigate to All Models tab
     await page.getByRole("tab", { name: "All Models" }).click();
     await page.waitForLoadState("networkidle");
-    await page.waitForTimeout(2000);
 
     // Search for the wildcard model
     await page.getByPlaceholder("Search model names").fill("cohere");
-    await page.waitForTimeout(1000);
 
     // Verify the model appears in the results count (not "Showing 0 results")
     await expect(page.getByTestId("pagination-range")).toHaveText(/Showing \d+-\d+ of \d+/, {
@@ -410,8 +404,7 @@ test.describe("Add Model", () => {
     });
 
     // Verify the wildcard model appears in the table body (wildcard models show as "cohere/*")
-    const tableBody = page.locator("table tbody");
-    await expect(tableBody.getByText("cohere/").first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole("row").filter({ hasText: "cohere/" })).not.toHaveCount(0, { timeout: 15_000 });
 
     // "cohere/" in the table also matches a plain cohere deployment; require the wildcard exactly.
     const stored = await findDeploymentByName(page, "cohere/*");

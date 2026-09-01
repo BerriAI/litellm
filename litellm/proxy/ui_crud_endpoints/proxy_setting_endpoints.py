@@ -4,7 +4,12 @@ import json
 import os
 from collections import Counter
 from collections.abc import Mapping
-from typing import Any, Final, Protocol, TypeVar
+from typing import (
+    Any,
+    Final,
+    Protocol,
+    cast,  # noqa: TID251  # prisma types Json columns as fields.Json but de-serializes them to plain python on read
+)
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
@@ -25,6 +30,7 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attributio
 from litellm.proxy.utils import invalidate_config_param
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
     SSOConfigRepository,
     UISettingsRepository,
@@ -37,29 +43,16 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 
 router: Final = APIRouter()
 
-_DbRecordT: Final = TypeVar("_DbRecordT", covariant=True)
-
-
-class _PrismaTableActions(Protocol[_DbRecordT]):
-    async def find_unique(self, where: Mapping[str, object]) -> _DbRecordT | None: ...
-
-    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> _DbRecordT: ...
-
-    async def upsert(self, where: Mapping[str, object], data: Mapping[str, object]) -> _DbRecordT: ...
-
 
 class _SsoSettingsMappingRow(Protocol):
     @property
     def sso_settings(self) -> Mapping[str, object] | None: ...
 
 
-class _HasSsoSettingsMappingTable(Protocol):
-    @property
-    def table(self) -> _PrismaTableActions[_SsoSettingsMappingRow]: ...
-
-
-def _sso_settings_mapping_db(repo: _HasSsoSettingsMappingTable) -> _PrismaTableActions[_SsoSettingsMappingRow]:
-    return repo.table
+def _sso_settings_mapping_db(repo: SSOConfigRepository) -> TableActions[_SsoSettingsMappingRow]:
+    return cast(  # cast-ok: prisma types Json columns as str; the client hands back the deserialized value
+        "TableActions[_SsoSettingsMappingRow]", repo.table
+    )
 
 
 class _StoredSsoSettingsRow(Protocol):
@@ -67,12 +60,7 @@ class _StoredSsoSettingsRow(Protocol):
     def sso_settings(self) -> object: ...
 
 
-class _HasStoredSsoSettingsTable(Protocol):
-    @property
-    def table(self) -> _PrismaTableActions[_StoredSsoSettingsRow]: ...
-
-
-def _stored_sso_settings_db(repo: _HasStoredSsoSettingsTable) -> _PrismaTableActions[_StoredSsoSettingsRow]:
+def _stored_sso_settings_db(repo: SSOConfigRepository) -> TableActions[_StoredSsoSettingsRow]:
     return repo.table
 
 
@@ -81,13 +69,10 @@ class _UiSettingsRow(Protocol):
     def ui_settings(self) -> str | Mapping[str, JsonValue] | None: ...
 
 
-class _HasUiSettingsTable(Protocol):
-    @property
-    def table(self) -> _PrismaTableActions[_UiSettingsRow]: ...
-
-
-def _ui_settings_db(repo: _HasUiSettingsTable) -> _PrismaTableActions[_UiSettingsRow]:
-    return repo.table
+def _ui_settings_db(repo: UISettingsRepository) -> TableActions[_UiSettingsRow]:
+    return cast(  # cast-ok: prisma types Json columns as str; the client hands back the deserialized value
+        "TableActions[_UiSettingsRow]", repo.table
+    )
 
 
 class _ConfigParamRow(Protocol):
@@ -95,13 +80,10 @@ class _ConfigParamRow(Protocol):
     def param_value(self) -> str | Mapping[str, object] | None: ...
 
 
-class _HasConfigParamTable(Protocol):
-    @property
-    def table(self) -> _PrismaTableActions[_ConfigParamRow]: ...
-
-
-def _config_param_db(repo: _HasConfigParamTable) -> _PrismaTableActions[_ConfigParamRow]:
-    return repo.table
+def _config_param_db(repo: ConfigRepository) -> TableActions[_ConfigParamRow]:
+    return cast(  # cast-ok: prisma's LiteLLM_Config actions object, whose Json column parses to a mapping
+        "TableActions[_ConfigParamRow]", repo.table
+    )
 
 
 # Maps each UIThemeConfig field to the env var the UI branding path reads it

@@ -64,11 +64,6 @@ def test_langsmith_logging_async():
     except Exception as e:
         pytest.fail(f"An exception occurred - {e}")
 
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {e}")
-
 
 async def make_async_calls(metadata=None, **completion_kwargs):
     total_tasks = 300

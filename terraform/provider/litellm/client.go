@@ -61,6 +61,17 @@ func (c *Client) GetKey(keyID string) (*Key, error) {
 		return nil, err
 	}
 
+	// /key/info nests the key's fields under "info"; only "key" itself is
+	// top-level. Without unwrapping, reads map nothing back into state.
+	if info, ok := resp["info"].(map[string]interface{}); ok {
+		if _, present := info["key"]; !present {
+			if k, ok := resp["key"].(string); ok {
+				info["key"] = k
+			}
+		}
+		return c.parseKeyResponse(info)
+	}
+
 	return c.parseKeyResponse(resp)
 }
 
@@ -70,7 +81,6 @@ func (c *Client) UpdateKey(key *Key) (*Key, error) {
 		"key":              key.Key,
 		"team_id":          key.TeamID,
 		"metadata":         key.Metadata,
-		"budget_duration":  key.BudgetDuration,
 		"key_alias":        key.KeyAlias,
 		"aliases":          key.Aliases,
 		"permissions":      key.Permissions,
@@ -78,6 +88,12 @@ func (c *Client) UpdateKey(key *Key) (*Key, error) {
 		"model_rpm_limit":  key.ModelRPMLimit,
 		"model_tpm_limit":  key.ModelTPMLimit,
 		"blocked":          key.Blocked,
+	}
+
+	// The proxy rejects an empty-string budget_duration with a 400, so only
+	// send it when set.
+	if key.BudgetDuration != "" {
+		updateData["budget_duration"] = key.BudgetDuration
 	}
 
 	// Only add pointer fields if they are explicitly set
@@ -106,6 +122,30 @@ func (c *Client) UpdateKey(key *Key) (*Key, error) {
 	}
 	if len(key.Tags) > 0 {
 		updateData["tags"] = key.Tags
+	}
+	if key.BudgetID != "" {
+		updateData["budget_id"] = key.BudgetID
+	}
+	if len(key.EnforcedParams) > 0 {
+		updateData["enforced_params"] = key.EnforcedParams
+	}
+	if len(key.AllowedRoutes) > 0 {
+		updateData["allowed_routes"] = key.AllowedRoutes
+	}
+	if len(key.AllowedPassthroughRoutes) > 0 {
+		updateData["allowed_passthrough_routes"] = key.AllowedPassthroughRoutes
+	}
+	if key.RPMLimitType != "" {
+		updateData["rpm_limit_type"] = key.RPMLimitType
+	}
+	if key.TPMLimitType != "" {
+		updateData["tpm_limit_type"] = key.TPMLimitType
+	}
+	if len(key.Prompts) > 0 {
+		updateData["prompts"] = key.Prompts
+	}
+	if key.OrganizationID != "" {
+		updateData["organization_id"] = key.OrganizationID
 	}
 
 	resp, err := c.sendRequest("POST", "/key/update", updateData)
@@ -250,6 +290,34 @@ func (c *Client) parseKeyResponse(resp map[string]interface{}) (*Key, error) {
 						createdKey.Tags[i] = s
 					}
 				}
+			}
+		case "budget_id":
+			if s, ok := v.(string); ok {
+				createdKey.BudgetID = s
+			}
+		case "enforced_params":
+			createdKey.EnforcedParams = toStringSlice(v)
+		case "allowed_routes":
+			createdKey.AllowedRoutes = toStringSlice(v)
+		case "allowed_passthrough_routes":
+			createdKey.AllowedPassthroughRoutes = toStringSlice(v)
+		case "rpm_limit_type":
+			if s, ok := v.(string); ok {
+				createdKey.RPMLimitType = s
+			}
+		case "tpm_limit_type":
+			if s, ok := v.(string); ok {
+				createdKey.TPMLimitType = s
+			}
+		case "prompts":
+			createdKey.Prompts = toStringSlice(v)
+		case "organization_id":
+			if s, ok := v.(string); ok {
+				createdKey.OrganizationID = s
+			}
+		case "project_id":
+			if s, ok := v.(string); ok {
+				createdKey.ProjectID = s
 			}
 		}
 	}

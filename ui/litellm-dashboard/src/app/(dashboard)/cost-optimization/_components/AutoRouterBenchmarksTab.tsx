@@ -8,6 +8,7 @@ import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -39,15 +40,23 @@ const Message: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <p className="py-8 text-center text-sm text-muted-foreground">{children}</p>
 );
 
-const Metric: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+const Metric: React.FC<{ label: string; value: string; hint?: string }> = ({ label, value, hint }) => (
   <Card size="sm">
     <CardHeader>
       <CardTitle className="text-sm font-normal text-muted-foreground">{label}</CardTitle>
     </CardHeader>
-    <CardContent>
+    <CardContent className="flex flex-wrap items-baseline gap-2">
       <p className="text-3xl font-semibold text-foreground">{value}</p>
+      {hint && <p className="text-sm text-muted-foreground">{hint}</p>}
     </CardContent>
   </Card>
+);
+
+const SpendRow: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+  <dl className="flex items-baseline justify-between gap-6 py-3">
+    <dt className="text-sm text-muted-foreground">{label}</dt>
+    <dd className="text-base font-semibold tabular-nums text-foreground">{value}</dd>
+  </dl>
 );
 
 const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
@@ -55,35 +64,27 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
   const cheaper = stats.saved_spend >= 0;
   return (
     <Card className="overflow-hidden py-0">
-      <div className="grid md:grid-cols-[1fr_1fr]">
-        <div className="flex flex-col justify-center gap-3 p-6">
-          <p className="text-sm text-muted-foreground">Total estimated savings</p>
-          <div className="flex flex-wrap items-center gap-3">
-            <p className="text-5xl font-semibold tracking-tight text-foreground">{usd(stats.saved_spend)}</p>
+      <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <div className="flex flex-col items-center justify-center gap-2 p-6">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Total estimated savings
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <p className="text-6xl font-semibold tracking-tight text-foreground">{usd(stats.saved_spend)}</p>
             <Badge
               variant="secondary"
-              className={cheaper ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive"}
+              className={`h-6 px-2.5 text-sm ${cheaper ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive"}`}
             >
               {stats.saved_spend !== 0 && (cheaper ? "-" : "+")}
               {Math.abs(stats.saved_pct).toFixed(0)}%
             </Badge>
           </div>
-          <dl className="divide-y text-sm">
-            <div className="flex items-baseline justify-between gap-6 py-3">
-              <dt className="text-muted-foreground">Actual auto-router spend</dt>
-              <dd className="font-medium tabular-nums text-foreground">{usd(stats.spend)}</dd>
-            </div>
-            <div className="flex items-baseline justify-between gap-6 py-3">
-              <dt className="text-muted-foreground">Estimated spend at highest-tier model</dt>
-              <dd className="font-medium tabular-nums text-foreground">{usd(stats.baseline_spend)}</dd>
-            </div>
-          </dl>
         </div>
 
-        <div className="flex flex-col items-center justify-center gap-2 border-t p-6 md:border-t-0 md:border-l">
-          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Avg saved per session</p>
-          <p className="text-5xl font-semibold tracking-tight text-foreground">{usd(stats.saved_per_session)}</p>
-          <p className="text-sm text-muted-foreground">across {stats.sessions.toLocaleString()} sessions</p>
+        <div className="flex flex-col justify-center border-t p-6 md:border-t-0 md:border-l">
+          <SpendRow label="Actual auto-router spend" value={usd(stats.spend)} />
+          <Separator />
+          <SpendRow label="Estimated spend at highest-tier model" value={usd(stats.baseline_spend)} />
         </div>
       </div>
     </Card>
@@ -239,7 +240,12 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
 
       <TierTurnsChart view={view} autoRouters={autoRouters} />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Metric
+          label="Avg saved per session"
+          value={usd(stats.saved_per_session)}
+          hint={`· ${stats.sessions.toLocaleString()} sessions`}
+        />
         <Metric label="Avg turns per session" value={stats.avg_turns_per_session.toFixed(1)} />
         <Metric label="Avg session length" value={durationLabel(stats.avg_session_seconds)} />
         <Metric label="Avg tokens per session" value={formatNumberWithCommas(stats.avg_tokens_per_session, 1, true)} />

@@ -210,7 +210,6 @@ async def _patch_team_caches_add_access_group(
     for team_id in team_ids:
         cached_team = await _get_team_object_from_cache(
             key=f"team_id:{team_id}",
-            proxy_logging_obj=proxy_logging_obj,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
         )
@@ -240,7 +239,6 @@ async def _patch_team_caches_remove_access_group(
     for team_id in team_ids:
         cached_team = await _get_team_object_from_cache(
             key=f"team_id:{team_id}",
-            proxy_logging_obj=proxy_logging_obj,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=None,
         )
@@ -390,7 +388,7 @@ async def list_access_groups(
     _require_admin_view(user_api_key_dict)
     prisma_client: Final = get_prisma_client_or_throw(CommonProxyErrors.db_not_connected_error.value)
 
-    table: Final[_AccessGroupTable] = AccessGroupRepository(prisma_client).table
+    table: Final = AccessGroupRepository(prisma_client).table
     records: Final = await table.find_many(order={"created_at": "desc"})
     return [_record_to_response(r) for r in records]
 
@@ -406,7 +404,7 @@ async def get_access_group(
     _require_admin_view(user_api_key_dict)
     prisma_client: Final = get_prisma_client_or_throw(CommonProxyErrors.db_not_connected_error.value)
 
-    table: Final[_AccessGroupTable] = AccessGroupRepository(prisma_client).table
+    table: Final = AccessGroupRepository(prisma_client).table
     record: Final = await table.find_unique(where={"access_group_id": access_group_id})
     if record is None:
         raise HTTPException(

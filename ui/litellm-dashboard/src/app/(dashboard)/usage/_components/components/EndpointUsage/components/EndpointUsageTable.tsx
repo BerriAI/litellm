@@ -1,6 +1,6 @@
 import React from "react";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Meter, MeterIndicator, MeterTrack } from "@/components/ui/meter";
+import { Meter, MeterIndicator, MeterTrack } from "@/components/shared/Meter";
 import { DataTable } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { MetricWithMetadata } from "@/components/UsagePage/types";

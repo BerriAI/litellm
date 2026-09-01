@@ -4,7 +4,7 @@ import { getSSOSettings, updateSSOSettings } from "./networking";
 import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "./shared/errorUtils";
 import { Button } from "@/components/ui/button";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import {
   GroupClaimField,
   MappingToggleField,

@@ -330,6 +330,50 @@ def test_real_llm_failure_still_emitted():
     assert span.status.status_code is StatusCode.ERROR
 
 
+def test_provider_auth_failure_span_carries_stack_trace():
+    """Regression for LIT-6163: a 401 the provider returned is not an expected
+    client error, so the error span built from the real failure payload keeps
+    ``litellm.provider.error.stack_trace`` alongside code and llm_provider."""
+    from litellm.exceptions import AuthenticationError
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    try:
+        raise AuthenticationError(
+            message="AnthropicException - API key is invalid.", llm_provider="anthropic", model="claude-haiku-4-5"
+        )
+    except AuthenticationError as caught:
+        error_information = StandardLoggingPayloadSetup.get_error_information(caught)
+    logger, exporter = _logger()
+    payload = _payload(status="failure", custom_llm_provider="anthropic", error_information=error_information)
+    _emit_llm(logger, _kwargs(payload=payload), fail=True)
+    (span,) = exporter.get_finished_spans()
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.attributes["error.type"] == "AuthenticationError"
+    assert span.attributes["litellm.provider.error.code"] == "401"
+    assert span.attributes["litellm.provider.error.llm_provider"] == "anthropic"
+    assert "test_otel_v2_logger" in span.attributes["litellm.provider.error.stack_trace"]
+
+
+def test_unmapped_provider_auth_failure_span_carries_stack_trace():
+    """Regression for LIT-6163 on /v1/messages: that route logs the provider's
+    raw exception (no llm_provider), and its error span keeps the stack trace."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.llms.anthropic.common_utils import AnthropicError
+
+    try:
+        raise AnthropicError(status_code=401, message='{"type":"authentication_error","message":"API key is invalid."}')
+    except AnthropicError as caught:
+        error_information = StandardLoggingPayloadSetup.get_error_information(caught)
+    logger, exporter = _logger()
+    payload = _payload(status="failure", custom_llm_provider="anthropic", error_information=error_information)
+    _emit_llm(logger, _kwargs(payload=payload), fail=True)
+    (span,) = exporter.get_finished_spans()
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.attributes["error.type"] == "AnthropicError"
+    assert span.attributes["litellm.provider.error.code"] == "401"
+    assert "test_otel_v2_logger" in span.attributes["litellm.provider.error.stack_trace"]
+
+
 def test_idempotent_on_repeat_callback():
     """The carrier is the dedup: once the async callback closes the span and
     clears the carrier, a second callback firing emits nothing."""
@@ -734,11 +778,15 @@ def test_mcp_span_roots_without_transport_or_propagated_context(
 
 
 @pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
-def test_mcp_span_parents_to_propagated_meta_trace_context(make_payload, span_name):
+def test_mcp_span_links_propagated_meta_trace_context_and_nests_under_transport(
+    make_payload, span_name
+):
     """When the client propagates W3C trace context in the request's
-    ``params._meta`` (SEP-414), the MCP span parents to it (one distributed trace)
-    and still links the transport span — never falling through to the
-    ambient/session span."""
+    ``params._meta`` (SEP-414), the MCP span still nests under the gateway's own
+    transport span — one renderable trace — and records the client's context as a
+    span *link*. Parenting to the remote context instead would root the span in a
+    trace whose root span never reaches the gateway's tracing backend, leaving the
+    span unreachable from the trace view."""
     logger, exporter = _logger()
     transport = logger._emitter.start_span(
         SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
@@ -757,12 +805,65 @@ def test_mcp_span_parents_to_propagated_meta_trace_context(make_payload, span_na
         reset_mcp_message_trace_carrier(token)
     transport.end()
     span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
-    assert span.context.trace_id == 0x11111111111111111111111111111111
     assert span.parent is not None
-    assert span.parent.span_id == 0x2222222222222222
-    assert [link.context.span_id for link in span.links] == [
-        transport.get_span_context().span_id
+    assert span.parent.span_id == transport.get_span_context().span_id
+    assert span.context.trace_id == transport.get_span_context().trace_id
+    assert [link.context.trace_id for link in span.links] == [
+        0x11111111111111111111111111111111
     ]
+    assert [link.context.span_id for link in span.links] == [0x2222222222222222]
+
+
+@pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
+def test_mcp_span_without_transport_roots_and_links_propagated_context(
+    make_payload, span_name
+):
+    """With no transport span at all there is nothing of the gateway's to anchor
+    to, so the span starts its own root trace — and the client context stays a
+    span link there too, so the event keeps one shape everywhere."""
+    logger, exporter = _logger()
+    token = set_mcp_message_trace_carrier(
+        {"traceparent": "00-11111111111111111111111111111111-2222222222222222-01"}
+    )
+    try:
+        asyncio.run(
+            logger.async_log_success_event(
+                {"standard_logging_object": make_payload()}, None, None, None
+            )
+        )
+    finally:
+        reset_mcp_message_trace_carrier(token)
+    span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
+    assert span.parent is None
+    assert span.context.trace_id != 0x11111111111111111111111111111111
+    assert [link.context.span_id for link in span.links] == [0x2222222222222222]
+
+
+def test_mcp_span_links_unsampled_client_traceparent():
+    """A client traceparent with the sampled flag off ('-00') still yields a valid
+    remote context, so the link is recorded; the span's own recording follows the
+    transport's sampling decision, never the client's flag."""
+    logger, exporter = _logger()
+    transport = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    set_request_root_span(transport)
+    token = set_mcp_message_trace_carrier(
+        {"traceparent": "00-11111111111111111111111111111111-2222222222222222-00"}
+    )
+    try:
+        asyncio.run(
+            logger.async_log_success_event(
+                {"standard_logging_object": _mcp_list_payload()}, None, None, None
+            )
+        )
+    finally:
+        reset_mcp_message_trace_carrier(token)
+    transport.end()
+    span = next(s for s in exporter.get_finished_spans() if s.name == "tools/list")
+    assert span.parent is not None
+    assert span.parent.span_id == transport.get_span_context().span_id
+    assert [link.context.span_id for link in span.links] == [0x2222222222222222]
 
 
 @pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
@@ -795,8 +896,11 @@ def test_mcp_span_ignores_client_supplied_baggage(make_payload, span_name):
         reset_mcp_message_trace_carrier(token)
     transport.end()
     span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
-    # Trace context still honored: proves the carrier was processed, not dropped wholesale.
-    assert span.parent is not None and span.parent.span_id == 0x2222222222222222
+    # Trace context still honored (as a link): proves the carrier was processed,
+    # not dropped wholesale.
+    assert [link.context.span_id for link in span.links] == [0x2222222222222222]
+    assert span.parent is not None
+    assert span.parent.span_id == transport.get_span_context().span_id
     # Identity is the authenticated payload's team, never the client's spoofed value.
     assert span.attributes[LiteLLM.TEAM_ID] == "t1"
     assert "litellm.metadata.user_api_key_user_id" not in span.attributes
@@ -844,10 +948,10 @@ def test_mcp_span_malformed_traceparent_nests_under_transport():
     assert span.links == ()
 
 
-def test_mcp_span_links_this_messages_transport_when_context_is_propagated():
-    """On the semconv path the transport is recorded as a link, and that link must
-    point at the POST carrying this message too. Reading the stale session anchor
-    would attribute the tool call to whichever request opened the session."""
+def test_mcp_span_with_propagated_context_nests_under_this_messages_transport():
+    """With client context propagated, the span must still anchor to the POST
+    carrying this message, not the stale session anchor — otherwise the tool call
+    is attributed to whichever request opened the session."""
     logger, exporter = _logger()
     session_opener = logger._emitter.start_span(
         SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
@@ -872,10 +976,10 @@ def test_mcp_span_links_this_messages_transport_when_context_is_propagated():
     session_opener.end()
     this_message.end()
     span = next(s for s in exporter.get_finished_spans() if s.name == "tools/list")
-    assert span.parent is not None and span.parent.span_id == 0x2222222222222222
-    assert [link.context.span_id for link in span.links] == [
-        this_message.get_span_context().span_id
-    ]
+    assert span.parent is not None
+    assert span.parent.span_id == this_message.get_span_context().span_id
+    assert span.context.trace_id == this_message.get_span_context().trace_id
+    assert [link.context.span_id for link in span.links] == [0x2222222222222222]
 
 
 def test_pre_call_idempotent_keeps_first_span():

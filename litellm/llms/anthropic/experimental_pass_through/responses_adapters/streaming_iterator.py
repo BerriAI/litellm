@@ -152,7 +152,10 @@ class AnthropicResponsesStreamWrapper:
             if block_idx < 0:
                 if not delta:
                     return
-                block_idx = self._open_block(item_id, {"type": "thinking", "thinking": ""})
+                block_idx = self._open_block(
+                    item_id,
+                    {"type": "thinking", "thinking": "", "signature": ""},  # mutable-ok: API message payload
+                )
             self._chunk_queue.append(
                 {
                     "type": "content_block_delta",

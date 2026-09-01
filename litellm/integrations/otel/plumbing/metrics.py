@@ -32,6 +32,7 @@ from litellm.integrations.otel.model.semconv import (
     resolve_provider,
 )
 from litellm.integrations.otel.model.utils import to_seconds
+from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
 
@@ -198,16 +199,21 @@ class GenAIMetricRecorder:
     ) -> None:
         common_attrs: Final = self._filter_attributes(self._bounded_attributes(kwargs))
         duration_s: Final = (end_time - start_time).total_seconds()
+        usage_is_replayed: Final = is_unbilled_non_inference_call_from_params(
+            kwargs.get("call_type"), kwargs.get("litellm_params"), response_obj
+        )
 
         self._metrics.operation_duration.record(duration_s, attributes=common_attrs)
-        self._record_token_usage(response_obj, common_attrs)
+        if not usage_is_replayed:
+            self._record_token_usage(response_obj, common_attrs)
 
         cost: Final = kwargs.get("response_cost")
         if cost:
             self._metrics.token_cost.record(cost, attributes=common_attrs)
 
         self._record_time_to_first_token(kwargs, common_attrs)
-        self._record_time_per_output_token(kwargs, response_obj, end_time, duration_s, common_attrs)
+        if not usage_is_replayed:
+            self._record_time_per_output_token(kwargs, response_obj, end_time, duration_s, common_attrs)
         self._record_response_duration(kwargs, end_time, common_attrs)
 
     def record_failure(

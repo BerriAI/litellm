@@ -18,21 +18,20 @@ Scoping:
 """
 
 import json
-from collections.abc import Mapping, Sequence
-from datetime import datetime
-from typing import TYPE_CHECKING, Final, Protocol
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     CommonProxyErrors,
-    LiteLLM_TeamTable,
     LitellmUserRoles,
     UserAPIKeyAuth,
     user_api_key_has_admin_view,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import MemoryRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.types.memory_management import (
@@ -44,52 +43,15 @@ from litellm.types.memory_management import (
 )
 
 if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
     from litellm.proxy.utils import PrismaClient
 
 router: Final = APIRouter()
 
 
-class _MemoryRecord(Protocol):
-    memory_id: str
-    key: str
-    value: str
-    metadata: object
-    user_id: str | None
-    team_id: str | None
-    created_at: datetime | None
-    created_by: str | None
-    updated_at: datetime | None
-    updated_by: str | None
-
-
-class _MemoryTableActions(Protocol):
-    async def create(self, data: Mapping[str, object]) -> _MemoryRecord: ...
-
-    async def find_many(
-        self,
-        where: Mapping[str, object] | None = ...,
-        order: Mapping[str, str] | None = ...,
-        skip: int = ...,
-        take: int = ...,
-    ) -> Sequence[_MemoryRecord]: ...
-
-    async def count(self, where: Mapping[str, object] | None = ...) -> int: ...
-
-    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> _MemoryRecord: ...
-
-    async def delete(self, where: Mapping[str, object]) -> _MemoryRecord | None: ...
-
-
-def _memory_table(prisma_client: "PrismaClient") -> _MemoryTableActions:
+def _memory_table(prisma_client: "PrismaClient") -> TableActions["prisma_models.LiteLLM_MemoryTable"]:
     return MemoryRepository(prisma_client).table
-
-
-class _TeamTableActions(Protocol):
-    async def find_unique(self, where: Mapping[str, str]) -> LiteLLM_TeamTable | None: ...
-
-
-def _team_table(prisma_client: "PrismaClient") -> _TeamTableActions:
-    return TeamRepository(prisma_client).table
 
 
 def _serialize_metadata_for_prisma(metadata: object) -> str:
@@ -129,7 +91,7 @@ def _visibility_filter(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, object
     return {"OR": ors}
 
 
-def _row_to_model(row: _MemoryRecord) -> LiteLLM_MemoryRow:
+def _row_to_model(row: "prisma_models.LiteLLM_MemoryTable") -> LiteLLM_MemoryRow:
     return LiteLLM_MemoryRow(
         memory_id=row.memory_id,
         key=row.key,
@@ -163,7 +125,7 @@ def _internal_error(log_message: str, exc: Exception, default_detail: str) -> HT
 
 
 async def _assert_write_access(
-    prisma_client: "PrismaClient", row: _MemoryRecord, user_api_key_dict: UserAPIKeyAuth
+    prisma_client: "PrismaClient", row: "prisma_models.LiteLLM_MemoryTable", user_api_key_dict: UserAPIKeyAuth
 ) -> None:
     """
     Enforce ownership for mutations (PUT/DELETE).
@@ -219,7 +181,7 @@ async def _is_team_admin_for(prisma_client: "PrismaClient", user_api_key_dict: U
     )
 
     try:
-        team_obj: Final = await _team_table(prisma_client).find_unique(where={"team_id": team_id})
+        team_obj: Final = await TeamRepository(prisma_client).find_by_id(team_id, id_field="team_id")
     except Exception as e:
         verbose_proxy_logger.exception("Error loading team for write-auth check (team_id=%s): %s", team_id, e)
         return False
@@ -407,7 +369,7 @@ async def list_memory(
 
 async def _find_memory_for_caller(
     prisma_client: "PrismaClient", key: str, user_api_key_dict: UserAPIKeyAuth
-) -> _MemoryRecord:
+) -> "prisma_models.LiteLLM_MemoryTable":
     """Look up a memory row by key, scoped to the caller's visibility."""
     key_filter: Final[Mapping[str, object]] = {"key": key}
     vis: Final = _visibility_filter(user_api_key_dict)
@@ -416,6 +378,18 @@ async def _find_memory_for_caller(
     if not rows:
         raise HTTPException(status_code=404, detail=f"Memory with key '{key}' not found")
     return rows[0]
+
+
+async def _find_visible_memory_or_none(
+    prisma_client: "PrismaClient", key: str, user_api_key_dict: UserAPIKeyAuth
+) -> "prisma_models.LiteLLM_MemoryTable | None":
+    """The caller-visible row for `key`, or None when nothing is visible to them."""
+    try:
+        return await _find_memory_for_caller(prisma_client, key, user_api_key_dict)
+    except HTTPException as e:
+        if e.status_code == 404:
+            return None
+        raise
 
 
 @router.get(
@@ -480,17 +454,8 @@ async def upsert_memory(
         )
     data["updated_by"] = user_api_key_dict.user_id
 
-    async def _find_existing() -> _MemoryRecord | None:
-        """Return the caller-visible row for `key`, or None."""
-        try:
-            return await _find_memory_for_caller(prisma_client, key, user_api_key_dict)
-        except HTTPException as e:
-            if e.status_code == 404:
-                return None
-            raise
-
     try:
-        existing: Final = await _find_existing()
+        existing: Final = await _find_visible_memory_or_none(prisma_client, key, user_api_key_dict)
         if existing is not None:
             # Visibility != write authority. Make sure the caller actually
             # owns this row (their user_id matches, or it's a pure team row in
@@ -530,7 +495,7 @@ async def upsert_memory(
                 # instead of surfacing a 500 on a unique-violation.
                 if not _is_unique_violation(e):
                     raise
-                existing_after_race: Final = await _find_existing()
+                existing_after_race: Final = await _find_visible_memory_or_none(prisma_client, key, user_api_key_dict)
                 if existing_after_race is None:
                     # Row exists globally but isn't visible to this caller
                     # (owned by someone else). Treat as conflict.
@@ -549,6 +514,8 @@ async def upsert_memory(
     except Exception as e:
         raise _internal_error("Error upserting memory: %s", e, "Internal error updating memory entry.")
 
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Memory with key '{key}' not found")
     return _row_to_model(row)
 
 
@@ -568,8 +535,10 @@ async def delete_memory(
     # Visibility != write authority — see the upsert handler for the rationale.
     await _assert_write_access(prisma_client, row, user_api_key_dict)
     try:
-        await _memory_table(prisma_client).delete(where={"memory_id": row.memory_id})
+        deleted: Final = await _memory_table(prisma_client).delete(where={"memory_id": row.memory_id})
     except Exception as e:
         raise _internal_error("Error deleting memory: %s", e, "Internal error deleting memory entry.")
 
+    if deleted is None:
+        raise HTTPException(status_code=404, detail=f"Memory with key '{key}' not found")
     return MemoryDeleteResponse(key=key, deleted=True)

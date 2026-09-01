@@ -9,8 +9,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
-from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.proxy.hooks.responses_id_security import (
+    ResponsesIDSecurity,
+    _is_responses_api_create_route,
+)
+from litellm.types.llms.openai import (
+    ResponseCompletedEvent,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
+)
 from litellm.types.utils import SpecialEnums
 
 
@@ -573,6 +580,115 @@ class TestAsyncPreCallHook:
 
                     assert exc_info.value.status_code == 403
                     assert "team" in exc_info.value.detail.lower()
+
+
+class TestIsResponsesApiCreateRoute:
+    """Test the route gate that decides whether a streamed response id is encrypted."""
+
+    @pytest.mark.parametrize(
+        "route",
+        [
+            "/v1/responses",
+            "/responses",
+            "/openai/v1/responses",
+        ],
+    )
+    def test_create_routes_match(self, route):
+        assert _is_responses_api_create_route(route) is True
+
+    @pytest.mark.parametrize(
+        "route",
+        [
+            None,
+            "/chat/completions",
+            "/openai/v1/chat/completions",
+            "/v1/responses/{response_id}",
+            "/openai/v1/responses/{response_id}",
+            "/v1/responsesX",
+            "/responsesX",
+        ],
+    )
+    def test_non_create_routes_do_not_match(self, route):
+        assert _is_responses_api_create_route(route) is False
+
+
+class TestAsyncPostCallStreamingIteratorHook:
+    """Regression test for LIT-6167: streamed responses on /openai/v1/responses and
+    /responses must have their ids security-encrypted, not just on the exact
+    /v1/responses path. A streamed create emits ResponseCompletedEvent, whose
+    client-visible id lives on event.response.id, so the test drives that production
+    event shape (not a top-level id) and uses real encryption, asserting the id
+    round-trips back to the raw provider id plus the caller's user/team, which is the
+    access-control wrapper the aliases were leaking without."""
+
+    @staticmethod
+    async def _agen(chunks):
+        for chunk in chunks:
+            yield chunk
+
+    @staticmethod
+    def _completed_event(response_id):
+        return ResponseCompletedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            response=ResponsesAPIResponse(
+                id=response_id,
+                created_at=0,
+                model="gpt-5.1",
+                object="response",
+                output=[],
+                parallel_tool_calls=False,
+                tool_choice="auto",
+                tools=[],
+            ),
+        )
+
+    async def _drain_streamed_id(self, responses_id_security, route, monkeypatch):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key-abcdefghij")
+        event = self._completed_event("resp_rawprovider123")
+
+        mock_auth = MagicMock()
+        mock_auth.user_id = "user-a"
+        mock_auth.team_id = "team-a"
+        mock_auth.request_route = route
+
+        collected = [
+            out
+            async for out in responses_id_security.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=mock_auth,
+                response=self._agen([event]),
+                request_data={},
+            )
+        ]
+        return collected[0].response.id
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "route",
+        ["/v1/responses", "/responses", "/openai/v1/responses"],
+    )
+    async def test_streamed_id_encrypted_on_all_responses_routes(
+        self, responses_id_security, route, monkeypatch
+    ):
+        streamed_id = await self._drain_streamed_id(responses_id_security, route, monkeypatch)
+
+        assert streamed_id != "resp_rawprovider123"
+        assert responses_id_security._is_encrypted_response_id(streamed_id)
+        assert responses_id_security._decrypt_response_id(streamed_id) == (
+            "resp_rawprovider123",
+            "user-a",
+            "team-a",
+        )
+
+    @pytest.mark.asyncio
+    async def test_streamed_id_untouched_on_non_responses_route(
+        self, responses_id_security, monkeypatch
+    ):
+        streamed_id = await self._drain_streamed_id(
+            responses_id_security, "/chat/completions", monkeypatch
+        )
+
+        assert streamed_id == "resp_rawprovider123"
+        assert not responses_id_security._is_encrypted_response_id(streamed_id)
 
 
 class TestAsyncPostCallSuccessHook:
