@@ -108,7 +108,6 @@ export function MCPServerPermissions({
   const blocksAllMcpServers = mcpServers.includes(NO_MCP_SERVERS_SENTINEL);
   const grantsAllProxyMcpServers = mcpServers.includes(ALL_PROXY_MCP_SERVERS_SENTINEL);
 
-  // Merge servers, inherited servers and access groups into one list
   const mergedItems = [
     ...directServerIds.map((server) => ({ type: "server", value: server, inherited: false })),
     ...inheritedOnlyServerIds.map((server) => ({ type: "server", value: server, inherited: true })),

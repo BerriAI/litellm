@@ -57,7 +57,6 @@ export function AgentPermissions({
     return agentId;
   };
 
-  // Merge agents, inherited agents and access groups into one list
   const mergedItems = [
     ...agents.map((agent) => ({ type: "agent", value: agent, inherited: false })),
     ...inheritedOnlyAgents.map((agent) => ({ type: "agent", value: agent, inherited: true })),
