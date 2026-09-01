@@ -54,7 +54,10 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
 )
-from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
@@ -700,6 +703,12 @@ async def patch_model(
                 code=status.HTTP_403_FORBIDDEN,
                 param="blocked",
             )
+
+        ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=patch_data.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+            existing_litellm_params=db_model.litellm_params,
+        )
 
         _raise_on_strategy_router_write_violation(
             incoming_params=patch_data.litellm_params,
@@ -1465,6 +1474,32 @@ class ModelManagementAuthChecks:
         return True
 
     @staticmethod
+    def can_user_attach_credential(
+        litellm_params: GenericLiteLLMParams | None,
+        user_api_key_dict: UserAPIKeyAuth,
+        existing_litellm_params: GenericLiteLLMParams | None = None,
+    ) -> Literal[True]:
+        if litellm_params is None or litellm_params.litellm_credential_name is None:
+            return True
+        if existing_litellm_params is not None and existing_litellm_params.litellm_credential_name is not None:
+            existing_credential_name: Final = decrypt_value_helper(
+                value=existing_litellm_params.litellm_credential_name,
+                key="litellm_credential_name",
+                exception_type="debug",
+                return_original_value=True,
+            )
+            if litellm_params.litellm_credential_name == existing_credential_name:
+                return True
+        if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+            return True
+        raise ProxyException(
+            message=f"Only a proxy admin can attach a stored credential (litellm_credential_name) to a model. Your role={user_api_key_dict.user_role}.",
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param="litellm_credential_name",
+        )
+
+    @staticmethod
     async def allow_team_model_action(
         model_params: Deployment | updateDeployment,
         user_api_key_dict: UserAPIKeyAuth,
@@ -1786,6 +1821,11 @@ async def add_new_model(
             premium_user=premium_user,
         )
 
+        ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=model_params.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+        )
+
         _raise_on_strategy_router_write_violation(
             incoming_params=model_params.litellm_params,
             existing_params=None,
@@ -1956,6 +1996,12 @@ async def update_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+        )
+
+        ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=model_params.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+            existing_litellm_params=deployment.litellm_params,
         )
 
         _raise_on_strategy_router_write_violation(
