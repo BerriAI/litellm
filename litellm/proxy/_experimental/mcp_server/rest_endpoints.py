@@ -1404,8 +1404,12 @@ if MCP_AVAILABLE:
         async def _list_tools_operation(client):
             # Bound the whole pagination walk: without this the preview is limited only by the
             # per-request timeout times the page cap. max() keeps the pre-pagination guarantee
-            # that a single slow page within the client timeout still succeeds.
-            listing_deadline: Final = max(MCP_CLIENT_TIMEOUT, MCP_TOOL_LISTING_TIMEOUT)
+            # that a single slow page within the client timeout still succeeds, and a
+            # per-server timeout above the global default extends the deadline with it.
+            listing_deadline: Final = max(
+                getattr(client, "timeout", MCP_CLIENT_TIMEOUT) or MCP_CLIENT_TIMEOUT,
+                MCP_TOOL_LISTING_TIMEOUT,
+            )
             list_tools_result = None  # rebind-ok: set inside the timeout scope below
             with anyio.move_on_after(listing_deadline):
                 list_tools_result = await client.list_tools(raise_on_error=True)  # rebind-ok: fills the init above

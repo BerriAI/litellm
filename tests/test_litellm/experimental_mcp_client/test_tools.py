@@ -14,6 +14,7 @@ from mcp.types import (
 from mcp.types import Tool as MCPTool
 
 from litellm.experimental_mcp_client.tools import (
+    list_tools_with_pagination,
     transform_mcp_tool_to_anthropic_tool,
     _get_function_arguments,
     _normalize_mcp_input_schema,
@@ -125,6 +126,55 @@ async def test_load_mcp_tools_follows_pagination(mock_session):
     second_call_params = mock_session.list_tools.call_args_list[1].kwargs["params"]
     assert isinstance(second_call_params, PaginatedRequestParams)
     assert second_call_params.cursor == "page-2"
+
+
+@pytest.mark.asyncio()
+async def test_pagination_walk_stops_at_page_cap(mock_session, monkeypatch):
+    monkeypatch.setattr("litellm.experimental_mcp_client.tools.MCP_TOOL_LISTING_MAX_PAGES", 2)
+    mock_session.list_tools.side_effect = [
+        ListToolsResult(
+            tools=[MCPTool(name="tool_0", description="0", inputSchema={})],
+            nextCursor="page-2",
+        ),
+        ListToolsResult(
+            tools=[MCPTool(name="tool_1", description="1", inputSchema={})],
+            nextCursor="page-3",
+        ),
+        ListToolsResult(tools=[MCPTool(name="tool_2", description="2", inputSchema={})]),
+    ]
+    result = await list_tools_with_pagination(mock_session)
+    assert [tool.name for tool in result] == ["tool_0", "tool_1"]
+    assert mock_session.list_tools.call_count == 2
+
+
+@pytest.mark.asyncio()
+async def test_pagination_walk_stops_on_repeated_cursor(mock_session):
+    mock_session.list_tools.side_effect = [
+        ListToolsResult(
+            tools=[MCPTool(name="tool_0", description="0", inputSchema={})],
+            nextCursor="same-cursor",
+        ),
+        ListToolsResult(
+            tools=[MCPTool(name="tool_1", description="1", inputSchema={})],
+            nextCursor="same-cursor",
+        ),
+    ]
+    result = await list_tools_with_pagination(mock_session)
+    assert [tool.name for tool in result] == ["tool_0", "tool_1"]
+    assert mock_session.list_tools.call_count == 2
+
+
+@pytest.mark.asyncio()
+async def test_pagination_walk_treats_empty_cursor_as_terminal(mock_session):
+    mock_session.list_tools.side_effect = [
+        ListToolsResult(
+            tools=[MCPTool(name="tool_0", description="0", inputSchema={})],
+            nextCursor="",
+        ),
+    ]
+    result = await list_tools_with_pagination(mock_session)
+    assert [tool.name for tool in result] == ["tool_0"]
+    mock_session.list_tools.assert_called_once()
 
 
 @pytest.mark.asyncio()
