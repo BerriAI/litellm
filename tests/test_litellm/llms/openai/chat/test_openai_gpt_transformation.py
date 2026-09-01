@@ -148,17 +148,39 @@ class TestGetOptionalParamsIntegration:
     def test_reasoning_effort_supported_for_unknown_model_alias(self):
         """An openai/-routed model litellm doesn't recognize is likely a proxy alias:
         reasoning_effort must be forwarded so the server decides support."""
-        supported_params = OpenAIGPTConfig().get_supported_openai_params(
+        from litellm.llms.openai.openai import OpenAIConfig
+
+        supported_params = OpenAIConfig().get_supported_openai_params(
             "my-claude-alias"
         )
         assert "reasoning_effort" in supported_params
 
     def test_reasoning_effort_not_supported_for_known_non_reasoning_models(self):
         """Known OpenAI models keep failing closed client-side."""
-        config = OpenAIGPTConfig()
+        from litellm.llms.openai.openai import OpenAIConfig
+
+        config = OpenAIConfig()
         assert "reasoning_effort" not in config.get_supported_openai_params("gpt-4o")
         assert "reasoning_effort" not in config.get_supported_openai_params(
             "responses/gpt-4.1-mini"
+        )
+
+    def test_reasoning_effort_not_inherited_by_openai_compatible_subclasses(self):
+        """Providers subclassing either openai config keep their own reasoning_effort gating
+        for their models, which are all unknown to the openai catalog."""
+        from litellm.llms.openai.openai import OpenAIConfig
+
+        class InheritingDispatcherConfig(OpenAIConfig):
+            pass
+
+        class InheritingGPTConfig(OpenAIGPTConfig):
+            pass
+
+        assert "reasoning_effort" not in InheritingDispatcherConfig().get_supported_openai_params(
+            "some-unknown-model"
+        )
+        assert "reasoning_effort" not in InheritingGPTConfig().get_supported_openai_params(
+            "some-unknown-model"
         )
 
     def test_reasoning_effort_forwarded_in_optional_params_for_unknown_model_alias(
