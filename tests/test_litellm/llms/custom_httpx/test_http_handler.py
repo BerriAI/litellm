@@ -1317,8 +1317,9 @@ async def test_finalizer_on_live_loop_disposes_foreign_loop_session_without_sche
 
 
 @pytest.mark.asyncio
-async def test_post_connection_error_retry_forwards_content():
-    """content= body must not be dropped when the primary connection raises RemoteProtocolError."""
+@pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
+async def test_connection_error_retry_forwards_content(method: str):
+    """content= body must not be dropped on RemoteProtocolError retry for every HTTP verb."""
 
     async def raise_connection_error(request: httpx.Request) -> httpx.Response:
         raise httpx.RemoteProtocolError("connection dropped", request=request)
@@ -1330,7 +1331,7 @@ async def test_post_connection_error_retry_forwards_content():
     with patch.object(handler, "single_connection_post_request", new_callable=AsyncMock) as mock_retry:
         mock_retry.return_value = httpx.Response(200)
         body = b'{"post": ["run1"]}'
-        await handler.post("https://api.example.com/runs/batch", content=body)
+        await getattr(handler, method)("https://api.example.com/runs/batch", content=body)
 
     assert mock_retry.call_args.kwargs["content"] == body
     await handler.close()
