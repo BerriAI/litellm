@@ -13,19 +13,20 @@ jobs:
   monitor-db-pricing:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           persist-credentials: false
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
         with:
           python-version: "3.12"
 
       - name: Run monitor
-        id: monitor
+        shell: bash
         run: |
+          set -o pipefail
           python .github/workflows/monitor_databricks_pricing.py | tee /tmp/monitor_out.txt
           if grep -q '^NO_CHANGE' /tmp/monitor_out.txt; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -53,4 +54,4 @@ Updated entries: databricks/databricks-deepseek-v4-*"
             --base litellm_internal_staging \
             --head "$BRANCH" \
             --title "chore(model_prices): refresh Databricks Foundation Model Serving rates" \
-            --body "Automated daily check of the Databricks Foundation Model Serving pricing page detected rate changes. Updated model_prices_and_context_window.json and packaged backup for monitored models." || true
+            --body "Automated daily check of the Databricks Foundation Model Serving pricing page detected rate changes. Updated model_prices_and_context_window.json and packaged backup for monitored models."
