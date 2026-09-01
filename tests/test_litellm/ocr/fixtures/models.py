@@ -135,17 +135,11 @@ class AzureDocumentIntelligenceOcrSdkInput(OcrSdkInputBase):
 
 class VertexDeepSeekOcrSdkInput(OcrSdkInputBase):
     boundary: Literal["vertex_deepseek"] = "vertex_deepseek"
-    model: Literal["vertex_ai/deepseek-ai/deepseek-ocr-maas"] = "vertex_ai/deepseek-ai/deepseek-ocr-maas"
+    model: Literal["vertex_ai/deepseek-ocr-maas"] = "vertex_ai/deepseek-ocr-maas"
     document: MistralDocument
     custom_llm_provider: Literal["vertex_ai"] | None = None
     vertex_project: str
     vertex_location: str = "us-central1"
-    stream: bool | None = None
-    temperature: float | None = None
-    max_tokens: int | None = None
-    top_p: float | None = None
-    n: int | None = None
-    stop: str | list[str] | None = None
 
 
 def _validate_reducto_source(source: str) -> str:

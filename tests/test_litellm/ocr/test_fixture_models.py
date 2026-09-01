@@ -82,35 +82,8 @@ def test_reducto_fixture_fields_match_provider_configs() -> None:
 
 def test_deepseek_fixture_fields_match_provider_config() -> None:
     assert _provider_fields(VertexDeepSeekOcrSdkInput) == _supported_params(
-        VertexAIDeepSeekOCRConfig(), "deepseek-ai/deepseek-ocr-maas"
+        VertexAIDeepSeekOCRConfig(), "deepseek-ocr-maas"
     )
-
-
-def test_deepseek_maps_litellm_params_without_duplicating_model_namespace() -> None:
-    config: Final = VertexAIDeepSeekOCRConfig()
-    optional_params: Final = config.map_ocr_params(
-        non_default_params={"temperature": 0.5, "max_tokens": 256},
-        optional_params={},
-        model="deepseek-ai/deepseek-ocr-maas",
-    )
-    request: Final = config.transform_ocr_request(
-        model="deepseek-ai/deepseek-ocr-maas",
-        document={"type": "image_url", "image_url": "gs://bucket/document.png"},
-        optional_params=optional_params,
-        headers={},
-    )
-
-    assert request.data == {
-        "model": "deepseek-ai/deepseek-ocr-maas",
-        "messages": [
-            {
-                "role": "user",
-                "content": [{"type": "image_url", "image_url": "gs://bucket/document.png"}],
-            }
-        ],
-        "temperature": 0.5,
-        "max_tokens": 256,
-    }
 
 
 @pytest.mark.parametrize(

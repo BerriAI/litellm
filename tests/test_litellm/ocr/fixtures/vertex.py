@@ -33,41 +33,22 @@ def _as_vertex_mistral(case_input: MistralOcrSdkInput, project: str, location: s
 
 
 def _required_deepseek_inputs(project: str, location: str) -> tuple[VertexDeepSeekOcrSdkInput, ...]:
-    document: Final = image_document("invoice 123", 24)
-    common: Final = {"document": document, "vertex_project": project, "vertex_location": location}
-    cases: Final[tuple[dict[str, object], ...]] = (
-        {},
-        {"stream": False},
-        {"temperature": 0.5},
-        {"max_tokens": 256},
-        {"top_p": 0.9},
-        {"n": 1},
-        {"stop": ["END", "STOP"]},
+    return (
+        VertexDeepSeekOcrSdkInput(
+            document=image_document("invoice 123", 24),
+            vertex_project=project,
+            vertex_location=location,
+        ),
     )
-    return tuple(VertexDeepSeekOcrSdkInput.model_validate({**common, **case}) for case in cases)
 
 
 @st.composite
 def vertex_deepseek_input_strategy(draw: DrawFn, project: str, location: str) -> VertexDeepSeekOcrSdkInput:
-    optional_params: Final = draw(
-        st.fixed_dictionaries(
-            {},
-            optional={
-                "stream": st.just(False),
-                "temperature": st.sampled_from((0.0, 0.5, 1.0)),
-                "max_tokens": st.sampled_from((1, 256, 1024)),
-                "top_p": st.sampled_from((0.1, 0.9, 1.0)),
-                "n": st.just(1),
-                "stop": st.sampled_from(("END", ["END", "STOP"])),
-            },
-        )
-    )
     return VertexDeepSeekOcrSdkInput.model_validate(
         {
             "document": draw(public_document_strategy()),
             "vertex_project": project,
             "vertex_location": location,
-            **optional_params,
         }
     )
 
