@@ -891,3 +891,105 @@ def test_router_deployments_sharing_backend_keep_their_own_off_peak_pricing():
             litellm.model_cost.pop(deployment_id, None)
         _restore_model_cost_entries(original_entries)
         del router
+
+
+def test_router_off_peak_only_deployment_inherits_builtin_base_rates():
+    """A deployment that sets only ``off_peak_pricing`` on its model_info must
+    still be costed from its deployment-scoped entry: the base token rates are
+    inherited from the backend model's built-in cost map entry, since the
+    shared backend key deliberately never carries the off-peak block.
+    """
+    from litellm import Router
+
+    block = {
+        "hours_utc": "00:00-00:00",
+        "input_cost_per_token": 5e-05,
+        "output_cost_per_token": 1e-04,
+    }
+    shared_keys = ["gpt-4o-mini", "openai/gpt-4o-mini"]
+    deployment_id = "offpeak-only-dep-1"
+    original_entries = _snapshot_model_cost_entries(shared_keys + [deployment_id])
+    builtin_info = litellm.get_model_info(model="openai/gpt-4o-mini")
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "offpeak-only",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key-for-registration",
+                },
+                "model_info": {"id": deployment_id, "off_peak_pricing": dict(block)},
+            }
+        ]
+    )
+
+    try:
+        entry = litellm.model_cost[deployment_id]
+        assert entry["off_peak_pricing"] == block
+        assert entry["input_cost_per_token"] is not None
+        assert entry["input_cost_per_token"] == builtin_info["input_cost_per_token"]
+        assert entry["output_cost_per_token"] == builtin_info["output_cost_per_token"]
+        for shared_key in shared_keys:
+            shared_entry = litellm.model_cost.get(shared_key) or {}
+            assert not shared_entry.get("off_peak_pricing")
+    finally:
+        _restore_model_cost_entries(original_entries)
+        del router
+
+
+def test_use_custom_pricing_for_model_sees_off_peak_only_model_info():
+    from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
+
+    block = {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-05}
+    assert use_custom_pricing_for_model({"metadata": {"model_info": {"off_peak_pricing": block}}}) is True
+    assert use_custom_pricing_for_model({"metadata": {"model_info": {"off_peak_pricing": None}}}) is False
+    assert use_custom_pricing_for_model({"metadata": {"model_info": {"id": "some-id"}}}) is False
+
+
+def test_completion_cost_applies_off_peak_only_deployment_pricing():
+    """End to end through the cost calculator: with ``custom_pricing`` set and
+    a ``router_model_id`` whose entry carries only an always-on off-peak block,
+    the request bills at the block's rates rather than the shared backend rate.
+    """
+    from litellm import Router
+    from litellm.types.utils import ModelResponse, Usage
+
+    block = {
+        "hours_utc": "00:00-00:00",
+        "input_cost_per_token": 5e-05,
+        "output_cost_per_token": 1e-04,
+    }
+    shared_keys = ["gpt-4o-mini", "openai/gpt-4o-mini"]
+    deployment_id = "offpeak-only-dep-2"
+    original_entries = _snapshot_model_cost_entries(shared_keys + [deployment_id])
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "offpeak-only",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key-for-registration",
+                },
+                "model_info": {"id": deployment_id, "off_peak_pricing": dict(block)},
+            }
+        ]
+    )
+
+    try:
+        response = ModelResponse(
+            model="gpt-4o-mini",
+            usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        )
+        cost = litellm.completion_cost(
+            completion_response=response,
+            model="openai/gpt-4o-mini",
+            custom_llm_provider="openai",
+            custom_pricing=True,
+            router_model_id=deployment_id,
+        )
+        assert cost == pytest.approx(100 * 5e-05 + 50 * 1e-04)
+    finally:
+        _restore_model_cost_entries(original_entries)
+        del router
