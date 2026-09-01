@@ -19,10 +19,12 @@ import {
 import {
   AdaptiveEligible,
   AdaptiveRouterWeights,
+  ClassificationMode,
   ClassifierFallback,
   ClassifierLLMConfig,
   ClassifierType,
   ComplexityTierLabels,
+  DEFAULT_CLASSIFICATION_MODE,
   ComplexityRouterConfigValue,
   ComplexityTiers,
   DimensionWeights,
@@ -105,6 +107,7 @@ export interface BuildComplexityRouterConfigParams {
   classifierFallback: ClassifierFallback | undefined;
   classificationPrompt: string | undefined;
   heuristicFirstMaxTier: string | undefined;
+  classificationMode: ClassificationMode | undefined;
   sessionAffinity: boolean;
   deploymentAffinity: boolean;
   customTechnicalKeywords: string[];
@@ -159,6 +162,7 @@ export interface ComplexityRouterConfigPayload {
   classifier_fallback?: ClassifierFallback;
   classification_prompt?: string;
   heuristic_first_max_tier?: string;
+  classification_mode: ClassificationMode;
   session_affinity: boolean;
   deployment_affinity: boolean;
   custom_technical_keywords?: string[];
@@ -393,6 +397,7 @@ export const buildComplexityRouterConfig = ({
   classifierFallback,
   classificationPrompt,
   heuristicFirstMaxTier,
+  classificationMode,
   sessionAffinity,
   deploymentAffinity,
   customTechnicalKeywords,
@@ -452,6 +457,7 @@ export const buildComplexityRouterConfig = ({
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
     ...classifierWireFields(effectiveType, classifierInputs),
+    classification_mode: classificationMode ?? DEFAULT_CLASSIFICATION_MODE,
     session_affinity: sessionAffinity,
     deployment_affinity: deploymentAffinity,
     ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),

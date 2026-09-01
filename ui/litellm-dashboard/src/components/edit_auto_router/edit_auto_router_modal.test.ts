@@ -47,6 +47,7 @@ const expectedClassifiedTierConfig = {
   semantic_keyword_matching: true,
   embedding_model: "voyage-4-large",
   match_threshold: 0.65,
+  classification_mode: "every_request",
   session_affinity: false,
   deployment_affinity: true,
   adaptive: true,
@@ -68,6 +69,7 @@ const expectedAdaptiveDisabledConfig = {
   semantic_keyword_matching: true,
   embedding_model: "voyage-4-large",
   match_threshold: 0.65,
+  classification_mode: "every_request",
   session_affinity: false,
   deployment_affinity: true,
 };
