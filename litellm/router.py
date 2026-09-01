@@ -4894,6 +4894,16 @@ class Router:
             if custom_llm_provider is not None:
                 response_kwargs["custom_llm_provider"] = custom_llm_provider
 
+            # kwargs["session"] (e.g. realtime client_secrets) still has whatever
+            # model string the caller/proxy originally sent (a model_name/alias),
+            # not model_name resolved above. acreate_realtime_client_secret
+            # prioritizes session.model over the model kwarg, so leaving it
+            # unresolved would silently route with the alias instead of the
+            # deployment litellm picked. See BerriAI/litellm#36742.
+            session = response_kwargs.get("session")
+            if isinstance(session, dict) and session.get("model"):
+                response_kwargs["session"] = {**session, "model": model_name}
+
             response = original_generic_function(**response_kwargs)
 
             rpm_semaphore: Final = self._get_client(
