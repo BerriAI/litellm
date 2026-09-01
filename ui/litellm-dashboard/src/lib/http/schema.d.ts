@@ -7710,6 +7710,10 @@ export interface paths {
          *         - model_max_budget: dict - Per-model budgets, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
          *         - model_max_budget_usage: dict | None - Current-window spend per model, present only when
          *           the key has per-model budgets
+         *         - budget_limits: list | None - Concurrent budget windows, exactly as stored
+         *         - budget_limits_usage: dict | None - Current-window spend per budget window, e.g.
+         *           {"1h": {"current_spend": 0.0009}}, present only when the key has budget windows
+         *           (read from the same cross-pod spend counter the budget enforcement uses)
          *         - models: list - Model_name's the key is allowed to call
          *         - tpm_limit / rpm_limit: int | None - Tokens and requests per minute limits
          *         - metadata: dict - Metadata for the key, e.g. {"team": "core-infra"}
