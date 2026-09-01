@@ -226,7 +226,9 @@ test.describe("Add Model", () => {
     });
     expect(createCred.ok(), `POST /credentials failed (${createCred.status()}): ${await createCred.text()}`).toBe(true);
 
-    // Multi-instance stacks propagate a new credential to the probe-serving instance on a periodic sync
+    // Multi-instance stacks propagate a new credential to the probe-serving instances on a periodic
+    // sync; consecutive successes guard against a load balancer alternating synced and stale replicas
+    let consecutiveProbeSuccesses = 0;
     await expect
       .poll(
         async () => {
@@ -242,15 +244,16 @@ test.describe("Add Model", () => {
               mode: "chat",
             },
           });
-          if (!probe.ok()) return false;
-          return (await probe.json()).status === "success";
+          const healthy = probe.ok() && (await probe.json()).status === "success";
+          consecutiveProbeSuccesses = healthy ? consecutiveProbeSuccesses + 1 : 0;
+          return consecutiveProbeSuccesses;
         },
         {
           message: `stored credential ${credentialName} never became usable for a connection test`,
           timeout: 60_000,
         },
       )
-      .toBe(true);
+      .toBeGreaterThanOrEqual(3);
 
     try {
       await navigateToPage(page, Page.Models);
