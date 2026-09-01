@@ -520,6 +520,22 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return url if isinstance(url, str) else None
         return None
 
+    @classmethod
+    def _image_urls_in(cls, messages: "Sequence[AllMessageValues] | None") -> frozenset[str]:
+        """Normalized image urls already carried by these messages."""
+        found: set[str] = set()  # mutable-ok: accumulator, frozen on return
+        for message in messages or ():
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if not isinstance(part, dict) or part.get("type") != "image_url":
+                    continue
+                url = cls._get_image_url(item=part)
+                if url is not None:
+                    found.add(cls._normalize_image_input(url))
+        return frozenset(found)
+
     def _handle_unscannable_image(self, reason: str) -> None:
         """Block or warn for an image part ApplyGuardrail cannot scan.
 
@@ -577,15 +593,20 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # on_unscannable_image policy decides rather than this helper.
         return value
 
-    def _refuse_file_backed_images(self, inputs: "GenericGuardrailAPIInputs", input_type: str) -> None:
+    def _refuse_file_backed_images(self, request_data: Mapping[str, object], input_type: str) -> None:
         """Hand a file-backed image to on_unscannable_image rather than ignoring it.
+
+        Read from the raw request rather than inputs["structured_messages"]: the
+        /v1/messages handler translates to OpenAI spec before populating that field,
+        and the translation drops a file source entirely, so the block never survives
+        to be counted. The provider still forwards it to the model.
 
         Images are a request-side concern; an OUTPUT scan takes generated text, so a
         file reference sitting in the conversation history is not this scan's problem.
         """
         if input_type != "request":
             return
-        found: Final = self._file_backed_image_count(inputs.get("structured_messages"))
+        found: Final = self._file_backed_image_count(request_data.get("messages"))
         if not found:
             return
         self._handle_unscannable_image(
@@ -593,32 +614,32 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
 
     @staticmethod
-    def _file_backed_image_count(structured_messages: object) -> int:
+    def _file_backed_image_count(messages: object) -> int:
         """Count image parts whose bytes live behind a provider Files API.
 
         An Anthropic `{"type": "image", "source": {"type": "file", "file_id": ...}}`
         block carries no data, so the guardrail translation yields nothing for it
         while the provider still forwards the file to the model. Left alone that is
         an image the policy never sees, which is the failure this whole path exists
-        to remove -- so it is counted here and refused rather than documented.
+        to remove, so it is counted here and refused rather than documented.
 
-        Detects that one shape rather than comparing counts against
-        `inputs["images"]`: structured_messages is already narrowed by the
-        skip/scope flags, so a mismatch is not by itself evidence of a dropped
-        image, and blocking a legitimate request is worse than the gap.
+        Counts this one shape rather than comparing totals against
+        `inputs["images"]`, whose length is narrowed by the skip and scope flags; a
+        mismatch there is not by itself evidence of a dropped image, and refusing a
+        legitimate request is worse than the gap.
 
-        That narrowing cuts both ways and this check inherits it. `images` is
-        extracted from every message while structured_messages holds only the
-        scoped subset (guardrail_translation/handler.py builds them from different
-        lists), so a file source in a message the scope excluded is not seen here.
-        Reading the unscoped list instead would refuse requests for content the
-        operator's skip flags deliberately took out of scanning, which is a
-        different wrong answer.
+        Deliberately reads the whole request rather than the scanned subset. Under
+        `experimental_use_latest_role_message_only` that means a file source in an
+        older turn is refused even though the operator scoped scanning to the latest
+        one. The alternative is the scoped list, which for /v1/messages has already
+        been translated to OpenAI spec with the file source dropped, so the check
+        would never fire at all. Over-refusing is the safer of the two errors here,
+        and `on_unscannable_image: allow` turns it off.
         """
-        if not isinstance(structured_messages, list):
+        if not isinstance(messages, list):
             return 0
         found = 0  # rebind-ok: running count over the message list
-        for message in structured_messages:
+        for message in messages:
             if not isinstance(message, dict):
                 continue
             content = message.get("content")
@@ -3517,7 +3538,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # Before the shortcuts below, so a file-backed image cannot be skipped either.
         # Both conditions live in the callee: apply_guardrail sits one branch under
         # ruff-strict's complexity ceiling, and two more here would cross it.
-        self._refuse_file_backed_images(inputs=inputs, input_type=input_type)
+        self._refuse_file_backed_images(request_data=request_data, input_type=input_type)
         try:
             verbose_proxy_logger.debug(
                 "Bedrock Guardrail: Applying guardrail to %s text(s) and %s image(s)", len(texts), len(image_urls)
@@ -3597,8 +3618,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     # message path means `_create_bedrock_input_content_request` does the
                     # decoding, format check and on_unscannable_image handling, so the
                     # unified and native lifecycle paths cannot drift apart.
+                    # `experimental_use_latest_role_message_only` puts the selected
+                    # message itself into filtered_messages, image parts included, and
+                    # those go through the same builder below. Appending them again
+                    # would fetch and bill each one twice.
+                    already_scanned: Final = self._image_urls_in(filtered_messages)
                     image_parts: Final = [  # mutable-ok: OpenAI message content is a list in the wire format
-                        self._image_content_part(self._normalize_image_input(url)) for url in image_urls
+                        self._image_content_part(normalized)
+                        for normalized in (self._normalize_image_input(url) for url in image_urls)
+                        if normalized not in already_scanned
                     ]
                     image_message: Final = (
                         (ChatCompletionUserMessage(role="user", content=image_parts),) if image_parts else ()

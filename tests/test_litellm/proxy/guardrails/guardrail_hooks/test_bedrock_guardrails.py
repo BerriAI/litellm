@@ -5799,10 +5799,9 @@ class TestBedrockGuardrailImageInput:
         the silent pass this path exists to remove. Documented is not the same as
         safe; under the default policy the request is refused.
         """
-        inputs = {
-            "texts": ["what does this say?"],
-            "images": [],
-            "structured_messages": [
+        inputs = {"texts": ["what does this say?"], "images": []}
+        request_data = {
+            "messages": [
                 {
                     "role": "user",
                     "content": [
@@ -5810,7 +5809,7 @@ class TestBedrockGuardrailImageInput:
                         {"type": "image", "source": {"type": "file", "file_id": "file_abc"}},
                     ],
                 }
-            ],
+            ]
         }
 
         g = self._guardrail()
@@ -5824,10 +5823,90 @@ class TestBedrockGuardrailImageInput:
         # the failure mode being pinned is a silent pass, not an AWS error.
         with patch.object(g, "make_bedrock_api_request", new=spy):
             with pytest.raises(HTTPException) as exc_info:
-                await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
+                await g.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request")
 
         assert "file id" in str(exc_info.value.detail)
         assert sent == [], "refused before any scan was attempted"
+
+    @pytest.mark.asyncio
+    async def test_a_file_backed_image_is_refused_through_the_real_translation(self):
+        """Drive the /v1/messages handler instead of hand-building its output.
+
+        The handler translates to OpenAI spec before filling structured_messages, and
+        that translation drops a file source, so a check reading structured_messages
+        passes every hand-written fixture and never fires in production.
+        """
+        from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
+
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "what does this say?"},
+                        {"type": "image", "source": {"type": "file", "file_id": "file_abc"}},
+                    ],
+                }
+            ],
+        }
+        assert not self._file_parts_in(AnthropicMessagesHandler().get_structured_messages(data)), (
+            "the translation is expected to drop the file source; that is why this test exists"
+        )
+
+        g = self._guardrail()
+        with patch.object(g, "make_bedrock_api_request", new=AsyncMock(return_value={"action": "NONE"})):
+            with pytest.raises(HTTPException) as exc_info:
+                await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=g)
+
+        assert "file id" in str(exc_info.value.detail)
+
+    @staticmethod
+    def _file_parts_in(messages) -> int:
+        return sum(
+            1
+            for message in messages or ()
+            if isinstance(message, dict)
+            for part in (message.get("content") if isinstance(message.get("content"), list) else ())
+            if isinstance(part, dict) and part.get("type") == "image"
+        )
+
+    @pytest.mark.asyncio
+    async def test_latest_message_only_does_not_scan_the_same_image_twice(self):
+        """The selected message carries its own image parts into the scan payload.
+
+        `inputs["images"]` holds that same url, so appending it again would fetch and
+        bill the image twice.
+        """
+        url = self._PNG_DATA_URI
+        g = self._guardrail(experimental_use_latest_role_message_only=True)
+        sent: list = []
+
+        async def spy(**kwargs):
+            sent.append(await g.convert_to_bedrock_format(source="INPUT", messages=kwargs["messages"]))
+            return {"action": "NONE", "outputs": []}
+
+        with patch.object(g, "make_bedrock_api_request", new=spy):
+            await g.apply_guardrail(
+                inputs={
+                    "texts": ["hello"],
+                    "images": [url],
+                    "structured_messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "hello"},
+                                {"type": "image_url", "image_url": {"url": url}},
+                            ],
+                        }
+                    ],
+                },
+                request_data={},
+                input_type="request",
+            )
+
+        images = [item for item in sent[0]["content"] if "image" in item]
+        assert len(images) == 1, f"the image was sent {len(images)} times"
 
     @pytest.mark.asyncio
     async def test_a_file_backed_image_is_let_through_under_the_allow_policy(self):
@@ -5841,17 +5920,15 @@ class TestBedrockGuardrailImageInput:
 
         with patch.object(g, "make_bedrock_api_request", new=spy):
             await g.apply_guardrail(
-                inputs={
-                    "texts": ["hello"],
-                    "images": [],
-                    "structured_messages": [
+                inputs={"texts": ["hello"], "images": []},
+                request_data={
+                    "messages": [
                         {
                             "role": "user",
                             "content": [{"type": "image", "source": {"type": "file", "file_id": "file_abc"}}],
                         }
-                    ],
+                    ]
                 },
-                request_data={},
                 input_type="request",
             )
 
@@ -5874,10 +5951,9 @@ class TestBedrockGuardrailImageInput:
 
         with patch.object(g, "make_bedrock_api_request", new=spy):
             await g.apply_guardrail(
-                inputs={
-                    "texts": ["hello"],
-                    "images": [self._PNG_DATA_URI],
-                    "structured_messages": [
+                inputs={"texts": ["hello"], "images": [self._PNG_DATA_URI]},
+                request_data={
+                    "messages": [
                         {
                             "role": "user",
                             "content": [
@@ -5886,9 +5962,8 @@ class TestBedrockGuardrailImageInput:
                                 {"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}},
                             ],
                         }
-                    ],
+                    ]
                 },
-                request_data={},
                 input_type="request",
             )
 
@@ -5913,10 +5988,9 @@ class TestBedrockGuardrailImageInput:
         with patch.object(g, "make_bedrock_api_request", new=spy):
             with pytest.raises(HTTPException) as exc_info:
                 await g.apply_guardrail(
-                    inputs={
-                        "texts": ["hello"],
-                        "images": [],
-                        "structured_messages": [
+                    inputs={"texts": ["hello"], "images": []},
+                    request_data={
+                        "messages": [
                             "not a message",
                             123,
                             {"role": "user", "content": "a plain string, not a list"},
@@ -5924,9 +5998,8 @@ class TestBedrockGuardrailImageInput:
                                 "role": "user",
                                 "content": [{"type": "image", "source": {"type": "file", "file_id": "file_abc"}}],
                             },
-                        ],
+                        ]
                     },
-                    request_data={},
                     input_type="request",
                 )
 
