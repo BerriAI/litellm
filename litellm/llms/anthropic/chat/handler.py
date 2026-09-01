@@ -118,6 +118,7 @@ async def make_call(
         speed=speed,
         tool_name_reverse_map=tool_name_reverse_map,
     )
+    completion_stream.http_response = response
 
     # LOGGING
     logging_obj.post_call(
@@ -186,6 +187,7 @@ def make_sync_call(
         speed=speed,
         tool_name_reverse_map=tool_name_reverse_map,
     )
+    completion_stream.http_response = response
 
     # LOGGING
     logging_obj.post_call(
@@ -638,6 +640,8 @@ class ModelResponseIterator:
     ):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
+        self.sync_stream = sync_stream
+        self.http_response: httpx.Response | None = None
         self.content_blocks: list[ContentBlockDelta] = []
         self.tool_index = -1
         self.json_mode = json_mode
@@ -690,6 +694,16 @@ class ModelResponseIterator:
     @accumulated_json.setter
     def accumulated_json(self, value: str) -> None:
         self._json_buffer.set(value)
+
+    async def aclose(self) -> None:
+        response: Final = self.http_response
+        self.http_response = None
+        if response is None:
+            return
+        if self.sync_stream:
+            response.close()
+            return
+        await response.aclose()
 
     def check_empty_tool_call_args(self) -> bool:
         """
