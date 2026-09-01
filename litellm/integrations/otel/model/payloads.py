@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
+from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final, cast
 from urllib.parse import urlsplit
 
@@ -113,7 +114,9 @@ class LLMUsage:
         raw_usage: Final = metadata.get("usage_object")
         usage_object: Final[Mapping[str, object]] = raw_usage if isinstance(raw_usage, Mapping) else {}
         raw_details: Final = usage_object.get("prompt_tokens_details")
-        prompt_details: Final[Mapping[str, object]] = raw_details if isinstance(raw_details, Mapping) else {}
+        prompt_details: Final[Mapping[str, object]] = (
+            raw_details if isinstance(raw_details, Mapping) else MappingProxyType({})
+        )
         cache_creation_top_level: Final = as_int(usage_object.get("cache_creation_input_tokens"))
         cache_creation_write: Final = as_int(prompt_details.get("cache_write_tokens"))
         cache_creation_alias: Final = as_int(prompt_details.get("cache_creation_tokens"))
