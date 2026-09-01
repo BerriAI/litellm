@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 import litellm
 from litellm.rust_bridge.ocr import use_litellm_rust
+from tests.route_parity.fixtures.media import structured_image_data_uri
 from tests.route_parity.fixtures.pipeline import parse_recording_args, record_fixtures
 from tests.route_parity.fixtures.store import fixture_directory
 from tests.test_litellm.ocr.fixtures.azure import (
@@ -37,13 +38,14 @@ class LiteLLMOcrFixtureClient:
 def discover_targets(
     environ: Mapping[str, str],
     client: OcrFixtureClient,
+    inline_image_data_uri: str,
 ) -> tuple[OcrRecordingTarget, ...]:
     return (
-        *mistral_recording_targets(environ, client),
-        *azure_mistral_recording_targets(environ, client),
+        *mistral_recording_targets(environ, client, inline_image_data_uri),
+        *azure_mistral_recording_targets(environ, client, inline_image_data_uri),
         *azure_document_intelligence_recording_targets(environ, client),
-        *vertex_recording_targets(environ, client),
-        *reducto_recording_targets(environ, client),
+        *vertex_recording_targets(environ, client, inline_image_data_uri),
+        *reducto_recording_targets(environ, client, inline_image_data_uri),
     )
 
 
@@ -58,7 +60,8 @@ def main() -> int:
     load_dotenv()
     args: Final = parse_recording_args()
     client: Final = LiteLLMOcrFixtureClient(cast(OcrSdkCall, litellm.ocr))
-    targets: Final = require_targets(discover_targets(os.environ, client))
+    inline_image_data_uri: Final = structured_image_data_uri()
+    targets: Final = require_targets(discover_targets(os.environ, client, inline_image_data_uri))
     root: Final = fixture_directory(
         args.fixture_dir,
         os.environ.get(FIXTURE_DIR_ENV),

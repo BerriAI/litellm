@@ -1,25 +1,29 @@
 from __future__ import annotations
 
 import queue
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 import pytest
 from hypothesis import find, settings
 from hypothesis.strategies import SearchStrategy
 
 from tests.route_parity.fixtures.inputs import generate_case_inputs
+from tests.route_parity.fixtures.media import structured_pdf_data_uri
 from tests.route_parity.fixtures.pipeline import parse_recording_args
 from tests.test_litellm.ocr.fixtures.azure import (
-    AZURE_DOCUMENT_INTELLIGENCE_MODELS,
+    AZURE_DOCUMENT_INTELLIGENCE_RECORDING_MODELS,
     AZURE_MISTRAL_MODELS,
 )
 from tests.test_litellm.ocr.fixtures.base import OcrSdkInputBase
+from tests.test_litellm.ocr.fixtures.common import OcrFixtureClient, OcrRecordingTarget
 from tests.test_litellm.ocr.fixtures.mistral import MISTRAL_MODELS
 from tests.test_litellm.ocr.fixtures.record import (
-    discover_targets,
+    discover_targets as discover_targets_with_media,
+)
+from tests.test_litellm.ocr.fixtures.record import (
     require_targets,
 )
 from tests.test_litellm.ocr.fixtures.reducto import REDUCTO_LEGACY_MODELS, REDUCTO_V3_MODELS
@@ -54,12 +58,17 @@ _MISTRAL_PARAMS: Final = frozenset(
         "table_format",
         "confidence_scores_granularity",
         "include_blocks",
-        "id",
     }
 )
 _MISTRAL_2512_PARAMS: Final = _MISTRAL_PARAMS - {"include_blocks"}
 _MISTRAL_2505_PARAMS: Final = _MISTRAL_2512_PARAMS - {"extract_header", "extract_footer", "table_format"}
+_AZURE_MISTRAL_PARAMS: Final = _MISTRAL_2505_PARAMS - {"document_annotation_prompt"}
 _FIND_SETTINGS: Final = settings(max_examples=2_000, deadline=None, derandomize=True, database=None)
+_INLINE_IMAGE_DATA_URI: Final = "data:image/png;base64,dGVzdA=="
+
+
+def discover_targets(environ: Mapping[str, str], client: OcrFixtureClient) -> tuple[OcrRecordingTarget, ...]:
+    return discover_targets_with_media(environ, client, _INLINE_IMAGE_DATA_URI)
 
 
 def _model(case_input: OcrSdkInputBase) -> str:
@@ -73,6 +82,14 @@ def _find_input(
     predicate: Callable[[OcrSdkInputBase], bool],
 ) -> OcrSdkInputBase:
     return find(strategy, predicate, settings=_FIND_SETTINGS)
+
+
+def _document_transport(case_input: OcrSdkInputBase) -> tuple[str, str]:
+    document: Final = cast(dict[str, object], case_input.canonical_input()["document"])
+    document_type: Final = cast(str, document["type"])
+    source: Final = document["image_url"] if document_type == "image_url" else document["document_url"]
+    assert isinstance(source, str)
+    return document_type, "data" if source.startswith("data:") else "remote"
 
 
 def test_parse_args_has_no_model_selection() -> None:
@@ -191,7 +208,7 @@ def test_mistral_target_invocation_forwards_discovered_credentials() -> None:
     assert kwargs["model"] in MISTRAL_MODELS
 
 
-def test_every_target_strategy_reaches_every_model_and_coverage_param() -> None:
+def test_every_target_strategy_reaches_every_recording_model_and_coverage_param() -> None:
     targets: Final = discover_targets(
         {
             "MISTRAL_API_KEY": "mistral-secret",
@@ -207,15 +224,15 @@ def test_every_target_strategy_reaches_every_model_and_coverage_param() -> None:
     )
     expected: Final[dict[str, tuple[tuple[str, ...], frozenset[str]]]] = {
         "mistral-ocr": (MISTRAL_MODELS, _MISTRAL_PARAMS),
-        "azure-mistral": (AZURE_MISTRAL_MODELS, _MISTRAL_2512_PARAMS),
+        "azure-mistral": (AZURE_MISTRAL_MODELS, _AZURE_MISTRAL_PARAMS),
         "azure-document-intelligence": (
-            AZURE_DOCUMENT_INTELLIGENCE_MODELS,
+            AZURE_DOCUMENT_INTELLIGENCE_RECORDING_MODELS,
             frozenset({"pages", "features", "req_format"}),
         ),
         "vertex-mistral": (VERTEX_MISTRAL_MODELS, _MISTRAL_2505_PARAMS),
         "vertex-deepseek": (VERTEX_DEEPSEEK_MODELS, frozenset[str]()),
         "reducto-v3": (REDUCTO_V3_MODELS, frozenset({"formatting", "retrieval", "settings"})),
-        "reducto-legacy": (REDUCTO_LEGACY_MODELS, frozenset({"enhance"})),
+        "reducto-legacy": (REDUCTO_LEGACY_MODELS, frozenset[str]()),
     }
 
     for target in targets:
@@ -231,13 +248,57 @@ def test_every_target_strategy_reaches_every_model_and_coverage_param() -> None:
                 == model
             )
         for param in expected_params:
-            assert (
-                param
-                in _find_input(
-                    target.strategy,
-                    lambda case_input, expected_param=param: expected_param in case_input.as_sdk_kwargs(),
-                ).as_sdk_kwargs()
+            reached = _find_input(
+                target.strategy,
+                lambda case_input, expected_param=param: expected_param in case_input.as_sdk_kwargs(),
             )
+            assert param in reached.as_sdk_kwargs()
+            document = cast(dict[str, object], reached.canonical_input()["document"])
+            assert document == {"type": "document_url", "document_url": structured_pdf_data_uri()}
+
+
+@pytest.mark.parametrize("target_name", ("mistral-ocr", "azure-mistral", "vertex-mistral"))
+def test_mistral_recording_targets_reach_every_transport_branch(target_name: str) -> None:
+    targets: Final = discover_targets(
+        {
+            "MISTRAL_API_KEY": "mistral-secret",
+            "AZURE_AI_API_KEY": "azure-secret",
+            "AZURE_AI_API_BASE": "https://azure.example",
+            "VERTEX_AI_API_KEY": "vertex-secret",
+            "VERTEXAI_PROJECT": "project-1",
+        },
+        _UNUSED_OCR_CLIENT,
+    )
+    target: Final = next(candidate for candidate in targets if candidate.name == target_name)
+
+    for transport in (
+        ("image_url", "remote"),
+        ("image_url", "data"),
+        ("document_url", "remote"),
+        ("document_url", "data"),
+    ):
+        reached = _find_input(
+            target.strategy,
+            lambda case_input, expected=transport: _document_transport(case_input) == expected,
+        )
+        assert _document_transport(reached) == transport
+
+
+def test_vertex_deepseek_recording_reaches_documented_image_branch() -> None:
+    targets: Final = discover_targets(
+        {
+            "VERTEX_AI_API_KEY": "vertex-secret",
+            "VERTEXAI_PROJECT": "project-1",
+        },
+        _UNUSED_OCR_CLIENT,
+    )
+    target: Final = next(candidate for candidate in targets if candidate.name == "vertex-deepseek")
+    case_input: Final = _find_input(
+        target.strategy,
+        lambda candidate: _document_transport(candidate) == ("image_url", "data"),
+    )
+
+    assert _document_transport(case_input) == ("image_url", "data")
 
 
 def test_ocr_targets_have_no_hardcoded_required_inputs() -> None:

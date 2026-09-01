@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 from typing import Final, TypeVar, cast
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
 
+import httpx
 import pytest
+import respx
 from hypothesis import find, given, settings
 from hypothesis import strategies as st
 from hypothesis.strategies import DataObject, SearchStrategy
@@ -13,18 +18,25 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationEr
 
 from litellm.llms.azure_ai.ocr.document_intelligence.transformation import AzureDocumentIntelligenceOCRConfig
 from litellm.llms.azure_ai.ocr.transformation import AzureAIOCRConfig
-from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
+from litellm.llms.base_llm.ocr.transformation import (
+    BaseOCRConfig,
+    DocumentType,
+    OCRRequestData,
+)
 from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.llms.reducto.ocr.transformation import ReductoParseLegacyConfig, ReductoParseV3Config
 from litellm.llms.vertex_ai.ocr.deepseek_transformation import VertexAIDeepSeekOCRConfig
 from litellm.llms.vertex_ai.ocr.transformation import VertexAIOCRConfig
+from tests.route_parity.fixtures.media import structured_pdf_data_uri
 from tests.test_litellm.ocr.conftest import ocr_fixture_marks
 from tests.test_litellm.ocr.fixtures.azure import (
     AZURE_DOCUMENT_INTELLIGENCE_MODELS,
+    AZURE_DOCUMENT_INTELLIGENCE_RECORDING_MODELS,
     AZURE_MISTRAL_MODELS,
     AzureDocumentIntelligenceOcrSdkInput,
     AzureMistralOcrSdkInput,
     azure_document_intelligence_input_strategy,
+    azure_mistral_input_strategy,
 )
 from tests.test_litellm.ocr.fixtures.base import (
     DocumentUrlDocument,
@@ -42,6 +54,7 @@ from tests.test_litellm.ocr.fixtures.reducto import (
     ReductoChunking,
     ReductoDocumentUrlDocument,
     ReductoFormatting,
+    ReductoImageUrlDocument,
     ReductoPageRange,
     ReductoParseLegacySdkInput,
     ReductoParseV3SdkInput,
@@ -56,6 +69,7 @@ from tests.test_litellm.ocr.fixtures.vertex import (
     VertexDeepSeekOcrSdkInput,
     VertexMistralOcrSdkInput,
     vertex_deepseek_input_strategy,
+    vertex_mistral_input_strategy,
 )
 
 COMMON_FIELDS: Final = frozenset(
@@ -109,15 +123,79 @@ _MISTRAL_OPTION_GROUPS: Final = frozenset(
                 "table_format",
                 "confidence_scores_granularity",
                 "include_blocks",
-                "id",
             )
         ),
         frozenset({"document_annotation_format", "document_annotation_prompt"}),
         frozenset({"include_blocks", "confidence_scores_granularity"}),
     }
 )
+_MISTRAL_2505_OPTION_GROUPS: Final = frozenset(
+    {
+        frozenset[str](),
+        *(
+            frozenset({field})
+            for field in (
+                "pages",
+                "include_image_base64",
+                "image_limit",
+                "image_min_size",
+                "bbox_annotation_format",
+                "document_annotation_format",
+                "confidence_scores_granularity",
+            )
+        ),
+        frozenset({"document_annotation_format", "document_annotation_prompt"}),
+    }
+)
+_AZURE_MISTRAL_OPTION_GROUPS: Final = _MISTRAL_2505_OPTION_GROUPS - {
+    frozenset({"document_annotation_format", "document_annotation_prompt"})
+}
+_REDUCTO_FORMATTING_INCLUDE_GROUPS: Final = (
+    (),
+    ("hyperlinks",),
+    ("change_tracking", "highlight", "comments"),
+    ("signatures", "ignore_watermarks"),
+)
+_REDUCTO_FILTER_BLOCK_GROUPS: Final = (
+    (),
+    ("Header",),
+    ("Header", "Footer", "Page Number"),
+    ("Figure", "Table", "Key Value"),
+)
+_REDUCTO_RETURN_IMAGE_GROUPS: Final = (
+    (),
+    ("figure",),
+    ("table",),
+    ("page",),
+    ("figure", "table"),
+)
 _FIND_SETTINGS: Final = settings(max_examples=2_000, deadline=None, derandomize=True, database=None)
 _FixtureInputT = TypeVar("_FixtureInputT")
+INLINE_IMAGE_DATA_URI: Final = "data:image/png;base64,dGVzdA=="
+_MapOcrParams = Callable[[dict[str, object], dict[str, object], str], dict[str, object]]
+_TransformOcrRequest = Callable[
+    [str, DocumentType, dict[str, object], dict[str, object]],
+    OCRRequestData,
+]
+_GetCompleteUrl = Callable[[str | None, str, dict[str, object]], str]
+
+
+def _transform_with_stubbed_download(
+    transform_request: _TransformOcrRequest,
+    model: str,
+    document: DocumentType,
+    mapped: dict[str, object],
+) -> OCRRequestData:
+    source_key: Final = "image_url" if document["type"] == "image_url" else "document_url"
+    source: Final = document[source_key]
+    if source.startswith("data:"):
+        return transform_request(model, document, mapped, {})
+    media_type: Final = "image/png" if document["type"] == "image_url" else "application/pdf"
+    with respx.mock(assert_all_called=False) as router:
+        router.route(method="GET").mock(
+            return_value=httpx.Response(200, content=b"\x00", headers={"content-type": media_type})
+        )
+        return transform_request(model, document, mapped, {})
 
 
 def _find_fixture(
@@ -125,6 +203,49 @@ def _find_fixture(
     predicate: Callable[[_FixtureInputT], bool],
 ) -> _FixtureInputT:
     return find(strategy, predicate, settings=_FIND_SETTINGS)
+
+
+def _document_transport(document: ImageUrlDocument | DocumentUrlDocument) -> tuple[str, str]:
+    if isinstance(document, ImageUrlDocument):
+        source: Final = document.image_url.url if isinstance(document.image_url, ImageUrlValue) else document.image_url
+        return document.type, "data" if source.startswith("data:") else "remote"
+    return document.type, "data" if document.document_url.startswith("data:") else "remote"
+
+
+def _normalized_azure_pages(pages: object) -> str:
+    if isinstance(pages, str):
+        return pages.replace(" ", "")
+    assert isinstance(pages, list)
+    raw_pages: Final = cast(list[object], pages)
+    if all(isinstance(page, int) for page in raw_pages):
+        integer_pages: Final = cast(list[int], raw_pages)
+        return ",".join(str(page + 1) for page in sorted(set(integer_pages)))
+    string_pages: Final = cast(list[str], raw_pages)
+    return ",".join(page.strip() for page in string_pages)
+
+
+def test_structured_pdf_exercises_semantic_ocr_features() -> None:
+    encoded: Final = structured_pdf_data_uri().partition(",")[2]
+    pdf: Final = base64.b64decode(encoded, validate=True)
+
+    assert pdf.startswith(b"%PDF-1.")
+    assert b"/Count 5" in pdf
+    assert pdf.count(b"/Subtype /Image") == 3
+    assert all(
+        marker in pdf
+        for marker in (
+            b"/Width 120",
+            b"/Width 320",
+            b"/Width 360",
+            b"/Subtype /Highlight",
+            b"/Subtype /Link",
+            b"/Subtype /Text",
+            b"/Title (Quarterly Operations Report)",
+        )
+    )
+    assert b"Invoice Number: INV-2048" in pdf
+    assert b"Formula: gross margin" in pdf
+    assert b"Approved by: Jordan Lee" in pdf
 
 
 class _ModelRegistryEntry(BaseModel):
@@ -350,6 +471,30 @@ def test_vertex_deepseek_request_uses_single_provider_namespace(model: str) -> N
 
 
 @pytest.mark.parametrize(
+    "document",
+    (
+        {"type": "image_url", "image_url": "data:image/png;base64,AA=="},
+        {"type": "document_url", "document_url": "data:application/pdf;base64,AA=="},
+    ),
+)
+def test_vertex_deepseek_request_maps_both_document_types_to_image_content(
+    document: DocumentType,
+) -> None:
+    request: Final = VertexAIDeepSeekOCRConfig().transform_ocr_request(  # pyright: ignore[reportUnknownMemberType]
+        model="deepseek-ai/deepseek-ocr-maas",
+        document=document,
+        optional_params={},
+        headers={},
+    )
+
+    source_key: Final = "image_url" if document["type"] == "image_url" else "document_url"
+    data: Final = cast(dict[str, object], request.data)
+    messages: Final = cast(list[dict[str, object]], data["messages"])
+    content: Final = cast(list[dict[str, object]], messages[0]["content"])
+    assert content == [{"type": "image_url", "image_url": document[source_key]}]
+
+
+@pytest.mark.parametrize(
     "sdk_input",
     (
         ReductoParseV3SdkInput(model="reducto/parse-v3", document=_reducto_document()),
@@ -434,12 +579,12 @@ def test_reducto_nested_constraints() -> None:
 @settings(max_examples=100, deadline=None)
 @given(model=st.sampled_from(MISTRAL_MODELS), data=st.data())
 def test_mistral_strategy_only_generates_bounded_valid_sdk_inputs(model: str, data: DataObject) -> None:
-    sdk_input: Final = data.draw(mistral_input_strategy(model))
+    sdk_input: Final = data.draw(mistral_input_strategy(model, INLINE_IMAGE_DATA_URI))
     assert MistralOcrSdkInput.model_validate(sdk_input.canonical_input()) == sdk_input
     optional_fields: Final = frozenset(sdk_input.model_fields_set) - {"model", "document"}
     assert optional_fields in _MISTRAL_OPTION_GROUPS
     if sdk_input.pages is not None:
-        assert sdk_input.pages in ([0], [0, 1])
+        assert sdk_input.pages in ([0], [0, 1], "0-2")
     if sdk_input.image_limit is not None:
         assert sdk_input.image_limit == 1
     if sdk_input.image_min_size is not None:
@@ -454,6 +599,46 @@ def test_mistral_strategy_only_generates_bounded_valid_sdk_inputs(model: str, da
         assert optional_fields.isdisjoint({"extract_header", "extract_footer", "table_format"})
     if model not in _MISTRAL_4_OR_NEWER:
         assert "include_blocks" not in optional_fields
+        assert not isinstance(sdk_input.pages, str)
+    if optional_fields:
+        assert isinstance(sdk_input.document, DocumentUrlDocument)
+        assert sdk_input.document.document_url == structured_pdf_data_uri()
+
+
+@pytest.mark.parametrize(
+    "transport",
+    (
+        ("image_url", "remote"),
+        ("image_url", "data"),
+        ("document_url", "remote"),
+        ("document_url", "data"),
+    ),
+)
+def test_mistral_strategy_reaches_every_document_transform_branch(transport: tuple[str, str]) -> None:
+    sdk_input: Final = _find_fixture(
+        mistral_input_strategy("mistral/mistral-ocr-4-1", INLINE_IMAGE_DATA_URI),
+        lambda candidate: _document_transport(candidate.document) == transport,
+    )
+
+    assert _document_transport(sdk_input.document) == transport
+
+
+@settings(max_examples=100, deadline=None)
+@given(sdk_input=mistral_input_strategy("mistral/mistral-ocr-4-1", INLINE_IMAGE_DATA_URI))
+def test_mistral_strategy_values_survive_the_request_transform(sdk_input: MistralOcrSdkInput) -> None:
+    sdk_kwargs: Final = sdk_input.as_sdk_kwargs()
+    model: Final = cast(str, sdk_kwargs["model"])
+    document: Final = cast(DocumentType, sdk_kwargs["document"])
+    optional_params: Final = {name: value for name, value in sdk_kwargs.items() if name not in {"model", "document"}}
+    config: Final = MistralOCRConfig()
+    map_params: Final = cast(_MapOcrParams, config.map_ocr_params)
+    transform_request: Final = cast(_TransformOcrRequest, config.transform_ocr_request)
+    mapped: Final = map_params(optional_params, {}, model)
+    request: Final = transform_request(model, document, mapped, {})
+    request_data: Final = cast(dict[str, object], request.data)
+
+    assert mapped == optional_params
+    assert request_data == {"model": model, "document": document, **optional_params}
 
 
 @pytest.mark.parametrize(
@@ -461,6 +646,7 @@ def test_mistral_strategy_only_generates_bounded_valid_sdk_inputs(model: str, da
     (
         ("pages", [0]),
         ("pages", [0, 1]),
+        ("pages", "0-2"),
         ("include_image_base64", False),
         ("include_image_base64", True),
         ("image_limit", 1),
@@ -476,12 +662,11 @@ def test_mistral_strategy_only_generates_bounded_valid_sdk_inputs(model: str, da
         ("confidence_scores_granularity", "block"),
         ("include_blocks", False),
         ("include_blocks", True),
-        ("id", "case-1"),
     ),
 )
 def test_mistral_strategy_reaches_every_finite_scalar_value(field: str, value: object) -> None:
     sdk_input: Final = _find_fixture(
-        mistral_input_strategy("mistral/mistral-ocr-4-1"),
+        mistral_input_strategy("mistral/mistral-ocr-4-1", INLINE_IMAGE_DATA_URI),
         lambda candidate: field in candidate.model_fields_set and getattr(candidate, field) == value,
     )
 
@@ -489,20 +674,22 @@ def test_mistral_strategy_reaches_every_finite_scalar_value(field: str, value: o
 
 
 @settings(max_examples=50, deadline=None)
-@given(sdk_input=reducto_v3_input_strategy())
+@given(sdk_input=reducto_v3_input_strategy(INLINE_IMAGE_DATA_URI))
 def test_reducto_v3_strategy_only_generates_bounded_valid_sdk_inputs(sdk_input: ReductoParseV3SdkInput) -> None:
     assert ReductoParseV3SdkInput.model_validate(sdk_input.canonical_input()) == sdk_input
     option_groups: Final = frozenset(sdk_input.model_fields_set) & {"formatting", "retrieval", "settings"}
     assert len(option_groups) <= 1
     if "formatting" in option_groups:
-        assert len(sdk_input.formatting.model_fields_set) == 1
-        assert sdk_input.formatting.table_output_format in {"dynamic", "html", "md", "json", "csv", "jsonbbox"}
-        assert tuple(sdk_input.formatting.include) in {
-            (),
-            ("hyperlinks",),
-            ("change_tracking", "highlight", "comments"),
-            ("signatures", "ignore_watermarks"),
-        }
+        formatting_fields: Final = frozenset(sdk_input.formatting.model_fields_set)
+        assert len(formatting_fields) == 1
+        if "table_output_format" in formatting_fields:
+            assert sdk_input.formatting.table_output_format in {"dynamic", "html", "md", "json", "csv", "jsonbbox"}
+        if "add_page_markers" in formatting_fields:
+            assert sdk_input.formatting.add_page_markers in {False, True}
+        if "merge_tables" in formatting_fields:
+            assert sdk_input.formatting.merge_tables in {False, True}
+        if "include" in formatting_fields:
+            assert tuple(sdk_input.formatting.include) in _REDUCTO_FORMATTING_INCLUDE_GROUPS
     if "retrieval" in option_groups:
         retrieval_fields: Final = frozenset(sdk_input.retrieval.model_fields_set)
         assert retrieval_fields in {
@@ -511,39 +698,123 @@ def test_reducto_v3_strategy_only_generates_bounded_valid_sdk_inputs(sdk_input: 
             frozenset({"chunking", "embedding_optimized"}),
         }
         chunking: Final = sdk_input.retrieval.chunking
-        if chunking.chunk_size is not None or chunking.chunk_overlap != 0:
+        if "chunking" in retrieval_fields:
+            assert chunking.chunk_mode in {"variable", "section", "page", "disabled", "block", "page_sections"}
+            assert chunking.chunk_size in {None, 250, 1000, 1500}
+            assert chunking.chunk_overlap in {0, 32, 128}
+        if chunking.chunk_size is not None or chunking.chunk_overlap:
             assert chunking.chunk_mode == "variable"
+        if chunking.chunk_overlap:
+            assert chunking.chunk_size == 1000
+        if "filter_blocks" in retrieval_fields:
+            assert tuple(sdk_input.retrieval.filter_blocks) in _REDUCTO_FILTER_BLOCK_GROUPS
         if "embedding_optimized" in retrieval_fields:
             assert chunking.chunk_mode == "variable"
+            assert chunking.chunk_size is None
+            assert chunking.chunk_overlap == 0
+            assert sdk_input.retrieval.embedding_optimized in {False, True}
     if "settings" in option_groups:
         settings_fields: Final = frozenset(sdk_input.settings.model_fields_set)
         assert settings_fields in {
+            frozenset({"model"}),
             frozenset({"ocr_system"}),
             frozenset({"extraction_mode"}),
-            frozenset({"force_url_result"}),
             frozenset({"return_ocr_data"}),
             frozenset({"return_images"}),
+            frozenset({"embed_pdf_metadata"}),
             frozenset({"embed_pdf_metadata", "embed_pdf_metadata_dpi"}),
             frozenset({"timeout"}),
             frozenset({"page_range"}),
         }
-        assert "persist_results" not in settings_fields
+        assert settings_fields.isdisjoint(
+            {
+                "force_url_result",
+                "force_file_extension",
+                "persist_results",
+                "tenant_throttling",
+                "document_password",
+                "hybrid_vpc",
+            }
+        )
+        if "model" in settings_fields:
+            assert sdk_input.settings.model == "r-1"
+        if "ocr_system" in settings_fields:
+            assert sdk_input.settings.ocr_system in {"standard", "legacy"}
+        if "extraction_mode" in settings_fields:
+            assert sdk_input.settings.extraction_mode in {"hybrid", "ocr", "metadata"}
+        if "return_ocr_data" in settings_fields:
+            assert sdk_input.settings.return_ocr_data is True
+        if "return_images" in settings_fields:
+            assert tuple(sdk_input.settings.return_images) in _REDUCTO_RETURN_IMAGE_GROUPS
         if "embed_pdf_metadata_dpi" in settings_fields:
             assert sdk_input.settings.embed_pdf_metadata is True
             assert sdk_input.settings.embed_pdf_metadata_dpi in {50, 100, 250}
+        if "timeout" in settings_fields:
+            assert sdk_input.settings.timeout == 300.0
         if sdk_input.settings.page_range is not None:
-            ranges: Final = (
-                sdk_input.settings.page_range
-                if isinstance(sdk_input.settings.page_range, list)
-                else [sdk_input.settings.page_range]
+            dumped_range: Final = cast(
+                dict[str, object], sdk_input.settings.model_dump(mode="json", exclude_unset=True)
+            )["page_range"]
+            assert dumped_range in (
+                {"start": 1, "end": 1},
+                {"start": 1, "end": 3},
+                [{"start": 1, "end": 2}, {"start": 4, "end": 5}],
             )
-            assert all(isinstance(page_range, ReductoPageRange) for page_range in ranges)
+
+
+@settings(max_examples=60, deadline=None)
+@given(sdk_input=reducto_v3_input_strategy(INLINE_IMAGE_DATA_URI))
+def test_reducto_v3_strategy_values_survive_the_request_transform(sdk_input: ReductoParseV3SdkInput) -> None:
+    sdk_kwargs: Final = sdk_input.as_sdk_kwargs()
+    model: Final = cast(str, sdk_kwargs["model"])
+    document: Final = cast(DocumentType, sdk_kwargs["document"])
+    optional_params: Final = {
+        name: value for name, value in sdk_kwargs.items() if name not in {"model", "document", "custom_llm_provider"}
+    }
+    config: Final = ReductoParseV3Config()
+    map_params: Final = cast(_MapOcrParams, config.map_ocr_params)
+    transform_request: Final = cast(_TransformOcrRequest, config.transform_ocr_request)
+    mapped: Final = map_params(optional_params, {}, model)
+
+    with patch.object(config, "_ensure_file_id_sync", return_value="reducto://fixture-document.pdf"):
+        request: Final = transform_request(model, document, mapped, {})
+
+    assert mapped == optional_params
+    assert cast(dict[str, object], request.data) == {
+        "input": "reducto://fixture-document.pdf",
+        **optional_params,
+    }
+
+
+def test_reducto_v3_strategy_reaches_image_upload_branch_without_options() -> None:
+    sdk_input: Final = _find_fixture(
+        reducto_v3_input_strategy(INLINE_IMAGE_DATA_URI),
+        lambda candidate: isinstance(candidate.document, ReductoImageUrlDocument),
+    )
+
+    assert isinstance(sdk_input.document, ReductoImageUrlDocument)
+    assert sdk_input.document.image_url.startswith("data:image/")
+    assert sdk_input.model_fields_set == {"model", "document"}
+
+
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    (("reducto/parse-v3", None), ("parse-v3", "reducto")),
+)
+def test_reducto_v3_strategy_reaches_every_routing_form(model: str, provider: str | None) -> None:
+    sdk_input: Final = _find_fixture(
+        reducto_v3_input_strategy(INLINE_IMAGE_DATA_URI),
+        lambda candidate: candidate.model == model and candidate.custom_llm_provider == provider,
+    )
+
+    assert sdk_input.model == model
+    assert sdk_input.custom_llm_provider == provider
 
 
 @pytest.mark.parametrize("table_format", ("dynamic", "html", "md", "json", "csv", "jsonbbox"))
 def test_reducto_v3_strategy_reaches_every_table_format(table_format: str) -> None:
     sdk_input: Final = _find_fixture(
-        reducto_v3_input_strategy(),
+        reducto_v3_input_strategy(INLINE_IMAGE_DATA_URI),
         lambda candidate: (
             "formatting" in candidate.model_fields_set
             and "table_output_format" in candidate.formatting.model_fields_set
@@ -554,10 +825,46 @@ def test_reducto_v3_strategy_reaches_every_table_format(table_format: str) -> No
     assert sdk_input.formatting.table_output_format == table_format
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("add_page_markers", False),
+        ("add_page_markers", True),
+        ("merge_tables", False),
+        ("merge_tables", True),
+    ),
+)
+def test_reducto_v3_strategy_reaches_every_formatting_boolean(field: str, value: bool) -> None:
+    sdk_input: Final = _find_fixture(
+        reducto_v3_input_strategy(INLINE_IMAGE_DATA_URI),
+        lambda candidate: (
+            "formatting" in candidate.model_fields_set
+            and field in candidate.formatting.model_fields_set
+            and getattr(candidate.formatting, field) is value
+        ),
+    )
+
+    assert getattr(sdk_input.formatting, field) is value
+
+
+@pytest.mark.parametrize("include", _REDUCTO_FORMATTING_INCLUDE_GROUPS)
+def test_reducto_v3_strategy_reaches_every_formatting_include(include: tuple[str, ...]) -> None:
+    sdk_input: Final = _find_fixture(
+        reducto_v3_input_strategy(INLINE_IMAGE_DATA_URI),
+        lambda candidate: (
+            "formatting" in candidate.model_fields_set
+            and "include" in candidate.formatting.model_fields_set
+            and tuple(candidate.formatting.include) == include
+        ),
+    )
+
+    assert tuple(sdk_input.formatting.include) == include
+
+
 @pytest.mark.parametrize("chunk_mode", ("variable", "section", "page", "disabled", "block", "page_sections"))
 def test_reducto_v3_strategy_reaches_every_chunk_mode(chunk_mode: str) -> None:
     sdk_input: Final = _find_fixture(
-        reducto_v3_input_strategy(),
+        reducto_v3_input_strategy(INLINE_IMAGE_DATA_URI),
         lambda candidate: (
             "retrieval" in candidate.model_fields_set
             and "chunking" in candidate.retrieval.model_fields_set
@@ -571,7 +878,7 @@ def test_reducto_v3_strategy_reaches_every_chunk_mode(chunk_mode: str) -> None:
 @pytest.mark.parametrize("chunk_size", (250, 1000, 1500))
 def test_reducto_v3_strategy_reaches_every_chunk_size(chunk_size: int) -> None:
     sdk_input: Final = _find_fixture(
-        reducto_v3_input_strategy(),
+        reducto_v3_input_strategy(INLINE_IMAGE_DATA_URI),
         lambda candidate: candidate.retrieval.chunking.chunk_size == chunk_size,
     )
 
@@ -579,10 +886,51 @@ def test_reducto_v3_strategy_reaches_every_chunk_size(chunk_size: int) -> None:
     assert sdk_input.retrieval.chunking.chunk_size == chunk_size
 
 
+@pytest.mark.parametrize("chunk_overlap", (32, 128))
+def test_reducto_v3_strategy_reaches_every_chunk_overlap(chunk_overlap: int) -> None:
+    sdk_input: Final = _find_fixture(
+        reducto_v3_input_strategy(INLINE_IMAGE_DATA_URI),
+        lambda candidate: candidate.retrieval.chunking.chunk_overlap == chunk_overlap,
+    )
+
+    assert sdk_input.retrieval.chunking.chunk_mode == "variable"
+    assert sdk_input.retrieval.chunking.chunk_size == 1000
+    assert sdk_input.retrieval.chunking.chunk_overlap == chunk_overlap
+
+
+@pytest.mark.parametrize("filter_blocks", _REDUCTO_FILTER_BLOCK_GROUPS)
+def test_reducto_v3_strategy_reaches_every_filter_block_group(filter_blocks: tuple[str, ...]) -> None:
+    sdk_input: Final = _find_fixture(
+        reducto_v3_input_strategy(INLINE_IMAGE_DATA_URI),
+        lambda candidate: (
+            "retrieval" in candidate.model_fields_set
+            and "filter_blocks" in candidate.retrieval.model_fields_set
+            and tuple(candidate.retrieval.filter_blocks) == filter_blocks
+        ),
+    )
+
+    assert tuple(sdk_input.retrieval.filter_blocks) == filter_blocks
+
+
+@pytest.mark.parametrize("embedding_optimized", (False, True))
+def test_reducto_v3_strategy_reaches_every_embedding_setting(embedding_optimized: bool) -> None:
+    sdk_input: Final = _find_fixture(
+        reducto_v3_input_strategy(INLINE_IMAGE_DATA_URI),
+        lambda candidate: (
+            "retrieval" in candidate.model_fields_set
+            and "embedding_optimized" in candidate.retrieval.model_fields_set
+            and candidate.retrieval.embedding_optimized is embedding_optimized
+        ),
+    )
+
+    assert sdk_input.retrieval.chunking.chunk_mode == "variable"
+    assert sdk_input.retrieval.embedding_optimized is embedding_optimized
+
+
 @pytest.mark.parametrize("dpi", (50, 100, 250))
 def test_reducto_v3_strategy_reaches_every_metadata_dpi(dpi: int) -> None:
     sdk_input: Final = _find_fixture(
-        reducto_v3_input_strategy(),
+        reducto_v3_input_strategy(INLINE_IMAGE_DATA_URI),
         lambda candidate: (
             "settings" in candidate.model_fields_set
             and "embed_pdf_metadata_dpi" in candidate.settings.model_fields_set
@@ -592,6 +940,58 @@ def test_reducto_v3_strategy_reaches_every_metadata_dpi(dpi: int) -> None:
 
     assert sdk_input.settings.embed_pdf_metadata is True
     assert sdk_input.settings.embed_pdf_metadata_dpi == dpi
+
+
+def test_reducto_v3_strategy_reaches_metadata_with_default_dpi_omitted() -> None:
+    sdk_input: Final = _find_fixture(
+        reducto_v3_input_strategy(INLINE_IMAGE_DATA_URI),
+        lambda candidate: (
+            "settings" in candidate.model_fields_set and candidate.settings.model_fields_set == {"embed_pdf_metadata"}
+        ),
+    )
+
+    assert sdk_input.settings.embed_pdf_metadata is True
+    assert "embed_pdf_metadata_dpi" not in sdk_input.settings.model_fields_set
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("model", "r-1"),
+        ("ocr_system", "standard"),
+        ("ocr_system", "legacy"),
+        ("extraction_mode", "hybrid"),
+        ("extraction_mode", "ocr"),
+        ("extraction_mode", "metadata"),
+        ("return_ocr_data", True),
+        ("timeout", 300.0),
+    ),
+)
+def test_reducto_v3_strategy_reaches_every_scalar_setting(field: str, value: object) -> None:
+    sdk_input: Final = _find_fixture(
+        reducto_v3_input_strategy(INLINE_IMAGE_DATA_URI),
+        lambda candidate: (
+            "settings" in candidate.model_fields_set
+            and field in candidate.settings.model_fields_set
+            and getattr(candidate.settings, field) == value
+        ),
+    )
+
+    assert getattr(sdk_input.settings, field) == value
+
+
+@pytest.mark.parametrize("return_images", _REDUCTO_RETURN_IMAGE_GROUPS)
+def test_reducto_v3_strategy_reaches_every_return_image_group(return_images: tuple[str, ...]) -> None:
+    sdk_input: Final = _find_fixture(
+        reducto_v3_input_strategy(INLINE_IMAGE_DATA_URI),
+        lambda candidate: (
+            "settings" in candidate.model_fields_set
+            and "return_images" in candidate.settings.model_fields_set
+            and tuple(candidate.settings.return_images) == return_images
+        ),
+    )
+
+    assert tuple(sdk_input.settings.return_images) == return_images
 
 
 @pytest.mark.parametrize(
@@ -604,7 +1004,7 @@ def test_reducto_v3_strategy_reaches_every_metadata_dpi(dpi: int) -> None:
 )
 def test_reducto_v3_strategy_reaches_every_page_range_shape(page_range: object) -> None:
     sdk_input: Final = _find_fixture(
-        reducto_v3_input_strategy(),
+        reducto_v3_input_strategy(INLINE_IMAGE_DATA_URI),
         lambda candidate: (
             cast(
                 dict[str, object],
@@ -621,6 +1021,128 @@ def test_reducto_v3_strategy_reaches_every_page_range_shape(page_range: object) 
 @given(sdk_input=reducto_legacy_input_strategy())
 def test_reducto_legacy_strategy_generates_valid_litellm_inputs(sdk_input: ReductoParseLegacySdkInput) -> None:
     assert ReductoParseLegacySdkInput.model_validate(sdk_input.canonical_input()) == sdk_input
+    assert "enhance" not in sdk_input.model_fields_set
+
+
+@settings(max_examples=10, deadline=None)
+@given(sdk_input=reducto_legacy_input_strategy())
+def test_reducto_legacy_strategy_values_survive_the_request_transform(
+    sdk_input: ReductoParseLegacySdkInput,
+) -> None:
+    sdk_kwargs: Final = sdk_input.as_sdk_kwargs()
+    model: Final = cast(str, sdk_kwargs["model"])
+    document: Final = cast(DocumentType, sdk_kwargs["document"])
+    config: Final = ReductoParseLegacyConfig()
+    transform_request: Final = cast(_TransformOcrRequest, config.transform_ocr_request)
+
+    with patch.object(config, "_ensure_file_id_sync", return_value="reducto://fixture-document.pdf"):
+        request: Final = transform_request(model, document, {}, {})
+
+    assert cast(dict[str, object], request.data) == {
+        "document_url": "reducto://fixture-document.pdf",
+    }
+
+
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    (("reducto/parse-legacy", None), ("parse-legacy", "reducto")),
+)
+def test_reducto_legacy_strategy_reaches_every_routing_form(model: str, provider: str | None) -> None:
+    sdk_input: Final = _find_fixture(
+        reducto_legacy_input_strategy(),
+        lambda candidate: candidate.model == model and candidate.custom_llm_provider == provider,
+    )
+
+    assert sdk_input.model == model
+    assert sdk_input.custom_llm_provider == provider
+
+
+@settings(max_examples=50, deadline=None)
+@given(sdk_input=azure_mistral_input_strategy(INLINE_IMAGE_DATA_URI))
+def test_azure_mistral_strategy_is_contained_to_gateway_capabilities(
+    sdk_input: AzureMistralOcrSdkInput,
+) -> None:
+    optional_fields: Final = frozenset(sdk_input.model_fields_set) - {"model", "document"}
+
+    assert optional_fields in _AZURE_MISTRAL_OPTION_GROUPS
+    assert optional_fields.isdisjoint(
+        {
+            "document_annotation_prompt",
+            "extract_header",
+            "extract_footer",
+            "table_format",
+            "include_blocks",
+            "id",
+        }
+    )
+    assert not isinstance(sdk_input.pages, str)
+    assert sdk_input.confidence_scores_granularity in {None, "page", "word"}
+    if optional_fields:
+        assert isinstance(sdk_input.document, DocumentUrlDocument)
+        assert sdk_input.document.document_url == structured_pdf_data_uri()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("pages", [0]),
+        ("pages", [0, 1]),
+        ("include_image_base64", False),
+        ("include_image_base64", True),
+        ("image_limit", 1),
+        ("image_min_size", 300),
+        ("confidence_scores_granularity", "page"),
+        ("confidence_scores_granularity", "word"),
+    ),
+)
+def test_azure_mistral_strategy_reaches_every_gateway_scalar(field: str, value: object) -> None:
+    sdk_input: Final = _find_fixture(
+        azure_mistral_input_strategy(INLINE_IMAGE_DATA_URI),
+        lambda candidate: field in candidate.model_fields_set and getattr(candidate, field) == value,
+    )
+
+    assert getattr(sdk_input, field) == value
+
+
+@pytest.mark.parametrize("field", ("bbox_annotation_format", "document_annotation_format"))
+def test_azure_mistral_strategy_reaches_every_gateway_schema(field: str) -> None:
+    sdk_input: Final = _find_fixture(
+        azure_mistral_input_strategy(INLINE_IMAGE_DATA_URI),
+        lambda candidate: frozenset(candidate.model_fields_set) - {"model", "document"} == frozenset({field}),
+    )
+
+    assert frozenset(sdk_input.model_fields_set) - {"model", "document"} == {field}
+
+
+@settings(max_examples=50, deadline=None)
+@given(sdk_input=azure_mistral_input_strategy(INLINE_IMAGE_DATA_URI))
+def test_azure_mistral_strategy_exercises_url_conversion_and_inline_bypass(
+    sdk_input: AzureMistralOcrSdkInput,
+) -> None:
+    sdk_kwargs: Final = sdk_input.as_sdk_kwargs()
+    model: Final = cast(str, sdk_kwargs["model"])
+    document: Final = cast(DocumentType, sdk_kwargs["document"])
+    optional_params: Final = {name: value for name, value in sdk_kwargs.items() if name not in {"model", "document"}}
+    config: Final = AzureAIOCRConfig()
+    map_params: Final = cast(_MapOcrParams, config.map_ocr_params)
+    transform_request: Final = cast(_TransformOcrRequest, config.transform_ocr_request)
+    mapped: Final = map_params(optional_params, {}, model)
+
+    request: Final = _transform_with_stubbed_download(transform_request, model, document, mapped)
+
+    source_key: Final = "image_url" if document["type"] == "image_url" else "document_url"
+    source: Final = document[source_key]
+    expected_document: Final = dict(document)
+    if not source.startswith("data:"):
+        media_type: Final = "image/png" if document["type"] == "image_url" else "application/pdf"
+        expected_document[source_key] = f"data:{media_type};base64,AA=="
+
+    assert mapped == optional_params
+    assert cast(dict[str, object], request.data) == {
+        "model": model,
+        "document": expected_document,
+        **optional_params,
+    }
 
 
 @settings(max_examples=30, deadline=None)
@@ -629,16 +1151,18 @@ def test_azure_document_intelligence_strategy_only_generates_litellm_inputs(
     sdk_input: AzureDocumentIntelligenceOcrSdkInput,
 ) -> None:
     assert sdk_input.req_format == "litellm"
+    assert sdk_input.model in AZURE_DOCUMENT_INTELLIGENCE_RECORDING_MODELS
     assert "boundary" not in sdk_input.as_sdk_kwargs()
     optional_fields: Final = frozenset(sdk_input.model_fields_set) - {"model", "document"}
     assert optional_fields in {
         frozenset[str](),
         frozenset({"pages"}),
         frozenset({"features"}),
+        frozenset({"pages", "features"}),
         frozenset({"req_format"}),
     }
     if sdk_input.pages is not None:
-        assert sdk_input.pages in ([0], [0, 1], "1", "1,2", "1-2")
+        assert sdk_input.pages in ([0], [2, 0, 0, 1], ["1", "2-4"], "1-4, 5", [0, 1])
     if isinstance(sdk_input.features, list):
         assert tuple(sdk_input.features) in {
             ("languages",),
@@ -647,27 +1171,70 @@ def test_azure_document_intelligence_strategy_only_generates_litellm_inputs(
             ("formulas",),
             ("styleFont",),
             ("keyValuePairs",),
+            ("languages", "styleFont"),
         }
     if isinstance(sdk_input.features, str):
-        assert sdk_input.features == "languages,styleFont"
+        assert sdk_input.features == "languages, styleFont"
+
+
+@settings(max_examples=50, deadline=None)
+@given(sdk_input=azure_document_intelligence_input_strategy())
+def test_azure_document_intelligence_strategy_exercises_request_transform(
+    sdk_input: AzureDocumentIntelligenceOcrSdkInput,
+) -> None:
+    sdk_kwargs: Final = sdk_input.as_sdk_kwargs()
+    model: Final = cast(str, sdk_kwargs["model"])
+    document: Final = cast(DocumentType, sdk_kwargs["document"])
+    optional_params: Final = {name: value for name, value in sdk_kwargs.items() if name not in {"model", "document"}}
+    config: Final = AzureDocumentIntelligenceOCRConfig()
+    map_params: Final = cast(_MapOcrParams, config.map_ocr_params)
+    get_complete_url: Final = cast(_GetCompleteUrl, config.get_complete_url)
+    transform_request: Final = cast(_TransformOcrRequest, config.transform_ocr_request)
+    mapped: Final = map_params(optional_params, {}, model)
+    url: Final = get_complete_url("https://document.example", model, mapped)
+    query: Final = parse_qs(urlparse(url).query)
+    request: Final = transform_request(model, document, mapped, {})
+
+    if sdk_input.pages is None:
+        assert "pages" not in mapped
+        assert "pages" not in query
+    else:
+        expected_pages: Final = _normalized_azure_pages(sdk_input.pages)
+        assert mapped["pages"] == expected_pages
+        assert query["pages"] == [expected_pages]
+    if sdk_input.features is None:
+        assert "features" not in mapped
+        assert "features" not in query
+    else:
+        raw_features: Final = (
+            sdk_input.features.split(",") if isinstance(sdk_input.features, str) else sdk_input.features
+        )
+        expected_features: Final = ",".join(feature.strip() for feature in raw_features)
+        assert mapped["features"] == expected_features
+        assert query["features"] == [expected_features]
+
+    source: Final = document["document_url"] if document["type"] == "document_url" else document["image_url"]
+    assert isinstance(source, str)
+    expected_body: Final = (
+        {"base64Source": source.partition(",")[2]} if source.startswith("data:") else {"urlSource": source}
+    )
+    assert cast(dict[str, object], request.data) == expected_body
 
 
 @pytest.mark.parametrize(
     ("field", "value"),
     (
         ("pages", [0]),
-        ("pages", [0, 1]),
-        ("pages", "1"),
-        ("pages", "1,2"),
-        ("pages", "1-2"),
+        ("pages", [2, 0, 0, 1]),
+        ("pages", ["1", "2-4"]),
+        ("pages", "1-4, 5"),
         ("features", ["languages"]),
         ("features", ["ocrHighResolution"]),
         ("features", ["barcodes"]),
         ("features", ["formulas"]),
         ("features", ["styleFont"]),
         ("features", ["keyValuePairs"]),
-        ("features", "languages,styleFont"),
-        ("req_format", "litellm"),
+        ("features", "languages, styleFont"),
     ),
 )
 def test_azure_document_intelligence_strategy_reaches_every_finite_value(field: str, value: object) -> None:
@@ -679,10 +1246,142 @@ def test_azure_document_intelligence_strategy_reaches_every_finite_value(field: 
     assert getattr(sdk_input, field) == value
 
 
+def test_azure_document_intelligence_strategy_reaches_combined_query_branch() -> None:
+    sdk_input: Final = _find_fixture(
+        azure_document_intelligence_input_strategy(),
+        lambda candidate: {"pages", "features"}.issubset(candidate.model_fields_set),
+    )
+
+    assert sdk_input.pages == [0, 1]
+    assert sdk_input.features == ["languages", "styleFont"]
+
+
+@pytest.mark.parametrize(
+    "transport",
+    (("document_url", "data"), ("image_url", "remote")),
+)
+def test_azure_document_intelligence_strategy_reaches_body_source_branches(
+    transport: tuple[str, str],
+) -> None:
+    sdk_input: Final = _find_fixture(
+        azure_document_intelligence_input_strategy(),
+        lambda candidate: _document_transport(candidate.document) == transport,
+    )
+
+    assert _document_transport(sdk_input.document) == transport
+
+
+@settings(max_examples=50, deadline=None)
+@given(sdk_input=vertex_mistral_input_strategy("project-1", "us-central1", INLINE_IMAGE_DATA_URI))
+def test_vertex_mistral_strategy_is_contained_to_2505_capabilities(
+    sdk_input: VertexMistralOcrSdkInput,
+) -> None:
+    optional_fields: Final = frozenset(sdk_input.model_fields_set) - {
+        "model",
+        "document",
+        "vertex_project",
+        "vertex_location",
+    }
+
+    assert optional_fields in _MISTRAL_2505_OPTION_GROUPS
+    assert optional_fields.isdisjoint({"extract_header", "extract_footer", "table_format", "include_blocks", "id"})
+    assert not isinstance(sdk_input.pages, str)
+    assert sdk_input.confidence_scores_granularity in {None, "page", "word"}
+    if optional_fields:
+        assert isinstance(sdk_input.document, DocumentUrlDocument)
+        assert sdk_input.document.document_url == structured_pdf_data_uri()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("pages", [0]),
+        ("pages", [0, 1]),
+        ("include_image_base64", False),
+        ("include_image_base64", True),
+        ("image_limit", 1),
+        ("image_min_size", 300),
+        ("confidence_scores_granularity", "page"),
+        ("confidence_scores_granularity", "word"),
+    ),
+)
+def test_vertex_mistral_strategy_reaches_every_2505_scalar(field: str, value: object) -> None:
+    sdk_input: Final = _find_fixture(
+        vertex_mistral_input_strategy("project-1", "us-central1", INLINE_IMAGE_DATA_URI),
+        lambda candidate: field in candidate.model_fields_set and getattr(candidate, field) == value,
+    )
+
+    assert getattr(sdk_input, field) == value
+
+
+@pytest.mark.parametrize(
+    "fields",
+    (
+        frozenset({"bbox_annotation_format"}),
+        frozenset({"document_annotation_format"}),
+        frozenset({"document_annotation_format", "document_annotation_prompt"}),
+    ),
+)
+def test_vertex_mistral_strategy_reaches_every_2505_schema_group(fields: frozenset[str]) -> None:
+    sdk_input: Final = _find_fixture(
+        vertex_mistral_input_strategy("project-1", "us-central1", INLINE_IMAGE_DATA_URI),
+        lambda candidate: (
+            frozenset(candidate.model_fields_set) - {"model", "document", "vertex_project", "vertex_location"} == fields
+        ),
+    )
+
+    assert frozenset(sdk_input.model_fields_set) - {"model", "document", "vertex_project", "vertex_location"} == fields
+
+
+@settings(max_examples=50, deadline=None)
+@given(sdk_input=vertex_mistral_input_strategy("project-1", "us-central1", INLINE_IMAGE_DATA_URI))
+def test_vertex_mistral_strategy_exercises_url_conversion_and_inline_bypass(
+    sdk_input: VertexMistralOcrSdkInput,
+) -> None:
+    sdk_kwargs: Final = sdk_input.as_sdk_kwargs()
+    model: Final = cast(str, sdk_kwargs["model"])
+    document: Final = cast(DocumentType, sdk_kwargs["document"])
+    optional_params: Final = {
+        name: value
+        for name, value in sdk_kwargs.items()
+        if name not in {"model", "document", "vertex_project", "vertex_location"}
+    }
+    config: Final = VertexAIOCRConfig()
+    map_params: Final = cast(_MapOcrParams, config.map_ocr_params)
+    transform_request: Final = cast(_TransformOcrRequest, config.transform_ocr_request)
+    mapped: Final = map_params(optional_params, {}, model)
+
+    request: Final = _transform_with_stubbed_download(transform_request, model, document, mapped)
+
+    source_key: Final = "image_url" if document["type"] == "image_url" else "document_url"
+    source: Final = document[source_key]
+    expected_document: Final = dict(document)
+    if not source.startswith("data:"):
+        media_type: Final = "image/png" if document["type"] == "image_url" else "application/pdf"
+        expected_document[source_key] = f"data:{media_type};base64,AA=="
+
+    assert mapped == optional_params
+    assert cast(dict[str, object], request.data) == {
+        "model": model,
+        "document": expected_document,
+        **optional_params,
+    }
+
+
 @settings(max_examples=30, deadline=None)
-@given(sdk_input=vertex_deepseek_input_strategy("project-1", "us-central1"))
+@given(sdk_input=vertex_deepseek_input_strategy("project-1", "us-central1", INLINE_IMAGE_DATA_URI))
 def test_vertex_deepseek_strategy_only_generates_litellm_inputs(
     sdk_input: VertexDeepSeekOcrSdkInput,
 ) -> None:
     assert sdk_input.vertex_project == "project-1"
     assert "boundary" not in sdk_input.as_sdk_kwargs()
+    assert _document_transport(sdk_input.document) == ("image_url", "data")
+
+
+def test_vertex_deepseek_strategy_reaches_documented_image_branch() -> None:
+    sdk_input: Final = _find_fixture(
+        vertex_deepseek_input_strategy("project-1", "us-central1", INLINE_IMAGE_DATA_URI),
+        lambda candidate: _document_transport(candidate.document) == ("image_url", "data"),
+    )
+
+    assert _document_transport(sdk_input.document) == ("image_url", "data")

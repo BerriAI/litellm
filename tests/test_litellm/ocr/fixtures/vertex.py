@@ -12,15 +12,13 @@ from tests.test_litellm.ocr.fixtures.base import OcrDocument, OcrSdkInputBase
 from tests.test_litellm.ocr.fixtures.common import (
     OcrFixtureClient,
     OcrRecordingTarget,
+    image_data_document,
     invoke_with_api_key,
-    public_document_strategy,
     sampled_scalar_strategy,
 )
 from tests.test_litellm.ocr.fixtures.mistral import (
-    MISTRAL_MODEL,
     MistralCompatibleOcrSdkInput,
-    MistralOcrSdkInput,
-    mistral_input_strategy,
+    mistral_input_values_strategy,
 )
 
 VertexMistralModel = Literal["vertex_ai/mistral-ocr-2505"]
@@ -48,34 +46,50 @@ class VertexDeepSeekOcrSdkInput(OcrSdkInputBase):
 
 
 def _as_vertex_mistral(
-    case_input: MistralOcrSdkInput,
+    values: dict[str, object],
     project: str,
     location: str,
     model: VertexMistralModel,
 ) -> VertexMistralOcrSdkInput:
-    values: Final = case_input.model_dump(
-        mode="python",
-        exclude={"boundary", "model", "custom_llm_provider"},
-        exclude_unset=True,
-    )
     return VertexMistralOcrSdkInput.model_validate(
         {**values, "model": model, "vertex_project": project, "vertex_location": location}
     )
 
 
+def vertex_mistral_input_strategy(
+    project: str,
+    location: str,
+    inline_image_data_uri: str,
+) -> SearchStrategy[VertexMistralOcrSdkInput]:
+    return st.builds(
+        _as_vertex_mistral,
+        project=st.just(project),
+        location=st.just(location),
+        model=sampled_scalar_strategy(VERTEX_MISTRAL_MODELS),
+        values=mistral_input_values_strategy("2505", inline_image_data_uri),
+    )
+
+
 @st.composite
-def vertex_deepseek_input_strategy(draw: DrawFn, project: str, location: str) -> VertexDeepSeekOcrSdkInput:
+def vertex_deepseek_input_strategy(
+    draw: DrawFn, project: str, location: str, inline_image_data_uri: str
+) -> VertexDeepSeekOcrSdkInput:
     return VertexDeepSeekOcrSdkInput.model_validate(
         {
             "model": draw(sampled_scalar_strategy(VERTEX_DEEPSEEK_MODELS)),
-            "document": draw(public_document_strategy()),
+            # The current Vertex model card documents image input only. Keep
+            # the broader fixture model for existing recordings, but do not
+            # spend a paid request on the transform's unsupported PDF branch.
+            "document": image_data_document(inline_image_data_uri),
             "vertex_project": project,
             "vertex_location": location,
         }
     )
 
 
-def vertex_recording_targets(environ: Mapping[str, str], client: OcrFixtureClient) -> tuple[OcrRecordingTarget, ...]:
+def vertex_recording_targets(
+    environ: Mapping[str, str], client: OcrFixtureClient, inline_image_data_uri: str
+) -> tuple[OcrRecordingTarget, ...]:
     api_key: Final = environ.get("VERTEX_AI_API_KEY")
     project: Final = environ.get("VERTEXAI_PROJECT") or environ.get("VERTEX_PROJECT")
     location: Final = environ.get("VERTEXAI_LOCATION") or environ.get("VERTEX_LOCATION") or "us-central1"
@@ -89,20 +103,17 @@ def vertex_recording_targets(environ: Mapping[str, str], client: OcrFixtureClien
             provider_spec=ProviderSpec(upstream_base=upstream_base.rstrip("/")),
             strategy=cast(
                 SearchStrategy[OcrSdkInputBase],
-                st.builds(
-                    _as_vertex_mistral,
-                    project=st.just(project),
-                    location=st.just(location),
-                    model=sampled_scalar_strategy(VERTEX_MISTRAL_MODELS),
-                    case_input=mistral_input_strategy(MISTRAL_MODEL, feature_level="2505"),
-                ),
+                vertex_mistral_input_strategy(project, location, inline_image_data_uri),
             ),
             invocation=invocation,
         ),
         OcrRecordingTarget(
             name="vertex-deepseek",
             provider_spec=ProviderSpec(upstream_base=upstream_base.rstrip("/")),
-            strategy=cast(SearchStrategy[OcrSdkInputBase], vertex_deepseek_input_strategy(project, location)),
+            strategy=cast(
+                SearchStrategy[OcrSdkInputBase],
+                vertex_deepseek_input_strategy(project, location, inline_image_data_uri),
+            ),
             invocation=invocation,
         ),
     )

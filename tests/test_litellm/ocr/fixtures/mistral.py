@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from typing import Final, Literal, cast
 
 from hypothesis import strategies as st
-from hypothesis.strategies import DrawFn, SearchStrategy
+from hypothesis.strategies import SearchStrategy
 from pydantic import Field, model_validator
 from typing_extensions import Self
 
@@ -18,10 +18,10 @@ from tests.test_litellm.ocr.fixtures.common import (
     OcrFixtureClient,
     OcrRecordingTarget,
     annotation_format,
-    image_document,
+    document_transport_strategy,
     invoke_with_api_key,
     parameter_strategy,
-    public_document_strategy,
+    pdf_document,
     sampled_list_strategy,
     sampled_parameter_group_strategy,
     sampled_scalar_strategy,
@@ -113,7 +113,14 @@ def _feature_level(model: str) -> MistralFeatureLevel:
     return "2505"
 
 
-def mistral_optional_params_strategy(feature_level: MistralFeatureLevel) -> SearchStrategy[dict[str, object]]:
+def _optional_param_strategies(
+    *,
+    include_document_annotation_prompt: bool = True,
+) -> tuple[
+    tuple[SearchStrategy[dict[str, object]], ...],
+    tuple[SearchStrategy[dict[str, object]], ...],
+    tuple[SearchStrategy[dict[str, object]], ...],
+]:
     annotation: Final = annotation_format("document_title")
     common: Final[tuple[SearchStrategy[dict[str, object]], ...]] = (
         parameter_strategy("pages", sampled_list_strategy(((0,), (0, 1)))),
@@ -125,16 +132,21 @@ def mistral_optional_params_strategy(feature_level: MistralFeatureLevel) -> Sear
             sampled_scalar_strategy((annotation_format("bounding_boxes"),)),
         ),
         parameter_strategy("document_annotation_format", sampled_scalar_strategy((annotation,))),
-        sampled_parameter_group_strategy(
+        *(
             (
-                (
-                    ("document_annotation_format", annotation),
-                    ("document_annotation_prompt", "Extract the visible title"),
+                sampled_parameter_group_strategy(
+                    (
+                        (
+                            ("document_annotation_format", annotation),
+                            ("document_annotation_prompt", "Extract the visible title"),
+                        ),
+                    )
                 ),
             )
+            if include_document_annotation_prompt
+            else ()
         ),
         parameter_strategy("confidence_scores_granularity", sampled_scalar_strategy(("page", "word"))),
-        parameter_strategy("id", sampled_scalar_strategy(("case-1",))),
     )
     feature_2512: Final[tuple[SearchStrategy[dict[str, object]], ...]] = (
         parameter_strategy("extract_header", sampled_scalar_strategy((False, True))),
@@ -142,8 +154,20 @@ def mistral_optional_params_strategy(feature_level: MistralFeatureLevel) -> Sear
         parameter_strategy("table_format", sampled_scalar_strategy(("markdown", "html"))),
     )
     feature_4: Final[tuple[SearchStrategy[dict[str, object]], ...]] = (
+        parameter_strategy("pages", sampled_scalar_strategy(("0-2",))),
         parameter_strategy("include_blocks", sampled_scalar_strategy((False, True))),
         sampled_parameter_group_strategy(((("include_blocks", True), ("confidence_scores_granularity", "block")),)),
+    )
+    return common, feature_2512, feature_4
+
+
+def mistral_optional_params_strategy(
+    feature_level: MistralFeatureLevel,
+    *,
+    include_document_annotation_prompt: bool = True,
+) -> SearchStrategy[dict[str, object]]:
+    common, feature_2512, feature_4 = _optional_param_strategies(
+        include_document_annotation_prompt=include_document_annotation_prompt
     )
     return st.one_of(
         *common,
@@ -152,25 +176,72 @@ def mistral_optional_params_strategy(feature_level: MistralFeatureLevel) -> Sear
     )
 
 
-@st.composite
-def mistral_input_strategy(
-    draw: DrawFn,
+def _mistral_input_values(
+    document: OcrDocument,
+    optional_params: dict[str, object] | None = None,
+) -> dict[str, object]:
+    return {"document": document, **(optional_params or {})}
+
+
+def _mistral_input(
     model: str,
-    feature_level: MistralFeatureLevel | None = None,
+    document: OcrDocument,
+    optional_params: dict[str, object] | None = None,
 ) -> MistralOcrSdkInput:
-    canonical_document: Final = image_document("invoice 123", 24)
-    values: Final = draw(
-        st.one_of(
-            public_document_strategy().map(lambda document: {"document": document}),
-            mistral_optional_params_strategy(feature_level or _feature_level(model)).map(
-                lambda optional_params: {"document": canonical_document, **optional_params}
-            ),
-        )
+    return MistralOcrSdkInput.model_validate({"model": model, **_mistral_input_values(document, optional_params)})
+
+
+def mistral_input_values_strategy(
+    feature_level: MistralFeatureLevel,
+    inline_image_data_uri: str,
+    *,
+    include_document_annotation_prompt: bool = True,
+) -> SearchStrategy[dict[str, object]]:
+    option_document: Final = pdf_document()
+    return st.one_of(
+        document_transport_strategy(inline_image_data_uri).map(_mistral_input_values),
+        mistral_optional_params_strategy(
+            feature_level,
+            include_document_annotation_prompt=include_document_annotation_prompt,
+        ).map(lambda optional_params: _mistral_input_values(option_document, optional_params)),
     )
-    return MistralOcrSdkInput.model_validate({"model": model, **values})
 
 
-def mistral_recording_targets(environ: Mapping[str, str], client: OcrFixtureClient) -> tuple[OcrRecordingTarget, ...]:
+def mistral_input_strategy(
+    model: str,
+    inline_image_data_uri: str,
+    feature_level: MistralFeatureLevel | None = None,
+) -> SearchStrategy[MistralOcrSdkInput]:
+    return mistral_input_values_strategy(feature_level or _feature_level(model), inline_image_data_uri).map(
+        lambda values: MistralOcrSdkInput.model_validate({"model": model, **values})
+    )
+
+
+def _mistral_recording_strategy(inline_image_data_uri: str) -> SearchStrategy[MistralOcrSdkInput]:
+    document: Final = pdf_document()
+    baseline_models: Final = tuple(model for model in MISTRAL_MODELS if model != MISTRAL_MODEL)
+    common, feature_2512, feature_4 = _optional_param_strategies()
+    common_options: Final[SearchStrategy[dict[str, object]]] = st.one_of(*common)
+    feature_2512_options: Final[SearchStrategy[dict[str, object]]] = st.one_of(*feature_2512)
+    feature_4_options: Final[SearchStrategy[dict[str, object]]] = st.one_of(*feature_4)
+    return st.one_of(
+        sampled_scalar_strategy(baseline_models).map(lambda model: _mistral_input(model, document)),
+        document_transport_strategy(inline_image_data_uri).map(
+            lambda selected_document: _mistral_input(MISTRAL_MODEL, selected_document)
+        ),
+        common_options.map(lambda optional_params: _mistral_input(MISTRAL_MODEL, document, optional_params)),
+        feature_2512_options.map(
+            lambda optional_params: _mistral_input("mistral/mistral-ocr-2512", document, optional_params)
+        ),
+        feature_4_options.map(
+            lambda optional_params: _mistral_input("mistral/mistral-ocr-4-1", document, optional_params)
+        ),
+    )
+
+
+def mistral_recording_targets(
+    environ: Mapping[str, str], client: OcrFixtureClient, inline_image_data_uri: str
+) -> tuple[OcrRecordingTarget, ...]:
     api_key: Final = environ.get("MISTRAL_API_KEY")
     if not api_key:
         return ()
@@ -182,7 +253,7 @@ def mistral_recording_targets(environ: Mapping[str, str], client: OcrFixtureClie
             provider_spec=ProviderSpec(upstream_base=upstream_base),
             strategy=cast(
                 SearchStrategy[OcrSdkInputBase],
-                sampled_scalar_strategy(MISTRAL_MODELS).flatmap(mistral_input_strategy),
+                _mistral_recording_strategy(inline_image_data_uri),
             ),
             invocation=invoke_with_api_key(client, api_key),
         ),

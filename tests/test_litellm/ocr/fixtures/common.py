@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import base64
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Final, Protocol, TypeVar
-from urllib.parse import quote
+from functools import cache
+from typing import Final, Literal, Protocol, TypeVar
 
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 
+from tests.route_parity.fixtures.media import dummy_image_url, structured_pdf_data_uri
 from tests.route_parity.fixtures.pipeline import RecordingTarget
 from tests.test_litellm.ocr.fixtures.base import (
     DocumentUrlDocument,
@@ -40,22 +39,46 @@ class ApiKeyOcrInvocation:
 
 
 def image_document(text: str, font_size: int) -> ImageUrlDocument:
-    url: Final = f"https://dummyjson.com/image/800x300/ffffff/000000?text={quote(text)}&fontSize={font_size}"
-    return ImageUrlDocument(type="image_url", image_url=url)
+    return ImageUrlDocument(type="image_url", image_url=dummy_image_url(text, font_size))
 
 
-def fixture_pdf_data_uri() -> str:
-    fixture: Final = Path(__file__).resolve().parents[3] / "llm_translation" / "fixtures" / "dummy.pdf"
-    encoded: Final = base64.b64encode(fixture.read_bytes()).decode("ascii")
-    return f"data:application/pdf;base64,{encoded}"
+def image_data_document(data_uri: str) -> ImageUrlDocument:
+    return ImageUrlDocument(type="image_url", image_url=data_uri)
 
 
+@cache
+def remote_pdf_document() -> DocumentUrlDocument:
+    return DocumentUrlDocument(
+        type="document_url",
+        document_url="https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+    )
+
+
+@cache
 def pdf_document() -> DocumentUrlDocument:
-    return DocumentUrlDocument(type="document_url", document_url=fixture_pdf_data_uri())
+    return DocumentUrlDocument(type="document_url", document_url=structured_pdf_data_uri())
 
 
-def public_document_strategy() -> SearchStrategy[ImageUrlDocument | DocumentUrlDocument]:
-    return st.sampled_from((image_document("invoice 123", 24), pdf_document()))
+def document_transport_strategy(inline_image_data_uri: str) -> SearchStrategy[ImageUrlDocument | DocumentUrlDocument]:
+    transports: Final[tuple[Literal["remote_image", "inline_image", "remote_pdf", "inline_pdf"], ...]] = (
+        "remote_image",
+        "inline_image",
+        "remote_pdf",
+        "inline_pdf",
+    )
+
+    def as_document(
+        transport: Literal["remote_image", "inline_image", "remote_pdf", "inline_pdf"],
+    ) -> ImageUrlDocument | DocumentUrlDocument:
+        if transport == "remote_image":
+            return image_document("invoice 123", 24)
+        if transport == "inline_image":
+            return image_data_document(inline_image_data_uri)
+        if transport == "remote_pdf":
+            return remote_pdf_document()
+        return pdf_document()
+
+    return st.sampled_from(transports).map(as_document)
 
 
 def sampled_scalar_strategy(values: tuple[ValueT, ...]) -> SearchStrategy[ValueT]:
