@@ -13,10 +13,6 @@ import {
 
 /** Covers /ui/usage. The legacy /ui/old-usage view is deprecated and deliberately not covered. */
 
-/** One PROXY_CONFIG_RELOAD_INTERVAL_SECONDS (30s by default) plus room for the reload to run. */
-const ROUTER_RELOAD_TIMEOUT_MS = 45_000;
-const ROUTER_RELOAD_POLL_MS = 3_000;
-
 /** Stepping up from the title is exact; the page renders several other tables. */
 const topKeysCard = (page: PlaywrightPage): Locator =>
   page.getByText("Top Virtual Keys", { exact: true }).locator("xpath=..");
@@ -88,16 +84,16 @@ test.describe("Usage page", () => {
     // A deployment left behind keeps its custom pricing, so it goes on changing what later runs
     // route and what they cost. Runs on the failure path too, which the test body would not.
     // Resolved by name rather than by a returned id, so a create that persisted without answering
-    // 2xx is still cleaned up. /model/info serves the router rather than the database, and
-    // /model/new swallows a failed in-request reload, so a persisted deployment can take until the
-    // next reload to become listable; absent for longer than that means it never persisted.
+    // 2xx is still cleaned up. /model/info serves the router, and /model/new answers 2xx even when
+    // its in-request router reload failed, so the search-backed listing is what covers a deployment
+    // that reached the database only. Absent from both means it never persisted.
     const names = pricedDeployments.splice(0);
     if (names.length === 0) return;
     const auth = { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" };
 
-    const listedId = async (name: string): Promise<string | undefined> => {
-      const listed = await request.get(`${rootPath()}/model/info`, { headers: auth });
-      expect(listed.ok(), `GET /model/info (${listed.status()})`).toBe(true);
+    const idIn = async (path: string, label: string, name: string): Promise<string | undefined> => {
+      const listed = await request.get(path, { headers: auth });
+      expect(listed.ok(), `GET ${label} (${listed.status()})`).toBe(true);
       const deployments = ((await listed.json()).data ?? []) as {
         model_name?: string;
         model_info?: { id?: string };
@@ -106,12 +102,10 @@ test.describe("Usage page", () => {
     };
 
     for (const name of names) {
-      const giveUpAt = Date.now() + ROUTER_RELOAD_TIMEOUT_MS;
-      let id = await listedId(name);
-      while (id === undefined && Date.now() < giveUpAt) {
-        await new Promise((resolve) => setTimeout(resolve, ROUTER_RELOAD_POLL_MS));
-        id = await listedId(name);
-      }
+      const search = encodeURIComponent(name);
+      const id =
+        (await idIn(`${rootPath()}/model/info`, "/model/info", name)) ??
+        (await idIn(`${rootPath()}/v2/model/info?search=${search}`, "/v2/model/info", name));
       if (id === undefined) continue;
       const deleted = await request.post(`${rootPath()}/model/delete`, {
         headers: auth,
