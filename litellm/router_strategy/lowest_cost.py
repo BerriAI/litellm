@@ -246,6 +246,27 @@ class LowestCostLoggingHandler(CustomLogger):
             )
             item_litellm_model_name = _deployment.get("litellm_params", {}).get("model")
             item_litellm_model_cost_map = litellm.model_cost.get(item_litellm_model_name, {})
+            if not item_litellm_model_cost_map and item_litellm_model_name:
+                try:
+                    custom_llm_provider = _deployment.get("litellm_params", {}).get(
+                        "custom_llm_provider"
+                    )
+                    _resolved_info = litellm.get_model_info(
+                        model=item_litellm_model_name,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+                    item_litellm_model_cost_map = dict(_resolved_info)
+                    # Cache so subsequent routing calls skip get_model_info
+                    litellm.model_cost[item_litellm_model_name] = (
+                        item_litellm_model_cost_map
+                    )
+                except Exception as e:
+                    verbose_router_logger.debug(
+                        "Failed to resolve model info for %s: %s",
+                        item_litellm_model_name,
+                        e,
+                    )
+                    item_litellm_model_cost_map = {}
 
             # check if user provided input_cost_per_token and output_cost_per_token in litellm_params
             item_input_cost = None
