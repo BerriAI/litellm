@@ -6572,7 +6572,13 @@ class ProxyConfig:
         retention_period: Final = general_settings.get("maximum_spend_logs_retention_period")
         autorouter_retention: Final = general_settings.get("maximum_autorouter_session_retention_period")
         health_check_retention: Final = general_settings.get("maximum_health_check_retention_period")
-        if retention_period is not None or autorouter_retention is not None or health_check_retention is not None:
+        daily_tag_spend_retention: Final = general_settings.get("maximum_daily_tag_spend_retention_period")
+        if (
+            retention_period is not None
+            or autorouter_retention is not None
+            or health_check_retention is not None
+            or daily_tag_spend_retention is not None
+        ):
             from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
                 SpendLogCleanup,
             )
@@ -9508,6 +9514,7 @@ class ProxyStartupEvent:
             general_settings.get("maximum_spend_logs_retention_period") is not None
             or general_settings.get("maximum_autorouter_session_retention_period") is not None
             or general_settings.get("maximum_health_check_retention_period") is not None
+            or general_settings.get("maximum_daily_tag_spend_retention_period") is not None
         ):
             spend_log_cleanup: Final = SpendLogCleanup()
             cleanup_cron: Final = general_settings.get("maximum_spend_logs_cleanup_cron")

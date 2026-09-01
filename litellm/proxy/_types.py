@@ -2640,6 +2640,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "Set this well above health_check_interval because /health and the UI read the latest row per model."
         ),
     )
+    maximum_daily_tag_spend_retention_period: str | None = Field(
+        None,
+        description=(
+            "Maximum retention period for LiteLLM_DailyTagSpend rows (e.g., '90d'). Rows whose date is older than "
+            "this are deleted by the spend log cleanup job, on that job's schedule. The table only feeds usage "
+            "analytics (tag usage dashboards, /spend/tags), so deleting old rows truncates historical tag usage "
+            "charts but does not affect budget enforcement. Unset means rows are never deleted."
+        ),
+    )
     use_spend_logs_partitioning: bool | None = Field(
         None,
         description="If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.",
