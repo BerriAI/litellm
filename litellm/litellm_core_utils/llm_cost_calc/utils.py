@@ -443,7 +443,7 @@ def _apply_off_peak_pricing(
     off_peak_pricing falls back to the standard rate.
     """
     off_peak: Final = model_info.get("off_peak_pricing")
-    if not off_peak or not _is_off_peak(off_peak, current_time):
+    if not isinstance(off_peak, Mapping) or not _is_off_peak(off_peak, current_time):
         return prompt_base_cost, completion_base_cost, cache_read_cost
     return (
         _coerce_off_peak_rate(off_peak.get("input_cost_per_token"), prompt_base_cost),
