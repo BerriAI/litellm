@@ -38,7 +38,9 @@ async def test_collect_pages_follows_next_cursor_until_exhausted():
     tools = await collect_pages(upstream.fetch, lambda page: page.tools, method="tools/list", server="s")
 
     assert [t.name for t in tools] == [f"tool_{i:02d}" for i in range(72)]
-    assert upstream.cursors_seen == [None, "30", "60"], "each page must be requested with the cursor the previous one returned"
+    assert upstream.cursors_seen == [None, "30", "60"], (
+        "each page must be requested with the cursor the previous one returned"
+    )
 
 
 @pytest.mark.asyncio
