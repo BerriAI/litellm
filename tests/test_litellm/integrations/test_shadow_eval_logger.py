@@ -58,11 +58,12 @@ def _prisma(jobs=(), attempt_counts=(), attempt_costs=()) -> MagicMock:
     return prisma
 
 
-def _job_record(job: ActiveShadowEvalJob, api_key_id="key-hash") -> MagicMock:
+def _job_record(job: ActiveShadowEvalJob, target_type="key", target_id="key-hash") -> MagicMock:
     record = MagicMock()
     for field, value in dict(
         id=job.id,
-        api_key_id=api_key_id,
+        target_type=target_type,
+        target_id=target_id,
         router_name=job.router_name,
         direction=job.direction,
         baseline_model=job.baseline_model,
@@ -123,7 +124,7 @@ def _spend_counter(store=None):
     return counter, read, write
 
 
-def _logger(router=None, prisma=None, jobs=(), counter_store=None) -> ShadowEvalLogger:
+def _logger(router=None, prisma=None, jobs=(), counter_store=None, jobs_by_target=None) -> ShadowEvalLogger:
     cache = InMemoryCache(max_size_in_memory=4, default_ttl=60)
     counter, read, write = _spend_counter(counter_store)
     funnel_events = []
@@ -137,8 +138,9 @@ def _logger(router=None, prisma=None, jobs=(), counter_store=None) -> ShadowEval
     )
     logger._test_counter = counter
     logger._test_funnel = funnel_events
-    if jobs:
-        cache.set_cache("shadow_eval:active_jobs", {"key-hash": tuple(jobs)})
+    seeded = jobs_by_target if jobs_by_target is not None else ({("key", "key-hash"): tuple(jobs)} if jobs else None)
+    if seeded is not None:
+        cache.set_cache("shadow_eval:active_jobs", seeded)
     return logger
 
 
@@ -837,6 +839,86 @@ class TestSuccessHookSkipChain:
         prisma.db.litellm_shadowevalattempt.create.assert_not_called()
 
 
+JWT_IDENTITY = {"user_api_key_hash": None, "user_api_key_team_id": "team-eng", "user_api_key_user_id": "dev-alice"}
+
+
+@pytest.mark.asyncio
+class TestTargetMatching:
+    """A request qualifies for a job through ANY of its resolved identities: key hash,
+    team id, or user id. Team and user jobs must therefore sample JWT-authenticated
+    traffic, which carries no key hash at all."""
+
+    @pytest.mark.parametrize(
+        "target,sampled",
+        [
+            (("team", "team-eng"), True),
+            (("user", "dev-alice"), True),
+            (("key", "some-key"), False),
+        ],
+        ids=["team-job-samples-jwt-traffic", "user-job-samples-jwt-traffic", "key-jobs-never-match-keyless-traffic"],
+    )
+    async def test_jwt_shaped_traffic_matches_team_and_user_jobs_but_no_key_job(self, target, sampled):
+        prisma = _prisma()
+        router = _router()
+        logger = _logger(router=router, prisma=prisma, jobs_by_target={target: (_job(),)})
+        hook_kwargs = _success_kwargs()
+        hook_kwargs["standard_logging_object"]["metadata"] = dict(JWT_IDENTITY)
+
+        await logger.async_log_success_event(hook_kwargs, RESPONSE, None, None)
+        await _drain(logger)
+
+        if sampled:
+            prisma.db.litellm_shadowevalattempt.create.assert_awaited_once()
+            assert prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]["job_id"] == "job-1"
+        else:
+            router.acompletion.assert_not_called()
+            prisma.db.litellm_shadowevalattempt.create.assert_not_called()
+
+    async def test_an_event_with_no_identity_early_returns_without_a_cache_read(self):
+        prisma = _prisma()
+        router = _router()
+        cache = MagicMock(spec=InMemoryCache)
+        cache.async_get_cache = AsyncMock()
+        logger = ShadowEvalLogger(
+            router_provider=lambda: router,
+            prisma_provider=lambda: prisma,
+            jobs_cache=cache,
+        )
+        hook_kwargs = _success_kwargs()
+        hook_kwargs["standard_logging_object"]["metadata"] = {}
+
+        await logger.async_log_success_event(hook_kwargs, RESPONSE, None, None)
+
+        cache.async_get_cache.assert_not_awaited()
+        router.acompletion.assert_not_called()
+        prisma.db.litellm_shadowevalattempt.create.assert_not_called()
+
+    async def test_an_event_matching_a_key_job_and_a_team_job_fires_both(self):
+        """A request's key and its team can each hold a job; the two are separately
+        budgeted experiments, so both fire and each counts its own start."""
+        prisma = _prisma()
+        logger = _logger(
+            router=_router(),
+            prisma=prisma,
+            jobs_by_target={
+                ("key", "key-hash"): (_job(id="key-job"),),
+                ("team", "team-eng"): (_job(id="team-job"),),
+            },
+        )
+        hook_kwargs = _success_kwargs()
+        hook_kwargs["standard_logging_object"]["metadata"] = {
+            "user_api_key_hash": "key-hash",
+            "user_api_key_team_id": "team-eng",
+        }
+
+        await logger.async_log_success_event(hook_kwargs, RESPONSE, None, None)
+        await _drain(logger)
+
+        rows = [call.kwargs["data"] for call in prisma.db.litellm_shadowevalattempt.create.call_args_list]
+        assert sorted(row["job_id"] for row in rows) == ["key-job", "team-job"]
+        assert logger._job_starts == {"key-job": 1, "team-job": 1}
+
+
 @pytest.mark.asyncio
 class TestActiveJobsCache:
     async def test_cache_miss_reads_db_once_then_serves_from_cache(self):
@@ -851,8 +933,8 @@ class TestActiveJobsCache:
         first = await logger._active_jobs()
         second = await logger._active_jobs()
 
-        assert [job.id for job in first["key-hash"]] == ["job-1"]
-        assert second["key-hash"][0].attempts == 7
+        assert [job.id for job in first[("key", "key-hash")]] == ["job-1"]
+        assert second[("key", "key-hash")][0].attempts == 7
         assert prisma.db.litellm_shadowevaljob.find_many.await_count == 1
         where = prisma.db.litellm_shadowevaljob.find_many.call_args.kwargs["where"]
         assert where["stopped_at"] is None
@@ -899,8 +981,8 @@ class TestActiveJobsCache:
         jobs = await logger._active_jobs()
 
         assert logger._job_starts == {}
-        assert jobs["key-hash"][0].attempts == 7
-        assert jobs["key-hash"][0].spend == 0.05
+        assert jobs[("key", "key-hash")][0].attempts == 7
+        assert jobs[("key", "key-hash")][0].spend == 0.05
 
 
 @pytest.mark.asyncio
@@ -1249,13 +1331,14 @@ class TestActiveJobsFailClosed:
             jobs_cache=InMemoryCache(max_size_in_memory=4, default_ttl=60),
         )
 
-        assert [job.id for job in (await logger._active_jobs())["key-hash"]] == ["job-ok"]
+        assert [job.id for job in (await logger._active_jobs())[("key", "key-hash")]] == ["job-ok"]
 
-    async def test_both_of_a_key_s_jobs_survive_the_lookup(self):
+    async def test_every_targets_jobs_survive_the_lookup_keyed_by_type_and_id(self):
         records = [
             _job_record(_job(id="job-forward")),
             _job_record(_reverse_job(id="job-reverse")),
-            _job_record(_job(id="job-other"), api_key_id="other-key"),
+            _job_record(_job(id="job-other"), target_id="other-key"),
+            _job_record(_job(id="job-team"), target_type="team", target_id="team-eng"),
         ]
         prisma = _prisma(jobs=records, attempt_counts=[("job-reverse", 3)])
         logger = ShadowEvalLogger(
@@ -1266,9 +1349,11 @@ class TestActiveJobsFailClosed:
 
         jobs = await logger._active_jobs()
 
-        assert sorted(job.id for job in jobs["key-hash"]) == ["job-forward", "job-reverse"]
-        assert [job.id for job in jobs["other-key"]] == ["job-other"]
-        assert {job.id: job.attempts for job in jobs["key-hash"]}["job-reverse"] == 3
+        assert sorted(job.id for job in jobs[("key", "key-hash")]) == ["job-forward", "job-reverse"]
+        assert [job.id for job in jobs[("key", "other-key")]] == ["job-other"]
+        assert [job.id for job in jobs[("team", "team-eng")]] == ["job-team"]
+        assert ("team-eng",) not in jobs and "team-eng" not in jobs
+        assert {job.id: job.attempts for job in jobs[("key", "key-hash")]}["job-reverse"] == 3
 
 
 def _failing_router():
