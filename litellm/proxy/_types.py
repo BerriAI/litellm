@@ -3629,6 +3629,7 @@ class SpendLogsMetadata(TypedDict):
     autorouter_savings: ReadOnly[float | None]  # stamped by the logging payload; None = not auto-routed
     litellm_gateway_injected_cache: ReadOnly[str | None]
     router_metadata: ReadOnly[SpendLogsRouterMetadata | None]  # None = deployment not flagged internal_router_model
+    response_id: ReadOnly[str | None]  # provider response id; request_id holds the proxy's per-call id
 
 
 class SpendLogsPayload(TypedDict):

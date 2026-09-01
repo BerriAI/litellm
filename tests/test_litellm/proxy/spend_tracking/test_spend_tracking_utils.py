@@ -2834,9 +2834,9 @@ def test_get_logging_payload_failure_without_recovered_usage_is_zero():
 
 def test_get_logging_payload_sets_litellm_call_id_for_correlation():
     """LIT-3868: a successful spend log must carry the x-litellm-call-id (the
-    trace id) in its metadata, distinct from request_id, which stays the
-    provider response id. Without this there is no way to correlate a DB row
-    with its trace for a successful call.
+    trace id). request_id now keys off that same per-call id so duplicate
+    provider response ids cannot collapse rows, and the provider response id
+    moves to metadata.response_id so lookups by it still work.
     """
     provider_response_id = "chatcmpl-e6e6f3e9-c392-404e-9a71-5361c79d8470"
     trace_call_id = "c6a77556-19ce-4406-b287-53f5fb4b2b55"
@@ -2858,9 +2858,9 @@ def test_get_logging_payload_sets_litellm_call_id_for_correlation():
     )
     metadata = json.loads(payload["metadata"])
 
-    assert payload["request_id"] == provider_response_id
+    assert payload["request_id"] == trace_call_id
     assert metadata["litellm_call_id"] == trace_call_id
-    assert metadata["litellm_call_id"] != payload["request_id"]
+    assert metadata["response_id"] == provider_response_id
 
 
 def test_get_logging_payload_litellm_call_id_falls_back_to_litellm_params():
@@ -3449,17 +3449,36 @@ def test_get_spend_logs_id_separates_distinct_batches_whose_bodies_were_both_red
     assert ids == ["batch_first_batch_cost", "batch_second_batch_cost"]
 
 
-def test_get_spend_logs_id_prefers_the_response_id_over_the_standard_logging_id():
-    """An unredacted response keeps deciding its own row key, so cache-hit ids and every
-    other call type behave exactly as they did before."""
+def test_get_spend_logs_id_prefers_the_per_call_id_for_completion_calls():
+    """request_id is the primary key and the flush inserts with skip_duplicates, so a
+    completion row must key off the proxy-generated per-call id: a provider that reuses
+    completion ids (common on self-hosted OpenAI-compatible servers) would otherwise
+    silently drop every row after the first while budgets still get charged."""
     assert (
         get_spend_logs_id(
             "acompletion",
             {"id": "chatcmpl-from-response"},
             {"litellm_call_id": "call-id-1", "standard_logging_object": {"id": "id-from-standard-payload"}},
         )
-        == "chatcmpl-from-response"
+        == "call-id-1"
     )
+
+
+def test_get_spend_logs_id_stays_unique_when_a_provider_reuses_completion_ids():
+    """Two requests answered with the same provider response id must produce two
+    insertable rows. Observed against a live proxy with a self-hosted server returning a
+    fixed completion id: the second row was silently skipped by the duplicate-tolerant
+    flush while key and daily spend still incremented."""
+    ids = [
+        get_spend_logs_id("acompletion", {"id": "chatcmpl-reused"}, {"litellm_call_id": f"call-id-{index}"})
+        for index in range(2)
+    ]
+
+    assert ids == ["call-id-0", "call-id-1"]
+
+
+def test_get_spend_logs_id_falls_back_to_the_response_id_without_a_per_call_id():
+    assert get_spend_logs_id("acompletion", {"id": "chatcmpl-from-response"}, {}) == "chatcmpl-from-response"
 
 
 def test_batch_cost_row_does_not_collide_with_the_batch_creation_row():

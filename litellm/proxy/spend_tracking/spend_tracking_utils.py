@@ -128,6 +128,7 @@ def _get_spend_logs_metadata(
     litellm_call_id: str | None = None,
     autorouter_savings: float | None = None,
     router_metadata: SpendLogsRouterMetadata | None = None,
+    response_id: str | None = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -168,6 +169,7 @@ def _get_spend_logs_metadata(
             litellm_gateway_injected_cache=None,
             litellm_call_id=litellm_call_id,
             router_metadata=router_metadata,
+            response_id=response_id,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: " + str(list(metadata.keys()))
@@ -175,8 +177,13 @@ def _get_spend_logs_metadata(
 
     # Filter the metadata dictionary to include only the specified keys
     clean_metadata: Final = SpendLogsMetadata(
-        **{key: metadata.get(key) for key in SpendLogsMetadata.__annotations__ if key != "router_metadata"},
+        **{
+            key: metadata.get(key)
+            for key in SpendLogsMetadata.__annotations__
+            if key not in ("router_metadata", "response_id")
+        },
         router_metadata=router_metadata,
+        response_id=response_id,
     )
     _raw_key: Final = clean_metadata.get("user_api_key")
     _trusted_hash: Final = metadata.get("user_api_key_hash")
@@ -206,13 +213,38 @@ def _get_spend_logs_metadata(
 
 BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
 
+_RESPONSE_ID_KEYED_CALL_TYPES: Final = frozenset(
+    {
+        CallTypes.acreate_batch.value,
+        CallTypes.aretrieve_batch.value,
+        CallTypes.acreate_file.value,
+    }
+)
+"""Batch and file rows key off the object's own id so repeated polls of the same
+object collapse into one row instead of billing it once per poll. Every other call
+type keys off the proxy-generated per-call id: request_id is the LiteLLM_SpendLogs
+primary key and the flush inserts with skip_duplicates, so keying off the provider's
+response id silently drops every row after the first whenever a provider (commonly a
+self-hosted OpenAI-compatible server) reuses completion ids."""
+
 
 def get_spend_logs_id(call_type: str, response_obj: dict, kwargs: dict) -> str | None:
     standard_logging_payload = kwargs.get("standard_logging_object")
+    standard_logging_id: Final = (
+        standard_logging_payload.get("id") if isinstance(standard_logging_payload, dict) else None
+    )
     candidate_ids: Final = (
-        response_obj.get("id"),
-        standard_logging_payload.get("id") if isinstance(standard_logging_payload, dict) else None,
-        kwargs.get("litellm_call_id"),
+        (
+            response_obj.get("id"),
+            standard_logging_id,
+            kwargs.get("litellm_call_id"),
+        )
+        if call_type in _RESPONSE_ID_KEYED_CALL_TYPES
+        else (
+            kwargs.get("litellm_call_id"),
+            standard_logging_id,
+            response_obj.get("id"),
+        )
     )
     resolved_id: Final = next(
         (candidate for candidate in candidate_ids if isinstance(candidate, str) and candidate), None
@@ -490,6 +522,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             standard_logging_payload.get("autorouter_savings", None) if standard_logging_payload is not None else None
         ),
         litellm_call_id=litellm_call_id,
+        response_id=cast(str | None, response_obj_dict.get("id")),
         router_metadata=_get_router_metadata_for_spend_log(
             metadata=metadata,
             requested_model=_model_group,
