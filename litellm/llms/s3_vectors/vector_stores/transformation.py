@@ -68,7 +68,9 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         """Return the router iff it serves ``embedding_model`` as a deployment."""
         if router is None:
             return None
-        model_list: Final = [dict(m) for m in (router.get_model_list() or ())]  # mutable-ok: resolve_embedding_router requires list[dict]
+        model_list: Final = [
+            dict(m) for m in (router.get_model_list() or ())
+        ]  # mutable-ok: resolve_embedding_router requires list[dict]
         return resolve_embedding_router(embedding_model=embedding_model, llm_router=router, llm_model_list=model_list)
 
     def transform_search_vector_store_request(
