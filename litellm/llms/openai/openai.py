@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 
 import httpx
 
+from litellm.types.llms.custom_http import VerifyTypes
+
 if TYPE_CHECKING:
     import tiktoken
     from aiohttp import ClientSession
@@ -382,6 +384,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         organization: str | None = None,
         client: OpenAI | AsyncOpenAI | None = None,
         shared_session: Optional["ClientSession"] = None,
+        ssl_verify: VerifyTypes | None = None,
     ) -> OpenAI | AsyncOpenAI | None:
         workload_identity_config: Final = resolve_openai_workload_identity_config(api_key=api_key, api_base=api_base)
         client_initialization_params: Final[dict] = locals()
@@ -400,7 +403,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 if isinstance(cached_client, OpenAI) or isinstance(cached_client, AsyncOpenAI):
                     return cached_client
             if is_async:
-                async_http_client: Final = OpenAIChatCompletion._get_async_http_client(shared_session=shared_session)
+                async_http_client: Final = OpenAIChatCompletion._get_async_http_client(
+                    shared_session=shared_session,
+                    ssl_verify=ssl_verify,
+                )
                 http_client: httpx.Client | httpx.AsyncClient | None = async_http_client
                 _new_client: OpenAI | AsyncOpenAI = (
                     AsyncOpenAI(
@@ -422,7 +428,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     )
                 )
             else:
-                sync_http_client: Final = OpenAIChatCompletion._get_sync_http_client()
+                sync_http_client: Final = OpenAIChatCompletion._get_sync_http_client(
+                    ssl_verify=ssl_verify,
+                )
                 http_client = sync_http_client
                 _new_client = (
                     OpenAI(
@@ -773,10 +781,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                             max_retries=max_retries,
                             organization=organization,
                             stream_options=stream_options,
+                            ssl_verify=litellm_params.get("ssl_verify", None) if litellm_params else None,
                         )
                     else:
                         if not isinstance(max_retries, int):
                             raise OpenAIError(status_code=422, message="max retries must be an int")
+                        ssl_verify = litellm_params.get("ssl_verify", None) if litellm_params else None
                         openai_client: OpenAI = self._get_openai_client(
                             is_async=False,
                             api_key=api_key,
@@ -786,6 +796,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                             max_retries=max_retries,
                             organization=organization,
                             client=client,
+                            ssl_verify=ssl_verify,
                         )
 
                         ## LOGGING
@@ -917,6 +928,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         )
         for _ in range(2):  # if call fails due to alternating messages, retry with reformatted message
             try:
+                ssl_verify = litellm_params.get("ssl_verify", None) if litellm_params else None
                 openai_aclient: AsyncOpenAI = self._get_openai_client(
                     is_async=True,
                     api_key=api_key,
@@ -927,6 +939,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     organization=organization,
                     client=client,
                     shared_session=shared_session,
+                    ssl_verify=ssl_verify,
                 )
 
                 ## LOGGING
@@ -1022,6 +1035,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         max_retries=None,
         headers=None,
         stream_options: dict | None = None,
+        ssl_verify: VerifyTypes | None = None,
     ):
         data["stream"] = True
         data.update(self.get_stream_options(stream_options=stream_options, api_base=api_base))
@@ -1035,6 +1049,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             max_retries=max_retries,
             organization=organization,
             client=client,
+            ssl_verify=ssl_verify,
         )
         ## LOGGING
         logging_obj.pre_call(
@@ -1097,6 +1112,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         data.update(self.get_stream_options(stream_options=stream_options, api_base=api_base))
         for _ in range(2):
             try:
+                ssl_verify = litellm_params.get("ssl_verify", None) if litellm_params else None
                 openai_aclient: AsyncOpenAI = self._get_openai_client(
                     is_async=True,
                     api_key=api_key,
@@ -1107,6 +1123,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     organization=organization,
                     client=client,
                     shared_session=shared_session,
+                    ssl_verify=ssl_verify,
                 )
                 ## LOGGING
                 logging_obj.pre_call(
