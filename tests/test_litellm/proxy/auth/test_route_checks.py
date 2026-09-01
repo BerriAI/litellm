@@ -2,7 +2,6 @@ import os
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
-
 import pytest
 from fastapi import HTTPException, Request
 
@@ -803,7 +802,7 @@ def test_google_routes_with_dynamic_model_names_accessible_to_internal_users():
         # If no exception is raised, the test passes
     except Exception as e:
         pytest.fail(
-            f"Internal user should be able to access Google generateContent route. Got error: {str(e)}"
+            f"Internal user should be able to access Google generateContent route. Got error: {e!s}"
         )
 
 
@@ -1703,7 +1702,7 @@ def test_videos_route_accessible_to_internal_users():
         # If no exception is raised, the test passes
     except Exception as e:
         pytest.fail(
-            f"Internal user should be able to access /v1/videos route. Got error: {str(e)}"
+            f"Internal user should be able to access /v1/videos route. Got error: {e!s}"
         )
 
 
@@ -1803,7 +1802,7 @@ def test_proxy_admin_viewer_can_access_global_spend_tags():
         # If no exception is raised, the test passes
     except Exception as e:
         pytest.fail(
-            f"proxy_admin_viewer should be able to access /global/spend/tags route. Got error: {str(e)}"
+            f"proxy_admin_viewer should be able to access /global/spend/tags route. Got error: {e!s}"
         )
 
 
@@ -1964,7 +1963,7 @@ def test_proxy_admin_viewer_can_access_audit_logs(route):
         )
     except Exception as e:
         pytest.fail(
-            f"proxy_admin_viewer should be able to access {route} route. Got error: {str(e)}"
+            f"proxy_admin_viewer should be able to access {route} route. Got error: {e!s}"
         )
 
 
@@ -2029,7 +2028,7 @@ def test_proxy_admin_viewer_can_access_logs_page_endpoints(route):
         )
     except Exception as e:
         pytest.fail(
-            f"proxy_admin_viewer should be able to access {route}. Got error: {str(e)}"
+            f"proxy_admin_viewer should be able to access {route}. Got error: {e!s}"
         )
 
 
@@ -2141,7 +2140,7 @@ def test_proxy_admin_viewer_can_access_settings_read_endpoints(route):
         )
     except Exception as e:
         pytest.fail(
-            f"proxy_admin_viewer should be able to access {route}. Got error: {str(e)}"
+            f"proxy_admin_viewer should be able to access {route}. Got error: {e!s}"
         )
 
 
@@ -3407,7 +3406,11 @@ def test_organization_daily_activity_not_granted_by_org_admin_request_data_branc
 )
 @pytest.mark.parametrize(
     "dry_run_route",
-    ["/auto_router/test_routing", "/auto_router/validate_complexity_router_config"],
+    [
+        "/auto_router/test_routing",
+        "/auto_router/validate_complexity_router_config",
+        "/auto_router/validate_capability_router_config",
+    ],
 )
 def test_auto_router_dry_runs_share_model_new_audience(user_role, dry_run_route):
     """The dry runs serve whoever can draft a save on /model/new, no one else: a role
