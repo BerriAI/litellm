@@ -1,4 +1,5 @@
 import json
+import re
 import shlex
 import stat
 import time
@@ -196,6 +197,27 @@ class TestApiKeyHelperIsActuallyInvocable:
         )
         with patch(f"{AUTH_MODULE}.load_cli_token", return_value=stale):
             result = CliRunner().invoke(cli, self._helper_args("http://localhost:4000"))
+
+        assert "Not authenticated for this server" in result.output
+
+    def _windows_helper_args(self, base_url):
+        """Split the command the way cmd.exe and the C runtime do: every token is a double-quoted run."""
+        lite_exe = "C:\\Users\\u\\AppData\\Local\\Programs\\Python\\Python313\\Scripts\\lite.EXE"
+        with patch(f"{CLAUDE_SETTINGS_MODULE}.shutil.which", return_value=lite_exe):
+            helper = resolve_api_key_helper(base_url, platform="win32")
+        tokens = re.findall(r'"([^"]*)"', helper)
+        assert " ".join(f'"{token}"' for token in tokens) == helper
+        assert tokens[0] == lite_exe
+        return tokens[1:]
+
+    def test_the_windows_command_carries_the_base_url_through_cmd_quoting(self):
+        stale = CliTokenRecord(
+            base_url="http://other-proxy.example.com",
+            key="sk-stale",
+            timestamp=time.time(),
+        )
+        with patch(f"{AUTH_MODULE}.load_cli_token", return_value=stale):
+            result = CliRunner().invoke(cli, self._windows_helper_args("http://localhost:4000"))
 
         assert "Not authenticated for this server" in result.output
 
