@@ -632,10 +632,10 @@ class SlackAlerting(CustomBatchLogger):
                 event_message += f"Budget Crossed\n Total Budget:`{user_info.max_budget}`"
             elif percent_left <= SLACK_ALERTING_THRESHOLD_5_PERCENT:
                 event = "threshold_crossed"
-                event_message += "5% Threshold Crossed "
+                event_message += "5% or less of budget remaining"
             elif percent_left <= SLACK_ALERTING_THRESHOLD_15_PERCENT:
                 event = "threshold_crossed"
-                event_message += "15% Threshold Crossed"
+                event_message += "15% or less of budget remaining"
 
         return event, event_message
 
