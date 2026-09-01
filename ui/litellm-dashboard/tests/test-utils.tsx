@@ -52,7 +52,7 @@ const pointerBlocked = (element: HTMLElement): boolean => {
  * the option text alone is a race that React 19's flush timing loses.
  */
 export const chooseSelectOption = async (
-  user: ReturnType<typeof userEvent.setup>,
+  user: Pick<ReturnType<typeof userEvent.setup>, "click">,
   trigger: HTMLElement,
   optionName: string | RegExp,
 ) => {

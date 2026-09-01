@@ -5507,6 +5507,9 @@ def completion(
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
+            gigachat_scope=kwargs.get("gigachat_scope"),
+            gigachat_auth_url=kwargs.get("gigachat_auth_url"),
+            gigachat_access_token=kwargs.get("gigachat_access_token"),
             **{key: kwargs[key] for key in FORWARDED_KWARGS_KEYS if key in kwargs},
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
@@ -6289,18 +6292,15 @@ def embedding(
             if headers is not None and headers != {}:
                 optional_params["extra_headers"] = headers
 
-            if encoding_format is not None:
-                optional_params["encoding_format"] = encoding_format
+            requested_encoding_format: Final = (
+                encoding_format
+                or optional_params.get("encoding_format")
+                or get_secret_str("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT")
+            )
+            if requested_encoding_format is None or requested_encoding_format.strip().lower() == "none":
+                optional_params.pop("encoding_format", None)
             else:
-                env_fmt: Final = get_secret_str("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT")
-                if env_fmt is not None and env_fmt.strip().lower() == "none":
-                    optional_params.pop("encoding_format", None)
-                else:
-                    _default_fmt: Final = optional_params.get("encoding_format") or env_fmt or "float"
-                    if _default_fmt.strip().lower() == "none":
-                        optional_params.pop("encoding_format", None)
-                    else:
-                        optional_params["encoding_format"] = _default_fmt
+                optional_params["encoding_format"] = requested_encoding_format
 
             api_version = None
 

@@ -115,9 +115,11 @@ class SpeechToCompletionBridgeHandler:
             **request_data,
         )
 
+        requested_response_format: Final = optional_params.get("response_format")
         if isinstance(result, ModelResponse):
             return self.transformation_handler.transform_response(
                 model_response=result,
+                response_format=requested_response_format if isinstance(requested_response_format, str) else None,
             )
         else:
             raise Exception(f"Unmapped response type. Got type: {type(result)}")

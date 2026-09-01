@@ -350,10 +350,10 @@ class OpenAIResponsesHandler(BaseTranslation):
             if written_back.instructions is None:
                 data.pop("instructions", None)
             else:
-                data["instructions"] = written_back.instructions
+                data["instructions"] = written_back.instructions  # rebind-ok: data is an out-param
         elif isinstance(input_data, str):
             guardrailed_texts: Final = guardrailed_inputs.get("texts") or ()
-            data["input"] = guardrailed_texts[0] if guardrailed_texts else input_data
+            data["input"] = guardrailed_texts[0] if guardrailed_texts else input_data  # rebind-ok: data is an out-param
         else:
             await self._apply_guardrail_responses_to_input(
                 messages=input_data,
