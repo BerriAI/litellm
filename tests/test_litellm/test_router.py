@@ -7567,6 +7567,61 @@ async def test_avector_store_create_does_not_inject_router():
     assert "router" not in mock_acreate.await_args.kwargs
 
 
+def test_vector_store_search_injects_router():
+    """
+    Sync parity for the router injection: router.vector_store_search must pass
+    the router down to the SDK search call so provider transforms can resolve
+    router-managed embedding models, same as avector_store_search.
+    """
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    expected_response = VectorStoreSearchResponse(
+        object="vector_store.search_results.page", search_query="q", data=[]
+    )
+    mock_search = MagicMock(return_value=expected_response)
+    # Router.__init__ binds search via a local import, so patch the module
+    # attribute before constructing the Router.
+    with patch("litellm.vector_stores.main.search", new=mock_search):  # test-quality-ok: the SDK call is the only place the injected router kwarg is observable
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-3.5-turbo",
+                    "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "test-key"},
+                }
+            ]
+        )
+        search_response = router.vector_store_search(
+            vector_store_id="v", query="q", custom_llm_provider="s3_vectors"
+        )
+
+    assert search_response is expected_response
+    mock_search.assert_called_once()
+    assert mock_search.call_args.kwargs["router"] is router
+    assert mock_search.call_args.kwargs["custom_llm_provider"] == "s3_vectors"
+
+
+def test_vector_store_create_does_not_inject_router():
+    """The sync create path must keep calling the SDK without a router kwarg."""
+    expected_response = {"id": "vs_1", "object": "vector_store"}
+    mock_create = MagicMock(return_value=expected_response)
+    # Router.__init__ binds create via a local import, so patch the module
+    # attribute before constructing the Router.
+    with patch("litellm.vector_stores.main.create", new=mock_create):  # test-quality-ok: the SDK call is the only place a leaked router kwarg would surface
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-3.5-turbo",
+                    "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "test-key"},
+                }
+            ]
+        )
+        create_response = router.vector_store_create(custom_llm_provider="openai")
+
+    assert create_response is expected_response
+    mock_create.assert_called_once()
+    assert "router" not in mock_create.call_args.kwargs
+
+
 class TestPreRoutingStrategyRegistryLifecycle:
     """
     Regression tests: a deployment leaving the model_list must release the
