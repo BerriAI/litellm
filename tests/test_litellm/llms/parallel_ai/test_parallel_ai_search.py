@@ -411,6 +411,27 @@ class TestParallelAISearch:
         first = response.results[0].model_dump()
         assert first["excerpts"] == ["First excerpt.", "Second excerpt."]
 
+    @pytest.mark.asyncio
+    async def test_response_normalizes_null_result_fields(self, respx_mock, httpx_transport):
+        response_payload = {
+            **MOCK_V1_RESPONSE,
+            "results": [{"url": None, "title": None, "publish_date": None, "excerpts": None}],
+        }
+        respx_mock.post("https://api.parallel.ai/v1/search").respond(json=response_payload)
+
+        response = await litellm.asearch(
+            query="AI developments",
+            search_provider="parallel_ai",
+        )
+
+        assert len(response.results) == 1
+        result = response.results[0]
+        assert result.url == ""
+        assert result.title == ""
+        assert result.snippet == ""
+        assert result.date is None
+        assert result.model_dump()["excerpts"] == ()
+
     @pytest.mark.parametrize(
         "mode,usage,max_results,expected_cost",
         [

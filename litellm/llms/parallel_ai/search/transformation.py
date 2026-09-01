@@ -25,10 +25,10 @@ from litellm.secret_managers.main import get_secret_str
 class _ParallelAIV1SearchResult(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    url: str = ""
+    url: str | None = None
     title: str | None = None
     publish_date: str | None = None
-    excerpts: Sequence[str] = ()
+    excerpts: Sequence[str] | None = None
 
 
 class _ParallelAIV1SearchResponse(BaseModel):
@@ -253,11 +253,11 @@ class ParallelAISearchConfig(BaseSearchConfig):
                 MappingProxyType(
                     {
                         "title": result.title or "",
-                        "url": result.url,
-                        "snippet": " ... ".join(result.excerpts) if result.excerpts else "",
+                        "url": result.url or "",
+                        "snippet": " ... ".join(result.excerpts or ()),
                         "date": result.publish_date,
                         "last_updated": None,
-                        "excerpts": result.excerpts,
+                        "excerpts": result.excerpts or (),
                     }
                 )
             )
