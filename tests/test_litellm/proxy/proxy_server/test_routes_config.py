@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from .conftest import VOLATILE_KEYS, normalize
 
 
@@ -1069,7 +1071,17 @@ def test_get_config_callbacks_deduplicates_configured_and_runtime(client, auth_a
     assert {callback["name"] for callback in callbacks} == {"langfuse"}
 
 
-def test_get_config_callbacks_deduplicates_dotted_path_callback(client, auth_as, mock_prisma, monkeypatch):
+@pytest.mark.parametrize(
+    "config_key,expected_type",
+    [
+        ("success_callback", "success"),
+        ("failure_callback", "failure"),
+        ("callbacks", "success_and_failure"),
+    ],
+)
+def test_get_config_callbacks_deduplicates_dotted_path_callback(
+    client, auth_as, mock_prisma, monkeypatch, config_key, expected_type
+):
     """A dotted-path callback stays a single editable row instead of duplicating under its class name."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
@@ -1090,7 +1102,7 @@ def test_get_config_callbacks_deduplicates_dotted_path_callback(client, auth_as,
     fake_proxy_config = MagicMock()
     fake_proxy_config.get_config = AsyncMock(
         return_value={
-            "litellm_settings": {"success_callback": [dotted_path]},
+            "litellm_settings": {config_key: [dotted_path]},
             "general_settings": {},
             "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
         }
@@ -1120,7 +1132,7 @@ def test_get_config_callbacks_deduplicates_dotted_path_callback(client, auth_as,
     assert response.status_code == 200
     callbacks = response.json()["callbacks"]
     assert [(callback["name"], callback["type"], callback.get("read_only", False)) for callback in callbacks] == [
-        (dotted_path, "success", False)
+        (dotted_path, expected_type, False)
     ]
 
 
