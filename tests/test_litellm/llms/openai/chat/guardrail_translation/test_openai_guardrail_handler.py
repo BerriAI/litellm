@@ -1610,3 +1610,36 @@ class TestBuildBlockSseChunks:
         assert first["choices"][0]["delta"] == {"content": "Blocked by policy."}
         assert final["id"] == "chatcmpl-live"
         assert final["usage"] == {"prompt_tokens": 11, "completion_tokens": 5, "total_tokens": 16}
+
+
+class TestCheckStreamingHasEnded:
+    """_check_streaming_has_ended lets end_of_stream_only withhold the finish chunk until moderation"""
+
+    def test_empty_and_content_only_chunks_are_not_ended(self):
+        handler = OpenAIChatCompletionsHandler()
+        assert handler._check_streaming_has_ended([]) is False
+        content_only = [
+            {"id": "chatcmpl-live", "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": None}]},
+            {"id": "chatcmpl-live", "choices": []},
+            {"id": "chatcmpl-live", "usage": {"prompt_tokens": 1, "completion_tokens": 1}},
+        ]
+        assert handler._check_streaming_has_ended(content_only) is False
+
+    def test_dict_finish_chunk_marks_stream_ended(self):
+        handler = OpenAIChatCompletionsHandler()
+        chunks = [
+            {"id": "chatcmpl-live", "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": None}]},
+            {"id": "chatcmpl-live", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        ]
+        assert handler._check_streaming_has_ended(chunks) is True
+
+    def test_object_finish_chunk_marks_stream_ended(self):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        handler = OpenAIChatCompletionsHandler()
+        chunks = [
+            ModelResponseStream(
+                choices=[StreamingChoices(index=0, delta=Delta(content=None), finish_reason="stop")]
+            )
+        ]
+        assert handler._check_streaming_has_ended(chunks) is True

@@ -53,6 +53,19 @@ class _BlockingGuardrail(CustomGuardrail):
         )
 
 
+class _PassingGuardrail(CustomGuardrail):
+    """Mock guardrail that always lets response scans through unchanged."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return inputs
+
+
 def _chat_chunk(delta: Delta, finish_reason: Optional[str] = None) -> ModelResponseStream:
     return ModelResponseStream(
         id="chatcmpl-live",
@@ -129,8 +142,13 @@ async def _run_hook(
     sampling_rate: int = 1,
     end_of_stream_only: bool = False,
     buffer_until_moderated: bool = False,
+    blocks: bool = True,
 ) -> Tuple[StreamChunk, ...]:
-    guardrail = _BlockingGuardrail(guardrail_name="test-blocking-guardrail", event_hook="post_call")
+    guardrail = (
+        _BlockingGuardrail(guardrail_name="test-blocking-guardrail", event_hook="post_call")
+        if blocks
+        else _PassingGuardrail(guardrail_name="test-passing-guardrail", event_hook="post_call")
+    )
     guardrail.streaming_sampling_rate = sampling_rate
     guardrail.streaming_end_of_stream_only = end_of_stream_only
     guardrail.streaming_buffer_until_moderated = buffer_until_moderated
@@ -140,7 +158,7 @@ async def _run_hook(
     request_data = {
         "messages": [{"role": "user", "content": "hi"}],
         "guardrail_to_apply": guardrail,
-        "metadata": {"guardrails": ["test-blocking-guardrail"]},
+        "metadata": {"guardrails": [guardrail.guardrail_name]},
     }
 
     return tuple(
@@ -203,11 +221,36 @@ async def test_chat_mid_stream_block_continues_the_completion():
 
 @pytest.mark.asyncio
 async def test_chat_end_of_stream_block_terminates_cleanly():
+    """Regression for bugbot's finish-ordering finding: in end_of_stream_only
+    mode the original finish chunk must be withheld until moderation decides,
+    so a block's content_filter finish is the only stream terminator a client
+    ever sees - never policy text trailing after finish_reason stop."""
     collected = await _run_hook("/v1/chat/completions", _chat_stream(end=True), end_of_stream_only=True)
     _assert_no_error_frame(collected)
+    forwarded = [chunk for chunk in collected if isinstance(chunk, ModelResponseStream)]
+    assert forwarded, "content chunks still stream to the client before end-of-stream moderation"
+    assert all(choice.finish_reason is None for chunk in forwarded for choice in chunk.choices), (
+        "the original finish chunk must be withheld until moderation decides"
+    )
     payloads = _sse_payloads(collected)
     assert BLOCK_MESSAGE in json.dumps(payloads)
     assert payloads[-1]["choices"][0]["finish_reason"] == "content_filter"
+
+
+@pytest.mark.asyncio
+async def test_chat_end_of_stream_pass_releases_withheld_finish_chunk():
+    """When end-of-stream moderation passes, the withheld finish chunk is
+    released so a clean stream still terminates normally."""
+    collected = await _run_hook(
+        "/v1/chat/completions", _chat_stream(end=True), end_of_stream_only=True, blocks=False
+    )
+    assert not [chunk for chunk in collected if isinstance(chunk, bytes)], (
+        "a clean stream must carry no synthetic block frames"
+    )
+    forwarded = [chunk for chunk in collected if isinstance(chunk, ModelResponseStream)]
+    finish_reasons = [choice.finish_reason for chunk in forwarded for choice in chunk.choices]
+    assert finish_reasons[-1] == "stop", "the withheld finish chunk must be released after moderation passes"
+    assert all(reason is None for reason in finish_reasons[:-1])
 
 
 @pytest.mark.asyncio
@@ -234,20 +277,35 @@ async def test_responses_buffered_block_emits_full_event_sequence():
 
 @pytest.mark.asyncio
 async def test_responses_mid_stream_block_continues_the_response():
-    """Regression for the LIT-6496 500 error frame: after events were already
-    forwarded, the block appends a new output item under the same response id
-    and closes with response.completed - never a second response.created."""
+    """Regression for the LIT-6496 500 error frame and bugbot's unclosed-item
+    finding: after events were already forwarded, the block first closes the
+    output item still open on the wire, then appends the replacement item under
+    the same response id, and closes with response.completed - never a second
+    response.created and never a completed response with an item left open."""
     collected = await _run_hook("/v1/responses", _responses_stream(end=False))
     _assert_no_error_frame(collected)
-    forwarded_types = [chunk["type"] for chunk in collected if isinstance(chunk, dict)]
+    forwarded = [chunk for chunk in collected if isinstance(chunk, dict)]
+    forwarded_types = [chunk["type"] for chunk in forwarded]
     assert "response.created" in forwarded_types, "original events should have streamed before the block"
     payloads = _sse_payloads(collected)
     assert payloads, "no block SSE chunks were emitted"
     block_types = [payload["type"] for payload in payloads]
     assert "response.created" not in block_types, "a mid-stream block must not restart the response"
-    assert block_types[0] == "response.output_item.added"
     assert block_types[-1] == "response.completed"
-    assert payloads[0]["output_index"] == 1, "the block item must continue after the original output item"
+
+    all_events = forwarded + list(payloads)
+    opened = sorted(event["output_index"] for event in all_events if event["type"] == "response.output_item.added")
+    closed = sorted(event["output_index"] for event in all_events if event["type"] == "response.output_item.done")
+    assert opened == closed, "every output item opened on the stream must be closed before response.completed"
+    original_done_position = block_types.index("response.output_item.done")
+    block_item_position = block_types.index("response.output_item.added")
+    assert original_done_position < block_item_position, (
+        "the in-progress original item must be closed before the block item is appended"
+    )
+    assert payloads[original_done_position]["item"]["id"] == "msg_orig"
+    assert payloads[block_item_position]["output_index"] == 1, (
+        "the block item must continue after the original output item"
+    )
     completed = payloads[-1]["response"]
     assert completed["id"] == "resp_live"
     assert completed["output"][0]["content"][0]["text"] == BLOCK_MESSAGE

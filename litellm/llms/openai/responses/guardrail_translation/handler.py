@@ -31,6 +31,7 @@ Output: response.output is List[GenericResponseOutputItem] where each has:
 import time
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
@@ -874,10 +875,10 @@ class OpenAIResponsesHandler(BaseTranslation):
           sent, so emit the full synthetic sequence (``response.created``
           through ``response.completed``).
         - ``stream_started`` True (sampling / mid-stream): events already
-          reached the client, so continue the in-progress response: deliver the
-          block message as a new output item under the same response id and
-          close with a ``response.completed`` carrying only the replacement
-          item.
+          reached the client, so continue the in-progress response: close the
+          output item still open on the wire, deliver the block message as a
+          new output item under the same response id, and close with a
+          ``response.completed`` carrying only the replacement item.
 
         The proxy's data generator appends ``data: [DONE]`` itself.
         """
@@ -887,7 +888,8 @@ class OpenAIResponsesHandler(BaseTranslation):
             else self._standalone_block_events(exc)
         )
         return tuple(
-            f"data: {event.model_dump_json(exclude_none=True, exclude_unset=True)}\n\n".encode() for event in events
+            f"data: {event.model_dump_json(exclude_none=True, exclude_unset=True, serialize_as_any=True)}\n\n".encode()
+            for event in events
         )
 
     @staticmethod
@@ -915,6 +917,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             "logprobs": None,
         }
         return (
+            *_open_item_closing_events(responses_so_far),
             OutputItemAddedEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                 output_index=output_index,
@@ -1036,3 +1039,123 @@ def _continuation_identity(exc: "ModifyResponseException", responses_so_far: Seq
         index for item in responses_so_far if isinstance(index := stream_item_field(item, "output_index"), int)
     )
     return response_id, model, max(indices) + 1 if indices else 0
+
+
+@dataclass(frozen=True, slots=True)
+class _OpenItemState:
+    item_id: str
+    item_type: str
+    role: str
+    output_index: int
+    content_index: int
+    text: str
+    part_open: bool
+
+
+def _open_item_state(responses_so_far: Sequence[object]) -> _OpenItemState | None:
+    typed: Final = tuple((str(stream_item_field(event, "type") or ""), event) for event in responses_so_far)
+    added: Final = tuple(
+        (added_index, stream_item_field(event, "item"))
+        for event_type, event in typed
+        if event_type == "response.output_item.added"
+        and isinstance(added_index := stream_item_field(event, "output_index"), int)
+    )
+    done_indices: Final = frozenset(
+        done_index
+        for event_type, event in typed
+        if event_type == "response.output_item.done"
+        and isinstance(done_index := stream_item_field(event, "output_index"), int)
+    )
+    open_added: Final = tuple((index, payload) for index, payload in added if index not in done_indices)
+    if not open_added:
+        return None
+    output_index, item_payload = open_added[-1]
+    item_id: Final = stream_item_field(item_payload, "id") if item_payload is not None else None
+    if not isinstance(item_id, str) or not item_id:
+        return None
+    raw_type: Final = stream_item_field(item_payload, "type")
+    raw_role: Final = stream_item_field(item_payload, "role")
+    part_added: Final = tuple(
+        part_index
+        for event_type, event in typed
+        if event_type == "response.content_part.added"
+        and stream_item_field(event, "item_id") == item_id
+        and isinstance(part_index := stream_item_field(event, "content_index"), int)
+    )
+    part_done: Final = frozenset(
+        part_done_index
+        for event_type, event in typed
+        if event_type == "response.content_part.done"
+        and stream_item_field(event, "item_id") == item_id
+        and isinstance(part_done_index := stream_item_field(event, "content_index"), int)
+    )
+    open_parts: Final = tuple(index for index in part_added if index not in part_done)
+    text: Final = "".join(
+        delta
+        for event_type, event in typed
+        if event_type == "response.output_text.delta"
+        and stream_item_field(event, "item_id") == item_id
+        and isinstance(delta := stream_item_field(event, "delta"), str)
+    )
+    return _OpenItemState(
+        item_id=item_id,
+        item_type=raw_type if isinstance(raw_type, str) and raw_type else "message",
+        role=raw_role if isinstance(raw_role, str) and raw_role else "assistant",
+        output_index=output_index,
+        content_index=open_parts[-1] if open_parts else 0,
+        text=text,
+        part_open=bool(open_parts),
+    )
+
+
+def _open_item_closing_events(responses_so_far: Sequence[object]) -> Sequence[ResponsesAPIStreamingResponse]:
+    """Close the output item still in progress on the relayed stream before the
+    block item is appended: strict Responses clients reject a
+    ``response.completed`` that arrives while an earlier ``output_item.added``
+    was never closed. The closing text is exactly what the client has received
+    for that item so far."""
+    open_item: Final = _open_item_state(responses_so_far)
+    if open_item is None:
+        return ()
+    partial_part: Final[_BlockedContentPart] = {
+        "type": "output_text",
+        "text": open_item.text,
+        "annotations": (),
+    }
+    closed_payload: Final[_BlockedItemPayload] = {
+        "type": open_item.item_type,
+        "id": open_item.item_id,
+        "status": "completed",
+        "role": open_item.role,
+        "content": (partial_part,),
+    }
+    item_done: Final = OutputItemDoneEvent(
+        type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+        output_index=open_item.output_index,
+        item=GenericResponseOutputItem.model_validate(closed_payload),
+    )
+    if not open_item.part_open:
+        return (item_done,)
+    partial_done_part: Final[_BlockedDoneContentPart] = {
+        "type": "output_text",
+        "text": open_item.text,
+        "annotations": (),
+        "logprobs": None,
+    }
+    return (
+        OutputTextDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+            item_id=open_item.item_id,
+            output_index=open_item.output_index,
+            content_index=open_item.content_index,
+            text=open_item.text,
+        ),
+        ContentPartDoneEvent(
+            type=ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+            item_id=open_item.item_id,
+            output_index=open_item.output_index,
+            content_index=open_item.content_index,
+            part=ContentPartDonePartOutputText.model_validate(partial_done_part),
+        ),
+        item_done,
+    )
