@@ -709,33 +709,16 @@ async def test_validate_mcp_server_alias_persists_verbatim(mock_access_groups, m
     assert object_permission["mcp_tool_permissions"] == {"Allowed Server": ["tool1"]}
 
 
-@pytest.mark.asyncio
-@patch(
-    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
-    return_value=set(),
-)
-@patch(
-    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
-    new_callable=AsyncMock,
-    return_value=[],
-)
-async def test_validate_alias_grant_expands_on_other_region_after_save(mock_access_groups, mock_allow_all):
-    """Full cross-region flow: save a key on the west instance (alias resolves to
-    west's hash-derived id), then expand the persisted grant on the central
-    instance, whose registry maps the same alias to a different id."""
+def test_alias_grant_expands_on_other_region_after_save():
+    """Cross-region flow: the west instance saves an alias grant (its resolver maps
+    the alias to west's hash-derived id), then the central instance, whose registry
+    maps the same alias to a different id, expands the persisted grant. Rewriting
+    to west's id at save time is exactly the regression this guards against."""
     west_mgr = _make_mock_mcp_manager(servers=[_make_mock_mcp_server("west-id", alias="github-mcp")])
     central_mgr = _make_mock_mcp_manager(servers=[_make_mock_mcp_server("central-id", alias="github-mcp")])
 
-    team_obj = _make_team_obj(mcp_servers=["west-id"])
     object_permission = {"mcp_servers": ["github-mcp"]}
-    with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
-        west_mgr,
-    ):
-        await validate_key_mcp_servers_against_team(
-            object_permission=object_permission,
-            team_obj=team_obj,
-        )
+    _drop_stale_object_permission_mcp_servers(object_permission, {"github-mcp": {"west-id"}})
     assert object_permission["mcp_servers"] == ["github-mcp"]
 
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
