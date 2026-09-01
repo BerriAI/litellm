@@ -645,6 +645,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "lemonade",
     "docker_model_runner",
     "amazon_nova",
+    "agnes_ai"
 ]
 
 # Resolving these providers runs an OAuth device flow (their provider info IS the login), so any
@@ -828,6 +829,7 @@ openai_compatible_endpoints: Final[list] = [
 
 openai_compatible_providers: Final[list] = [
     "anyscale",
+    "agnes_ai",
     "groq",
     "nvidia_nim",
     "cerebras",
