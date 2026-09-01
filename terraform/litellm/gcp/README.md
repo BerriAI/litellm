@@ -16,8 +16,10 @@ Deploys the componentized LiteLLM proxy on GCP:
 - **Cloud Run v2** services for `gateway` (port 4000), `backend` (port 4001),
   and `ui` (port 3000), all using a shared runtime service account
 - **Cloud Run Job** (`litellm-migrations`) that runs `prisma migrate deploy` from the dedicated `ghcr.io/berriai/litellm-migrations` image
-- **External global HTTP(S) load balancer** with serverless NEGs and a URL
-  map mirroring the helm-chart ingress path routing:
+- **HTTP(S) load balancer** with serverless NEGs and a URL map mirroring the
+  helm-chart ingress path routing. `load_balancing_scheme` controls mode:
+  - `EXTERNAL_MANAGED`: global external LB
+  - `INTERNAL_MANAGED`: global internal managed LB (private IP)
   - LLM data-plane prefixes → `gateway`
   - UI asset paths → `ui`
   - Everything else → `backend`
@@ -317,10 +319,15 @@ vpcaccess, compute, servicenetworking, storage, artifactregistry).
 
 ## TLS
 
+TLS is supported for both LB schemes, with different certificate inputs:
+
+- `EXTERNAL_MANAGED`: set `lb_domains`; this module creates a Google-managed cert
+- `INTERNAL_MANAGED`: set both `lb_domains` and `certificate_manager_certificates`; this module uses your pre-existing Certificate Manager certificates
+
 `terraform plan` refuses to provision an HTTP-only LB by default — TLS
 is the supported posture. Two paths:
 
-**Production / staging — set `lb_domains`:**
+**Production / staging (INTERNAL_MANAGED) — set `lb_domains`:**
 
 1. `terraform apply` once with `allow_plaintext_lb = true` (intentional
    chicken-and-egg escape hatch) to provision the LB and read the anycast
@@ -336,10 +343,22 @@ managed cert sits in `PROVISIONING` for ~15-60 min on first apply until
 DNS propagation completes — `gcloud compute ssl-certificates describe
 <tenant>-litellm-<env>-cert` shows the state.
 
+**Production / staging (INTERNAL_MANAGED) — set both hostnames and cert refs:**
+
+Set:
+
+- `lb_domains = ["proxy.internal.example.com"]`
+- `certificate_manager_certificates = ["projects/<project>/locations/global/certificates/<name>"]`
+
+Result: a 443 internal forwarding rule and HTTPS target proxy using the
+provided certificates. If exactly one of the two variables is set,
+`terraform plan` fails with a clear precondition error.
+
 **Trial / dev — explicitly opt into HTTP-only:**
 
-Set `allow_plaintext_lb = true` and leave `lb_domains = []`. Without the
-flag, plan fails with a clear error pointing at the precondition.
+Set `allow_plaintext_lb = true`, leave `lb_domains = []`, and leave
+`certificate_manager_certificates = []`. Without the flag, plan fails
+with a clear error pointing at the precondition.
 Intended for short-lived trial / dev stacks only.
 
 ## Using as a module

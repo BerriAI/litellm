@@ -19,8 +19,11 @@ env    = "stage"
 
 # TLS: provide DNS names already pointing at the LB IP for a Google-managed
 # cert. Without one, plan fails unless allow_plaintext_lb = true is set
-# explicitly (trial/dev only).
-# lb_domains         = ["proxy.example.com"]
+# explicitly (trial/dev only). INTERNAL_MANAGED TLS requires both
+# lb_domains and certificate_manager_certificates.
+# load_balancing_scheme = "EXTERNAL_MANAGED" # or "INTERNAL_MANAGED"
+# lb_domains = ["proxy.example.com"]
+# certificate_manager_certificates = ["projects/<project>/locations/global/certificates/<name>"]
 # allow_plaintext_lb = true
 
 # Storage and database retention. Defaults are safe — destroy preserves

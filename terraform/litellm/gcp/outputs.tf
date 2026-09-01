@@ -1,11 +1,14 @@
 output "lb_ip" {
-  description = "Global anycast IP of the external HTTPS load balancer."
-  value       = google_compute_global_address.lb.address
+  description = "Load balancer IP. Global anycast for EXTERNAL_MANAGED, global private IP for INTERNAL_MANAGED."
+  value       = var.load_balancing_scheme == "EXTERNAL_MANAGED" ? google_compute_global_address.lb[0].address : google_compute_global_forwarding_rule.http_internal[0].ip_address
 }
 
 output "lb_url" {
-  description = "Proxy URL. Switches scheme based on whether lb_domains is set; when TLS is enabled the URL points at the first listed domain (since managed certs are tied to the hostname, not the anycast IP). The dashboard is served at /, the API at /v1/*."
-  value       = local.tls_enabled ? "https://${var.lb_domains[0]}" : "http://${google_compute_global_address.lb.address}"
+  description = "Proxy URL. Switches scheme based on whether TLS is enabled; when TLS is enabled the URL points at the first domain in lb_domains. The dashboard is served at /, the API at /v1/*."
+  value = local.tls_enabled ? "https://${var.lb_domains[0]}" : format(
+    "http://%s",
+    var.load_balancing_scheme == "EXTERNAL_MANAGED" ? google_compute_global_address.lb[0].address : google_compute_global_forwarding_rule.http_internal[0].ip_address,
+  )
 }
 
 output "gateway_service_url" {

@@ -93,6 +93,12 @@ variable "vpc_connector_cidr" {
   default     = "10.41.0.0/28"
 }
 
+variable "lb_proxy_only_subnet_cidr" {
+  description = "CIDR for the regional proxy-only subnet used by INTERNAL_MANAGED load balancing."
+  type        = string
+  default     = "10.42.0.0/23"
+}
+
 # ---------- Component images ----------
 #
 # Cloud Run only pulls from Artifact Registry, [region.]gcr.io, or
@@ -302,17 +308,48 @@ variable "db_username" {
 
 variable "lb_domains" {
   description = <<-EOT
-    DNS names for a Google-managed SSL certificate fronting the LB. When
-    non-empty, the stack provisions a 443 forwarding rule + HTTPS target
-    proxy + managed cert covering these domains, and the existing 80
-    forwarding rule serves a permanent 301 redirect to HTTPS. Leave empty
-    ([]) to disable TLS (must combine with `allow_plaintext_lb = true` for
-    the plan to succeed — see README.md "TLS"). Each domain must already
-    resolve to the LB's anycast IP (`lb_ip` output) for managed-cert
-    provisioning to succeed.
+    DNS names fronting the LB when TLS is enabled.
+
+    EXTERNAL_MANAGED: when non-empty, the stack provisions a Google-managed
+    SSL certificate covering these domains, creates a 443 forwarding rule,
+    and rewrites port 80 to a permanent HTTPS redirect.
+
+    INTERNAL_MANAGED: when enabling TLS, `lb_domains` must be non-empty and
+    `certificate_manager_certificates` must also be provided.
+
+    Leave empty ([]) to disable TLS (must combine with
+    `allow_plaintext_lb = true` for the plan to succeed — see README.md
+    "TLS").
   EOT
   type        = list(string)
   default     = []
+}
+
+variable "certificate_manager_certificates" {
+  description = <<-EOT
+    Pre-existing Certificate Manager certificate resource references for
+    INTERNAL_MANAGED TLS. Provide full certificate self_links.
+
+    This input is ignored for EXTERNAL_MANAGED, where `lb_domains` continues
+    to drive Google-managed SSL certificate creation in this module.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
+variable "load_balancing_scheme" {
+  description = <<-EOT
+    Load balancer scheme for the GCP HTTP(S) load balancer resources.
+    Allowed values match the provider/API values directly:
+    `EXTERNAL_MANAGED` (public) and `INTERNAL_MANAGED` (private).
+  EOT
+  type        = string
+  default     = "EXTERNAL_MANAGED"
+
+  validation {
+    condition     = contains(["EXTERNAL_MANAGED", "INTERNAL_MANAGED"], var.load_balancing_scheme)
+    error_message = "load_balancing_scheme must be EXTERNAL_MANAGED or INTERNAL_MANAGED."
+  }
 }
 
 variable "allow_plaintext_lb" {

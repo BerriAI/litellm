@@ -66,9 +66,26 @@ variable "image_tag" {
 
 # TLS — provide DNS names for a managed cert, or opt into HTTP-only for dev.
 variable "lb_domains" {
-  description = "DNS names (already pointing at lb_ip) for a Google-managed cert. Empty → no TLS."
+  description = "TLS hostnames. EXTERNAL_MANAGED creates a Google-managed cert; INTERNAL_MANAGED requires this plus certificate_manager_certificates. Empty -> no TLS."
   type        = list(string)
   default     = []
+}
+
+variable "certificate_manager_certificates" {
+  description = "Pre-existing Certificate Manager certificate self_links for INTERNAL_MANAGED TLS."
+  type        = list(string)
+  default     = []
+}
+
+variable "load_balancing_scheme" {
+  description = "Load balancer scheme. Allowed values: EXTERNAL_MANAGED or INTERNAL_MANAGED."
+  type        = string
+  default     = "EXTERNAL_MANAGED"
+
+  validation {
+    condition     = contains(["EXTERNAL_MANAGED", "INTERNAL_MANAGED"], var.load_balancing_scheme)
+    error_message = "load_balancing_scheme must be EXTERNAL_MANAGED or INTERNAL_MANAGED."
+  }
 }
 
 variable "allow_plaintext_lb" {
