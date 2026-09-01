@@ -7,5 +7,5 @@
   "local/no-long-condition-chain": { "max": 265, "target": 120 },
   "testing-library/no-container": { "max": 133, "target": 50 },
   "testing-library/no-node-access": { "max": 716, "target": 500 },
-  "testing-library/prefer-screen-queries": { "max": 21, "target": 18 }
+  "testing-library/prefer-screen-queries": { "max": 18, "target": 18 }
 }
