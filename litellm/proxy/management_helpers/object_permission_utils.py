@@ -403,14 +403,7 @@ async def _get_grandfathered_key_mcp_server_ids(
     """
     if existing_object_permission is None or prisma_client is None:
         return frozenset()
-    raw_tool_perms: Final = existing_object_permission.mcp_tool_permissions or {}
-    tool_perm_keys: Final[frozenset[str]] = frozenset(
-        json.loads(raw_tool_perms).keys() if isinstance(raw_tool_perms, str) else raw_tool_perms.keys()
-    )
-    identifiers: Final = (frozenset(existing_object_permission.mcp_servers or []) | tool_perm_keys) - {
-        SpecialMCPServerNames.no_mcp_servers.value,
-        SpecialMCPServerName.all_proxy_servers.value,
-    }
+    identifiers: Final = _get_existing_key_mcp_server_identifiers(existing_object_permission)
     return frozenset(
         _flatten_resolved_mcp_server_ids(
             await _resolve_mcp_server_identifiers_to_ids(
@@ -419,6 +412,22 @@ async def _get_grandfathered_key_mcp_server_ids(
             )
         )
     )
+
+
+def _get_existing_key_mcp_server_identifiers(
+    existing_object_permission: Optional["LiteLLM_ObjectPermissionTable"],
+) -> frozenset[str]:
+    if existing_object_permission is None:
+        return frozenset()
+    raw_tool_permissions: Final = existing_object_permission.mcp_tool_permissions or {}
+    tool_permissions: Final = (
+        json.loads(raw_tool_permissions) if isinstance(raw_tool_permissions, str) else raw_tool_permissions
+    )
+    tool_permission_keys: Final = frozenset(tool_permissions.keys()) if isinstance(tool_permissions, dict) else frozenset()
+    return (frozenset(existing_object_permission.mcp_servers or []) | tool_permission_keys) - {
+        SpecialMCPServerNames.no_mcp_servers.value,
+        SpecialMCPServerName.all_proxy_servers.value,
+    }
 
 
 async def _get_team_allowed_mcp_servers(
@@ -554,9 +563,22 @@ async def validate_key_mcp_servers_against_team(
         stale_identifiers: Final = {
             identifier for identifier in requested_servers if not identifier_to_server_ids.get(identifier)
         }
+        existing_identifiers: Final = _get_existing_key_mcp_server_identifiers(existing_key_object_permission)
+        new_stale_identifiers: Final = stale_identifiers - existing_identifiers
+        if new_stale_identifiers and not is_proxy_admin and not team_allowed_servers:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": (
+                        "Key requests unresolved MCP server references that cannot be authorized: "
+                        f"{sorted(new_stale_identifiers)}. Only proxy admins or keys constrained by an MCP-enabled "
+                        "team may add unresolved logical references."
+                    )
+                },
+            )
         if stale_identifiers:
             verbose_proxy_logger.warning(
-                "validate_key_mcp_servers_against_team: ignoring stale MCP server identifiers (no longer in registry or DB): %s",
+                "validate_key_mcp_servers_against_team: preserving MCP server identifiers unresolved in this region: %s",
                 sorted(stale_identifiers),
             )
         active_requested_servers: Final = _flatten_resolved_mcp_server_ids(identifier_to_server_ids)

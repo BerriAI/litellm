@@ -204,6 +204,10 @@ class LiteLLM_Proxy_MCP_Handler:
             List names of allowed MCP servers
         """
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            Ambiguous,
+            Forbidden,
+            NotFound,
+            Resolved,
             global_mcp_server_manager,
         )
         from litellm.proxy._experimental.mcp_server.server import (
@@ -217,6 +221,7 @@ class LiteLLM_Proxy_MCP_Handler:
             for server_url in (_tool.get("server_url", "") if isinstance(_tool, dict) else "",)
             if isinstance(server_url, str) and server_url.startswith(LITELLM_PROXY_MCP_SERVER_URL_PREFIX)
         ]
+        caller_allowed_server_ids: Final = await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
 
         # Resolve toolset names: collect all toolset IDs first, then apply their
         # combined permissions in a single pass so multiple toolsets are unioned
@@ -224,7 +229,20 @@ class LiteLLM_Proxy_MCP_Handler:
         resolved_mcp_servers: Final[list[str]] = []
         resolved_toolset_ids: Final[list[str]] = []
         for name in mcp_servers:
-            if not global_mcp_server_manager.get_mcp_server_by_name(name):
+            server = global_mcp_server_manager.get_mcp_server_by_name(name)
+            resolution = (
+                global_mcp_server_manager.resolve_single_target(
+                    name,
+                    allowed_server_ids=caller_allowed_server_ids,
+                )
+                if server is None
+                else None
+            )
+            is_server_reference: Final = server is not None or isinstance(
+                resolution,
+                (Resolved, Ambiguous, Forbidden),
+            )
+            if not is_server_reference and isinstance(resolution, NotFound):
                 try:
                     from litellm.proxy.proxy_server import prisma_client
 
@@ -282,7 +300,11 @@ class LiteLLM_Proxy_MCP_Handler:
         )
         tools: Final = listing.tools
 
-        allowed_mcp_server_ids: Final = await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
+        allowed_mcp_server_ids: Final = (
+            await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
+            if resolved_toolset_ids and user_api_key_auth is not None
+            else caller_allowed_server_ids
+        )
         allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(allowed_mcp_server_ids)
 
         allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(

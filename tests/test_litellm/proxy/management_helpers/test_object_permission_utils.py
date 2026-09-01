@@ -836,6 +836,14 @@ async def test_teamless_non_admin_stale_reference_must_not_rebind_to_future_priv
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
 
+    admin_persisted = await validate_key_mcp_servers_against_team(
+        object_permission=stored_permission,
+        team_obj=None,
+        prisma_client=mock_prisma_client,
+        is_proxy_admin=True,
+    )
+    assert admin_persisted == stored_permission
+
     try:
         persisted = await validate_key_mcp_servers_against_team(
             object_permission=stored_permission,
@@ -848,6 +856,25 @@ async def test_teamless_non_admin_stale_reference_must_not_rebind_to_future_priv
         # preserved for cross-region use instead, runtime must keep it from
         # binding to a private server later.
         assert exc.status_code == 403
+        with pytest.raises(HTTPException) as empty_team_exc:
+            await validate_key_mcp_servers_against_team(
+                object_permission=stored_permission,
+                team_obj=_make_team_obj(mcp_servers=[]),
+                prisma_client=mock_prisma_client,
+                is_proxy_admin=False,
+            )
+        assert empty_team_exc.value.status_code == 403
+        grandfathered = await validate_key_mcp_servers_against_team(
+            object_permission=stored_permission,
+            team_obj=None,
+            prisma_client=mock_prisma_client,
+            is_proxy_admin=False,
+            existing_key_object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="existing-permission",
+                **stored_permission,
+            ),
+        )
+        assert grandfathered == stored_permission
         return
 
     assert persisted == stored_permission
@@ -895,7 +922,7 @@ async def test_teamless_non_admin_stale_reference_must_not_rebind_to_future_priv
 
 
 @pytest.mark.asyncio
-async def test_preserved_tool_permission_alias_must_survive_server_alias_rename(
+async def test_stale_tool_permission_alias_fails_closed_after_server_alias_rename(
     monkeypatch,
 ):
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
@@ -977,7 +1004,7 @@ async def test_preserved_tool_permission_alias_must_survive_server_alias_rename(
         user_api_key_auth=auth,
     )
 
-    assert allowed_tools == ["read"]
+    assert allowed_tools == []
 
 
 @pytest.mark.asyncio

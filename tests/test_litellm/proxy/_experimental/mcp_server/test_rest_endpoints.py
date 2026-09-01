@@ -2381,7 +2381,6 @@ class TestGetToolsForSingleServer:
             transport=MCPTransport.sse,
             allowed_tools=None,
         )
-
         object_permission = LiteLLM_ObjectPermissionTable(
             object_permission_id="test-permission-id",
             mcp_tool_permissions=None,  # No tool permissions set
@@ -2433,6 +2432,16 @@ class TestGetToolsForSingleServer:
             name="test-server",
             transport=MCPTransport.sse,
             allowed_tools=None,
+        )
+        other_server = MCPServer(
+            server_id="other-server-id",
+            name="other-server",
+            transport=MCPTransport.sse,
+        )
+        monkeypatch.setitem(
+            rest_endpoints.global_mcp_server_manager.registry,
+            other_server.server_id,
+            other_server,
         )
 
         object_permission = LiteLLM_ObjectPermissionTable(

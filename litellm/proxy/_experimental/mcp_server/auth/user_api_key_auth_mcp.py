@@ -2092,7 +2092,10 @@ class MCPRequestHandler:
             )
 
             key_direct_tools: Final = (
-                global_mcp_server_manager.expand_tool_permissions(key_obj_perm.mcp_tool_permissions).get(server_id)
+                global_mcp_server_manager.get_tool_permissions_for_server(
+                    key_obj_perm.mcp_tool_permissions,
+                    server_id,
+                )
                 if key_obj_perm
                 else None
             )
@@ -2115,7 +2118,10 @@ class MCPRequestHandler:
                 else None
             )
             team_direct_tools: Final = (
-                global_mcp_server_manager.expand_tool_permissions(team_obj_perm.mcp_tool_permissions).get(server_id)
+                global_mcp_server_manager.get_tool_permissions_for_server(
+                    team_obj_perm.mcp_tool_permissions,
+                    server_id,
+                )
                 if team_obj_perm
                 else None
             )
@@ -2126,8 +2132,8 @@ class MCPRequestHandler:
             team_tools: Final = MCPRequestHandler._union_tool_grants(team_direct_tools, team_toolset_tools)
 
             # Apply same inheritance logic as get_allowed_mcp_servers
-            if team_tools:
-                if key_tools:
+            if team_tools is not None:
+                if key_tools is not None:
                     # Both have restrictions → intersection
                     allowed_tools = list(set(team_tools) & set(key_tools))
                 else:
@@ -2210,7 +2216,10 @@ class MCPRequestHandler:
                 )
                 return allowed_tools
             org_direct_tools: Final = (
-                global_mcp_server_manager.expand_tool_permissions(org_obj_perm.mcp_tool_permissions).get(server_id)
+                global_mcp_server_manager.get_tool_permissions_for_server(
+                    org_obj_perm.mcp_tool_permissions,
+                    server_id,
+                )
                 if org_obj_perm and org_obj_perm.mcp_tool_permissions
                 else None
             )
@@ -2991,9 +3000,10 @@ class MCPRequestHandler:
         if object_permissions is None:
             return allowed_tools
 
-        user_direct_tools: Final = global_mcp_server_manager.expand_tool_permissions(
-            object_permissions.mcp_tool_permissions
-        ).get(server_id)
+        user_direct_tools: Final = global_mcp_server_manager.get_tool_permissions_for_server(
+            object_permissions.mcp_tool_permissions,
+            server_id,
+        )
         user_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(object_permissions, server_id)
         user_tools: Final = MCPRequestHandler._union_tool_grants(user_direct_tools, user_toolset_tools)
         if user_tools is None:
@@ -3156,8 +3166,11 @@ class MCPRequestHandler:
                 global_mcp_server_manager,
             )
 
-            tools: Final = global_mcp_server_manager.expand_tool_permissions(mcp_tool_permissions).get(server_id)
-            return list(tools) if tools else None
+            tools: Final = global_mcp_server_manager.get_tool_permissions_for_server(
+                mcp_tool_permissions,
+                server_id,
+            )
+            return list(tools) if tools is not None else None
         except Exception as e:
             verbose_logger.warning("Failed to get agent tool permissions for server: %s", e)
             return None

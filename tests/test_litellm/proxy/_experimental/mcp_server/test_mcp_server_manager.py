@@ -7830,6 +7830,29 @@ class TestMCPServerManagerExpandToolPermissions:
         result = manager.expand_tool_permissions({"uuid-a": ["read_file"], "alias-a": ["write_file"]})
         assert sorted(result["uuid-a"]) == ["read_file", "write_file"]
 
+    @pytest.mark.parametrize(
+        ("tool_permissions", "server_id", "expected"),
+        [
+            pytest.param({"alias-a": ["read_file"]}, "uuid-a", ["read_file"], id="target-match"),
+            pytest.param({"old-alias": ["read_file"]}, "uuid-a", [], id="unresolved-reference"),
+            pytest.param({"alias-a": ["read_file"]}, "uuid-b", None, id="resolved-elsewhere"),
+        ],
+    )
+    def test_get_tool_permissions_for_server(self, tool_permissions, server_id, expected):
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-a"] = self._make_server(
+            "uuid-a",
+            server_name="alpha",
+            alias="alias-a",
+        )
+        manager.config_mcp_servers["uuid-b"] = self._make_server(
+            "uuid-b",
+            server_name="beta",
+            alias="alias-b",
+        )
+
+        assert manager.get_tool_permissions_for_server(tool_permissions, server_id) == expected
+
 
 class TestOAuthDiscoverySSRFGuard:
     """SSRF guard for the OAuth metadata discovery follow-up fetches.

@@ -18152,6 +18152,26 @@ async def _mcp_forward_as_path(path_segment: str, request: Request):
     return await _stream_mcp_asgi_response(handle_streamable_http_mcp, scope, request.receive)
 
 
+def _is_mcp_server_namespace_reference(reference: str, client_ip: str | None) -> bool:
+    """Return whether ``reference`` belongs to the MCP server namespace.
+
+    The legacy lookup is a useful fast path for unique matches, but returns
+    ``None`` for ambiguity and IP-inaccessible matches as well as for missing
+    references. Only the latter may fall through to another namespace.
+    """
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        Ambiguous,
+        Forbidden,
+        Resolved,
+        global_mcp_server_manager,
+    )
+
+    if global_mcp_server_manager.get_mcp_server_by_name(reference, client_ip=client_ip) is not None:
+        return True
+    resolution = global_mcp_server_manager.resolve_single_target(reference, client_ip=client_ip)
+    return isinstance(resolution, (Resolved, Ambiguous, Forbidden))
+
+
 async def _resolve_mcp_csv_tokens(csv_segment: str, client_ip: str | None) -> list[str]:
     """Validate a comma-separated ``/{name1,name2,...}/mcp`` segment.
 
@@ -18175,9 +18195,6 @@ async def _resolve_mcp_csv_tokens(csv_segment: str, client_ip: str | None) -> li
     list and silently broadens the request scope).
     """
     from litellm.constants import DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        global_mcp_server_manager,
-    )
 
     seen: Final[set] = set()
     deduped: Final[list[str]] = []
@@ -18192,7 +18209,7 @@ async def _resolve_mcp_csv_tokens(csv_segment: str, client_ip: str | None) -> li
 
     resolved: Final[list[str]] = []
     for token in deduped:
-        if global_mcp_server_manager.get_mcp_server_by_name(token, client_ip=client_ip):
+        if _is_mcp_server_namespace_reference(token, client_ip):
             resolved.append(token)
             continue
         if await _is_mcp_access_group_cached(token):
@@ -18244,15 +18261,13 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
     4. MCP access group tag (DB lookup, cached)
     """
     try:
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            global_mcp_server_manager,
-        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
         from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
         client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
 
         # 1. Registered MCP server alias
-        if global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name, client_ip=client_ip):
+        if _is_mcp_server_namespace_reference(mcp_server_name, client_ip):
             return await _mcp_forward_as_path(mcp_server_name, request)
 
         # 2. Comma-separated list — validate every token resolves to a known

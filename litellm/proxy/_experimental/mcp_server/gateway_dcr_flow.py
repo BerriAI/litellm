@@ -43,6 +43,7 @@ import html
 import secrets
 from base64 import urlsafe_b64encode
 from collections.abc import Awaitable, Callable, Iterable, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, Literal, Protocol, TypeVar
@@ -387,14 +388,22 @@ def relative_request_url(request: Request) -> str:
     return f"{path}?{request.url.query}" if request.url.query else path
 
 
-def resolve_scoped_resource_server(request: Request, resource: str | None) -> MCPServer | None:
+@dataclass(frozen=True, slots=True)
+class _AmbiguousScopedResource:
+    reference: str
+
+
+def resolve_scoped_resource_server(
+    request: Request, resource: str | None
+) -> MCPServer | _AmbiguousScopedResource | None:
     """Resolve an RFC 8707 ``resource`` value to the single gateway-managed oauth2 server it
-    names, or ``None`` for every other shape: absent, the aggregate resource, a foreign
-    host, an unparseable value, a multi-server path, an unknown name, or any server mode the
-    keyless gateway flow does not serve (whose protected-resource metadata never directs a
-    client here). ``None`` means the flow stays unscoped and byte-identical to today, so a
-    hostile or confused ``resource`` can never widen anything; a resolved server only ever
-    NARROWS the session via the sealed scope.
+    names. An ambiguous single-server reference is returned explicitly so callers reject it
+    with ``invalid_target`` instead of silently widening the grant. ``None`` covers every
+    other shape: absent, the aggregate resource, a foreign host, an unparseable value, a
+    multi-server path, an unknown name, or any server mode the keyless gateway flow does not
+    serve (whose protected-resource metadata never directs a client here). ``None`` keeps
+    the flow unscoped and byte-identical to today; a resolved server only ever NARROWS the
+    session via the sealed scope.
 
     Resolution is an IDENTITY question, deliberately free of the per-IP visibility filter:
     access is enforced where it belongs (grant intersection at admission, IP checks on the
@@ -413,12 +422,16 @@ def resolve_scoped_resource_server(request: Request, resource: str | None) -> MC
         MCPRequestHandler,
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # proxy import cycle
+        Ambiguous,
         global_mcp_server_manager,
     )
 
     names: Final = MCPRequestHandler.extract_target_server_names_from_path(canonical[len(base) :])
     if len(names) != 1:
         return None
+    resolution: Final = global_mcp_server_manager.resolve_single_target(names[0])
+    if isinstance(resolution, Ambiguous):
+        return _AmbiguousScopedResource(reference=names[0])
     server: Final = global_mcp_server_manager.get_mcp_server_by_name(names[0])
     if server is None or not server.is_gateway_managed_oauth2:
         return None
@@ -456,7 +469,10 @@ def aggregate_authorize(
     base_url: Final = get_request_base_url(request)
     if session_user_id is None:
         return _login_redirect(base_url, request)
-    scoped_server: Final = resolve_scoped_resource_server(request, resource)
+    scoped_resource: Final = resolve_scoped_resource_server(request, resource)
+    if isinstance(scoped_resource, _AmbiguousScopedResource):
+        return _oauth_error(400, "invalid_target", "resource matches multiple MCP servers")
+    scoped_server: Final = scoped_resource
     handle: Final = secrets.token_urlsafe(24)
     flow: Final = _new_connect_flow(
         session_user_id=session_user_id,
@@ -993,11 +1009,15 @@ def _resource_conflicts_with_scope(
     """True when a scoped grant is being redeemed for a DIFFERENT resource than the one
     sealed into it (RFC 8707 section 2.2: reject with ``invalid_target``). An absent
     ``resource`` never conflicts (the sealed scope still binds the minted session), and an
-    unscoped grant ignores the parameter entirely, exactly as the endpoint always has, so
-    no pre-existing client breaks."""
-    if sealed_resource_server_id is None or resource is None:
+    unscoped grant ignores every non-ambiguous parameter as before. An ambiguous reference
+    always conflicts so it can never redeem into an unscoped session."""
+    if resource is None:
         return False
     resolved: Final = resolve_scoped_resource_server(request, resource)
+    if isinstance(resolved, _AmbiguousScopedResource):
+        return True
+    if sealed_resource_server_id is None:
+        return False
     return resolved is None or resolved.server_id != sealed_resource_server_id
 
 

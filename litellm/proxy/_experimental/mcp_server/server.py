@@ -1410,6 +1410,16 @@ if MCP_AVAILABLE:
                     "message": f"MCP server reference '{server_or_group}' matches multiple permitted servers",
                 },
             )
+        if isinstance(resolution, Forbidden) and any(
+            candidate.server_id == server_or_group for candidate in resolution.candidates
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "access_denied",
+                    "message": f"The key is not allowed to access server {server_or_group}",
+                },
+            )
 
         prefix_matches: Final = tuple(
             server
@@ -3800,12 +3810,20 @@ if MCP_AVAILABLE:
         a server it will be 403'd on immediately after authentication.
         """
         for server_name in mcp_servers or []:
-            server = global_mcp_server_manager.get_mcp_server_by_name(server_name, client_ip=client_ip)
-            if server is not None and allowed_server_ids is not None and server.server_id not in allowed_server_ids:
-                # Caller's narrowed scope excludes this server — skip the
-                # preemptive challenge and let downstream authorization
-                # return 403.
-                continue
+            if allowed_server_ids is not None:
+                resolution = global_mcp_server_manager.resolve_single_target(
+                    server_name,
+                    allowed_server_ids=allowed_server_ids,
+                    client_ip=client_ip,
+                )
+                if not isinstance(resolution, Resolved):
+                    # A forbidden or ambiguous server reference remains in the
+                    # server namespace, but there is no single authorized target
+                    # whose OAuth mode can be challenged here.
+                    continue
+                server = resolution.value
+            else:
+                server = global_mcp_server_manager.get_mcp_server_by_name(server_name, client_ip=client_ip)
             if server is not None and server.auth_type == MCPAuth.oauth2 and server.oauth2_flow == "client_credentials":
                 # Stamped M2M: the challenge decision below never reads discovered
                 # metadata, so deferred-discovery failures must not 503 this loop.

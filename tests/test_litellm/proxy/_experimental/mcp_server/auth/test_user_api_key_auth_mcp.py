@@ -335,6 +335,9 @@ class TestMCPRequestHandler:
         mock_manager = MagicMock()
         mock_manager.expand_permission_list = MagicMock(side_effect=lambda servers: servers)
         mock_manager.expand_tool_permissions = MagicMock(side_effect=lambda perms: perms or {})
+        mock_manager.get_tool_permissions_for_server = MagicMock(
+            side_effect=lambda perms, server_id: (perms or {}).get(server_id)
+        )
         mock_manager.resolve_toolset_tool_permissions = AsyncMock(return_value=toolset_perms)
         return mock_manager
 
@@ -503,6 +506,69 @@ class TestMCPRequestHandler:
             )
 
         assert result is None
+
+    @pytest.mark.parametrize("permission_level", ["key", "team", "user", "agent", "org"])
+    async def test_stale_tool_permission_alias_fails_closed_at_every_permission_level(self, permission_level):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        manager = MCPServerManager()
+        manager.registry["server-id"] = MCPServer(
+            server_id="server-id",
+            name="new-alias",
+            alias="new-alias",
+            transport="sse",
+        )
+        permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="permission-id",
+            mcp_tool_permissions={"old-alias": ["read"]},
+        )
+        auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="user-id" if permission_level == "user" else None,
+            agent_id="agent-id" if permission_level == "agent" else None,
+            org_id="org-id" if permission_level == "org" else None,
+        )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                manager,
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_key_object_permission",
+                return_value=permission if permission_level == "key" else None,
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_team_object_permission",
+                AsyncMock(return_value=permission if permission_level == "team" else None),
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_user_object_permission",
+                AsyncMock(return_value=permission if permission_level == "user" else None),
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_agent_object_permission",
+                AsyncMock(return_value=permission if permission_level == "agent" else None),
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_org_object_permission",
+                AsyncMock(return_value=permission if permission_level == "org" else None),
+            ),
+        ):
+            result = await MCPRequestHandler.get_allowed_tools_for_server(
+                server_id="server-id",
+                user_api_key_auth=auth,
+            )
+
+        assert result == []
 
     # ------------------------------------------------------------------
     # LIT-5749: toolsets attached to a TEAM, ORG, or internal USER must be
@@ -8791,7 +8857,21 @@ class TestUserMCPEntitlement:
 
     async def test_entitlement_on_another_server_does_not_restrict_this_one(self):
         """Tool grants are per server: naming tools on srv-b places no bound on srv-a."""
-        with patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=None):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        manager = MCPServerManager()
+        manager.registry["srv-b"] = MCPServer(
+            server_id="srv-b",
+            name="Server B",
+            transport="sse",
+        )
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            manager,
+        ), patch.object(MCPRequestHandler, "_get_key_object_permission", return_value=None):
             with patch.object(
                 MCPRequestHandler, "_get_team_object_permission", new_callable=AsyncMock, return_value=None
             ):

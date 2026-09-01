@@ -6258,6 +6258,22 @@ class MCPServerManager:
                 result.setdefault(server_id, []).extend(tools or [])
         return result
 
+    def get_tool_permissions_for_server(
+        self,
+        tool_permissions: dict[str, list[str]] | None,
+        server_id: str,
+    ) -> list[str] | None:
+        """Resolve this server's tool restriction, denying stale logical references."""
+        if not tool_permissions:
+            return None
+        expanded: Final = self.expand_tool_permissions(tool_permissions)
+        if server_id in expanded:
+            return expanded[server_id]
+        has_unresolved_reference: Final = any(
+            isinstance(self.resolve_permission_reference(reference), NotFound) for reference in tool_permissions
+        )
+        return [] if has_unresolved_reference else None
+
     def get_mcp_server_by_name(self, server_name: str, client_ip: str | None = None) -> MCPServer | None:
         """
         Get the MCP Server from the server name.
