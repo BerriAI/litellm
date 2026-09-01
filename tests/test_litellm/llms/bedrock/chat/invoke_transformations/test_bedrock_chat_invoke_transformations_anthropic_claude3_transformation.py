@@ -649,9 +649,9 @@ def test_bedrock_chat_invoke_drop_params_still_inlines_for_non_native(local_mode
     "model",
     ["us.anthropic.claude-fable-5-1", "anthropic.claude-fable-5-1"],
 )
-def test_bedrock_chat_invoke_fable_5_1_response_format_uses_native_path(local_model_cost_map, model):
-    """Regression: Fable 5.1 rejects forced tool use, so invoke must skip the
-    tool-based structured-output stub and emit ``output_format`` instead of a
+def test_bedrock_chat_invoke_fable_5_1_response_format_avoids_forced_tool_choice(local_model_cost_map, model):
+    """Regression: Bedrock rejects both native ``output_config.format`` and forced
+    tool_choice for Fable 5.1, so invoke must use the tool-based path without a
     forced ``tool_choice``."""
     result = AmazonAnthropicClaudeConfig().map_openai_params(
         non_default_params={
@@ -668,5 +668,6 @@ def test_bedrock_chat_invoke_fable_5_1_response_format_uses_native_path(local_mo
         drop_params=False,
     )
 
-    assert "output_format" in result
+    assert "output_format" not in result
+    assert "tools" in result
     assert "tool_choice" not in result
