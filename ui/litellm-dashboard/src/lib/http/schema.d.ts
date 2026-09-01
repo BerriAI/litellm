@@ -25436,8 +25436,14 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /**
+             * Database Max Idle Connection Lifetime
+             * @description Prisma `max_idle_connection_lifetime` URL param (seconds). A pooled connection idle longer than this is closed and replaced instead of being handed to the next request. Defaults to 60 so connections are recycled before common infra idle timeouts (AWS NLB / RDS Proxy ~350s, many LBs 60-350s) silently drop them and requests fail with `Error { kind: Closed }`. A value pinned on the DATABASE_URL or set via `database_extra_connection_params` takes precedence.
+             * @default 60
+             */
+            database_max_idle_connection_lifetime: number | null;
+            /**
              * Database Socket Timeout
-             * @description Prisma `socket_timeout` URL param (seconds). When set, an idle/slow connection that has not produced data within this window is closed. This is the main knob for capping idle DB connections from LiteLLM.
+             * @description Prisma `socket_timeout` URL param (seconds). When set, an in-flight operation that has not produced data within this window is aborted. For capping how long idle pooled connections are kept, see `database_max_idle_connection_lifetime`.
              */
             database_socket_timeout?: number | null;
             /**
