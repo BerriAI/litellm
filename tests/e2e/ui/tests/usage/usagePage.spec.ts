@@ -5,6 +5,7 @@ import { Page } from "../../fixtures/pages";
 import {
   createVirtualKey,
   masterKey,
+  rootPath,
   sendChatCompletion,
   waitForKeyInDailyActivity,
   waitForSpendLog,
@@ -50,6 +51,23 @@ async function createPricedDeployment(
     },
   });
   expect(res.ok(), `POST /model/new failed (${res.status()}): ${await res.text()}`).toBe(true);
+
+  // /model/new returns once the row is written, but the router only picks the deployment up on its
+  // next refresh, so sending traffic straight away can still get "no healthy deployments". A ping
+  // that fails writes no spend log, so retrying it costs the ranking this test asserts nothing.
+  await expect
+    .poll(
+      async () => {
+        const ping = await request.post(`${rootPath()}/v1/chat/completions`, {
+          headers: { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" },
+          data: { model: modelName, messages: [{ role: "user", content: "readiness ping" }] },
+        });
+        return ping.ok();
+      },
+      { message: `deployment ${modelName} never became routable`, timeout: 60_000 },
+    )
+    .toBe(true);
+
   return { modelName, modelId: (await res.json()).model_info?.id as string };
 }
 
