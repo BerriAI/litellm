@@ -17113,13 +17113,22 @@ async def get_config(
         """
 
         for _callback in _success_callbacks:
-            _data_to_return.append(process_callback(_callback, "success", environment_variables))
+            row: Final = process_callback(_callback, "success", environment_variables)
+            if isinstance(_callback, str) and "." in _callback:
+                row["read_only"] = True
+            _data_to_return.append(row)
 
         for _callback in _failure_callbacks:
-            _data_to_return.append(process_callback(_callback, "failure", environment_variables))
+            row: Final = process_callback(_callback, "failure", environment_variables)
+            if isinstance(_callback, str) and "." in _callback:
+                row["read_only"] = True
+            _data_to_return.append(row)
 
         for _callback in _success_and_failure_callbacks:
-            _data_to_return.append(process_callback(_callback, "success_and_failure", environment_variables))
+            row: Final = process_callback(_callback, "success_and_failure", environment_variables)
+            if isinstance(_callback, str) and "." in _callback:
+                row["read_only"] = True
+            _data_to_return.append(row)
 
         configured_callback_names: Final = frozenset(
             _normalize_callback_alias(callback)
