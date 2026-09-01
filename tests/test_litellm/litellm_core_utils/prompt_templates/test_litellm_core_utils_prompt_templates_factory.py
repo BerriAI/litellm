@@ -982,6 +982,10 @@ def test_bedrock_tools_pt_strict_parameter():
     Bedrock requires alongside strict); without forwarding it the model ignores the
     enum constraint the caller asked for. Every other Bedrock family (Nova, Llama,
     GPT-OSS) rejects the strict field, so it must only be forwarded for Claude.
+
+    Uses Opus 4.5, since the Claude ids whose cost-map entry sets
+    ``bedrock_converse_supports_strict_tools: false`` never receive the field. See
+    test_bedrock_converse_strict_tools_opus_47_48.py for that gate.
     """
     tools_with_strict = [
         {
@@ -1000,7 +1004,7 @@ def test_bedrock_tools_pt_strict_parameter():
         }
     ]
     result = _bedrock_tools_pt(
-        tools_with_strict, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
+        tools_with_strict, model="anthropic.claude-opus-4-5-20251101-v1:0"
     )
     assert result[0]["toolSpec"]["strict"] is True
     assert result[0]["toolSpec"]["inputSchema"]["json"]["additionalProperties"] is False
@@ -1024,7 +1028,7 @@ def test_bedrock_tools_pt_strict_parameter():
         }
     ]
     result = _bedrock_tools_pt(
-        tools_without_strict, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
+        tools_without_strict, model="anthropic.claude-opus-4-5-20251101-v1:0"
     )
     assert "strict" not in result[0]["toolSpec"]
     assert "additionalProperties" not in result[0]["toolSpec"]["inputSchema"]["json"]

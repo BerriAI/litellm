@@ -5,6 +5,13 @@ Anthropic-compatible validator that rejects ``toolSpec.strict`` even though
 Anthropic's native API accepts ``strict`` as a top-level tool field. See
 BerriAI/litellm#31582.
 
+The same validator covers Haiku 4.5, Sonnet 4.5/4.6 and Opus 4.6, which were left
+unflagged. Forwarding ``strict: true`` makes it compile the tool schema into a
+constrained-decoding grammar, and that grammar rejects ordinary JSON Schema keywords:
+a tool carrying ``maxItems`` on an array property comes back as ``For 'array' type,
+property 'maxItems' is not supported``. Neither field fails on its own, only the pair.
+See BerriAI/litellm#34388.
+
 That per-model gate only covers models whose cost-map entry carries the flag, so a
 ``strict: false`` that litellm itself synthesized still broke unflagged models. Since
 ``strict: false`` is the Chat Completions default, it is now dropped for every model
@@ -68,12 +75,23 @@ _NON_STRICT_TOOL = [
         "bedrock/us.anthropic.claude-sonnet-5",
         "bedrock/eu.anthropic.claude-sonnet-5",
         "bedrock/jp.anthropic.claude-sonnet-5",
+        # Haiku 4.5, Sonnet 4.5/4.6 and Opus 4.6 reject it as well, see #34388
+        "anthropic.claude-haiku-4-5-20251001-v1:0",
+        "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "bedrock/eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "anthropic.claude-sonnet-4-6",
+        "bedrock/us.anthropic.claude-sonnet-4-6",
+        "bedrock/eu.anthropic.claude-sonnet-4-6",
+        "anthropic.claude-opus-4-6-v1",
+        "bedrock/eu.anthropic.claude-opus-4-6-v1",
     ],
 )
 def test_bedrock_tools_pt_strict_dropped_for_strict_unsupported_models(
     model_id: str,
 ) -> None:
-    """Opus 4.7/4.8, Sonnet 4 and Sonnet 5 reject toolSpec.strict and additionalProperties."""
+    """These Claude ids reject toolSpec.strict and additionalProperties on Converse."""
     result = _bedrock_tools_pt(_STRICT_TOOL, model=model_id)
     tool_spec = result[0]["toolSpec"]
     assert (
@@ -87,14 +105,12 @@ def test_bedrock_tools_pt_strict_dropped_for_strict_unsupported_models(
 @pytest.mark.parametrize(
     "model_id",
     [
-        "anthropic.claude-sonnet-4-5-20250929-v1:0",
-        "bedrock/us.anthropic.claude-sonnet-4-6",
-        "bedrock/us.anthropic.claude-opus-4-6",
         "bedrock/us.anthropic.claude-opus-4-5",
+        "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
     ],
 )
 def test_bedrock_tools_pt_strict_kept_for_other_anthropic(model_id: str) -> None:
-    """Sonnet 4.5/4.6 and Opus <=4.6 accept toolSpec.strict — keep forwarding it."""
+    """Claude ids with no flag in the cost map keep forwarding toolSpec.strict."""
     result = _bedrock_tools_pt(_STRICT_TOOL, model=model_id)
     assert (
         result[0]["toolSpec"]["strict"] is True
@@ -177,10 +193,16 @@ def test_bedrock_converse_supports_strict_tools_helper() -> None:
         bedrock_converse_supports_strict_tools(
             "anthropic.claude-sonnet-4-5-20250929-v1:0"
         )
-        is True
+        is False
     )
     assert (
-        bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-opus-4-6")
+        bedrock_converse_supports_strict_tools(
+            "bedrock/eu.anthropic.claude-opus-4-6-v1"
+        )
+        is False
+    )
+    assert (
+        bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-opus-4-5")
         is True
     )
     assert bedrock_converse_supports_strict_tools("us.amazon.nova-micro-v1:0") is False
@@ -204,8 +226,14 @@ def test_bedrock_converse_supports_strict_tools_helper() -> None:
         is False
     )
     assert (
-        bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0")
-        is True
+        bedrock_converse_supports_strict_tools(
+            "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        )
+        is False
+    )
+    assert (
+        bedrock_converse_supports_strict_tools("bedrock/eu.anthropic.claude-sonnet-4-6")
+        is False
     )
 
 
@@ -227,6 +255,20 @@ def test_bedrock_converse_supports_strict_tools_helper() -> None:
         "eu.anthropic.claude-sonnet-5",
         "au.anthropic.claude-sonnet-5",
         "jp.anthropic.claude-sonnet-5",
+        "anthropic.claude-haiku-4-5-20251001-v1:0",
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "apac.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0",
+        "anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "anthropic.claude-sonnet-4-6",
+        "us.anthropic.claude-sonnet-4-6",
+        "eu.anthropic.claude-sonnet-4-6",
+        "anthropic.claude-opus-4-6-v1",
+        "us.anthropic.claude-opus-4-6-v1",
+        "eu.anthropic.claude-opus-4-6-v1",
     ],
 )
 def test_strict_tools_flag_set_in_model_cost_map(cost_map_key: str) -> None:
