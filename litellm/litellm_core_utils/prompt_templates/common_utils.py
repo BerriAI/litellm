@@ -205,6 +205,41 @@ def is_non_content_values_set(message: AllMessageValues) -> bool:
     return any(message.get(key, None) is not None for key in message if key not in ignore_keys)
 
 
+_IMAGE_CONTENT_PART_TYPES: Final = frozenset({"image_url", "input_image", "image"})
+_IMAGE_SCAN_MAX_DEPTH: Final = 4
+
+
+def _content_parts_contain_image(parts: Sequence[object]) -> bool:
+    """Depth-bounded frontier walk over nested content lists, iterative because the repo bans
+    recursion; an Anthropic tool_result nests its image parts exactly one level down."""
+    frontier = parts  # rebind-ok: depth-bounded frontier walk
+    for _ in range(_IMAGE_SCAN_MAX_DEPTH):
+        if any(isinstance(part, Mapping) and part.get("type") in _IMAGE_CONTENT_PART_TYPES for part in frontier):
+            return True
+        frontier = tuple(  # rebind-ok: depth-bounded frontier walk
+            nested
+            for part in frontier
+            if isinstance(part, Mapping)
+            for content in (part.get("content"),)
+            if isinstance(content, list)
+            for nested in content
+        )
+        if not frontier:
+            return False
+    return False
+
+
+def request_contains_image_content(messages: Sequence[Mapping[str, object]]) -> bool:
+    """Whether any message carries an image content part, across the dialects that reach
+    pre-routing hooks untranslated: chat-completions ``image_url``, Responses ``input_image``,
+    and Anthropic Messages ``image``, including images nested inside ``tool_result`` blocks."""
+    return any(
+        isinstance(content, list) and _content_parts_contain_image(content)
+        for message in messages
+        for content in (message.get("content"),)
+    )
+
+
 def _audio_or_image_in_message_content(message: AllMessageValues) -> bool:
     """
     Checks if message content contains an image or audio
