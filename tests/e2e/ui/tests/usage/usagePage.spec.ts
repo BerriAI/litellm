@@ -56,6 +56,20 @@ async function createPricedDeployment(
 test.describe("Usage page", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
+  const pricedDeployments: string[] = [];
+
+  test.afterEach(async ({ request }) => {
+    // A deployment left behind keeps its custom pricing, so it goes on changing what later runs
+    // route and what they cost. Runs on the failure path too, which the test body would not.
+    for (const modelId of pricedDeployments.splice(0)) {
+      const deleted = await request.post("/model/delete", {
+        headers: { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" },
+        data: { id: modelId },
+      });
+      expect(deleted.ok(), `POST /model/delete for ${modelId} (${deleted.status()})`).toBe(true);
+    }
+  });
+
   test("Top Virtual Keys lists a key that served traffic, toggles views, and opens key info", async ({
     page,
     request,
@@ -69,6 +83,7 @@ test.describe("Usage page", () => {
     // keys than the list shows, whether this one makes the cut is down to how ties happen to sort.
     // Give it a priced deployment of its own so it earns its place.
     const { modelName, modelId } = await createPricedDeployment(request, alias);
+    pricedDeployments.push(modelId);
 
     const requestId = await sendChatCompletion(request, {
       model: modelName,
@@ -101,10 +116,5 @@ test.describe("Usage page", () => {
     });
     await expect(page.getByRole("tab", { name: "Settings", exact: true })).toBeVisible();
     await expect(page.getByText("Back to Keys", { exact: false })).toBeVisible();
-
-    await request.post("/model/delete", {
-      headers: { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" },
-      data: { id: modelId },
-    });
   });
 });

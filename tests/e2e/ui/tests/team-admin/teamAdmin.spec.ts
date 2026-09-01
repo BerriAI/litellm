@@ -50,14 +50,20 @@ async function addRemovableMember(page: PlaywrightPage): Promise<string> {
   return userId;
 }
 
-async function deleteUser(page: PlaywrightPage, userId: string): Promise<void> {
-  await page.request.post("/user/delete", {
-    headers: { Authorization: `Bearer ${masterKey()}` },
-    data: { user_ids: [userId] },
-  });
-}
-
 test.describe("Team Admin", () => {
+  const createdMembers: string[] = [];
+
+  test.afterEach(async ({ page }) => {
+    // Runs on the failure path too, which a call at the end of the test body would not.
+    for (const userId of createdMembers.splice(0)) {
+      const deleted = await page.request.post("/user/delete", {
+        headers: { Authorization: `Bearer ${masterKey()}` },
+        data: { user_ids: [userId] },
+      });
+      expect(deleted.ok(), `POST /user/delete for ${userId} (${deleted.status()})`).toBe(true);
+    }
+  });
+
   test.use({ storageState: TEAM_ADMIN_STORAGE_PATH });
 
   test("Team admin can see all team keys including internal user keys", async ({ page }) => {
@@ -120,6 +126,7 @@ test.describe("Team Admin", () => {
     // Removing the seeded member leaves nothing for the next attempt, so the retries CI runs with
     // are guaranteed to fail and the suite cannot run twice against one database. Bring our own.
     const memberId = await addRemovableMember(page);
+    createdMembers.push(memberId);
 
     await navigateToPage(page, Page.Teams);
     await dismissFeedbackPopup(page);
@@ -155,8 +162,6 @@ test.describe("Team Admin", () => {
         timeout: 15_000,
       })
       .not.toContain(memberId);
-
-    await deleteUser(page, memberId);
   });
 
   test("Team admin can create a team key with All Team Models", async ({ page }) => {
