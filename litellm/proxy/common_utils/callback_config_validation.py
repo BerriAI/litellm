@@ -77,7 +77,7 @@ def cross_entry_family_error(
     callback_vars: Mapping[str, str] | None,
     stored_vars_by_entry: Sequence[Mapping[str, str]],
 ) -> str | None:
-    """Reject an entry that joins a credential family another entry already holds.
+    """Reject an entry that changes a credential family another entry already holds.
 
     Every stored entry's variables are flattened into one dict before a request
     reads them, and the flattened dict is what the exporter authenticates and
@@ -86,20 +86,31 @@ def cross_entry_family_error(
     with the key from the first, and the request carries that key to the new
     host.
 
-    Requiring one entry to own a family end to end removes the pairing. Only the
-    writers this endpoint newly admits are held to it, because a proxy admin
-    already holds every credential the proxy has. A team admin who does want to
-    move a family deletes the entry holding it first, which reveals nothing.
+    Requiring one entry to own a family end to end removes the pairing. Repeating
+    a value the holding entry already stores is allowed, because flattening then
+    produces the same dict either way -- that is how the same integration gets
+    registered for both the success and the failure event. A team admin who does
+    want to move a family deletes the entry holding it first, which reveals
+    nothing.
+
+    Only the writers this endpoint newly admits are held to this, because a proxy
+    admin already holds every credential the proxy has.
+
+    ``stored_vars_by_entry`` has to arrive decrypted; the credential values are
+    encrypted at rest and ciphertext never equals the plaintext coming in.
     """
     if not callback_vars:
         return None
-    held: Final = {family for entry in stored_vars_by_entry for family in map(_family_of, entry) if family is not None}
+    stored: Final = {  # mutable-ok: local view of the stored entries, never stored
+        var: value for entry in stored_vars_by_entry for var, value in entry.items() if _family_of(var) is not None
+    }
+    held: Final = {_family_of(var) for var in stored}  # mutable-ok: local index, never stored
     return next(
         (
             f"{family} is already configured by another callback entry on this team. "
             f"Remove that entry before setting {var} here."
-            for var, family in ((v, _family_of(v)) for v in callback_vars)
-            if family is not None and family in held
+            for var, value, family in ((v, callback_vars[v], _family_of(v)) for v in callback_vars)
+            if family in held and stored.get(var) != value
         ),
         None,
     )

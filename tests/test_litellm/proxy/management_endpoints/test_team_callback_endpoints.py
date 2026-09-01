@@ -1538,6 +1538,11 @@ async def test_proxy_admin_still_told_the_team_is_unknown():
         ({"langsmith_api_key": "k"}, [{"dd_api_key": "k"}], False),
         # variables that configure no backend carry nothing to redirect
         ({"turn_off_message_logging": "true"}, [{"langfuse_secret_key": "sk"}], False),
+        # the same integration registered for a second event: identical values
+        # flatten to the identical dict, so there is nothing to redirect
+        ({"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}, [{"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], False),
+        # the same shape with one value moved is the redirect again
+        ({"langfuse_host": "http://attacker.invalid", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}, [{"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], True),
     ],
 )
 def test_one_entry_owns_a_credential_family(new_vars, stored, rejected):

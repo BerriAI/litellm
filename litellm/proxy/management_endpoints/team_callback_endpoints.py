@@ -347,11 +347,16 @@ async def add_team_callbacks(
         # flattened into one dict before a request reads them, so an entry
         # naming only a destination would pair with a key written on another
         # entry and carry it to that destination -- a key a team admin can read
-        # back nowhere. Proxy admins are exempt: they already hold every
-        # credential the proxy has.
+        # back nowhere. Repeating a value the owning entry already stores is
+        # fine, which is how one integration covers both events. Proxy admins
+        # are exempt: they already hold every credential the proxy has.
         if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            # Decrypted, because the check compares the incoming values against
+            # the stored ones and the credentials are encrypted at rest.
+            decrypted_logging: Final = decrypt_callback_vars(team_metadata).get("logging")
+            stored_entries: Final = decrypted_logging if isinstance(decrypted_logging, list) else ()
             stored_entry_vars: Final = [  # mutable-ok: read-only input to the check, never stored
-                entry.get("callback_vars") or {} for entry in team_callback_settings
+                entry.get("callback_vars") or {} for entry in stored_entries
             ]
             family_error: Final = cross_entry_family_error(data.callback_vars, stored_entry_vars)
             if family_error is not None:
