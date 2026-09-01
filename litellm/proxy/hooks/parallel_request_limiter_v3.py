@@ -26,7 +26,11 @@ from typing_extensions import NotRequired, ReadOnly
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.constants import (
+    BEST_OF_N_PROVIDER_NAME,
+    DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
@@ -55,6 +59,7 @@ from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject, ResponseAPIUsage
 from litellm.types.utils import (
+    TPM_CHARGED_INTERNAL_CALL_ORIGINS,
     CallTypes,
     EmbeddingResponse,
     ModelResponse,
@@ -4329,10 +4334,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # 'metadata' and 'litellm_metadata' fields from litellm_params
         standard_logging_object: Final = kwargs.get("standard_logging_object") or {}
         request_metadata: Final = get_litellm_metadata_from_kwargs(kwargs)
-        if request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY):
-            # Internal sub-calls bill spend to the caller but are not the caller's
+        internal_origin: Final = request_metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)
+        if internal_origin and internal_origin not in TPM_CHARGED_INTERNAL_CALL_ORIGINS:
+            # Background sub-calls bill spend to the caller but are not the caller's
             # traffic; charging them here would let background evals eat TPM headroom.
+            # A best_of_n fan-out IS the caller's traffic, so its origins fall through.
             return []
+        call_litellm_params: Final = kwargs.get("litellm_params") or {}  # mutable-ok: absent-params fallback read
+        is_best_of_n_parent: Final = call_litellm_params.get("custom_llm_provider") == BEST_OF_N_PROVIDER_NAME
         standard_logging_metadata: Final = standard_logging_object.get("metadata") or {}
 
         model_group: Final = get_model_group_from_litellm_kwargs(kwargs)
@@ -4360,6 +4369,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         total_tokens = self._get_total_tokens_from_usage(usage=_usage, rate_limit_type=rate_limit_type)
         if total_tokens == 0:
             total_tokens = self._aggregate_only_total_tokens(usage=_usage)
+        if is_best_of_n_parent:
+            # The best_of_n parent's usage is a copy of one child's and the children charge
+            # for themselves, so settle the parent at zero actual tokens: reserved scopes
+            # release their pre-call reservation and unreserved scopes charge nothing.
+            total_tokens = 0  # rebind-ok: parent settles at zero, children carry the charge
 
         stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
         reserved_tokens: Final = stash.reserved_tokens if stash is not None else 0

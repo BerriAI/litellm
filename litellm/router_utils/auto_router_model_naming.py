@@ -21,10 +21,17 @@ from litellm.router_strategy.complexity_router.config import (
 )
 
 AUTO_ROUTER_MODEL_PREFIX: Final = "auto_router/"
+BEST_OF_N_MODEL_PREFIX: Final = "best_of_n/"
 
-StrategyRouterKind = Literal["semantic", "complexity", "adaptive", "quality"]
+StrategyRouterKind = Literal["semantic", "complexity", "adaptive", "quality", "best_of_n"]
 
-StrategyRouterDependencyRole: TypeAlias = Literal["tier", "default", "classifier", "embedding"]
+PRE_ROUTING_STRATEGY_KINDS: Final[frozenset[StrategyRouterKind]] = frozenset(
+    {"semantic", "complexity", "adaptive", "quality"}
+)
+"""The kinds whose deployment is a pure marker: it only rewrites the model group, so
+deployment selection strips it. A best_of_n deployment owns its call and stays selectable."""
+
+StrategyRouterDependencyRole: TypeAlias = Literal["tier", "default", "classifier", "embedding", "synthesizer"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +54,7 @@ STRATEGY_ROUTER_PARAM_FIELDS: Final[frozenset[str]] = frozenset(
         "adaptive_router_config",
         "quality_router_config",
         "quality_router_default_model",
+        "best_of_n_config",
     }
 )
 
@@ -59,6 +67,7 @@ _REQUIRED_FIELD_GROUPS: Final[Mapping[StrategyRouterKind, tuple[tuple[str, ...],
     "complexity": (("complexity_router_config", "complexity_router_default_model"),),
     "adaptive": (("adaptive_router_config",),),
     "quality": (("quality_router_config", "quality_router_default_model"),),
+    "best_of_n": (("best_of_n_config",),),
 }
 
 
@@ -69,6 +78,8 @@ def classify_strategy_router_model(model: str) -> StrategyRouterKind | None:
     exactly: reserved names are matched by prefix, everything else under
     ``auto_router/`` is a semantic router.
     """
+    if model.startswith(BEST_OF_N_MODEL_PREFIX):
+        return "best_of_n"
     if not model.startswith(AUTO_ROUTER_MODEL_PREFIX):
         return None
     remainder: Final = model[len(AUTO_ROUTER_MODEL_PREFIX) :]
@@ -102,6 +113,16 @@ def _mapping(value: object) -> Mapping[str, object]:
     return value if isinstance(value, Mapping) else _NO_CONFIG
 
 
+def _entry_pool(value: object, role: StrategyRouterDependencyRole) -> tuple[StrategyRouterDependency, ...]:
+    """Dependencies from entries that are either bare names or ``{model_name: ...}`` mappings."""
+    entries: Final = value if isinstance(value, Sequence) and not isinstance(value, str) else (value,)
+    return tuple(
+        dep
+        for entry in entries
+        for dep in _named(_mapping(entry).get("model_name") if isinstance(entry, Mapping) else entry, role)
+    )
+
+
 def strategy_router_dependencies(
     litellm_params: Mapping[str, object],
 ) -> tuple[StrategyRouterDependency, ...]:
@@ -132,6 +153,13 @@ def strategy_router_dependencies(
         )
     if kind == "adaptive":
         return _pool(_mapping(litellm_params.get("adaptive_router_config")).get("available_models"), "tier")
+    if kind == "best_of_n":
+        best_of_n: Final = _mapping(litellm_params.get("best_of_n_config"))
+        return tuple(
+            dict.fromkeys(
+                _entry_pool(best_of_n.get("models"), "tier") + _entry_pool(best_of_n.get("synthesizer"), "synthesizer")
+            )
+        )
     if kind == "quality":
         quality: Final = _mapping(litellm_params.get("quality_router_config"))
         return tuple(
@@ -246,23 +274,22 @@ def validate_strategy_router_model_write(model: str, present_fields: frozenset[s
         offending: Final = sorted(present_fields & STRATEGY_ROUTER_PARAM_FIELDS)
         if offending:
             return (
-                f"litellm_params.model='{model}' does not start with '{AUTO_ROUTER_MODEL_PREFIX}' but the "
-                f"deployment carries auto-router settings ({', '.join(offending)}), so the router could not "
-                f"load it. Keep the '{AUTO_ROUTER_MODEL_PREFIX}' prefix; to change the name clients call, "
-                "edit the public model_name instead."
+                f"litellm_params.model='{model}' does not start with '{AUTO_ROUTER_MODEL_PREFIX}' or "
+                f"'{BEST_OF_N_MODEL_PREFIX}' but the deployment carries strategy-router settings "
+                f"({', '.join(offending)}), so the router could not load it. Keep the strategy prefix; "
+                "to change the name clients call, edit the public model_name instead."
             )
         return None
-    remainder: Final = model[len(AUTO_ROUTER_MODEL_PREFIX) :]
-    if remainder.startswith(AUTO_ROUTER_MODEL_PREFIX):
+    prefix: Final = BEST_OF_N_MODEL_PREFIX if kind == "best_of_n" else AUTO_ROUTER_MODEL_PREFIX
+    remainder: Final = model[len(prefix) :]
+    if remainder.startswith(prefix):
         return (
-            f"litellm_params.model='{model}' repeats the '{AUTO_ROUTER_MODEL_PREFIX}' prefix, so the router "
+            f"litellm_params.model='{model}' repeats the '{prefix}' prefix, so the router "
             f"could not load it. Use '{remainder}'; to change the name clients call, edit the public "
             "model_name instead."
         )
     if not remainder:
-        return (
-            f"litellm_params.model='{model}' is missing the router name after the '{AUTO_ROUTER_MODEL_PREFIX}' prefix."
-        )
+        return f"litellm_params.model='{model}' is missing the router name after the '{prefix}' prefix."
     missing: Final = tuple(
         " or ".join(group) for group in _REQUIRED_FIELD_GROUPS[kind] if not any(f in present_fields for f in group)
     )

@@ -591,9 +591,10 @@ def _strategy_router_key(deployment: object) -> tuple[str, str] | None:
 
     Kinds come from ``classify_strategy_router_model``, the same rule the Router registers a
     deployment by, so this arm cannot disagree with the arm that stamped ``router_type`` onto
-    the session rows. Semantic auto-routers return None: they record no routing decision, so
-    they can never own a session row, and ``AutoRouterBenchmarkGroup.router_type`` has no
-    value for them. A permanent zero would read as "no traffic" rather than "not instrumented".
+    the session rows. Semantic auto-routers and best_of_n routers return None: they record no
+    routing decision, so they can never own a session row, and
+    ``AutoRouterBenchmarkGroup.router_type`` has no value for them. A permanent zero would
+    read as "no traffic" rather than "not instrumented".
     """
     if not isinstance(deployment, Mapping):
         return None
@@ -605,7 +606,7 @@ def _strategy_router_key(deployment: object) -> tuple[str, str] | None:
     if not isinstance(model, str):
         return None
     kind: Final = classify_strategy_router_model(model)
-    return None if kind is None or kind == "semantic" else (router_name, kind)
+    return (router_name, kind) if kind in ("complexity", "adaptive", "quality") else None
 
 
 def _idle_router_groups(
@@ -635,7 +636,7 @@ def _idle_router_groups(
 
 @router.get(
     "/auto_router/benchmarks",
-    tags=("auto router",),
+    tags=["auto router"],  # mutable-ok: FastAPI tags contract is a list
     dependencies=(Depends(user_api_key_auth),),
     response_model=AutoRouterBenchmarksResponse,
 )
@@ -1305,7 +1306,7 @@ async def _shadow_eval_results(
 
 @router.post(
     "/auto_router/shadow_eval/start",
-    tags=("auto router",),
+    tags=["auto router"],  # mutable-ok: FastAPI tags contract is a list
     dependencies=(Depends(user_api_key_auth),),
     response_model=ShadowEvalJobResponse,
     status_code=status.HTTP_201_CREATED,
@@ -1528,7 +1529,7 @@ async def start_shadow_eval(
 
 @router.get(
     "/auto_router/shadow_eval",
-    tags=("auto router",),
+    tags=["auto router"],  # mutable-ok: FastAPI tags contract is a list
     dependencies=(Depends(user_api_key_auth),),
     response_model=list[ShadowEvalJobResponse],
 )
@@ -1578,7 +1579,7 @@ async def list_shadow_eval_jobs(
 
 @router.get(
     "/auto_router/shadow_eval/{job_id}",
-    tags=("auto router",),
+    tags=["auto router"],  # mutable-ok: FastAPI tags contract is a list
     dependencies=(Depends(user_api_key_auth),),
     response_model=ShadowEvalJobResponse,
 )
@@ -1633,7 +1634,7 @@ async def get_shadow_eval_job(
 
 @router.post(
     "/auto_router/shadow_eval/{job_id}/stop",
-    tags=("auto router",),
+    tags=["auto router"],  # mutable-ok: FastAPI tags contract is a list
     dependencies=(Depends(user_api_key_auth),),
     response_model=ShadowEvalJobResponse,
 )
