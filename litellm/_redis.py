@@ -742,7 +742,9 @@ def get_redis_client(**env_overrides):
     if "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
         return _init_redis_sentinel(redis_kwargs)
 
-    return redis.Redis(**redis_kwargs)
+    return redis.Redis(  # pyright: ignore[reportCallIssue]  # object-valued kwargs match no overload statically
+        **redis_kwargs,  # pyright: ignore[reportArgumentType]  # allow-listed and coerced against this signature
+    )
 
 
 def get_redis_async_client(
