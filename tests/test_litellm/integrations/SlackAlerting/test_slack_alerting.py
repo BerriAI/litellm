@@ -10,6 +10,7 @@ import pytest
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_alert_type
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.proxy._types import CallInfo, Litellm_EntityType
 from litellm.types.integrations.slack_alerting import AlertType, SlackAlertingCacheKeys
@@ -46,9 +47,8 @@ class TestSlackAlerting(unittest.TestCase):
         self.assertEqual(result, -0.2)
 
     def test_get_event_and_event_message_max_budget(self):
-        # Initial setup with no event
         event = None
-        event_message = "Test Message: "
+        event_message = get_budget_alert_type("user_budget").get_event_message()
 
         # Test case 1: When spend exceeds max_budget
         user_info = CallInfo(
@@ -63,7 +63,7 @@ class TestSlackAlerting(unittest.TestCase):
         self.assertEqual(event, "budget_crossed")
         self.assertTrue("Budget Crossed" in event_message)
 
-        # Test case 2: When 5% of max_budget is left
+        event_message = get_budget_alert_type("user_budget").get_event_message()
         user_info = CallInfo(
             max_budget=100.0,
             spend=95.0,
@@ -74,9 +74,9 @@ class TestSlackAlerting(unittest.TestCase):
             user_info=user_info, event=event, event_message=event_message
         )
         self.assertEqual(event, "threshold_crossed")
-        self.assertTrue("5% Threshold Crossed" in event_message)
+        self.assertEqual(event_message, "User Budget: 5% or less of budget remaining")
 
-        # Test case 3: When 15% of max_budget is left
+        event_message = get_budget_alert_type("user_budget").get_event_message()
         user_info = CallInfo(
             max_budget=100.0,
             spend=85.0,
@@ -87,7 +87,7 @@ class TestSlackAlerting(unittest.TestCase):
             user_info=user_info, event=event, event_message=event_message
         )
         self.assertEqual(event, "threshold_crossed")
-        self.assertTrue("15% Threshold Crossed" in event_message)
+        self.assertEqual(event_message, "User Budget: 15% or less of budget remaining")
 
     def test_get_event_and_event_message_soft_budget(self):
         # Initial setup with no event
