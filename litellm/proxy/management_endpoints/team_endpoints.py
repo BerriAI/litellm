@@ -5153,6 +5153,7 @@ async def list_team_v2(
             skip=skip,
             take=page_size,
             order=order_by if order_by else {"created_at": "desc"},  # Default sort
+            include=_INCLUDE_MODEL_TABLE,
         )
         # Get total count for pagination
         total_count = await _deleted_team_db(prisma_client).count(where=where_conditions)
@@ -5162,6 +5163,7 @@ async def list_team_v2(
             skip=skip,
             take=page_size,
             order=order_by if order_by else {"created_at": "desc"},  # Default sort
+            include=_INCLUDE_MODEL_TABLE,
         )
         # Get total count for pagination
         total_count = await _team_db(prisma_client).count(where=where_conditions)

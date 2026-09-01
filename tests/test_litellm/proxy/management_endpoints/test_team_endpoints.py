@@ -3742,6 +3742,62 @@ async def test_list_team_v2_with_status_deleted():
 
 
 @pytest.mark.asyncio
+async def test_list_team_v2_includes_litellm_model_table():
+    """
+    Regression test for GH #26312: GET /v2/team/list must eagerly load the
+    litellm_model_table relation, same as /team/info and /team/list, or a
+    team's model_aliases always read back as null from this endpoint.
+    """
+    from unittest.mock import AsyncMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _INCLUDE_MODEL_TABLE,
+        list_team_v2,
+    )
+
+    mock_request = Mock(spec=Request)
+    mock_user_api_key_dict_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user_123",
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        mock_db = Mock()
+        mock_prisma_client.db = mock_db
+
+        mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+        mock_db.litellm_teamtable.count = AsyncMock(return_value=0)
+
+        await list_team_v2(
+            http_request=mock_request,
+            user_id=None,
+            user_api_key_dict=mock_user_api_key_dict_admin,
+            page=1,
+            page_size=10,
+            status=None,
+        )
+
+        assert mock_db.litellm_teamtable.find_many.call_args.kwargs["include"] == _INCLUDE_MODEL_TABLE
+
+        mock_db.litellm_deletedteamtable.find_many = AsyncMock(return_value=[])
+        mock_db.litellm_deletedteamtable.count = AsyncMock(return_value=0)
+
+        await list_team_v2(
+            http_request=mock_request,
+            user_id=None,
+            user_api_key_dict=mock_user_api_key_dict_admin,
+            page=1,
+            page_size=10,
+            status="deleted",
+        )
+
+        assert mock_db.litellm_deletedteamtable.find_many.call_args.kwargs["include"] == _INCLUDE_MODEL_TABLE
+
+
+@pytest.mark.asyncio
 async def test_list_team_v2_org_admin_sees_org_teams():
     """
     Test that an org admin (internal_user role with org_admin membership)
