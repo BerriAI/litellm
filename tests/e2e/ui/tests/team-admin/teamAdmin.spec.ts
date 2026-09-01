@@ -230,7 +230,7 @@ test.describe("Team Admin", () => {
     const teamSelect = page.getByTestId("team-dropdown").getByRole("combobox");
     await teamSelect.click();
     await page.keyboard.type(E2E_TEAM_CRUD_ALIAS);
-    await page.locator('[data-slot="combobox-content"]:visible').getByText(E2E_TEAM_CRUD_ALIAS).first().click();
+    await page.getByRole("option", { name: E2E_TEAM_CRUD_ALIAS }).first().click();
 
     // Models — pick "All Team Models". The popup is portaled to the body, so
     // scope the option lookup to the page.

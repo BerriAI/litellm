@@ -484,6 +484,22 @@ FIREWORKS_AI_80_B: Final = int(os.getenv("FIREWORKS_AI_80_B", 80))
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING: Final = "REDACTED_BY_LITELM"
 MAX_LANGFUSE_INITIALIZED_CLIENTS: Final = int(os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50))
+# Backpressure + lifetime bounds for the /v1/messages streaming relay (see
+# BaseAnthropicMessagesStreamingIterator.async_sse_wrapper). The relay queue is
+# bounded so a slow client throttles the upstream pump instead of letting it
+# buffer the whole response in memory; the detached-drain cap bounds how many
+# post-disconnect drains may run concurrently so client behavior can't create
+# unbounded worker state.
+ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE: Final = int(
+    os.getenv("ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", "1024")
+)
+# Setting this to 0 disables detached draining entirely: every post-disconnect
+# pump bills whatever partial output it has already collected and aborts the
+# upstream stream immediately, instead of continuing to drain for the real
+# terminal usage.
+ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS: Final = int(
+    os.getenv("ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", "100")
+)
 LOGGING_WORKER_CONCURRENCY: Final = int(os.getenv("LOGGING_WORKER_CONCURRENCY", 100))  # Must be above 0
 LOGGING_WORKER_MAX_QUEUE_SIZE: Final = int(os.getenv("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000))
 LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = float(os.getenv("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0))
@@ -806,6 +822,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.meta.ai/v1",
     "https://api.cognition.ai/v1",
     "https://api.scx.ai/v1",
+    "https://gigachat.devices.sberbank.ru/api/v1",
 ]
 
 

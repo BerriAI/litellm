@@ -91,6 +91,11 @@ cli = [
 ]
 extra_proxy = [
     "prisma>=0.11.0,<1.0",
+    # Used by ProxyExtrasDBManager.spend_logs_is_partitioned() to detect a
+    # partitioned LiteLLM_SpendLogs and keep schema reconciliation from
+    # fighting its composite primary key.
+    "psycopg>=3.2,<4.0",
+    "psycopg-binary>=3.2,<4.0",
     "azure-identity>=1.25.2,<2.0",
     "azure-keyvault-secrets>=4.10.0,<5.0",
     # Not in PyPI proxy extra.
