@@ -536,6 +536,14 @@ def get_llm_provider(
             )
 
 
+def _dashscope_family_chat_config(custom_llm_provider: str) -> "litellm.DashScopeChatConfig":
+    if custom_llm_provider == "qwencloud":
+        return litellm.QwenCloudChatConfig()
+    if custom_llm_provider == "qwen_ai_platform":
+        return litellm.QwenAIPlatformChatConfig()
+    return litellm.DashScopeChatConfig()
+
+
 def _get_openai_compatible_provider_info(
     model: str,
     api_base: str | None,
@@ -785,11 +793,11 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.HerokuChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
-    elif custom_llm_provider == "dashscope":
+    elif custom_llm_provider in ("dashscope", "qwencloud", "qwen_ai_platform"):
         (
             api_base,
             dynamic_api_key,
-        ) = litellm.DashScopeChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
+        ) = _dashscope_family_chat_config(custom_llm_provider)._get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "modelscope":
         (
             api_base,
