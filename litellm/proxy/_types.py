@@ -2425,6 +2425,16 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     database_connection_timeout: float | None = Field(
         60, description="default timeout for a connection to the database"
     )
+    database_connection_idle_lifetime: float | None = Field(
+        60,
+        description=(
+            "Prisma `max_idle_connection_lifetime` URL param (seconds). Connections "
+            "idle longer than this are closed by the pool before a managed database "
+            "(RDS, Cloud SQL, Azure) silently drops them, preventing intermittent "
+            "`Error { kind: Closed }` failures. Set to null to fall back to "
+            "Prisma's built-in default (300s)."
+        ),
+    )
     database_connect_timeout: float | None = Field(
         None,
         description=(

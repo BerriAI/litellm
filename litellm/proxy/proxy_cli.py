@@ -7,8 +7,9 @@ import re
 import subprocess
 import sys
 import urllib.parse as urlparse
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import click
@@ -56,6 +57,7 @@ telemetry: Final = None
 class LiteLLMDatabaseConnectionPool(Enum):
     database_connection_pool_limit = 10
     database_connection_pool_timeout = 60
+    database_connection_idle_lifetime = 60
 
 
 def _build_db_connection_url_params(
@@ -1081,6 +1083,11 @@ def run_server(
         db_connection_timeout: int | float | None = 60
         db_connect_timeout: int | float | None = None
         db_socket_timeout: int | float | None = None
+        db_connection_idle_lifetime: (
+            int | float | None
+        ) = (  # rebind-ok: overwritten from general_settings when a config is provided
+            LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value
+        )
         db_disable_prepared_statements: bool = False
         db_extra_connection_params: dict | None = None
         db_statement_timeout: float | None = None
@@ -1183,6 +1190,10 @@ def run_server(
                 db_connection_timeout = LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value
             db_connect_timeout = general_settings.get("database_connect_timeout")
             db_socket_timeout = general_settings.get("database_socket_timeout")
+            db_connection_idle_lifetime = general_settings.get(  # rebind-ok: default set for the no-config path
+                "database_connection_idle_lifetime",
+                LiteLLMDatabaseConnectionPool.database_connection_idle_lifetime.value,
+            )
             _disable_prepared_statements: Final = general_settings.get("database_disable_prepared_statements", False)
             if isinstance(_disable_prepared_statements, str):
                 from litellm.secret_managers.main import str_to_bool
@@ -1253,6 +1264,15 @@ def run_server(
                     disable_prepared_statements=db_disable_prepared_statements,
                     extra_params=db_extra_connection_params,
                 )
+                # The idle lifetime is applied add-if-missing so a value the operator
+                # pinned on the URL itself keeps winning over the built-in default.
+                idle_lifetime_params: Final[Mapping[str, int | float]] = MappingProxyType(
+                    {
+                        "max_idle_connection_lifetime": lifetime
+                        for lifetime in (db_connection_idle_lifetime,)
+                        if lifetime is not None
+                    }
+                )
                 if os.getenv("DATABASE_URL", None) is not None:
                     database_url = get_secret("DATABASE_URL", default_value=None)
                     resolved_url: Final[str | None] = str(database_url) if database_url else None
@@ -1270,11 +1290,11 @@ def run_server(
                         writer_url,
                         connection_url_params,
                     )
-                    os.environ["DATABASE_URL"] = modified_url
+                    os.environ["DATABASE_URL"] = add_missing_query_params(modified_url, idle_lifetime_params)
                 if os.getenv("DIRECT_URL", None) is not None:
                     database_url = os.getenv("DIRECT_URL")
                     modified_url = append_query_params(database_url, connection_url_params)
-                    os.environ["DIRECT_URL"] = modified_url
+                    os.environ["DIRECT_URL"] = add_missing_query_params(modified_url, idle_lifetime_params)
                 # The reader pool is a real pool against the same configured cap, so it
                 # gets the allowlisted pool params. Schema-affecting ones, including any
                 # the operator smuggled in through database_extra_connection_params, stay
@@ -1291,7 +1311,7 @@ def run_server(
                         _with_query_value(read_replica_url, "options", reader_options)
                         if reader_options
                         else read_replica_url,
-                        reader_shareable_params(connection_url_params),
+                        reader_shareable_params(MappingProxyType({**idle_lifetime_params, **connection_url_params})),
                     )
                 subprocess.run(["prisma"], capture_output=True)
                 is_prisma_runnable = True
