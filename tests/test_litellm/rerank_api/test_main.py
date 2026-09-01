@@ -173,6 +173,38 @@ async def test_arerank_error_is_mapped_to_litellm_exception(respx_mock: respx.Mo
 
 
 @pytest.mark.asyncio
+async def test_arerank_declared_authenticating_provider_skips_resolution(monkeypatch):
+    """Regression for the event-loop hazard in arerank's provider pre-resolution:
+    get_llm_provider runs the blocking OAuth device flow for github_copilot/chatgpt,
+    so arerank must adopt the declared provider instead of resolving it, while the
+    except path still maps with that declared provider."""
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    resolution_calls = []
+
+    def record_resolution(*args, **kwargs):
+        resolution_calls.append((args, kwargs))
+        return "gpt-4o", "github_copilot", None, None
+
+    def rerank_raises_provider_error(*args, **kwargs):
+        raise BaseLLMException(status_code=401, message='{"error":"bad key"}')
+
+    monkeypatch.setattr(litellm, "get_llm_provider", record_resolution)
+    monkeypatch.setattr("litellm.rerank_api.main.rerank", rerank_raises_provider_error)
+
+    with pytest.raises(litellm.AuthenticationError) as exc_info:
+        await litellm.arerank(
+            model="github_copilot/gpt-4o",
+            query=MARKER_QUERY,
+            documents=[MARKER_DOC],
+        )
+
+    assert resolution_calls == []
+    assert "Github_copilotException" in str(exc_info.value)
+    assert "None - " not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
 async def test_together_rerank_async_honors_env_api_base(respx_mock: respx.MockRouter, monkeypatch):
     """Regression: TOGETHER_AI_API_BASE was honored by chat but ignored by rerank."""
     monkeypatch.setenv("TOGETHER_AI_API_BASE", "https://env-together.example/v1")
