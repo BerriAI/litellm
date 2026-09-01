@@ -5492,7 +5492,7 @@ async def _drive_passthrough_request_and_capture_logging(
     mock_request.query_params = QueryParams({})
     mock_request.body = AsyncMock(return_value=b'{"model": "gemini-2.0-flash"}')
 
-    captured_data: dict = {}
+    captured_data: dict = {}  # mutable-ok: the pre-call hook records the request data into it
 
     async def capture_pre_call_hook(user_api_key_dict, data, call_type):
         captured_data.update(data)
@@ -5657,7 +5657,7 @@ async def test_pass_through_request_leaves_guardrail_readable_metadata():
         },
     )
 
-    observed: dict[str, dict[str, str] | BaseException] = {}
+    observed: dict[str, dict[str, str] | BaseException] = {}  # mutable-ok: the pre-call hook records into it
 
     def read_headers_the_way_a_guardrail_does(logging_obj: LiteLLMLoggingObj | None) -> None:
         assert logging_obj is not None
