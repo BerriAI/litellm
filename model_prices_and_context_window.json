@@ -43509,7 +43509,8 @@
         "max_tokens": 1024,
         "mode": "video_generation",
         "output_cost_per_second": 0.4,
-        "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/veo/3-1-generate",
+        "output_cost_per_second_4k": 0.6,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "supported_modalities": [
             "text"
         ],
@@ -43523,6 +43524,8 @@
         "max_tokens": 1024,
         "mode": "video_generation",
         "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.12,
+        "output_cost_per_second_4k": 0.3,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "supported_modalities": [
             "text"
@@ -43538,7 +43541,8 @@
         "max_tokens": 1024,
         "mode": "video_generation",
         "output_cost_per_second": 0.4,
-        "source": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/veo/3-1-generate",
+        "output_cost_per_second_4k": 0.6,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "supported_modalities": [
             "text"
         ],
@@ -43553,6 +43557,8 @@
         "max_tokens": 1024,
         "mode": "video_generation",
         "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.12,
+        "output_cost_per_second_4k": 0.3,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "supported_modalities": [
             "text"
