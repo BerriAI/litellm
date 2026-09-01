@@ -1,3 +1,4 @@
+import asyncio
 import datetime as real_datetime
 import smtplib
 
@@ -1878,3 +1879,185 @@ async def test_proxy_only_error_5xx_keeps_traceback_and_runs_sync_callbacks(monk
         Logging.failure_handler = orig_sync_failure
 
     assert "test_proxy_utils" in captured["async_traceback"]
+
+
+class _UnifiedDuringCallGuardrail(CustomGuardrail):
+    """during_call double routed through UnifiedLLMGuardrails, since apply_guardrail is in the class __dict__."""
+
+    def __init__(self, name, execution_order, sleep=0.05, raise_exc=None):
+        super().__init__(
+            guardrail_name=name,
+            event_hook=GuardrailEventHooks.during_call,
+            default_on=True,
+        )
+        self.name = name
+        self.sleep = sleep
+        self.raise_exc = raise_exc
+        self.execution_order = execution_order
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        self.execution_order.append(f"{self.name}_start")
+        await asyncio.sleep(self.sleep)
+        if self.raise_exc is not None:
+            raise self.raise_exc
+        self.execution_order.append(f"{self.name}_end")
+        return inputs
+
+
+class _NativeDuringCallGuardrail(CustomGuardrail):
+    """during_call double that keeps the native async_moderation_hook dispatch."""
+
+    def __init__(self, name, execution_order):
+        super().__init__(
+            guardrail_name=name,
+            event_hook=GuardrailEventHooks.during_call,
+            default_on=True,
+        )
+        self.name = name
+        self.execution_order = execution_order
+
+    async def async_moderation_hook(self, data, user_api_key_dict, call_type):
+        self.execution_order.append(self.name)
+        return data
+
+
+def _during_call_request_data(content="hi"):
+    return {"model": "gpt-4", "messages": [{"role": "user", "content": content}]}
+
+
+def _during_call_key():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    return UserAPIKeyAuth(api_key="sk-1234", user_id="test_user")
+
+
+@pytest.fixture
+def install_guardrails(monkeypatch):
+    """Register guardrails for one test, dropping the capability cache on both sides.
+
+    ProxyLogging keys that cache on id()s of litellm.callbacks, so a stale entry
+    whose list has since been collected can hand this test another test's
+    has_guardrail verdict, and ours to whatever runs next.
+    """
+
+    def _install(callbacks):
+        monkeypatch.setattr(litellm, "callbacks", callbacks)
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    yield _install
+    ProxyLogging._callback_capabilities_cache.clear()
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_runs_every_unified_guardrail(install_guardrails):
+    """Every unified-path during_call guardrail runs, not only the last one registered."""
+    execution_order = []
+    install_guardrails([_UnifiedDuringCallGuardrail(f"g{i}", execution_order) for i in range(3)])
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+
+    await proxy_logging_obj.during_call_hook(
+        data=_during_call_request_data(),
+        user_api_key_dict=_during_call_key(),
+        call_type="acompletion",
+    )
+
+    assert sorted(execution_order) == sorted(f"g{i}_{marker}" for i in range(3) for marker in ("start", "end"))
+    first_end_idx = next(i for i, item in enumerate(execution_order) if item.endswith("_end"))
+    starts_before_first_end = sum(1 for item in execution_order[:first_end_idx] if item.endswith("_start"))
+    assert starts_before_first_end == 3, f"expected 3 concurrent starts, got {starts_before_first_end}"
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_first_registered_guardrail_still_blocks(install_guardrails):
+    """A blocking guardrail rejects the request even when a second guardrail is registered after it."""
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+    from litellm.types.guardrails import BlockedWord, ContentFilterAction
+
+    install_guardrails(
+        [
+            ContentFilterGuardrail(
+                guardrail_name="insults",
+                blocked_words=[BlockedWord(keyword="zebra", action=ContentFilterAction("BLOCK"))],
+                event_hook="during_call",
+                default_on=True,
+            ),
+            ContentFilterGuardrail(
+                guardrail_name="denied-advice",
+                blocked_words=[BlockedWord(keyword="yak", action=ContentFilterAction("BLOCK"))],
+                event_hook="during_call",
+                default_on=True,
+            ),
+        ]
+    )
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await proxy_logging_obj.during_call_hook(
+            data=_during_call_request_data(content="you absolute zebra"),
+            user_api_key_dict=_during_call_key(),
+            call_type="acompletion",
+        )
+
+    assert exc_info.value.detail["keyword"] == "zebra"
+    assert exc_info.value.detail["guardrail_name"] == "insults"
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_mixed_native_and_unified_guardrails(install_guardrails):
+    """A native during_call guardrail runs exactly once alongside a unified-path one."""
+    execution_order = []
+    install_guardrails(
+        [
+            _NativeDuringCallGuardrail("native", execution_order),
+            _UnifiedDuringCallGuardrail("unified", execution_order),
+        ]
+    )
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+
+    await proxy_logging_obj.during_call_hook(
+        data=_during_call_request_data(),
+        user_api_key_dict=_during_call_key(),
+        call_type="acompletion",
+    )
+
+    assert execution_order.count("native") == 1
+    assert "unified_end" in execution_order
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_block_wins_over_reroute(install_guardrails):
+    """A slower block wins over a faster reroute so crafted input cannot bypass a block."""
+    from litellm.exceptions import SensitiveDataRouteException
+
+    execution_order = []
+    install_guardrails(
+        [
+            _UnifiedDuringCallGuardrail(
+                "rerouter",
+                execution_order,
+                sleep=0,
+                raise_exc=SensitiveDataRouteException(
+                    route_to_model="on-prem", session_id="s1", guardrail_name="rerouter"
+                ),
+            ),
+            _UnifiedDuringCallGuardrail(
+                "blocker",
+                execution_order,
+                sleep=0.1,
+                raise_exc=HTTPException(status_code=400, detail="blocked by guardrail"),
+            ),
+        ]
+    )
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await proxy_logging_obj.during_call_hook(
+            data=_during_call_request_data(),
+            user_api_key_dict=_during_call_key(),
+            call_type="acompletion",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "blocked by guardrail" in str(exc_info.value.detail)

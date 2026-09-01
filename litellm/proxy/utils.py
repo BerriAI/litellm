@@ -2248,7 +2248,16 @@ class ProxyLogging:
         call_type: CallTypesLiteral,
     ):
         """
-        Runs the CustomGuardrail's async_moderation_hook() in parallel
+        Runs the CustomGuardrail's async_moderation_hook() in parallel.
+
+        Each per-guardrail coroutine sets ``guardrail_to_apply`` immediately
+        before awaiting, and the unified hook pops it before its first
+        suspension point, so concurrent guardrails never race on that key.
+        Every guardrail is awaited to completion (``return_exceptions=True``)
+        so a raise by one never leaves the others running as unobserved
+        background tasks. A guardrail that blocks (any exception other than a
+        reroute or passthrough) takes precedence over one that only changes the
+        request flow, so a fast reroute can never let a slower block be bypassed.
         """
         # Fast path: skip the entire guardrail scan when no CustomGuardrail
         # callbacks are registered. Saves per-request iteration over
@@ -2256,6 +2265,41 @@ class ProxyLogging:
         # deployments with no guardrails configured.
         if not ProxyLogging._callback_capabilities().has_guardrail:
             return data
+        # Convert user_api_key_dict to proper format for async_moderation_hook
+        user_api_key_auth_dict: Final = (
+            self._convert_user_api_key_auth_to_dict(user_api_key_dict)
+            if call_type == CallTypes.call_mcp_tool.value
+            else user_api_key_dict
+        )
+
+        async def _run_one(callback: CustomGuardrail) -> None:
+            if (
+                "apply_guardrail" in type(callback).__dict__
+                and not callback.use_native_lifecycle_hooks
+                and user_api_key_dict is not None
+                and not getattr(callback, "use_native_during_call_hook", False)
+            ):
+                data["guardrail_to_apply"] = callback
+                await self._run_guardrail_with_metrics(
+                    callback,
+                    unified_guardrail.async_moderation_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        data=data,
+                        call_type=call_type,
+                    ),
+                    "during_call",
+                )
+            else:
+                await self._run_guardrail_with_metrics(
+                    callback,
+                    callback.async_moderation_hook(
+                        data=data,
+                        user_api_key_dict=user_api_key_auth_dict,
+                        call_type=call_type,
+                    ),
+                    "during_call",
+                )
+
         # Step 1: Collect all guardrail tasks to run in parallel
         guardrail_tasks: Final = []
 
@@ -2279,47 +2323,19 @@ class ProxyLogging:
 
                     if callback.should_run_guardrail(data=data, event_type=event_type) is not True:
                         continue
-                # Convert user_api_key_dict to proper format for async_moderation_hook
-                if call_type == CallTypes.call_mcp_tool.value:
-                    user_api_key_auth_dict = self._convert_user_api_key_auth_to_dict(user_api_key_dict)
-                else:
-                    user_api_key_auth_dict = user_api_key_dict
                 # Add task to list for parallel execution
-                if (
-                    "apply_guardrail" in type(callback).__dict__
-                    and not callback.use_native_lifecycle_hooks
-                    and user_api_key_dict is not None
-                    and not getattr(callback, "use_native_during_call_hook", False)
-                ):
-                    data["guardrail_to_apply"] = callback
-                    guardrail_task = self._run_guardrail_with_metrics(
-                        callback,
-                        unified_guardrail.async_moderation_hook(
-                            user_api_key_dict=user_api_key_dict,
-                            data=data,
-                            call_type=call_type,
-                        ),
-                        "during_call",
-                    )
-                else:
-                    guardrail_task = self._run_guardrail_with_metrics(
-                        callback,
-                        callback.async_moderation_hook(
-                            data=data,
-                            user_api_key_dict=user_api_key_auth_dict,
-                            call_type=call_type,
-                        ),
-                        "during_call",
-                    )
-                guardrail_tasks.append(guardrail_task)
+                guardrail_tasks.append(_run_one(callback))
 
         # Step 2: Run all guardrail tasks in parallel
-        if guardrail_tasks:
-            try:
-                await asyncio.gather(*guardrail_tasks)
-            except Exception as e:
-                # If any guardrail raises an exception, it will propagate here
-                raise e
+        if not guardrail_tasks:
+            return data
+        results: Final = await asyncio.gather(*guardrail_tasks, return_exceptions=True)
+        raised: Final = tuple(result for result in results if isinstance(result, BaseException))
+        blocking: Final = next((exc for exc in raised if not _exception_changes_request_flow(exc)), None)
+        if blocking is not None:
+            raise blocking
+        if raised:
+            raise raised[0]
 
         return data
 
