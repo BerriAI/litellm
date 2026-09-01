@@ -461,7 +461,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Grounding qualifiers are attached only when assembling the OUTPUT request, so a
         grounding_source/query tag cannot change how input-safety policies treat content
         """
-        content = message.get("content")
+        content: Final = message.get("content")
         if content is None:
             return ()
         if isinstance(content, str):
@@ -513,7 +513,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     @classmethod
     def _image_urls_in(cls, messages: "Sequence[AllMessageValues] | None") -> frozenset[str]:
         """Normalized image urls already carried by these messages."""
-        found: set[str] = set()  # mutable-ok: accumulator, frozen on return
+        found: Final[set[str]] = set()  # mutable-ok: accumulator, frozen on return
         for message in messages or ():
             content = message.get("content")
             if not isinstance(content, list):
@@ -776,12 +776,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Returns:
             BedrockRequest: The bedrock request object.
         """
-        bedrock_request: BedrockRequest = BedrockRequest(source=source)
         if source == "INPUT":
-            bedrock_request = await self._create_bedrock_input_content_request(messages=messages)
-        elif source == "OUTPUT":
-            bedrock_request = self._create_bedrock_output_content_request(response=response, messages=messages)
-        return bedrock_request
+            return await self._create_bedrock_input_content_request(messages=messages)
+        if source == "OUTPUT":
+            return self._create_bedrock_output_content_request(response=response, messages=messages)
+        return BedrockRequest(source=source)
 
     def get_content_items_for_message(self, message: AllMessageValues) -> list[QualifiedTextBlock] | None:
         """

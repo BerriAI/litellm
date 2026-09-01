@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, TypeAlias
 
 from typing_extensions import ReadOnly, TypedDict
 
@@ -12,7 +12,7 @@ class BedrockTextContent(TypedDict, total=False):
     qualifiers: list[BedrockGuardrailQualifier]
 
 
-BedrockGuardrailImageFormat = Literal["png", "jpeg"]
+BedrockGuardrailImageFormat: TypeAlias = Literal["png", "jpeg"]
 
 
 class BedrockGuardrailImageSource(TypedDict, total=False):
