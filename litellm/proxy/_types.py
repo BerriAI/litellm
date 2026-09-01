@@ -832,10 +832,16 @@ class LiteLLMRoutes(enum.Enum):
         "/team/{team_id}/members/me",
         # POST/GET the team's logging callbacks, and DELETE one of them. Every
         # handler calls _verify_team_access, which admits only a proxy admin, an
-        # org admin for the team, or an admin of this team. The :path converter
-        # mirrors the route registration, which accepts a team id containing "/".
+        # org admin for the team, or an admin of this team.
+        #
+        # Two spellings per route because neither placeholder alone covers every
+        # team id the router accepts: the gate expands {x:path} to "[^:]+", which
+        # takes a slash but not a colon, and {x} to "[^/]+", which takes a colon
+        # but not a slash. team_id is a free-form string, so both are reachable.
         "/team/{team_id:path}/callback",
         "/team/{team_id:path}/callback/{callback_name}",
+        "/team/{team_id}/callback",
+        "/team/{team_id}/callback/{callback_name}",
         "/model/new",
         "/model/update",
         "/model/delete",

@@ -3551,6 +3551,10 @@ TEAM_CALLBACK_ROUTES = (
     # contain a slash
     "/team/tenant/06bda574/callback",
     "/team/tenant/06bda574/callback/langfuse",
+    # team_id is a free-form string, so it may also contain a colon, which the
+    # gate's :path expansion excludes
+    "/team/tenant:06bda574/callback",
+    "/team/tenant:06bda574/callback/langfuse",
 )
 
 
@@ -3590,8 +3594,13 @@ def test_team_callback_routes_are_self_managed():
     look identical for an internal_user while silently denying the org admins and
     view-only roles that list does not cover.
     """
-    assert "/team/{team_id:path}/callback" in LiteLLMRoutes.self_managed_routes.value
-    assert "/team/{team_id:path}/callback/{callback_name}" in LiteLLMRoutes.self_managed_routes.value
+    for template in (
+        "/team/{team_id:path}/callback",
+        "/team/{team_id:path}/callback/{callback_name}",
+        "/team/{team_id}/callback",
+        "/team/{team_id}/callback/{callback_name}",
+    ):
+        assert template in LiteLLMRoutes.self_managed_routes.value
 
 
 @pytest.mark.parametrize("route", TEAM_CALLBACK_ROUTES)
