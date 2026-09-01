@@ -162,6 +162,20 @@ def _rust_responses_websocket_enabled(
     return custom_llm_provider == "openai" and litellm_params.get("rust") is True
 
 
+def _signing_optional_params(
+    litellm_params: Mapping[str, object],
+    optional_params: Mapping[str, object],
+) -> dict[str, object]:
+    """Merge deployment params into the dict passed to provider ``sign_request``.
+
+    Chat completions build ``optional_params`` from the OpenAI allowlist, so AWS
+    credential keys that live only on the deployment (``aws_role_name``, static
+    keys, region) never reach SigV4. ``optional_params`` still wins on collision
+    so a per-request override is honored.
+    """
+    return {**dict(litellm_params), **dict(optional_params)}
+
+
 from .http_handler import get_shared_realtime_ssl_context
 
 if TYPE_CHECKING:
@@ -534,7 +548,7 @@ class BaseLLMHTTPHandler:
 
         headers, signed_json_body = provider_config.sign_request(
             headers=headers,
-            optional_params=optional_params,
+            optional_params=_signing_optional_params(litellm_params, optional_params),
             request_data=data,
             api_base=api_base,
             api_key=api_key,
