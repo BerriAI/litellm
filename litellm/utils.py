@@ -6586,11 +6586,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("WANDB_API_KEY")
-        elif custom_llm_provider == "dashscope":
-            if "DASHSCOPE_API_KEY" in os.environ:
+        elif custom_llm_provider in ("dashscope", "qwencloud", "qwen_ai_platform"):
+            if f"{custom_llm_provider.upper()}_API_KEY" in os.environ or "DASHSCOPE_API_KEY" in os.environ:
                 keys_in_environment = True
             else:
-                missing_keys.append("DASHSCOPE_API_KEY")
+                missing_keys.append(f"{custom_llm_provider.upper()}_API_KEY")
         elif custom_llm_provider == "modelscope":
             if "MODELSCOPE_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -8152,6 +8152,11 @@ class ProviderConfigManager:
             LlmProviders.NEBIUS: (lambda: litellm.NebiusConfig(), False),
             LlmProviders.WANDB: (lambda: litellm.WandbConfig(), False),
             LlmProviders.DASHSCOPE: (lambda: litellm.DashScopeChatConfig(), False),
+            LlmProviders.QWENCLOUD: (lambda: litellm.QwenCloudChatConfig(), False),
+            LlmProviders.QWEN_AI_PLATFORM: (
+                lambda: litellm.QwenAIPlatformChatConfig(),
+                False,
+            ),
             LlmProviders.MODELSCOPE: (lambda: litellm.ModelScopeChatConfig(), False),
             LlmProviders.MOONSHOT: (lambda: litellm.MoonshotChatConfig(), False),
             LlmProviders.DOCKER_MODEL_RUNNER: (
@@ -8366,12 +8371,16 @@ class ProviderConfigManager:
             )
 
             return VolcEngineEmbeddingConfig()
-        elif litellm.LlmProviders.DASHSCOPE == provider:
-            from litellm.llms.dashscope.embed.transformation import (
-                DashScopeEmbeddingConfig,
+        elif provider in (
+            litellm.LlmProviders.DASHSCOPE,
+            litellm.LlmProviders.QWENCLOUD,
+            litellm.LlmProviders.QWEN_AI_PLATFORM,
+        ):
+            from litellm.llms.dashscope.common_utils import (
+                get_dashscope_family_embedding_config,
             )
 
-            return DashScopeEmbeddingConfig()
+            return get_dashscope_family_embedding_config(provider.value)
         elif litellm.LlmProviders.OVHCLOUD == provider:
             return litellm.OVHCloudEmbeddingConfig()
         elif litellm.LlmProviders.SNOWFLAKE == provider:
@@ -8444,12 +8453,16 @@ class ProviderConfigManager:
             return litellm.VoyageRerankConfig()
         elif litellm.LlmProviders.WATSONX == provider:
             return litellm.IBMWatsonXRerankConfig()
-        elif litellm.LlmProviders.DASHSCOPE == provider:
-            from litellm.llms.dashscope.rerank.transformation import (
-                DashScopeRerankConfig,
+        elif provider in (
+            litellm.LlmProviders.DASHSCOPE,
+            litellm.LlmProviders.QWENCLOUD,
+            litellm.LlmProviders.QWEN_AI_PLATFORM,
+        ):
+            from litellm.llms.dashscope.common_utils import (
+                get_dashscope_family_rerank_config,
             )
 
-            return DashScopeRerankConfig()
+            return get_dashscope_family_rerank_config(provider.value)
         return litellm.CohereRerankConfig()
 
     @staticmethod
@@ -9122,12 +9135,16 @@ class ProviderConfigManager:
             )
 
             return get_openrouter_image_generation_config(model)
-        elif LlmProviders.DASHSCOPE == provider:
-            from litellm.llms.dashscope.image_generation import (
-                get_dashscope_image_generation_config,
+        elif provider in (
+            LlmProviders.DASHSCOPE,
+            LlmProviders.QWENCLOUD,
+            LlmProviders.QWEN_AI_PLATFORM,
+        ):
+            from litellm.llms.dashscope.common_utils import (
+                get_dashscope_family_image_generation_config,
             )
 
-            return get_dashscope_image_generation_config(model)
+            return get_dashscope_family_image_generation_config(provider.value)
         elif LlmProviders.MODELSCOPE == provider:
             from litellm.llms.modelscope.image_generation import (
                 get_modelscope_image_generation_config,
