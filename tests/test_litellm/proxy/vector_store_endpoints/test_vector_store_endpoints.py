@@ -117,6 +117,7 @@ async def test_vector_store_embedding_executors_preserve_explicit_configuration(
 
     mock_router = MagicMock()
     mock_router.embedding.return_value = response
+    mock_router.aembedding = AsyncMock(return_value=response)
     router_executor = RouterVectorStoreEmbeddingExecutor(
         router=mock_router,
         metadata={"user_api_key_team_id": "team-a"},
@@ -140,8 +141,20 @@ async def test_vector_store_embedding_executors_preserve_explicit_configuration(
         assert router_executor.embed("openai/model", "query", {"api_key": "store-key"}) is response
         assert await router_executor.aembed("openai/model", "query", {"api_key": "store-key"}) is response
 
-    explicit_embedding.assert_called_once_with(model="openai/model", input=["query"], api_key="store-key")
-    explicit_aembedding.assert_awaited_once_with(model="openai/model", input=["query"], api_key="store-key")
+    explicit_embedding.assert_not_called()
+    explicit_aembedding.assert_not_awaited()
+    assert mock_router.embedding.call_args.kwargs == {
+        "model": "openai/model",
+        "input": ["query"],
+        "api_key": "store-key",
+        "metadata": {"user_api_key_team_id": "team-a"},
+    }
+    mock_router.aembedding.assert_awaited_once_with(
+        model="openai/model",
+        input=["query"],
+        api_key="store-key",
+        metadata={"user_api_key_team_id": "team-a"},
+    )
 
 
 @pytest.mark.asyncio
