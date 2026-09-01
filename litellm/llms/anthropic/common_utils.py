@@ -326,19 +326,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             )
 
     @staticmethod
-    def _apply_forced_tool_choice(
-        model: str,
-        tool_choice: AnthropicMessagesToolChoice,
-        drop_params: bool,
-    ) -> AnthropicMessagesToolChoice:
-        """Forward ``tool_choice`` unless the model map flags the model with
+    def forced_tool_use_downgraded(model: str, drop_params: bool) -> bool:
+        """True when the model map flags the model with
         ``supports_forced_tool_use: false`` (Fable 5.1 / Mythos 5.1 400 on
-        ``any``/``tool``), in which case downgrade to ``auto`` (with
-        drop_params) or raise a clean client-side 400."""
-        if tool_choice["type"] not in ("any", "tool"):
-            return tool_choice
+        ``any``/``tool``) and ``drop_params`` asks for the ``auto`` downgrade;
+        raises a clean client-side 400 for such models without ``drop_params``."""
         if AnthropicModelInfo._get_model_capability(model, "supports_forced_tool_use") is not False:
-            return tool_choice
+            return False
         if not (litellm.drop_params or drop_params):
             raise litellm.utils.UnsupportedParamsError(
                 message=(
@@ -349,6 +343,18 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 status_code=400,
             )
         litellm.verbose_logger.warning(DROP_FORCED_TOOL_CHOICE_WARNING, model)
+        return True
+
+    @staticmethod
+    def _apply_forced_tool_choice(
+        model: str,
+        tool_choice: AnthropicMessagesToolChoice,
+        drop_params: bool,
+    ) -> AnthropicMessagesToolChoice:
+        if tool_choice["type"] not in ("any", "tool"):
+            return tool_choice
+        if not AnthropicModelInfo.forced_tool_use_downgraded(model, drop_params):
+            return tool_choice
         disable_parallel: Final = tool_choice.get("disable_parallel_tool_use")
         if disable_parallel is None:
             return AnthropicMessagesToolChoice(type="auto")
