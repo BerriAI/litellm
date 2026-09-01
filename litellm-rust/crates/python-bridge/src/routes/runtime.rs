@@ -3,7 +3,7 @@ use std::panic::AssertUnwindSafe;
 use std::time::Duration;
 
 use futures_util::FutureExt;
-use litellm_core::error::{CoreError, CoreResult};
+use litellm_core::error::Error;
 use litellm_python_interop::{Pythonized, panic_to_pyerr, release_gil, to_py};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -14,11 +14,11 @@ use tokio::time::{self, MissedTickBehavior};
 pub(super) fn run_sync<T, F>(
     py: Python<'_>,
     future: F,
-    map_error: fn(CoreError) -> PyErr,
+    map_error: fn(Error) -> PyErr,
 ) -> PyResult<Py<PyAny>>
 where
     T: Serialize + Send + 'static,
-    F: Future<Output = CoreResult<T>> + Send + 'static,
+    F: Future<Output = Result<T, Error>> + Send + 'static,
 {
     run_sync_on(
         py,
@@ -32,11 +32,11 @@ fn run_sync_on<T, F>(
     py: Python<'_>,
     runtime: &Runtime,
     future: F,
-    map_error: fn(CoreError) -> PyErr,
+    map_error: fn(Error) -> PyErr,
 ) -> PyResult<Py<PyAny>>
 where
     T: Serialize + Send + 'static,
-    F: Future<Output = CoreResult<T>> + Send + 'static,
+    F: Future<Output = Result<T, Error>> + Send + 'static,
 {
     if Handle::try_current().is_ok() {
         return Err(PyRuntimeError::new_err(
@@ -52,11 +52,11 @@ where
 pub(super) fn run_async<T, F>(
     py: Python<'_>,
     future: F,
-    map_error: fn(CoreError) -> PyErr,
+    map_error: fn(Error) -> PyErr,
 ) -> PyResult<Bound<'_, PyAny>>
 where
     T: Serialize + Send + 'static,
-    F: Future<Output = CoreResult<T>> + Send + 'static,
+    F: Future<Output = Result<T, Error>> + Send + 'static,
 {
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let result = catch_route_panic(future).await?;
@@ -65,7 +65,7 @@ where
     })
 }
 
-fn map_core_result<T>(result: CoreResult<T>, map_error: fn(CoreError) -> PyErr) -> PyResult<T> {
+fn map_core_result<T>(result: Result<T, Error>, map_error: fn(Error) -> PyErr) -> PyResult<T> {
     match result {
         Ok(value) => Ok(value),
         Err(error) => Err(
@@ -75,9 +75,9 @@ fn map_core_result<T>(result: CoreResult<T>, map_error: fn(CoreError) -> PyErr) 
     }
 }
 
-async fn catch_route_panic<T, F>(future: F) -> PyResult<CoreResult<T>>
+async fn catch_route_panic<T, F>(future: F) -> PyResult<Result<T, Error>>
 where
-    F: Future<Output = CoreResult<T>>,
+    F: Future<Output = Result<T, Error>>,
 {
     AssertUnwindSafe(future)
         .catch_unwind()
@@ -85,9 +85,9 @@ where
         .map_err(panic_to_pyerr)
 }
 
-async fn wait_for_sync_result<T, F>(future: F) -> PyResult<CoreResult<T>>
+async fn wait_for_sync_result<T, F>(future: F) -> PyResult<Result<T, Error>>
 where
-    F: Future<Output = CoreResult<T>>,
+    F: Future<Output = Result<T, Error>>,
 {
     let future = catch_route_panic(future);
     tokio::pin!(future);
@@ -121,11 +121,11 @@ mod tests {
 
     use super::*;
 
-    fn runtime_error(error: CoreError) -> PyErr {
+    fn runtime_error(error: Error) -> PyErr {
         PyRuntimeError::new_err(error.to_string())
     }
 
-    fn panicking_error_mapper(_error: CoreError) -> PyErr {
+    fn panicking_error_mapper(_error: Error) -> PyErr {
         panic!("error mapper panicked")
     }
 
@@ -275,7 +275,7 @@ mod tests {
         Python::attach(|py| {
             let error = run_sync::<bool, _>(
                 py,
-                poll_fn(|_| -> Poll<CoreResult<bool>> { panic!("route future panicked") }),
+                poll_fn(|_| -> Poll<Result<bool, Error>> { panic!("route future panicked") }),
                 runtime_error,
             )
             .expect_err("panicked route should become a Python exception");
@@ -291,7 +291,7 @@ mod tests {
         Python::attach(|py| {
             let error = run_sync::<bool, _>(
                 py,
-                async { Err(CoreError::InvalidRequest("invalid".to_string())) },
+                async { Err(Error::InvalidRequest("invalid".to_string())) },
                 panicking_error_mapper,
             )
             .expect_err("panicked mapper should become a Python exception");

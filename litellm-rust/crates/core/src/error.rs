@@ -1,9 +1,7 @@
-use thiserror::Error;
+use thiserror::Error as ThisError;
 
-pub type CoreResult<T> = Result<T, CoreError>;
-
-#[derive(Debug, Error, PartialEq, Eq)]
-pub enum CoreError {
+#[derive(Debug, ThisError, PartialEq, Eq)]
+pub enum Error {
     #[error("expected {expected}, got {actual}")]
     InvalidType {
         expected: &'static str,
@@ -39,10 +37,10 @@ pub enum CoreError {
 }
 
 /// Re-tag an error raised after the provider has already returned a response.
-pub(crate) fn as_response_error(err: CoreError) -> CoreError {
+pub(crate) fn as_response_error(err: Error) -> Error {
     match err {
-        already @ (CoreError::InvalidResponse(_) | CoreError::Http { .. }) => already,
-        other => CoreError::InvalidResponse(other.to_string()),
+        already @ (Error::InvalidResponse(_) | Error::Http { .. }) => already,
+        other => Error::InvalidResponse(other.to_string()),
     }
 }
 

@@ -24,7 +24,7 @@ Rules for adding or changing an LLM provider/route in `litellm-rust`. `messages`
 ## Types and errors
 
 11. Typed contracts only: no bare `serde_json::Value` / `String` / `Vec<String>` as a transform input or output. Parse wire bytes into typed structs/enums at the host edge; a `type` discriminator is a typed field, not a raw string.
-12. Model failures as values: return typed `CoreError`, don't panic. No `unwrap`/`expect`/`panic!` on user or provider input.
+12. Model failures as values: return typed `Error`, don't panic. No `unwrap`/`expect`/`panic!` on user or provider input.
 13. No mutation: build values in one shot (comprehensions/iterators, `collect`), prefer immutable bindings and owned typed structs over seeding-and-mutating.
 14. Early returns over deep nesting; small focused files over god modules.
 15. Preserve Python output shape intentionally. If a field is always serialized as `null` for parity, keep it and pin it with a test.

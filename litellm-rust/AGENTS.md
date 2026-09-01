@@ -19,7 +19,7 @@ A top-level LiteLLM call is a module under `crates/core/src/<route>/`, shaped li
 
 ```
 core/src/messages/
-  mod.rs             # pub async fn messages(..) -> CoreResult<..>  (+ messages_stream for SSE)
+  mod.rs             # pub async fn messages(..) -> Result<.., Error>  (+ messages_stream for SSE)
   types.rs           # request/response types, MessagesRequest
   transformation.rs  # the provider template trait
   prepare.rs         # provider resolution, auth headers, URL

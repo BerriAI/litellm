@@ -17,7 +17,7 @@ pub mod types;
 
 use serde_json::{Map, Value};
 
-use crate::error::CoreResult;
+use crate::error::Error;
 
 use handler::execute_chat_completions_provider_call;
 use prepare::{parse_messages, prepare_chat_completions_call, resolve_provider_config};
@@ -25,7 +25,7 @@ use types::{ChatCompletionsRequest, ChatCompletionsResponse};
 
 pub async fn chat_completions(
     request: ChatCompletionsRequest<'_>,
-) -> CoreResult<ChatCompletionsResponse> {
+) -> Result<ChatCompletionsResponse, Error> {
     execute_chat_completions_provider_call(prepare_chat_completions_call(request)?).await
 }
 

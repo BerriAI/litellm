@@ -3,7 +3,7 @@ use std::future::Future;
 use litellm_core::audio_transcription::{
     AudioTranscriptionRequest, audio_transcription as run_audio_transcription,
 };
-use litellm_core::error::CoreResult;
+use litellm_core::error::Error;
 use litellm_python_interop::from_py;
 use pyo3::prelude::*;
 use serde_json::Value;
@@ -14,7 +14,7 @@ use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
 fn prepare_transcription(
     py: Python<'_>,
     inputs: AudioTranscriptionInputs,
-) -> PyResult<impl Future<Output = CoreResult<Value>> + Send + 'static> {
+) -> PyResult<impl Future<Output = Result<Value, Error>> + Send + 'static> {
     let audio = from_py(inputs.audio.bind(py))?;
     let options = RouteOptions::from_python(
         py,

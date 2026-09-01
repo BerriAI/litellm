@@ -91,7 +91,7 @@ mod tests {
     use std::ffi::CString;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use litellm_core::error::{CoreError, CoreResult};
+    use litellm_core::error::Error;
     use pyo3::exceptions::PyLookupError;
     use pyo3::types::{PyDict, PyList};
 
@@ -131,15 +131,15 @@ mod tests {
         fn prepare_echo(
             _py: Python<'_>,
             inputs: EchoInputs,
-        ) -> PyResult<impl Future<Output = CoreResult<String>> + Send + 'static> {
+        ) -> PyResult<impl Future<Output = Result<String, Error>> + Send + 'static> {
             FUTURE_DROPPED.store(false, Ordering::SeqCst);
             let drop_guard = (inputs.value == "pending").then_some(DropGuard);
             Ok(async move {
                 let _drop_guard = drop_guard;
                 tokio::task::yield_now().await;
                 match inputs.value.as_str() {
-                    "error" => Err(CoreError::InvalidRequest("synthetic error".to_string())),
-                    "map_panic" => Err(CoreError::InvalidRequest("panic in mapper".to_string())),
+                    "error" => Err(Error::InvalidRequest("synthetic error".to_string())),
+                    "map_panic" => Err(Error::InvalidRequest("panic in mapper".to_string())),
                     "panic" => panic!("synthetic panic"),
                     "pending" => {
                         pending::<()>().await;
@@ -150,9 +150,8 @@ mod tests {
             })
         }
 
-        fn map_error(error: CoreError) -> PyErr {
-            if matches!(&error, CoreError::InvalidRequest(message) if message == "panic in mapper")
-            {
+        fn map_error(error: Error) -> PyErr {
+            if matches!(&error, Error::InvalidRequest(message) if message == "panic in mapper") {
                 panic!("synthetic mapper panic")
             }
             PyLookupError::new_err(error.to_string())

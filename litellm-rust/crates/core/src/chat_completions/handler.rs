@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::error::{CoreError, CoreResult, as_response_error};
+use crate::error::{Error, as_response_error};
 use crate::http_utils::{classify_send_error, truncate_error_body};
 
 use super::client::http_client;
@@ -11,9 +11,9 @@ use super::types::{
 
 pub(super) async fn execute_chat_completions_provider_call(
     request: ProviderChatCompletionsRequest,
-) -> CoreResult<ChatCompletionsResponse> {
+) -> Result<ChatCompletionsResponse, Error> {
     let body = serde_json::to_vec(&request.body).map_err(|err| {
-        CoreError::InvalidRequest(format!(
+        Error::InvalidRequest(format!(
             "failed to serialize chat completions request: {err}"
         ))
     })?;
@@ -33,17 +33,17 @@ pub(super) async fn execute_chat_completions_provider_call(
     let text = response
         .text()
         .await
-        .map_err(|err| CoreError::Network(err.to_string()))?;
+        .map_err(|err| Error::Network(err.to_string()))?;
 
     if !status.is_success() {
-        return Err(CoreError::Http {
+        return Err(Error::Http {
             status: status.as_u16(),
             body: truncate_error_body(&text),
         });
     }
 
     let body: Value = serde_json::from_str(&text).map_err(|err| {
-        CoreError::InvalidResponse(format!("invalid chat completions response JSON: {err}"))
+        Error::InvalidResponse(format!("invalid chat completions response JSON: {err}"))
     })?;
     request
         .config
@@ -55,7 +55,7 @@ pub(super) async fn execute_chat_completions_provider_call(
 pub(super) async fn signed_headers(
     request: &ProviderChatCompletionsRequest,
     body: &[u8],
-) -> CoreResult<Vec<(String, String)>> {
+) -> Result<Vec<(String, String)>, Error> {
     use std::collections::BTreeMap;
     use std::time::SystemTime;
 
@@ -76,7 +76,7 @@ pub(super) async fn signed_headers(
         .iter()
         .any(|(name, _)| is_sigv4_computed_header(name))
     {
-        return Err(CoreError::Unsupported(
+        return Err(Error::Unsupported(
             "request forwards a header AWS SigV4 computes",
         ));
     }
@@ -112,9 +112,9 @@ pub(super) async fn signed_headers(
 pub(super) async fn signed_headers(
     request: &ProviderChatCompletionsRequest,
     _body: &[u8],
-) -> CoreResult<Vec<(String, String)>> {
+) -> Result<Vec<(String, String)>, Error> {
     match &request.auth {
-        ChatCompletionsAuth::AwsSigV4 { .. } => Err(CoreError::Unsupported(
+        ChatCompletionsAuth::AwsSigV4 { .. } => Err(Error::Unsupported(
             "AWS SigV4 requires the bedrock-auth feature",
         )),
         _ => Ok(request.upstream_headers.clone()),

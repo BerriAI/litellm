@@ -1,6 +1,6 @@
 use serde_json::{Map, Value};
 
-use crate::CoreResult;
+use crate::Error;
 
 use super::types::{OcrRequestData, OcrResponseData};
 
@@ -43,13 +43,13 @@ pub trait OcrProviderConfig: Sync {
         model: &str,
         document: Value,
         optional_params: Map<String, Value>,
-    ) -> CoreResult<OcrRequestData>;
+    ) -> Result<OcrRequestData, Error>;
 
     fn transform_ocr_response(
         &self,
         model: &str,
         response_json: Value,
-    ) -> CoreResult<OcrResponseData>;
+    ) -> Result<OcrResponseData, Error>;
 
     fn complete_url(
         &self,
@@ -57,13 +57,13 @@ pub trait OcrProviderConfig: Sync {
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String>;
+    ) -> Result<String, Error>;
 
     fn resolve_api_key(
         &self,
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String>;
+    ) -> Result<String, Error>;
 
     fn auth_strategy(&self) -> OcrAuthStrategy {
         OcrAuthStrategy::Bearer

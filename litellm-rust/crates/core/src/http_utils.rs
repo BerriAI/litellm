@@ -3,13 +3,13 @@
 use serde_json::{Map, Value};
 
 use crate::constants::UPSTREAM_ERROR_BODY_MAX_CHARS;
-use crate::error::{CoreError, CoreResult, json_type_name};
+use crate::error::{Error, json_type_name};
 
-pub(crate) fn classify_send_error(error: reqwest::Error) -> CoreError {
+pub(crate) fn classify_send_error(error: reqwest::Error) -> Error {
     if error.is_connect() || error.is_builder() {
-        CoreError::Connect(error.to_string())
+        Error::Connect(error.to_string())
     } else {
-        CoreError::Network(error.to_string())
+        Error::Network(error.to_string())
     }
 }
 
@@ -26,7 +26,7 @@ pub fn truncate_error_body(body: &str) -> String {
 pub fn string_headers(
     context: &'static str,
     extra_headers: Option<Map<String, Value>>,
-) -> CoreResult<Vec<(String, String)>> {
+) -> Result<Vec<(String, String)>, Error> {
     extra_headers
         .unwrap_or_default()
         .into_iter()
@@ -35,7 +35,7 @@ pub fn string_headers(
                 .as_str()
                 .map(|value| (key.clone(), value.to_string()))
                 .ok_or_else(|| {
-                    CoreError::InvalidRequest(format!(
+                    Error::InvalidRequest(format!(
                         "{context} extra_headers.{key} must be a string, got {}",
                         json_type_name(&value)
                     ))
@@ -89,7 +89,7 @@ mod tests {
         let err = string_headers("chat completions", Some(headers)).expect_err("non-string value");
         assert_eq!(
             err,
-            CoreError::InvalidRequest(
+            Error::InvalidRequest(
                 "chat completions extra_headers.x-trace must be a string, got number".to_string()
             )
         );
