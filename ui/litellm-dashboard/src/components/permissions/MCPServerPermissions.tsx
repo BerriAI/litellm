@@ -11,14 +11,18 @@ interface MCPServerPermissionsProps {
   mcpAccessGroups?: string[];
   mcpToolPermissions?: Record<string, string[]>;
   mcpToolsets?: string[];
+  inheritedMcpServers?: string[];
   accessToken?: string | null;
 }
+
+const INHERITED_MCP_SERVER_TOOLTIP = "Granted through one of the team's access groups";
 
 export function MCPServerPermissions({
   mcpServers,
   mcpAccessGroups = [],
   mcpToolPermissions = {},
   mcpToolsets = [],
+  inheritedMcpServers = [],
   accessToken,
 }: MCPServerPermissionsProps) {
   const [mcpServerDetails, setMCPServerDetails] = useState<MCPServer[]>([]);
@@ -50,10 +54,16 @@ export function MCPServerPermissions({
     });
   };
 
+  const directServerIds = mcpServers.filter(
+    (server) => server !== NO_MCP_SERVERS_SENTINEL && server !== ALL_PROXY_MCP_SERVERS_SENTINEL,
+  );
+  const inheritedOnlyServerIds = inheritedMcpServers.filter((server) => !mcpServers.includes(server));
+  const serverIdCount = directServerIds.length + inheritedOnlyServerIds.length;
+
   // Fetch MCP server details when component mounts
   useEffect(() => {
     const fetchMCPServerDetails = async () => {
-      if (accessToken && mcpServers.length > 0) {
+      if (accessToken && serverIdCount > 0) {
         try {
           const response = await fetchMCPServers(accessToken);
           if (response && Array.isArray(response)) {
@@ -67,7 +77,7 @@ export function MCPServerPermissions({
       }
     };
     fetchMCPServerDetails();
-  }, [accessToken, mcpServers.length]);
+  }, [accessToken, serverIdCount]);
 
   // Fetch toolset details
   useEffect(() => {
@@ -98,12 +108,11 @@ export function MCPServerPermissions({
   const blocksAllMcpServers = mcpServers.includes(NO_MCP_SERVERS_SENTINEL);
   const grantsAllProxyMcpServers = mcpServers.includes(ALL_PROXY_MCP_SERVERS_SENTINEL);
 
-  // Merge servers and access groups into one list
+  // Merge servers, inherited servers and access groups into one list
   const mergedItems = [
-    ...mcpServers
-      .filter((server) => server !== NO_MCP_SERVERS_SENTINEL && server !== ALL_PROXY_MCP_SERVERS_SENTINEL)
-      .map((server) => ({ type: "server", value: server })),
-    ...mcpAccessGroups.map((group) => ({ type: "accessGroup", value: group })),
+    ...directServerIds.map((server) => ({ type: "server", value: server, inherited: false })),
+    ...inheritedOnlyServerIds.map((server) => ({ type: "server", value: server, inherited: true })),
+    ...mcpAccessGroups.map((group) => ({ type: "accessGroup", value: group, inherited: false })),
   ];
   const totalCount = mergedItems.length + mcpToolsets.length;
 
@@ -152,8 +161,17 @@ export function MCPServerPermissions({
                           <span className="text-sm font-medium text-foreground truncate">
                             {getMCPServerDisplayName(item.value)}
                           </span>
+                          {item.inherited && (
+                            <span className="ml-1 px-1.5 py-0.5 text-[9px] font-semibold text-info bg-info/10 border border-info/20 rounded-sm uppercase tracking-wide shrink-0">
+                              Inherited
+                            </span>
+                          )}
                         </TooltipTrigger>
-                        <TooltipContent>{`Full ID: ${item.value}`}</TooltipContent>
+                        <TooltipContent>
+                          {item.inherited
+                            ? `${INHERITED_MCP_SERVER_TOOLTIP}. Full ID: ${item.value}`
+                            : `Full ID: ${item.value}`}
+                        </TooltipContent>
                       </Tooltip>
                     ) : (
                       <div className="inline-flex items-center gap-2 min-w-0">

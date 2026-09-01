@@ -406,4 +406,47 @@ describe("MCPServerPermissions", () => {
     );
     await waitFor(() => expect(screen.getByText("Blocked")).toHaveAttribute("data-variant", "destructive"));
   });
+
+  it("lists servers inherited from access groups with an Inherited tag and counts them", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      { server_id: mockServerId1, server_name: mockServerName1, alias: mockServerName1 },
+    ]);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={[]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        inheritedMcpServers={[mockServerId1]}
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    expect(await screen.findByText(/DW_MCP/)).toBeInTheDocument();
+    expect(screen.getByText("Inherited")).toBeInTheDocument();
+    expect(screen.getByText("1")).toBeInTheDocument();
+    expect(screen.queryByText("No MCP servers, access groups, or toolsets configured")).not.toBeInTheDocument();
+    expect(networking.fetchMCPServers).toHaveBeenCalledWith(mockAccessToken);
+  });
+
+  it("does not double-list a server that is both granted directly and inherited", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      { server_id: mockServerId2, server_name: mockServerName2, alias: mockServerName2 },
+    ]);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={[mockServerId2]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        inheritedMcpServers={[mockServerId2]}
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    expect(await screen.findByText(/Test Server/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Test Server/)).toHaveLength(1);
+    expect(screen.queryByText("Inherited")).not.toBeInTheDocument();
+    expect(screen.getByText("1")).toBeInTheDocument();
+  });
 });

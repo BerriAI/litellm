@@ -38,6 +38,9 @@ vi.mock("@/components/networking", () => ({
   organizationInfoCall: vi.fn(),
   getRouterSettingsCall: vi.fn().mockResolvedValue({ fields: [] }),
   getPassThroughEndpointsCall: vi.fn(),
+  fetchMCPServers: vi.fn().mockResolvedValue([]),
+  fetchMCPToolsets: vi.fn().mockResolvedValue([]),
+  getAgentsList: vi.fn().mockResolvedValue({ agents: [] }),
 }));
 
 const can = vi.fn();
@@ -300,6 +303,31 @@ describe("TeamInfoView", () => {
         "href",
         expect.stringContaining("/models-and-endpoints?model_group=claude-sonnet-5"),
       );
+    });
+
+    it("shows MCP servers and agents inherited from access groups in the Object Permissions card", async () => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+        { server_id: "mcp-github-1234", server_name: "github", alias: "github" },
+      ]);
+      vi.mocked(networking.getAgentsList).mockResolvedValue({
+        agents: [{ agent_id: "agent-support-5678", agent_name: "support_agent" }],
+      });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          object_permission: null,
+          access_group_ids: ["ag-1"],
+          access_group_mcp_server_ids: ["mcp-github-1234"],
+          access_group_agent_ids: ["agent-support-5678"],
+        }),
+      );
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      expect(await screen.findByText(/github \(mcp\.\.\.1234\)/)).toBeInTheDocument();
+      expect(await screen.findByText(/support_agent \(age\.\.\.5678\)/)).toBeInTheDocument();
+      expect(screen.getAllByText("Inherited")).toHaveLength(2);
+      expect(screen.queryByText("No MCP servers, access groups, or toolsets configured")).not.toBeInTheDocument();
+      expect(screen.queryByText("No agents or access groups configured")).not.toBeInTheDocument();
     });
 
     it("keeps the all-proxy-models badge non-clickable", async () => {
