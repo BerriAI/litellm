@@ -38,13 +38,14 @@ async function findKeyByAlias(page: PlaywrightPage, alias: string): Promise<Reco
 /** A member this test adds itself, so removing it costs the suite nothing on a retry or a re-run. */
 async function addRemovableMember(page: PlaywrightPage, registerForCleanup: string[]): Promise<string> {
   const userId = `e2e-removable-${Date.now()}`;
+  // Claimed before the call: /user/new can persist the user and still answer non-2xx, and the id is
+  // ours either way, so registering it up front is what no failure path can skip.
+  registerForCleanup.push(userId);
   const created = await page.request.post("/user/new", {
     headers: { Authorization: `Bearer ${masterKey()}` },
     data: { user_id: userId, user_role: "internal_user", auto_create_key: false },
   });
   expect(created.ok(), `POST /user/new failed (${created.status()}): ${await created.text()}`).toBe(true);
-  // Registered before member_add, which can fail and would otherwise strand the user.
-  registerForCleanup.push(userId);
 
   const added = await page.request.post("/team/member_add", {
     headers: { Authorization: `Bearer ${masterKey()}` },
@@ -58,12 +59,14 @@ test.describe("Team Admin", () => {
   const createdMembers: string[] = [];
 
   test.afterEach(async ({ page }) => {
-    // Runs on the failure path too, which a call at the end of the test body would not.
+    // Runs on the failure path too, which a call at the end of the test body would not. Ids are
+    // claimed before the user is created, so one that never persisted is skipped rather than
+    // failing an otherwise clean run.
     for (const userId of createdMembers.splice(0)) {
-      const deleted = await page.request.post("/user/delete", {
-        headers: { Authorization: `Bearer ${masterKey()}` },
-        data: { user_ids: [userId] },
-      });
+      const auth = { Authorization: `Bearer ${masterKey()}` };
+      const info = await page.request.get(`/user/info?user_id=${encodeURIComponent(userId)}`, { headers: auth });
+      if (!info.ok()) continue;
+      const deleted = await page.request.post("/user/delete", { headers: auth, data: { user_ids: [userId] } });
       expect(deleted.ok(), `POST /user/delete for ${userId} (${deleted.status()})`).toBe(true);
     }
   });
