@@ -565,6 +565,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             status=_get_status_for_spend_log(
                 metadata=metadata,
             ),
+            litellm_call_id=litellm_call_id,
         )
 
         verbose_proxy_logger.debug(

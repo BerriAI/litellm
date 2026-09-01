@@ -229,10 +229,24 @@ async def _find_spend_logs(
     return rows
 
 
+class _RequestIdEquals(TypedDict):
+    request_id: ReadOnly[str]
+
+
+class _LitellmCallIdEquals(TypedDict):
+    litellm_call_id: ReadOnly[str]
+
+
+def _request_id_or_call_id_clause(request_id: str) -> tuple[_RequestIdEquals, _LitellmCallIdEquals]:
+    request_id_clause: Final[_RequestIdEquals] = {"request_id": request_id}
+    call_id_clause: Final[_LitellmCallIdEquals] = {"litellm_call_id": request_id}
+    return (request_id_clause, call_id_clause)
+
+
 async def _find_spend_log_row(prisma_client: PrismaClient, request_id: str) -> _SpendLogOwnershipRow | None:
-    """Read the single spend log row identified by ``request_id``."""
-    return await _spend_logs_table(prisma_client).find_unique(
-        where={"request_id": request_id},
+    """Read the single spend log row identified by ``request_id`` or ``litellm_call_id``."""
+    return await _spend_logs_table(prisma_client).find_first(
+        where={"OR": _request_id_or_call_id_clause(request_id)},
         include=None,
     )
 
@@ -2543,7 +2557,6 @@ async def ui_view_spend_logs(
             ("team_id", "team_id"),
             ('"user"', "user"),
             ("api_key", "api_key"),
-            ("request_id", "request_id"),
             ("model", "model"),
             ("model_id", "model_id"),
             ("model_group", "model_group"),
@@ -2554,6 +2567,12 @@ async def ui_view_spend_logs(
                 sql_conditions.append(f"{sql_col} = ${p}")
                 sql_params.append(val)
                 p += 1
+
+        request_id_filter: Final = where_conditions.get("request_id")
+        if isinstance(request_id_filter, str):
+            sql_conditions.append(f"(request_id = ${p} OR litellm_call_id = ${p})")
+            sql_params.append(request_id_filter)
+            p += 1
 
         # Multi-team OR filter: (user = $X OR team_id = ANY($Y))
         if permitted_team_ids:
@@ -2662,6 +2681,7 @@ async def ui_view_spend_logs(
                 cache_hit, cache_key, request_tags, team_id,
                 organization_id, end_user, requester_ip_address,
                 session_id, status, mcp_namespaced_tool_name, agent_id,
+                litellm_call_id,
                 COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms
             FROM "LiteLLM_SpendLogs"
             WHERE {" AND ".join(sql_conditions)}
@@ -2735,7 +2755,7 @@ def _hydrate_spend_log_metadata(rows: Sequence[Mapping[str, object]]) -> None:
 
 
 def _cold_storage_object_key_from_metadata(
-    metadata: str | dict | None,
+    metadata: str | Mapping[str, object] | None,
 ) -> str | None:
     if isinstance(metadata, str):
         try:
@@ -2870,7 +2890,7 @@ async def ui_view_request_response_for_request_id(
         sql_query: Final = """
             SELECT messages, response, proxy_server_request, metadata
             FROM "LiteLLM_SpendLogs"
-            WHERE request_id = $1
+            WHERE request_id = $1 OR litellm_call_id = $1
             LIMIT 1
         """
         db_result: Final[Sequence[Mapping[str, object]] | None] = await _query_raw_or_none(
@@ -2989,7 +3009,7 @@ async def view_spend_logs(
             start_date_iso: Final = start_date_obj.isoformat()
             end_date_iso: Final = end_date_obj.isoformat()
 
-            filter_query: Final = {
+            filter_query: Final[dict[str, object]] = {
                 "startTime": {
                     "gte": start_date_iso,  # Greater than or equal to Start Date
                     "lte": end_date_iso,  # Less than or equal to End Date
@@ -3002,7 +3022,7 @@ async def view_spend_logs(
                 else:
                     filter_query["api_key"] = api_key
             if request_id is not None and isinstance(request_id, str):
-                filter_query["request_id"] = request_id
+                filter_query["OR"] = _request_id_or_call_id_clause(request_id)
             if user_id is not None and isinstance(user_id, str):
                 filter_query["user"] = user_id
 
@@ -3073,7 +3093,7 @@ async def view_spend_logs(
             return response
 
         else:
-            scoped_filter: Final[dict[str, str]] = {}
+            scoped_filter: Final[dict[str, object]] = {}
             if api_key is not None and isinstance(api_key, str):
                 if api_key.startswith("sk-"):
                     hashed_token = prisma_client.hash_token(token=api_key)
@@ -3081,7 +3101,7 @@ async def view_spend_logs(
                     hashed_token = api_key
                 scoped_filter["api_key"] = hashed_token
             if request_id is not None and isinstance(request_id, str):
-                scoped_filter["request_id"] = request_id
+                scoped_filter["OR"] = _request_id_or_call_id_clause(request_id)
             if user_id is not None and isinstance(user_id, str):
                 scoped_filter["user"] = user_id
 

@@ -3644,6 +3644,7 @@ class SpendLogsPayload(TypedDict):
     session_id: str | None
     request_duration_ms: int | None
     status: Literal["success", "failure"]
+    litellm_call_id: ReadOnly[str | None]
 
 
 class SpanAttributes(str, enum.Enum):
