@@ -6,6 +6,7 @@ from typing import Any, Final, Literal
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.bedrock.rerank.handler import BedrockRerankHandler
@@ -43,16 +44,22 @@ async def arerank(
     """
     Async: Reranks a list of documents based on their relevance to the query
     """
-    _custom_llm_provider: str | None = None  # rebind-ok: set by the get_llm_provider unpack; read in the except
+    _custom_llm_provider: str | None = (
+        None  # rebind-ok: set by the declared-provider guard or the get_llm_provider unpack; read in the except
+    )
     try:
         loop: Final = asyncio.get_event_loop()
         kwargs["arerank"] = True
 
-        _, _custom_llm_provider, _, _ = litellm.get_llm_provider(  # rebind-ok: see pre-declaration above
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            api_base=kwargs.get("api_base", None),
-        )
+        declared_provider: Final = declared_authenticating_provider(model, custom_llm_provider)
+        if declared_provider is not None:
+            _custom_llm_provider = declared_provider  # rebind-ok: see pre-declaration above
+        else:
+            _, _custom_llm_provider, _, _ = litellm.get_llm_provider(  # rebind-ok: see pre-declaration above
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                api_base=kwargs.get("api_base", None),
+            )
 
         func: Final = partial(
             rerank,
