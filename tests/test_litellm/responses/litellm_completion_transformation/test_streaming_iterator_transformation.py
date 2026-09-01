@@ -132,7 +132,7 @@ def test_tool_call_delta_is_emitted_as_responses_events():
     evt2 = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
     assert evt2 is not None
     assert evt2.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
-    assert evt2.item_id == "call_1"
+    assert evt2.item_id == "fc_call_1"
     assert evt2.output_index == 1
     # The delta will be a chunk of the arguments, not the full arguments
     assert len(evt2.delta) <= 10  # Chunks are max 10 characters
@@ -197,7 +197,7 @@ def test_tool_calls_present_only_in_final_response_are_emitted_before_completed(
 
     # The last event should be FUNCTION_CALL_ARGUMENTS_DONE
     assert evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE
-    assert evt.item_id == "call_2"
+    assert evt.item_id == "fc_call_2"
     assert evt.output_index == 1
     assert evt.arguments == '{"y":2}'
 
@@ -291,7 +291,7 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
     # Verify each delta is at most 10 characters
     for evt in delta_events:
         assert len(evt.delta) <= 10
-        assert evt.item_id == "call_test"
+        assert evt.item_id == "fc_call_test"
         assert evt.output_index == 1
         assert hasattr(evt, "__dict__") and "sequence_number" in evt.__dict__
 
@@ -349,7 +349,8 @@ def test_tool_call_delta_without_id_uses_index_mapping():
         if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
     ]
     assert len(output_item_added_events) == 1
-    assert output_item_added_events[0].item.id == "call_abc123"
+    assert output_item_added_events[0].item.id == "fc_call_abc123"
+    assert output_item_added_events[0].item.call_id == "call_abc123"
 
 
 def test_parallel_tool_calls_without_ids_use_index_mapping():
@@ -404,8 +405,8 @@ def test_parallel_tool_calls_without_ids_use_index_mapping():
         arguments_by_call_id.setdefault(evt.item_id, "")
         arguments_by_call_id[evt.item_id] += evt.delta
 
-    assert arguments_by_call_id["call_a"] == '{"x":1}'
-    assert arguments_by_call_id["call_b"] == '{"y":2}'
+    assert arguments_by_call_id["fc_call_a"] == '{"x":1}'
+    assert arguments_by_call_id["fc_call_b"] == '{"y":2}'
 
 
 def test_final_tool_events_and_completed_snapshot_reuse_streamed_call_identity():
@@ -416,7 +417,9 @@ def test_final_tool_events_and_completed_snapshot_reuse_streamed_call_identity()
         responses_api_request={},
     )
     streamed_ids = ["call_stream_a", "call_stream_b"]
+    streamed_item_ids = [f"fc_{call_id}" for call_id in streamed_ids]
     terminal_ids = ["call_terminal_a", "call_terminal_b"]
+    terminal_item_ids = [f"fc_{call_id}" for call_id in terminal_ids]
 
     iterator._queue_tool_call_delta_events(
         [
@@ -482,7 +485,7 @@ def test_final_tool_events_and_completed_snapshot_reuse_streamed_call_identity()
         }
         and getattr(event.item, "type", None) == "function_call"
     ]
-    assert [item.id for item in final_tool_items] == streamed_ids
+    assert [item.id for item in final_tool_items] == streamed_item_ids
     assert [item.call_id for item in final_tool_items] == streamed_ids
 
     argument_event_ids = [
@@ -495,13 +498,13 @@ def test_final_tool_events_and_completed_snapshot_reuse_streamed_call_identity()
         }
     ]
     assert argument_event_ids
-    assert set(argument_event_ids) == set(streamed_ids)
+    assert set(argument_event_ids) == set(streamed_item_ids)
 
     completed = final_events[-1]
     completed_calls = [item for item in completed.response.output if item.type == "function_call"]
-    assert [item.id for item in completed_calls] == streamed_ids
+    assert [item.id for item in completed_calls] == streamed_item_ids
     assert [item.call_id for item in completed_calls] == streamed_ids
-    assert not set(terminal_ids) & {
+    assert not set(terminal_ids + terminal_item_ids) & {
         item_id for item in final_tool_items + completed_calls for item_id in (item.id, item.call_id)
     }
 
@@ -629,6 +632,7 @@ def test_terminal_only_tool_calls_keep_terminal_identity():
         responses_api_request={},
     )
     terminal_ids = ["call_terminal_a", "call_terminal_b"]
+    terminal_item_ids = [f"fc_{call_id}" for call_id in terminal_ids]
     response = ModelResponse(
         id="chatcmpl-terminal-only",
         created=123,
@@ -661,7 +665,7 @@ def test_terminal_only_tool_calls_keep_terminal_identity():
         if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
     ]
 
-    assert [item.id for item in added_items] == terminal_ids
+    assert [item.id for item in added_items] == terminal_item_ids
     assert [item.call_id for item in added_items] == terminal_ids
 
 
@@ -726,13 +730,13 @@ def test_terminal_only_call_is_not_conflated_with_later_streamed_call():
 
     assert completed is not None
     assert {item.id for item in added_or_done_items} == {
-        "call_terminal_only",
-        "call_streamed",
+        "fc_call_terminal_only",
+        "fc_call_streamed",
     }
     completed_calls = [item for item in completed.response.output if item.type == "function_call"]
     assert [item.id for item in completed_calls] == [
-        "call_terminal_only",
-        "call_streamed",
+        "fc_call_terminal_only",
+        "fc_call_streamed",
     ]
     assert [item.call_id for item in completed_calls] == [
         "call_terminal_only",
@@ -793,10 +797,10 @@ def test_reused_index_with_new_call_id_marks_fallback_ambiguous():
         arguments_by_call_id.setdefault(evt.item_id, "")
         arguments_by_call_id[evt.item_id] += evt.delta
 
-    assert arguments_by_call_id["call_a"] == '{"a":'
-    assert arguments_by_call_id["call_b"] == '{"b":'
-    assert arguments_by_call_id["call_a"] != '{"a":1}'
-    assert arguments_by_call_id["call_b"] != '{"b":1}'
+    assert arguments_by_call_id["fc_call_a"] == '{"a":'
+    assert arguments_by_call_id["fc_call_b"] == '{"b":'
+    assert arguments_by_call_id["fc_call_a"] != '{"a":1}'
+    assert arguments_by_call_id["fc_call_b"] != '{"b":1}'
 
 
 @pytest.mark.asyncio
@@ -889,3 +893,58 @@ def test_object_tool_call_arguments_stream_as_valid_json():
     )
 
     assert json.loads(streamed_arguments) == {"command": "ls", "flags": ["-l"]}
+
+
+def test_streamed_anthropic_tool_call_events_correlate_on_normalized_item_id():
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+
+    response = ModelResponse(
+        id="resp-anthropic",
+        created=123,
+        model="test-model",
+        object="chat.completion",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "toolu_01AbCdEf",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+                            "index": 0,
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+    iterator.litellm_model_response = response
+
+    events = []
+    while True:
+        evt = iterator.common_done_event_logic(sync_mode=True)
+        events.append(evt)
+        if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
+            break
+
+    added = [e for e in events if e.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
+    deltas = [e for e in events if e.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA]
+    dones = [e for e in events if e.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE]
+    item_dones = [e for e in events if e.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
+
+    assert len(added) == 1 and len(dones) == 1 and len(item_dones) == 1 and deltas
+    assert added[0].item.id == "fc_toolu_01AbCdEf"
+    assert added[0].item.call_id == "toolu_01AbCdEf"
+    assert item_dones[0].item.id == "fc_toolu_01AbCdEf"
+    assert item_dones[0].item.call_id == "toolu_01AbCdEf"
+    for evt in deltas + dones:
+        assert evt.item_id == added[0].item.id

@@ -325,7 +325,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: 
+    ) -> Coroutine[object, object, list[AllMessageValues]]:
         ...
 
     @overload
@@ -341,7 +341,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         """OpenAI no longer supports image_url as a string, so we need to convert it to a dict"""
         stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(messages)
         hoisted_messages: Final = hoist_images_from_tool_messages(stripped_messages)
@@ -443,6 +443,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 optional_params["tools"] = tools
 
         optional_params.pop("max_retries", None)
+        if not optional_params.get("tools") and not optional_params.get("functions"):
+            optional_params.pop("tool_choice", None)
 
         return {
             "model": model,
@@ -473,6 +475,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             if tools is not None and len(tools) > 0:
                 optional_params["tools"] = tools
         if self.__class__._is_base_class:
+            if not optional_params.get("tools") and not optional_params.get("functions"):
+                optional_params.pop("tool_choice", None)
             return {
                 "model": model,
                 "messages": transformed_messages,
@@ -497,8 +501,12 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             return None
         tool_call_names: Final = get_tool_call_names(optional_params.get("tools", []))
         try:
-            json_content: Final = json.loads(content)
-            if json_content.get("type") == "function" and json_content.get("name") in tool_call_names:
+            json_content: Final[object] = json.loads(content)
+            if (
+                isinstance(json_content, dict)
+                and json_content.get("type") == "function"
+                and json_content.get("name") in tool_call_names
+            ):
                 return ChatCompletionMessageToolCall(
                     function=Function(
                         name=json_content.get("name"),
@@ -622,7 +630,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response: Final = raw_response.json()
+            completion_response: Final[dict[str, object]] = raw_response.json()
         except Exception as e:
             response_headers: Final = getattr(raw_response, "headers", None)
             raise OpenAIError(

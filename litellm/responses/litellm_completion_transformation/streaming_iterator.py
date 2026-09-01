@@ -114,7 +114,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._pending_tool_events: list[BaseLiteLLMOpenAIResponseObject] = []
         self._tool_output_index_by_call_id: dict[str, int] = {}
         self._tool_args_by_call_id: dict[str, str] = {}
-        self._tool_item_id_by_call_id: dict[str, str] = {}
+        self._tool_item_id_by_call_id: dict[str, str] = {}  # mutable-ok: filled per call id as tool call events stream
         self._tool_call_id_by_index: dict[int, str] = {}
         self._streamed_tool_call_ids_in_order: list[str] = []
         self._resolved_tool_call_id_by_position: dict[int, str] = {}
@@ -262,10 +262,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 self._sequence_number += 1
                 names = self._custom_tool_names
                 item_kwargs = build_tool_call_item_kwargs(call_id, tool_name, "", "in_progress", names)
-                tool_item_ids = getattr(self, "_tool_item_id_by_call_id", None)
-                if tool_item_ids is None:
-                    tool_item_ids = self._tool_item_id_by_call_id = {}
-                tool_item_ids[call_id] = item_kwargs["id"]
+                self._tool_item_id_by_call_id[call_id] = item_kwargs["id"]
                 if tool_namespace:
                     item_kwargs["namespace"] = tool_namespace
                 event = OutputItemAddedEvent(
@@ -343,10 +340,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 self._sequence_number += 1
                 names = self._custom_tool_names
                 item_kwargs = build_tool_call_item_kwargs(call_id, tool_name, "", "in_progress", names)
-                tool_item_ids = getattr(self, "_tool_item_id_by_call_id", None)
-                if tool_item_ids is None:
-                    tool_item_ids = self._tool_item_id_by_call_id = {}
-                tool_item_ids[call_id] = item_kwargs["id"]
+                self._tool_item_id_by_call_id[call_id] = item_kwargs["id"]
                 if tool_namespace:
                     item_kwargs["namespace"] = tool_namespace
                 event = OutputItemAddedEvent(
@@ -392,10 +386,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._sequence_number += 1
             names = self._custom_tool_names
             item_kwargs = build_tool_call_item_kwargs(call_id, tool_name, final_args, "completed", names)
-            tool_item_ids = getattr(self, "_tool_item_id_by_call_id", None)
-            if tool_item_ids is None:
-                tool_item_ids = self._tool_item_id_by_call_id = {}
-            item_kwargs["id"] = tool_item_ids.setdefault(call_id, item_kwargs["id"])
+            item_kwargs["id"] = self._tool_item_id_by_call_id.setdefault(call_id, item_kwargs["id"])
             if tool_namespace:
                 item_kwargs["namespace"] = tool_namespace
             item_done_event = OutputItemDoneEvent(

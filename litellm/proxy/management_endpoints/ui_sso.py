@@ -502,7 +502,7 @@ def _set_nested_metadata_value(metadata: dict[str, object], key_path: str, value
     placeholder: Final = "\x00"
     parts = key_path.replace("\\.", placeholder).split(".")
     parts = [p.replace(placeholder, ".") for p in parts]
-    current: Any = metadata
+    current: dict[str, object] = metadata
     for part in parts[:-1]:
         existing = current.get(part)
         if not isinstance(existing, dict):
@@ -4076,7 +4076,7 @@ class SSOAuthenticationHandler:
                 )
                 if resp.status_code == 200:
                     try:
-                        userinfo_raw: Final = resp.json()
+                        userinfo_raw: Final[dict[str, object] | None] = resp.json()
                         if not userinfo_raw:
                             # JSON null (None) or empty dict ({}) — no identity claims.
                             # Treat as failure so id_token fallback can be attempted.
@@ -4406,7 +4406,7 @@ class MicrosoftSSOHandler:
     ) -> tuple[list[str], str | None]:
         """Helper function to fetch and parse group data from a URL"""
         response: Final = await async_client.get(url, headers=headers)
-        response_json: Final = response.json()
+        response_json: Final[dict[str, object]] = response.json()
         response_typed: Final = await MicrosoftSSOHandler._cast_graph_api_response_dict(response=response_json)
         group_ids: Final = MicrosoftSSOHandler._get_group_ids_from_graph_api_response(response=response_typed)
         return group_ids, response_typed.get("odata_nextLink")

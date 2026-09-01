@@ -369,7 +369,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
 
     @model_validator(mode="before")
     @classmethod
-    def preprocess_input_data(cls, data: Any) -> Any:
+    def preprocess_input_data(cls, data: object) -> object:
         """
         Pre-process input data before validation:
         1. Filter out reserved Python keywords ('self', 'params', '__class__') to prevent
@@ -627,6 +627,11 @@ class AlertingConfig(BaseModel):
     alerting_threshold: float | None = 300
 
 
+def _resolved_annotations(model_class: type[object]) -> Mapping[str, object]:
+    """Resolve a class's annotations, keeping each resolved annotation opaque."""
+    return get_type_hints(model_class)
+
+
 class ModelGroupInfo(BaseModel):
     model_group: str
     providers: list[str]
@@ -655,7 +660,7 @@ class ModelGroupInfo(BaseModel):
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
 
     def __init__(self, **data) -> None:
-        for field_name, field_type in get_type_hints(self.__class__).items():
+        for field_name, field_type in _resolved_annotations(self.__class__).items():
             if field_type is bool and data.get(field_name) is None:
                 data[field_name] = False
         super().__init__(**data)
