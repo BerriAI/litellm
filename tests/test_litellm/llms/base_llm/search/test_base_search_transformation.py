@@ -21,6 +21,7 @@ from litellm.llms.azure.search.transformation import BingGroundingSearchConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
+    SearchResponse,
     _is_trusted_search_api_base,
 )
 from litellm.llms.brave.search.transformation import BraveSearchConfig
@@ -489,6 +490,7 @@ class TestSearchHTTPErrorHandling:
             provider_config=config,
         )
 
+        assert isinstance(response, SearchResponse)
         assert response.object == "search"
         assert len(response.results) == 1
         assert response.results[0].title == "LiteLLM Docs"
