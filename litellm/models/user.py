@@ -6,6 +6,7 @@ Canonical definition for ``litellm_usertable``. Re-exported from
 """
 
 from datetime import datetime
+from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -49,19 +50,23 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
 
     @model_validator(mode="before")
     @classmethod
-    def set_model_info(cls, values):
+    def set_model_info(cls, values: object) -> object:
         if isinstance(values, BaseModel):
-            values = values.model_dump()
+            raw: Final = values.model_dump()  # mutable-ok: pydantic before-validator dict payload
         elif hasattr(values, "__dict__") and not isinstance(values, dict):
-            values = dict(values.__dict__)
+            raw: Final = dict(values.__dict__)  # mutable-ok: object normalization for ORM/Prisma models
+        else:
+            raw: Final = values
 
-        if isinstance(values, dict):
-            if values.get("spend") is None:
-                values.update({"spend": 0.0})
-            if values.get("models") is None:
-                values.update({"models": []})
-            if values.get("teams") is None:
-                values.update({"teams": []})
+        if isinstance(raw, dict):
+            updates: Final = {  # mutable-ok: default values for uninitialized fields
+                **({"spend": 0.0} if raw.get("spend") is None else {}),  # mutable-ok: conditional default
+                **({"models": []} if raw.get("models") is None else {}),  # mutable-ok: conditional default
+                **({"teams": []} if raw.get("teams") is None else {}),  # mutable-ok: conditional default
+            }
+            if updates:
+                return {**raw, **updates}  # mutable-ok: merged normalized model dictionary
+            return raw
         return values
 
     def is_over_budget(self) -> bool:

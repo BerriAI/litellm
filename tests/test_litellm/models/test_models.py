@@ -418,6 +418,36 @@ class TestTagTable:
         assert tag.spend == 0.0
         assert tag.models == []
 
+    def test_tag_from_object_with_attributes(self):
+        class MockPrismaTag:
+            def __init__(
+                self,
+                tag_name: str,
+                spend: float | None = None,
+                models: list[str] | None = None,
+            ) -> None:
+                self.tag_name = tag_name
+                self.spend = spend
+                self.models = models
+
+        obj = MockPrismaTag(tag_name="prod-tag", spend=None, models=None)
+        tag = LiteLLM_TagTable.model_validate(obj)
+        assert tag.tag_name == "prod-tag"
+        assert tag.spend == 0.0
+        assert tag.models == []
+
+    def test_tag_from_pydantic_model(self):
+        class MockPydanticTag(BaseModel):
+            tag_name: str
+            spend: float | None = None
+            models: list[str] | None = None
+
+        row = MockPydanticTag(tag_name="staging-tag", spend=None, models=None)
+        tag = LiteLLM_TagTable.model_validate(row)
+        assert tag.tag_name == "staging-tag"
+        assert tag.spend == 0.0
+        assert tag.models == []
+
 
 class TestEndUserTable:
     def test_end_user_creation(self):
@@ -439,7 +469,13 @@ class TestEndUserTable:
 
     def test_end_user_from_object_with_attributes(self):
         class MockPrismaEndUser:
-            def __init__(self, user_id, blocked, spend=None, alias=None):
+            def __init__(
+                self,
+                user_id: str,
+                blocked: bool,
+                spend: float | None = None,
+                alias: str | None = None,
+            ) -> None:
                 self.user_id = user_id
                 self.blocked = blocked
                 self.spend = spend
