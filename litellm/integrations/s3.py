@@ -1,11 +1,18 @@
 #### What this does ####
 #    On success + failure, log events to Supabase
 
+import hashlib
 from datetime import datetime
 from typing import Final, cast
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
+from litellm.constants import (
+    MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES,
+    MAX_S3_OBJECT_KEY_BYTES,
+    S3_BOUNDED_OBJECT_KEY_HEAD_BYTES,
+    S3_PREFIX_DIGEST_CHARS,
+)
 from litellm.types.utils import StandardLoggingPayload
 
 
@@ -133,9 +140,7 @@ class S3Logger:
                 s3_file_name,
             )
 
-            s3_object_download_filename: Final = (
-                "time-" + start_time.strftime("%Y-%m-%dT%H-%M-%S-%f") + "_" + payload["id"] + ".json"
-            )
+            s3_object_download_filename: Final = get_s3_object_download_filename(start_time, payload["id"])
 
             from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
@@ -198,6 +203,41 @@ def resolve_sse_params(
     return algorithm, valid_key_id
 
 
+def _truncate_to_utf8_bytes(value: str, max_bytes: int) -> str:
+    """Trim `value` so its UTF-8 encoding fits `max_bytes`, never splitting a character."""
+    if max_bytes <= 0:
+        return ""
+    encoded: Final = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def get_s3_object_download_filename(start_time: datetime, response_id: str) -> str:
+    """Content-Disposition filename, bounded because S3 caps a request's metadata headers at 2048 bytes."""
+    file_name: Final = f"time-{start_time.strftime('%Y-%m-%dT%H-%M-%S-%f')}_{response_id}"
+    budget: Final = MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES - len(b".json")
+    if len(file_name.encode("utf-8")) <= budget:
+        return file_name + ".json"
+    return _bounded_s3_file_name(file_name, file_name) + ".json"
+
+
+def _bounded_s3_file_name(s3_file_name: str, sanitized_s3_file_name: str) -> str:
+    """Readable head of the file name plus the sha256 of the whole name, so shortening stays collision free."""
+    digest: Final = hashlib.sha256(s3_file_name.encode("utf-8")).hexdigest()
+    head: Final = _truncate_to_utf8_bytes(sanitized_s3_file_name, S3_BOUNDED_OBJECT_KEY_HEAD_BYTES)
+    return f"{head}_{digest}" if head else digest
+
+
+def _bounded_s3_prefix(configured_prefix: str, max_bytes: int) -> str:
+    """Whole leading path segments that fit, then a digest segment of the full prefix."""
+    digest_segment: Final = hashlib.sha256(configured_prefix.encode("utf-8")).hexdigest()[:S3_PREFIX_DIGEST_CHARS] + "/"
+    if max_bytes < len(digest_segment):
+        return ""
+    head: Final = _truncate_to_utf8_bytes(configured_prefix, max_bytes - len(digest_segment))
+    return head[: head.rfind("/") + 1] + digest_segment
+
+
 def get_s3_object_key(
     s3_path: str,
     prefix: str,
@@ -205,12 +245,21 @@ def get_s3_object_key(
     s3_file_name: str,
 ) -> str:
     sanitized_s3_file_name: Final = s3_file_name.replace("/", "_")
-    s3_object_key = (
-        (s3_path.rstrip("/") + "/" if s3_path else "")
-        + prefix
-        + start_time.strftime("%Y-%m-%d")
-        + "/"
-        + sanitized_s3_file_name
-    )  # we need the s3 key to include the time, so we log cache hits too
-    s3_object_key += ".json"
-    return s3_object_key
+    configured_prefix: Final = (s3_path.rstrip("/") + "/" if s3_path else "") + prefix
+    date_segment: Final = start_time.strftime("%Y-%m-%d") + "/"
+    # we need the s3 key to include the time, so we log cache hits too
+    s3_object_key: Final = configured_prefix + date_segment + sanitized_s3_file_name + ".json"
+    if len(s3_object_key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES:
+        return s3_object_key
+
+    # S3 rejects an over-limit key with a 400, dropping the record, so bound it while keeping the
+    # `<prefix>/<date>/<file>` layout that lifecycle rules and prefix-scoped IAM policies match on.
+    bounded_file_name: Final = _bounded_s3_file_name(s3_file_name, sanitized_s3_file_name)
+    reserved_bytes: Final = len(bounded_file_name.encode("utf-8")) + len(b".json") + len(date_segment.encode("utf-8"))
+    prefix_budget: Final = MAX_S3_OBJECT_KEY_BYTES - reserved_bytes
+    bounded_prefix: Final = (
+        configured_prefix
+        if len(configured_prefix.encode("utf-8")) <= prefix_budget
+        else _bounded_s3_prefix(configured_prefix, prefix_budget)
+    )
+    return bounded_prefix + date_segment + bounded_file_name + ".json"

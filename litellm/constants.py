@@ -13,6 +13,17 @@ DEFAULT_BATCH_SIZE: Final = int(os.getenv("DEFAULT_BATCH_SIZE", 512))
 DEFAULT_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_FLUSH_INTERVAL_SECONDS", 5))
 DEFAULT_S3_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_S3_BATCH_SIZE: Final = int(os.getenv("DEFAULT_S3_BATCH_SIZE", 512))
+# S3 caps an object key at 1024 UTF-8 bytes, prefixes and delimiters included.
+# https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
+MAX_S3_OBJECT_KEY_BYTES: Final = 1024
+# Bytes of the original file name kept ahead of the hash when a key has to be bounded.
+# Wide enough for the `time-HH-MM-SS-ffffff` stamp plus the head of the response id.
+S3_BOUNDED_OBJECT_KEY_HEAD_BYTES: Final = 64
+# Hex chars of the prefix digest appended when a configured s3 path/alias prefix is trimmed.
+S3_PREFIX_DIGEST_CHARS: Final = 16
+# S3 caps a request's combined metadata headers at 2048 bytes, so the Content-Disposition
+# filename gets a budget that leaves room for the other headers the loggers send.
+MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = int(os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1))
 DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = int(os.getenv("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1))

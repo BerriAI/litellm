@@ -1171,6 +1171,220 @@ def test_create_s3_batch_logging_element_flat_key_for_arn_response_id():
 
 
 # --------------------------------------------------------------
+# object keys bounded to S3's 1024 UTF-8 byte limit
+# --------------------------------------------------------------
+def _oversized_response_id(marker: str = "") -> str:
+    """A Responses API id long enough on its own to blow past the 1024 byte cap."""
+    return "resp_" + marker + "A" * 1100
+
+
+def test_s3_object_key_at_the_byte_limit_is_left_alone():
+    """A key that still fits must stay byte-identical, hash-free."""
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+    from litellm.integrations.s3 import get_s3_object_key
+
+    start_time = datetime(2026, 8, 24, 6, 18, 41, 948021)
+    fixed_len = len("input/2026-08-24/.json")
+    file_name = "x" * (MAX_S3_OBJECT_KEY_BYTES - fixed_len)
+
+    key = get_s3_object_key(s3_path="input", prefix="", start_time=start_time, s3_file_name=file_name)
+
+    assert key == f"input/2026-08-24/{file_name}.json"
+    assert len(key.encode("utf-8")) == MAX_S3_OBJECT_KEY_BYTES
+
+
+def test_s3_object_key_is_bounded_for_oversized_response_id():
+    """The reported failure: an oversized Responses API id pushed the key past
+    1024 bytes and S3 rejected the PUT with a 400."""
+    import hashlib
+
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+    from litellm.integrations.s3 import get_s3_object_key
+
+    start_time = datetime(2026, 8, 24, 6, 18, 41, 948021)
+    file_name = f"time-06-18-41-948021_{_oversized_response_id()}"
+
+    key = get_s3_object_key(
+        s3_path="input", prefix="DefaultTeamProd/", start_time=start_time, s3_file_name=file_name
+    )
+
+    assert len(key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES
+    assert key.startswith("input/DefaultTeamProd/2026-08-24/time-06-18-41-948021_resp_")
+    assert key.endswith(f"_{hashlib.sha256(file_name.encode('utf-8')).hexdigest()}.json")
+
+
+@pytest.mark.parametrize(
+    "s3_path,prefix",
+    [
+        ("input", ""),
+        ("a" * 900, ""),
+        ("input", "team-" + "b" * 900 + "/"),
+        ("c" * 600, "team-" + "d" * 600 + "/key-" + "e" * 600 + "/"),
+        # many short segments: the whole-segment trim lands right at the budget edge,
+        # so this pins the byte arithmetic (date segment included) rather than just the cap
+        ("", "ssss/" * 200),
+    ],
+)
+def test_s3_object_key_is_bounded_for_long_paths_and_aliases(s3_path: str, prefix: str):
+    """Long configured paths, team aliases and key aliases must not reintroduce the overflow."""
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+    from litellm.integrations.s3 import get_s3_object_key
+
+    key = get_s3_object_key(
+        s3_path=s3_path,
+        prefix=prefix,
+        start_time=datetime(2026, 8, 24, 6, 18, 41, 948021),
+        s3_file_name=f"time-06-18-41-948021_{_oversized_response_id()}",
+    )
+
+    assert len(key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES
+    assert key.endswith(".json")
+    # lifecycle rules and prefix-scoped IAM policies are written against `<prefix>/<date>/<file>`
+    assert "/2026-08-24/" in key or key.startswith("2026-08-24/")
+    assert "/" not in key.rsplit("2026-08-24/", 1)[1]
+
+
+def test_s3_object_key_trimmed_prefixes_stay_distinct_per_operator():
+    """Two long configured prefixes sharing a head must not collapse into one folder,
+    and the readable leading segments a prefix-scoped IAM policy matches on survive."""
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+    from litellm.integrations.s3 import get_s3_object_key
+
+    start_time = datetime(2026, 8, 24, 6, 18, 41, 948021)
+    keys = [
+        get_s3_object_key(
+            s3_path="input",
+            prefix="team-" + "b" * 900 + suffix + "/",
+            start_time=start_time,
+            s3_file_name=f"time-06-18-41-948021_{_oversized_response_id()}",
+        )
+        for suffix in ("-one", "-two")
+    ]
+
+    assert keys[0] != keys[1]
+    assert all(key.startswith("input/") for key in keys)
+    assert all(len(key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES for key in keys)
+
+
+def test_s3_object_key_bounded_prefix_never_splits_a_multibyte_character():
+    """A multibyte prefix is trimmed on a character boundary, so the key stays decodable."""
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+    from litellm.integrations.s3 import get_s3_object_key
+
+    key = get_s3_object_key(
+        s3_path="\u65e5\u672c\u8a9e" * 200,
+        prefix="\u30c1\u30fc\u30e0" * 200 + "/",
+        start_time=datetime(2026, 8, 24, 6, 18, 41, 948021),
+        s3_file_name=f"time-06-18-41-948021_{_oversized_response_id()}",
+    )
+
+    assert len(key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES
+    assert key.encode("utf-8").decode("utf-8") == key
+
+
+def test_s3_object_key_stays_unique_for_ids_sharing_a_head():
+    """Shortening must not collide: two ids with the same visible head keep distinct keys."""
+    from litellm.integrations.s3 import get_s3_object_key
+
+    start_time = datetime(2026, 8, 24, 6, 18, 41, 948021)
+    keys = {
+        get_s3_object_key(
+            s3_path="input",
+            prefix="",
+            start_time=start_time,
+            s3_file_name=f"time-06-18-41-948021_{_oversized_response_id()}{suffix}",
+        )
+        for suffix in ("first", "second", "third")
+    }
+
+    assert len(keys) == 3
+
+
+def test_s3_object_key_bounding_is_deterministic():
+    """The same response id must always resolve to the same object key."""
+    from litellm.integrations.s3 import get_s3_object_key
+
+    start_time = datetime(2026, 8, 24, 6, 18, 41, 948021)
+    file_name = f"time-06-18-41-948021_{_oversized_response_id()}"
+    def build() -> str:
+        return get_s3_object_key(s3_path="input", prefix="team/", start_time=start_time, s3_file_name=file_name)
+
+    assert build() == build()
+
+
+def test_create_s3_batch_logging_element_bounds_key_and_keeps_full_response_id():
+    """End to end through the s3_v2 element builder: the key is bounded while the
+    uploaded payload still carries the untouched response id."""
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+
+    logger = S3Logger(s3_use_team_prefix=True, s3_use_key_prefix=True)
+    response_id = _oversized_response_id()
+    payload = StandardLoggingPayload(
+        id=response_id,
+        metadata={"user_api_key_team_alias": "DefaultTeamProd", "user_api_key_alias": "prod-key"},
+        messages=[],
+    )
+
+    result = logger.create_s3_batch_logging_element(datetime(2026, 8, 24, 6, 18, 41, 948021), payload)
+
+    assert result is not None
+    assert len(result.s3_object_key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES
+    assert result.s3_object_key.startswith("DefaultTeamProd/prod-key/2026-08-24/")
+    assert result.payload["id"] == response_id
+
+
+def test_s3_object_download_filename_is_bounded_for_oversized_response_id():
+    """S3 caps combined metadata headers at 2048 bytes, so the Content-Disposition
+    filename has to be bounded too or the PUT still fails with MetadataTooLarge."""
+    from litellm.constants import MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES
+    from litellm.integrations.s3 import get_s3_object_download_filename
+
+    file_name = get_s3_object_download_filename(
+        datetime(2026, 8, 24, 6, 18, 41, 948021), _oversized_response_id()
+    )
+
+    assert len(file_name.encode("utf-8")) <= MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES
+    assert file_name.startswith("time-2026-08-24T06-18-41-948021_resp_")
+    assert file_name.endswith(".json")
+
+
+def test_s3_object_download_filenames_stay_distinct_when_shortened():
+    """Shortened filenames must not collide, or two records downloaded from the
+    console arrive as the same file."""
+    from litellm.integrations.s3 import get_s3_object_download_filename
+
+    start_time = datetime(2026, 8, 24, 6, 18, 41, 948021)
+    file_names = {
+        get_s3_object_download_filename(start_time, _oversized_response_id() + suffix)
+        for suffix in ("first", "second", "third")
+    }
+
+    assert len(file_names) == 3
+
+
+def test_s3_object_download_filename_short_id_is_unchanged():
+    """Ordinary response ids keep the exact filename they had before."""
+    from litellm.integrations.s3 import get_s3_object_download_filename
+
+    file_name = get_s3_object_download_filename(datetime(2026, 8, 24, 6, 18, 41, 948021), "resp_abc123")
+
+    assert file_name == "time-2026-08-24T06-18-41-948021_resp_abc123.json"
+
+
+def test_create_s3_batch_logging_element_bounds_the_download_filename():
+    """The element the uploader signs carries a bounded Content-Disposition filename."""
+    from litellm.constants import MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES
+
+    logger = S3Logger()
+    payload = StandardLoggingPayload(id=_oversized_response_id(), metadata={}, messages=[])
+
+    result = logger.create_s3_batch_logging_element(datetime(2026, 8, 24, 6, 18, 41, 948021), payload)
+
+    assert result is not None
+    assert len(result.s3_object_download_filename.encode("utf-8")) <= MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES
+
+
+# --------------------------------------------------------------
 # params_source / s3_callback_params_override (audit-log decoupling)
 # --------------------------------------------------------------
 def test_s3_callback_params_override_uses_alternate_dict(monkeypatch):
