@@ -20285,7 +20285,7 @@ export interface paths {
          * List Vector Stores
          * @description List all available vector stores with optional filtering and pagination.
          *     Combines both in-memory vector stores and those stored in the database.
-         *     Database is the source of truth - deleted stores are removed from memory, updated stores sync to memory.
+         *     Config entries remain authoritative; database-backed entries sync from the database.
          *
          *     Parameters:
          *     - page: int - Page number for pagination (default: 1)
@@ -21586,7 +21586,7 @@ export interface paths {
          * List Vector Stores
          * @description List all available vector stores with optional filtering and pagination.
          *     Combines both in-memory vector stores and those stored in the database.
-         *     Database is the source of truth - deleted stores are removed from memory, updated stores sync to memory.
+         *     Config entries remain authoritative; database-backed entries sync from the database.
          *
          *     Parameters:
          *     - page: int - Page number for pagination (default: 1)

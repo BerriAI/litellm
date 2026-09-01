@@ -38535,7 +38535,7 @@
     "paths": {
       "/v1/vector_store/list": {
         "get": {
-          "description": "List all available vector stores with optional filtering and pagination.\nCombines both in-memory vector stores and those stored in the database.\nDatabase is the source of truth - deleted stores are removed from memory, updated stores sync to memory.\n\nParameters:\n- page: int - Page number for pagination (default: 1)\n- page_size: int - Number of items per page (default: 100)",
+          "description": "List all available vector stores with optional filtering and pagination.\nCombines both in-memory vector stores and those stored in the database.\nConfig entries remain authoritative; database-backed entries sync from the database.\n\nParameters:\n- page: int - Page number for pagination (default: 1)\n- page_size: int - Number of items per page (default: 100)",
           "operationId": "list_vector_stores_v1_vector_store_list_get",
           "parameters": [
             {
@@ -38686,7 +38686,7 @@
       },
       "/vector_store/list": {
         "get": {
-          "description": "List all available vector stores with optional filtering and pagination.\nCombines both in-memory vector stores and those stored in the database.\nDatabase is the source of truth - deleted stores are removed from memory, updated stores sync to memory.\n\nParameters:\n- page: int - Page number for pagination (default: 1)\n- page_size: int - Number of items per page (default: 100)",
+          "description": "List all available vector stores with optional filtering and pagination.\nCombines both in-memory vector stores and those stored in the database.\nConfig entries remain authoritative; database-backed entries sync from the database.\n\nParameters:\n- page: int - Page number for pagination (default: 1)\n- page_size: int - Number of items per page (default: 100)",
           "operationId": "list_vector_stores_vector_store_list_get",
           "parameters": [
             {

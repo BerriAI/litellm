@@ -21,6 +21,7 @@ from litellm.proxy.vector_store_endpoints.endpoints import (
 from litellm.proxy.vector_store_endpoints.management_endpoints import (
     _check_vector_store_access,
     create_vector_store_in_db,
+    list_vector_stores,
     new_vector_store,
 )
 from litellm.proxy.vector_store_endpoints.utils import (
@@ -797,6 +798,83 @@ async def test_config_loaded_milvus_grpc_connection_is_trusted():
 
     assert result["api_base"] == "https://configured-milvus:19530"
     assert result[MILVUS_ADMIN_CONFIGURED_CONNECTION] is True
+
+
+@pytest.mark.asyncio
+async def test_list_vector_stores_preserves_config_source_and_evicts_stale_database_cache():
+    registry = VectorStoreRegistry()
+    registry.load_vector_stores_from_config(
+        [
+            {
+                "vector_store_name": "configured",
+                "litellm_params": {
+                    "vector_store_id": "configured",
+                    "custom_llm_provider": "milvus",
+                    "milvus_transport": "grpc",
+                    "api_base": "https://configured-milvus:19530",
+                    "litellm_embedding_model": "team-embedding-alias",
+                },
+            }
+        ]
+    )
+    registry.add_vector_store_to_registry(
+        LiteLLM_ManagedVectorStore(
+            vector_store_id="stale-database-cache",
+            custom_llm_provider="openai",
+        )
+    )
+
+    with (
+        patch.object(  # test-quality-ok: installs the isolated registry used by the endpoint
+            litellm, "vector_store_registry", registry
+        ),
+        patch(  # test-quality-ok: models a proxy without persisted vector stores
+            "litellm.proxy.proxy_server.prisma_client", None
+        ),
+        patch(  # test-quality-ok: isolates registry synchronization from feature entitlement
+            "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+            new=AsyncMock(),
+        ),
+        patch(  # test-quality-ok: isolates registry synchronization from per-user access policy
+            "litellm.proxy.vector_store_endpoints.management_endpoints._check_vector_store_access",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        response = await list_vector_stores(
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert registry.config_vector_store_ids == frozenset(("configured",))
+    assert [store["vector_store_id"] for store in response["data"]] == ["configured"]
+    assert registry.get_litellm_managed_vector_store_from_registry("configured") is not None
+    assert registry.get_litellm_managed_vector_store_from_registry("stale-database-cache") is None
+
+
+@pytest.mark.asyncio
+async def test_db_fallback_does_not_evict_config_source():
+    registry = VectorStoreRegistry()
+    registry.load_vector_stores_from_config(
+        [
+            {
+                "vector_store_name": "configured",
+                "litellm_params": {
+                    "vector_store_id": "configured",
+                    "custom_llm_provider": "openai",
+                },
+            }
+        ]
+    )
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=None)
+
+    result = await registry.pop_vector_stores_to_run_with_db_fallback(
+        non_default_params={"vector_store_ids": ["configured"]},
+        prisma_client=prisma_client,
+    )
+
+    assert [store["vector_store_id"] for store in result] == ["configured"]
+    assert registry.get_litellm_managed_vector_store_from_registry("configured") is not None
+    prisma_client.db.litellm_managedvectorstorestable.find_unique.assert_not_awaited()
 
 
 def test_admin_persistence_strips_forged_marker_and_adds_server_marker():

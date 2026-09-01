@@ -369,7 +369,7 @@ async def list_vector_stores(
     """
     List all available vector stores with optional filtering and pagination.
     Combines both in-memory vector stores and those stored in the database.
-    Database is the source of truth - deleted stores are removed from memory, updated stores sync to memory.
+    Config entries remain authoritative; database-backed entries sync from the database.
 
     Parameters:
     - page: int - Page number for pagination (default: 1)
@@ -396,6 +396,7 @@ async def list_vector_stores(
         # Process in-memory vector stores
         if litellm.vector_store_registry is not None:
             in_memory_vector_stores: Final = copy.deepcopy(litellm.vector_store_registry.vector_stores)
+            config_vector_store_ids: Final = litellm.vector_store_registry.config_vector_store_ids
 
             vector_stores_to_delete_from_memory: Final[list[str]] = []
 
@@ -404,8 +405,9 @@ async def list_vector_stores(
                 if not vector_store_id:
                     continue
 
-                # If vector store is in memory but NOT in database, it was deleted
-                if vector_store_id not in db_vector_store_ids:
+                if vector_store_id in config_vector_store_ids:
+                    vector_store_map[vector_store_id] = vector_store
+                elif vector_store_id not in db_vector_store_ids:
                     verbose_proxy_logger.info(
                         "Vector store %s exists in memory but not in database - marking for deletion from cache",
                         vector_store_id,
@@ -424,7 +426,7 @@ async def list_vector_stores(
             # 2. Update in-memory registry with database versions (for updates)
             for vector_store in vector_stores_from_db:
                 vector_store_id = vector_store.get("vector_store_id", None)
-                if vector_store_id:
+                if vector_store_id and vector_store_id not in config_vector_store_ids:
                     litellm.vector_store_registry.update_vector_store_in_registry(
                         vector_store_id=vector_store_id, updated_data=vector_store
                     )
