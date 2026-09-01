@@ -647,6 +647,9 @@
         "supports_adaptive_thinking": {
           "type": "boolean"
         },
+        "supports_anthropic_thinking_payload": {
+          "type": "boolean"
+        },
         "supports_assistant_prefill": {
           "type": "boolean"
         },
