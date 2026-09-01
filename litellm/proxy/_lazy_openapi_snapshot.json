@@ -12582,6 +12582,18 @@
               "description": "Custom message when a guardrail blocks an action. Supports placeholders like {tool_name}, {rule_id}, and {default_message}.",
               "title": "Violation Message Template"
             },
+            "wingback_app_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Wingback external gateway integration name for request attribution (sent as additional_provider_specific_params.wingback_app_id).",
+              "title": "Wingback App Id"
+            },
             "xecguard_model": {
               "anyOf": [
                 {
