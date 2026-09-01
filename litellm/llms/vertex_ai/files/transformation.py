@@ -12,7 +12,7 @@ from urllib.parse import quote, unquote
 import httpx
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, Required
 
 import litellm
 from litellm._uuid import uuid
@@ -104,6 +104,27 @@ class _VertexBatchRow(TypedDict, total=False):
     processed_time: ReadOnly[str]
 
 
+class _VertexEmbeddingVector(TypedDict):
+    values: ReadOnly[list[float]]
+
+
+class _VertexEmbeddingUsageMetadata(TypedDict, total=False):
+    promptTokenCount: ReadOnly[int]
+
+
+class _VertexEmbeddingResponse(TypedDict, total=False):
+    embedding: ReadOnly[Required[_VertexEmbeddingVector]]
+    usageMetadata: ReadOnly[_VertexEmbeddingUsageMetadata]
+    tokenCount: ReadOnly[int]
+
+
+class _VertexEmbeddingBatchRow(TypedDict, total=False):
+    key: ReadOnly[str]
+    request: ReadOnly[Mapping[str, object]]
+    status: ReadOnly[Required[str]]
+    response: ReadOnly[Required[_VertexEmbeddingResponse]]
+
+
 class _OpenAIBatchOutputError(TypedDict):
     code: ReadOnly[str]
     message: ReadOnly[str]
@@ -111,7 +132,7 @@ class _OpenAIBatchOutputError(TypedDict):
 
 class _OpenAIBatchOutputResponse(TypedDict):
     status_code: ReadOnly[int]
-    request_id: ReadOnly[str]
+    request_id: ReadOnly[object]
     body: ReadOnly[Mapping[str, object]]
 
 
@@ -218,7 +239,7 @@ def _get_litellm_batch_custom_id_from_labels(labels: Mapping[str, object] | None
     return str(labels.get("litellm_custom_id", "unknown"))
 
 
-def _is_vertex_embeddings_batch_output_row(vertex_output_row: Mapping[str, Any]) -> bool:
+def _is_vertex_embeddings_batch_output_row(vertex_output_row: Mapping[str, object]) -> bool:
     """
     Whether a Vertex batch output row came from an `EmbedContentRequest`.
 
@@ -237,7 +258,7 @@ def _is_vertex_embeddings_batch_output_row(vertex_output_row: Mapping[str, Any])
 
 def _openai_batch_output_row(
     custom_id: str,
-    body: Mapping[str, Any] | None = None,
+    body: Mapping[str, object] | None = None,
     error_code: str | None = None,
     error_message: str = "",
 ) -> _OpenAIBatchOutputRow:
@@ -259,7 +280,7 @@ def _openai_batch_output_row(
     }
 
 
-def _split_vertex_batch_key(vertex_output_row: Mapping[str, Any]) -> tuple[str, int, int]:
+def _split_vertex_batch_key(vertex_output_row: Mapping[str, object]) -> tuple[str, int, int]:
     """
     Resolve `(custom_id, index within that custom_id, group size)` for a Vertex batch
     output row.
@@ -278,7 +299,7 @@ def _split_vertex_batch_key(vertex_output_row: Mapping[str, Any]) -> tuple[str, 
     return unquote(match["custom_id"]), int(match["index"]), int(match["total"])
 
 
-def _embedding_prompt_token_count(vertex_response: Mapping[str, Any]) -> int:
+def _embedding_prompt_token_count(vertex_response: _VertexEmbeddingResponse) -> int:
     """
     Prompt tokens billed for one Vertex Gemini Embedding batch row.
 
@@ -293,7 +314,7 @@ def _embedding_prompt_token_count(vertex_response: Mapping[str, Any]) -> int:
 
 def _vertex_embeddings_rows_to_openai_batch_output_row(
     custom_id: str,
-    vertex_output_rows: tuple[Mapping[str, Any], ...],
+    vertex_output_rows: tuple[_VertexEmbeddingBatchRow, ...],
     element_indices: tuple[int, ...],
     element_count: int,
     model: str | None,
@@ -348,7 +369,7 @@ def _vertex_embeddings_rows_to_openai_batch_output_row(
 
 
 def _transform_vertex_embeddings_batch_output_to_openai(
-    vertex_output_rows: Iterable[Mapping[str, Any]],
+    vertex_output_rows: Iterable[_VertexEmbeddingBatchRow],
     model: str | None,
 ) -> tuple[_OpenAIBatchOutputRow, ...]:
     """
@@ -388,7 +409,7 @@ def _model_from_managed_gcs_url(url: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _is_embeddings_batch_entry(openai_entry: Mapping[str, Any]) -> bool:
+def _is_embeddings_batch_entry(openai_entry: Mapping[str, object]) -> bool:
     """
     Whether an OpenAI batch JSONL line targets the embeddings endpoint.
 
@@ -431,7 +452,7 @@ def _vertex_batch_embeddings_key(custom_id: str, index: int, total: int) -> str:
     return encoded_custom_id if total < 2 else f"{encoded_custom_id}#{index}/{total}"
 
 
-def _vertex_embeddings_row(key: str | None, embed_content_request: Mapping[str, Any]) -> Mapping[str, Any]:
+def _vertex_embeddings_row(key: str | None, embed_content_request: Mapping[str, object]) -> Mapping[str, object]:
     """
     One Vertex Gemini Embedding batch input row.
 
@@ -453,8 +474,8 @@ def _vertex_embeddings_row(key: str | None, embed_content_request: Mapping[str, 
 
 
 def _openai_batch_jsonl_entry_to_vertex_embeddings_rows(
-    openai_entry: Mapping[str, Any],
-) -> tuple[Mapping[str, Any], ...]:
+    openai_entry: Mapping[str, object],
+) -> tuple[Mapping[str, object], ...]:
     """
     Transforms a single OpenAI `/v1/embeddings` batch entry into Vertex Gemini Embedding
     batch rows, one per requested embedding.
@@ -512,7 +533,7 @@ def _openai_batch_jsonl_entry_to_vertex_embeddings_rows(
 def _openai_batch_jsonl_entry_to_vertex_rows(
     openai_entry: dict[str, Any],
     map_openai_to_vertex_params: Callable[[dict[str, Any]], dict[str, Any]],
-) -> tuple[Mapping[str, Any], ...]:
+) -> tuple[Mapping[str, object], ...]:
     """
     Transforms a single OpenAI JSONL batch entry into the Vertex rows it maps to.
 
@@ -533,7 +554,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
         cached_content=None,
     )
 
-    custom_id: Final = openai_entry.get("custom_id")
+    custom_id: Final[object] = openai_entry.get("custom_id")
     if custom_id is not None:
         if "labels" not in vertex_request_body:
             vertex_request_body["labels"] = {}
