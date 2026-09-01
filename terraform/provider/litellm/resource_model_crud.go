@@ -246,12 +246,13 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 		ModelName:     d.Get("model_name").(string),
 		LiteLLMParams: litellmParams,
 		ModelInfo: ModelInfo{
-			ID:        modelID,
-			DBModel:   true,
-			BaseModel: pricingBaseModel,
-			Tier:      d.Get("tier").(string),
-			Mode:      d.Get("mode").(string),
-			TeamID:    d.Get("team_id").(string),
+			ID:                      modelID,
+			DBModel:                 true,
+			BaseModel:               pricingBaseModel,
+			Tier:                    d.Get("tier").(string),
+			Mode:                    d.Get("mode").(string),
+			TeamID:                  d.Get("team_id").(string),
+			CacheReadInputTokenCost: d.Get("cache_read_input_cost_per_million_tokens").(float64) / 1000000.0,
 		},
 		Additional: make(map[string]interface{}),
 	}
@@ -341,6 +342,7 @@ func resourceLiteLLMModelRead(d *schema.ResourceData, m interface{}) error {
 
 	// Store cost information
 	d.Set("input_cost_per_million_tokens", d.Get("input_cost_per_million_tokens"))
+	d.Set("cache_read_input_cost_per_million_tokens", d.Get("cache_read_input_cost_per_million_tokens"))
 	d.Set("output_cost_per_million_tokens", d.Get("output_cost_per_million_tokens"))
 
 	// Handle thinking configuration
