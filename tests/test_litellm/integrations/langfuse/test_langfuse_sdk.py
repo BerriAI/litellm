@@ -18,8 +18,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 from litellm.integrations.langfuse.langfuse import (
     MINIMUM_LANGFUSE_VERSION,
-    raise_if_unsupported_langfuse_version,
     installed_langfuse_version,
+    raise_if_unsupported_langfuse_version,
 )
 from litellm.integrations.langfuse.langfuse_sdk import (
     AS_ROOT_ATTRIBUTE,
@@ -249,6 +249,31 @@ def test_arbitrary_trace_id_is_hashed_deterministically():
     assert first == resolve_trace_id("order-4471")
     assert len(first) == 32 and first == first.lower()
     assert first != resolve_trace_id("order-4472")
+
+
+@pytest.mark.parametrize("supplied", [12345, 12.5, True, False], ids=["int", "float", "true", "false"])
+def test_non_string_trace_id_is_normalized(supplied):
+    resolved = resolve_trace_id(supplied)
+
+    assert len(resolved) == 32
+    assert resolved == resolve_trace_id(supplied)
+
+
+@pytest.mark.parametrize("supplied", [12345, 12.5, True, False], ids=["int", "float", "true", "false"])
+def test_non_string_observation_id_is_normalized(supplied):
+    resolved = resolve_observation_id(supplied)
+
+    assert len(resolved) == 16
+    assert resolved == resolve_observation_id(supplied)
+
+
+def test_trace_id_with_trailing_newline_is_hashed():
+    supplied = "a" * 32 + "\n"
+
+    resolved = resolve_trace_id(supplied)
+
+    assert resolved != supplied
+    assert len(resolved) == 32
 
 
 def test_missing_trace_id_still_yields_a_valid_trace_id():

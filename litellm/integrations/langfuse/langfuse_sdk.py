@@ -54,25 +54,20 @@ def to_unix_nanos(value: datetime | float | None) -> int | None:
     return int(seconds * 1_000_000_000)
 
 
-def resolve_trace_id(trace_id: str | None) -> str:
-    """Map litellm's trace id onto the 32 lowercase hex characters v4 requires.
-
-    Anything else raises inside the SDK rather than being ignored, so a plain
-    uuid is dash-stripped and any other identifier is hashed deterministically,
-    which keeps repeat calls with the same id on the same trace.
-    """
-    normalized: Final = trace_id.lower().replace("-", "") if trace_id else ""
-    if _TRACE_ID_PATTERN.match(normalized):
+def resolve_trace_id(trace_id: object | None) -> str:
+    """Map a caller's trace id onto the 32 lowercase hex characters v4 requires."""
+    normalized: Final = "" if trace_id is None else str(trace_id).lower().replace("-", "")
+    if _TRACE_ID_PATTERN.fullmatch(normalized):
         return normalized
-    return Langfuse.create_trace_id(seed=trace_id) if trace_id else Langfuse.create_trace_id()
+    return Langfuse.create_trace_id(seed=str(trace_id)) if normalized else Langfuse.create_trace_id()
 
 
-def resolve_observation_id(observation_id: str | None) -> str | None:
-    """Same for a caller-supplied parent, which v4 requires to be 16 hex characters."""
-    normalized: Final = observation_id.lower().replace("-", "") if observation_id else ""
+def resolve_observation_id(observation_id: object | None) -> str | None:
+    """Map a caller's parent observation id onto v4's 16 lowercase hex characters."""
+    normalized: Final = "" if observation_id is None else str(observation_id).lower().replace("-", "")
     if not normalized:
         return None
-    if _OBSERVATION_ID_PATTERN.match(normalized):
+    if _OBSERVATION_ID_PATTERN.fullmatch(normalized):
         return normalized
     return sha256(normalized.encode("utf-8")).digest()[:8].hex()
 
