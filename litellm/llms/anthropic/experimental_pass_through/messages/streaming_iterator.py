@@ -8,6 +8,10 @@ import httpx
 from pydantic import TypeAdapter
 from typing_extensions import TypedDict
 
+from litellm.constants import (
+    ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS,
+    ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE,
+)
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -20,6 +24,9 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointT
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
 GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ: Final = PassThroughEndpointLogging()
+
+_UPSTREAM_PUMP_TASKS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: stdlib strong-ref set for pump tasks
+_DETACHED_STREAM_DRAINS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: bounded strong-ref set, detached drains
 
 INCOMPLETE_STREAM_ERROR_MESSAGE: Final = (
     "Provider stream ended before emitting a message_stop event; "
@@ -131,6 +138,34 @@ def parse_anthropic_error_event(chunk: object) -> tuple[str, str, int] | None:
 
 def _is_terminal_stream_chunk(chunk: object) -> bool:
     return _is_message_stop_chunk(chunk) or _is_provider_error_chunk(chunk)
+
+
+def _try_claim_detached_drain_slot() -> bool:
+    """Claim a detached-drain slot for the current task, bounding concurrency.
+
+    Returns True if a slot was claimed (the caller may keep draining upstream
+    for billing) or False if the cap is already reached (the caller should stop
+    and bill what it has). Only touched from the event loop, so the check +
+    insert need no lock.
+    """
+    if len(_DETACHED_STREAM_DRAINS) >= ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS:
+        return False
+    current_task: Final = asyncio.current_task()
+    if current_task is not None:
+        _DETACHED_STREAM_DRAINS.add(current_task)
+        current_task.add_done_callback(_DETACHED_STREAM_DRAINS.discard)
+    return True
+
+
+def _exception_left_unconsumed(queue: "asyncio.Queue[bytes | None | BaseException]", exc: BaseException) -> bool:
+    """After client detach the relay never reads the queue again, so drain it here.
+
+    The forwarded exception still sitting in the queue means the relay tore
+    down before re-raising it, so the proxy's failure handling never ran and
+    the caller must salvage spend itself.
+    """
+    remaining: Final = tuple(queue.get_nowait() for _ in range(queue.qsize()))
+    return any(item is exc for item in remaining)
 
 
 def _sse_event(event_type: str, payload: Mapping[str, object]) -> bytes:
@@ -414,17 +449,167 @@ class BaseAnthropicMessagesStreamingIterator:
 
     async def async_sse_wrapper(
         self,
-        completion_stream: AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | dict],
+        completion_stream: AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | Mapping[str, object]],
     ) -> AsyncIterator[bytes]:
         """
         Generic async SSE wrapper that converts streaming chunks to SSE format
         and handles logging.
 
+        The upstream read runs in a detached background task (``_pump_upstream``)
+        so that a client disconnect tears down only this client-facing generator,
+        never the upstream drain + billing. The provider (e.g. Bedrock) keeps
+        generating and billing the full response regardless of the client, so
+        draining it to completion is what lets spend tracking see the real
+        terminal ``message_delta`` / ``message_stop`` usage instead of a
+        truncated placeholder count.
+
+        Chunks reach the client through a bounded queue. While the client is
+        connected the pump blocks on a full queue (racing the disconnect
+        signal), so a slow reader throttles the upstream read exactly as the old
+        direct ``yield`` did instead of letting the whole response buffer in
+        memory. Once the client goes away the pump stops enqueueing and only
+        keeps a single ``collected_chunks`` copy for billing, and the number of
+        such post-disconnect drains running at once is capped so client behavior
+        can't create unbounded worker state; over the cap the pump bills what it
+        has rather than draining further. Detached-drain lifetime is otherwise
+        bounded by the upstream stream/read timeout.
+
+        An upstream failure (Bedrock read / decode / chunk-conversion error)
+        that happens while the client is still connected is forwarded through
+        the queue and re-raised here, so the original provider exception (and
+        its status) reaches the proxy's failure handling unchanged rather than
+        being masked by a generic incomplete-stream event.
+
         This method provides the common logic for both Anthropic and Bedrock implementations.
         """
-        collected_chunks: Final = []
-        saw_terminal_event = False
+        queue: Final[asyncio.Queue[bytes | None | BaseException]] = asyncio.Queue(
+            maxsize=ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE
+        )
+        client_detached: Final = asyncio.Event()
 
+        pump_task: Final = asyncio.create_task(self._pump_upstream_to_queue(completion_stream, queue, client_detached))
+        _UPSTREAM_PUMP_TASKS.add(pump_task)
+        pump_task.add_done_callback(_UPSTREAM_PUMP_TASKS.discard)
+
+        reached_end = False  # rebind-ok: flipped once the relay consumes the end-of-stream sentinel
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    reached_end = True
+                    break
+                if isinstance(item, BaseException):
+                    raise item
+                yield item
+        finally:
+            client_detached.set()
+            if not reached_end:
+                self._dispatch_pending_deferred_logging()
+
+    def _dispatch_pending_deferred_logging(self) -> None:
+        """Fire deferred billing that a torn-down response would otherwise drop.
+
+        When the pump finishes draining while the client is still connected it
+        stores the logging coroutine for ProxyLogging._fire_deferred_stream_logging,
+        which the proxy only fires on a normally completed response: a client
+        disconnect (GeneratorExit / CancelledError) re-raises past it. Without
+        this dispatch that window loses the spend row entirely.
+        """
+        deferred_cb: Final = getattr(self.litellm_logging_obj, "_on_deferred_stream_complete", None)
+        deferred_args: Final = getattr(self.litellm_logging_obj, "_deferred_stream_complete_args", None)
+        if deferred_cb is None or deferred_args is None:
+            return
+        self.litellm_logging_obj._on_deferred_stream_complete = None
+        self.litellm_logging_obj._deferred_stream_complete_args = None
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=deferred_cb(*deferred_args))
+
+    async def _bill_collected_chunks(
+        self,
+        collected_chunks: list[bytes],  # mutable-ok: SSE buffer forwarded to list-typed _handle_streaming_logging
+        *,
+        stream_teardown: bool,
+    ) -> None:
+        from litellm._logging import verbose_proxy_logger
+
+        try:
+            await self._handle_streaming_logging(collected_chunks, stream_teardown=stream_teardown)
+        except Exception as exc:  # noqa: BLE001  # billing is best-effort; never crash the pump
+            verbose_proxy_logger.warning(
+                "async_sse_wrapper billing failed after %d chunks: %s(%s)",
+                len(collected_chunks),
+                type(exc).__name__,
+                exc,
+            )
+
+    @staticmethod
+    async def _abort_upstream(
+        completion_stream: AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | Mapping[str, object]],
+    ) -> None:
+        """Close the upstream provider stream so it stops generating and billing."""
+        from litellm._logging import verbose_proxy_logger
+
+        try:
+            await aclose_if_supported(completion_stream)
+        except Exception as exc:  # noqa: BLE001  # abort is best-effort; log and continue
+            verbose_proxy_logger.warning(
+                "async_sse_wrapper failed to abort upstream stream: %s(%s)",
+                type(exc).__name__,
+                exc,
+            )
+
+    @staticmethod
+    async def _enqueue_for_client(
+        queue: "asyncio.Queue[bytes | None | BaseException]",
+        client_detached: "asyncio.Event",
+        item: bytes | None | BaseException,
+    ) -> bool:
+        """Deliver one item to the client, applying backpressure.
+
+        Returns True if the item was queued, False if the client disconnected
+        before there was room (the item is then dropped, since a gone client
+        can't receive it). Never blocks once the client has detached.
+        """
+        if client_detached.is_set():
+            return False
+        try:
+            queue.put_nowait(item)
+        except asyncio.QueueFull:
+            pass
+        else:
+            return True
+        put_task: Final = asyncio.ensure_future(queue.put(item))
+        detached_task: Final = asyncio.ensure_future(client_detached.wait())
+        try:
+            await asyncio.wait(frozenset((put_task, detached_task)), return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            if not detached_task.done():
+                detached_task.cancel()
+        if put_task.done() and not put_task.cancelled():
+            return True
+        put_task.cancel()
+        return False
+
+    async def _pump_upstream_to_queue(
+        self,
+        completion_stream: AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | Mapping[str, object]],
+        queue: "asyncio.Queue[bytes | None | BaseException]",
+        client_detached: "asyncio.Event",
+    ) -> None:
+        """Drain the whole upstream into ``queue`` (backpressured) and bill once.
+
+        Runs detached so a client disconnect can't interrupt the upstream read;
+        see ``async_sse_wrapper`` for the full rationale. On a completed drain
+        the success billing (or deferred park) happens before the end-of-stream
+        sentinel is enqueued: the relay can only tear down after consuming the
+        sentinel, so its teardown can never outrun the park and get mistaken
+        for a client disconnect, and a sentinel the client never consumes falls
+        back to dispatching the parked billing here.
+        """
+        from litellm._logging import verbose_proxy_logger
+
+        collected_chunks: Final[list[bytes]] = []  # mutable-ok: SSE billing buffer appended to across the drain
+        saw_terminal_event = False  # rebind-ok: accumulates across the upstream loop
+        draining_detached = False  # rebind-ok: set once this pump claims a detached-drain slot
         try:
             async for chunk in completion_stream:
                 if self.completion_start_time is None:
@@ -432,17 +617,62 @@ class BaseAnthropicMessagesStreamingIterator:
                 saw_terminal_event = saw_terminal_event or _is_terminal_stream_chunk(chunk)
                 encoded_chunk = self._convert_chunk_to_sse_format(chunk)
                 collected_chunks.append(encoded_chunk)
-                yield encoded_chunk
-        except (GeneratorExit, asyncio.CancelledError):
-            # A client disconnect tears the generator down at the yield, so the
-            # post-loop logging below never runs and the tokens already streamed
-            # (and billed by the provider) would never reach spend tracking. See LIT-5839.
-            if collected_chunks:
-                await self._handle_streaming_logging(collected_chunks, stream_teardown=True)
-            raise
+                if not client_detached.is_set():
+                    await self._enqueue_for_client(queue, client_detached, encoded_chunk)
+                    continue
+                if not draining_detached:
+                    if not _try_claim_detached_drain_slot():
+                        verbose_proxy_logger.warning(
+                            "async_sse_wrapper: detached-drain cap (%d) reached; billing %d partial "
+                            "chunks and aborting the upstream stream to stop provider billing",
+                            ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS,
+                            len(collected_chunks),
+                        )
+                        await self._bill_collected_chunks(collected_chunks, stream_teardown=True)
+                        await self._abort_upstream(completion_stream)
+                        return
+                    draining_detached = True
+        except Exception as exc:  # noqa: BLE001  # upstream errors are handled/forwarded by _handle_pump_upstream_error
+            await self._handle_pump_upstream_error(queue, client_detached, collected_chunks, exc)
+            return
 
-        if not saw_terminal_event:
-            yield _incomplete_stream_error_sse_event()
+        if client_detached.is_set():
+            await self._bill_collected_chunks(collected_chunks, stream_teardown=True)
+            return
+        if not saw_terminal_event and not await self._enqueue_for_client(
+            queue, client_detached, _incomplete_stream_error_sse_event()
+        ):
+            await self._bill_collected_chunks(collected_chunks, stream_teardown=True)
+            return
+        await self._bill_collected_chunks(collected_chunks, stream_teardown=False)
+        if not await self._enqueue_for_client(queue, client_detached, None):
+            self._dispatch_pending_deferred_logging()
 
-        # Handle logging after all chunks are processed
-        await self._handle_streaming_logging(collected_chunks)
+    async def _handle_pump_upstream_error(
+        self,
+        queue: "asyncio.Queue[bytes | None | BaseException]",
+        client_detached: "asyncio.Event",
+        collected_chunks: list[bytes],  # mutable-ok: SSE buffer forwarded to list-typed _bill_collected_chunks
+        exc: BaseException,
+    ) -> None:
+        """Forward a provider error to a still-connected client, else salvage partial spend.
+
+        Handing the original exception to the client-facing generator lets it
+        re-raise so the proxy's failure handling keeps the provider status and
+        owns logging (no success-bill). If the client already went away, or
+        disconnects before ever consuming the queued exception, no failure hook
+        runs, so bill the partial instead of dropping the request.
+        """
+        from litellm._logging import verbose_proxy_logger
+
+        if not client_detached.is_set() and await self._enqueue_for_client(queue, client_detached, exc):
+            await client_detached.wait()
+            if not _exception_left_unconsumed(queue, exc):
+                return
+        verbose_proxy_logger.warning(
+            "async_sse_wrapper upstream pump failed after client disconnect (%d chunks): %s(%s)",
+            len(collected_chunks),
+            type(exc).__name__,
+            exc,
+        )
+        await self._bill_collected_chunks(collected_chunks, stream_teardown=True)
