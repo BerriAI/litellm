@@ -7109,6 +7109,39 @@ async def test_get_allowed_mcp_servers_prefers_allowed_access_group_over_forbidd
 
 
 @pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_forbidden_exact_id_does_not_fall_through_to_alias():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.proxy._experimental.mcp_server.server import (
+        _get_allowed_mcp_servers_from_mcp_server_names,
+    )
+
+    exact_id_server = _make_mcp_server_for_scope_filter("west-id", "west")
+    alias_server = _make_mcp_server_for_scope_filter("central-id", "west-id")
+    manager = MCPServerManager()
+    manager.registry.update(
+        {
+            exact_id_server.server_id: exact_id_server,
+            alias_server.server_id: alias_server,
+        }
+    )
+
+    async def resolve_access_group(_: list[str]) -> list[str]:
+        return []
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _get_allowed_mcp_servers_from_mcp_server_names(
+            mcp_servers=["west-id"],
+            allowed_mcp_servers=[alias_server],
+            mcp_server_manager=manager,
+            access_group_resolver=resolve_access_group,
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_get_allowed_mcp_servers_from_mcp_server_names_empty_list_fails_closed():
     """
     Edge case: ``mcp_servers=[]`` (explicit empty scope) is still an
