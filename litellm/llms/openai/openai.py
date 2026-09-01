@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 import httpx
 
 if TYPE_CHECKING:
+    import tiktoken
     from aiohttp import ClientSession
 
 import openai
@@ -50,6 +51,7 @@ from .common_utils import (
     drop_params_from_unprocessable_entity_error,
     is_output_token_limit_error,
 )
+from .workload_identity import resolve_openai_workload_identity_config
 
 openaiOSeriesConfig: Final = OpenAIOSeriesConfig()
 openAIGPT5Config: Final = OpenAIGPT5Config()
@@ -264,7 +266,7 @@ class OpenAIConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: object,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -348,6 +350,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         client: OpenAI | AsyncOpenAI | None = None,
         shared_session: Optional["ClientSession"] = None,
     ) -> OpenAI | AsyncOpenAI | None:
+        workload_identity_config: Final = resolve_openai_workload_identity_config(api_key=api_key, api_base=api_base)
         client_initialization_params: Final[dict] = locals()
         if client is None:
             if not isinstance(max_retries, int):
@@ -363,28 +366,49 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             if cached_client:
                 if isinstance(cached_client, OpenAI) or isinstance(cached_client, AsyncOpenAI):
                     return cached_client
-            http_client: Final[httpx.Client | httpx.AsyncClient | None] = (
-                OpenAIChatCompletion._get_async_http_client(shared_session=shared_session)
-                if is_async
-                else OpenAIChatCompletion._get_sync_http_client()
-            )
             if is_async:
-                _new_client: OpenAI | AsyncOpenAI = AsyncOpenAI(
-                    api_key=api_key,
-                    base_url=api_base,
-                    http_client=http_client,
-                    timeout=timeout,
-                    max_retries=max_retries,
-                    organization=organization,
+                async_http_client: Final = OpenAIChatCompletion._get_async_http_client(shared_session=shared_session)
+                http_client: httpx.Client | httpx.AsyncClient | None = async_http_client
+                _new_client: OpenAI | AsyncOpenAI = (
+                    AsyncOpenAI(
+                        workload_identity=workload_identity_config.to_sdk_workload_identity(),
+                        base_url=api_base,
+                        http_client=async_http_client,
+                        timeout=timeout,
+                        max_retries=max_retries,
+                        organization=organization,
+                    )
+                    if workload_identity_config is not None
+                    else AsyncOpenAI(
+                        api_key=api_key,
+                        base_url=api_base,
+                        http_client=async_http_client,
+                        timeout=timeout,
+                        max_retries=max_retries,
+                        organization=organization,
+                    )
                 )
             else:
-                _new_client = OpenAI(
-                    api_key=api_key,
-                    base_url=api_base,
-                    http_client=http_client,
-                    timeout=timeout,
-                    max_retries=max_retries,
-                    organization=organization,
+                sync_http_client: Final = OpenAIChatCompletion._get_sync_http_client()
+                http_client = sync_http_client
+                _new_client = (
+                    OpenAI(
+                        workload_identity=workload_identity_config.to_sdk_workload_identity(),
+                        base_url=api_base,
+                        http_client=sync_http_client,
+                        timeout=timeout,
+                        max_retries=max_retries,
+                        organization=organization,
+                    )
+                    if workload_identity_config is not None
+                    else OpenAI(
+                        api_key=api_key,
+                        base_url=api_base,
+                        http_client=sync_http_client,
+                        timeout=timeout,
+                        max_retries=max_retries,
+                        organization=organization,
+                    )
                 )
 
             ## SAVE CACHE KEY
@@ -1345,7 +1369,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         data: dict,
         model_response: ModelResponse,
         timeout: float,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
         api_base: str | None = None,
         client=None,
@@ -1408,7 +1432,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         prompt: str,
         timeout: float,
         optional_params: dict,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
         api_base: str | None = None,
         model_response: ImageResponse | None = None,

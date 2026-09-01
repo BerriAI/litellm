@@ -2,17 +2,21 @@
 Organization repository for database operations on LiteLLM_OrganizationTable.
 """
 
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.repositories.base_repository import BaseRepository
+from litellm.repositories.prisma_protocols import TableActions
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
 
 
 class OrganizationRepository(BaseRepository[LiteLLM_OrganizationTable]):
     """Repository for organization database operations."""
 
     @property
-    def table(self) -> Any:
+    def table(self) -> TableActions["prisma_models.LiteLLM_OrganizationTable"]:
         return self.prisma_client.db.litellm_organizationtable
 
     @property

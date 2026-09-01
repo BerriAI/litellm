@@ -7,6 +7,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { LogEntry } from "../columns";
 import { AutoRouterTag } from "@/components/shared/table_cells";
 import { ClassifyTag } from "./ClassifyTag";
+import { SidebarToggle } from "./SidebarToggle";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
 import {
   DRAWER_HEADER_PADDING,
@@ -26,6 +27,8 @@ interface DrawerHeaderProps {
   statusLabel: string;
   statusColor: "error" | "success";
   environment: string;
+  isSidebarCollapsed: boolean;
+  onToggleSidebar: () => void;
 }
 
 /**
@@ -40,34 +43,48 @@ export function DrawerHeader({
   statusLabel,
   statusColor,
   environment,
+  isSidebarCollapsed,
+  onToggleSidebar,
 }: DrawerHeaderProps) {
   const provider = log.custom_llm_provider || "";
   const providerInfo = provider ? getProviderLogoAndName(provider) : null;
+  const showToggleWithProvider = isSidebarCollapsed && Boolean(providerInfo || log.model);
+  const showToggleWithRequestId = isSidebarCollapsed && !showToggleWithProvider;
 
   return (
     <div
+      className="z-chrome"
       style={{
         padding: DRAWER_HEADER_PADDING,
         borderBottom: `1px solid ${COLOR_BORDER}`,
         backgroundColor: COLOR_BACKGROUND,
         position: "sticky",
         top: 0,
-        zIndex: 10,
       }}
     >
       {/* Row 0: Model + Provider with Logo */}
-      <ModelProviderSection
-        model={log.model}
-        modelGroup={log.model_group}
-        internalCallOrigin={log.metadata?.internal_call_origin}
-        providerLogo={providerInfo?.logo}
-        providerName={providerInfo?.displayName}
-      />
+      <div className="flex items-center gap-2" style={{ marginBottom: SPACING_MEDIUM }}>
+        {showToggleWithProvider && <SidebarToggle isCollapsed onToggle={onToggleSidebar} />}
+        <ModelProviderSection
+          model={log.model}
+          modelGroup={log.model_group}
+          internalCallOrigin={log.metadata?.internal_call_origin}
+          providerLogo={providerInfo?.logo}
+          providerName={providerInfo?.displayName}
+        />
+      </div>
 
       {/* Row 1: Request ID + Actions */}
       <div
-        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: SPACING_MEDIUM }}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 4,
+          marginBottom: SPACING_MEDIUM,
+        }}
       >
+        {showToggleWithRequestId && <SidebarToggle isCollapsed onToggle={onToggleSidebar} />}
         <RequestIdSection requestId={log.request_id} />
         <NavigationSection onPrevious={onPrevious} onNext={onNext} onClose={onClose} />
       </div>
@@ -95,7 +112,7 @@ function ModelProviderSection({
   providerName?: string;
 }) {
   return (
-    <div className="flex items-center gap-2" style={{ marginBottom: SPACING_MEDIUM }}>
+    <div className="flex min-w-0 items-center gap-2">
       {providerLogo && (
         <img
           src={providerLogo}

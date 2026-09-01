@@ -10,13 +10,16 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
 import React from "react";
 import ClassifierPromptEditor from "./ClassifierPromptEditor";
+import CustomTierPromptEditor from "./CustomTierPromptEditor";
+import { RestrictedSection, restrictedBy } from "./TierRestrictions";
 import HeuristicScoringConfig from "./HeuristicScoringConfig";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
   ClassifierFallback,
   ClassifierType,
   ComplexityRouterConfigValue,
-  DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS,
+  DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS,
+  MIN_QUOTED_CONTEXT_TURN_CHARS,
   DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
   DEFAULT_CLASSIFIER_FALLBACK,
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
@@ -26,11 +29,20 @@ import {
   CLASSIFICATION_RUBRIC_KEYS,
   ClassificationRubric,
   effectiveTierLabel,
+  heuristicScoringRole,
+  usesLlmClassifier,
+  DEFAULT_HEURISTIC_FIRST_MAX_TIER,
+  HEURISTIC_FIRST_MAX_TIER_KEYS,
+  effectiveClassifierType,
 } from "./ComplexityRouterConfig";
 
 const DEFAULT_SCORING_EXPLANATION =
   "The router scores each request across 7 dimensions: token count, code presence, reasoning markers, technical " +
   "terms, simple indicators, multi-step patterns, and question complexity. The weighted score determines the tier:";
+
+const CLASSIFIER_TIMEOUT_ID = "classifier-timeout-ms";
+const CLASSIFIER_CONTEXT_WINDOW_SIZE_ID = "classifier-context-window-size";
+const CLASSIFIER_CONTEXT_BUDGET_CHARS_ID = "classifier-context-budget-chars";
 
 const CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK =
   "This router classifies with your own prompt, so the tier comes from whatever rubric it states. The four tier " +
@@ -48,7 +60,7 @@ const CUSTOM_PROMPT_WITH_DEFAULT_MODEL_FALLBACK =
  */
 const scoringExplanation = (value: ComplexityRouterConfigValue): string => {
   const usesCustomPrompt =
-    value.classifier_type === "llm" && Boolean(value.classifier_llm_config?.system_prompt?.trim());
+    usesLlmClassifier(value.classifier_type) && Boolean(value.classifier_llm_config?.system_prompt?.trim());
   if (!usesCustomPrompt) return DEFAULT_SCORING_EXPLANATION;
   return value.classifier_fallback === "default_model"
     ? CUSTOM_PROMPT_WITH_DEFAULT_MODEL_FALLBACK
@@ -84,18 +96,21 @@ const boundaryRanges = (
 const HowClassificationWorks: React.FC<{ value: ComplexityRouterConfigValue }> = ({ value }) => {
   // The shipped boundaries come from the proxy, so this card cannot state ranges the router stopped using.
   const { data: scorerDefaults, isError } = useComplexityScorerDefaults();
+  const scorerRuns = heuristicScoringRole(value) !== "never";
   const ranges = boundaryRanges(
     scorerDefaults?.tier_boundaries,
     value.tier_boundaries,
     value.reasoning_override_min_score,
   );
 
+  if (value.custom_tier_set) return null;
+
   return (
     <Card className="bg-muted mt-4">
       <CardContent>
         <strong className="block mb-2 font-semibold">How Classification Works</strong>
         <span className="text-[13px] text-muted-foreground">{scoringExplanation(value)}</span>
-        {ranges && (
+        {scorerRuns && ranges && (
           <ul style={{ marginTop: 8, marginBottom: 0, paddingLeft: 20, fontSize: 13, color: "rgba(0, 0, 0, 0.45)" }}>
             <li>
               <strong>{effectiveTierLabel("SIMPLE", value.tier_labels)}</strong>: Score &lt; {ranges.simpleMedium}
@@ -136,6 +151,54 @@ interface ClassificationMethodConfigProps {
   defaultModel?: string;
 }
 
+const ClassifierTypeRadios: React.FC<{
+  value: ComplexityRouterConfigValue;
+  classifierType: ClassifierType;
+  onTypeChange: (classifierType: ClassifierType) => void;
+}> = ({ value, classifierType, onTypeChange }) => {
+  const scorerLocked = Boolean(value.custom_tier_set);
+  const scorerLockedReason = restrictedBy(value, "heuristicClassifier")?.reason;
+  return (
+    <RadioGroup
+      value={classifierType}
+      onValueChange={(classifierType: unknown) => onTypeChange(classifierType as ClassifierType)}
+      className="w-full"
+    >
+      <div className="flex w-full flex-col items-start gap-2">
+        <SimpleTooltip content={scorerLockedReason}>
+          <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
+            <RadioGroupItem value="heuristic" className="mt-0.5" disabled={scorerLocked} />
+            <span>
+              <strong className="font-semibold">Heuristic</strong>{" "}
+              <span className="text-muted-foreground">
+                (default), rule-based scoring with no API calls and &lt;1ms latency
+              </span>
+            </span>
+          </Label>
+        </SimpleTooltip>
+        <Label className="items-start font-normal leading-normal">
+          <RadioGroupItem value="llm" className="mt-0.5" />
+          <span>
+            <strong className="font-semibold">LLM Classifier</strong>{" "}
+            <span className="text-muted-foreground">calls a model to decide the tier (e.g. a small/fast model)</span>
+          </span>
+        </Label>
+        <SimpleTooltip content={scorerLockedReason}>
+          <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
+            <RadioGroupItem value="heuristic_first" className="mt-0.5" disabled={scorerLocked} />
+            <span>
+              <strong className="font-semibold">Heuristic first</strong>{" "}
+              <span className="text-muted-foreground">
+                scores locally, and only pays for the classifier when the score does not confidently land a cheap tier
+              </span>
+            </span>
+          </Label>
+        </SimpleTooltip>
+      </div>
+    </RadioGroup>
+  );
+};
+
 const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   value,
   onChange,
@@ -145,37 +208,51 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   showValidationErrors = false,
   defaultModel,
 }) => {
+  const [draft, setDraft] = React.useState<{ id: string; raw: string } | null>(null);
   const hasDefaultModel = Boolean(defaultModel);
+  const classifierType = effectiveClassifierType(value);
   const classifierModelMissing =
-    showValidationErrors && value.classifier_type === "llm" && !value.classifier_llm_config?.model;
+    showValidationErrors && usesLlmClassifier(classifierType) && !value.classifier_llm_config?.model;
   const usesCustomPrompt = Boolean(value.classifier_llm_config?.system_prompt?.trim());
+  const contextBudget = value.classifier_context_budget_chars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS;
+  const contextBudgetQuotesNothing = contextBudget > 0 && contextBudget < MIN_QUOTED_CONTEXT_TURN_CHARS;
   const classificationRubric = value.classifier_llm_config?.classification_rubric ?? DEFAULT_CLASSIFICATION_RUBRIC;
 
   const handleClassifierTypeChange = (classifierType: ClassifierType) => {
     const nextValue: ComplexityRouterConfigValue = {
       ...value,
       classifier_type: classifierType,
-      classifier_llm_config:
-        classifierType === "llm"
-          ? value.classifier_llm_config ?? {
-              model: "",
-              timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS,
-              classification_rubric: NEW_CLASSIFIER_CLASSIFICATION_RUBRIC,
-            }
+      classifier_llm_config: usesLlmClassifier(classifierType)
+        ? value.classifier_llm_config ?? {
+            model: "",
+            timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS,
+            classification_rubric: NEW_CLASSIFIER_CLASSIFICATION_RUBRIC,
+          }
+        : undefined,
+      classifier_context_window_size: usesLlmClassifier(classifierType)
+        ? value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE
+        : undefined,
+      classifier_context_budget_chars: usesLlmClassifier(classifierType)
+        ? value.classifier_context_budget_chars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS
+        : undefined,
+      classifier_context_include_assistant_turns: usesLlmClassifier(classifierType)
+        ? value.classifier_context_include_assistant_turns
+        : undefined,
+      classifier_fallback: usesLlmClassifier(classifierType) ? value.classifier_fallback : undefined,
+      heuristic_first_max_tier:
+        classifierType === "heuristic_first"
+          ? value.heuristic_first_max_tier ?? DEFAULT_HEURISTIC_FIRST_MAX_TIER
           : undefined,
-      classifier_context_window_size:
-        classifierType === "llm"
-          ? value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE
-          : undefined,
-      classifier_context_per_turn_chars:
-        classifierType === "llm"
-          ? value.classifier_context_per_turn_chars ?? DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS
-          : undefined,
-      classifier_context_include_assistant_turns:
-        classifierType === "llm" ? value.classifier_context_include_assistant_turns : undefined,
-      classifier_fallback: classifierType === "llm" ? value.classifier_fallback : undefined,
     };
     onChange(nextValue);
+  };
+
+  const handleHeuristicFirstMaxTierChange = (tier: string) => {
+    onChange({ ...value, heuristic_first_max_tier: tier });
+  };
+
+  const handleClassificationPromptChange = (classificationPrompt: string | undefined) => {
+    onChange({ ...value, classification_prompt: classificationPrompt });
   };
 
   const handleClassifierModelChange = (model: string) => {
@@ -189,13 +266,13 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     });
   };
 
-  const handleClassifierTimeoutChange = (timeoutMs: number | null) => {
+  const handleClassifierTimeoutChange = (timeoutMs: number) => {
     onChange({
       ...value,
       classifier_llm_config: {
         ...value.classifier_llm_config,
         model: value.classifier_llm_config?.model ?? "",
-        timeout_ms: timeoutMs ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
+        timeout_ms: timeoutMs,
       },
     });
   };
@@ -228,18 +305,30 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     onChange({ ...value, classifier_fallback: fallback });
   };
 
-  const handleClassifierContextWindowSizeChange = (windowSize: number | null) => {
+  const handleClassifierContextWindowSizeChange = (windowSize: number) => {
     onChange({
       ...value,
-      classifier_context_window_size: windowSize ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
+      classifier_context_window_size: windowSize,
     });
   };
 
-  const handleClassifierContextPerTurnCharsChange = (perTurnChars: number | null) => {
+  const handleClassifierContextBudgetCharsChange = (budgetChars: number) => {
     onChange({
       ...value,
-      classifier_context_per_turn_chars: perTurnChars ?? DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS,
+      classifier_context_budget_chars: budgetChars,
     });
+  };
+
+  const handleClassifierIntegerChange = (
+    id: string,
+    raw: string,
+    minimum: number,
+    onCommit: (value: number) => void,
+  ) => {
+    setDraft({ id, raw });
+    const parsed = Number(raw);
+    if (raw.trim() === "" || !Number.isFinite(parsed)) return;
+    onCommit(Math.max(minimum, Math.round(parsed)));
   };
 
   const handleClassifierContextIncludeAssistantTurnsChange = (includeAssistantTurns: boolean) => {
@@ -251,32 +340,34 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
 
   return (
     <>
-      <RadioGroup
-        value={value.classifier_type}
-        onValueChange={(classifierType: unknown) => handleClassifierTypeChange(classifierType as ClassifierType)}
-        className="w-full"
-      >
-        <div className="flex w-full flex-col items-start gap-2">
-          <Label className="items-start font-normal leading-normal">
-            <RadioGroupItem value="heuristic" className="mt-0.5" />
-            <span>
-              <strong className="font-semibold">Heuristic</strong>{" "}
-              <span className="text-muted-foreground">
-                (default) — rule-based scoring, no API calls, &lt;1ms latency
-              </span>
-            </span>
-          </Label>
-          <Label className="items-start font-normal leading-normal">
-            <RadioGroupItem value="llm" className="mt-0.5" />
-            <span>
-              <strong className="font-semibold">LLM Classifier</strong>{" "}
-              <span className="text-muted-foreground">— use a model to decide the tier (e.g. a small/fast model)</span>
-            </span>
-          </Label>
-        </div>
-      </RadioGroup>
+      <ClassifierTypeRadios value={value} classifierType={classifierType} onTypeChange={handleClassifierTypeChange} />
 
-      {value.classifier_type === "llm" && (
+      {classifierType === "heuristic_first" && (
+        <div className="mt-4 space-y-2">
+          <strong className="block font-semibold">Decide locally up to</strong>
+          <Select
+            value={value.heuristic_first_max_tier}
+            onValueChange={(tier: unknown) => handleHeuristicFirstMaxTierChange(tier as string)}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {HEURISTIC_FIRST_MAX_TIER_KEYS.map((tier) => (
+                <SelectItem key={tier} value={tier}>
+                  {effectiveTierLabel(tier, value.tier_labels)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-sm text-muted-foreground">
+            A request the scorer places at or below this tier routes there without a classifier call. Anything the
+            scorer places higher, and anything it found no signal for at all, goes to the classifier instead
+          </p>
+        </div>
+      )}
+
+      {usesLlmClassifier(classifierType) && (
         <div className="mt-4 space-y-3">
           <div>
             <strong className="block mb-1 font-semibold">Classifier Model</strong>
@@ -292,14 +383,27 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             {classifierModelMissing && <span className="text-xs text-destructive">A classifier model is required</span>}
           </div>
           <div>
-            <strong className="block mb-1 font-semibold">Timeout (ms)</strong>
+            <Label htmlFor={CLASSIFIER_TIMEOUT_ID} className="block mb-1 font-semibold">
+              Timeout (ms)
+            </Label>
             <Input
-              type="number"
-              value={value.classifier_llm_config?.timeout_ms ?? DEFAULT_CLASSIFIER_TIMEOUT_MS}
-              onChange={(event) =>
-                handleClassifierTimeoutChange(event.target.value === "" ? null : event.target.valueAsNumber)
+              id={CLASSIFIER_TIMEOUT_ID}
+              type="text"
+              inputMode="numeric"
+              value={
+                draft?.id === CLASSIFIER_TIMEOUT_ID
+                  ? draft.raw
+                  : String(value.classifier_llm_config?.timeout_ms ?? DEFAULT_CLASSIFIER_TIMEOUT_MS)
               }
-              min={1}
+              onChange={(event) =>
+                handleClassifierIntegerChange(
+                  CLASSIFIER_TIMEOUT_ID,
+                  event.target.value,
+                  1,
+                  handleClassifierTimeoutChange,
+                )
+              }
+              onBlur={() => setDraft(null)}
               className="w-full"
             />
             <span className="text-xs text-muted-foreground">
@@ -314,7 +418,10 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               </SimpleTooltip>
             </div>
             <SimpleTooltip
-              content={usesCustomPrompt ? "Your custom prompt replaces the built-in rubric entirely" : undefined}
+              content={
+                restrictedBy(value, "classificationRubric")?.reason ??
+                (usesCustomPrompt ? "Your custom prompt replaces the built-in rubric entirely" : undefined)
+              }
               className="w-full"
             >
               <Select
@@ -326,7 +433,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
                 onValueChange={(preset: ClassificationRubric | null) =>
                   preset && handleClassificationRubricChange(preset)
                 }
-                disabled={usesCustomPrompt}
+                disabled={usesCustomPrompt || Boolean(value.custom_tier_set)}
               >
                 <SelectTrigger aria-label="Classification Rubric" className="w-full">
                   <SelectValue />
@@ -341,23 +448,32 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               </Select>
             </SimpleTooltip>
             <span className="block text-xs text-muted-foreground">
-              {usesCustomPrompt
-                ? "Not in use: the custom prompt below is the classifier's entire rubric."
-                : CLASSIFICATION_RUBRIC_DESCRIPTIONS[classificationRubric].description}
+              {restrictedBy(value, "classificationRubric")?.reason ??
+                (usesCustomPrompt
+                  ? "Not in use: the custom prompt below is the classifier's entire rubric."
+                  : CLASSIFICATION_RUBRIC_DESCRIPTIONS[classificationRubric].description)}
             </span>
           </div>
           <div>
             <strong className="block mb-1 font-semibold">Classifier Prompt</strong>
-            <ClassifierPromptEditor
-              systemPrompt={value.classifier_llm_config?.system_prompt}
-              onChange={handleClassifierSystemPromptChange}
-              contextWindowSize={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
-              tierLabels={value.tier_labels}
-              classificationRubric={classificationRubric}
-            />
+            {value.custom_tier_set ? (
+              <CustomTierPromptEditor
+                classificationPrompt={value.classification_prompt}
+                onChange={handleClassificationPromptChange}
+                tierRows={value.custom_tier_set.tiers}
+                contextWindowSize={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
+              />
+            ) : (
+              <ClassifierPromptEditor
+                systemPrompt={value.classifier_llm_config?.system_prompt}
+                onChange={handleClassifierSystemPromptChange}
+                contextWindowSize={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
+                tierLabels={value.tier_labels}
+                classificationRubric={classificationRubric}
+              />
+            )}
           </div>
-          <div>
-            <strong className="block mb-1 font-semibold">If the classifier fails</strong>
+          <RestrictedSection heading="If the classifier fails" by={restrictedBy(value, "classifierFallback")}>
             <RadioGroup
               value={value.classifier_fallback ?? DEFAULT_CLASSIFIER_FALLBACK}
               onValueChange={(fallback: unknown) => handleClassifierFallbackChange(fallback as ClassifierFallback)}
@@ -392,16 +508,29 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             <span className="block text-xs text-muted-foreground">
               Applies when the classifier call errors, times out, or returns an unparseable response.
             </span>
-          </div>
+          </RestrictedSection>
           <div>
-            <strong className="block mb-1 font-semibold">Context Window Size</strong>
+            <Label htmlFor={CLASSIFIER_CONTEXT_WINDOW_SIZE_ID} className="block mb-1 font-semibold">
+              Context Window Size
+            </Label>
             <Input
-              type="number"
-              value={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
-              onChange={(event) =>
-                handleClassifierContextWindowSizeChange(event.target.value === "" ? null : event.target.valueAsNumber)
+              id={CLASSIFIER_CONTEXT_WINDOW_SIZE_ID}
+              type="text"
+              inputMode="numeric"
+              value={
+                draft?.id === CLASSIFIER_CONTEXT_WINDOW_SIZE_ID
+                  ? draft.raw
+                  : String(value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE)
               }
-              min={0}
+              onChange={(event) =>
+                handleClassifierIntegerChange(
+                  CLASSIFIER_CONTEXT_WINDOW_SIZE_ID,
+                  event.target.value,
+                  0,
+                  handleClassifierContextWindowSizeChange,
+                )
+              }
+              onBlur={() => setDraft(null)}
               className="w-full"
             />
             <span className="text-xs text-muted-foreground">
@@ -411,17 +540,40 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             </span>
           </div>
           <div>
-            <strong className="block mb-1 font-semibold">Context Per-Turn Character Limit</strong>
+            <Label htmlFor={CLASSIFIER_CONTEXT_BUDGET_CHARS_ID} className="block mb-1 font-semibold">
+              Context Character Budget
+            </Label>
             <Input
-              type="number"
-              value={value.classifier_context_per_turn_chars ?? DEFAULT_CLASSIFIER_CONTEXT_PER_TURN_CHARS}
-              onChange={(event) =>
-                handleClassifierContextPerTurnCharsChange(event.target.value === "" ? null : event.target.valueAsNumber)
+              id={CLASSIFIER_CONTEXT_BUDGET_CHARS_ID}
+              type="text"
+              inputMode="numeric"
+              value={
+                draft?.id === CLASSIFIER_CONTEXT_BUDGET_CHARS_ID
+                  ? draft.raw
+                  : String(value.classifier_context_budget_chars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS)
               }
-              min={1}
+              onChange={(event) =>
+                handleClassifierIntegerChange(
+                  CLASSIFIER_CONTEXT_BUDGET_CHARS_ID,
+                  event.target.value,
+                  0,
+                  handleClassifierContextBudgetCharsChange,
+                )
+              }
+              onBlur={() => setDraft(null)}
               className="w-full"
             />
-            <span className="text-xs text-muted-foreground">Prior turns longer than this are truncated.</span>
+            <span className="text-xs text-muted-foreground">
+              Total characters of prior conversation sent to the classifier. Turns are taken newest first and quoted
+              whole while they fit, so a short conversation is never cut.
+            </span>
+            {contextBudgetQuotesNothing && (
+              <span className="block text-xs text-destructive">
+                Under {MIN_QUOTED_CONTEXT_TURN_CHARS} characters there is no room to quote a turn that does not already
+                fit, so a long conversation reaches the classifier with no context at all. Set Context Window Size to 0
+                to turn context off deliberately.
+              </span>
+            )}
           </div>
           <div>
             <div className="flex items-center gap-2 mb-1">
@@ -446,7 +598,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         </div>
       )}
 
-      {value.classifier_type === "heuristic" && (
+      {heuristicScoringRole(value) !== "never" && (
         <div className="mt-4">
           <div className="flex items-center gap-2 mb-1">
             <strong className="font-semibold">Custom Technical Keywords</strong>

@@ -6,13 +6,16 @@ import datetime
 import enum
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from typing_extensions import Protocol, Required, TypedDict, runtime_checkable
+from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._uuid import uuid
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
@@ -185,6 +188,11 @@ class ModelInfo(MirroredPricingParams):
     # settings) still wins over this, exactly as it already does over the
     # router-wide default.
     enable_tag_filtering: bool | None = None
+
+    # when True, calls routed to this deployment persist a router_metadata block
+    # (requested model group, selected model + provider, router correlation id)
+    # in the spend log row's metadata. Set it on every deployment of the group.
+    internal_router_model: bool | None = None
 
     def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
@@ -480,7 +488,9 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     output_cost_per_token: float | None
     input_cost_per_second: float | None
     output_cost_per_second: float | None
+    output_cost_per_second_480p: ReadOnly[float | None]
     output_cost_per_second_1080p: float | None
+    output_cost_per_second_4k: ReadOnly[float | None]
     num_retries: int | None
     ## MOCK RESPONSES ##
     mock_response: str | ModelResponse | Exception | None
@@ -574,6 +584,11 @@ class RouterErrors(enum.Enum):
     no_deployments_available = "No deployments available for selected model"
     no_deployments_with_tag_routing = "Not allowed to access model due to tags configuration"
     no_deployments_with_provider_budget_routing = "No deployments available - crossed budget"
+    no_healthy_deployments = "There are no healthy deployments for this model"
+    only_strategy_marker_deployments = (
+        "Every deployment for it is a strategy router marker (auto_router/...), which is not a callable "
+        "model, and no pre-routing strategy selected a deployment for this request"
+    )
 
 
 class AllowedFailsPolicy(BaseModel):
@@ -635,6 +650,7 @@ class ModelGroupInfo(BaseModel):
     supports_url_context: bool = Field(default=False)
     supports_reasoning: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
+    supported_reasoning_efforts: tuple[str, ...] | None = Field(default=None)
     supported_openai_params: list[str] | None = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
 
@@ -835,6 +851,17 @@ class GenericBudgetWindowDetails(BaseModel):
     spend_key: str
     start_time_key: str
     ttl_seconds: int
+
+
+class FallbackAccessCheck(Protocol):
+    """
+    Decides whether the caller behind `request_kwargs` may be served by fallback `model`.
+
+    The router runs it before every cross-model-group fallback attempt and skips targets it
+    rejects, so a fallback can never reach a model the caller could not have requested directly.
+    """
+
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
 
 
 OptionalPreCallChecks = list[
