@@ -172,7 +172,7 @@ class TestContainerAPI:
         async def _resolve_upstream():
             return upstream_response
 
-        with patch.object(  # test-quality-ok: create_container does not forward a client, so the handler is the only seam
+        with patch.object(  # test-quality-ok: create_container exposes no client seam, only the handler
             base_llm_http_handler,
             "container_create_handler",
             side_effect=lambda **kwargs: _resolve_upstream() if kwargs["_is_async"] else upstream_response,
