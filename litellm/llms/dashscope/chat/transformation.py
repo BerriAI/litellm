@@ -64,12 +64,15 @@ class DashScopeChatConfig(OpenAIGPTConfig):
         stream: bool | None = None,
     ) -> str:
         """
-        If api_base is not provided, use the default DashScope /chat/completions endpoint.
+        If api_base is not provided, use the default DashScope base URL.
+        Appends /chat/completions only when not already present, matching OpenAIGPTConfig behavior.
         """
         if not api_base:
             api_base = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
-        if not api_base.endswith("/chat/completions"):
-            api_base = f"{api_base}/chat/completions"
+        endpoint = "chat/completions"
+        api_base = api_base.rstrip("/")
+        if endpoint not in api_base:
+            api_base = f"{api_base}/{endpoint}"
 
         return api_base
