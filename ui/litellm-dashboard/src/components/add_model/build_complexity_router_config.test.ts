@@ -59,6 +59,18 @@ describe("buildComplexityRouterConfig", () => {
     expect(config).toEqual(expected);
   });
 
+  // False is the value a truthy guard would silently drop, and it is the whole point of the toggle:
+  // an untouched form tracks the backend default (enabled), an explicit false is a real opt-out.
+  it("carries an explicit context-window escalation opt-out and buffer, false included", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      enableContextWindowEscalation: false,
+      contextWindowEscalationBuffer: 0.9,
+    });
+    expect(config.enable_context_window_escalation).toBe(false);
+    expect(config.context_window_escalation_buffer).toBe(0.9);
+  });
+
   it("trims escalation keywords and drops blank entries", () => {
     const config = buildComplexityRouterConfig({
       ...baseParams,

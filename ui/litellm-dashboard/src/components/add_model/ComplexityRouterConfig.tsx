@@ -29,6 +29,7 @@ import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
+import ContextWindowEscalationConfig from "./ContextWindowEscalationConfig";
 import { Restricted, restrictedBy } from "./TierRestrictions";
 import { type TierSetAction, applyTierSetAction, setFallbackTier } from "./tier_set_actions";
 import {
@@ -392,6 +393,13 @@ export interface ComplexityRouterConfigValue {
   tier_distance_penalty?: number;
   adaptive_eligible?: AdaptiveEligible;
   return_raw_model_name?: boolean;
+  /**
+   * Context-window escalation gate. Undefined means untouched, which keeps both keys out of the
+   * payload so the router tracks the backend defaults (enabled, 0.95 buffer); an explicit false
+   * is a real opt-out and must survive the edit round-trip.
+   */
+  enable_context_window_escalation?: boolean;
+  context_window_escalation_buffer?: number;
   /**
    * Heuristic scorer knobs. Undefined means the operator never touched them, which keeps the key out of the
    * payload so the router tracks the backend defaults rather than freezing today's numbers.
@@ -826,6 +834,11 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             children: (
               <PlanModeOverrideControls value={value} onChange={onChange} planModeTierOptions={planModeTierOptions} />
             ),
+          },
+          {
+            key: "context-window",
+            label: <strong className="text-foreground font-semibold">Advanced: Context Window Escalation</strong>,
+            children: <ContextWindowEscalationConfig value={value} onChange={onChange} />,
           },
           {
             key: "response",
