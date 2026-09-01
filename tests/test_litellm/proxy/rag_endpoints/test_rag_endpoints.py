@@ -6,15 +6,19 @@ Covers:
 """
 
 import io
+import json
+from copy import deepcopy
 from typing import Final
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
+import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
+from litellm.types.utils import CredentialItem
 
 
 @pytest.fixture
@@ -83,6 +87,72 @@ def test_rag_ingest_rejects_non_string_provider(
     assert response.status_code == 400
     assert response.json() == {
         "detail": {"error": "custom_llm_provider must be a string"}
+    }
+
+
+@pytest.mark.asyncio
+async def test_rag_ingest_named_credentials_are_request_local_and_not_persisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.rag_endpoints.endpoints import _save_vector_store_to_db_from_rag_ingest
+    from litellm.rag.ingestion.openai_ingestion import OpenAIRAGIngestion
+
+    ingest_options: Final = {
+        "vector_store": {
+            "custom_llm_provider": "openai",
+            "litellm_credential_name": "rag-openai",
+            "ttl_days": 7,
+        }
+    }
+    original_ingest_options: Final = deepcopy(ingest_options)
+    credential: Final = CredentialItem(
+        credential_name="rag-openai",
+        credential_info={},
+        credential_values={
+            "api_key": "sk-resolved",
+            "api_base": "https://credential-endpoint.example",
+            "aws_access_key_id": "resolved-access-key",
+            "aws_secret_access_key": "resolved-secret-key",
+            "aws_session_token": "resolved-session-token",
+            "aws_sts_endpoint": "https://credential-sts.example",
+            "vertex_credentials": '{"private_key":"resolved-private-key"}',
+        },
+    )
+    prisma_client: Final = MagicMock()
+    vector_store_table: Final = prisma_client.db.litellm_managedvectorstorestable
+    vector_store_table.find_unique = AsyncMock(return_value=None)
+    created_vector_store: Final = MagicMock()
+    created_vector_store.model_dump.return_value = {
+        "vector_store_id": "vs_named_credential",
+        "custom_llm_provider": "openai",
+        "litellm_credential_name": "rag-openai",
+        "litellm_params": '{"ttl_days": 7}',
+    }
+    vector_store_table.create = AsyncMock(return_value=created_vector_store)
+    monkeypatch.setattr(litellm, "credential_list", [credential])
+    monkeypatch.setattr(litellm, "vector_store_registry", None)
+
+    OpenAIRAGIngestion(ingest_options=ingest_options)
+    await _save_vector_store_to_db_from_rag_ingest(
+        response={"vector_store_id": "vs_named_credential"},
+        ingest_options=ingest_options,
+        prisma_client=prisma_client,
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-123", team_id="team-123"),
+    )
+
+    persistence_data: Final = vector_store_table.create.await_args.kwargs["data"]
+    persisted_params: Final = json.loads(persistence_data["litellm_params"])
+    credential_keys: Final = {*credential.credential_values, "litellm_credential_name"}
+    assert {
+        "caller_request": ingest_options,
+        "credential_column": persistence_data.get("litellm_credential_name"),
+        "provider_setting": persisted_params.get("ttl_days"),
+        "persisted_credential_keys": credential_keys.intersection(persisted_params),
+    } == {
+        "caller_request": original_ingest_options,
+        "credential_column": "rag-openai",
+        "provider_setting": 7,
+        "persisted_credential_keys": set(),
     }
 
 
