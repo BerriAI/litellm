@@ -538,6 +538,72 @@ def test_inherit_builtin_cache_pricing_noop_for_unknown_backend():
     assert model_info == {"input_cost_per_token": 0.000003}
 
 
+def test_inherit_builtin_base_rates_for_off_peak_fills_missing_rates():
+    """Direct unit test of the helper: an entry carrying only an
+    off_peak_pricing block inherits the backend model's built-in base token
+    rates, so cost lookup via the deployment id can bill standard rates
+    outside the windows.
+    """
+    backend_model = "gpt-4o-mini"
+    builtin_info = litellm.get_model_info(model=backend_model, custom_llm_provider="openai")
+    off_peak_block = {
+        "hours_utc": "00:00-00:00",
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 1e-06,
+    }
+    model_info = {"off_peak_pricing": off_peak_block}
+
+    Router._inherit_builtin_base_rates_for_off_peak(
+        model_info=model_info,
+        backend_model=backend_model,
+        custom_llm_provider="openai",
+    )
+
+    assert model_info["input_cost_per_token"] == builtin_info["input_cost_per_token"]
+    assert model_info["output_cost_per_token"] == builtin_info["output_cost_per_token"]
+    assert model_info["off_peak_pricing"] == off_peak_block
+
+
+def test_inherit_builtin_base_rates_for_off_peak_leaves_explicit_rates_alone():
+    """An entry that sets its own base rate beside the block already counts as
+    a full custom pricing entry; the helper must not mix builtin rates into it.
+    """
+    model_info = {
+        "off_peak_pricing": {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-07},
+        "input_cost_per_token": 3e-06,
+    }
+
+    Router._inherit_builtin_base_rates_for_off_peak(
+        model_info=model_info,
+        backend_model="gpt-4o-mini",
+        custom_llm_provider="openai",
+    )
+
+    assert model_info["input_cost_per_token"] == 3e-06
+    assert "output_cost_per_token" not in model_info
+
+
+def test_inherit_builtin_base_rates_for_off_peak_noop_without_block_or_backend():
+    """Nothing happens without an off_peak_pricing block, and an unmapped
+    backend model leaves the entry unchanged rather than raising.
+    """
+    plain_info = {"id": "dep-1"}
+    Router._inherit_builtin_base_rates_for_off_peak(
+        model_info=plain_info,
+        backend_model="gpt-4o-mini",
+        custom_llm_provider="openai",
+    )
+    assert plain_info == {"id": "dep-1"}
+
+    off_peak_info = {"off_peak_pricing": {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-07}}
+    Router._inherit_builtin_base_rates_for_off_peak(
+        model_info=off_peak_info,
+        backend_model="this-backend-model-does-not-exist-x9y8z7",
+        custom_llm_provider=None,
+    )
+    assert "input_cost_per_token" not in off_peak_info
+
+
 def test_custom_pricing_field_denylist_covers_all_builtin_pricing_fields():
     """The shared-backend-key stripping in Router relies on
     CustomPricingLiteLLMParams enumerating every per-deployment pricing field.
