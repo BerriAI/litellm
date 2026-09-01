@@ -738,6 +738,45 @@ def _check_allowed_routes_caller_permission(
     )
 
 
+_READ_ONLY_ALLOWED_ROUTES_PRESET: Final = frozenset(("info_routes",))
+
+
+def _is_safe_preset_route_transition(
+    incoming_allowed_routes: Sequence[str] | None,
+    existing_allowed_routes: Sequence[str] | None,
+) -> bool:
+    """
+    True when every route on BOTH sides is a safe `key_type` preset bucket
+    (empty = full access, which non-admins already get from a default
+    `/key/generate`), with one carve-out: a read-only (`info_routes`) key
+    stays read-only, so widening it needs an admin. Requiring the existing
+    side to be a safe preset keeps an owner from clearing an admin-set
+    custom route restriction (LIT-4139).
+    """
+    incoming: Final = frozenset(incoming_allowed_routes or ())
+    existing: Final = frozenset(existing_allowed_routes or ())
+    if not (incoming | existing) <= _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS:
+        return False
+    return existing != _READ_ONLY_ALLOWED_ROUTES_PRESET or incoming == existing
+
+
+def _enforce_allowed_routes_update_permission(
+    data: UpdateKeyRequest,
+    existing_key_row: LiteLLM_VerificationToken,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    if _is_safe_preset_route_transition(
+        incoming_allowed_routes=data.allowed_routes,
+        existing_allowed_routes=existing_key_row.allowed_routes,
+    ):
+        return
+    _check_allowed_routes_caller_permission(
+        allowed_routes=data.allowed_routes,
+        user_api_key_dict=user_api_key_dict,
+        allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
+    )
+
+
 def _check_permissions_caller_permission(
     data: GenerateRequestBase,
     user_api_key_dict: UserAPIKeyAuth,
@@ -2538,10 +2577,10 @@ async def _validate_update_key_data(
 
     _is_proxy_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
 
-    _check_allowed_routes_caller_permission(
-        allowed_routes=data.allowed_routes,
+    _enforce_allowed_routes_update_permission(
+        data=data,
+        existing_key_row=existing_key_row,
         user_api_key_dict=user_api_key_dict,
-        allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
     )
     _check_passthrough_routes_caller_permission(
         data=data,
