@@ -357,12 +357,9 @@ def test_rag_query_merges_managed_store_params(client_internal_user):
         "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
         new_callable=AsyncMock,
         return_value=mock_response,
-    ) as mock_aquery, patch.object(litellm, "vector_store_registry", mock_registry), patch(  # test-quality-ok: seeds the managed-store registry the merge under test reads and stubs the access assert covered by auth tests
-        "litellm.proxy.rag_endpoints.endpoints.assert_user_can_access_vector_store_id",
-        new=AsyncMock(),
-    ), patch(  # test-quality-ok: stubs the direct-endpoint access assert covered by auth tests
-        "litellm.proxy.vector_store_endpoints.endpoints.assert_user_can_access_vector_store",
-        new=AsyncMock(),
+    ) as mock_aquery, patch.object(litellm, "vector_store_registry", mock_registry), patch(  # test-quality-ok: seeds the managed-store registry the merge under test reads and grants access so real store resolution runs
+        "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+        new=AsyncMock(return_value=True),
     ):
         response = client_internal_user.post(
             "/v1/rag/query",
@@ -383,8 +380,8 @@ def test_rag_query_merges_managed_store_params(client_internal_user):
     assert forwarded_config["vector_bucket_name"] == "bkt"
 
 
-def test_rag_query_user_retrieval_config_wins_over_store(client_internal_user):
-    """User-supplied retrieval_config keys must win over registry values."""
+def test_rag_query_store_params_win_over_user_retrieval_config(client_internal_user):
+    """Registry values must win over user-supplied retrieval_config keys so callers cannot override store credentials."""
     import litellm
     from litellm.types.utils import ModelResponse
 
@@ -406,12 +403,9 @@ def test_rag_query_user_retrieval_config_wins_over_store(client_internal_user):
         "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
         new_callable=AsyncMock,
         return_value=mock_response,
-    ) as mock_aquery, patch.object(litellm, "vector_store_registry", mock_registry), patch(  # test-quality-ok: seeds the managed-store registry the merge under test reads and stubs the access assert covered by auth tests
-        "litellm.proxy.rag_endpoints.endpoints.assert_user_can_access_vector_store_id",
-        new=AsyncMock(),
-    ), patch(  # test-quality-ok: stubs the direct-endpoint access assert covered by auth tests
-        "litellm.proxy.vector_store_endpoints.endpoints.assert_user_can_access_vector_store",
-        new=AsyncMock(),
+    ) as mock_aquery, patch.object(litellm, "vector_store_registry", mock_registry), patch(  # test-quality-ok: seeds the managed-store registry the merge under test reads and grants access so real store resolution runs
+        "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+        new=AsyncMock(return_value=True),
     ):
         response = client_internal_user.post(
             "/v1/rag/query",
@@ -424,7 +418,9 @@ def test_rag_query_user_retrieval_config_wins_over_store(client_internal_user):
 
     assert response.status_code == 200, response.json()
     forwarded_config = mock_aquery.await_args.kwargs["retrieval_config"]
-    assert forwarded_config["aws_region_name"] == "us-east-1"
+    assert forwarded_config["aws_region_name"] == "eu-west-1"
+
+
 EICAR = r"X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
 INGEST_REQUEST = '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'
 

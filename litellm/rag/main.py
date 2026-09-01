@@ -51,12 +51,19 @@ INGESTION_REGISTRY: Final[dict[str, type[BaseRAGIngestion]]] = {
     "vertex_ai": VertexAIRAGIngestion,
 }
 
-# retrieval_config keys consumed by the query pipeline itself; everything else is
-# forwarded to vector_stores.asearch as provider-specific params (e.g.
-# aws_region_name, embedding_model, vector_bucket_name for S3 Vectors).
-# `filters`/`retrieval_filter` are reserved for the explicit filter param.
-_CONSUMED_RETRIEVAL_CONFIG_KEYS: Final = frozenset(
-    {"vector_store_id", "custom_llm_provider", "top_k", "filters", "retrieval_filter"}
+# Only these retrieval_config keys are forwarded to vector_stores.asearch as
+# provider-specific params. The explicit allowlist keeps caller-controlled
+# connection overrides (api_base, api_key, ...) away from the search call,
+# where they could redirect store credentials to an attacker-chosen host.
+_FORWARDABLE_RETRIEVAL_CONFIG_KEYS: Final = frozenset(
+    {
+        "aws_region_name",
+        "vector_bucket_name",
+        "embedding_model",
+        "litellm_embedding_model",
+        "litellm_embedding_config",
+        "litellm_credential_name",
+    }
 )
 
 
@@ -233,10 +240,10 @@ async def _execute_query_pipeline(
         raise ValueError("No query found in messages for RAG query")
 
     # 2. Search vector store
-    # Forward provider-specific retrieval_config extras (region, embedding model,
-    # bucket, credentials refs, ...) to the search call; kwargs win on conflict.
+    # Forward allowlisted provider retrieval_config extras (region, embedding
+    # model, bucket, credential refs) to the search call; kwargs win on conflict.
     provider_search_params: Final = MappingProxyType(
-        {k: v for k, v in retrieval_config.items() if k not in _CONSUMED_RETRIEVAL_CONFIG_KEYS}
+        {k: v for k, v in retrieval_config.items() if k in _FORWARDABLE_RETRIEVAL_CONFIG_KEYS}
     )
     forwarded_search_params: Final = MappingProxyType({**provider_search_params, **kwargs})
     with _suppressed_sub_call_billing():

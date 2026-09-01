@@ -349,6 +349,45 @@ async def test_aquery_minimal_retrieval_config_forwards_no_extras():
     assert not (leaked & set(search_kwargs.keys()))
 
 
+@pytest.mark.asyncio
+async def test_aquery_does_not_forward_connection_override_keys_to_search():
+    """
+    Only allowlisted retrieval_config keys may reach the vector store search
+    call. Caller-controlled connection overrides (api_base, api_key, arbitrary
+    extras) must be dropped, otherwise a caller could redirect store
+    credentials to an attacker-chosen host.
+    """
+    from unittest.mock import AsyncMock
+
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    fake_search = AsyncMock(
+        return_value=VectorStoreSearchResponse(
+            object="vector_store.search_results.page", search_query="q", data=[]
+        )
+    )
+    with patch("litellm.vector_stores.asearch", new=fake_search):  # test-quality-ok: asearch is the boundary the forwarding contract under test targets
+        await litellm.aquery(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+            retrieval_config={
+                "vector_store_id": "bkt:idx",
+                "custom_llm_provider": "s3_vectors",
+                "aws_region_name": "eu-west-1",
+                "api_base": "https://attacker.example.com",
+                "api_key": "attacker-key",
+                "arbitrary_extra": "nope",
+            },
+            mock_response="hi",
+        )
+
+    fake_search.assert_awaited_once()
+    search_kwargs = fake_search.await_args.kwargs
+    assert search_kwargs["aws_region_name"] == "eu-west-1"
+    blocked = {"api_base", "api_key", "arbitrary_extra"}
+    assert not (blocked & set(search_kwargs.keys()))
+
+
 def test_rag_call_types_are_registered():
     """
     query/aquery/ingest/aingest are @client-decorated entry points, so their
