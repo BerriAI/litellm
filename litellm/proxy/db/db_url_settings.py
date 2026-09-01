@@ -82,8 +82,17 @@ CONNECTION_PARAM_KEYS: Final[frozenset[str]] = frozenset(
         "pool_timeout",
         "connect_timeout",
         "socket_timeout",
+        "max_idle_connection_lifetime",
         "pgbouncer",
     }
+)
+
+# Quaint never tests pooled connections on checkout and keeps them idle for
+# 300s by default, past many infra idle timeouts, so dead sockets surface as
+# `Error { kind: Closed }`. 60s recycles them first; explicit values win.
+DEFAULT_MAX_IDLE_CONNECTION_LIFETIME: Final = 60
+IDLE_LIFETIME_DEFAULT_PARAMS: Final[Mapping[str, int]] = MappingProxyType(
+    {"max_idle_connection_lifetime": DEFAULT_MAX_IDLE_CONNECTION_LIFETIME}
 )
 
 

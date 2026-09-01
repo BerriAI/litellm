@@ -2452,6 +2452,97 @@ class TestReadReplicaConnectionParams:
         assert "DATABASE_URL_READ_REPLICA" not in captured
 
 
+class TestMaxIdleConnectionLifetimeDefault:
+    """The proxy defaults `max_idle_connection_lifetime` below common infra idle
+    timeouts so stale pooled connections are recycled instead of failing requests."""
+
+    def _config(self, tmp_path, general_settings):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(yaml.dump({"model_list": [], "general_settings": general_settings}))
+        return str(config_path)
+
+    def test_default_applied_to_database_and_direct_url(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {}),
+            direct_url="postgresql://t:t@localhost:5432/t",
+        )
+
+        for env_var in ("DATABASE_URL", "DIRECT_URL"):
+            query = urlparse.parse_qs(urlparse.urlparse(captured[env_var]).query)
+            assert query["max_idle_connection_lifetime"] == ["60"], env_var
+
+    def test_url_pinned_value_wins_over_default(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {}),
+            database_url="postgresql://t:t@localhost:5432/t?max_idle_connection_lifetime=300",
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        assert query["max_idle_connection_lifetime"] == ["300"]
+
+    def test_config_key_overrides_default(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {"database_max_idle_connection_lifetime": 45}),
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        assert query["max_idle_connection_lifetime"] == ["45"]
+
+    def test_extra_connection_params_override_default(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(
+                tmp_path,
+                {"database_extra_connection_params": {"max_idle_connection_lifetime": 120}},
+            ),
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        assert query["max_idle_connection_lifetime"] == ["120"]
+
+    def test_read_replica_gets_the_default(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {}),
+            read_replica_url="postgresql://t:t@reader:5432/t",
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
+        assert query["max_idle_connection_lifetime"] == ["60"]
+
+    def test_replica_pinned_value_wins(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {"database_max_idle_connection_lifetime": 45}),
+            read_replica_url="postgresql://t:t@reader:5432/t?max_idle_connection_lifetime=200",
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
+        assert query["max_idle_connection_lifetime"] == ["200"]
+
+    def test_config_key_reaches_the_read_replica(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {"database_max_idle_connection_lifetime": 45}),
+            read_replica_url="postgresql://t:t@reader:5432/t",
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
+        assert query["max_idle_connection_lifetime"] == ["45"]
+
+    def test_build_db_connection_url_params_includes_configured_lifetime(self):
+        from litellm.proxy.proxy_cli import _build_db_connection_url_params
+
+        params = _build_db_connection_url_params(
+            connection_limit=10,
+            pool_timeout=60,
+            max_idle_connection_lifetime=45,
+        )
+        assert params["max_idle_connection_lifetime"] == 45
+
+    def test_build_db_connection_url_params_omits_lifetime_when_unset(self):
+        from litellm.proxy.proxy_cli import _build_db_connection_url_params
+
+        params = _build_db_connection_url_params(connection_limit=10, pool_timeout=60)
+        assert "max_idle_connection_lifetime" not in params
+
+
 class TestTokenAuthCliFlags:
     """`--azure_postgresql_auth` has to reach the URL assembly the same way the env var does."""
 
