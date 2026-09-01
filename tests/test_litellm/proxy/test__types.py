@@ -10,6 +10,7 @@ from litellm.proxy._types import (
     LiteLLM_AuditLogs,
     LiteLLM_TeamMembership,
     LitellmUserRoles,
+    NewUserRequest,
     OrganizationMemberUpdateRequest,
     ResetSpendRequest,
     UpdateKeyRequest,
@@ -277,3 +278,32 @@ def test_team_membership_budget_table_present_still_works():
     }
     result = LiteLLM_TeamMembership.model_validate(data)
     assert result.litellm_budget_table is None
+
+
+def test_a_singular_organization_id_reaches_the_organizations_list():
+    request = NewUserRequest.model_validate({"user_email": "member@org.test", "organization_id": "org-1"})
+
+    assert request.organizations == ["org-1"]
+
+
+def test_a_singular_organization_id_is_merged_with_an_organizations_list():
+    request = NewUserRequest.model_validate(
+        {"user_email": "member@org.test", "organization_id": "org-2", "organizations": ["org-1"]}
+    )
+
+    assert request.organizations == ["org-1", "org-2"]
+
+
+def test_an_organization_named_both_ways_is_not_duplicated():
+    request = NewUserRequest.model_validate(
+        {"user_email": "member@org.test", "organization_id": "org-1", "organizations": ["org-1"]}
+    )
+
+    assert request.organizations == ["org-1"]
+
+
+@pytest.mark.parametrize("body", [{}, {"organization_id": None}])
+def test_a_request_without_an_organization_id_keeps_its_organizations_untouched(body):
+    request = NewUserRequest.model_validate({"user_email": "member@org.test", **body})
+
+    assert request.organizations is None

@@ -66,6 +66,25 @@ const makeUser = (userId: string, email: string) => ({
   budget_duration: null,
 });
 
+const session = vi.hoisted(() => ({
+  userId: "admin-user-id",
+  userRole: "Admin",
+  organizations: [] as unknown[],
+}));
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => ({
+    accessToken: "test-token",
+    token: "test-token",
+    userId: session.userId,
+    userRole: session.userRole,
+  }),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: () => ({ data: session.organizations }),
+}));
+
 const createQueryClient = () =>
   new QueryClient({
     defaultOptions: {
@@ -84,16 +103,21 @@ const defaultProps = {
   teams: [],
 };
 
-const renderDashboard = (overrides: Partial<typeof defaultProps> = {}) =>
-  renderWithProviders(
+const renderDashboard = (overrides: Partial<typeof defaultProps> = {}) => {
+  const props = { ...defaultProps, ...overrides };
+  session.userId = props.userID;
+  session.userRole = props.userRole;
+  return renderWithProviders(
     <QueryClientProvider client={createQueryClient()}>
-      <ViewUserDashboard {...defaultProps} {...overrides} />
+      <ViewUserDashboard {...props} />
     </QueryClientProvider>,
   );
+};
 
 describe("ViewUserDashboard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    session.organizations = [];
     userListCall.mockResolvedValue({
       users: [makeUser("user-1", "test@example.com")],
       total: 1,
@@ -159,6 +183,29 @@ describe("ViewUserDashboard", () => {
     expect(screen.queryByTestId("toggle-user-selection")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /\+ invite user/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /\+ bulk invite users/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the invite button to an org admin, whose session role is only Internal User", async () => {
+    session.organizations = [
+      { organization_id: "org-1", members: [{ user_id: "org-admin-user", user_role: "org_admin" }] },
+    ];
+
+    renderDashboard({ userRole: "Internal User", userID: "org-admin-user" });
+
+    expect(await screen.findByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /\+ bulk invite users/i })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("toggle-user-selection")).not.toBeInTheDocument();
+  });
+
+  it("keeps the invite button hidden from a plain member of an organization", async () => {
+    session.organizations = [
+      { organization_id: "org-1", members: [{ user_id: "member-user", user_role: "internal_user" }] },
+    ];
+
+    renderDashboard({ userRole: "Internal User", userID: "member-user" });
+
+    expect(await screen.findByText("test@example.com")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /\+ invite user/i })).not.toBeInTheDocument();
   });
 
   it("keeps actions unavailable while the user list is loading", () => {

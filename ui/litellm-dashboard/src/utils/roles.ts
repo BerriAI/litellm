@@ -46,18 +46,23 @@ export const isUserTeamAdminForSingleTeam = (teamMemberWithRoles: Member[] | nul
   return teamMemberWithRoles.some((member) => member.user_id === userID && member.role === "admin");
 };
 
-export const isOrgAdminForAnyOrg = (
+export const orgsAdministeredBy = (
   organizations: Organization[] | null | undefined,
   userID: string | null | undefined,
-): boolean => {
+): Organization[] => {
   if (organizations == null || !userID) {
-    return false;
+    return [];
   }
-  return organizations.some((org) => {
+  return organizations.filter((org) => {
     const members: OrganizationMembership[] = org.members ?? [];
     return members.some((member) => member.user_id === userID && member.user_role === ORG_ADMIN_MEMBERSHIP_ROLE);
   });
 };
+
+export const isOrgAdminForAnyOrg = (
+  organizations: Organization[] | null | undefined,
+  userID: string | null | undefined,
+): boolean => orgsAdministeredBy(organizations, userID).length > 0;
 
 export const formatUserRole = (userRole: string): string => {
   if (!userRole) {

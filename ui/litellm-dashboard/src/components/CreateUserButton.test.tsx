@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -338,6 +338,54 @@ describe("CreateUserButton", () => {
           expect.objectContaining({
             organizations: ["org-1"],
           }),
+        );
+      });
+    });
+
+    it("preselects and posts the organization the caller administers", async () => {
+      const { useOrganizations } = await import("@/app/(dashboard)/hooks/organizations/useOrganizations");
+      vi.mocked(useOrganizations).mockReturnValue({
+        data: [
+          {
+            organization_id: "org-1",
+            organization_alias: "My Org",
+            members: [{ user_id: "123", user_role: "org_admin" }],
+          },
+          {
+            organization_id: "org-2",
+            organization_alias: "Someone Else's Org",
+            members: [{ user_id: "999", user_role: "org_admin" }],
+          },
+        ],
+        isLoading: false,
+      } as any);
+
+      const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+      mockUserCreateCall.mockResolvedValue({ data: { user_id: "org-user" } });
+      mockInvitationCreateCall.mockResolvedValue({
+        id: "inv-preselect",
+        user_id: "org-user",
+        has_user_setup_sso: false,
+      } as any);
+
+      renderWithProviders(
+        <CreateUserButton {...defaultProps} possibleUIRoles={{ proxy_user: { ui_label: "User", description: "" } }} />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
+
+      const dialog = screen.getByRole("dialog", { name: /invite user/i });
+      fireEvent.change(within(dialog).getByLabelText(/user email/i), { target: { value: "member@example.com" } });
+      await user.click(within(dialog).getByRole("button", { name: /invite user/i }));
+
+      await waitFor(() => {
+        expect(mockUserCreateCall).toHaveBeenCalledWith(
+          "token",
+          null,
+          expect.objectContaining({ organizations: ["org-1"] }),
         );
       });
     });

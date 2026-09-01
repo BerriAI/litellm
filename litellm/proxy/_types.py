@@ -1711,6 +1711,18 @@ class NewUserRequest(GenerateRequestBase):
     sso_user_id: str | None = None
     organizations: list[str] | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_singular_organization_id(cls, values: object) -> object:
+        if not isinstance(values, dict):
+            return values
+        organization_id: Final = values.get("organization_id")
+        current: Final = values.get("organizations")
+        organizations: Final[list[object]] = list(current) if isinstance(current, list) else []
+        if not isinstance(organization_id, str) or organization_id in organizations:
+            return values
+        return {**values, "organizations": [*organizations, organization_id]}
+
 
 class NewUserResponse(GenerateKeyResponse):
     max_budget: float | None = None

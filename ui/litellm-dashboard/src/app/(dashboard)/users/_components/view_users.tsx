@@ -18,6 +18,7 @@ import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
+import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -59,6 +60,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   orgAdminOrgIds,
 }) => {
   const isProxyAdmin = userRole ? isProxyAdminRole(userRole) : false;
+  const isOrgAdmin = useIsOrgAdmin();
   const queryClient = useQueryClient();
 
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
@@ -327,7 +329,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           )}
           {!userListQuery.isLoading && userID && accessToken && (
             <>
-              {isProxyAdmin && (
+              {(isProxyAdmin || isOrgAdmin) && (
                 <CreateUserButton userID={userID} accessToken={accessToken} possibleUIRoles={possibleUIRoles} />
               )}
 
