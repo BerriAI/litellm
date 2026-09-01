@@ -137,6 +137,36 @@ const isEntrySuccess = (entry: GuardrailInformation): boolean => {
   return (entry.guardrail_status ?? "").toLowerCase() === "success";
 };
 
+const isEntryNotRun = (entry: GuardrailInformation): boolean => {
+  return (entry.guardrail_status ?? "").toLowerCase() === "not_run";
+};
+
+type EntryStatusLabel = "PASSED" | "NOT RUN" | "FAILED";
+
+const entryStatusLabel = (entry: GuardrailInformation): EntryStatusLabel => {
+  if (isEntrySuccess(entry)) return "PASSED";
+  if (isEntryNotRun(entry)) return "NOT RUN";
+  return "FAILED";
+};
+
+const StatusIcon = ({ status }: { status: EntryStatusLabel }) => {
+  if (status === "PASSED") return <CheckCircleIcon />;
+  if (status === "NOT RUN") return <GrayDotIcon />;
+  return <FailCircleIcon />;
+};
+
+const timelineStatusClass = (status: EntryStatusLabel): string => {
+  if (status === "PASSED") return "bg-success/15 text-success";
+  if (status === "NOT RUN") return "bg-muted text-muted-foreground";
+  return "bg-destructive/15 text-destructive";
+};
+
+const cardStatusClass = (status: EntryStatusLabel): string => {
+  if (status === "PASSED") return "bg-success/15 text-success border border-success/20";
+  if (status === "NOT RUN") return "bg-muted text-muted-foreground border border-border";
+  return "bg-destructive/15 text-destructive border border-destructive/20";
+};
+
 const getRiskColor = (score: number): string => {
   if (score <= 3) return "text-success bg-success/10 border-success/20";
   if (score <= 6) return "text-warning bg-warning/10 border-warning/20";
@@ -318,8 +348,7 @@ interface TimelineEntry {
   type: "request" | "guardrail" | "llm" | "response";
   label: string;
   offsetMs: number;
-  status?: string;
-  isSuccess?: boolean;
+  status?: EntryStatusLabel;
 }
 
 const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
@@ -348,8 +377,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
         type: "guardrail",
         label: `Pre-call guardrail: ${getDisplayName(e)}`,
         offsetMs,
-        status: isEntrySuccess(e) ? "PASSED" : "FAILED",
-        isSuccess: isEntrySuccess(e),
+        status: entryStatusLabel(e),
       });
     }
 
@@ -372,8 +400,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
         type: "guardrail",
         label: `During-call guardrail: ${getDisplayName(e)}`,
         offsetMs,
-        status: isEntrySuccess(e) ? "PASSED" : "FAILED",
-        isSuccess: isEntrySuccess(e),
+        status: entryStatusLabel(e),
       });
     }
 
@@ -384,8 +411,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
         type: "guardrail",
         label: `Post-call guardrail: ${getDisplayName(e)}`,
         offsetMs,
-        status: isEntrySuccess(e) ? "PASSED" : "FAILED",
-        isSuccess: isEntrySuccess(e),
+        status: entryStatusLabel(e),
       });
     }
 
@@ -410,10 +436,8 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
                   <GrayDotIcon />
                 ) : item.type === "llm" ? (
                   <PlayCircleIcon />
-                ) : item.isSuccess ? (
-                  <CheckCircleIcon />
                 ) : (
-                  <FailCircleIcon />
+                  <StatusIcon status={item.status ?? "FAILED"} />
                 )}
               </div>
               {idx < timeline.length - 1 && <div className="w-0.5 bg-border grow" style={{ minHeight: "24px" }} />}
@@ -427,9 +451,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
                 </span>
                 {item.status && (
                   <span
-                    className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
-                      item.isSuccess ? "bg-success/15 text-success" : "bg-destructive/15 text-destructive"
-                    }`}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${timelineStatusClass(item.status)}`}
                   >
                     {item.status}
                   </span>
@@ -456,6 +478,7 @@ const formatGuardrailCost = (cost: number): string => {
 const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
   const [expanded, setExpanded] = useState(false);
   const success = isEntrySuccess(entry);
+  const statusLabel = entryStatusLabel(entry);
   const totalMasked = getTotalMasked(entry);
   const displayName = getDisplayName(entry);
   const durationStr = formatDurationMs(entry.duration);
@@ -490,7 +513,9 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
         onClick={() => setExpanded(!expanded)}
       >
         {/* Status icon */}
-        <div className="shrink-0">{success ? <CheckCircleIcon /> : <FailCircleIcon />}</div>
+        <div className="shrink-0">
+          <StatusIcon status={statusLabel} />
+        </div>
 
         {/* Name + badges */}
         <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
@@ -501,13 +526,9 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
           </span>
 
           <span
-            className={`px-2 py-0.5 rounded text-[11px] font-semibold uppercase shrink-0 ${
-              success
-                ? "bg-success/15 text-success border border-success/20"
-                : "bg-destructive/15 text-destructive border border-destructive/20"
-            }`}
+            className={`px-2 py-0.5 rounded text-[11px] font-semibold uppercase shrink-0 ${cardStatusClass(statusLabel)}`}
           >
-            {success ? "PASSED" : "FAILED"}
+            {statusLabel}
           </span>
 
           {matchCountStr && (
@@ -673,7 +694,8 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
   }, [data]);
 
   const passedCount = guardrailEntries.filter(isEntrySuccess).length;
-  const allPassed = passedCount === guardrailEntries.length;
+  const notRunCount = guardrailEntries.filter(isEntryNotRun).length;
+  const allPassed = passedCount === guardrailEntries.length - notRunCount;
 
   const totalOverheadMs = useMemo(() => {
     return Math.round(guardrailEntries.reduce((sum, e) => sum + (e.duration ?? 0), 0) * 1000);
@@ -728,6 +750,11 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
                 ) : null}
                 {passedCount} Passed
               </span>
+              {notRunCount > 0 && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-muted text-muted-foreground border border-border">
+                  {notRunCount} Not run
+                </span>
+              )}
             </div>
           </div>
         </div>
