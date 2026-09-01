@@ -718,8 +718,9 @@ Configure auto-scaling based on:
 # Backup config
 cp config.yaml config.yaml.backup
 
-# Backup secrets
-kubectl get secret litellm-secrets -o yaml > secrets-backup.yaml
+# Backup secrets (restrict permissions)
+(umask 077 && kubectl get secret litellm-secrets -o yaml > secrets-backup.yaml)
+# Encrypt or move secrets-backup.yaml to protected storage immediately
 ```
 
 ### Database Backup

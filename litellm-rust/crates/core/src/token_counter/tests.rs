@@ -44,7 +44,7 @@ fn fmt_tools(tools: &[Map<String, Value>]) -> String {
 
 #[test]
 fn resolves_cl100k_base_for_unknown_models() {
-    let tokenizer = resolve("unknown-model-xyz");
+    let tokenizer = resolve("unknown-model-xyz").unwrap();
     let count = tokenizer.count("hello world");
     let expected = tiktoken::get_encoding("cl100k_base").unwrap();
     assert_eq!(count, expected.count("hello world"));
@@ -52,7 +52,7 @@ fn resolves_cl100k_base_for_unknown_models() {
 
 #[test]
 fn resolves_o200k_base_for_gpt4o() {
-    let tokenizer = resolve("gpt-4o");
+    let tokenizer = resolve("gpt-4o").unwrap();
     let count = tokenizer.count("hello world");
     let expected = tiktoken::get_encoding("o200k_base").unwrap();
     assert_eq!(count, expected.count("hello world"));
@@ -60,7 +60,7 @@ fn resolves_o200k_base_for_gpt4o() {
 
 #[test]
 fn normalizes_azure_model_names() {
-    let tokenizer = resolve("gpt-35-turbo");
+    let tokenizer = resolve("gpt-35-turbo").unwrap();
     let count = tokenizer.count("hello");
     let expected = tiktoken::get_encoding("cl100k_base").unwrap();
     assert_eq!(count, expected.count("hello"));
@@ -68,13 +68,13 @@ fn normalizes_azure_model_names() {
 
 #[test]
 fn counts_empty_text_as_zero() {
-    let tokenizer = resolve("gpt-4");
+    let tokenizer = resolve("gpt-4").unwrap();
     assert_eq!(tokenizer.count(""), 0);
 }
 
 #[test]
 fn counts_unicode_text() {
-    let tokenizer = resolve("gpt-4");
+    let tokenizer = resolve("gpt-4").unwrap();
     let count = tokenizer.count("á");
     assert!(count > 0);
 }
@@ -672,15 +672,31 @@ fn format_function_definitions_anthropic_tool_shape() {
 }
 
 #[test]
+fn non_openai_models_return_error() {
+    let result = resolve("cohere/command-r");
+    assert!(result.is_err());
+    match result {
+        Err(e) => assert!(e.to_string().contains("HuggingFace tokenizer")),
+        Ok(_) => panic!("expected error for cohere model"),
+    }
+
+    let result = resolve("meta-llama/Llama-3-8b");
+    assert!(result.is_err());
+
+    let result = resolve("mistralai/mistral-7b");
+    assert!(result.is_err());
+}
+
+#[test]
 fn hf_tokenizer_attempted_for_claude_2() {
-    let tokenizer = resolve("claude-2");
+    let tokenizer = resolve("claude-2").unwrap();
     let count = tokenizer.count("hello world");
     assert!(count > 0);
 }
 
 #[test]
 fn hf_tokenizer_not_attempted_for_claude_3() {
-    let tokenizer = resolve("claude-3-opus");
+    let tokenizer = resolve("claude-3-opus").unwrap();
     let count = tokenizer.count("hello world");
     let expected = tiktoken::get_encoding("cl100k_base").unwrap();
     assert_eq!(count, expected.count("hello world"));
@@ -688,11 +704,11 @@ fn hf_tokenizer_not_attempted_for_claude_3() {
 
 #[test]
 fn resolved_tokenizer_unified_api() {
-    let tiktoken_tok = resolve("gpt-4");
+    let tiktoken_tok = resolve("gpt-4").unwrap();
     let count = tiktoken_tok.count("hello world");
     assert!(count > 0);
 
-    let hf_tok = resolve("claude-2");
+    let hf_tok = resolve("claude-2").unwrap();
     let count = hf_tok.count("hello world");
     assert!(count > 0);
 }

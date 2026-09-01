@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 use tokenizers::Tokenizer;
 
 use super::encoding::count_text;
+use crate::{CoreError, CoreResult};
 
 enum TokenizerImpl {
     Tiktoken(&'static tiktoken::CoreBpe),
@@ -27,12 +28,18 @@ impl ResolvedTokenizer {
 
 static ANTHROPIC_TOKENIZER: OnceLock<Option<Box<Tokenizer>>> = OnceLock::new();
 
-pub(crate) fn resolve(model: &str) -> ResolvedTokenizer {
+pub(crate) fn resolve(model: &str) -> CoreResult<ResolvedTokenizer> {
     if let Some(hf) = try_resolve_hf(model) {
-        return ResolvedTokenizer(TokenizerImpl::HuggingFace(hf));
+        return Ok(ResolvedTokenizer(TokenizerImpl::HuggingFace(hf)));
     }
 
     let normalized = fix_model_name(model);
+
+    if is_non_openai_model(&normalized) {
+        return Err(CoreError::InvalidRequest(format!(
+            "model '{model}' requires a HuggingFace tokenizer; falling back to Python path"
+        )));
+    }
 
     let enc = if normalized.contains("gpt-4o") {
         tiktoken::get_encoding("o200k_base")
@@ -44,7 +51,20 @@ pub(crate) fn resolve(model: &str) -> ResolvedTokenizer {
         )
     };
 
-    ResolvedTokenizer(TokenizerImpl::Tiktoken(enc))
+    Ok(ResolvedTokenizer(TokenizerImpl::Tiktoken(enc)))
+}
+
+fn is_non_openai_model(model: &str) -> bool {
+    let lower = model.to_lowercase();
+    lower.contains("cohere")
+        || lower.contains("command-r")
+        || lower.contains("llama")
+        || lower.contains("mistral")
+        || lower.contains("mixtral")
+        || lower.contains("qwen")
+        || lower.contains("yi-")
+        || lower.contains("deepseek")
+        || lower.contains("gemma")
 }
 
 fn try_resolve_hf(model: &str) -> Option<Box<Tokenizer>> {
