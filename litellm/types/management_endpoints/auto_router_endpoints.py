@@ -251,7 +251,11 @@ DEFAULT_SHADOW_EVAL_JUDGE_MODEL: Final[str] = "anthropic/claude-sonnet-5"
 
 # Sample-count ceiling written on every new job: a zero-cost error loop (a shadow arm that
 # fails before billing) never consumes spend budget, so it must terminate on count instead.
+# A multi-router job writes one attempt row per router arm, so the valve is reached
+# proportionally sooner; it is a safety valve, not a sample budget.
 SHADOW_EVAL_TURN_VALVE: Final[int] = 10_000
+
+SHADOW_EVAL_MAX_ROUTERS: Final[int] = 4
 
 
 class StartShadowEvalRequest(BaseModel):
@@ -288,7 +292,24 @@ class StartShadowEvalRequest(BaseModel):
             "to across all their teams: JWT requests carrying their subject claim and virtual keys they own"
         ),
     )
-    router_name: str = Field(description="The auto-router under evaluation, in either direction")
+    router_name: str | None = Field(
+        default=None,
+        description=(
+            "The auto-router under evaluation, in either direction: the single-router spelling of "
+            "router_names. Provide exactly one of the two fields"
+        ),
+    )
+    router_names: tuple[str, ...] = Field(
+        default=(),
+        max_length=SHADOW_EVAL_MAX_ROUTERS,
+        description=(
+            "The auto-routers under evaluation, at most "
+            f"{SHADOW_EVAL_MAX_ROUTERS}. Every sampled request runs through every router listed and each "
+            "arm is judged independently against the same real response, so routers compare head-to-head "
+            "on identical traffic. More than one router requires direction 'forward'. After validation "
+            "this field always carries the full deduplicated set, whichever spelling the caller used"
+        ),
+    )
     direction: ShadowEvalDirection = Field(
         default="forward",
         description=(
@@ -332,7 +353,8 @@ class StartShadowEvalRequest(BaseModel):
             "Per-target USD budget for the eval's own overhead, the shadow-arm and judge calls, priced with "
             "the same figures the spend pipeline bills. EACH scoped target samples until its recorded eval "
             "spend reaches this, so a job over N targets spends at most about N times max_budget; in-flight "
-            "samples can overshoot the cap by one sampling cache window"
+            "samples can overshoot the cap by one sampling cache window. Every router arm draws from the "
+            "same per-target budget, so a multi-router job reaches it proportionally sooner"
         ),
     )
 
@@ -371,6 +393,23 @@ class StartShadowEvalRequest(BaseModel):
             raise ValueError("baseline_model is required when direction is 'reverse'")
         if self.direction == "forward" and self.baseline_model is not None:
             raise ValueError("baseline_model is only meaningful when direction is 'reverse'")
+        return self
+
+    @model_validator(mode="after")
+    def _resolve_router_set(self) -> "StartShadowEvalRequest":
+        """Whichever spelling the caller used, router_names leaves validation as the full
+        deduplicated set, so every downstream reader consumes one field."""
+        if (self.router_name is None) == (not self.router_names):
+            raise ValueError("provide exactly one of router_name or router_names")
+        single: Final = () if self.router_name is None else (self.router_name,)
+        routers: Final = tuple(dict.fromkeys(self.router_names or single))
+        if not all(name.strip() for name in routers):
+            raise ValueError("router names must be non-empty strings")
+        if len(routers) > 1 and self.direction == "reverse":
+            raise ValueError("a reverse job evaluates one router against baseline_model; pass a single router")
+        # A returned model_copy is ignored on the __init__ construction path, so the
+        # normalization must land as a self attribute store to hold for every caller.
+        self.router_names = routers
         return self
 
 
@@ -428,15 +467,28 @@ class ShadowEvalResult(BaseModel):
             "and in reverse the models the router itself picked"
         )
     )
+    by_router: tuple[ShadowEvalSlice, ...] = Field(
+        default=(),
+        description=(
+            "One slice per router arm, grouped on the router name. Every arm of a multi-router job is "
+            "judged against the same real responses over the same sampled requests, so these slices "
+            "compare routers head-to-head: like-for-like win rates and spends on identical traffic. "
+            "Verdicts from before arm stamping existed count toward the job's own router"
+        ),
+    )
     overall_shadow_win_rate_pct: float
     overall_tie_rate_pct: float
     sampled_real_spend: float = Field(
         default=0.0,
-        description="USD the real arm billed across all judged turns, cache-served turns excluded",
+        description=(
+            "USD the real arm billed across all judged turns, cache-served turns excluded. A judged turn "
+            "is one (request, router arm) verdict, so a multi-router job counts the real response once per "
+            "arm it was judged against; per-router comparisons read by_router"
+        ),
     )
     sampled_shadow_spend: float = Field(
         default=0.0,
-        description="USD the shadow arm billed across the same turns, judge excluded, like for like",
+        description="USD the shadow arms billed across the same turns, judge excluded, like for like",
     )
     not_sampled_count: int | None = Field(
         default=None,
@@ -540,7 +592,13 @@ class ShadowEvalJobResponse(BaseModel):
         min_length=1,
         description="The targets whose traffic this job evaluates, and only theirs, each with its own budget",
     )
-    router_name: str
+    router_names: tuple[str, ...] = Field(
+        min_length=1,
+        description=(
+            "Every auto-router this job runs as a shadow arm. Multi-router jobs sample one slice of "
+            "traffic and judge every arm against the same real responses"
+        ),
+    )
     direction: ShadowEvalDirection = "forward"
     baseline_model: str | None = None
     judge_model: str
@@ -561,6 +619,13 @@ class ShadowEvalJobResponse(BaseModel):
     judge_spend: float | None = Field(default=None, description="Judge cost so far; detail endpoint only")
     last_error: str | None = Field(default=None, description="Most recent attempt error; detail endpoint only")
     results: ShadowEvalResult | None = Field(default=None, description="Stratified verdicts; detail endpoint only")
+
+    @computed_field
+    @property
+    def router_name(self) -> str:
+        """The first router, kept for callers that predate router_names; derived so the
+        two fields can never disagree."""
+        return self.router_names[0]
 
     @computed_field
     @property
