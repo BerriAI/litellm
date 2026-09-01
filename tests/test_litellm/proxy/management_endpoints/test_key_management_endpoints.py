@@ -11054,56 +11054,100 @@ class TestLIT4891SafePresetKeyTypeTransition:
         )
 
     async def _run_update(self, data, existing_key_row):
-        await _validate_update_key_data(
-            data=data,
-            existing_key_row=existing_key_row,
-            user_api_key_dict=self._make_auth(),
-            llm_router=None,
-            premium_user=False,
-            prisma_client=AsyncMock(),
-            user_api_key_cache=MagicMock(),
-        )
+        try:
+            await _validate_update_key_data(
+                data=data,
+                existing_key_row=existing_key_row,
+                user_api_key_dict=self._make_auth(),
+                llm_router=None,
+                premium_user=False,
+                prisma_client=AsyncMock(),
+                user_api_key_cache=MagicMock(),
+            )
+        except HTTPException as exc:
+            return exc
+        return None
+
+    def _assert_routes_403(self, exc):
+        assert exc is not None
+        assert exc.status_code == 403
+        assert "Only proxy admins can set" in str(exc.detail)
 
     @pytest.mark.asyncio
     async def test_non_admin_owner_can_clear_safe_preset_to_full_access(self):
-        await self._run_update(
-            data=UpdateKeyRequest(key="sk-test", allowed_routes=[]),
-            existing_key_row=self._make_existing_key(allowed_routes=["llm_api_routes"]),
+        assert (
+            await self._run_update(
+                data=UpdateKeyRequest(key="sk-test", allowed_routes=[]),
+                existing_key_row=self._make_existing_key(allowed_routes=["llm_api_routes"]),
+            )
+            is None
         )
 
     @pytest.mark.asyncio
     async def test_non_admin_owner_can_switch_full_access_to_safe_preset(self):
-        await self._run_update(
-            data=UpdateKeyRequest(key="sk-test", allowed_routes=["llm_api_routes"]),
-            existing_key_row=self._make_existing_key(allowed_routes=[]),
+        assert (
+            await self._run_update(
+                data=UpdateKeyRequest(key="sk-test", allowed_routes=["llm_api_routes"]),
+                existing_key_row=self._make_existing_key(allowed_routes=[]),
+            )
+            is None
         )
 
     @pytest.mark.asyncio
-    async def test_non_admin_owner_can_switch_between_safe_presets(self):
-        await self._run_update(
-            data=UpdateKeyRequest(key="sk-test", allowed_routes=["info_routes"]),
-            existing_key_row=self._make_existing_key(allowed_routes=["llm_api_routes"]),
+    async def test_non_admin_owner_can_narrow_to_read_only_preset(self):
+        assert (
+            await self._run_update(
+                data=UpdateKeyRequest(key="sk-test", allowed_routes=["info_routes"]),
+                existing_key_row=self._make_existing_key(allowed_routes=["llm_api_routes"]),
+            )
+            is None
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_admin_can_resend_read_only_preset_unchanged(self):
+        assert (
+            await self._run_update(
+                data=UpdateKeyRequest(key="sk-test", allowed_routes=["info_routes"]),
+                existing_key_row=self._make_existing_key(allowed_routes=["info_routes"]),
+            )
+            is None
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_admin_cannot_widen_read_only_key_to_full_access(self):
+        self._assert_routes_403(
+            await self._run_update(
+                data=UpdateKeyRequest(key="sk-test", allowed_routes=[]),
+                existing_key_row=self._make_existing_key(allowed_routes=["info_routes"]),
+            )
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_admin_cannot_widen_read_only_key_to_llm_api(self):
+        self._assert_routes_403(
+            await self._run_update(
+                data=UpdateKeyRequest(key="sk-test", allowed_routes=["llm_api_routes"]),
+                existing_key_row=self._make_existing_key(allowed_routes=["info_routes"]),
+            )
         )
 
     @pytest.mark.asyncio
     async def test_non_admin_cannot_clear_custom_route_restriction(self):
-        with pytest.raises(HTTPException) as exc_info:
+        self._assert_routes_403(
             await self._run_update(
                 data=UpdateKeyRequest(key="sk-test", allowed_routes=[]),
                 existing_key_row=self._make_existing_key(allowed_routes=["/chat/completions"]),
             )
-        assert exc_info.value.status_code == 403
-        assert "Only proxy admins can set" in str(exc_info.value.detail)
+        )
 
     @pytest.mark.asyncio
     async def test_non_admin_cannot_set_non_preset_routes(self):
-        with pytest.raises(HTTPException) as exc_info:
+        self._assert_routes_403(
             await self._run_update(
                 data=UpdateKeyRequest(key="sk-test", allowed_routes=["management_routes"]),
                 existing_key_row=self._make_existing_key(allowed_routes=["llm_api_routes"]),
             )
-        assert exc_info.value.status_code == 403
-        assert "Only proxy admins can set" in str(exc_info.value.detail)
+        )
 
 
 class TestKeyOwnerPrivilegeEscalation:

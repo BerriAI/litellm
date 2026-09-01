@@ -736,6 +736,9 @@ def _check_allowed_routes_caller_permission(
     )
 
 
+_READ_ONLY_ALLOWED_ROUTES_PRESET: Final = frozenset(("info_routes",))
+
+
 def _is_safe_preset_route_transition(
     incoming_allowed_routes: Sequence[str] | None,
     existing_allowed_routes: Sequence[str] | None,
@@ -743,13 +746,16 @@ def _is_safe_preset_route_transition(
     """
     True when every route on BOTH sides is a safe `key_type` preset bucket
     (empty = full access, which non-admins already get from a default
-    `/key/generate`). Requiring the existing side too keeps an owner from
-    clearing an admin-set custom route restriction (LIT-4139).
+    `/key/generate`), with one carve-out: a read-only (`info_routes`) key
+    stays read-only, so widening it needs an admin. Requiring the existing
+    side to be a safe preset keeps an owner from clearing an admin-set
+    custom route restriction (LIT-4139).
     """
-    return all(
-        route in _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS
-        for route in (*(incoming_allowed_routes or ()), *(existing_allowed_routes or ()))
-    )
+    incoming: Final = frozenset(incoming_allowed_routes or ())
+    existing: Final = frozenset(existing_allowed_routes or ())
+    if not (incoming | existing) <= _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS:
+        return False
+    return existing != _READ_ONLY_ALLOWED_ROUTES_PRESET or incoming == existing
 
 
 def _enforce_allowed_routes_update_permission(
