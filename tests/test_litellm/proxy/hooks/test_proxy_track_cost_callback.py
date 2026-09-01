@@ -1980,15 +1980,15 @@ async def test_proxy_track_cost_callback_carries_guardrail_info_to_sl_object():
     }
 
     with (
-        patch(
+        patch(  # test-quality-ok: spend counters are a proxy_server global the callback reads lazily, no seam
             "litellm.proxy.proxy_server.increment_spend_counters",
             new_callable=AsyncMock,
         ),
-        patch(
+        patch(  # test-quality-ok: update_cache is a proxy_server global the callback reads lazily, no seam
             "litellm.proxy.proxy_server.update_cache",
             new_callable=AsyncMock,
         ),
-        patch(
+        patch(  # test-quality-ok: callback imports proxy_logging_obj off proxy_server in its body, no seam
             "litellm.proxy.proxy_server.proxy_logging_obj",
         ) as mock_proxy_logging,
     ):
