@@ -67,9 +67,9 @@ class _SupportsModelDump(Protocol):
     def model_dump(self) -> Mapping[str, object]: ...
 
 
-class _SpendLogOwnershipRow(Protocol):
-    user: str | None
-    team_id: str | None
+class _SpendLogOwnerRow(TypedDict):
+    user: ReadOnly[str | None]
+    team_id: ReadOnly[str | None]
 
 
 class _ActivityRow(TypedDict):
@@ -243,20 +243,23 @@ def _request_id_or_call_id_clause(request_id: str) -> tuple[_RequestIdEquals, _L
     return (request_id_clause, call_id_clause)
 
 
-_SPEND_LOG_ID_LOOKUP_ROW_CAP: Final = 100
-
-
-async def _find_spend_log_rows(prisma_client: PrismaClient, request_id: str) -> Sequence[_SpendLogOwnershipRow]:
-    """Read every spend log row identified by ``request_id`` or ``litellm_call_id``.
+async def _find_spend_log_owners(prisma_client: PrismaClient, request_id: str) -> Sequence[_SpendLogOwnerRow]:
+    """Read the distinct ``(user, team_id)`` owner pairs across every spend log row
+    identified by ``request_id`` or ``litellm_call_id``.
 
     ``litellm_call_id`` is populated from the client-settable ``x-litellm-call-id``
-    request header, so it is not guaranteed unique to one tenant: more than one row
-    can match. Callers must authorize every returned row, not just one of them.
+    request header, so it is not guaranteed unique to one tenant: any number of rows
+    can match one id. Authorization must consider the owner of every match, uncapped,
+    because a flood of matching rows could otherwise push a foreign owner past a
+    row-sample cap while the data queries still return that foreign row.
     """
-    return await _spend_logs_table(prisma_client).find_many(
-        where={"OR": _request_id_or_call_id_clause(request_id)},
-        take=_SPEND_LOG_ID_LOOKUP_ROW_CAP,
-    )
+    sql_query: Final = """
+        SELECT DISTINCT "user", team_id
+        FROM "LiteLLM_SpendLogs"
+        WHERE request_id = $1 OR litellm_call_id = $1
+    """
+    owners: Final[Sequence[_SpendLogOwnerRow] | None] = await _query_raw_or_none(prisma_client, sql_query, request_id)
+    return owners if owners is not None else ()
 
 
 async def _count_spend_logs(prisma_client: PrismaClient, where: Mapping[str, object]) -> int:
@@ -4303,18 +4306,18 @@ def _can_user_view_spend_log(user_api_key_dict: UserAPIKeyAuth) -> bool:
     )
 
 
-async def _user_can_view_spend_log_row(
+async def _user_can_view_spend_log_owner(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
-    row: _SpendLogOwnershipRow,
+    owner: _SpendLogOwnerRow,
 ) -> bool:
-    if row.user is not None and row.user == user_api_key_dict.user_id:
+    if owner["user"] is not None and owner["user"] == user_api_key_dict.user_id:
         return True
-    if row.team_id:
+    if owner["team_id"]:
         return await _can_team_member_view_log(
             prisma_client=prisma_client,
             user_api_key_dict=user_api_key_dict,
-            team_id=row.team_id,
+            team_id=owner["team_id"],
         )
     return False
 
@@ -4331,9 +4334,9 @@ async def _assert_user_can_view_request_id(
     granted only when the user owns all of them directly or via a permitted team.
     Raises HTTP 403 if any matching row is not the user's to view.
     """
-    rows: Final = await _find_spend_log_rows(prisma_client, request_id)
-    for row in rows:
-        if not await _user_can_view_spend_log_row(prisma_client, user_api_key_dict, row):
+    owners: Final = await _find_spend_log_owners(prisma_client, request_id)
+    for owner in owners:
+        if not await _user_can_view_spend_log_owner(prisma_client, user_api_key_dict, owner):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"error": f"Not authorized to view spend log for request_id={request_id}"},
