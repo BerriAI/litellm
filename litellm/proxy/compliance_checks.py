@@ -26,7 +26,8 @@ class ComplianceChecker:
 
     def __init__(self, data: ComplianceCheckRequest):
         self.data = data
-        self.guardrails = data.guardrail_information or []
+        # a not_run entry records a guardrail that never evaluated the request, so it cannot evidence compliance
+        self.guardrails = [g for g in (data.guardrail_information or []) if g.get("guardrail_status") != "not_run"]
 
     def _get_guardrails_by_mode(self, mode: str) -> list[dict]:
         """

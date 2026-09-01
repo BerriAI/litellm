@@ -256,7 +256,7 @@ class UsageDetailResponse(BaseModel):
 class UsageLogEntry(BaseModel):
     id: str
     timestamp: str
-    action: str  # blocked | passed | flagged
+    action: str  # blocked | passed | flagged | not_run
     score: float | None
     latency_ms: float | None
     model: str | None
@@ -691,7 +691,9 @@ def _usage_log_entry_from_row(
     reason_val = None
     if entry_for_guardrail:
         st: Final = (entry_for_guardrail.get("guardrail_status") or "").lower()
-        if "intervened" in st or "block" in st:
+        if st == "not_run":
+            action_val = "not_run"
+        elif "intervened" in st or "block" in st:
             action_val = "blocked"
         elif "fail" in st or "error" in st:
             action_val = "flagged"

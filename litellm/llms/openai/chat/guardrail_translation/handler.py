@@ -192,6 +192,15 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                         task_mappings=tool_call_task_mappings,
                     )
 
+        elif not guardrail_to_apply.records_own_guardrail_information:
+            # Every guardrail in applied_guardrails needs a persisted evaluation record,
+            # or request logs report it as silently missing (LIT-6314).
+            guardrail_to_apply.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response="no scannable content after message scoping",
+                request_data=data,
+                guardrail_status="not_run",
+            )
+
         verbose_proxy_logger.debug(
             "OpenAI Chat Completions: Processed input messages: %s",
             data.get("messages"),

@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { LogDetailContent } from "./LogDetailContent";
+import { GuardrailJumpLink, LogDetailContent } from "./LogDetailContent";
 import type { LogEntry } from "../columns";
 
 vi.mock("../GuardrailViewer/GuardrailViewer", () => ({
@@ -487,5 +487,32 @@ describe("LogDetailContent", () => {
     const descriptions = screen.getByText("Provider").parentElement as HTMLElement;
     expect(descriptions).toBeInTheDocument();
     expect(within(descriptions).getByText("-")).toBeInTheDocument();
+  });
+});
+
+describe("GuardrailJumpLink", () => {
+  it("does not render a not_run entry as a failure", () => {
+    render(
+      <GuardrailJumpLink
+        guardrailEntries={[
+          { guardrail_name: "pii-rail", guardrail_status: "success" },
+          { guardrail_name: "system-only", guardrail_status: "not_run" },
+        ]}
+      />,
+    );
+    expect(screen.getByText(/2 guardrails/)).toHaveTextContent("✓");
+    expect(screen.getByText(/2 guardrails/)).not.toHaveTextContent("✗");
+  });
+
+  it("still renders a real failure as failed", () => {
+    render(
+      <GuardrailJumpLink
+        guardrailEntries={[
+          { guardrail_name: "pii-rail", guardrail_status: "guardrail_intervened" },
+          { guardrail_name: "system-only", guardrail_status: "not_run" },
+        ]}
+      />,
+    );
+    expect(screen.getByText(/2 guardrails/)).toHaveTextContent("✗");
   });
 });

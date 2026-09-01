@@ -33,6 +33,16 @@ describe("GuardrailViewer", () => {
     expect(screen.getByText("1235ms")).toBeInTheDocument();
   });
 
+  it("renders not_run entries as not run instead of failed", () => {
+    const data = makeGuardrailInformation({ guardrail_status: "not_run", guardrail_mode: "pre_call" });
+    renderWithProviders(<GuardrailViewer data={data} />);
+
+    expect(screen.getByText(/1 Not run/)).toBeInTheDocument();
+    // one NOT RUN badge in the timeline, one in the evaluation card
+    expect(screen.getAllByText("NOT RUN")).toHaveLength(2);
+    expect(screen.queryByText("FAILED")).not.toBeInTheDocument();
+  });
+
   it("calculates and displays masked entity totals", async () => {
     const user = userEvent.setup();
     const data = makeGuardrailInformation({

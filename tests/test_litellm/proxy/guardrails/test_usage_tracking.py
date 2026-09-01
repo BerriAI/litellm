@@ -307,6 +307,37 @@ async def test_zero_and_non_int_usage_counters_are_skipped():
 
 
 @pytest.mark.asyncio
+async def test_not_run_entries_are_indexed_but_not_counted_as_evaluations():
+    """
+    LIT-6314 records a not_run entry when message scoping leaves a guardrail
+    nothing to scan. The guardrail never evaluated the request, so counting it
+    as a passed evaluation would inflate daily pass rates; it still gets an
+    index row so per-request drill-down finds the spend log.
+    """
+    prisma = _prisma()
+    logs = [_payload("r1", guardrail_status="not_run"), _payload("r2")]
+
+    await process_spend_logs_guardrail_usage(prisma, logs)
+
+    metrics_create = prisma.db.litellm_dailyguardrailmetrics.upsert.call_args.kwargs["data"]["create"]
+    assert metrics_create["requests_evaluated"] == 1
+    assert metrics_create["passed_count"] == 1
+    index_rows = prisma.db.litellm_spendlogguardrailindex.create_many.call_args.kwargs["data"]
+    assert sorted(row["request_id"] for row in index_rows) == ["r1", "r2"]
+
+
+@pytest.mark.asyncio
+async def test_batch_of_only_not_run_entries_writes_no_metrics_row():
+    prisma = _prisma()
+
+    await process_spend_logs_guardrail_usage(prisma, [_payload("r1", guardrail_status="not_run")])
+
+    assert prisma.db.litellm_dailyguardrailmetrics.upsert.call_count == 0
+    index_rows = prisma.db.litellm_spendlogguardrailindex.create_many.call_args.kwargs["data"]
+    assert [row["request_id"] for row in index_rows] == ["r1"]
+
+
+@pytest.mark.asyncio
 async def test_payload_without_request_id_is_skipped_like_the_metrics_path():
     prisma = _prisma()
     logs = [
