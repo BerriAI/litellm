@@ -1,0 +1,95 @@
+name: Report LiteLLM Rust release wheel
+
+on: # zizmor: ignore[dangerous-triggers] reporter executes no PR code and consumes no PR artifacts or outputs
+  workflow_run:
+    workflows:
+      - LiteLLM Rust
+    types:
+      - completed
+
+permissions: {}
+
+jobs:
+  report-release-wheel:
+    name: report release wheel
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.path == '.github/workflows/test-rust.yml' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.pull_requests[0].number != null
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+
+    steps:
+      - name: Link release wheel report on PR
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          COMMENT_MARKER: "<!-- litellm-release-wheel-size -->"
+        with:
+          script: |
+            const marker = process.env.COMMENT_MARKER;
+            const workflowRun = context.payload.workflow_run;
+            if (
+              workflowRun.conclusion !== "success" ||
+              workflowRun.event !== "pull_request" ||
+              workflowRun.path !== ".github/workflows/test-rust.yml" ||
+              workflowRun.head_repository?.full_name !==
+                `${context.repo.owner}/${context.repo.repo}` ||
+              workflowRun.pull_requests?.length !== 1
+            ) {
+              throw new Error("unexpected source workflow");
+            }
+            const pullRequest = workflowRun.pull_requests[0];
+            const pullRequestNumber = pullRequest.number;
+            const headSha = workflowRun.head_sha;
+            const runId = workflowRun.id;
+            if (
+              !Number.isSafeInteger(pullRequestNumber) ||
+              pullRequestNumber <= 0 ||
+              !Number.isSafeInteger(runId) ||
+              runId <= 0 ||
+              !/^[0-9a-f]{40}$/.test(headSha) ||
+              pullRequest.head?.sha !== headSha
+            ) {
+              throw new Error("invalid source workflow metadata");
+            }
+            const runUrl =
+              `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}` +
+              `/actions/runs/${runId}`;
+            const body = [
+              marker,
+              "## LiteLLM Rust workflow",
+              "",
+              `Workflow completed successfully for \`${headSha}\``,
+              "",
+              `[View workflow run](${runUrl})`,
+            ].join("\n");
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pullRequestNumber,
+              per_page: 100,
+            });
+            const existing = comments.find(
+              (comment) =>
+                comment.user?.login === "github-actions[bot]" &&
+                comment.body?.startsWith(marker),
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullRequestNumber,
+                body,
+              });
+            }
