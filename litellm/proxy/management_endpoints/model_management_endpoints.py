@@ -89,6 +89,7 @@ from litellm.router_strategy.complexity_router import (
 from litellm.router_utils.auto_router_model_naming import (
     STRATEGY_ROUTER_PARAM_FIELDS,
     carries_complexity_router_settings,
+    validate_capability_router_config_write,
     validate_complexity_router_config_placement,
     validate_complexity_router_config_write,
     validate_strategy_router_model_write,
@@ -226,6 +227,11 @@ def _strategy_router_write_violation(
     """
     if incoming_params is None:
         return None
+    capability_violation: Final = validate_capability_router_config_write(
+        capability_router_config=incoming_params.capability_router_config
+    )
+    if capability_violation is not None:
+        return capability_violation
     config_violation: Final = validate_complexity_router_config_write(
         complexity_router_config=incoming_params.complexity_router_config
     )
@@ -2562,6 +2568,7 @@ async def clear_cache() -> ReconcileOutcome:
             # on reload and abort it.
             for model_name in db_router_names:
                 llm_router.auto_routers.pop(model_name, None)
+                llm_router.capability_routers.pop(model_name, None)
                 llm_router.complexity_routers.pop(model_name, None)
                 llm_router.adaptive_routers.pop(model_name, None)
                 llm_router.quality_routers.pop(model_name, None)
