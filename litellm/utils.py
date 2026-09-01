@@ -69,6 +69,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_TRIM_RATIO,
     FUNCTION_DEFINITION_TOKEN_COUNT,
+    HF_CONFIG_FETCH_TIMEOUT_SECONDS,
     INITIAL_RETRY_DELAY,
     JITTER,
     MAX_RETRY_DELAY,
@@ -2659,10 +2660,19 @@ def _is_explicitly_disabled_factory(model: str, custom_llm_provider: str | None,
     ``_supports_factory`` so caching, fallback, and normalisation improvements
     apply here automatically.
     """
+    from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+
     try:
-        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
+        declared: Final = declared_authenticating_provider(model, custom_llm_provider)
+        if declared is not None:
+            model = model.removeprefix(
+                f"{declared}/"
+            )  # rebind-ok: mirrors get_llm_provider's split without its OAuth flow
+            custom_llm_provider = declared  # rebind-ok: same
+        else:
+            model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
         model_info: Final = _get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
         val: Final = model_info.get(key)
         if val is False:
@@ -2748,6 +2758,15 @@ def supports_computer_use(model: str, custom_llm_provider: str | None = None) ->
         custom_llm_provider=custom_llm_provider,
         key="supports_computer_use",
     )
+
+
+def is_vision_explicitly_disabled(model: str, custom_llm_provider: str | None = None) -> bool:
+    """True only when supports_vision is explicitly declared false for the model.
+
+    The opt-out mirror of :func:`supports_vision`: a missing declaration reads as not
+    disabled, so unknown or newly added models stay eligible for image routing.
+    """
+    return _is_explicitly_disabled_factory(model, custom_llm_provider, "supports_vision")
 
 
 def supports_vision(model: str, custom_llm_provider: str | None = None) -> bool:
@@ -2850,10 +2869,9 @@ def _update_dictionary(existing_dict: dict, new_dict: dict) -> dict:
             elif isinstance(v, dict):
                 existing_nested_dict = existing_dict.get(k)
                 if isinstance(existing_nested_dict, dict):
-                    existing_nested_dict.update(v)
-                    existing_dict[k] = existing_nested_dict
+                    existing_dict[k] = {**existing_nested_dict, **v}  # mutable-ok: copy-on-write merge
                 else:
-                    existing_dict[k] = v
+                    existing_dict[k] = dict(v)  # mutable-ok: detached copy, never the caller's dict by reference
             else:
                 existing_dict[k] = v
 
@@ -3542,10 +3560,10 @@ def get_optional_params_embeddings(
             non_default_params=non_default_params, optional_params={}, kwargs=kwargs
         )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "gemini":
-        # OpenAI SDKs (and litellm's own client) send encoding_format="float"
-        # by default; float lists are exactly what the vertex API returns, so
-        # the param is a no-op — don't reject the provider default. Other
-        # values (e.g. "base64") stay on the unsupported-param path below.
+        # OpenAI SDKs send encoding_format="float" by default; float lists are
+        # exactly what the vertex API returns, so the param is a no-op and the
+        # provider default is not rejected. Other values (e.g. "base64") stay
+        # on the unsupported-param path below.
         if non_default_params.get("encoding_format") == "float":
             non_default_params.pop("encoding_format")
         supported_params = get_supported_openai_params(
@@ -3581,7 +3599,7 @@ def get_optional_params_embeddings(
             object = litellm.AmazonTitanMultimodalEmbeddingG1Config()
         elif "amazon.titan-embed-text-v2:0" in model:
             object = litellm.AmazonTitanV2Config()
-        elif "cohere.embed-multilingual-v3" in model or "cohere.embed-v4" in model:
+        elif "cohere.embed" in model:
             object = litellm.BedrockCohereEmbeddingConfig()
         elif "twelvelabs" in model or "marengo" in model:
             object = litellm.TwelveLabsMarengoEmbeddingConfig()
@@ -5168,7 +5186,7 @@ def get_max_tokens(model: str) -> int | None:
         config_url: Final = f"https://huggingface.co/{model_name}/raw/main/config.json"
         try:
             # Make the HTTP request to get the raw JSON file
-            response: Final = litellm.module_level_client.get(config_url)
+            response: Final = litellm.module_level_client.get(config_url, timeout=HF_CONFIG_FETCH_TIMEOUT_SECONDS)
             response.raise_for_status()  # Raise an exception for bad responses (4xx or 5xx)
 
             # Parse the JSON response
@@ -5522,7 +5540,7 @@ def _get_max_position_embeddings(model_name: str) -> int | None:
 
     try:
         # Make the HTTP request to get the raw JSON file
-        response: Final = litellm.module_level_client.get(config_url)
+        response: Final = litellm.module_level_client.get(config_url, timeout=HF_CONFIG_FETCH_TIMEOUT_SECONDS)
         response.raise_for_status()  # Raise an exception for bad responses (4xx or 5xx)
 
         # Parse the JSON response
@@ -5841,6 +5859,7 @@ def _get_model_info_helper(
                 cache_creation_input_token_cost_above_1hr=_model_info.get(
                     "cache_creation_input_token_cost_above_1hr", None
                 ),
+                off_peak_pricing=_model_info.get("off_peak_pricing", None),
                 input_cost_per_character=_model_info.get("input_cost_per_character", None),
                 input_cost_per_token_above_128k_tokens=_model_info.get("input_cost_per_token_above_128k_tokens", None),
                 input_cost_per_token_above_200k_tokens=_model_info.get("input_cost_per_token_above_200k_tokens", None),
@@ -6567,11 +6586,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("WANDB_API_KEY")
-        elif custom_llm_provider == "dashscope":
-            if "DASHSCOPE_API_KEY" in os.environ:
+        elif custom_llm_provider in ("dashscope", "qwencloud", "qwen_ai_platform"):
+            if f"{custom_llm_provider.upper()}_API_KEY" in os.environ or "DASHSCOPE_API_KEY" in os.environ:
                 keys_in_environment = True
             else:
-                missing_keys.append("DASHSCOPE_API_KEY")
+                missing_keys.append(f"{custom_llm_provider.upper()}_API_KEY")
         elif custom_llm_provider == "modelscope":
             if "MODELSCOPE_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -8133,6 +8152,11 @@ class ProviderConfigManager:
             LlmProviders.NEBIUS: (lambda: litellm.NebiusConfig(), False),
             LlmProviders.WANDB: (lambda: litellm.WandbConfig(), False),
             LlmProviders.DASHSCOPE: (lambda: litellm.DashScopeChatConfig(), False),
+            LlmProviders.QWENCLOUD: (lambda: litellm.QwenCloudChatConfig(), False),
+            LlmProviders.QWEN_AI_PLATFORM: (
+                lambda: litellm.QwenAIPlatformChatConfig(),
+                False,
+            ),
             LlmProviders.MODELSCOPE: (lambda: litellm.ModelScopeChatConfig(), False),
             LlmProviders.MOONSHOT: (lambda: litellm.MoonshotChatConfig(), False),
             LlmProviders.DOCKER_MODEL_RUNNER: (
@@ -8259,10 +8283,17 @@ class ProviderConfigManager:
         """
         # Handle OpenAI special cases (O-series and GPT-5 models)
         if provider == LlmProviders.OPENAI:
+            from litellm.llms.openai.chat.gpt_transformation import (
+                OpenAIGPTConfig,
+                OpenAIUnknownModelConfig,
+            )
+
             if litellm.openaiOSeriesConfig.is_model_o_series_model(model=model):
                 return litellm.openaiOSeriesConfig
             if litellm.OpenAIGPT5Config.is_model_gpt_5_model(model=model):
                 return litellm.OpenAIGPT5Config()
+            if not OpenAIGPTConfig.is_openai_catalog_model(model):
+                return OpenAIUnknownModelConfig()
 
         # Handle Azure before the generic map so base_model can be threaded through
         if provider == LlmProviders.AZURE:
@@ -8340,12 +8371,16 @@ class ProviderConfigManager:
             )
 
             return VolcEngineEmbeddingConfig()
-        elif litellm.LlmProviders.DASHSCOPE == provider:
-            from litellm.llms.dashscope.embed.transformation import (
-                DashScopeEmbeddingConfig,
+        elif provider in (
+            litellm.LlmProviders.DASHSCOPE,
+            litellm.LlmProviders.QWENCLOUD,
+            litellm.LlmProviders.QWEN_AI_PLATFORM,
+        ):
+            from litellm.llms.dashscope.common_utils import (
+                get_dashscope_family_embedding_config,
             )
 
-            return DashScopeEmbeddingConfig()
+            return get_dashscope_family_embedding_config(provider.value)
         elif litellm.LlmProviders.OVHCLOUD == provider:
             return litellm.OVHCloudEmbeddingConfig()
         elif litellm.LlmProviders.SNOWFLAKE == provider:
@@ -8418,12 +8453,16 @@ class ProviderConfigManager:
             return litellm.VoyageRerankConfig()
         elif litellm.LlmProviders.WATSONX == provider:
             return litellm.IBMWatsonXRerankConfig()
-        elif litellm.LlmProviders.DASHSCOPE == provider:
-            from litellm.llms.dashscope.rerank.transformation import (
-                DashScopeRerankConfig,
+        elif provider in (
+            litellm.LlmProviders.DASHSCOPE,
+            litellm.LlmProviders.QWENCLOUD,
+            litellm.LlmProviders.QWEN_AI_PLATFORM,
+        ):
+            from litellm.llms.dashscope.common_utils import (
+                get_dashscope_family_rerank_config,
             )
 
-            return DashScopeRerankConfig()
+            return get_dashscope_family_rerank_config(provider.value)
         return litellm.CohereRerankConfig()
 
     @staticmethod
@@ -8573,6 +8612,13 @@ class ProviderConfigManager:
 
             return SonioxAudioTranscriptionConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
+            bare_vertex_model: Final = model.removeprefix("vertex_ai/")
+            if bare_vertex_model.startswith("gemini") and "transcribe" in bare_vertex_model:
+                from litellm.llms.vertex_ai.audio_transcription.gemini_transcribe_transformation import (
+                    VertexGeminiAudioTranscriptionConfig,
+                )
+
+                return VertexGeminiAudioTranscriptionConfig()
             from litellm.llms.vertex_ai.audio_transcription.transformation import (
                 VertexAIAudioTranscriptionConfig,
             )
@@ -8822,6 +8868,12 @@ class ProviderConfigManager:
             )
 
             return AzurePassthroughConfig()
+        elif LlmProviders.GIGACHAT == provider:
+            from litellm.llms.gigachat.passthrough.transformation import (
+                GigaChatPassthroughConfig,
+            )
+
+            return GigaChatPassthroughConfig()
         elif LlmProviders.WATSONX == provider:
             from litellm.llms.watsonx.passthrough.transformation import (
                 WatsonxPassthroughConfig,
@@ -9083,12 +9135,16 @@ class ProviderConfigManager:
             )
 
             return get_openrouter_image_generation_config(model)
-        elif LlmProviders.DASHSCOPE == provider:
-            from litellm.llms.dashscope.image_generation import (
-                get_dashscope_image_generation_config,
+        elif provider in (
+            LlmProviders.DASHSCOPE,
+            LlmProviders.QWENCLOUD,
+            LlmProviders.QWEN_AI_PLATFORM,
+        ):
+            from litellm.llms.dashscope.common_utils import (
+                get_dashscope_family_image_generation_config,
             )
 
-            return get_dashscope_image_generation_config(model)
+            return get_dashscope_family_image_generation_config(provider.value)
         elif LlmProviders.MODELSCOPE == provider:
             from litellm.llms.modelscope.image_generation import (
                 get_modelscope_image_generation_config,
@@ -9401,6 +9457,10 @@ class ProviderConfigManager:
 
             return RunwayMLTextToSpeechConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
+            if "gemini" in model:
+                # Gemini TTS uses the speech_to_completion bridge, and Google Cloud TTS param
+                # mapping would drop response_format before the bridge sees it (LIT-6501)
+                return None
             from litellm.llms.vertex_ai.text_to_speech.transformation import (
                 VertexAITextToSpeechConfig,
             )
