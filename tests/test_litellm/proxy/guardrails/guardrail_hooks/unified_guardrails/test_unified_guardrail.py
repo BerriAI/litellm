@@ -1844,7 +1844,8 @@ class TestStreamingHttpErrorFrames:
 
         out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
 
-        assert out[:2] == chunks
+        assert out[0] == chunks[0]
+        assert chunks[1] not in out
         frame = out[-1]
         assert isinstance(frame, bytes)
         text = frame.decode()

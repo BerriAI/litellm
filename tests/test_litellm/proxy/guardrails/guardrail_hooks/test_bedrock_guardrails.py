@@ -5524,7 +5524,9 @@ async def test_streaming_end_of_stream_block_emits_error_frame_instead_of_trunca
     """Regression for PR #38722: a topicPolicy DENY caught by the end-of-stream
     scan used to raise after SSE headers were flushed, so the client saw a
     silently truncated stream. The unified hook must emit the chat in-stream
-    error frame instead."""
+    error frame instead. The finish chunk is withheld while the end-of-stream
+    scan runs, so on a block it is dropped rather than relayed before the
+    frame."""
     from litellm.llms import load_guardrail_translation_mappings
     from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import (
         unified_guardrail as unified_module,
@@ -5582,8 +5584,9 @@ async def test_streaming_end_of_stream_block_emits_error_frame_instead_of_trunca
     finally:
         unified_module.endpoint_guardrail_translation_mappings = None
 
-    assert len(out) == 3
+    assert len(out) == 2
     assert isinstance(out[0], ModelResponseStream)
+    assert out[0].choices[0].finish_reason is None
     frame = out[-1]
     assert isinstance(frame, bytes)
     payload = json.loads(frame.decode()[len("data: ") :])
