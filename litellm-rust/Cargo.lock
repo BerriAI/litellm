@@ -1428,7 +1428,9 @@ dependencies = [
  "aws-sigv4",
  "aws-smithy-runtime-api",
  "aws-types",
+ "bytes",
  "futures-util",
+ "mime",
  "rand 0.8.7",
  "reqwest",
  "serde",
@@ -1436,6 +1438,7 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.19",
  "tokio",
+ "url",
 ]
 
 [[package]]
@@ -2720,6 +2723,7 @@ dependencies = [
  "idna",
  "percent-encoding",
  "serde",
+ "serde_derive",
 ]
 
 [[package]]
