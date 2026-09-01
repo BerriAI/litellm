@@ -20,6 +20,7 @@ import secrets
 import traceback
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeVar, cast
 
 import fastapi
@@ -3590,9 +3591,12 @@ def _window_max_budget(window: Mapping[str, object]) -> float | None:
         return None
 
 
-async def _budget_window_with_usage(window: Mapping[str, object], api_key_hash: str) -> Mapping[str, object]:
+async def _budget_window_usage(
+    window: Mapping[str, object], api_key_hash: str
+) -> tuple[str, Mapping[str, object]] | None:
     """
-    Copy of a budget window with current-window spend attached.
+    (budget_duration, usage entry) for one budget window; None when the window
+    has no budget_duration to key it by.
 
     Reads the same cross-pod counter (spend:key:{hashed_token}:window:{budget_duration})
     that _virtual_key_multi_budget_check enforces against, passing the same
@@ -3603,34 +3607,41 @@ async def _budget_window_with_usage(window: Mapping[str, object], api_key_hash: 
 
     duration: Final = window.get("budget_duration")
     if not isinstance(duration, str) or not duration:
-        return window
+        return None
+    max_budget: Final = _window_max_budget(window)
     spend: Final = await get_current_spend(
         counter_key=f"spend:key:{api_key_hash}:window:{duration}",
         fallback_spend=0.0,
-        max_budget=_window_max_budget(window),
+        max_budget=max_budget,
         window_entity_type="Key",
         window_entity_id=api_key_hash,
         window_duration=duration,
         window_start=get_budget_window_start(window),
     )
-    return {**window, "current_spend": round(spend, 4)}  # mutable-ok: per-window response copy, built once per window
+    return duration, MappingProxyType(
+        {
+            "current_spend": round(spend, 4),
+            "budget_limit": max_budget,
+            "reset_at": window.get("reset_at"),
+        }
+    )
 
 
-async def _budget_limits_with_usage(
+async def _build_budget_limits_usage(
     budget_limits: Sequence[object] | str | None, api_key_hash: str
-) -> tuple[Mapping[str, object], ...] | None:
+) -> Mapping[str, Mapping[str, object]] | None:
     """
-    budget_limits as window dicts with current-window spend attached; None when
-    the key has no windows so the caller keeps the stored value.
+    Current-window spend per budget window, keyed by budget_duration, reported
+    next to the stored budget_limits (which is returned untouched). None when
+    the key has no windows, so the field only appears on keys that have them.
     """
     windows: Final = _budget_limit_windows(budget_limits)
     if not windows:
         return None
-    return tuple(
-        await asyncio.gather(
-            *(_budget_window_with_usage(window=window, api_key_hash=api_key_hash) for window in windows)
-        )
+    usages: Final = await asyncio.gather(
+        *(_budget_window_usage(window=window, api_key_hash=api_key_hash) for window in windows)
     )
+    return MappingProxyType({duration: usage for duration, usage in (u for u in usages if u is not None)})
 
 
 @router.post(
@@ -3717,12 +3728,12 @@ async def info_key_fn_v2(
                     user_api_key_cache=model_max_budget_limiter.dual_cache,
                 )
             if k_token_hash:
-                budget_limits_usage = await _budget_limits_with_usage(
+                budget_limits_usage = await _build_budget_limits_usage(
                     budget_limits=k_dict.get("budget_limits"),
                     api_key_hash=k_token_hash,
                 )
                 if budget_limits_usage is not None:
-                    k_dict["budget_limits"] = budget_limits_usage
+                    k_dict["budget_limits_usage"] = budget_limits_usage
 
             filtered_key_info.append(k_dict)
         return {"key": data.keys, "info": filtered_key_info}
@@ -3759,9 +3770,10 @@ async def info_key_fn(
         - model_max_budget: dict - Per-model budgets, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
         - model_max_budget_usage: dict | None - Current-window spend per model, present only when
           the key has per-model budgets
-        - budget_limits: list | None - Concurrent budget windows. Each entry includes
-          current_spend: spend accumulated in the window so far (read from the same cross-pod
-          spend counter the budget enforcement uses)
+        - budget_limits: list | None - Concurrent budget windows, exactly as stored
+        - budget_limits_usage: dict | None - Current-window spend per budget window, keyed by
+          budget_duration, present only when the key has budget windows (read from the same
+          cross-pod spend counter the budget enforcement uses)
         - models: list - Model_name's the key is allowed to call
         - tpm_limit / rpm_limit: int | None - Tokens and requests per minute limits
         - metadata: dict - Metadata for the key, e.g. {"team": "core-infra"}
@@ -3841,12 +3853,12 @@ async def info_key_fn(
                 model_max_budget=model_max_budget,
                 user_api_key_cache=model_max_budget_limiter.dual_cache,
             )
-        budget_limits_usage: Final = await _budget_limits_with_usage(
+        budget_limits_usage: Final = await _build_budget_limits_usage(
             budget_limits=key_info.get("budget_limits"),
             api_key_hash=key_token_hash,
         )
         if budget_limits_usage is not None:
-            key_info["budget_limits"] = budget_limits_usage
+            key_info["budget_limits_usage"] = budget_limits_usage
 
         # Attach object_permission if object_permission_id is set
         key_info = await attach_object_permission_to_dict(key_info, prisma_client)
