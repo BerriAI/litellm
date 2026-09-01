@@ -1559,3 +1559,53 @@ class TestScanOnlyToolResults:
         assert data["messages"][3]["content"] == "page says [BLOCKED] here"
         assert data["messages"][3]["tool_call_id"] == "call_1"
         assert data["messages"][4]["content"] == "and then?"
+
+
+class TestNoScannableContentRecordsNotRun:
+    """LIT-6314: a guardrail whose scoping leaves nothing to scan must still persist an evaluation record"""
+
+    def _system_only_data(self) -> dict:
+        return {"messages": [{"role": "system", "content": "SYSTEM-PROMPT"}]}
+
+    def _recorded_entries(self, data: dict) -> list:
+        metadata = data.get("metadata") or data.get("litellm_metadata") or {}
+        return metadata.get("standard_logging_guardrail_information") or []
+
+    @pytest.mark.asyncio
+    async def test_skipped_scan_records_not_run_entry(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail(guardrail_name="skip-system-guardrail")
+        guardrail.skip_system_message_in_guardrail = True
+        data = self._system_only_data()
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.last_inputs is None, "nothing survived scoping, apply_guardrail must not run"
+        entries = self._recorded_entries(data)
+        assert len(entries) == 1
+        assert entries[0]["guardrail_name"] == "skip-system-guardrail"
+        assert entries[0]["guardrail_status"] == "not_run"
+
+    @pytest.mark.asyncio
+    async def test_self_recording_guardrail_is_left_alone(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail(guardrail_name="self-recording-guardrail")
+        guardrail.skip_system_message_in_guardrail = True
+        guardrail.records_own_guardrail_information = True
+        data = self._system_only_data()
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.last_inputs is None
+        assert self._recorded_entries(data) == []
+
+    @pytest.mark.asyncio
+    async def test_scannable_content_records_no_extra_entry(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail(guardrail_name="normal-guardrail")
+        data = {"messages": [{"role": "user", "content": "hello"}]}
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.last_inputs is not None
+        assert all(e.get("guardrail_status") != "not_run" for e in self._recorded_entries(data))
