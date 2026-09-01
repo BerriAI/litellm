@@ -11033,6 +11033,123 @@ class TestLIT1884KeyUpdateValidation:
         )
 
 
+class TestLIT4891SafePresetKeyTypeTransition:
+    def _make_existing_key(self, allowed_routes):
+        row = MagicMock()
+        row.user_id = "internal-user-123"
+        row.created_by = "internal-user-123"
+        row.token = "hashed_token"
+        row.team_id = None
+        row.max_budget = None
+        row.spend = 0.0
+        row.organization_id = None
+        row.project_id = None
+        row.allowed_routes = allowed_routes
+        return row
+
+    def _make_auth(self):
+        return UserAPIKeyAuth(
+            user_id="internal-user-123",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+    async def _run_update(self, data, existing_key_row):
+        try:
+            await _validate_update_key_data(
+                data=data,
+                existing_key_row=existing_key_row,
+                user_api_key_dict=self._make_auth(),
+                llm_router=None,
+                premium_user=False,
+                prisma_client=AsyncMock(),
+                user_api_key_cache=MagicMock(),
+            )
+        except HTTPException as exc:
+            return exc
+        return None
+
+    def _assert_routes_403(self, exc):
+        assert exc is not None
+        assert exc.status_code == 403
+        assert "Only proxy admins can set" in str(exc.detail)
+
+    @pytest.mark.asyncio
+    async def test_non_admin_owner_can_clear_safe_preset_to_full_access(self):
+        assert (
+            await self._run_update(
+                data=UpdateKeyRequest(key="sk-test", allowed_routes=[]),
+                existing_key_row=self._make_existing_key(allowed_routes=["llm_api_routes"]),
+            )
+            is None
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_admin_owner_can_switch_full_access_to_safe_preset(self):
+        assert (
+            await self._run_update(
+                data=UpdateKeyRequest(key="sk-test", allowed_routes=["llm_api_routes"]),
+                existing_key_row=self._make_existing_key(allowed_routes=[]),
+            )
+            is None
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_admin_owner_can_narrow_to_read_only_preset(self):
+        assert (
+            await self._run_update(
+                data=UpdateKeyRequest(key="sk-test", allowed_routes=["info_routes"]),
+                existing_key_row=self._make_existing_key(allowed_routes=["llm_api_routes"]),
+            )
+            is None
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_admin_can_resend_read_only_preset_unchanged(self):
+        assert (
+            await self._run_update(
+                data=UpdateKeyRequest(key="sk-test", allowed_routes=["info_routes"]),
+                existing_key_row=self._make_existing_key(allowed_routes=["info_routes"]),
+            )
+            is None
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_admin_cannot_widen_read_only_key_to_full_access(self):
+        self._assert_routes_403(
+            await self._run_update(
+                data=UpdateKeyRequest(key="sk-test", allowed_routes=[]),
+                existing_key_row=self._make_existing_key(allowed_routes=["info_routes"]),
+            )
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_admin_cannot_widen_read_only_key_to_llm_api(self):
+        self._assert_routes_403(
+            await self._run_update(
+                data=UpdateKeyRequest(key="sk-test", allowed_routes=["llm_api_routes"]),
+                existing_key_row=self._make_existing_key(allowed_routes=["info_routes"]),
+            )
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_admin_cannot_clear_custom_route_restriction(self):
+        self._assert_routes_403(
+            await self._run_update(
+                data=UpdateKeyRequest(key="sk-test", allowed_routes=[]),
+                existing_key_row=self._make_existing_key(allowed_routes=["/chat/completions"]),
+            )
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_admin_cannot_set_non_preset_routes(self):
+        self._assert_routes_403(
+            await self._run_update(
+                data=UpdateKeyRequest(key="sk-test", allowed_routes=["management_routes"]),
+                existing_key_row=self._make_existing_key(allowed_routes=["llm_api_routes"]),
+            )
+        )
+
+
 class TestKeyOwnerPrivilegeEscalation:
     """
     Policy:
@@ -12007,9 +12124,10 @@ class TestAllowedRoutesCallerPermission:
 
     @pytest.mark.asyncio
     async def test_non_admin_update_key_explicit_empty_allowed_routes_rejected(self):
-        """`update_key_fn` rejects a non-admin when `allowed_routes` is
-        present as `[]` in the request body. The value matches the model
-        default but `model_fields_set` distinguishes the two."""
+        """`update_key_fn` rejects a non-admin clearing a custom (non-preset)
+        route restriction with an explicit `[]` in the request body. The value
+        matches the model default but `model_fields_set` distinguishes the
+        two. Clearing from a safe preset is allowed (LIT-4891)."""
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             update_key_fn,
         )
@@ -12032,7 +12150,7 @@ class TestAllowedRoutesCallerPermission:
             patch(
                 "litellm.proxy.management_endpoints.key_management_endpoints._get_and_validate_existing_key",
                 new_callable=AsyncMock,
-                return_value=MagicMock(),
+                return_value=MagicMock(allowed_routes=["/chat/completions"]),
             ),
         ):
             with pytest.raises(ProxyException) as exc_info:
@@ -12047,8 +12165,8 @@ class TestAllowedRoutesCallerPermission:
 
     @pytest.mark.asyncio
     async def test_non_admin_update_key_explicit_null_allowed_routes_rejected(self):
-        """`update_key_fn` rejects a non-admin when `allowed_routes` is
-        present as `null` in the request body."""
+        """`update_key_fn` rejects a non-admin clearing a custom (non-preset)
+        route restriction with an explicit `null` in the request body."""
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             update_key_fn,
         )
@@ -12071,7 +12189,7 @@ class TestAllowedRoutesCallerPermission:
             patch(
                 "litellm.proxy.management_endpoints.key_management_endpoints._get_and_validate_existing_key",
                 new_callable=AsyncMock,
-                return_value=MagicMock(),
+                return_value=MagicMock(allowed_routes=["/chat/completions"]),
             ),
         ):
             with pytest.raises(ProxyException) as exc_info:

@@ -102,6 +102,7 @@ export interface StoredComplexityRouterConfig {
   dimension_weights?: unknown;
   reasoning_override_min_score?: unknown;
   session_affinity?: unknown;
+  modality_routing?: unknown;
   deployment_affinity?: unknown;
   adaptive?: boolean;
   adaptive_weights?: AdaptiveRouterWeights;
@@ -176,6 +177,7 @@ export const hydrateComplexityRouterConfig = (
     reasoning_override_min_score: hydrateReasoningOverrideMinScore(parsedConfig.reasoning_override_min_score),
     session_affinity:
       typeof parsedConfig.session_affinity === "boolean" ? parsedConfig.session_affinity : DEFAULT_SESSION_AFFINITY,
+    modality_routing: typeof parsedConfig.modality_routing === "boolean" ? parsedConfig.modality_routing : false,
     deployment_affinity:
       typeof parsedConfig.deployment_affinity === "boolean"
         ? parsedConfig.deployment_affinity
@@ -214,6 +216,7 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "heuristic_first_max_tier",
   "classification_mode",
   "session_affinity",
+  "modality_routing",
   "deployment_affinity",
   "adaptive",
   "adaptive_weights",
@@ -309,6 +312,7 @@ export const buildUpdatedComplexityRouterConfig = (
     classifierContextIncludeAssistantTurns: value.classifier_context_include_assistant_turns,
     classifierFallback: value.classifier_fallback,
     sessionAffinity: value.session_affinity ?? DEFAULT_SESSION_AFFINITY,
+    modalityRouting: value.modality_routing ?? false,
     deploymentAffinity: value.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY,
     customTechnicalKeywords: customTechnicalKeywords ?? [],
     keywordTierRules: keywordMatching?.keywordTierRules ?? [],
