@@ -30,13 +30,14 @@ Output: response.output is List[GenericResponseOutputItem] where each has:
 
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from openai.types.responses.tool_param import FunctionToolParam
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -1050,6 +1051,7 @@ class _OpenItemState:
     content_index: int
     text: str
     part_open: bool
+    payload: object
 
 
 def _open_item_state(responses_so_far: Sequence[object]) -> _OpenItemState | None:
@@ -1070,7 +1072,9 @@ def _open_item_state(responses_so_far: Sequence[object]) -> _OpenItemState | Non
     if not open_added:
         return None
     output_index, item_payload = open_added[-1]
-    item_id: Final = stream_item_field(item_payload, "id") if item_payload is not None else None
+    if item_payload is None:
+        return None
+    item_id: Final = stream_item_field(item_payload, "id")
     if not isinstance(item_id, str) or not item_id:
         return None
     raw_type: Final = stream_item_field(item_payload, "type")
@@ -1105,18 +1109,42 @@ def _open_item_state(responses_so_far: Sequence[object]) -> _OpenItemState | Non
         content_index=open_parts[-1] if open_parts else 0,
         text=text,
         part_open=bool(open_parts),
+        payload=item_payload,
     )
+
+
+_item_fields_adapter: Final = TypeAdapter(Mapping[str, object])
+_no_item_fields: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _incomplete_item_fields(payload: object) -> Mapping[str, object]:
+    raw: Final = payload.model_dump() if isinstance(payload, BaseModel) else payload
+    if not isinstance(raw, dict):
+        return _no_item_fields
+    return _item_fields_adapter.validate_python(raw)
 
 
 def _open_item_closing_events(responses_so_far: Sequence[object]) -> Sequence[ResponsesAPIStreamingResponse]:
     """Close the output item still in progress on the relayed stream before the
     block item is appended: strict Responses clients reject a
     ``response.completed`` that arrives while an earlier ``output_item.added``
-    was never closed. The closing text is exactly what the client has received
-    for that item so far."""
+    was never closed. A message item closes ``completed`` with exactly the text
+    the client has received so far; any other item type (a function call the
+    guardrail rejected, for instance) closes ``incomplete`` so the synthetic
+    done event can never authorize acting on it."""
     open_item: Final = _open_item_state(responses_so_far)
     if open_item is None:
         return ()
+    if open_item.item_type != "message":
+        return (
+            OutputItemDoneEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                output_index=open_item.output_index,
+                item=BaseLiteLLMOpenAIResponseObject.model_validate(
+                    MappingProxyType({**_incomplete_item_fields(open_item.payload), "status": "incomplete"})
+                ),
+            ),
+        )
     partial_part: Final[_BlockedContentPart] = {
         "type": "output_text",
         "text": open_item.text,
