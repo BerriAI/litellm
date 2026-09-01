@@ -10,7 +10,7 @@ All /vector_store management endpoints
 
 import copy
 import json
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, TypeAlias
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -49,6 +49,7 @@ from litellm.types.vector_stores import (
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
 router: Final = APIRouter()
+EmbeddingResolution: TypeAlias = tuple[str, dict[str, object]]
 
 
 def _vector_store_table(prisma_client: "PrismaClient") -> "TableActions[_VectorStoreRow]":
@@ -155,7 +156,19 @@ async def _fetch_and_authorize_vector_store(
     return typed
 
 
-def _resolve_embedding_config_from_router(embedding_model: str, llm_router) -> dict[str, object] | None:
+def _provider_qualified_embedding_model(
+    fallback: str,
+    model: object,
+    custom_llm_provider: object,
+) -> str:
+    if not isinstance(model, str) or not model:
+        return fallback
+    if "/" in model or not isinstance(custom_llm_provider, str) or not custom_llm_provider:
+        return model
+    return f"{custom_llm_provider}/{model}"
+
+
+def _resolve_embedding_config_from_router(embedding_model: str, llm_router) -> EmbeddingResolution | None:
     """
     Resolve embedding config from router's config-defined models.
 
@@ -168,7 +181,7 @@ def _resolve_embedding_config_from_router(embedding_model: str, llm_router) -> d
         llm_router: The LiteLLM router instance
 
     Returns:
-        Dictionary with api_key, api_base, and api_version if model found, None otherwise
+        Provider-qualified model and its connection config if found, otherwise None
     """
     if not embedding_model or llm_router is None:
         return None
@@ -218,12 +231,21 @@ def _resolve_embedding_config_from_router(embedding_model: str, llm_router) -> d
                 if project_id:
                     embedding_config["project_id"] = project_id
 
+                resolved_model: Final = _provider_qualified_embedding_model(
+                    fallback=embedding_model,
+                    model=getattr(litellm_params, "model", None),
+                    custom_llm_provider=getattr(litellm_params, "custom_llm_provider", None),
+                )
+
                 # Only return config if we have at least api_key or api_base
                 if embedding_config:
                     verbose_proxy_logger.debug(
                         "Resolved embedding config from router model %s: %s", model_name, list(embedding_config.keys())
                     )
-                    return embedding_config
+                    return (
+                        resolved_model,
+                        embedding_config,
+                    )
         except Exception as e:
             verbose_proxy_logger.debug("Error resolving embedding config from router for model %s: %s", model_name, e)
             continue
@@ -233,7 +255,7 @@ def _resolve_embedding_config_from_router(embedding_model: str, llm_router) -> d
 
 async def _resolve_embedding_config_from_db(
     embedding_model: str, prisma_client: "PrismaClient"
-) -> dict[str, object] | None:
+) -> EmbeddingResolution | None:
     """
     Resolve embedding config from database model configuration.
 
@@ -246,7 +268,7 @@ async def _resolve_embedding_config_from_db(
         prisma_client: The Prisma client instance
 
     Returns:
-        Dictionary with api_key, api_base, and api_version if model found, None otherwise
+        Provider-qualified model and its connection config if found, otherwise None
     """
     if not embedding_model:
         return None
@@ -315,7 +337,15 @@ async def _resolve_embedding_config_from_db(
                         model_name,
                         list(embedding_config.keys()),
                     )
-                    return embedding_config
+                    resolved_model: Final = _provider_qualified_embedding_model(
+                        fallback=embedding_model,
+                        model=decrypted_params.get("model"),
+                        custom_llm_provider=decrypted_params.get("custom_llm_provider"),
+                    )
+                    return (
+                        resolved_model,
+                        embedding_config,
+                    )
         except Exception as e:
             verbose_proxy_logger.debug("Error resolving embedding config for model %s: %s", model_name, e)
             continue
@@ -325,7 +355,7 @@ async def _resolve_embedding_config_from_db(
 
 async def _resolve_embedding_config(
     embedding_model: str, prisma_client: "PrismaClient | None", llm_router: "Router | None" = None
-) -> dict[str, object] | None:
+) -> EmbeddingResolution | None:
     """
     Resolve embedding config from either router (config-defined) or database models.
 
@@ -343,7 +373,7 @@ async def _resolve_embedding_config(
         llm_router: The LiteLLM router instance (optional, will be imported if not provided)
 
     Returns:
-        Dictionary with api_key, api_base, and api_version if model found, None otherwise
+        Provider-qualified model and its connection config if found, otherwise None
     """
     if not embedding_model:
         return None
