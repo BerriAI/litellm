@@ -38,8 +38,17 @@ vi.mock("./useModelDashboardData", () => ({
   useModelDashboardData: () => ({ availableModelAccessGroups: [], allModelsOnProxy: [], availableModelGroups: [] }),
 }));
 
-const ADMIN = { accessToken: "at", token: "t", userRole: "Admin", userId: "u1", premiumUser: false };
-const NON_ADMIN = { accessToken: "at", token: "t", userRole: "Internal User", userId: "u1", premiumUser: false };
+const ADMIN = { accessToken: "at", token: "t", userRole: "Admin", userId: "u1", premiumUser: false, isViewOnly: false };
+const NON_ADMIN = {
+  accessToken: "at",
+  token: "t",
+  userRole: "Internal User",
+  userId: "u1",
+  premiumUser: false,
+  isViewOnly: false,
+};
+// A proxy_admin_viewer session: effectiveSessionRole masquerades the role as "Admin".
+const VIEW_ONLY_ADMIN = { ...ADMIN, isViewOnly: true };
 
 const renderPage = () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
@@ -97,6 +106,22 @@ describe("ModelsAndEndpointsPage", () => {
     renderPage();
     expect(screen.queryByRole("tab", { name: "LLM Credentials" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Health Status" })).not.toBeInTheDocument();
+  });
+
+  // POST /model/new 403s a proxy_admin_viewer, so the form's tab must not render for one.
+  it("hides the Add Model tab for a view-only admin session", () => {
+    mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
+    const { getByRole, queryByRole } = renderPage();
+    expect(queryByRole("tab", { name: "Add Model" })).not.toBeInTheDocument();
+    expect(getByRole("tab", { name: "All Models" })).toBeInTheDocument();
+  });
+
+  // Read parity: the Auto-Routers list stays reachable for a view-only admin; only the
+  // create affordance inside it is withheld, which AutoRoutersTabPanel decides.
+  it("keeps the Auto-Routers tab for a view-only admin session", () => {
+    mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
+    const { getByRole } = renderPage();
+    expect(getByRole("tab", { name: /Auto-Routers/ })).toBeInTheDocument();
   });
 
   // Auto-routers are excluded from the All Models table, so this tab is their home: the only
