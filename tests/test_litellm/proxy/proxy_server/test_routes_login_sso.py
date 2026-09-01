@@ -531,14 +531,53 @@ def test_a_refused_attempt_carries_retry_after(client, monkeypatch, reset_login_
     assert refused.headers.get("retry-after") == "77"
 
 
+def test_the_form_returns_a_human_readable_lockout_page(client, monkeypatch, reset_login_throttle):
+    """The no-JavaScript form must render a wait page when its POST is throttled."""
+    _install_real_auth(monkeypatch, max_failed_login_attempts=2, failed_login_window_seconds=77)
+
+    assert [_form_login(client) for _ in range(2)] == [401, 401]
+
+    refused = client.post("/login", data={"username": "admin", "password": "wrong"})
+    assert refused.status_code == 429
+    assert refused.headers.get("content-type", "").startswith("text/html")
+    assert "Try again in about 77 seconds" in refused.text
+    assert refused.headers.get("retry-after") == "77"
+
+
 def test_a_second_username_from_the_same_source_still_gets_through(client, monkeypatch, reset_login_throttle):
-    """The bucket is the username and source pair, so one account cannot block another."""
+    """The username counter carries no address, so one account exhausting it cannot block another."""
     _install_real_auth(monkeypatch, max_failed_login_attempts=2)
 
     for _ in range(3):
         _json_login(client, "/v2/login", username="admin")
 
     assert _json_login(client, "/v2/login", username="someone-else@example.com") == 401
+
+
+def test_a_spray_across_usernames_is_refused_on_the_source_counter(client, monkeypatch, reset_login_throttle):
+    """A fresh username per guess keeps every username counter at one, so the address is what stops it."""
+    _install_real_auth(monkeypatch, max_failed_login_attempts=100, max_failed_login_attempts_per_source=4)
+
+    sprayed = [_json_login(client, "/v2/login", username=f"sprayed-{i}@corp.com") for i in range(4)]
+    assert sprayed == [401] * 4
+
+    assert _json_login(client, "/v2/login", username="sprayed-5@corp.com") == 429
+
+
+def test_the_configured_admin_password_still_signs_in_while_refused(client, monkeypatch, reset_login_throttle):
+    """The operator must never be locked out of the console by traffic aimed at it."""
+    from unittest.mock import AsyncMock, patch
+
+    _install_real_auth(monkeypatch, max_failed_login_attempts=2)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://stub")
+
+    assert [_json_login(client, "/v2/login") for _ in range(2)] == [401, 401]
+    assert _json_login(client, "/v2/login") == 429
+
+    with patch("litellm.proxy.auth.login_utils.user_update", new=AsyncMock()), patch(
+        "litellm.proxy.auth.login_utils.generate_key_helper_fn", new=AsyncMock(return_value={"token": "sk-ui"})
+    ):
+        assert _json_login(client, "/v2/login", password="right-password") == 200
 
 
 def test_sign_in_succeeds_again_once_the_budget_is_restored(client, monkeypatch, reset_login_throttle):
