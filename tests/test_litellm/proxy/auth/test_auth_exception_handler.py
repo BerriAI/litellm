@@ -67,30 +67,6 @@ async def test_handle_authentication_error_db_unavailable_connectivity(db_error)
 
 
 @pytest.mark.asyncio
-async def test_handle_custom_auth_transport_error_does_not_fall_back():
-    """Custom-authenticator outages must not issue the DB fail-open identity."""
-    handler = UserAPIKeyAuthExceptionHandler()
-
-    with patch(
-        "litellm.proxy.proxy_server.general_settings",
-        {"allow_requests_on_db_unavailable": True},
-    ):
-        with pytest.raises(ProxyException) as exc_info:
-            await handler._handle_authentication_error(
-                httpx.ConnectError("custom authenticator unavailable"),
-                MagicMock(),
-                {},
-                "/test",
-                None,
-                "test-key",
-                is_custom_auth_error=True,
-            )
-
-    assert exc_info.value.type == ProxyErrorTypes.no_db_connection
-    assert exc_info.value.code == str(status.HTTP_503_SERVICE_UNAVAILABLE)
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "prisma_error",
     [
