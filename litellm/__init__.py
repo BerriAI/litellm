@@ -26,7 +26,14 @@ def _dev_env_hot_reload_enabled() -> bool:
     return os.getenv("LITELLM_DEV_ENV_HOT_RELOAD") == "True"
 
 
-if os.getenv("LITELLM_MODE", "DEV") == "DEV":
+def _should_load_dotenv() -> bool:
+    """Check if dotenv should be implicitly loaded (skipped in PRODUCTION or when LITELLM_DISABLE_DOTENV is set)."""
+    if os.getenv("LITELLM_DISABLE_DOTENV", "").lower() in ("1", "true", "t", "yes", "y"):
+        return False
+    return os.getenv("LITELLM_MODE", "DEV") == "DEV"
+
+
+if _should_load_dotenv():
     _dotenv.load_dotenv(override=_dev_env_hot_reload_enabled())
 
 from collections.abc import Sequence
