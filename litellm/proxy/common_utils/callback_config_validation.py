@@ -44,6 +44,67 @@ def _langfuse_environment_error(callback_vars: Mapping[str, str]) -> str | None:
     return None
 
 
+# Which credential family a dynamic variable belongs to. The families are the
+# integrations that share one account: every langfuse_* variable configures the
+# same Langfuse project whether it rides the classic callback or the OTel one,
+# and every dd_* variable configures the same Datadog account.
+_VAR_FAMILIES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "arize_": "Arize",
+        "dd_": "Datadog",
+        "gcs_": "GCS",
+        "humanloop_": "Humanloop",
+        "langfuse_": "Langfuse",
+        "langsmith_": "LangSmith",
+        "newrelic_": "New Relic",
+        "posthog_": "PostHog",
+        "wandb_": "Weights & Biases",
+        "weave_": "Weights & Biases",
+    }
+)
+
+
+def _family_of(var: str) -> str | None:
+    """The credential family ``var`` configures, or ``None`` if it configures none.
+
+    ``turn_off_message_logging`` and friends belong to no backend, so they carry
+    no credentials anyone could redirect.
+    """
+    return next((family for prefix, family in _VAR_FAMILIES.items() if var.startswith(prefix)), None)
+
+
+def cross_entry_family_error(
+    callback_vars: Mapping[str, str] | None,
+    stored_vars_by_entry: Sequence[Mapping[str, str]],
+) -> str | None:
+    """Reject an entry that joins a credential family another entry already holds.
+
+    Every stored entry's variables are flattened into one dict before a request
+    reads them, and the flattened dict is what the exporter authenticates and
+    addresses with. So an entry naming only a destination is enough to redirect
+    credentials that were written somewhere else: a host on a second entry pairs
+    with the key from the first, and the request carries that key to the new
+    host.
+
+    Requiring one entry to own a family end to end removes the pairing. Only the
+    writers this endpoint newly admits are held to it, because a proxy admin
+    already holds every credential the proxy has. A team admin who does want to
+    move a family deletes the entry holding it first, which reveals nothing.
+    """
+    if not callback_vars:
+        return None
+    held: Final = {family for entry in stored_vars_by_entry for family in map(_family_of, entry) if family is not None}
+    return next(
+        (
+            f"{family} is already configured by another callback entry on this team. "
+            f"Remove that entry before setting {var} here."
+            for var, family in ((v, _family_of(v)) for v in callback_vars)
+            if family is not None and family in held
+        ),
+        None,
+    )
+
+
 def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str | None:
     """Validate every ``logging`` entry of a team/key metadata payload."""
     if not metadata:

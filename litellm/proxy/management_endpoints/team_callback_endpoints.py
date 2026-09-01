@@ -29,7 +29,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.callback_config_validation import callback_config_error
+from litellm.proxy.common_utils.callback_config_validation import (
+    callback_config_error,
+    cross_entry_family_error,
+)
 from litellm.proxy.common_utils.callback_utils import (
     _CALLBACK_VAR_ENCRYPTED_PREFIX,
     decrypt_callback_vars,
@@ -339,6 +342,23 @@ async def add_team_callbacks(
         team_callback_settings: list[dict] = team_metadata.get("logging")  # will be dict of type AddTeamCallback
         if team_callback_settings is None or not isinstance(team_callback_settings, list):
             team_callback_settings = []
+
+        # One entry has to own a credential family end to end. The entries are
+        # flattened into one dict before a request reads them, so an entry
+        # naming only a destination would pair with a key written on another
+        # entry and carry it to that destination -- a key a team admin can read
+        # back nowhere. Proxy admins are exempt: they already hold every
+        # credential the proxy has.
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            stored_entry_vars: Final = [  # mutable-ok: read-only input to the check, never stored
+                entry.get("callback_vars") or {} for entry in team_callback_settings
+            ]
+            family_error: Final = cross_entry_family_error(data.callback_vars, stored_entry_vars)
+            if family_error is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=family_error,
+                )
 
         ## check if it already exists, for the same callback event
         for callback in team_callback_settings:

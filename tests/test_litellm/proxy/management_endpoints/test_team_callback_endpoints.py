@@ -19,6 +19,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.callback_config_validation import cross_entry_family_error
 from litellm.proxy.management_endpoints.team_callback_endpoints import (
     add_team_callbacks,
     delete_team_callback,
@@ -1518,3 +1519,33 @@ async def test_proxy_admin_still_told_the_team_is_unknown():
 
     assert exc.value.status_code == 404
     assert "does not exist" in str(exc.value.detail)
+
+
+@pytest.mark.parametrize(
+    "new_vars, stored, rejected",
+    [
+        # the redirect, in every carrier a caller could pick: an entry naming
+        # only a host, pairing with a key pair written on another entry
+        ({"langfuse_host": "http://attacker.invalid"}, [{"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], True),
+        # the sibling carrier -- langfuse and langfuse_otel are one account
+        ({"langfuse_host": "http://attacker.invalid"}, [{"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_secret_key": "sk"}], True),
+        # a destination variable no integration registry lists
+        ({"dd_agent_host": "attacker.invalid"}, [{"dd_api_key": "k", "dd_site": "us5.datadoghq.com"}], True),
+        # one entry owning its family end to end is the feature
+        ({"langfuse_host": "https://eu.cloud.langfuse.com", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}, [], False),
+        # a different family alongside an existing one stays fine
+        ({"gcs_bucket_name": "bucket"}, [{"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], False),
+        ({"langsmith_api_key": "k"}, [{"dd_api_key": "k"}], False),
+        # variables that configure no backend carry nothing to redirect
+        ({"turn_off_message_logging": "true"}, [{"langfuse_secret_key": "sk"}], False),
+    ],
+)
+def test_one_entry_owns_a_credential_family(new_vars, stored, rejected):
+    """A team admin must not be able to redirect a credential they cannot read.
+
+    The stored entries are flattened into one dict before a request reads them,
+    so an entry naming only a destination pairs with a key written elsewhere and
+    carries it to that destination.
+    """
+    error = cross_entry_family_error(new_vars, stored)
+    assert (error is not None) is rejected
