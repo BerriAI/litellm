@@ -3740,6 +3740,7 @@ class LlmProviders(str, Enum):
     VERTEX_AI_BETA = "vertex_ai_beta"
     GEMINI = "gemini"
     AI21 = "ai21"
+    AGNES_AI = "agnes_ai"
     BASETEN = "baseten"
     BLACK_FOREST_LABS = "black_forest_labs"
     AZURE = "azure"
