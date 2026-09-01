@@ -51,20 +51,19 @@ test.describe("Usage page", () => {
     const card = await openUsage(page);
 
     // Table view (the default): the key is listed by its alias.
-    const row = card.locator("tbody tr").filter({ hasText: alias });
+    const row = card.getByRole("row").filter({ hasText: alias });
     await expect(row, `${alias} missing from Top Virtual Keys`).toHaveCount(1, {
       timeout: 30_000,
     });
 
     // Chart view swaps the table out for the bar chart, and back.
     await card.getByText("Chart View", { exact: true }).click();
-    await expect(card.locator("tbody tr")).toHaveCount(0, { timeout: 10_000 });
+    await expect(card.getByRole("table")).toHaveCount(0, { timeout: 10_000 });
     await card.getByText("Table View", { exact: true }).click();
     await expect(row).toHaveCount(1, { timeout: 10_000 });
 
-    // Clicking the Key ID cell fetches key info and opens the detail panel.
     // The alias is already in the row behind the modal, so match the panel's own controls.
-    await row.locator("td").first().click();
+    await row.getByRole("button", { name: token }).click();
     const keyInfo = page.getByRole("tab", { name: "Overview", exact: true });
     await expect(keyInfo, "key info panel did not open").toBeVisible({
       timeout: 20_000,

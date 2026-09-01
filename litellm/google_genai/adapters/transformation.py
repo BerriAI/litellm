@@ -108,7 +108,6 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
 
     def __init__(self, completion_stream: object):
         self.sent_first_chunk = False
-        # State tracking for accumulating partial tool calls
         self.accumulated_tool_calls = dict[int, _ToolCallAccumulator]()
         self._returned_response = False
         super().__init__(completion_stream)
@@ -723,7 +722,7 @@ class GoogleGenAIAdapter:
         )
 
         for tool_call in tool_calls:
-            if not hasattr(tool_call, "function"):
+            if not hasattr(tool_call, "function") or isinstance(tool_call, ChatCompletionDeltaCustomToolCall):
                 continue
 
             # 3. Use `index` as the primary key for accumulation

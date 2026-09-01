@@ -224,11 +224,7 @@ class PipelineExecutor:
 
             # Handle terminal actions
             if action == "allow":
-                return PipelineExecutionResult(
-                    terminal_action="allow",
-                    step_results=step_results,
-                    modified_data=working_data if working_data != data else None,
-                )
+                return _allow_result(step_results=step_results, working_data=working_data, request_data=data)
 
             if action == "block":
                 return PipelineExecutionResult(
@@ -250,11 +246,7 @@ class PipelineExecutor:
             # action == "next" → continue to next step
 
         # Ran out of steps without a terminal action → default allow
-        return PipelineExecutionResult(
-            terminal_action="allow",
-            step_results=step_results,
-            modified_data=working_data if working_data != data else None,
-        )
+        return _allow_result(step_results=step_results, working_data=working_data, request_data=data)
 
     @staticmethod
     async def _run_step(
@@ -380,6 +372,45 @@ class PipelineExecutor:
                 if callback.guardrail_name == guardrail_name:
                     return callback
         return None
+
+
+def _allow_result(
+    step_results: Sequence[PipelineStepResult],
+    working_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
+    request_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
+) -> PipelineExecutionResult:
+    """Build the terminal-allow result, propagating pipeline modifications without the per-step guardrail override."""
+    restored: Final = _restore_request_guardrails(working_data, request_data)
+    return PipelineExecutionResult(
+        terminal_action="allow",
+        step_results=list(step_results),  # mutable-ok: PipelineExecutionResult field is a list
+        modified_data=restored if restored != request_data else None,
+    )
+
+
+def _restore_request_guardrails(
+    working_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
+    request_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
+) -> dict:  # mutable-ok: merged back into the request dict, which downstream code mutates
+    """
+    Restore the request's own metadata["guardrails"] activation list.
+
+    _run_step overrides it to [step.guardrail] so should_run_guardrail() allows each
+    step; letting that override escape via modified_data permanently drops every
+    independently activated guardrail from later lifecycle stages (post_call, etc.).
+    """
+    working_metadata: Final = working_data.get("metadata")
+    if not isinstance(working_metadata, dict):
+        return working_data
+    request_metadata: Final = request_data.get("metadata")
+    original_guardrails: Final = request_metadata.get("guardrails") if isinstance(request_metadata, dict) else None
+    stripped: Final = {k: v for k, v in working_metadata.items() if k != "guardrails"}  # mutable-ok: request dict
+    if original_guardrails is not None:
+        restored: Final = {**stripped, "guardrails": original_guardrails}  # mutable-ok: request dict
+        return {**working_data, "metadata": restored}  # mutable-ok: request dict
+    if not stripped and not isinstance(request_metadata, dict):
+        return {k: v for k, v in working_data.items() if k != "metadata"}  # mutable-ok: request dict
+    return {**working_data, "metadata": stripped}  # mutable-ok: request dict
 
 
 def _pipeline_action_for_outcome(step: PipelineStep, outcome: str) -> str:
