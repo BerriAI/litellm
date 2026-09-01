@@ -68,6 +68,7 @@ async def asearch(
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     extra_headers: dict[str, Any] | None = None,
+    client: Any | None = None,
     **kwargs,
 ) -> SearchResponse:
     """
@@ -84,6 +85,7 @@ async def asearch(
         api_base: Optional API base URL
         timeout: Optional timeout
         extra_headers: Optional extra headers
+        client: Optional HTTPHandler or AsyncHTTPHandler client
         **kwargs: Additional parameters
 
     Returns:
@@ -132,6 +134,7 @@ async def asearch(
             api_base=api_base,
             timeout=timeout,
             extra_headers=extra_headers,
+            client=client,
             **kwargs,
         )
 
@@ -171,6 +174,7 @@ def search(
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     extra_headers: dict[str, Any] | None = None,
+    client: Any | None = None,
     **kwargs,
 ) -> SearchResponse | Coroutine[Any, Any, SearchResponse]:
     """
@@ -303,6 +307,7 @@ def search(
             api_key=api_key,
             api_base=complete_url,
             custom_llm_provider=search_provider,
+            client=client,
             asearch=_is_async,
             headers=headers,
             provider_config=search_provider_config,
