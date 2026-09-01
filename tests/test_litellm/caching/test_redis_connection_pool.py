@@ -255,6 +255,39 @@ def test_coerce_redis_kwargs_types_float_invalid_drops_key():
     assert "myparam" not in result
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("false", False), ("true", True), ("0", False), ("1", True)],
+)
+def test_coerce_socket_keepalive_string(raw, expected):
+    """socket_keepalive's signature default is None, so it needs an explicit bool
+    coercion: a leftover "false" string is truthy and enables keepalive."""
+    result = _coerce_redis_kwargs_types({"socket_keepalive": raw})
+
+    assert result["socket_keepalive"] is expected
+
+
+def test_get_redis_client_logic_coerces_cluster_only_kwargs(monkeypatch):
+    """Cluster-only kwargs (absent from redis.Redis's signature) must still be
+    coerced when routing to a cluster, or Helm-stringified values reach
+    RedisCluster as strings."""
+    for envvar in (*_get_redis_env_kwarg_mapping(), "REDIS_CLUSTER_NODES", "REDIS_SENTINEL_NODES"):
+        monkeypatch.delenv(envvar, raising=False)
+
+    result = _get_redis_client_logic(
+        startup_nodes='[{"host": "localhost", "port": 7000}]',
+        cluster_error_retry_attempts="5",
+        require_full_coverage="false",
+        health_check_interval="30",
+    )
+
+    assert result["cluster_error_retry_attempts"] == 5
+    assert isinstance(result["cluster_error_retry_attempts"], int)
+    assert result["require_full_coverage"] is False
+    assert result["health_check_interval"] == 30
+    assert isinstance(result["health_check_interval"], int)
+
+
 def test_get_redis_client_logic_raises_without_host_or_url(monkeypatch):
     """_get_redis_client_logic raises ValueError when neither host nor url is provided."""
     for envvar in (*_get_redis_env_kwarg_mapping(), "REDIS_CLUSTER_NODES", "REDIS_SENTINEL_NODES"):

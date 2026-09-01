@@ -186,12 +186,19 @@ def _get_redis_env_kwarg_mapping():
     return {f"{PREFIX}{x.upper()}": x for x in _get_redis_kwargs() if x not in exclude_from_environment}
 
 
+def _str_to_bool(value: str) -> bool:
+    return value.lower() in ("true", "1", "yes")
+
+
 def _coerce_redis_kwargs_types(
     redis_kwargs: Mapping[str, object],
-    client: type = redis.Redis,
+    client: type | tuple[type, ...] = redis.Redis,
 ) -> dict[str, object]:  # mutable-ok: a caller mutates the returned kwargs before constructing its client
     """Coerces string values to the numeric/boolean type ``client``'s constructor
-    declares for that parameter.
+    declares for that parameter. ``client`` may be a tuple of client classes; a
+    parameter's type is taken from the first signature that declares it, which
+    lets cluster callers coerce cluster-only kwargs such as
+    ``cluster_error_retry_attempts`` alongside the shared connection kwargs.
 
     Environment variables are always strings, and Helm ``--set`` stringifies values
     too, so a config value like ``health_check_interval`` or ``socket_timeout``
@@ -203,24 +210,30 @@ def _coerce_redis_kwargs_types(
     explicit target type rather than the parameter's own signature default: redis-py
     8.x changed the timeout defaults from ``None`` to int ``5``, so inferring the
     type from the default would make a fractional ``"5.5"`` fail ``int()`` and get
-    silently dropped on 8.x while working on older versions.
+    silently dropped on 8.x while working on older versions. ``socket_keepalive``
+    is explicit too: its signature default is ``None``, which carries no type to
+    infer from, and leaving it a string makes ``"false"`` truthy.
     """
-    sig: Final = inspect.signature(client)
-    numeric_param_types: Final = MappingProxyType(
+    signatures: Final = tuple(inspect.signature(c) for c in (client if isinstance(client, tuple) else (client,)))
+    explicit_param_types: Final = MappingProxyType(
         {
             "max_connections": int,
             "socket_timeout": float,
             "socket_connect_timeout": float,
+            "socket_keepalive": bool,
         }
     )
     result: Final = dict(redis_kwargs)  # mutable-ok: per-key try/except coercion below needs to drop individual keys
     for key, value in redis_kwargs.items():
         if not isinstance(value, str):
             continue
-        param = sig.parameters.get(key)
+        param = next((sig.parameters[key] for sig in signatures if key in sig.parameters), None)
         if param is None:
             continue
-        explicit_type = numeric_param_types.get(key)
+        explicit_type = explicit_param_types.get(key)
+        if explicit_type is bool:
+            result[key] = _str_to_bool(value)
+            continue
         if explicit_type is not None:
             try:
                 result[key] = explicit_type(value)
@@ -232,7 +245,7 @@ def _coerce_redis_kwargs_types(
             continue
         # bool must be checked before int, since bool subclasses int
         if isinstance(default, bool):
-            result[key] = value.lower() in ("true", "1", "yes")
+            result[key] = _str_to_bool(value)
         elif isinstance(default, int):
             try:
                 result[key] = int(value)
@@ -590,7 +603,12 @@ def _get_redis_client_logic(**env_overrides):
         raise ValueError("Either 'host' or 'url' must be specified for redis.")
 
     # litellm.print_verbose(f"redis_kwargs: {redis_kwargs}")
-    return _coerce_redis_kwargs_types(redis_kwargs)
+    coercion_client: Final = (
+        (redis.Redis, redis.RedisCluster, async_redis.RedisCluster)
+        if redis_kwargs.get("startup_nodes")
+        else redis.Redis
+    )
+    return _coerce_redis_kwargs_types(redis_kwargs, client=coercion_client)
 
 
 def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
