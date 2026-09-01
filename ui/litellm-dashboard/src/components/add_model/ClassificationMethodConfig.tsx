@@ -15,9 +15,12 @@ import { RestrictedSection, restrictedBy } from "./TierRestrictions";
 import HeuristicScoringConfig from "./HeuristicScoringConfig";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
+  ClassificationFrequency,
   ClassifierFallback,
   ClassifierType,
   ComplexityRouterConfigValue,
+  classificationFrequency,
+  withClassificationFrequency,
   DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS,
   MIN_QUOTED_CONTEXT_TURN_CHARS,
   DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
@@ -111,7 +114,7 @@ const HowClassificationWorks: React.FC<{ value: ComplexityRouterConfigValue }> =
         <strong className="block mb-2 font-semibold">How Classification Works</strong>
         <span className="text-[13px] text-muted-foreground">{scoringExplanation(value)}</span>
         {scorerRuns && ranges && (
-          <ul style={{ marginTop: 8, marginBottom: 0, paddingLeft: 20, fontSize: 13, color: "rgba(0, 0, 0, 0.45)" }}>
+          <ul className="mt-2 pl-5 text-[13px] text-muted-foreground">
             <li>
               <strong>{effectiveTierLabel("SIMPLE", value.tier_labels)}</strong>: Score &lt; {ranges.simpleMedium}
             </li>
@@ -211,6 +214,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   const [draft, setDraft] = React.useState<{ id: string; raw: string } | null>(null);
   const hasDefaultModel = Boolean(defaultModel);
   const classifierType = effectiveClassifierType(value);
+  const sessionFrequencyRestriction = restrictedBy(value, "sessionAffinity");
   const classifierModelMissing =
     showValidationErrors && usesLlmClassifier(classifierType) && !value.classifier_llm_config?.model;
   const usesCustomPrompt = Boolean(value.classifier_llm_config?.system_prompt?.trim());
@@ -305,6 +309,10 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     onChange({ ...value, classifier_fallback: fallback });
   };
 
+  const handleClassificationFrequencyChange = (frequency: ClassificationFrequency) => {
+    onChange(withClassificationFrequency(value, frequency));
+  };
+
   const handleClassifierContextWindowSizeChange = (windowSize: number) => {
     onChange({
       ...value,
@@ -366,6 +374,49 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           </p>
         </div>
       )}
+
+      <div className="mt-4 space-y-2">
+        <strong className="block font-semibold">How often to classify</strong>
+        <RadioGroup
+          value={classificationFrequency(value)}
+          onValueChange={(frequency: unknown) =>
+            handleClassificationFrequencyChange(frequency as ClassificationFrequency)
+          }
+        >
+          <div className="inline-flex flex-col gap-2">
+            <Label className="items-start font-normal leading-normal">
+              <RadioGroupItem value="every_request" className="mt-0.5" />
+              <span>
+                <span>Every request</span>{" "}
+                <span className="text-muted-foreground">: score every turn, tool-result continuations included</span>
+              </span>
+            </Label>
+            <Label className="items-start font-normal leading-normal">
+              <RadioGroupItem value="user_turn" className="mt-0.5" />
+              <span>
+                <span>Every new user message</span>{" "}
+                <span className="text-muted-foreground">
+                  : score each new human ask, then hold that tier for the tool calls that follow it
+                </span>
+              </span>
+            </Label>
+            <Label className="items-start font-normal leading-normal">
+              <RadioGroupItem value="session" className="mt-0.5" disabled={Boolean(sessionFrequencyRestriction)} />
+              <span>
+                <span>Once per session</span>{" "}
+                <span className="text-muted-foreground">
+                  {sessionFrequencyRestriction?.reason ??
+                    ": score the first turn only, then hold that tier and its deployment for the whole session"}
+                </span>
+              </span>
+            </Label>
+          </div>
+        </RadioGroup>
+        <p className="text-sm text-muted-foreground">
+          Holding the tier keeps an agent on one model for a whole tool loop and cuts scoring cost. A turn the router
+          cannot match to a held decision, such as one with no session id or an expired one, is scored again
+        </p>
+      </div>
 
       {usesLlmClassifier(classifierType) && (
         <div className="mt-4 space-y-3">

@@ -30,6 +30,7 @@ from litellm.constants import EMPTY_MAPPING, RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
+from litellm.litellm_core_utils.prompt_templates.common_utils import request_contains_image_content
 from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.types.utils import (
@@ -281,7 +282,7 @@ def _response_cost_or_none(response: ModelResponse) -> float | None:
     return float(cost)
 
 
-def _effective_turn_off_message_logging(request_kwargs: Mapping[str, Any] | None) -> bool | None:
+def _effective_turn_off_message_logging(request_kwargs: Mapping[str, object] | None) -> bool | None:
     from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
         initialize_standard_callback_dynamic_params,
     )
@@ -738,6 +739,10 @@ def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bo
     size shrinks again the moment the client compacts: pinning the escalated tier would hold the
     session on the big-window model long after the oversized context that forced it is gone. The
     gate re-fires per request, so leaving these unpinned costs nothing but the classifier call.
+
+    A modality escalation is transient the same way: it describes what this one call carries (an
+    image), not what the session's traffic looks like, and pinning it would hold every following
+    text turn on the vision-capable model the image forced.
     """
     return decision is None or (
         decision.get("cause")
@@ -745,6 +750,7 @@ def _decision_is_pinnable(decision: StandardLoggingRoutingDecision | None) -> bo
             "default_model_fallback",
             "plan_mode",
             "housekeeping",
+            "modality_escalation",
         )
         and not decision.get("context_escalated")
     )
@@ -1919,7 +1925,7 @@ class ComplexityRouter(CustomLogger):
         ceiling_severity: Final = self._active_tier_severity(hard_ceiling) if hard_ceiling is not None else None
         best_model: str | None = None
         best_score = float("-inf")
-        candidate_scores: Final[list[dict[str, Any]]] = []
+        candidate_scores: Final[list[dict[str, object]]] = []
         for model in candidates:
             if floor_severity is not None and all(
                 self._active_tier_severity(model_tier) < floor_severity
@@ -2273,6 +2279,175 @@ class ComplexityRouter(CustomLogger):
         if escalated_tier == pinned_tier:
             return pinned_model
         return self.get_model_for_tier(escalated_tier)
+
+    def _model_accepts_image_input(self, model_name: str) -> bool:
+        """Whether a routed model or pool entry can serve an image request.
+
+        Resolved through the deployments that would actually serve the name; a name with no
+        deployment on the router is served by the SDK directly and is checked against the model
+        cost map itself. Only an explicit supports_vision false excludes, a deployment-level
+        model_info override first and the map otherwise, so unmapped custom names stay routable.
+
+        A multi-deployment group must accept on EVERY deployment: the router picks a deployment
+        inside the group after this gate runs, so a mixed group marked eligible could still hand
+        the image to its text-only member and fail with the exact 400 the gate exists to prevent.
+        """
+        from litellm.utils import is_vision_explicitly_disabled
+
+        def deployment_accepts(deployment: Mapping[str, Any]) -> bool:
+            declared: Final = (deployment.get("model_info") or EMPTY_MAPPING).get("supports_vision")
+            if declared is not None:
+                return declared is True
+            litellm_model: Final = (deployment.get("litellm_params") or EMPTY_MAPPING).get("model") or model_name
+            return not is_vision_explicitly_disabled(litellm_model)
+
+        deployments: Final = self.litellm_router_instance.get_model_list(model_name=model_name)
+        if not deployments:
+            return not is_vision_explicitly_disabled(model_name)
+        return all(deployment_accepts(deployment) for deployment in deployments)
+
+    def _modality_eligible_models(self) -> frozenset[str]:
+        """Every configured pool entry, plus default_model, that can serve an image request."""
+        names: Final = frozenset(entry for pool in self._tier_pools().values() for entry in pool) | frozenset(
+            name for name in (self.config.default_model,) if name
+        )
+        return frozenset(name for name in names if self._model_accepts_image_input(name))
+
+    async def _gate_response_modality(
+        self,
+        response: PreRoutingHookResponse,
+        messages: list[dict[str, Any]] | None,  # mutable-ok: forwarded verbatim to the list-typed re-pick
+        resolved_messages: Sequence[Mapping[str, object]] | None,
+        request_kwargs: dict,  # mutable-ok: same shape the hook receives
+    ) -> PreRoutingHookResponse:
+        """Replace a routed model that cannot accept this request's image input.
+
+        The single modality owner, applied to the decided response at the hook's exits so every
+        routing path is covered uniformly. A KEPT session pin is exempt by design (its cause);
+        replacement picks and every other path are just responses. The re-placement walks
+        UPWARD-ONLY from the decision's tier (so a plan-mode floor can never be undercut), picks
+        through `_pick_model_for_tier` so routing plugins still apply, then falls to
+        default_model (never on plugin routers, and never on a plan-floored decision, since
+        default_model carries no tier guarantee), else raises the clear 400. The rewritten
+        decision keeps its cause on a same-tier repick and becomes modality_escalation when the
+        tier moved or default_model took over, with the displaced placement in signals.
+        """
+        decision: Final = response.routing_decision
+        if (
+            not self.config.modality_routing
+            or not resolved_messages
+            or response.model is None
+            or (decision is not None and decision.get("cause") == "session_affinity_pin")
+            or not request_contains_image_content(resolved_messages)
+            or self._model_accepts_image_input(response.model)
+        ):
+            return response
+        eligible: Final = self._modality_eligible_models()
+        names: Final = self.config.tier_names()
+        pools: Final = self._tier_pools()
+        decided: Final = decision.get("tier") if decision is not None else None
+        start: Final = names.index(decided) if isinstance(decided, str) and decided in names else 0
+        capable: Final = next(
+            (name for name in names[start:] if any(entry in eligible for entry in pools.get(name, ()))), None
+        )
+        if capable is not None:
+            new_tier: ComplexityTier | str | None = capable if self.config.has_custom_tiers else ComplexityTier(capable)
+            repick_messages: Final = list(resolved_messages)  # mutable-ok: the pick's param is list-typed
+            new_model = await self._pick_model_for_tier(
+                new_tier,
+                messages,
+                repick_messages,  # pyright: ignore[reportArgumentType]  # hook-resolved message dicts; the pick only reads them
+                request_kwargs,
+                allowed_models=tuple(entry for entry in pools.get(capable, ()) if entry in eligible),
+            )
+        elif self._modality_default_model_usable(request_kwargs, resolved_messages, eligible):
+            new_tier = None
+            new_model = self._placed_default_model()
+        else:
+            import litellm
+
+            raise litellm.BadRequestError(
+                message=(
+                    f"Auto-router {self.model_name} received a request with image input, but no model "
+                    f"at or above the decided tier accepts images and modality_routing is enabled. "
+                    f"Tiers checked: {', '.join(names[start:])}. Add a vision-capable model to a tier, "
+                    f"or set a vision-capable default_model, or remove the image content."
+                ),
+                model=self.model_name,
+                llm_provider="",
+            )
+        self._restamp_adaptive_choice(request_kwargs, response.model, new_model)
+        same_tier: Final = capable is not None and decided == capable
+        base_cause: Final = (decision.get("cause") if decision is not None else None) or "default_fallback"
+        displaced_default: Final = decided is None and response.model == self.config.default_model
+        markers: Final = (
+            "modality:image",
+            *((f"modality_escalated_from:{decided}",) if not same_tier and isinstance(decided, str) else ()),
+            *(("modality_displaced_default_model",) if not same_tier and displaced_default else ()),
+        )
+        old_signals: Final = tuple(decision.get("signals") or ()) if decision is not None else ()
+        new_decision: Final = self._build_routing_decision(
+            routed_model=new_model,
+            cause=base_cause if same_tier else "modality_escalation",
+            tier=new_tier,
+            score=decision.get("score") if decision is not None else None,
+            signals=(*old_signals, *markers),
+            matched_keyword=decision.get("matched_keyword") if decision is not None else None,
+            escalation_keyword=decision.get("escalation_keyword") if decision is not None else None,
+            escalated=bool(decision.get("escalated", False)) if decision is not None else False,
+            classifier_model=decision.get("classifier_model") if decision is not None else None,
+            classifier_cost=decision.get("classifier_cost") if decision is not None else None,
+            conversation_continuing=bool(decision.get("conversation_continuing", True))
+            if decision is not None
+            else True,
+            tier_litellm_params=self._litellm_params_for_model(new_tier, new_model),
+            context_escalation_original_tier=(
+                decision.get("context_escalation_original_tier") if decision is not None else None
+            ),
+        )
+        from litellm.types.router import PreRoutingHookResponse as HookResponse
+
+        return HookResponse(
+            model=new_model,
+            messages=response.messages,
+            litellm_params=self._litellm_params_for_model(new_tier, new_model),
+            routing_decision=new_decision,
+        )
+
+    def _modality_default_model_usable(
+        self,
+        request_kwargs: Mapping[str, object],
+        resolved_messages: Sequence[Mapping[str, object]] | None,
+        eligible: frozenset[str],
+    ) -> bool:
+        """default_model may serve a gated request only when it is configured, plugin-free
+        (it is never checked against the plugin pipeline), capability-eligible, and the turn
+        carries no plan-mode sentinel. The sentinel is re-detected here rather than read off
+        the decision record, because the record only marks turns the floor RAISED; a sentinel
+        turn already at or above the floor keeps its ordinary cause, and default_model carries
+        no tier the floor could vouch for on any sentinel turn."""
+        return (
+            bool(self.config.default_model)
+            and not self.config.plugins
+            and self.config.default_model in eligible
+            and self._matched_plan_mode_signal(request_kwargs, resolved_messages) is None
+        )
+
+    def _placed_default_model(self) -> str:
+        """The default_model behind a usable-default verdict; the raise is the type-level
+        proof, not a reachable path."""
+        model: Final = self.config.default_model
+        if model is None:
+            raise ValueError(f"Auto-router {self.model_name}: modality gate routed to an unset default_model")
+        return model
+
+    @staticmethod
+    def _restamp_adaptive_choice(request_kwargs: Mapping[str, object], old_model: str, new_model: str) -> None:
+        """The adaptive feedback loop reads its chosen-model marker from request metadata; a
+        gate rewrite must move the marker with the model or rewards land on the displaced one."""
+        metadata: Final = request_kwargs.get("metadata")
+        if isinstance(metadata, dict) and metadata.get("adaptive_router_chosen_model") == old_model:
+            metadata["adaptive_router_chosen_model"] = new_model
 
     def _lexical_tier_override(self, user_message: str) -> KeywordOverride | None:
         """When keyword_tier_rules match literally, the most-severe matched tier wins.
@@ -2655,25 +2830,30 @@ class ComplexityRouter(CustomLogger):
                     session_tier_litellm_params: Final = self._litellm_params_for_model(routed_pin_tier, routed_model)
                     has_original_messages: Final = messages is not None and len(messages) > 0
                     return self._with_session_deployment_affinity(
-                        PreRoutingHookResponse(
-                            model=routed_model,
-                            messages=messages if has_original_messages else None,
-                            litellm_params=session_tier_litellm_params,
-                            routing_decision=self._build_routing_decision(
-                                routed_model=routed_model,
-                                cause=cause,
-                                tier=routed_pin_tier,
-                                matched_keyword=pin_plan_sentinel if plan_floored else None,
-                                escalation_keyword=pin_escalation_keyword,
-                                escalated=escalated,
-                                conversation_continuing=conversation_continuing,
-                                tier_litellm_params=session_tier_litellm_params,
-                                context_escalation_original_tier=pin_context_original_tier,
+                        await self._gate_response_modality(
+                            PreRoutingHookResponse(
+                                model=routed_model,
+                                messages=messages if has_original_messages else None,
+                                litellm_params=session_tier_litellm_params,
+                                routing_decision=self._build_routing_decision(
+                                    routed_model=routed_model,
+                                    cause=cause,
+                                    tier=routed_pin_tier,
+                                    matched_keyword=pin_plan_sentinel if plan_floored else None,
+                                    escalation_keyword=pin_escalation_keyword,
+                                    escalated=escalated,
+                                    conversation_continuing=conversation_continuing,
+                                    tier_litellm_params=session_tier_litellm_params,
+                                    context_escalation_original_tier=pin_context_original_tier,
+                                ),
                             ),
+                            messages,
+                            resolved_messages,
+                            request_kwargs,
                         )
                     )
 
-        response: Final = await self._classify_and_route(
+        routed_response: Final = await self._classify_and_route(
             model=model,
             request_kwargs=request_kwargs,
             messages=messages,
@@ -2681,6 +2861,11 @@ class ComplexityRouter(CustomLogger):
             specific_deployment=specific_deployment,
             conversation_continuing=conversation_continuing,
             resolved_messages=resolved_messages,
+        )
+        response: Final = (
+            await self._gate_response_modality(routed_response, messages, resolved_messages, request_kwargs)
+            if routed_response is not None
+            else None
         )
         # Sentinel presence, not the plan_mode cause, gates the pin write: a plan-mode turn
         # classified at or above the floor keeps its ordinary cause, yet on an adaptive router

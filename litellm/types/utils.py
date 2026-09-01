@@ -2840,6 +2840,10 @@ RoutingDecisionCause = Literal[
     # never called. The matched sentinel rides in matched_keyword. Distinct from the keyword causes,
     # which are operator-authored rules; these sentinels ship with the router.
     "housekeeping",
+    # modality_routing replaced the decided placement: the request carries an image and the
+    # routed model does not accept image input, so the nearest higher capable tier or
+    # default_model served instead. The displaced placement rides in signals.
+    "modality_escalation",
     "session_affinity_pin",
     "session_affinity_escalation",
     # classification_mode 'user_turn': the request is an agent loop's continuation turn (no new
@@ -3767,6 +3771,8 @@ class LlmProviders(str, Enum):
     CODESTRAL = "codestral"
     TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
     DASHSCOPE = "dashscope"
+    QWENCLOUD = "qwencloud"
+    QWEN_AI_PLATFORM = "qwen_ai_platform"
     MODELSCOPE = "modelscope"
     MOONSHOT = "moonshot"
     PUBLICAI = "publicai"

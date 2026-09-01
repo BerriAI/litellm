@@ -6449,3 +6449,62 @@ def test_disabled_thinking_omitted_for_always_on_models_converse(
         assert "thinking" not in additional
     else:
         assert additional.get("thinking") == {"type": "disabled"}
+
+@pytest.mark.parametrize(
+    "model",
+    ["anthropic.claude-fable-5-1", "us.anthropic.claude-fable-5-1"],
+)
+@pytest.mark.parametrize(
+    "tool_choice",
+    ["required", {"type": "function", "function": {"name": "get_weather"}}],
+)
+def test_forced_tool_choice_downgraded_to_auto_on_fable_5_1_converse(
+    local_model_cost_map, model, tool_choice
+):
+    config = AmazonConverseConfig()
+
+    result = config.map_tool_choice_values(
+        model=model, tool_choice=tool_choice, drop_params=True
+    )
+
+    assert result == {"auto": {}}
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    ["required", {"type": "function", "function": {"name": "get_weather"}}],
+)
+def test_forced_tool_choice_raises_clean_error_on_fable_5_1_converse(
+    local_model_cost_map, tool_choice, monkeypatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="forced tool use"):
+        config.map_tool_choice_values(
+            model="anthropic.claude-fable-5-1", tool_choice=tool_choice, drop_params=False
+        )
+
+
+@pytest.mark.parametrize("tool_choice", ["auto", "none"])
+def test_unforced_tool_choice_unaffected_on_fable_5_1_converse(local_model_cost_map, tool_choice):
+    config = AmazonConverseConfig()
+
+    result = config.map_tool_choice_values(
+        model="anthropic.claude-fable-5-1", tool_choice=tool_choice, drop_params=True
+    )
+
+    assert result == ({"auto": {}} if tool_choice == "auto" else None)
+
+
+def test_forced_tool_choice_forwarded_on_converse_models_that_support_it(
+    local_model_cost_map, monkeypatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+
+    result = config.map_tool_choice_values(
+        model="anthropic.claude-fable-5", tool_choice="required", drop_params=False
+    )
+
+    assert result == {"any": {}}
