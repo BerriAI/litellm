@@ -64,6 +64,10 @@ async def test_lowest_cost_routing_keeps_provider_pricing_isolated(monkeypatch: 
         assert custom_llm_provider is not None
         cost: Final = 1.0 if custom_llm_provider == "expensive-provider" else 1e-07
         return {
+            "key": model,
+            "max_tokens": None,
+            "max_input_tokens": None,
+            "max_output_tokens": None,
             "input_cost_per_token": cost,
             "output_cost_per_token": cost,
             "litellm_provider": custom_llm_provider,
