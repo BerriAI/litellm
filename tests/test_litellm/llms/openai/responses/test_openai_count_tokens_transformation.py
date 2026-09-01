@@ -1,4 +1,3 @@
-
 import pytest
 
 from litellm.llms.openai.responses.count_tokens.transformation import (
@@ -102,9 +101,7 @@ def test_messages_to_responses_input_basic():
         {"role": "user", "content": "How are you?"},
     ]
 
-    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
-        messages
-    )
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
 
     assert len(input_items) == 3
     assert input_items[0] == {"role": "user", "content": "Hello"}
@@ -120,9 +117,7 @@ def test_messages_to_responses_input_with_system():
         {"role": "user", "content": "Hello"},
     ]
 
-    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
-        messages
-    )
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
 
     assert len(input_items) == 1
     assert input_items[0] == {"role": "user", "content": "Hello"}
@@ -136,9 +131,7 @@ def test_messages_to_responses_input_with_developer():
         {"role": "user", "content": "Hello"},
     ]
 
-    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
-        messages
-    )
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
 
     assert len(input_items) == 1
     assert instructions == "Be concise."
@@ -151,9 +144,7 @@ def test_messages_to_responses_input_with_tool():
         {"role": "tool", "content": "72°F", "tool_call_id": "call_123"},
     ]
 
-    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(
-        messages
-    )
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
 
     assert len(input_items) == 2
     assert input_items[1] == {
@@ -161,6 +152,84 @@ def test_messages_to_responses_input_with_tool():
         "call_id": "call_123",
         "output": "72°F",
     }
+
+
+def test_anthropic_tool_roundtrip_and_schema_use_responses_format():
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "Check Chicago."}]},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "call_123",
+                    "name": "get_weather",
+                    "input": {"city": "Chicago"},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "call_123",
+                    "content": [{"type": "text", "text": "72°F"}],
+                }
+            ],
+        },
+    ]
+    tools = [
+        {
+            "name": "get_weather",
+            "description": "Get weather",
+            "input_schema": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        }
+    ]
+
+    input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(messages)
+
+    assert instructions is None
+    assert input_items == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Check Chicago."}],
+        },
+        {
+            "type": "function_call",
+            "call_id": "call_123",
+            "name": "get_weather",
+            "arguments": '{"city": "Chicago"}',
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_123",
+            "output": "72°F",
+        },
+    ]
+    assert OpenAICountTokensConfig._transform_tools_for_responses_api(tools) == [
+        {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get weather",
+            "parameters": tools[0]["input_schema"],
+            "strict": False,
+        }
+    ]
+    assert (
+        OpenAICountTokensConfig.system_to_instructions(
+            [
+                {"type": "text", "text": "Use tool results."},
+                {"type": "text", "text": "Be concise."},
+            ]
+        )
+        == "Use tool results.\nBe concise."
+    )
 
 
 def test_messages_to_responses_input_preserves_images():
@@ -424,10 +493,7 @@ def test_validate_request_missing_input():
 def test_get_endpoint_default():
     """Test default endpoint URL."""
     config = OpenAICountTokensConfig()
-    assert (
-        config.get_openai_count_tokens_endpoint()
-        == "https://api.openai.com/v1/responses/input_tokens"
-    )
+    assert config.get_openai_count_tokens_endpoint() == "https://api.openai.com/v1/responses/input_tokens"
 
 
 def test_get_endpoint_custom_base():
