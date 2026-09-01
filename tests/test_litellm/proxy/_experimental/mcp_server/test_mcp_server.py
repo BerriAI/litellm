@@ -6995,6 +6995,27 @@ async def test_get_allowed_mcp_servers_from_mcp_server_names_known_alias_returns
 
 
 @pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_from_mcp_server_names_duplicate_alias_is_ambiguous():
+    from litellm.proxy._experimental.mcp_server.server import (
+        _get_allowed_mcp_servers_from_mcp_server_names,
+    )
+
+    allowed = [
+        _make_mcp_server_for_scope_filter("id-a", "github"),
+        _make_mcp_server_for_scope_filter("id-b", "github"),
+    ]
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _get_allowed_mcp_servers_from_mcp_server_names(
+            mcp_servers=["github"],
+            allowed_mcp_servers=allowed,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["error"] == "ambiguous_mcp_server"
+
+
+@pytest.mark.asyncio
 async def test_get_allowed_mcp_servers_from_mcp_server_names_mixed_known_and_unknown():
     """
     Mixed scope (one valid + one unknown) returns only the resolved server,

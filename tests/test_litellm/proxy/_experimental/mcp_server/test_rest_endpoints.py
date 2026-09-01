@@ -679,7 +679,7 @@ class TestTestToolsList:
 class TestListToolsRestAPI:
     pytestmark = pytest.mark.asyncio
 
-    async def test_rejects_disallowed_server(self, monkeypatch):
+    async def test_unknown_server_returns_not_found(self, monkeypatch):
         async def fake_contexts(user_api_key_auth):
             return [user_api_key_auth]
 
@@ -707,8 +707,8 @@ class TestListToolsRestAPI:
                 user_api_key_dict=UserAPIKeyAuth(),
             )
 
-        assert exc_info.value.status_code == 403
-        assert exc_info.value.detail["error"] == "access_denied"
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.detail["error"] == "server_not_found"
         assert "server-1" in exc_info.value.detail["message"]
 
     async def test_lists_tools_for_allowed_server(self, monkeypatch):
@@ -1300,6 +1300,61 @@ class TestListToolsRestAPI:
         assert captured["server_arg"] is stub_server
         assert result["tools"] == ["tool-x"]
         assert result["error"] is None
+
+    async def test_duplicate_alias_returns_ambiguous(self, monkeypatch):
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        west = MCPServer(
+            server_id="west-id",
+            name="github",
+            alias="github",
+            server_name="github-west",
+            transport=MCPTransport.sse,
+            available_on_public_internet=True,
+        )
+        central = MCPServer(
+            server_id="central-id",
+            name="github",
+            alias="github",
+            server_name="github-central",
+            transport=MCPTransport.sse,
+            available_on_public_internet=True,
+        )
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["west-id", "central-id"]
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_registry",
+            lambda: {"west-id": west, "central-id": central},
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "filter_server_ids_by_ip_with_info",
+            lambda server_ids, client_ip: (server_ids, 0),
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.list_tool_rest_api(
+                request,
+                server_id="github",
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.detail["error"] == "ambiguous_mcp_server"
 
     async def test_name_not_in_allowed_returns_access_denied(self, monkeypatch):
         """When name resolves to a server whose UUID is NOT in allowed_server_ids,

@@ -32,6 +32,7 @@ from mcp.types import (
 from mcp.types import Tool as MCPTool
 
 from litellm.constants import MCP_METADATA_TIMEOUT
+from litellm.proxy._experimental.mcp_server import mcp_server_manager as manager_module
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _deserialize_json_dict,
@@ -7694,6 +7695,72 @@ class TestMCPServerManagerExpandPermissionList:
 
         assert usw1.expand_permission_list(["a"]) == ["hash-usw1"]
         assert usc1.expand_permission_list(["a"]) == ["hash-usc1"]
+
+
+class TestMCPServerManagerReferenceResolution:
+    def _make_server(
+        self,
+        server_id: str,
+        *,
+        alias: str | None = None,
+        server_name: str | None = None,
+        name: str | None = None,
+    ) -> MCPServer:
+        return MCPServer(
+            server_id=server_id,
+            name=name or alias or server_name or server_id,
+            alias=alias,
+            server_name=server_name,
+            url=f"https://{server_id}.example.com",
+            transport=MCPTransport.http,
+        )
+
+    def test_permission_resolution_expands_all_alias_matches(self):
+        manager = MCPServerManager()
+        manager.config_mcp_servers["west-id"] = self._make_server("west-id", alias="github")
+        manager.registry["central-id"] = self._make_server("central-id", alias="github")
+
+        result = manager.resolve_permission_reference("github")
+
+        assert isinstance(result, manager_module.Resolved)
+        assert {server.server_id for server in result.value} == {"west-id", "central-id"}
+        assert manager.get_mcp_server_by_name("github") is None
+
+    def test_single_target_resolution_distinguishes_all_outcomes(self):
+        manager = MCPServerManager()
+        manager.config_mcp_servers["west-id"] = self._make_server("west-id", alias="github")
+        manager.registry["central-id"] = self._make_server("central-id", alias="github")
+
+        ambiguous = manager.resolve_single_target("github", allowed_server_ids={"west-id", "central-id"})
+        resolved = manager.resolve_single_target("github", allowed_server_ids={"central-id"})
+        forbidden = manager.resolve_single_target("github", allowed_server_ids=set())
+        not_found = manager.resolve_single_target("missing", allowed_server_ids={"west-id", "central-id"})
+
+        assert isinstance(ambiguous, manager_module.Ambiguous)
+        assert {server.server_id for server in ambiguous.candidates} == {"west-id", "central-id"}
+        assert isinstance(resolved, manager_module.Resolved)
+        assert resolved.value.server_id == "central-id"
+        assert isinstance(forbidden, manager_module.Forbidden)
+        assert isinstance(not_found, manager_module.NotFound)
+
+    def test_forbidden_exact_id_does_not_fall_through_to_matching_alias(self):
+        manager = MCPServerManager()
+        manager.config_mcp_servers["west-id"] = self._make_server("west-id", alias="west")
+        manager.registry["central-id"] = self._make_server("central-id", alias="west-id")
+
+        result = manager.resolve_single_target("west-id", allowed_server_ids={"central-id"})
+
+        assert isinstance(result, manager_module.Forbidden)
+
+    def test_alias_match_precedes_server_name_match(self):
+        manager = MCPServerManager()
+        manager.config_mcp_servers["alias-id"] = self._make_server("alias-id", alias="github")
+        manager.registry["name-id"] = self._make_server("name-id", server_name="github")
+
+        result = manager.resolve_permission_reference("github")
+
+        assert isinstance(result, manager_module.Resolved)
+        assert tuple(server.server_id for server in result.value) == ("alias-id",)
 
 
 class TestMCPServerManagerExpandToolPermissions:

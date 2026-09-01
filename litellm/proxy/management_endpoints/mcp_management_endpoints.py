@@ -22,7 +22,7 @@ import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
 
 from fastapi import (
     APIRouter,
@@ -162,6 +162,11 @@ if MCP_AVAILABLE:
         resolve_ephemeral_dcr_client,
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        Ambiguous,
+        Forbidden,
+        NotFound,
+        Resolved,
+        SingleTargetResolution,
         global_mcp_server_manager,
     )
     from litellm.proxy._experimental.mcp_server.ui_session_utils import (
@@ -1922,43 +1927,59 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth,
         request: Request | None = None,
     ) -> MCPServer:
-        server = await get_cached_temporary_mcp_server(server_id)
-        resolved_from_temp_cache: Final = server is not None
-        if server is None:
-            # Fall back to real DB/config server (e.g. for the user-side OAuth flow
-            # which calls these endpoints with a real server_id, not a temp session id).
-            from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+        temporary_server: Final = await get_cached_temporary_mcp_server(server_id)
+        is_admin: Final = _user_has_admin_view(user_api_key_dict)
+        if temporary_server is not None:
+            if is_admin:
+                return temporary_server
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": f"Access denied to MCP server {server_id}"},
+            )
 
-            client_ip: Final = IPAddressUtils.get_mcp_client_ip(request) if request else None
-            server = global_mcp_server_manager.get_mcp_server_by_id(
-                server_id
-            ) or global_mcp_server_manager.get_mcp_server_by_name(server_id, client_ip=client_ip)
-        if server is None:
+        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+
+        client_ip: Final = IPAddressUtils.get_mcp_client_ip(request) if request else None
+        auth_contexts: Final = () if is_admin else tuple(await build_effective_auth_contexts(user_api_key_dict))
+        allowed_by_context: Final[tuple[list[str], ...]] = tuple(
+            [await global_mcp_server_manager.get_allowed_mcp_servers(auth_context) for auth_context in auth_contexts]
+        )
+        allowed_server_ids: Final[frozenset[str] | None] = (
+            None if is_admin else frozenset(server_id for server_ids in allowed_by_context for server_id in server_ids)
+        )
+
+        exact_server: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+        if exact_server is not None:
+            is_allowed: Final = allowed_server_ids is None or exact_server.server_id in allowed_server_ids
+            if is_allowed and global_mcp_server_manager.is_server_accessible_from_ip(exact_server, client_ip):
+                return exact_server
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": f"Access denied to MCP server {server_id}"},
+            )
+
+        resolution: Final[SingleTargetResolution] = global_mcp_server_manager.resolve_single_target(
+            server_id,
+            allowed_server_ids=allowed_server_ids,
+            client_ip=client_ip,
+        )
+        if isinstance(resolution, Resolved):
+            return cast(MCPServer, resolution.value)
+        if isinstance(resolution, NotFound):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"MCP server {server_id} not found"},
             )
-
-        # Per-server access policy mirrors `fetch_mcp_server`: admin-view
-        # callers are unrestricted; non-admins must have the server in their
-        # allowed-servers set. Temporary cached servers come from the
-        # admin-only `/server/oauth/session` setup flow and are not exposed
-        # to non-admins.
-        if not _user_has_admin_view(user_api_key_dict):
-            if resolved_from_temp_cache:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={"error": f"Access denied to MCP server {server_id}"},
-                )
-            allowed_server_ids: Final[set[str]] = set()
-            for auth_context in await build_effective_auth_contexts(user_api_key_dict):
-                allowed_server_ids.update(await global_mcp_server_manager.get_allowed_mcp_servers(auth_context))
-            if server.server_id not in allowed_server_ids:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={"error": f"Access denied to MCP server {server_id}"},
-                )
-        return server
+        if isinstance(resolution, Forbidden):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": f"Access denied to MCP server {server_id}"},
+            )
+        assert isinstance(resolution, Ambiguous)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": f"MCP server reference {server_id} is ambiguous"},
+        )
 
     @router.get(
         "/server/oauth/{server_id}/authorize",

@@ -2157,6 +2157,48 @@ class TestTemporaryMCPSessionEndpoints:
         mock_manager.get_allowed_mcp_servers.assert_awaited_once_with(non_admin)
 
     @pytest.mark.asyncio
+    async def test_get_cached_temporary_mcp_server_duplicate_alias_is_ambiguous(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _get_cached_temporary_mcp_server_or_404,
+        )
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        manager = MCPServerManager()
+        manager.config_mcp_servers["west-id"] = MCPServer(
+            server_id="west-id",
+            name="github",
+            alias="github",
+            server_name="github-west",
+            transport=MCPTransport.http,
+        )
+        manager.registry["central-id"] = MCPServer(
+            server_id="central-id",
+            name="github",
+            alias="github",
+            server_name="github-central",
+            transport=MCPTransport.http,
+        )
+        admin_auth = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_cached_temporary_mcp_server",
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                manager,
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _get_cached_temporary_mcp_server_or_404("github", admin_auth)
+
+        assert exc_info.value.status_code == 409
+
+    @pytest.mark.asyncio
     async def test_get_cached_temporary_mcp_server_non_admin_allowed(self):
         """Non-admin with the server in their allowed set gets the server."""
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (

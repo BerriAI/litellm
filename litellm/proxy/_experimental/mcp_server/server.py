@@ -15,7 +15,7 @@ import types
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -428,7 +428,11 @@ if MCP_AVAILABLE:
         outcome_wire_value,
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        Ambiguous,
+        Forbidden,
         MCPServerManager,
+        Resolved,
+        SingleTargetResolution,
         _caller_authorization_fans_out,
         _client_forwarded_authorization_headers,
         _resolve_openapi_tool_auth,
@@ -1398,32 +1402,64 @@ if MCP_AVAILABLE:
         """
 
         filtered_server: Final[dict[str, MCPServer]] = {}
+        allowed_server_ids: Final = frozenset(server.server_id for server in allowed_mcp_servers)
         # Filter servers based on mcp_servers parameter if provided
         if mcp_servers is not None:
             for server_or_group in mcp_servers:
-                server_name_matched = False
+                resolution: SingleTargetResolution = global_mcp_server_manager.resolve_single_target(
+                    server_or_group,
+                    allowed_server_ids=allowed_server_ids,
+                )
+                if isinstance(resolution, Resolved):
+                    resolved_server: MCPServer = cast(MCPServer, resolution.value)
+                    filtered_server[resolved_server.server_id] = resolved_server
+                    continue
+                elif isinstance(resolution, Ambiguous):
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "error": "ambiguous_mcp_server",
+                            "message": f"MCP server reference '{server_or_group}' matches multiple permitted servers",
+                        },
+                    )
+                elif isinstance(resolution, Forbidden):
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": "access_denied",
+                            "message": f"The key is not allowed to access server {server_or_group}",
+                        },
+                    )
+                prefix_matches = tuple(
+                    server
+                    for server in allowed_mcp_servers
+                    if server_or_group.lower()
+                    in tuple(prefix.lower() for prefix in iter_known_server_prefixes(server) if prefix)
+                )
+                if len(prefix_matches) > 1:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "error": "ambiguous_mcp_server",
+                            "message": f"MCP server reference '{server_or_group}' matches multiple permitted servers",
+                        },
+                    )
+                if prefix_matches:
+                    matched_server = prefix_matches[0]
+                    filtered_server[matched_server.server_id] = matched_server
+                    continue
 
-                for server in allowed_mcp_servers:
-                    if server:
-                        match_list = [s.lower() for s in iter_known_server_prefixes(server) if s]
-
-                        if server_or_group.lower() in match_list:
-                            filtered_server[server.server_id] = server
-                            server_name_matched = True
-                            break
-
-                if not server_name_matched:
-                    try:
-                        access_group_server_ids = await MCPRequestHandler._get_mcp_servers_from_access_groups(
-                            [server_or_group]
-                        )
-                        # Only include servers that the user has access to
-                        for server_id in access_group_server_ids:
-                            for server in allowed_mcp_servers:
-                                if server_id == server.server_id:
-                                    filtered_server[server.server_id] = server
-                    except Exception as e:
-                        verbose_logger.debug("Could not resolve '%s' as access group: %s", server_or_group, e)
+                try:
+                    access_group_server_ids = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                        [server_or_group]
+                    )
+                    # Only include servers that the user has access to
+                    for server_id in access_group_server_ids:
+                        for server in allowed_mcp_servers:
+                            if server_id == server.server_id:
+                                filtered_server[server.server_id] = server
+                except Exception as e:
+                    verbose_logger.debug("Could not resolve '%s' as access group: %s", server_or_group, e)
 
         if filtered_server:
             return list(filtered_server.values())

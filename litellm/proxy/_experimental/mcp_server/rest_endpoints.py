@@ -2,7 +2,7 @@ import asyncio
 import importlib
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -90,6 +90,11 @@ if MCP_AVAILABLE:
 
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
+        Ambiguous,
+        Forbidden,
+        NotFound,
+        Resolved,
+        SingleTargetResolution,
         global_mcp_server_manager,
     )
     from litellm.proxy._experimental.mcp_server.oauth_utils import (
@@ -411,24 +416,77 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: Final = mcp_request_handler_cls._get_mcp_server_auth_headers_from_headers(headers)
         return mcp_auth_header, mcp_server_auth_headers, raw_headers
 
-    def _resolve_mcp_server_id_for_rest(
+    def _raise_forbidden_rest_server(
+        server_id: str,
+        candidates: tuple[MCPServer, ...],
+        client_ip: str | None,
+    ) -> NoReturn:
+        if client_ip is not None and any(
+            not global_mcp_server_manager.is_server_accessible_from_ip(candidate, client_ip) for candidate in candidates
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "ip_filtering",
+                    "message": (
+                        f"MCP server '{server_id}' is not accessible from your IP address "
+                        f"({client_ip}). This server is restricted to internal "
+                        "networks only. To make it externally accessible, set "
+                        "'available_on_public_internet: true' in the server configuration."
+                    ),
+                },
+            )
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "access_denied",
+                "message": f"The key is not allowed to access server {server_id}",
+            },
+        )
+
+    def _resolve_single_rest_server(
         server_id: str,
         allowed_server_ids: set[str] | list[str],
         client_ip: str | None = None,
-    ) -> str:
-        """
-        Map REST ``server_id`` (UUID, server_name, or alias) to canonical server_id.
-
-        tools/list already did this; tools/call must match so clients can pass
-        server names like ``order_status_mcp`` instead of only UUIDs.
-        """
-        allowed: Final = set(allowed_server_ids)
-        if server_id in allowed:
-            return server_id
-        by_name: Final = global_mcp_server_manager.get_mcp_server_by_name(server_id, client_ip=client_ip)
-        if by_name is not None and by_name.server_id in allowed:
-            return by_name.server_id
-        return server_id
+    ) -> MCPServer:
+        allowed: Final = frozenset(allowed_server_ids)
+        exact_match: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+        if exact_match is not None:
+            if server_id in allowed and global_mcp_server_manager.is_server_accessible_from_ip(exact_match, client_ip):
+                return exact_match
+            _raise_forbidden_rest_server(server_id, (exact_match,), client_ip)
+        resolution: Final[SingleTargetResolution] = global_mcp_server_manager.resolve_single_target(
+            server_id,
+            allowed_server_ids=allowed,
+            client_ip=client_ip,
+        )
+        if isinstance(resolution, Resolved):
+            return cast(MCPServer, resolution.value)
+        if isinstance(resolution, Ambiguous):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "ambiguous_mcp_server",
+                    "message": f"MCP server reference '{server_id}' matches multiple permitted servers",
+                },
+            )
+        if isinstance(resolution, NotFound):
+            name_match: Final = global_mcp_server_manager.get_mcp_server_by_name(server_id)
+            if name_match is not None:
+                if name_match.server_id in allowed and global_mcp_server_manager.is_server_accessible_from_ip(
+                    name_match, client_ip
+                ):
+                    return name_match
+                _raise_forbidden_rest_server(server_id, (name_match,), client_ip)
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "server_not_found",
+                    "message": f"MCP server '{server_id}' was not found",
+                },
+            )
+        assert isinstance(resolution, Forbidden)
+        _raise_forbidden_rest_server(server_id, resolution.candidates, client_ip)
 
     async def _resolve_allowed_mcp_servers_with_ip_filter(
         request: Request,
@@ -465,44 +523,11 @@ if MCP_AVAILABLE:
             global_mcp_server_manager.filter_server_ids_by_ip(list(allowed_server_ids_set), _rest_client_ip)
         )
 
-        canonical_server_id: Final = _resolve_mcp_server_id_for_rest(server_id, allowed_server_ids_set, _rest_client_ip)
-
-        if canonical_server_id not in allowed_server_ids_set:
-            _server: Final = global_mcp_server_manager.get_mcp_server_by_id(
-                server_id
-            ) or global_mcp_server_manager.get_mcp_server_by_name(server_id)
-            if (
-                _server is not None
-                and _rest_client_ip is not None
-                and not global_mcp_server_manager._is_server_accessible_from_ip(_server, _rest_client_ip)
-            ):
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "error": "ip_filtering",
-                        "message": (
-                            f"MCP server '{server_id}' is not accessible from your IP address "
-                            f"({_rest_client_ip}). This server is restricted to internal "
-                            "networks only. To make it externally accessible, set "
-                            "'available_on_public_internet: true' in the server configuration."
-                        ),
-                    },
-                )
-            if _server is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail={
-                        "error": "server_not_found",
-                        "message": f"MCP server '{server_id}' was not found",
-                    },
-                )
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "access_denied",
-                    "message": f"The key is not allowed to access server {server_id}",
-                },
-            )
+        target_server: Final = _resolve_single_rest_server(
+            server_id,
+            allowed_server_ids_set,
+            _rest_client_ip,
+        )
 
         # Build allowed_mcp_servers list (only include allowed servers)
         allowed_mcp_servers: Final[list[MCPServer]] = []
@@ -511,7 +536,7 @@ if MCP_AVAILABLE:
             if server is not None:
                 allowed_mcp_servers.append(server)
 
-        return allowed_mcp_servers, canonical_server_id
+        return allowed_mcp_servers, target_server.server_id
 
     async def _get_tools_for_single_server(
         server,
@@ -595,46 +620,7 @@ if MCP_AVAILABLE:
         apply_tool_filters: bool = True,
     ) -> dict:
         """Handle tool listing for a single server_id request."""
-        # Resolve a server name to its UUID if needed
-        _name_resolved = None
-        if server_id not in allowed_server_ids:
-            _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(server_id)
-            if _name_resolved is not None and _name_resolved.server_id in set(allowed_server_ids):
-                server_id = _name_resolved.server_id
-
-        if server_id not in allowed_server_ids:
-            _server: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id) or _name_resolved
-            if (
-                _server is not None
-                and rest_client_ip is not None
-                and not global_mcp_server_manager._is_server_accessible_from_ip(_server, rest_client_ip)
-            ):
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "error": "ip_filtering",
-                        "message": (
-                            f"MCP server '{server_id}' is not accessible from your IP address "
-                            f"({rest_client_ip}). This server is restricted to internal "
-                            "networks only. To make it externally accessible, set "
-                            "'available_on_public_internet: true' in the server configuration."
-                        ),
-                    },
-                )
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "access_denied",
-                    "message": f"The key is not allowed to access server {server_id}",
-                },
-            )
-        server: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-        if server is None:
-            return {
-                "tools": [],
-                "error": "server_not_found",
-                "message": f"Server with id {server_id} not found",
-            }
+        server: Final = _resolve_single_rest_server(server_id, allowed_server_ids, rest_client_ip)
 
         server_auth_header: Final = _get_server_auth_header(server, mcp_server_auth_headers, mcp_auth_header)
         user_oauth_extra_headers: Final = await _get_user_oauth_extra_headers(server, user_api_key_dict)

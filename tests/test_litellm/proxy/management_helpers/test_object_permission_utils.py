@@ -16,7 +16,6 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _extract_requested_mcp_access_groups,
     _extract_requested_mcp_server_ids,
     _resolve_team_allowed_mcp_servers,
-    _rewrite_object_permission_mcp_servers,
     _set_object_permission,
     enforce_all_proxy_mcp_servers_grant_is_admin_only,
     validate_key_mcp_servers_against_team,
@@ -151,12 +150,6 @@ def test_extract_requested_mcp_server_ids_none():
 def test_extract_requested_mcp_server_ids_excludes_no_mcp_servers_sentinel():
     obj_perm = {"mcp_servers": ["no-mcp-servers", "server-1"]}
     assert _extract_requested_mcp_server_ids(obj_perm) == {"server-1"}
-
-
-def test_rewrite_object_permission_mcp_servers_preserves_sentinel():
-    obj_perm = {"mcp_servers": ["no-mcp-servers", "alias-1"]}
-    _rewrite_object_permission_mcp_servers(obj_perm, {"alias-1": {"server-1"}})
-    assert obj_perm["mcp_servers"] == ["no-mcp-servers", "server-1"]
 
 
 @pytest.mark.asyncio
@@ -560,12 +553,12 @@ async def test_validate_tool_permissions_validated_against_team(
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_stale_mcp_server_ids_are_silently_dropped(
+async def test_validate_stale_mcp_server_ids_are_ignored_during_authorization(
     mock_access_groups, mock_allow_all
 ):
     """
     Stale MCP server IDs (servers deleted and no longer in the registry) must not
-    block a key save with a 403. They are silently stripped instead.
+    block a key save with a 403.
 
     Scenario: key/team were configured with S1+S2, those servers were deleted and
     replaced with S3+S4. The UI form still holds S1+S2 in its local state. Saving
@@ -592,20 +585,16 @@ async def test_validate_stale_mcp_server_ids_are_silently_dropped(
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_stale_ids_in_mcp_tool_permissions_silently_dropped(
+async def test_validate_stale_ids_in_mcp_tool_permissions_are_preserved(
     mock_access_groups, mock_allow_all
 ):
-    """
-    Stale server IDs referenced only as keys in mcp_tool_permissions (not in
-    mcp_servers) must also be silently stripped rather than raising a 403.
-    """
     team_obj = _make_team_obj(mcp_servers=["s3", "s4"])
     object_permission = {"mcp_tool_permissions": {"s1-stale": ["tool1"]}}
     await validate_key_mcp_servers_against_team(
         object_permission=object_permission,
         team_obj=team_obj,
     )  # Must not raise
-    assert object_permission["mcp_tool_permissions"] == {}
+    assert object_permission["mcp_tool_permissions"] == {"s1-stale": ["tool1"]}
 
 
 @pytest.mark.asyncio
@@ -622,7 +611,7 @@ async def test_validate_stale_ids_in_mcp_tool_permissions_silently_dropped(
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_stale_mcp_server_ids_are_removed_from_object_permission(
+async def test_validate_stale_mcp_server_ids_are_preserved_in_object_permission(
     mock_access_groups, mock_allow_all
 ):
     team_obj = _make_team_obj(mcp_servers=["s3", "s4"])
@@ -631,7 +620,7 @@ async def test_validate_stale_mcp_server_ids_are_removed_from_object_permission(
         object_permission=object_permission,
         team_obj=team_obj,
     )
-    assert object_permission["mcp_servers"] == []
+    assert object_permission["mcp_servers"] == ["s1-stale", "s2-stale"]
 
 
 @pytest.mark.asyncio
@@ -692,7 +681,7 @@ async def test_validate_mcp_server_alias_outside_team_scope_raises(
     new_callable=AsyncMock,
     return_value=[],
 )
-async def test_validate_mcp_server_alias_is_normalized_before_save(
+async def test_validate_mcp_server_alias_is_authorized_without_rewriting_storage(
     mock_access_groups, mock_allow_all
 ):
     team_obj = _make_team_obj(mcp_servers=["allowed-server-id"])
@@ -706,8 +695,67 @@ async def test_validate_mcp_server_alias_is_normalized_before_save(
         team_obj=team_obj,
     )
 
-    assert object_permission["mcp_servers"] == ["allowed-server-id"]
-    assert object_permission["mcp_tool_permissions"] == {"allowed-server-id": ["tool1"]}
+    assert object_permission["mcp_servers"] == ["allowed-alias"]
+    assert object_permission["mcp_tool_permissions"] == {
+        "Allowed Server": ["tool1"],
+        "stale-id": ["tool2"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_validate_explicit_server_id_does_not_expand_matching_alias(monkeypatch):
+    manager = _make_mock_mcp_manager(
+        servers=[
+            _make_mock_mcp_server("west-id", alias="west"),
+            _make_mock_mcp_server("central-id", alias="west-id"),
+        ],
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        manager,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+        lambda: set(),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+        AsyncMock(return_value=[]),
+    )
+    object_permission = {"mcp_servers": ["west-id"]}
+
+    result = await validate_key_mcp_servers_against_team(
+        object_permission=object_permission,
+        team_obj=_make_team_obj(mcp_servers=["west-id"]),
+    )
+
+    assert result == object_permission
+
+
+@pytest.mark.asyncio
+async def test_team_explicit_server_id_does_not_grant_matching_alias(monkeypatch):
+    manager = _make_mock_mcp_manager(
+        servers=[
+            _make_mock_mcp_server("west-id", alias="west"),
+            _make_mock_mcp_server("central-id", alias="west-id"),
+        ],
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        manager,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+        AsyncMock(return_value=[]),
+    )
+    team_permission = MagicMock(spec=LiteLLM_ObjectPermissionTable)
+    team_permission.mcp_servers = ["west-id"]
+    team_permission.mcp_access_groups = []
+    team_permission.mcp_tool_permissions = {}
+
+    result = await _resolve_team_allowed_mcp_servers(team_permission)
+
+    assert result == {"west-id"}
 
 
 @pytest.mark.asyncio

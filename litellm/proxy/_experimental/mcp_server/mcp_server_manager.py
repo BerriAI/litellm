@@ -13,10 +13,27 @@ import json
 import os
 import re
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Collection,
+    Mapping,
+    Sequence,
+)
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypedDict, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Generic,
+    Literal,
+    TypeAlias,
+    TypedDict,
+    TypeVar,
+    cast,
+)
 from urllib.parse import ParseResult, urlparse
 
 import anyio
@@ -271,6 +288,34 @@ _ToolParamMap: TypeAlias = dict[str, list[str]]
 _EnvVarList: TypeAlias = list[dict[str, object]]
 _InMemoryCacheDict: TypeAlias = dict[str, object]
 _ToolArguments: TypeAlias = dict[str, object]
+
+_ResolutionValue = TypeVar("_ResolutionValue", covariant=True)
+
+
+@dataclass(frozen=True, slots=True)
+class Resolved(Generic[_ResolutionValue]):
+    value: _ResolutionValue
+
+
+@dataclass(frozen=True, slots=True)
+class NotFound:
+    reference: str
+
+
+@dataclass(frozen=True, slots=True)
+class Forbidden:
+    reference: str
+    candidates: tuple[MCPServer, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Ambiguous:
+    reference: str
+    candidates: tuple[MCPServer, ...]
+
+
+PermissionResolution: TypeAlias = Resolved[tuple[MCPServer, ...]] | NotFound
+SingleTargetResolution: TypeAlias = Resolved[MCPServer] | NotFound | Forbidden | Ambiguous
 
 
 @dataclass(frozen=True, slots=True)
@@ -6067,6 +6112,9 @@ class MCPServerManager:
         internal_networks = IPAddressUtils.parse_internal_networks(general_settings.get("mcp_internal_ip_ranges"))
         return IPAddressUtils.is_internal_ip(client_ip, internal_networks)
 
+    def is_server_accessible_from_ip(self, server: MCPServer, client_ip: str | None) -> bool:
+        return self._is_server_accessible_from_ip(server, client_ip)
+
     def get_mcp_server_by_id(self, server_id: str) -> MCPServer | None:
         """
         Get the MCP Server from the server id
@@ -6112,9 +6160,9 @@ class MCPServerManager:
         Expand a permission list of server_ids/names/aliases into concrete
         server_ids against the current region's config + DB registry union.
 
-        Entries that match a server_id pass through unchanged. Entries that
-        match an alias/server_name/name are replaced with every matching
-        server_id (duplicate names grant access to all matches). Entries
+        Entries that match a server_id pass through unchanged. Otherwise the
+        first matching field wins in alias, server_name, name order, and every
+        server matching that field is included. Entries
         that resolve to nothing pass through as-is and a debug log is
         emitted so admins can diagnose stale/typo permission entries — the
         downstream access-check denies them when compared against the
@@ -6122,19 +6170,11 @@ class MCPServerManager:
         """
         if not identifiers:
             return []
-        registry: Final = self.get_registry()
         expanded: Final[set[str]] = set()
         for identifier in identifiers:
-            if identifier in registry:
-                expanded.add(identifier)
-                continue
-            matches: list[str] = [
-                server_id
-                for server_id, server in registry.items()
-                if server.alias == identifier or server.server_name == identifier or server.name == identifier
-            ]
-            if matches:
-                expanded.update(matches)
+            resolution = self.resolve_permission_reference(identifier)
+            if isinstance(resolution, Resolved):
+                expanded.update(server.server_id for server in resolution.value)
             else:
                 # %r quotes and escapes control chars so an admin-controlled
                 # identifier with newlines cannot forge log lines.
@@ -6146,6 +6186,51 @@ class MCPServerManager:
                 )
                 expanded.add(identifier)
         return list(expanded)
+
+    def _resolve_reference_candidates(
+        self,
+        reference: str,
+        *,
+        include_server_id: bool,
+    ) -> tuple[MCPServer, ...]:
+        servers: Final = tuple(self.get_registry().values())
+        if include_server_id:
+            exact_id_match: Final = self.get_mcp_server_by_id(reference)
+            if exact_id_match is not None:
+                return (exact_id_match,)
+        for attribute in ("alias", "server_name", "name"):
+            matches = tuple(server for server in servers if getattr(server, attribute) == reference)
+            if matches:
+                return matches
+        return ()
+
+    def resolve_permission_reference(self, reference: str) -> PermissionResolution:
+        candidates: Final = self._resolve_reference_candidates(reference, include_server_id=True)
+        if not candidates:
+            return NotFound(reference=reference)
+        return Resolved(value=candidates)
+
+    def resolve_single_target(
+        self,
+        reference: str,
+        allowed_server_ids: Collection[str] | None = None,
+        client_ip: str | None = None,
+    ) -> SingleTargetResolution:
+        permission_resolution: Final = self.resolve_permission_reference(reference)
+        if isinstance(permission_resolution, NotFound):
+            return permission_resolution
+        allowed: Final = frozenset(allowed_server_ids) if allowed_server_ids is not None else None
+        permitted: Final = tuple(
+            server
+            for server in permission_resolution.value
+            if (allowed is None or server.server_id in allowed)
+            and self._is_server_accessible_from_ip(server, client_ip)
+        )
+        if not permitted:
+            return Forbidden(reference=reference, candidates=permission_resolution.value)
+        if len(permitted) > 1:
+            return Ambiguous(reference=reference, candidates=permitted)
+        return Resolved(value=next(iter(permitted)))
 
     def expand_tool_permissions(
         self,
@@ -6180,31 +6265,18 @@ class MCPServerManager:
         2. Second pass: exact server_name match
         3. Third pass: exact name match (lowest priority)
 
+        Returns None when the highest-priority field has multiple accessible matches.
+
         Args:
             server_name: The server name to look up.
             client_ip: Optional client IP for access control. When provided,
                        non-public servers are hidden from external IPs.
         """
-        registry: Final = self.get_registry()
-        # Pass 1: Match by alias (highest priority)
-        for server in registry.values():
-            if server.alias == server_name:
-                if not self._is_server_accessible_from_ip(server, client_ip):
-                    return None
-                return server
-        # Pass 2: Match by server_name
-        for server in registry.values():
-            if server.server_name == server_name:
-                if not self._is_server_accessible_from_ip(server, client_ip):
-                    return None
-                return server
-        # Pass 3: Match by name (lowest priority)
-        for server in registry.values():
-            if server.name == server_name:
-                if not self._is_server_accessible_from_ip(server, client_ip):
-                    return None
-                return server
-        return None
+        candidates: Final = self._resolve_reference_candidates(server_name, include_server_id=False)
+        accessible: Final = tuple(
+            server for server in candidates if self._is_server_accessible_from_ip(server, client_ip)
+        )
+        return accessible[0] if len(accessible) == 1 else None
 
     def get_filtered_registry(self, client_ip: str | None = None) -> dict[str, MCPServer]:
         """

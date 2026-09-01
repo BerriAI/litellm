@@ -6,7 +6,7 @@ organizations, teams, and keys.
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Final, Optional, Protocol, cast
 
 from fastapi import HTTPException, status
 
@@ -205,24 +205,29 @@ async def _set_object_permission(
     return data_json
 
 
-def _dedupe_preserving_order(values: list[str]) -> list[str]:
-    seen: Final[set[str]] = set()
-    result: Final[list[str]] = []
-    for value in values:
-        if value in seen:
-            continue
-        seen.add(value)
-        result.append(value)
-    return result
+class _MCPServerReference(Protocol):
+    @property
+    def server_id(self) -> str: ...
+
+    @property
+    def alias(self) -> str | None: ...
+
+    @property
+    def server_name(self) -> str | None: ...
+
+    @property
+    def name(self) -> str | None: ...
 
 
-def _mcp_server_identifier_matches(server: Any, identifier: str) -> bool:
-    return identifier in {
-        getattr(server, "server_id", None),
-        getattr(server, "alias", None),
-        getattr(server, "server_name", None),
-        getattr(server, "name", None),
-    }
+def _resolve_identifier_from_servers(servers: Sequence[object], identifier: str) -> set[str]:
+    references: Final = tuple(cast(_MCPServerReference, server) for server in servers)
+    matches_by_precedence: Final = (
+        {server.server_id for server in references if server.server_id == identifier},
+        {server.server_id for server in references if server.alias == identifier},
+        {server.server_id for server in references if server.server_name == identifier},
+        {server.server_id for server in references if server.name == identifier},
+    )
+    return next((matches for matches in matches_by_precedence if matches), set[str]())
 
 
 async def _get_db_mcp_servers_by_identifiers(
@@ -262,83 +267,15 @@ async def _resolve_mcp_server_identifiers_to_ids(
         global_mcp_server_manager,
     )
 
-    resolved: Final[dict[str, set[str]]] = {identifier: set() for identifier in identifiers}
-
-    for server in await _get_db_mcp_servers_by_identifiers(
-        identifiers=identifiers,
-        prisma_client=prisma_client,
-    ):
-        server_id = getattr(server, "server_id", None)
-        if not server_id:
-            continue
-        for identifier in identifiers:
-            if _mcp_server_identifier_matches(server, identifier):
-                resolved[identifier].add(server_id)
-
-    for registry_key, server in global_mcp_server_manager.get_registry().items():
-        server_id = getattr(server, "server_id", None) or registry_key
-        if not server_id:
-            continue
-        for identifier in identifiers:
-            if identifier == registry_key or _mcp_server_identifier_matches(server, identifier):
-                resolved[identifier].add(server_id)
-
-    return resolved
-
-
-def _rewrite_object_permission_mcp_servers(
-    object_permission: ObjectPermissionDict,
-    identifier_to_server_ids: dict[str, set[str]],
-) -> None:
-    mcp_servers: Final = object_permission.get("mcp_servers")
-    if not isinstance(mcp_servers, list):
-        return
-
-    normalized_servers: Final[list[str]] = []
-    for identifier in mcp_servers:
-        if identifier == SpecialMCPServerNames.no_mcp_servers.value:
-            normalized_servers.append(SpecialMCPServerNames.no_mcp_servers.value)
-            continue
-        normalized_servers.extend(sorted(identifier_to_server_ids.get(identifier, [])))
-    object_permission["mcp_servers"] = _dedupe_preserving_order(normalized_servers)
-
-
-def _rewrite_object_permission_mcp_tool_permissions(
-    object_permission: ObjectPermissionDict,
-    identifier_to_server_ids: dict[str, set[str]],
-) -> None:
-    mcp_tool_permissions: Final = object_permission.get("mcp_tool_permissions")
-    if not isinstance(mcp_tool_permissions, dict):
-        return
-
-    normalized_tool_permissions: Final[dict[str, list[str]]] = {}
-    for identifier, tools in mcp_tool_permissions.items():
-        if not isinstance(tools, list):
-            tools = []
-        for server_id in sorted(identifier_to_server_ids.get(identifier, [])):
-            normalized_tool_permissions.setdefault(server_id, [])
-            normalized_tool_permissions[server_id].extend(tools)
-
-    object_permission["mcp_tool_permissions"] = {
-        server_id: _dedupe_preserving_order(tools) for server_id, tools in normalized_tool_permissions.items()
-    }
-
-
-def _rewrite_object_permission_mcp_identifiers(
-    object_permission: ObjectPermissionDict | None,
-    identifier_to_server_ids: dict[str, set[str]],
-) -> None:
-    if not object_permission or not isinstance(object_permission, dict):
-        return
-
-    _rewrite_object_permission_mcp_servers(
-        object_permission=object_permission,
-        identifier_to_server_ids=identifier_to_server_ids,
+    db_servers: Final[Sequence[object]] = cast(
+        Sequence[object],
+        await _get_db_mcp_servers_by_identifiers(
+            identifiers=identifiers,
+            prisma_client=prisma_client,
+        ),
     )
-    _rewrite_object_permission_mcp_tool_permissions(
-        object_permission=object_permission,
-        identifier_to_server_ids=identifier_to_server_ids,
-    )
+    all_servers: Final = tuple(db_servers) + tuple(global_mcp_server_manager.get_registry().values())
+    return {identifier: _resolve_identifier_from_servers(all_servers, identifier) for identifier in identifiers}
 
 
 def _flatten_resolved_mcp_server_ids(
@@ -615,10 +552,6 @@ async def validate_key_mcp_servers_against_team(
                 "validate_key_mcp_servers_against_team: ignoring stale MCP server identifiers (no longer in registry or DB): %s",
                 sorted(stale_identifiers),
             )
-        _rewrite_object_permission_mcp_identifiers(
-            object_permission=object_permission,
-            identifier_to_server_ids=identifier_to_server_ids,
-        )
         active_requested_servers: Final = _flatten_resolved_mcp_server_ids(identifier_to_server_ids)
 
         allowed_servers = all_allowed_servers
