@@ -164,6 +164,19 @@ _CAPS_NONE: FrozenSet[str] = frozenset()
 
 ANTHROPIC_DIRECT_MODELS: Tuple[ModelEntry, ...] = (
     ModelEntry(
+        alias="claude-fable-5-1",
+        model="anthropic/claude-fable-5-1",
+        mode="adaptive",
+        required_env=_ANTHROPIC_REQ,
+        caps=_CAPS_XHIGH_MAX,
+        fail_reason=(
+            "claude-fable-5-1 access on the CI Anthropic account is not yet "
+            "confirmed for this brand-new release; Anthropic returns "
+            "not_found_error until the account has access, so this cell stays "
+            "loud in CI. Remove this fail_reason once access is confirmed."
+        ),
+    ),
+    ModelEntry(
         alias="claude-fable-5",
         model="anthropic/claude-fable-5",
         mode="adaptive",
@@ -223,6 +236,19 @@ ANTHROPIC_DIRECT_MODELS: Tuple[ModelEntry, ...] = (
 
 AZURE_AI_MODELS: Tuple[ModelEntry, ...] = (
     ModelEntry(
+        alias="azure-claude-fable-5-1",
+        model="azure_ai/claude-fable-5-1",
+        mode="adaptive",
+        required_env=_AZURE_FOUNDRY_REQ,
+        caps=_CAPS_XHIGH_MAX,
+        fail_reason=(
+            "claude-fable-5-1 has no deployment on the CI Microsoft Foundry "
+            "resource yet, so Foundry returns DeploymentNotFound and this cell "
+            "stays loud in CI. Remove this fail_reason once the deployment "
+            "exists."
+        ),
+    ),
+    ModelEntry(
         alias="azure-claude-fable-5",
         model="azure_ai/claude-fable-5",
         mode="adaptive",
@@ -268,6 +294,20 @@ AZURE_AI_MODELS: Tuple[ModelEntry, ...] = (
 
 
 VERTEX_AI_MODELS: Tuple[ModelEntry, ...] = (
+    ModelEntry(
+        alias="vertex-claude-fable-5-1",
+        model="vertex_ai/claude-fable-5-1",
+        mode="adaptive",
+        extra_params=(("vertex_location", "global"),),
+        required_env=_VERTEX_REQ,
+        caps=_CAPS_XHIGH_MAX,
+        fail_reason=(
+            "claude-fable-5-1 availability on the CI Vertex project is not yet "
+            "confirmed for this brand-new release, so this cell stays loud in "
+            "CI until verified. Remove this fail_reason once the model is "
+            "confirmed available on the global Vertex endpoint."
+        ),
+    ),
     ModelEntry(
         alias="vertex-claude-fable-5",
         model="vertex_ai/claude-fable-5",
@@ -332,6 +372,22 @@ VERTEX_AI_MODELS: Tuple[ModelEntry, ...] = (
 
 
 BEDROCK_CONVERSE_MODELS: Tuple[ModelEntry, ...] = (
+    ModelEntry(
+        alias="bedrock-claude-fable-5-1",
+        model="bedrock/converse/us.anthropic.claude-fable-5-1",
+        mode="adaptive",
+        extra_params=(("aws_region_name", "us-east-1"),),
+        required_env=_BEDROCK_REQ,
+        caps=_CAPS_XHIGH_MAX,
+        bedrock_effort_ceiling="xhigh",
+        unavailable_error="is not available for this account",
+        fail_reason=(
+            "claude-fable-5-1 access on the CI Bedrock account is not yet "
+            "confirmed for this brand-new release, so this cell stays loud in "
+            "CI until verified. Remove this fail_reason once the model is "
+            "enabled for the account."
+        ),
+    ),
     ModelEntry(
         alias="bedrock-claude-fable-5",
         model="bedrock/converse/us.anthropic.claude-fable-5",
