@@ -6,6 +6,8 @@ import type { ObjectPermission } from "./object_permission_types";
 
 interface ObjectPermissionsViewProps {
   objectPermission?: ObjectPermission | null;
+  inheritedMcpServerIds?: string[];
+  inheritedAgentIds?: string[];
   variant?: "card" | "inline";
   className?: string;
   accessToken?: string | null;
@@ -13,6 +15,8 @@ interface ObjectPermissionsViewProps {
 
 export function ObjectPermissionsView({
   objectPermission,
+  inheritedMcpServerIds = [],
+  inheritedAgentIds = [],
   variant = "card",
   className = "",
   accessToken,
@@ -34,9 +38,15 @@ export function ObjectPermissionsView({
         mcpAccessGroups={mcpAccessGroups}
         mcpToolPermissions={mcpToolPermissions}
         mcpToolsets={mcpToolsets}
+        inheritedMcpServers={inheritedMcpServerIds}
         accessToken={accessToken}
       />
-      <AgentPermissions agents={agents} agentAccessGroups={agentAccessGroups} accessToken={accessToken} />
+      <AgentPermissions
+        agents={agents}
+        agentAccessGroups={agentAccessGroups}
+        inheritedAgents={inheritedAgentIds}
+        accessToken={accessToken}
+      />
       <div className="min-w-0 rounded-md border border-border p-4">
         <p className="text-sm font-medium text-foreground">Search tools</p>
         {searchTools.length === 0 ? (

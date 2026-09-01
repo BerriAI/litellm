@@ -14,16 +14,26 @@ interface Agent {
 interface AgentPermissionsProps {
   agents: string[];
   agentAccessGroups?: string[];
+  inheritedAgents?: string[];
   accessToken?: string | null;
 }
 
-export function AgentPermissions({ agents, agentAccessGroups = [], accessToken }: AgentPermissionsProps) {
+const INHERITED_AGENT_TOOLTIP = "Granted through one of the team's access groups";
+
+export function AgentPermissions({
+  agents,
+  agentAccessGroups = [],
+  inheritedAgents = [],
+  accessToken,
+}: AgentPermissionsProps) {
   const [agentDetails, setAgentDetails] = useState<Agent[]>([]);
+  const inheritedOnlyAgents = inheritedAgents.filter((agent) => !agents.includes(agent));
+  const agentIdCount = agents.length + inheritedOnlyAgents.length;
 
   // Fetch agent details when component mounts
   useEffect(() => {
     const fetchAgentDetails = async () => {
-      if (accessToken && agents.length > 0) {
+      if (accessToken && agentIdCount > 0) {
         try {
           const response = await getAgentsList(accessToken);
           if (response && response.agents && Array.isArray(response.agents)) {
@@ -35,7 +45,7 @@ export function AgentPermissions({ agents, agentAccessGroups = [], accessToken }
       }
     };
     fetchAgentDetails();
-  }, [accessToken, agents.length]);
+  }, [accessToken, agentIdCount]);
 
   // Function to get display name for agent
   const getAgentDisplayName = (agentId: string) => {
@@ -47,10 +57,11 @@ export function AgentPermissions({ agents, agentAccessGroups = [], accessToken }
     return agentId;
   };
 
-  // Merge agents and access groups into one list
+  // Merge agents, inherited agents and access groups into one list
   const mergedItems = [
-    ...agents.map((agent) => ({ type: "agent", value: agent })),
-    ...agentAccessGroups.map((group) => ({ type: "accessGroup", value: group })),
+    ...agents.map((agent) => ({ type: "agent", value: agent, inherited: false })),
+    ...inheritedOnlyAgents.map((agent) => ({ type: "agent", value: agent, inherited: true })),
+    ...agentAccessGroups.map((group) => ({ type: "accessGroup", value: group, inherited: false })),
   ];
   const totalCount = mergedItems.length;
 
@@ -76,8 +87,17 @@ export function AgentPermissions({ agents, agentAccessGroups = [], accessToken }
                           <span className="text-sm font-medium text-foreground truncate">
                             {getAgentDisplayName(item.value)}
                           </span>
+                          {item.inherited && (
+                            <span className="ml-1 px-1.5 py-0.5 text-[9px] font-semibold text-purple-600 bg-purple-50 border border-purple-200 rounded-sm uppercase tracking-wide shrink-0 dark:text-purple-300 dark:bg-purple-950 dark:border-purple-800">
+                              Inherited
+                            </span>
+                          )}
                         </TooltipTrigger>
-                        <TooltipContent>{`Full ID: ${item.value}`}</TooltipContent>
+                        <TooltipContent>
+                          {item.inherited
+                            ? `${INHERITED_AGENT_TOOLTIP}. Full ID: ${item.value}`
+                            : `Full ID: ${item.value}`}
+                        </TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
                   ) : (

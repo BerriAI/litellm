@@ -1033,7 +1033,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             </div>
           </Card>
 
-          <ObjectPermissionsView objectPermission={info.object_permission} variant="card" accessToken={accessToken} />
+          <ObjectPermissionsView
+            objectPermission={info.object_permission}
+            inheritedMcpServerIds={info.access_group_mcp_server_ids}
+            inheritedAgentIds={info.access_group_agent_ids}
+            variant="card"
+            accessToken={accessToken}
+          />
 
           <Card className="block p-6">
             <GuardrailSettingsView
@@ -1883,6 +1889,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
               <ObjectPermissionsView
                 objectPermission={info.object_permission}
+                inheritedMcpServerIds={info.access_group_mcp_server_ids}
+                inheritedAgentIds={info.access_group_agent_ids}
                 variant="inline"
                 className="pt-4 border-t border-border"
                 accessToken={accessToken}
