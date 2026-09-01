@@ -2897,9 +2897,10 @@ async def ui_view_request_response_for_request_id(
         )
         if payload is not None:
             if not caller_is_admin and prisma_client is not None:
-                await _assert_user_can_view_request_id(
+                await _assert_user_owns_cold_storage_payload(
                     prisma_client=prisma_client,
                     user_api_key_dict=user_api_key_dict,
+                    payload=cast(Mapping[str, object], payload),  # cast-ok: custom-logger payload is untyped
                     request_id=request_id,
                 )
             return payload
@@ -4345,6 +4346,13 @@ async def _user_can_view_spend_log_owner(
     return False
 
 
+def _spend_log_forbidden(request_id: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"error": f"Not authorized to view spend log for request_id={request_id}"},
+    )
+
+
 async def _assert_user_can_view_request_id(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
@@ -4360,10 +4368,7 @@ async def _assert_user_can_view_request_id(
     owners: Final = await _find_spend_log_owners(prisma_client, request_id)
     for owner in owners:
         if not await _user_can_view_spend_log_owner(prisma_client, user_api_key_dict, owner["user"], owner["team_id"]):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={"error": f"Not authorized to view spend log for request_id={request_id}"},
-            )
+            raise _spend_log_forbidden(request_id)
 
 
 def _fetched_row_owner(row: Mapping[str, object]) -> tuple[str | None, str | None]:
@@ -4390,10 +4395,39 @@ async def _assert_user_owns_fetched_spend_rows(
     """
     for user, team_id in frozenset(_fetched_row_owner(row) for row in rows):
         if not await _user_can_view_spend_log_owner(prisma_client, user_api_key_dict, user, team_id):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={"error": f"Not authorized to view spend log for request_id={request_id}"},
-            )
+            raise _spend_log_forbidden(request_id)
+
+
+def _cold_storage_payload_owner(payload: Mapping[str, object]) -> tuple[str | None, str | None]:
+    metadata: Final = payload.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return (None, None)
+    owner: Final = cast(Mapping[str, object], metadata)  # cast-ok: cold-storage JSON is untyped
+    user: Final = owner.get("user_api_key_user_id")
+    team_id: Final = owner.get("user_api_key_team_id")
+    return (
+        user if isinstance(user, str) else None,
+        team_id if isinstance(team_id, str) else None,
+    )
+
+
+async def _assert_user_owns_cold_storage_payload(
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    payload: Mapping[str, object],
+    request_id: str,
+) -> None:
+    """
+    Authorize a cold-storage payload against the owner recorded inside it.
+    The custom logger reads the payload straight from cold storage, written
+    independently of the spend-log table and able to outlive its row, so a
+    request_id lookup could otherwise hand back another tenant's stored payload
+    when no row exists for the pre-check to catch. Verifying the payload's own
+    owner closes that gap, and a payload that records no owner fails closed.
+    """
+    owner_user, owner_team_id = _cold_storage_payload_owner(payload)
+    if not await _user_can_view_spend_log_owner(prisma_client, user_api_key_dict, owner_user, owner_team_id):
+        raise _spend_log_forbidden(request_id)
 
 
 async def _get_permitted_team_ids_for_spend_logs(
