@@ -2480,6 +2480,15 @@ class TestMaxIdleConnectionLifetimeDefault:
         query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
         assert query["max_idle_connection_lifetime"] == ["300"]
 
+    def test_url_pinned_value_wins_over_config_key(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {"database_max_idle_connection_lifetime": 45}),
+            database_url="postgresql://t:t@localhost:5432/t?max_idle_connection_lifetime=300",
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        assert query["max_idle_connection_lifetime"] == ["300"]
+
     def test_config_key_overrides_default(self, tmp_path):
         captured = _run_server_and_capture_urls(
             self._config(tmp_path, {"database_max_idle_connection_lifetime": 45}),
@@ -2526,21 +2535,11 @@ class TestMaxIdleConnectionLifetimeDefault:
         query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
         assert query["max_idle_connection_lifetime"] == ["45"]
 
-    def test_build_db_connection_url_params_includes_configured_lifetime(self):
-        from litellm.proxy.proxy_cli import _build_db_connection_url_params
+    def test_idle_lifetime_params_prefers_configured_value(self):
+        from litellm.proxy.db.db_url_settings import idle_lifetime_params
 
-        params = _build_db_connection_url_params(
-            connection_limit=10,
-            pool_timeout=60,
-            max_idle_connection_lifetime=45,
-        )
-        assert params["max_idle_connection_lifetime"] == 45
-
-    def test_build_db_connection_url_params_omits_lifetime_when_unset(self):
-        from litellm.proxy.proxy_cli import _build_db_connection_url_params
-
-        params = _build_db_connection_url_params(connection_limit=10, pool_timeout=60)
-        assert "max_idle_connection_lifetime" not in params
+        assert dict(idle_lifetime_params(45)) == {"max_idle_connection_lifetime": 45}
+        assert dict(idle_lifetime_params(None)) == {"max_idle_connection_lifetime": 60}
 
 
 class TestTokenAuthCliFlags:

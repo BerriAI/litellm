@@ -63,7 +63,6 @@ def _build_db_connection_url_params(
     pool_timeout: float | None,
     connect_timeout: float | None = None,
     socket_timeout: float | None = None,
-    max_idle_connection_lifetime: float | None = None,
     disable_prepared_statements: bool = False,
     extra_params: dict | None = None,
 ) -> dict:
@@ -87,8 +86,6 @@ def _build_db_connection_url_params(
         params["connect_timeout"] = connect_timeout
     if socket_timeout is not None:
         params["socket_timeout"] = socket_timeout
-    if max_idle_connection_lifetime is not None:
-        params["max_idle_connection_lifetime"] = max_idle_connection_lifetime
     if disable_prepared_statements:
         params["pgbouncer"] = "true"
     if extra_params:
@@ -1227,8 +1224,8 @@ def run_server(
 
         if os.getenv("DATABASE_URL", None) is not None or os.getenv("DIRECT_URL", None) is not None:
             from litellm.proxy.db.db_url_settings import (
-                IDLE_LIFETIME_DEFAULT_PARAMS,
                 add_missing_query_params,
+                idle_lifetime_params,
                 reader_shareable_params,
                 unsupported_db_scheme,
                 unsupported_db_scheme_message,
@@ -1254,9 +1251,11 @@ def run_server(
                     pool_timeout=db_connection_timeout,
                     connect_timeout=db_connect_timeout,
                     socket_timeout=db_socket_timeout,
-                    max_idle_connection_lifetime=general_settings.get("database_max_idle_connection_lifetime"),
                     disable_prepared_statements=db_disable_prepared_statements,
                     extra_params=db_extra_connection_params,
+                )
+                lifetime_params: Final = idle_lifetime_params(
+                    general_settings.get("database_max_idle_connection_lifetime")
                 )
                 if os.getenv("DATABASE_URL", None) is not None:
                     database_url = get_secret("DATABASE_URL", default_value=None)
@@ -1275,11 +1274,11 @@ def run_server(
                         writer_url,
                         connection_url_params,
                     )
-                    os.environ["DATABASE_URL"] = add_missing_query_params(modified_url, IDLE_LIFETIME_DEFAULT_PARAMS)
+                    os.environ["DATABASE_URL"] = add_missing_query_params(modified_url, lifetime_params)
                 if os.getenv("DIRECT_URL", None) is not None:
                     database_url = os.getenv("DIRECT_URL")
                     modified_url = append_query_params(database_url, connection_url_params)
-                    os.environ["DIRECT_URL"] = add_missing_query_params(modified_url, IDLE_LIFETIME_DEFAULT_PARAMS)
+                    os.environ["DIRECT_URL"] = add_missing_query_params(modified_url, lifetime_params)
                 # The reader pool is a real pool against the same configured cap, so it
                 # gets the allowlisted pool params. Schema-affecting ones, including any
                 # the operator smuggled in through database_extra_connection_params, stay
@@ -1299,7 +1298,7 @@ def run_server(
                             else read_replica_url,
                             reader_shareable_params(connection_url_params),
                         ),
-                        IDLE_LIFETIME_DEFAULT_PARAMS,
+                        lifetime_params,
                     )
                 subprocess.run(["prisma"], capture_output=True)
                 is_prisma_runnable = True

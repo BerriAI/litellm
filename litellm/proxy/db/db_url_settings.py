@@ -96,6 +96,17 @@ IDLE_LIFETIME_DEFAULT_PARAMS: Final[Mapping[str, int]] = MappingProxyType(
 )
 
 
+def idle_lifetime_params(configured: float | None) -> Mapping[str, str | int | float]:
+    """The `max_idle_connection_lifetime` to add to URLs that do not pin one.
+
+    Applied via ``add_missing_query_params`` so a URL-pinned value always wins,
+    whether the operator configured `database_max_idle_connection_lifetime` or not.
+    """
+    if configured is None:
+        return IDLE_LIFETIME_DEFAULT_PARAMS
+    return MappingProxyType({"max_idle_connection_lifetime": configured})
+
+
 def add_missing_query_params(url: str, params: Mapping[str, str | int | float]) -> str:
     """Return ``url`` with the ``params`` it does not already carry appended.
 
