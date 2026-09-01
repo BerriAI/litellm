@@ -5248,6 +5248,7 @@ def completion(
             prompt_label=kwargs.get("prompt_label", None),
             prompt_version=kwargs.get("prompt_version", None),
             request_kwargs=kwargs,
+            tools=tools,
         )
 
     ### LITELLM SYSTEM PROMPT ###

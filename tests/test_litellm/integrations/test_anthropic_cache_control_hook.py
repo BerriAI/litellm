@@ -2923,3 +2923,218 @@ class TestRecordGatewayInjection:
             custom_llm_provider="anthropic",
         )
         assert self.KEY not in kwargs["litellm_metadata"]
+
+
+def _marked_tool_anthropic_shape():
+    """Anthropic shape: cache_control at the top level of the tool."""
+    return {
+        "type": "function",
+        "function": {"name": "search", "parameters": {}},
+        "cache_control": {"type": "ephemeral"},
+    }
+
+
+def _marked_tool_openai_shape():
+    """OpenAI shape: cache_control nested under `function`."""
+    return {
+        "type": "function",
+        "function": {
+            "name": "search",
+            "parameters": {},
+            "cache_control": {"type": "ephemeral"},
+        },
+    }
+
+
+def _three_client_marked_system_messages() -> List[AllMessageValues]:
+    messages: List[AllMessageValues] = [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"System block {i}",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+        for i in range(3)
+    ]
+    messages.append({"role": "user", "content": "hello"})
+    return messages
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [_marked_tool_anthropic_shape(), _marked_tool_openai_shape()],
+    ids=["anthropic_shape", "openai_shape"],
+)
+def test_chat_path_reserves_slots_for_client_marked_tools(tool):
+    """A cache_control the client put on a tool counts toward Anthropic's cap.
+
+    The /v1/messages census already counts tools; the chat/completions census did
+    not, so three client marks in messages plus one marked tool was read as 3 of
+    4 and an injection point still applied, sending 5 blocks. Reachable when an
+    Anthropic model is routed through an OpenAI-shaped provider.
+    """
+    hook = AnthropicCacheControlHook()
+
+    _, processed, _ = hook.get_chat_completion_prompt(
+        model="openrouter/anthropic/claude-opus-4-6",
+        messages=_three_client_marked_system_messages(),
+        non_default_params={
+            "cache_control_injection_points": _build_injection_points(),
+            "tools": [tool],
+        },
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    message_blocks = _count_cache_control(processed)
+    assert message_blocks == 3, "The marked tool must consume the fourth slot"
+    assert message_blocks + 1 <= 4, "Total breakpoints must stay within Anthropic's cap"
+
+
+def test_chat_path_counts_tools_passed_as_argument():
+    """The async entry point receives `tools` separately from non_default_params."""
+    hook = AnthropicCacheControlHook()
+
+    _, processed, _ = hook.get_chat_completion_prompt(
+        model="openrouter/anthropic/claude-opus-4-6",
+        messages=_three_client_marked_system_messages(),
+        non_default_params={"cache_control_injection_points": _build_injection_points()},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+        tools=[_marked_tool_anthropic_shape()],
+    )
+
+    assert _count_cache_control(processed) == 3
+
+
+def test_chat_path_unmarked_tools_do_not_consume_slots():
+    """Only client-marked tools reserve a slot; plain tools must not throttle injection."""
+    hook = AnthropicCacheControlHook()
+    unmarked_tool = {"type": "function", "function": {"name": "search", "parameters": {}}}
+
+    _, processed, _ = hook.get_chat_completion_prompt(
+        model="openrouter/anthropic/claude-opus-4-6",
+        messages=_three_client_marked_system_messages(),
+        non_default_params={
+            "cache_control_injection_points": _build_injection_points(),
+            "tools": [unmarked_tool],
+        },
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assert _count_cache_control(processed) == 4, "Nothing reserved, so the cap is still 4"
+
+
+def test_count_tool_cache_breakpoints_counts_both_shapes():
+    count = AnthropicCacheControlHook.count_tool_cache_breakpoints(
+        [
+            _marked_tool_anthropic_shape(),
+            _marked_tool_openai_shape(),
+            {"type": "function", "function": {"name": "plain", "parameters": {}}},
+            "not-a-dict",
+        ]
+    )
+    assert count == 2
+    assert AnthropicCacheControlHook.count_tool_cache_breakpoints(None) == 0
+
+
+def test_sync_dispatch_forwards_tools_to_the_census():
+    """The census must see tools on the synchronous path too.
+
+    completion() strips `tools` from non_default_params (it is a standard OpenAI
+    param, and get_non_default_completion_params keeps only the non-default ones),
+    so the sync dispatch has to pass it separately the way the async one does.
+    Without that, a client-marked tool is invisible here and injection can still
+    push the request past the cap.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="openrouter/anthropic/claude-opus-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+
+    _, processed, _ = logging_obj.get_chat_completion_prompt(
+        model="openrouter/anthropic/claude-opus-4-6",
+        messages=_three_client_marked_system_messages(),
+        non_default_params={"cache_control_injection_points": _build_injection_points()},
+        prompt_variables=None,
+        prompt_id=None,
+        prompt_management_logger=AnthropicCacheControlHook(),
+        tools=[_marked_tool_anthropic_shape()],
+    )
+
+    assert _count_cache_control(processed) == 3, "The marked tool must consume the fourth slot"
+
+
+def test_completion_strips_tools_from_non_default_params():
+    """Guards the reason the parameter is needed: tools never survives in non_default_params."""
+    from litellm.utils import get_non_default_completion_params
+
+    non_default = get_non_default_completion_params(
+        kwargs={"model": "gpt-4o", "tools": [_marked_tool_anthropic_shape()]}
+    )
+    assert "tools" not in non_default
+
+
+def test_sync_dispatch_does_not_hand_tools_to_other_prompt_managers():
+    """Only the cache-control hook declares `tools` on the sync signature.
+
+    The sync dispatch resolves any registered prompt manager, and the others take
+    the base signature, so forwarding tools to all of them would raise TypeError
+    on every non-Anthropic prompt-managed request.
+    """
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    class _PromptManagerWithoutTools(CustomLogger):
+        def get_chat_completion_prompt(
+            self,
+            model,
+            messages,
+            non_default_params,
+            prompt_id,
+            prompt_variables,
+            dynamic_callback_params,
+            prompt_spec=None,
+            prompt_label=None,
+            prompt_version=None,
+            ignore_prompt_manager_model=False,
+            ignore_prompt_manager_optional_params=False,
+        ):
+            return model, messages, non_default_params
+
+    logging_obj = Logging(
+        model="openrouter/anthropic/claude-opus-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="test-call-id-2",
+        function_id="test-function-id-2",
+    )
+
+    _, processed, _ = logging_obj.get_chat_completion_prompt(
+        model="openrouter/anthropic/claude-opus-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        non_default_params={},
+        prompt_variables=None,
+        prompt_id=None,
+        prompt_management_logger=_PromptManagerWithoutTools(),
+        tools=[_marked_tool_anthropic_shape()],
+    )
+
+    assert processed == [{"role": "user", "content": "hello"}]

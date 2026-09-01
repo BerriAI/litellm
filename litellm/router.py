@@ -4002,6 +4002,7 @@ class Router:
             prompt_variables=prompt_variables,
             prompt_label=prompt_label,
             request_kwargs=kwargs,
+            tools=cast(list[dict] | None, kwargs.get("tools")),  # cast-ok: read from untyped router kwargs
         )
 
         # Filter out prompt management specific parameters from data before merging

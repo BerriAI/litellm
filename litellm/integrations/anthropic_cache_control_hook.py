@@ -127,6 +127,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
+        tools: list[dict] | None = None,
     ) -> tuple[str, list[AllMessageValues], dict]:
         """
         Apply cache control directives based on specified injection points.
@@ -184,9 +185,15 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             if carry_unmatched
             else tuple(message_points)
         )
+        # Client-marked tools are breakpoints the provider counts too, so they
+        # consume slots here exactly as they do on the /v1/messages path, which
+        # stands down entirely when a tool is marked. Gated on the Anthropic
+        # dialect like the tool_config reservation above, since the four-block
+        # cap is Anthropic's.
+        request_tools: Final = tools if tools is not None else non_default_params.get("tools")
         reserved_blocks: Final = (
             1 if not openai_dialect and any(p.get("location") == "tool_config" for p in remaining_points) else 0
-        )
+        ) + (0 if openai_dialect else AnthropicCacheControlHook.count_tool_cache_breakpoints(request_tools))
         breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(processed_messages)
         processed_messages = self._apply_message_injections(
             points=applied_message_points,
@@ -593,16 +600,28 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         """
         if AnthropicCacheControlHook.count_request_cache_breakpoints(messages, system) > 0:
             return True
-        if tools is not None:
-            return any(
-                isinstance(tool, dict)
-                and (
-                    tool.get("cache_control") is not None
-                    or (isinstance(tool.get("function"), dict) and tool["function"].get("cache_control") is not None)
-                )
-                for tool in tools
+        return AnthropicCacheControlHook.count_tool_cache_breakpoints(tools) > 0
+
+    @staticmethod
+    def count_tool_cache_breakpoints(tools: Iterable[object] | None) -> int:
+        """Count client-supplied cache_control marks on tool definitions.
+
+        Tools carry the mark either at the top level (Anthropic shape) or nested
+        under ``function`` (OpenAI shape); the Anthropic chat transform accepts
+        both. These count toward the provider's four-block limit exactly like
+        message-level breakpoints do.
+        """
+        if tools is None:
+            return 0
+        return sum(
+            1
+            for tool in tools
+            if isinstance(tool, dict)
+            and (
+                tool.get("cache_control") is not None
+                or (isinstance(tool.get("function"), dict) and tool["function"].get("cache_control") is not None)
             )
-        return False
+        )
 
     @staticmethod
     def get_default_injection_points(
@@ -951,6 +970,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             prompt_variables=prompt_variables,
             dynamic_callback_params=dynamic_callback_params,
             prompt_spec=prompt_spec,
+            tools=tools,
             prompt_label=prompt_label,
             prompt_version=prompt_version,
             ignore_prompt_manager_model=ignore_prompt_manager_model,
