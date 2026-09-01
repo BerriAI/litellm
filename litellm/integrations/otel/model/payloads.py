@@ -62,6 +62,14 @@ if TYPE_CHECKING:
 # --- typed sub-structures ---------------------------------------------------- #
 
 
+def _cache_token_value(*values: object) -> int | None:
+    parsed: Final[tuple[int | None, ...]] = tuple(as_int(value) for value in values)
+    return next(
+        (value for value in parsed if value),
+        next((value for value in parsed if value is not None), None),
+    )
+
+
 @dataclass(frozen=True)
 class LLMRequestParams:
     temperature: float | None = None
@@ -104,12 +112,30 @@ class LLMUsage:
         metadata: Final[Mapping[str, object]] = payload.get("metadata") or {}
         raw_usage: Final = metadata.get("usage_object")
         usage_object: Final[Mapping[str, object]] = raw_usage if isinstance(raw_usage, Mapping) else {}
+        raw_details: Final = usage_object.get("prompt_tokens_details")
+        prompt_details: Final[Mapping[str, object]] = raw_details if isinstance(raw_details, Mapping) else {}
+        cache_creation_top_level: Final = as_int(usage_object.get("cache_creation_input_tokens"))
+        cache_creation_write: Final = as_int(prompt_details.get("cache_write_tokens"))
+        cache_creation_alias: Final = as_int(prompt_details.get("cache_creation_tokens"))
+        cache_creation_provider: Final = as_int(prompt_details.get("cache_creation_input_tokens"))
+        cache_read_top_level: Final = as_int(usage_object.get("cache_read_input_tokens"))
+        cache_read_details: Final = as_int(prompt_details.get("cached_tokens"))
+        cache_read_provider: Final = as_int(usage_object.get("prompt_cache_hit_tokens"))
         return cls(
             input_tokens=as_int(payload.get("prompt_tokens")),
             output_tokens=as_int(payload.get("completion_tokens")),
             total_tokens=as_int(payload.get("total_tokens")),
-            cache_creation_input_tokens=as_int(usage_object.get("cache_creation_input_tokens")),
-            cache_read_input_tokens=as_int(usage_object.get("cache_read_input_tokens")),
+            cache_creation_input_tokens=_cache_token_value(
+                cache_creation_top_level,
+                cache_creation_write,
+                cache_creation_alias,
+                cache_creation_provider,
+            ),
+            cache_read_input_tokens=_cache_token_value(
+                cache_read_top_level,
+                cache_read_details,
+                cache_read_provider,
+            ),
         )
 
 
