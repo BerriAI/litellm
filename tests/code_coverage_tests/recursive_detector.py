@@ -63,6 +63,7 @@ IGNORE_FUNCTIONS = [
     "json_unrewritable_labels",  # max depth set (MAX_STRUCTURED_CONTENT_SCAN_DEPTH); returns the None sentinel at the cap so the caller blocks.
     "_flatten_form_field",  # bounded by the nesting depth of the already-parsed request body (a finite JSON tree, no cycles possible).
     "_flatten_form_data_field",  # bounded by the nesting depth of the already-parsed request body (a finite JSON tree, no cycles possible).
+    "_json_safe",  # max depth set (_MAX_DEPTH) plus a seen-ids cycle guard for self-referential input.
 ]
 
 

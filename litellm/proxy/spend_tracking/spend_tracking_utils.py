@@ -1,10 +1,10 @@
 import os
 import re
 import secrets
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from datetime import datetime as dt
-from typing import Any, Final, Literal, cast
+from typing import Final, Literal, Protocol, cast, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -30,7 +30,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     request_model_access_groups_from_litellm_params,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
-from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
+from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload, SpendLogsRouterMetadata
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
@@ -93,6 +93,24 @@ def _redact_logged_api_key(value: str | None, *, already_redacted: bool = False)
     return hash_token(stripped)
 
 
+def _get_router_metadata_for_spend_log(
+    metadata: Mapping[str, object] | None,
+    requested_model: str | None,
+    selected_model: str | None,
+    selected_provider: str | None,
+    router_correlation_id: str | None,
+) -> SpendLogsRouterMetadata | None:
+    model_info: Final = metadata.get("model_info") if metadata is not None else None
+    if not isinstance(model_info, Mapping) or model_info.get("internal_router_model") is not True:
+        return None
+    return SpendLogsRouterMetadata(
+        requested_model=requested_model or None,
+        selected_model=selected_model or None,
+        selected_provider=selected_provider or None,
+        router_correlation_id=router_correlation_id,
+    )
+
+
 def _get_spend_logs_metadata(
     metadata: dict | None,
     applied_guardrails: list[str] | None = None,
@@ -109,6 +127,7 @@ def _get_spend_logs_metadata(
     cost_breakdown: CostBreakdown | None = None,
     litellm_call_id: str | None = None,
     autorouter_savings: float | None = None,
+    router_metadata: SpendLogsRouterMetadata | None = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -148,13 +167,17 @@ def _get_spend_logs_metadata(
             autorouter_savings=autorouter_savings,
             litellm_gateway_injected_cache=None,
             litellm_call_id=litellm_call_id,
+            router_metadata=router_metadata,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: " + str(list(metadata.keys()))
     )
 
     # Filter the metadata dictionary to include only the specified keys
-    clean_metadata: Final = SpendLogsMetadata(**{key: metadata.get(key) for key in SpendLogsMetadata.__annotations__})
+    clean_metadata: Final = SpendLogsMetadata(
+        **{key: metadata.get(key) for key in SpendLogsMetadata.__annotations__ if key != "router_metadata"},
+        router_metadata=router_metadata,
+    )
     _raw_key: Final = clean_metadata.get("user_api_key")
     _trusted_hash: Final = metadata.get("user_api_key_hash")
     _already_redacted: Final = (
@@ -199,7 +222,28 @@ def get_spend_logs_id(call_type: str, response_obj: dict, kwargs: dict) -> str |
     return resolved_id
 
 
-def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> dict:
+_MISSING_ATTRIBUTE: Final = object()
+
+
+def _attribute_or_missing(source: object, name: str) -> object:
+    return getattr(source, name, _MISSING_ATTRIBUTE)
+
+
+@runtime_checkable
+class _ModelDumpable(Protocol):
+    def model_dump(self) -> object: ...
+
+
+def _dumped_usage_info(usage_info: object) -> object:
+    if isinstance(usage_info, _ModelDumpable):
+        return usage_info.model_dump()
+    instance_dict: Final = _attribute_or_missing(usage_info, "__dict__")
+    if instance_dict is not _MISSING_ATTRIBUTE:
+        return instance_dict
+    return usage_info
+
+
+def _extract_usage_for_ocr_call(response_obj: object, response_obj_dict: dict) -> dict:
     """
     Extract usage information for OCR/AOCR calls.
 
@@ -220,12 +264,10 @@ def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> d
         usage_info = response_obj_dict.get("usage_info")
 
     # Try to extract usage_info from object attributes if not found in dict
-    if not usage_info and hasattr(response_obj, "usage_info"):
-        usage_info = response_obj.usage_info
-        if hasattr(usage_info, "model_dump"):
-            usage_info = usage_info.model_dump()
-        elif hasattr(usage_info, "__dict__"):
-            usage_info = vars(usage_info)
+    if not usage_info:
+        attribute_usage_info: Final = _attribute_or_missing(response_obj, "usage_info")
+        if attribute_usage_info is not _MISSING_ATTRIBUTE:
+            usage_info = _dumped_usage_info(attribute_usage_info)
 
     # For OCR, we track pages instead of tokens
     if usage_info is not None:
@@ -375,6 +417,20 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         hidden_params: Final = standard_logging_payload.get("hidden_params", {})
         litellm_overhead_time_ms = hidden_params.get("litellm_overhead_time_ms")
 
+    custom_llm_provider: Final = (
+        kwargs.get("custom_llm_provider")
+        or _sl_attribution_fallback(standard_logging_payload, "custom_llm_provider")
+        or None
+    )
+    raw_model: Final = cast(str, kwargs.get("model") or "")
+    model_name: Final = (
+        standard_logging_payload.get("model") if standard_logging_payload is not None else None
+    ) or reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
+    litellm_call_id: Final = cast(
+        str | None,
+        kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
+    )
+
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
         metadata,
@@ -433,9 +489,13 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         autorouter_savings=(
             standard_logging_payload.get("autorouter_savings", None) if standard_logging_payload is not None else None
         ),
-        litellm_call_id=cast(
-            str | None,
-            kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
+        litellm_call_id=litellm_call_id,
+        router_metadata=_get_router_metadata_for_spend_log(
+            metadata=metadata,
+            requested_model=_model_group,
+            selected_model=model_name,
+            selected_provider=custom_llm_provider,
+            router_correlation_id=litellm_call_id,
         ),
     )
 
@@ -480,15 +540,6 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
 
     # Extract agent_id for A2A requests (set directly on model_call_details)
     agent_id: Final[str | None] = kwargs.get("agent_id") or metadata.get("agent_id")
-    custom_llm_provider: Final = (
-        kwargs.get("custom_llm_provider")
-        or _sl_attribution_fallback(standard_logging_payload, "custom_llm_provider")
-        or None
-    )
-    raw_model: Final = cast(str, kwargs.get("model") or "")
-    model_name: Final = (
-        standard_logging_payload.get("model") if standard_logging_payload is not None else None
-    ) or reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
 
     try:
         payload: Final[SpendLogsPayload] = SpendLogsPayload(
@@ -588,6 +639,14 @@ def _ensure_datetime_utc(timestamp: datetime) -> datetime:
     return timestamp
 
 
+async def _query_raw_rows(
+    prisma_client: PrismaClient,
+    sql_query: str,
+    *args: object,
+) -> Sequence[Mapping[str, object]] | None:
+    return await prisma_client.db.query_raw(sql_query, *args)
+
+
 async def get_spend_by_team(
     start_date: dt,
     end_date: dt,
@@ -649,7 +708,7 @@ async def get_spend_by_team(
             group_by_day;
     """
 
-    db_response: Final = await prisma_client.db.query_raw(sql_query, start_date, end_date, team_id)
+    db_response: Final = await _query_raw_rows(prisma_client, sql_query, start_date, end_date, team_id)
     if db_response is None:
         return []
 
@@ -724,7 +783,7 @@ async def get_spend_by_team_and_customer(
             group_by_day;
     """
 
-    db_response: Final = await prisma_client.db.query_raw(sql_query, start_date, end_date, team_id, customer_id)
+    db_response: Final = await _query_raw_rows(prisma_client, sql_query, start_date, end_date, team_id, customer_id)
     if db_response is None:
         return []
 
@@ -779,7 +838,7 @@ def _sanitize_request_body_for_spend_logs_payload(
         return {}
     visited.add(obj_id)
 
-    def _sanitize_value(value: Any) -> Any:
+    def _sanitize_value(value: object) -> object:
         if isinstance(value, dict):
             return _sanitize_request_body_for_spend_logs_payload(value, visited, max_string_length_prompt_in_db)
         elif isinstance(value, list):
@@ -1074,7 +1133,7 @@ def _sanitize_error_information_for_spend_logs(
     return cast(StandardLoggingPayloadErrorInformation, sanitized)
 
 
-def _convert_to_json_serializable_dict(obj: Any, visited: set | None = None, max_depth: int = 20) -> Any:
+def _convert_to_json_serializable_dict(obj: object, visited: set[int] | None = None, max_depth: int = 20) -> object:
     """
     Convert object to JSON-serializable dict, handling Pydantic models safely.
 
@@ -1128,6 +1187,13 @@ def _convert_to_json_serializable_dict(obj: Any, visited: set | None = None, max
             visited.remove(obj_id)
 
 
+def _convert_mapping_to_json_serializable(obj: Mapping[str, object]) -> dict[str, object]:
+    converted: Final = _convert_to_json_serializable_dict(obj)
+    if isinstance(converted, dict):
+        return converted
+    return dict(obj)
+
+
 def _get_proxy_server_request_for_spend_logs_payload(
     metadata: dict,
     litellm_params: dict,
@@ -1164,7 +1230,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
 
                 # If redaction is enabled, convert to serializable dict before redacting
                 if should_redact_message_logging(model_call_details=model_call_details):
-                    _request_body = _convert_to_json_serializable_dict(_request_body)
+                    _request_body = _convert_mapping_to_json_serializable(_request_body)
                     perform_redaction(model_call_details=_request_body, result=None)
 
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
@@ -1209,7 +1275,7 @@ def _get_response_for_spend_logs_payload(
     if payload is None:
         return "{}"
     if _should_store_prompts_and_responses_in_spend_logs():
-        response_obj: Any = payload.get("response")
+        response_obj: object = payload.get("response")
         if response_obj is None:
             return "{}"
 

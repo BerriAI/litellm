@@ -5740,3 +5740,52 @@ async def test_responses_api_failed_stream_scans_delta_text_before_replay():
     assert "Hello world" in scan_payloads[0]
     assert len(yielded) == len(stream_events)
     assert all(emitted is original for emitted, original in zip(yielded, stream_events))
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_debug_log_masks_signed_request_headers():
+    import logging
+
+    from litellm._logging import verbose_proxy_logger
+
+    session_token = "FakeSessionTokenValueThatMustNeverAppearInLogs1234567890"
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        aws_access_key_id="ASIAFAKEACCESSKEYID1",
+        aws_secret_access_key="fakeSecretAccessKeyForSigning",
+        aws_session_token=session_token,
+        aws_region_name="us-east-1",
+    )
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "outputs": []}
+
+    captured_records: list[logging.LogRecord] = []
+
+    class _RecordingHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured_records.append(record)
+
+    handler = _RecordingHandler(level=logging.DEBUG)
+    previous_level = verbose_proxy_logger.level
+    verbose_proxy_logger.addHandler(handler)
+    verbose_proxy_logger.setLevel(logging.DEBUG)
+    try:
+        with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_response
+            await guardrail.make_bedrock_api_request(
+                source="INPUT",
+                messages=[{"role": "user", "content": "hello"}],
+                request_data={},
+            )
+    finally:
+        verbose_proxy_logger.removeHandler(handler)
+        verbose_proxy_logger.setLevel(previous_level)
+
+    rendered_messages = [record.getMessage() for record in captured_records]
+    header_lines = [message for message in rendered_messages if "headers:" in message]
+    assert header_lines, "expected the signed-request debug line to be logged"
+    assert any("X-Amz-Security-Token" in message for message in header_lines)
+    assert all(session_token not in message for message in rendered_messages)
