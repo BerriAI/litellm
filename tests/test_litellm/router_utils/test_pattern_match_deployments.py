@@ -53,6 +53,20 @@ def test_get_pattern_bare_provider_name_never_matches_that_providers_wildcard(mo
     assert router.get_pattern("github_copilot") is None
 
 
+def test_get_pattern_missing_model_returns_none(monkeypatch):
+    """Regression: a request without a model reaches the auth layer's pattern walk as ``None``; the
+    declared-provider guard raised ``TypeError`` where the old inline resolve swallowed every
+    resolver error, so the proxy's missing-model 400 became a crash."""
+
+    def _unknown_provider(model, *args, **kwargs):
+        raise ValueError(f"unknown provider for {model}")
+
+    monkeypatch.setattr(pattern_match_deployments, "get_llm_provider", _unknown_provider)
+    router = PatternMatchRouter()
+    router.add_pattern("openai/*", _wildcard_deployment("openai/*"))
+    assert router.get_pattern(None) is None
+
+
 def test_get_pattern_still_resolves_unqualified_names(monkeypatch):
     monkeypatch.setattr(
         pattern_match_deployments,

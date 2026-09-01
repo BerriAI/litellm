@@ -127,7 +127,7 @@ def handle_anthropic_text_model_custom_llm_provider(
     return model, custom_llm_provider
 
 
-def declared_authenticating_provider(model: str, custom_llm_provider: str | None = None) -> str | None:
+def declared_authenticating_provider(model: str | None, custom_llm_provider: str | None = None) -> str | None:
     """The authenticating provider this pair already names, or None.
 
     get_llm_provider runs the OAuth device flow for github_copilot and chatgpt, because their
@@ -135,7 +135,7 @@ def declared_authenticating_provider(model: str, custom_llm_provider: str | None
     and for a declared pair the resolver's answer is the declaration itself, so metadata callers
     adopt the declaration instead of resolving.
     """
-    declared: Final = custom_llm_provider or (model.split("/", 1)[0] if "/" in model else None)
+    declared: Final = custom_llm_provider or (model.split("/", 1)[0] if model and "/" in model else None)
     return declared if declared in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO else None
 
 
