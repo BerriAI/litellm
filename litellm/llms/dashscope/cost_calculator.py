@@ -110,7 +110,7 @@ def _calculate_completion_cost(
     return (breakdown.completion_tokens * output_cost) + (breakdown.reasoning_tokens * reasoning_cost)
 
 
-def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
+def cost_per_token(model: str, usage: Usage, custom_llm_provider: str = "dashscope") -> tuple[float, float]:
     """
     Calculate cost per token for Dashscope models.
 
@@ -119,11 +119,12 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     Args:
         model: Model name without provider prefix
         usage: LiteLLM Usage block
+        custom_llm_provider: The provider id the request resolved to; dashscope or one of its brand aliases
 
     Returns:
         Tuple[float, float] - (prompt_cost_in_usd, completion_cost_in_usd)
     """
-    model_info: Final = get_model_info(model=model, custom_llm_provider="dashscope")
+    model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     breakdown: Final = _extract_token_breakdown(usage)
     raw_tiers: Final = model_info.get("tiered_pricing")
     tiered_pricing: Final = raw_tiers if isinstance(raw_tiers, list) else None

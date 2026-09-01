@@ -263,6 +263,7 @@ from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.audio_utils.utils import resolve_speech_media_type
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
@@ -382,6 +383,8 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     end_user_cache_key,
     get_management_object_ttl,
+    model_access_group_cache_key,
+    model_access_group_spend_counter_key,
     tag_cache_key,
 )
 from litellm.proxy.config_resolvers import resolve_fields
@@ -395,6 +398,9 @@ from litellm.proxy.credential_endpoints.endpoints import router as credential_ro
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
     SPEND_LOG_CLEANUP_BOUND_SETTINGS,
     SpendLogCleanup,
+)
+from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
+    build_window_spend_transaction,
 )
 from litellm.proxy.db.exception_handler import (
     PrismaDBExceptionHandler,
@@ -1358,7 +1364,7 @@ _OPENAPI_HTTP_METHODS: Final = {
 # the UI. Kept here at module scope to match the analogous descriptor
 # `is_secret` flags in litellm.proxy.config_resolvers and the
 # `_CACHE_SENSITIVE_FIELDS` constant in the cache endpoint file.
-_ALERTING_SENSITIVE_VARS: Final[set[str]] = {"SLACK_WEBHOOK_URL", "SMTP_PASSWORD"}
+_ALERTING_SENSITIVE_VARS: Final[set[str]] = {"ALERTING_WEBHOOK_URL", "SLACK_WEBHOOK_URL", "SMTP_PASSWORD"}
 
 
 def _strip_operation_id_method_suffix(operation_id: str) -> str:
@@ -2431,6 +2437,7 @@ async def get_current_spend(
     max_budget: float | None = None,
     window_entity_type: str | None = None,
     window_entity_id: str | None = None,
+    window_duration: str | None = None,
     window_start: datetime | None = None,
     fallback_authoritative: bool = False,
 ) -> float:
@@ -2455,7 +2462,8 @@ async def get_current_spend(
     runs and a key can leak spend past ``max_budget`` indefinitely. The
     authoritative source depends on the counter: primary key/team/user/org
     counters read the DB row; per-window counters (``window_start`` supplied)
-    aggregate spend logs; end-user/tag counters have no DB row, so the caller's
+    read the maintained window-spend row and only aggregate spend logs when
+    that row is missing or stale; end-user/tag counters have no DB row, so the caller's
     ``fallback_spend`` (loaded fresh in auth) is authoritative. The DB read is
     skipped for healthy primary counters (counter at or above recorded spend)
     and cached in-process for a few seconds, so a persistently stale counter
@@ -2480,6 +2488,7 @@ async def get_current_spend(
             counter_key=counter_key,
             window_entity_type=window_entity_type,
             window_entity_id=window_entity_id,
+            window_duration=window_duration,
             window_start=window_start,
         )
         if authoritative is not None:
@@ -2561,6 +2570,7 @@ async def _authoritative_floor_spend(
     counter_key: str,
     window_entity_type: str | None = None,
     window_entity_id: str | None = None,
+    window_duration: str | None = None,
     window_start: datetime | None = None,
 ) -> float | None:
     marker_key: Final = f"spend_db_floor:{counter_key}"
@@ -2575,10 +2585,11 @@ async def _authoritative_floor_spend(
         and window_entity_id is not None
         and window_start is not None
     ):
-        db_spend = await SpendCounterReseed.window_from_spend_logs(
+        db_spend = await SpendCounterReseed.window_from_db(
             prisma_client=prisma_client,
             entity_type=window_entity_type,
             entity_id=window_entity_id,
+            window_duration=window_duration,
             window_start=window_start,
         )
     if db_spend is None:
@@ -2648,6 +2659,8 @@ async def increment_spend_counters(
     budget_reservation: dict | None = None,
     end_user_id: str | None = None,
     tags: list[str] | None = None,
+    request_started_at: datetime | None = None,
+    model_access_groups: Sequence[str] | None = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -2701,15 +2714,27 @@ async def increment_spend_counters(
             return
         for window in key_budget_limits:
             duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
+            key_window_reset_at = window.get("reset_at") if isinstance(window, dict) else window.reset_at
             key_window_counter = f"spend:key:{hashed_token}:window:{duration}"
+            key_window_start = get_budget_window_start(window)
             if key_window_counter not in reserved_counter_keys:
                 await _init_and_increment_window_spend_counter(
                     counter_key=key_window_counter,
                     entity_type="Key",
                     entity_id=hashed_token,
-                    window_start=get_budget_window_start(window),
+                    window_duration=duration,
+                    window_start=key_window_start,
                     increment=cost,
                 )
+            await _enqueue_window_spend_row_update(
+                entity_type=Litellm_EntityType.KEY,
+                entity_id=hashed_token,
+                reset_at=key_window_reset_at,
+                window_duration=duration,
+                window_start=key_window_start,
+                increment=cost,
+                request_started_at=request_started_at,
+            )
 
     async def _team_scope(scope_team_id: str) -> None:
         team_counter_key: Final = f"spend:team:{scope_team_id}"
@@ -2732,15 +2757,27 @@ async def increment_spend_counters(
             return
         for window in team_budget_limits:
             duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
+            team_window_reset_at = window.get("reset_at") if isinstance(window, dict) else window.reset_at
             team_window_counter = f"spend:team:{scope_team_id}:window:{duration}"
+            team_window_start = get_budget_window_start(window)
             if team_window_counter not in reserved_counter_keys:
                 await _init_and_increment_window_spend_counter(
                     counter_key=team_window_counter,
                     entity_type="Team",
                     entity_id=scope_team_id,
-                    window_start=get_budget_window_start(window),
+                    window_duration=duration,
+                    window_start=team_window_start,
                     increment=cost,
                 )
+            await _enqueue_window_spend_row_update(
+                entity_type=Litellm_EntityType.TEAM,
+                entity_id=scope_team_id,
+                reset_at=team_window_reset_at,
+                window_duration=duration,
+                window_start=team_window_start,
+                increment=cost,
+                request_started_at=request_started_at,
+            )
 
     async def _team_member_scope(scope_user_id: str, scope_team_id: str) -> None:
         team_member_counter_key: Final = f"spend:team_member:{scope_user_id}:{scope_team_id}"
@@ -2776,6 +2813,13 @@ async def increment_spend_counters(
                 reserved_counter_keys=reserved_counter_keys,
             )
             if end_user_id is not None or tags is not None
+            else None,
+            _increment_model_access_group_spend_counters(
+                model_access_groups=model_access_groups,
+                response_cost=cost,
+                reserved_counter_keys=reserved_counter_keys,
+            )
+            if model_access_groups
             else None,
             _increment_org_spend_counter(
                 org_id=org_id,
@@ -2865,6 +2909,33 @@ async def _increment_end_user_and_tag_spend_counters(
         )
 
 
+async def _increment_model_access_group_spend_counters(
+    model_access_groups: Sequence[object],
+    response_cost: float,
+    reserved_counter_keys: set[str],
+) -> None:
+    """Charge the model access groups that authorized this request.
+
+    Without this the counter auth reads is written only by the reservation path, so
+    ``disable_budget_reservation`` would leave ``_model_access_group_max_budget_check`` enforcing
+    against the DB row's spend, which lags by up to the cache TTL.
+
+    Typed ``object`` rather than ``str`` because the names reach the cost callback out of request
+    metadata, which the coercion upstream filters to a list but not to strings. A non-string that
+    slipped through would build a counter key nothing else ever reads.
+    """
+    unique_groups: Final = tuple(
+        dict.fromkeys(group for group in model_access_groups if group and isinstance(group, str))
+    )
+    for group in unique_groups:
+        await _init_and_increment_unreserved_spend_counter(
+            counter_key=model_access_group_spend_counter_key(group),
+            source_cache_key=model_access_group_cache_key(group),
+            increment=response_cost,
+            reserved_counter_keys=reserved_counter_keys,
+        )
+
+
 async def _increment_org_spend_counter(
     org_id: str | None,
     response_cost: float,
@@ -2925,10 +2996,60 @@ async def _init_and_increment_spend_counter(
     await _increment_spend_counter_cache(counter_key=counter_key, increment=increment)
 
 
+async def _enqueue_window_spend_row_update(
+    entity_type: Litellm_EntityType,
+    entity_id: str,
+    reset_at: datetime | str | None,
+    window_duration: str,
+    window_start: datetime | None,
+    increment: float,
+    request_started_at: datetime | None,
+) -> None:
+    """Queue this request's cost against the LiteLLM_BudgetWindowSpend row for
+    the window, so enforcement can read a maintained total instead of
+    aggregating LiteLLM_SpendLogs.
+
+    request_started_at is this request's LiteLLM_SpendLogs startTime; the flush
+    stops the one-time seed there so a request its increment already covers is
+    not counted twice.
+
+    Enqueued even when the cache increment was skipped for a reserved counter:
+    the reservation only pre-charged the counter, and the row still owes the
+    actual cost.
+
+    Windows with no reset_at slide with wall clock, so their window_start moves
+    on every request and no single row can represent them. Those are left to
+    the read path's LiteLLM_SpendLogs fallback rather than rewritten per
+    request.
+    """
+    if window_start is None or not reset_at:
+        return
+    try:
+        await proxy_logging_obj.db_spend_update_writer.window_spend_update_queue.add_update(
+            build_window_spend_transaction(
+                entity_type=entity_type.value,
+                entity_id=entity_id,
+                window_duration=window_duration,
+                window_start=window_start,
+                spend=increment,
+                started_at=request_started_at,
+            )
+        )
+    except Exception as e:  # noqa: BLE001  # spend tracking must never fail the cost callback
+        verbose_proxy_logger.debug(
+            "Unable to enqueue budget window spend update for %s=%s window=%s: %s",
+            entity_type.value,
+            entity_id,
+            window_duration,
+            e,
+        )
+
+
 async def _init_and_increment_window_spend_counter(
     counter_key: str,
     entity_type: str,
     entity_id: str,
+    window_duration: str | None,
     window_start: datetime | None,
     increment: float,
 ):
@@ -2943,6 +3064,7 @@ async def _init_and_increment_window_spend_counter(
         counter_key=counter_key,
         entity_type=entity_type,
         entity_id=entity_id,
+        window_duration=window_duration,
         window_start=window_start,
     )
     if initialized is False:
@@ -2988,6 +3110,7 @@ async def _ensure_window_spend_counter_initialized(
     counter_key: str,
     entity_type: str,
     entity_id: str,
+    window_duration: str | None,
     window_start: datetime,
 ) -> bool:
     is_warm: Final = await _is_spend_counter_cache_warm(counter_key=counter_key)
@@ -3000,6 +3123,7 @@ async def _ensure_window_spend_counter_initialized(
         counter_key=counter_key,
         entity_type=entity_type,
         entity_id=entity_id,
+        window_duration=window_duration,
         window_start=window_start,
     )
     if window_spend is None:
@@ -4281,6 +4405,8 @@ class ProxyConfig:
         self.config: dict[str, Any] = {}
         self._last_semantic_filter_config: dict[str, object] | None = None
         self._last_hashicorp_vault_config: dict[str, object] | None = None
+        self._last_cyberark_config: dict[str, object] | None = None  # mutable-ok: change-detection cache
+        self._cyberark_boot_env: dict[str, str | None] | None = None  # mutable-ok: deployment env snapshot, set once
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
         self.auth_cache_invalidation_subscriber: AuthCacheInvalidationSubscriber | None = None
@@ -6764,9 +6890,18 @@ class ProxyConfig:
         - list: the rows (may be empty if no models exist)
         - None: signals a DB fetch *failure* — callers must not treat this
           as "all models deleted" and must not evict existing router deployments.
+
+        Pinned to the writer DB: this read reconciles the router against the rows a
+        model write just committed, and reading it through a lagging read replica
+        makes the write-triggered reload report its own durable write as missing
+        (#38556). It also keeps a stale replica snapshot from evicting a deployment
+        another pod just added. While the writer is degraded the pin yields to the
+        replica so reader-only mode keeps loading DB-backed models.
         """
         try:
-            new_models: Final[Sequence[_ProxyModelRow]] = await ModelRepository(prisma_client).table.find_many()
+            new_models: Final[Sequence[_ProxyModelRow]] = await ModelRepository(
+                WriterPinnedClient(prisma_client.db)
+            ).table.find_many()
             return new_models
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -6968,6 +7103,7 @@ class ProxyConfig:
 
         if self._should_load_db_object(object_type="config_overrides"):
             await self._init_hashicorp_vault_config_override(prisma_client=prisma_client)
+            await self._init_cyberark_config_override(prisma_client=prisma_client)
 
         await self._apply_safe_litellm_settings_overrides_from_db(prisma_client=prisma_client)
 
@@ -7129,6 +7265,64 @@ class ProxyConfig:
         except Exception as e:
             verbose_proxy_logger.exception(
                 "Error loading Hashicorp Vault config override from DB: %s",
+                str(e),
+            )
+
+    async def _init_cyberark_config_override(self, prisma_client: PrismaClient) -> None:
+        """
+        Load CyberArk Conjur config override from DB.
+        Decrypts sensitive fields, sets CYBERARK_* env vars, and reinitializes the secret manager.
+        Called periodically via _init_non_llm_objects_in_db to sync config across pods.
+        """
+        from litellm.proxy.management_endpoints.config_override_endpoints import (
+            CYBERARK_ENV_VAR_MAPPING,
+            _clear_cyberark_state,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the endpoint module
+            _get_current_env_values,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the endpoint module
+            _parse_config_value,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the endpoint module
+            _set_env_vars,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the endpoint module
+            _snapshot_cyberark_boot_env,  # pyright: ignore[reportPrivateUsage]  # module-internal helper shared with the endpoint module
+        )
+
+        try:
+            db_record: Final[_ConfigOverridesRow | None] = cast(  # cast-ok: prisma Json stub is `str`, runtime dict
+                "_ConfigOverridesRow | None",
+                await call_with_db_reconnect_retry(
+                    prisma_client,
+                    lambda: ConfigOverridesRepository(prisma_client).table.find_unique(
+                        where={"config_type": "cyberark"}  # mutable-ok: prisma where clause
+                    ),
+                    reason="init_cyberark_config_override_lookup_failure",
+                ),
+            )
+
+            if db_record is None or db_record.config_value is None:
+                if self._last_cyberark_config is not None:
+                    _clear_cyberark_state(self)
+                return
+
+            config_data: Final = _parse_config_value(db_record.config_value)
+
+            # Skip reinit if config hasn't changed since last poll
+            if self._last_cyberark_config == config_data:
+                return
+
+            decrypted_data: Final = self._decrypt_db_variables(config_data)
+
+            _snapshot_cyberark_boot_env(self)
+            previous_env: Final = _get_current_env_values(CYBERARK_ENV_VAR_MAPPING)
+            _set_env_vars(decrypted_data, CYBERARK_ENV_VAR_MAPPING)
+
+            try:
+                self.initialize_secret_manager(key_management_system="cyberark")
+            except Exception:
+                _set_env_vars(previous_env, CYBERARK_ENV_VAR_MAPPING)
+                raise
+
+            self._last_cyberark_config = config_data.copy()
+            verbose_proxy_logger.debug("CyberArk config override loaded from DB")
+        except Exception as e:  # noqa: BLE001  # any DB/decrypt/init failure must not break proxy boot
+            verbose_proxy_logger.exception(
+                "Error loading CyberArk config override from DB: %s",
                 str(e),
             )
 
@@ -10868,15 +11062,14 @@ async def audio_speech(
         if callback_headers:
             custom_headers.update(callback_headers)
 
-        # Determine media type based on model type
-        media_type = "audio/mpeg"  # Default for OpenAI TTS
-        request_model: Final = data.get("model", "")
-        if request_model:
-            request_model_lower: Final = request_model.lower()
-            if "gemini" in request_model_lower and (
-                "tts" in request_model_lower or "preview-tts" in request_model_lower
-            ):
-                media_type = "audio/wav"  # Gemini TTS returns WAV format after conversion
+        requested_format: Final = data.get("response_format")
+        upstream_content_type: Final = (
+            response.response.headers.get("content-type") if isinstance(response, HttpxBinaryResponseContent) else None
+        )
+        media_type: Final = resolve_speech_media_type(
+            upstream_content_type=upstream_content_type,
+            response_format=requested_format if isinstance(requested_format, str) else None,
+        )
 
         return StreamingResponse(
             _audio_speech_chunk_generator(response),
@@ -10892,7 +11085,15 @@ async def audio_speech(
         )
         verbose_proxy_logger.error("litellm.proxy.proxy_server.audio_speech(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
-        raise e
+        if isinstance(e, (ProxyException, HTTPException)):
+            raise e
+        raise ProxyException(
+            message=getattr(e, "message", f"{e}"),
+            type=getattr(e, "type", "None"),
+            param=getattr(e, "param", "None"),
+            openai_code=getattr(e, "code", None),
+            code=getattr(e, "status_code", 500),
+        )
 
 
 @router.post(
@@ -12013,6 +12214,7 @@ async def run_thread(
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
@@ -12558,25 +12760,53 @@ async def get_all_team_models(
     return returned_team_models
 
 
+def _resolve_model_grant_to_deployment_ids(
+    models: Sequence[str],
+    llm_router: Router,
+) -> tuple[str, ...]:
+    """
+    Resolve a `models` grant (a user's or a key's) to the deployment ids it can call.
+
+    An empty grant and the 'all-proxy-models' sentinel both mean unrestricted at call
+    time (see `_check_model_access_helper`), so both expand to every non-team deployment.
+    A grant entry naming an access group also grants that group's members, and naming a
+    deployed model that shares the name grants the model itself, matching the union the
+    call-time check applies.
+    """
+    if not models or SpecialModelNames.all_proxy_models.value in models:
+        return tuple(llm_router.get_model_ids(exclude_team_models=True))
+
+    access_groups: Final = llm_router.get_model_access_groups()
+    granted_model_names: Final = tuple(name for model in models for name in (model, *access_groups.get(model, ())))
+    return tuple(
+        model_id
+        for name in granted_model_names
+        for deployment in (llm_router.get_model_list(model_name=name) or ())
+        if (model_id := deployment.get("model_info", {}).get("id", None)) is not None
+    )
+
+
 def get_direct_access_models(
     user_db_object: LiteLLM_UserTable,
     llm_router: Router,
-) -> list[str]:
+    key_models: Sequence[str] = (),
+) -> tuple[str, ...]:
     """
-    Get all models that user has direct access to.
+    Get all models the caller has direct (non-team) access to.
 
-    The 'all-proxy-models' sentinel grants direct access to every non-team
-    deployment, mirroring how get_key_models expands it for the key/team path.
+    Both the user record and the calling key are enforced at call time, so direct access
+    is the intersection of the two grants. An unrestricted key (empty grant, or the
+    'all-proxy-models' sentinel) leaves the user's grant untouched.
     """
-    if SpecialModelNames.all_proxy_models.value in user_db_object.models:
-        return llm_router.get_model_ids(exclude_team_models=True)
+    user_model_ids: Final = _resolve_model_grant_to_deployment_ids(
+        cast(Sequence[str], user_db_object.models),  # cast-ok: user.models is a String[] column
+        llm_router,
+    )
+    if not key_models or SpecialModelNames.all_proxy_models.value in key_models:
+        return user_model_ids
 
-    return [
-        model_id
-        for model in user_db_object.models
-        for deployment in (llm_router.get_model_list(model_name=model) or [])
-        if (model_id := deployment.get("model_info", {}).get("id", None)) is not None
-    ]
+    key_model_ids: Final = frozenset(_resolve_model_grant_to_deployment_ids(key_models, llm_router))
+    return tuple(model_id for model_id in user_model_ids if model_id in key_model_ids)
 
 
 def _filter_models_to_user_accessible(all_models: list[dict]) -> list[dict]:
@@ -12600,10 +12830,10 @@ async def _populate_team_access_on_models(
     without filtering the model list.
     """
     user_teams: list[str] | Literal["*"] | None = None
-    direct_access_models: list[str] = []
+    direct_access_models: Sequence[str] = ()
     if _user_has_admin_view(user_api_key_dict):
         user_teams = "*"
-        direct_access_models = llm_router.get_model_ids(exclude_team_models=True)  # has access to all models
+        direct_access_models = tuple(llm_router.get_model_ids(exclude_team_models=True))  # access to all models
     elif user_api_key_dict.user_id is not None:
         user_db_object: Final[SupportsModelDump | None] = await UserRepository(prisma_client).table.find_unique(
             where={"user_id": user_api_key_dict.user_id}
@@ -12614,6 +12844,7 @@ async def _populate_team_access_on_models(
             direct_access_models = get_direct_access_models(
                 user_db_object=user_object,
                 llm_router=llm_router,
+                key_models=cast(Sequence[str], user_api_key_dict.models),  # cast-ok: key.models is a String[] column
             )
     if user_teams is not None:
         team_models: Final = await get_all_team_models(
@@ -12635,7 +12866,7 @@ async def _populate_team_access_on_models(
                 if can_use_model:
                     _model["model_info"]["access_via_team_ids"] = team_models.get(model_id, [])
 
-    direct_access_model_ids: Final = set(direct_access_models)
+    direct_access_model_ids: Final = frozenset(direct_access_models)
     for _model in all_models:
         model_id = _model.get("model_info", {}).get("id", None)
         if model_id is not None:
@@ -16338,6 +16569,7 @@ async def create_config_audit_log(
 
 _EXTRA_SECRET_CALLBACK_ENV_VARS: Final = frozenset(
     {
+        "ALERTING_WEBHOOK_URL",
         "GALILEO_USERNAME",
         "GENERIC_LOGGER_HEADERS",
         "OTEL_HEADERS",

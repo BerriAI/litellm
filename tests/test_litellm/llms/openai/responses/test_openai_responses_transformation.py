@@ -220,6 +220,111 @@ class TestOpenAIResponsesAPIConfig:
 
         assert result["input"] == input_clean
 
+    def test_transform_drops_foreign_tool_call_item_ids(self):
+        """Replayed tool call items whose ids are not OpenAI-shaped (e.g.
+        Anthropic toolu_/srvtoolu_ ids after a router fallback) must be sent
+        without an id: OpenAI 400s foreign ids ("Expected an ID that begins
+        with 'fc'") but accepts the items with no id at all. Genuine fc_/ctc_
+        ids and non-tool-call items pass through untouched."""
+        replayed_input = [
+            {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            {
+                "type": "function_call",
+                "id": "toolu_01Foreign",
+                "call_id": "toolu_01Foreign",
+                "name": "get_weather",
+                "arguments": '{"city": "SF"}',
+            },
+            {"type": "function_call_output", "call_id": "toolu_01Foreign", "output": "sunny"},
+            {
+                "type": "custom_tool_call",
+                "id": "srvtoolu_01Foreign",
+                "call_id": "srvtoolu_01Foreign",
+                "name": "apply_patch",
+                "input": "patch",
+            },
+            {
+                "type": "function_call",
+                "id": "fc_genuine",
+                "call_id": "call_genuine",
+                "name": "get_weather",
+                "arguments": "{}",
+            },
+            {"type": "message", "id": "msg_1", "role": "assistant", "content": []},
+        ]
+
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input=replayed_input,
+            response_api_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert "id" not in result["input"][1]
+        assert result["input"][1]["call_id"] == "toolu_01Foreign"
+        assert "id" not in result["input"][3]
+        assert result["input"][3]["call_id"] == "srvtoolu_01Foreign"
+        assert result["input"][4]["id"] == "fc_genuine"
+        assert result["input"][5]["id"] == "msg_1"
+        assert replayed_input[1]["id"] == "toolu_01Foreign"
+        assert replayed_input[3]["id"] == "srvtoolu_01Foreign"
+
+    def test_transform_keeps_foreign_tool_call_item_ids_for_other_providers(self):
+        """Providers reusing this config that do not enforce OpenAI's id
+        shapes must keep replayed ids untouched."""
+        from litellm.types.utils import LlmProviders
+
+        class _OpenRouterLikeConfig(OpenAIResponsesAPIConfig):
+            @property
+            def custom_llm_provider(self) -> LlmProviders:
+                return LlmProviders.OPENROUTER
+
+        replayed_input = [
+            {
+                "type": "function_call",
+                "id": "toolu_01Foreign",
+                "call_id": "toolu_01Foreign",
+                "name": "get_weather",
+                "arguments": "{}",
+            }
+        ]
+
+        result = _OpenRouterLikeConfig().transform_responses_api_request(
+            model="openrouter/some-model",
+            input=replayed_input,
+            response_api_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["input"][0]["id"] == "toolu_01Foreign"
+
+    def test_transform_compact_drops_foreign_tool_call_item_ids(self):
+        """The compact request path replays input the same way, so it must
+        apply the same id drop."""
+        replayed_input = [
+            {
+                "type": "function_call",
+                "id": "toolu_01Foreign",
+                "call_id": "toolu_01Foreign",
+                "name": "get_weather",
+                "arguments": "{}",
+            }
+        ]
+
+        _url, data = self.config.transform_compact_response_api_request(
+            model=self.model,
+            input=replayed_input,
+            response_api_optional_request_params={},
+            api_base="https://api.openai.com/v1/responses",
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert "id" not in data["input"][0]
+        assert data["input"][0]["call_id"] == "toolu_01Foreign"
+
     def test_transform_streaming_response(self):
         """Test streaming response transformation"""
         # Test with a text delta event
