@@ -31,7 +31,6 @@ def _key(client: McpClient, resources: ResourceManager, *, mcp_servers: list[str
 
 
 class TestMcpKeyGrantByAlias:
-    @pytest.mark.covers("mcp.list_tools.api_key.alias_grant_persists")
     def test_alias_grant_persists_verbatim_and_lists_tools(
         self,
         client: McpClient,
