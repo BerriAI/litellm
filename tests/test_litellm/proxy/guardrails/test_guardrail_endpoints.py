@@ -919,7 +919,9 @@ async def test_bedrock_guardrail_make_api_request_passes_api_key():
             "Content-Type": "application/json",
             "Authorization": "Bearer test-api-key-789",
         }
-        mock_request_instance.prepare.return_value = Mock()
+        mock_request_instance.prepare.return_value = Mock(
+            headers=mock_request_instance.headers
+        )
         mock_aws_request.return_value = mock_request_instance
 
         await guardrail_hook.make_bedrock_api_request(
