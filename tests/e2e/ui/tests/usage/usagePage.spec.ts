@@ -38,6 +38,9 @@ async function createPricedDeployment(
   registerForCleanup: string[],
 ): Promise<{ modelName: string }> {
   const modelName = `e2e-usage-priced-${label}`;
+  // Claimed before the call: /model/new can persist the deployment and still answer non-2xx, so a
+  // name recorded up front is the only registration no response shape can skip.
+  registerForCleanup.push(modelName);
   const res = await request.post("/model/new", {
     headers: { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" },
     data: {
@@ -52,8 +55,6 @@ async function createPricedDeployment(
     },
   });
   expect(res.ok(), `POST /model/new failed (${res.status()}): ${await res.text()}`).toBe(true);
-  // Registered before the wait below, which can fail and would otherwise strand the deployment.
-  registerForCleanup.push((await res.json()).model_info?.id as string);
 
   // /model/new returns once the row is written, but the router only picks the deployment up on its
   // next refresh, so sending traffic straight away can still get "no healthy deployments". A ping
@@ -82,12 +83,25 @@ test.describe("Usage page", () => {
   test.afterEach(async ({ request }) => {
     // A deployment left behind keeps its custom pricing, so it goes on changing what later runs
     // route and what they cost. Runs on the failure path too, which the test body would not.
-    for (const modelId of pricedDeployments.splice(0)) {
-      const deleted = await request.post("/model/delete", {
-        headers: { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" },
-        data: { id: modelId },
+    // Resolved by name rather than by a returned id, so a create that persisted without answering
+    // 2xx is still cleaned up, and one that never persisted is simply absent here.
+    const names = pricedDeployments.splice(0);
+    if (names.length === 0) return;
+    const auth = { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" };
+    const listed = await request.get(`${rootPath()}/model/info`, { headers: auth });
+    expect(listed.ok(), `GET /model/info (${listed.status()})`).toBe(true);
+    const deployments = ((await listed.json()).data ?? []) as {
+      model_name?: string;
+      model_info?: { id?: string };
+    }[];
+    for (const name of names) {
+      const match = deployments.find((d) => d.model_name === name);
+      if (!match?.model_info?.id) continue;
+      const deleted = await request.post(`${rootPath()}/model/delete`, {
+        headers: auth,
+        data: { id: match.model_info.id },
       });
-      expect(deleted.ok(), `POST /model/delete for ${modelId} (${deleted.status()})`).toBe(true);
+      expect(deleted.ok(), `POST /model/delete for ${name} (${deleted.status()})`).toBe(true);
     }
   });
 
