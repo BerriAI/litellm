@@ -860,6 +860,7 @@ class LiteLLMRoutes(enum.Enum):
         # proxy admin, or team admin naming their own team via team_id
         "/auto_router/test_routing",
         "/auto_router/validate_complexity_router_config",
+        "/auto_router/validate_capability_router_config",
         # Agent registry - reads are role-scoped and writes are proxy-admin-gated
         # inside agent_endpoints/endpoints.py
         *agent_management_routes,

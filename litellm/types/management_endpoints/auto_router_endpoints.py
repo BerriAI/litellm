@@ -9,6 +9,7 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
+from litellm.router_strategy.capability_router.config import CapabilityRouterConfig
 from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
 from litellm.types.utils import StandardLoggingRoutingDecision
 
@@ -44,6 +45,18 @@ class ComplexityRouterConfigValidationResponse(BaseModel):
     error: str | None = None
 
 
+class CapabilityRouterConfigValidationRequest(BaseModel):
+    """A capability-router config to validate without saving."""
+
+    capability_router_config: Mapping[str, object]
+    team_id: str | None = None
+
+
+class CapabilityRouterConfigValidationResponse(BaseModel):
+    valid: bool
+    error: str | None = None
+
+
 class AutoRouterRoutingTestRequest(BaseModel):
     """A single request to classify against a complexity-router config that need not be saved yet.
 
@@ -69,8 +82,13 @@ class AutoRouterRoutingTestRequest(BaseModel):
         default=None,
         description="The tool definitions the request advertises, which decide whether the plan-mode floor applies",
     )
-    complexity_router_config: RequestComplexityRouterConfig = Field(
-        description="The complexity router config to route against, in the shape /model/new accepts",
+    complexity_router_config: RequestComplexityRouterConfig | None = Field(
+        default=None,
+        description="The complexity router config to route against",
+    )
+    capability_router_config: CapabilityRouterConfig | None = Field(
+        default=None,
+        description="The capability router config to route against",
     )
     default_model: str | None = Field(
         default=None,
@@ -114,6 +132,8 @@ class AutoRouterRoutingTestRequest(BaseModel):
             raise ValueError("messages must not be empty")
         if (self.prompt is None) == (self.messages is None):
             raise ValueError("provide exactly one of prompt or messages")
+        if (self.complexity_router_config is None) == (self.capability_router_config is None):
+            raise ValueError("provide exactly one router config")
         if self.messages is not None:
             return self
         return self.model_copy(
