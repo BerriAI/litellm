@@ -979,8 +979,9 @@ def test_config_blocks_do_not_leak_into_inference_config():
     assert data["serviceTier"] == {"type": "priority"}
 
 
-def test_client_metadata_stripped_from_converse_request():
-    """``client_metadata`` sent by codex must not reach Bedrock as a passthrough model field.
+@pytest.mark.parametrize("model", ["anthropic.claude-opus-4-8", "us.anthropic.claude-opus-4-8"])
+def test_client_metadata_stripped_for_anthropic_converse_request(model):
+    """``client_metadata`` sent by codex must not reach Anthropic as a passthrough model field.
 
     Converse forwards ``additionalModelRequestFields`` verbatim to the model, and Anthropic
     rejects the request with "client_metadata: Extra inputs are not permitted".
@@ -988,7 +989,7 @@ def test_client_metadata_stripped_from_converse_request():
     config = AmazonConverseConfig()
 
     data = config._transform_request_helper(
-        model="anthropic.claude-opus-4-8",
+        model=model,
         system_content_blocks=[],
         optional_params={
             "maxTokens": 16,
@@ -1001,6 +1002,23 @@ def test_client_metadata_stripped_from_converse_request():
     fields = data.get("additionalModelRequestFields", {})
     assert "client_metadata" not in fields
     assert fields["anthropic_beta"] == ["computer-use-2025-01-24"]
+
+
+def test_client_metadata_kept_for_non_anthropic_converse_request():
+    """Only Anthropic is known to reject ``client_metadata``, so other families keep the passthrough."""
+    config = AmazonConverseConfig()
+
+    data = config._transform_request_helper(
+        model="amazon.nova-pro-v1:0",
+        system_content_blocks=[],
+        optional_params={
+            "maxTokens": 16,
+            "client_metadata": {"originator": "codex_cli_rs"},
+        },
+        messages=None,
+    )
+
+    assert data["additionalModelRequestFields"]["client_metadata"] == {"originator": "codex_cli_rs"}
 
 
 def test_parallel_tool_calls_config_kept_for_sonnet_5(monkeypatch):

@@ -1324,7 +1324,13 @@ class AmazonConverseConfig(BaseConfig):
             )
 
         additional_request_params.pop("parallel_tool_calls", None)
-        additional_request_params.pop("client_metadata", None)
+
+        if base_model.startswith("anthropic") and additional_request_params.pop("client_metadata", None) is not None:
+            litellm.verbose_logger.debug(
+                "Bedrock Converse: dropping `client_metadata` for model=%s, Anthropic rejects it with "
+                "'client_metadata: Extra inputs are not permitted'",
+                model,
+            )
 
         # Only set the topK value in for models that support it
         additional_request_params.update(self._handle_top_k_value(model, inference_params, drop_params))
