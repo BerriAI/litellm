@@ -6,9 +6,32 @@ to login_utils.py for better reusability.
 """
 
 import os
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+
+class _RecordedSleeps:
+    """A sleep that records what it was asked to wait for instead of waiting."""
+
+    def __init__(self):
+        self.seconds: list[float] = []
+
+    async def __call__(self, seconds: float) -> None:
+        self.seconds.append(seconds)
+
+
+@pytest.fixture(autouse=True)
+def login_delays(monkeypatch):
+    """Replace the failed-login wait, so the suite pays no wall clock and can read it back."""
+    from litellm.proxy.auth import login_throttle
+
+    recorded = _RecordedSleeps()
+    monkeypatch.setattr(login_throttle, "_sleep", recorded)
+    login_throttle._DELAYS_IN_FLIGHT.clear()
+    yield recorded
+    login_throttle._DELAYS_IN_FLIGHT.clear()
 
 
 def _unlimited_throttle():
@@ -16,7 +39,15 @@ def _unlimited_throttle():
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.auth.login_throttle import LoginThrottle
 
-    return LoginThrottle(client_ip="1.2.3.4", max_attempts=10_000, window_seconds=900, cache=DualCache())
+    store: Final = DualCache()
+    return LoginThrottle(
+        client_ip="1.2.3.4",
+        max_attempts=10_000,
+        max_attempts_per_source=10_000,
+        window_seconds=900,
+        username_cache=store,
+        source_cache=store,
+    )
 
 
 
@@ -628,16 +659,26 @@ class TestEncodeUiSessionJwt:
 # ---------------------------------------------------------------------------
 
 
-def _throttle(max_attempts: int = 3, window_seconds: int = 900, client_ip: str = "1.2.3.4", cache=None, redis_cache=None):
+def _throttle(
+    max_attempts: int = 3,
+    window_seconds: int = 900,
+    client_ip: str = "1.2.3.4",
+    cache=None,
+    redis_cache=None,
+    max_attempts_per_source: int = 10_000,
+):
     """A throttle over a real in-memory store, so the tests exercise the true counters."""
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.auth.login_throttle import LoginThrottle
 
+    store: Final = cache if cache is not None else DualCache()
     return LoginThrottle(
         client_ip=client_ip,
         max_attempts=max_attempts,
+        max_attempts_per_source=max_attempts_per_source,
         window_seconds=window_seconds,
-        cache=cache if cache is not None else DualCache(),
+        username_cache=store,
+        source_cache=store,
         redis_cache=redis_cache,
     )
 
@@ -675,21 +716,32 @@ async def test_attempts_are_refused_once_the_limit_is_reached(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_a_correct_password_is_refused_while_blocked(monkeypatch):
-    """The check precedes the credential comparison, so being over the limit wins."""
+async def test_a_correct_admin_password_is_accepted_while_blocked(monkeypatch):
+    """The configured admin credentials are compared before the gate, so the operator gets in.
+
+    A throttle that refuses a valid password hands anyone who can reach the login form a
+    denial of service against the one account that can fix it.
+    """
     from litellm.proxy._types import ProxyException
 
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://stub")
     throttle = _throttle(max_attempts=2)
 
     for _ in range(2):
         with pytest.raises(ProxyException):
             await _guess(throttle)
 
-    with pytest.raises(ProxyException) as blocked:
-        await _guess(throttle, password="right")
-    assert blocked.value.code == "429"
+    with pytest.raises(ProxyException) as still_blocked:
+        await _guess(throttle)
+    assert still_blocked.value.code == "429", "a wrong password is still refused"
+
+    with patch("litellm.proxy.auth.login_utils.user_update", new=AsyncMock()), patch(
+        "litellm.proxy.auth.login_utils.generate_key_helper_fn", new=AsyncMock(return_value={"token": "sk-ui"})
+    ):
+        result = await _guess(throttle, password="right")
+    assert result.key == "sk-ui"
 
 
 @pytest.mark.asyncio
@@ -700,18 +752,18 @@ async def test_a_blocked_attempt_does_not_extend_the_window(monkeypatch):
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
     throttle = _throttle(max_attempts=2)
-    key = throttle._key("admin")
+    key = throttle._username_key("admin")
 
     for _ in range(2):
         with pytest.raises(ProxyException):
             await _guess(throttle)
-    counted_at_limit = await throttle._failures(key)
+    counted_at_limit = await throttle._failures(throttle.username_cache, key)
 
     for _ in range(5):
         with pytest.raises(ProxyException):
             await _guess(throttle)
 
-    assert await throttle._failures(key) == counted_at_limit == 2
+    assert await throttle._failures(throttle.username_cache, key) == counted_at_limit == 2
 
 
 @pytest.mark.asyncio
@@ -733,7 +785,7 @@ async def test_a_successful_sign_in_clears_the_bucket(monkeypatch):
     ):
         await _guess(throttle, password="right")
 
-    assert await throttle._failures(throttle._key("admin")) == 0
+    assert await throttle._failures(throttle.username_cache, throttle._username_key("admin")) == 0
 
 
 @pytest.mark.asyncio
@@ -749,7 +801,7 @@ async def test_a_configuration_error_never_counts(monkeypatch):
             )
         assert exc.value.code == "500"
 
-    assert await throttle._failures(throttle._key("admin")) == 0
+    assert await throttle._failures(throttle.username_cache, throttle._username_key("admin")) == 0
 
 
 @pytest.mark.asyncio
@@ -773,7 +825,7 @@ async def test_the_username_is_case_folded_into_one_bucket(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_a_different_username_from_the_same_source_is_unaffected(monkeypatch):
-    """The bucket is the pair, so one username's failures do not block another."""
+    """The counters are independent, so one username's failures do not exhaust another's."""
     from litellm.proxy._types import ProxyException
 
     monkeypatch.setenv("UI_USERNAME", "admin")
@@ -853,7 +905,7 @@ async def test_a_user_with_no_password_set_does_not_consume_the_budget(monkeypat
                 )
             assert exc.value.code == "401"
 
-    assert await throttle._failures(throttle._key("nopass@example.com")) == 0
+    assert await throttle._failures(throttle.username_cache, throttle._username_key("nopass@example.com")) == 0
 
 
 @pytest.mark.asyncio
@@ -896,11 +948,40 @@ async def test_a_wrong_password_for_a_known_user_also_counts(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_two_source_addresses_do_not_share_a_bucket(monkeypatch):
-    """The key is the pair, so one address exhausting its budget must not block another.
+async def test_one_source_exhausting_its_own_budget_does_not_refuse_another_source(monkeypatch):
+    """The source counter is per address, so a noisy office does not take its neighbour down."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import ProxyException
 
-    Dropping the address from the key would turn this into the username-only counter the
-    design rejects, where anyone can lock a named admin out from anywhere.
+    monkeypatch.setenv("UI_USERNAME", "admin")
+    monkeypatch.setenv("UI_PASSWORD", "right")
+    shared_store = DualCache()
+    attacker = _throttle(
+        max_attempts=10_000, max_attempts_per_source=2, client_ip="203.0.113.9", cache=shared_store
+    )
+    operator = _throttle(
+        max_attempts=10_000, max_attempts_per_source=2, client_ip="198.51.100.7", cache=shared_store
+    )
+
+    for i in range(2):
+        with pytest.raises(ProxyException):
+            await _guess(attacker, username=f"target-{i}@corp.com")
+
+    with pytest.raises(ProxyException) as blocked:
+        await _guess(attacker, username="target-2@corp.com")
+    assert blocked.value.code == "429"
+
+    with pytest.raises(ProxyException) as unaffected:
+        await _guess(operator, username="target-3@corp.com")
+    assert unaffected.value.code == "401", "the other address must still reach the credential check"
+
+
+@pytest.mark.asyncio
+async def test_a_username_exhausted_from_one_source_is_refused_from_another(monkeypatch):
+    """The username counter carries no address, so spreading the guesses buys nothing.
+
+    The pair key this replaced reset the budget for every new address, which is exactly the
+    shape of a credential-stuffing run from a proxy pool.
     """
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy._types import ProxyException
@@ -908,20 +989,154 @@ async def test_two_source_addresses_do_not_share_a_bucket(monkeypatch):
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
     shared_store = DualCache()
-    attacker = _throttle(max_attempts=2, client_ip="203.0.113.9", cache=shared_store)
-    operator = _throttle(max_attempts=2, client_ip="198.51.100.7", cache=shared_store)
+    first_hop = _throttle(max_attempts=2, client_ip="203.0.113.9", cache=shared_store)
+    second_hop = _throttle(max_attempts=2, client_ip="198.51.100.7", cache=shared_store)
 
-    for _ in range(3):
+    for _ in range(2):
         with pytest.raises(ProxyException):
-            await _guess(attacker, username="admin")
+            await _guess(first_hop, username="victim@corp.com")
+
+    with pytest.raises(ProxyException) as rotated:
+        await _guess(second_hop, username="victim@corp.com")
+    assert rotated.value.code == "429"
+
+
+@pytest.mark.asyncio
+async def test_a_source_wide_spray_is_counted_even_though_each_username_is_fresh(monkeypatch):
+    """One guess against each of many usernames never trips a username counter, only the source one."""
+    from litellm.proxy._types import ProxyException
+
+    monkeypatch.setenv("UI_USERNAME", "admin")
+    monkeypatch.setenv("UI_PASSWORD", "right")
+    throttle = _throttle(max_attempts=10_000, max_attempts_per_source=6, client_ip="203.0.113.11")
+
+    for i in range(6):
+        with pytest.raises(ProxyException) as rejected:
+            await _guess(throttle, username=f"sprayed-{i}@corp.com")
+        assert rejected.value.code == "401"
 
     with pytest.raises(ProxyException) as blocked:
-        await _guess(attacker, username="admin")
+        await _guess(throttle, username="sprayed-7@corp.com")
     assert blocked.value.code == "429"
+    assert await throttle._failures(throttle.username_cache, throttle._username_key("sprayed-7@corp.com")) == 0
 
-    with pytest.raises(ProxyException) as unaffected:
-        await _guess(operator, username="admin")
-    assert unaffected.value.code == "401", "the real operator must still reach the credential check"
+
+@pytest.mark.asyncio
+async def test_a_successful_sign_in_leaves_the_source_counter_alone(monkeypatch):
+    """One account's success says nothing about the other attempts the address is making."""
+    from litellm.proxy._types import ProxyException
+
+    monkeypatch.setenv("UI_USERNAME", "admin")
+    monkeypatch.setenv("UI_PASSWORD", "right")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://stub")
+    throttle = _throttle(max_attempts=10)
+
+    for _ in range(2):
+        with pytest.raises(ProxyException):
+            await _guess(throttle)
+
+    with patch("litellm.proxy.auth.login_utils.user_update", new=AsyncMock()), patch(
+        "litellm.proxy.auth.login_utils.generate_key_helper_fn", new=AsyncMock(return_value={"token": "sk-ui"})
+    ):
+        await _guess(throttle, password="right")
+
+    assert await throttle._failures(throttle.username_cache, throttle._username_key("admin")) == 0
+    assert await throttle._failures(throttle.source_cache, throttle._source_key()) == 2
+
+
+@pytest.mark.asyncio
+async def test_the_delay_doubles_from_one_second_and_is_capped(monkeypatch, login_delays):
+    """Guessing has to cost wall clock, and the cost has to stop short of an unbounded hang."""
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.login_throttle import MAX_DELAY_SECONDS
+
+    monkeypatch.setenv("UI_USERNAME", "admin")
+    monkeypatch.setenv("UI_PASSWORD", "right")
+    throttle = _throttle(max_attempts=10_000)
+
+    for _ in range(9):
+        with pytest.raises(ProxyException):
+            await _guess(throttle)
+
+    assert login_delays.seconds == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0], (
+        "the first two failures answer immediately, then the wait doubles up to the cap"
+    )
+    assert max(login_delays.seconds) == MAX_DELAY_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_the_delay_tracks_whichever_counter_is_further_past_its_onset(monkeypatch):
+    """A source deep into a spray must not be answered instantly just because the username is fresh."""
+    from litellm.proxy.auth.login_throttle import FailureCounts, LoginThrottle
+
+    assert LoginThrottle.delay_seconds(FailureCounts(username=1, source=1)) == 0.0
+    assert LoginThrottle.delay_seconds(FailureCounts(username=2, source=24)) == 0.0
+    assert LoginThrottle.delay_seconds(FailureCounts(username=3, source=1)) == 1.0
+    assert LoginThrottle.delay_seconds(FailureCounts(username=1, source=25)) == 1.0
+    assert LoginThrottle.delay_seconds(FailureCounts(username=4, source=28)) == 8.0
+
+
+@pytest.mark.asyncio
+async def test_held_attempts_from_one_source_are_capped(monkeypatch):
+    """Holding a rejected attempt open must not let one address park unlimited sockets."""
+    import asyncio
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth import login_throttle as lt
+    from litellm.proxy.auth.login_throttle import MAX_CONCURRENT_DELAYS_PER_SOURCE
+
+    monkeypatch.setenv("UI_USERNAME", "admin")
+    monkeypatch.setenv("UI_PASSWORD", "right")
+    release = asyncio.Event()
+
+    async def _park(_seconds: float) -> None:
+        await release.wait()
+
+    monkeypatch.setattr(lt, "_sleep", _park)
+    throttle = _throttle(max_attempts=10_000, client_ip="203.0.113.44")
+    await throttle.record_failure("admin")
+    await throttle.record_failure("admin")
+
+    held = [asyncio.create_task(_guess(throttle)) for _ in range(MAX_CONCURRENT_DELAYS_PER_SOURCE)]
+    for _ in range(1000):
+        if lt._DELAYS_IN_FLIGHT.get("203.0.113.44") == MAX_CONCURRENT_DELAYS_PER_SOURCE:
+            break
+        await asyncio.sleep(0)
+    assert lt._DELAYS_IN_FLIGHT.get("203.0.113.44") == MAX_CONCURRENT_DELAYS_PER_SOURCE
+
+    try:
+        with pytest.raises(ProxyException) as over_cap:
+            await _guess(throttle)
+        assert over_cap.value.code == "429"
+        assert over_cap.value.headers.get("Retry-After") == "30"
+    finally:
+        release.set()
+        for task in held:
+            with pytest.raises(ProxyException):
+                await task
+
+    with pytest.raises(ProxyException) as after_drain:
+        await _guess(throttle)
+    assert after_drain.value.code == "401", "the cap must release once the held attempts answer"
+
+
+@pytest.mark.asyncio
+async def test_disabling_the_control_removes_the_delay_as_well(monkeypatch, login_delays):
+    """The escape hatch has to turn off the whole control, not only the refusal."""
+    import dataclasses
+
+    from litellm.proxy._types import ProxyException
+
+    monkeypatch.setenv("UI_USERNAME", "admin")
+    monkeypatch.setenv("UI_PASSWORD", "right")
+    throttle = dataclasses.replace(_throttle(max_attempts=2), enabled=False)
+
+    for _ in range(6):
+        with pytest.raises(ProxyException) as rejected:
+            await _guess(throttle)
+        assert rejected.value.code == "401"
+
+    assert login_delays.seconds == []
 
 
 class _NoExpiryRedis:
@@ -1003,7 +1218,7 @@ async def test_counters_do_not_share_the_key_authentication_cache(monkeypatch):
     throttle = LoginThrottle.from_request(request)
 
     for i in range(25):
-        with pytest.raises(Exception):
+        with pytest.raises(ProxyException, match="Invalid credentials"):
             await _guess(throttle, username=f"made-up-{i}@example.com")
 
     added = set(ps.user_api_key_cache.in_memory_cache.cache_dict) - auth_cache_keys_before
@@ -1055,14 +1270,29 @@ async def test_a_username_spray_cannot_evict_an_existing_counter(monkeypatch):
     back a fresh allowance against the real account.
     """
     from litellm.proxy._types import ProxyException
-    from litellm.proxy.auth.login_throttle import _FAILED_LOGIN_CACHE, _MAX_TRACKED_LOGIN_SOURCES
+    from litellm.proxy.auth.login_throttle import (
+        LoginThrottle,
+        _FAILED_LOGIN_SOURCE_CACHE,
+        _FAILED_LOGIN_USERNAME_CACHE,
+        _MAX_TRACKED_LOGIN_SOURCES,
+        _MAX_TRACKED_LOGIN_USERNAMES,
+    )
 
     monkeypatch.setenv("UI_USERNAME", "admin")
     monkeypatch.setenv("UI_PASSWORD", "right")
     assert _MAX_TRACKED_LOGIN_SOURCES >= 10_000
-    assert _FAILED_LOGIN_CACHE.in_memory_cache.max_size_in_memory == _MAX_TRACKED_LOGIN_SOURCES
+    assert _MAX_TRACKED_LOGIN_USERNAMES >= 10_000
+    assert _FAILED_LOGIN_SOURCE_CACHE.in_memory_cache.max_size_in_memory == _MAX_TRACKED_LOGIN_SOURCES
+    assert _FAILED_LOGIN_USERNAME_CACHE.in_memory_cache.max_size_in_memory == _MAX_TRACKED_LOGIN_USERNAMES
 
-    throttle = _throttle(max_attempts=3, cache=_FAILED_LOGIN_CACHE, client_ip="10.9.9.9")
+    throttle = LoginThrottle(
+        client_ip="10.9.9.9",
+        max_attempts=3,
+        max_attempts_per_source=10_000,
+        window_seconds=900,
+        username_cache=_FAILED_LOGIN_USERNAME_CACHE,
+        source_cache=_FAILED_LOGIN_SOURCE_CACHE,
+    )
     victim = "spray-victim@corp.com"
     for _ in range(3):
         with pytest.raises(ProxyException):
@@ -1071,7 +1301,7 @@ async def test_a_username_spray_cannot_evict_an_existing_counter(monkeypatch):
     for i in range(500):
         await throttle.record_failure(f"spray-filler-{i}@corp.com")
 
-    assert await throttle._failures(throttle._key(victim)) == 3, "the counter must survive a spray"
+    assert await throttle._failures(throttle.username_cache, throttle._username_key(victim)) == 3, "the counter must survive a spray"
     with pytest.raises(ProxyException) as blocked:
         await _guess(throttle, username=victim)
     assert blocked.value.code == "429"

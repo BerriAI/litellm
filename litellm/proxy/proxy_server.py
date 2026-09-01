@@ -2264,6 +2264,7 @@ user_custom_key_generate = None
 # Tests that need to reset it can patch 'litellm.proxy.proxy_server._pkce_no_redis_warning_emitted'.
 _pkce_no_redis_warning_emitted: bool = False
 _cp_no_redis_warning_emitted: bool = False
+_login_throttle_no_redis_warning_emitted: bool = False
 user_custom_key_update = None
 user_custom_sso = None
 user_custom_ui_sso_sign_in_handler = None
@@ -5315,6 +5316,21 @@ class ProxyConfig:
                         "the /v3/login/exchange call may land on a different pod and fail with 401. "
                         "Configure Redis via the 'cache' section in your proxy config, "
                         "or ensure sticky sessions for single-instance deployments."
+                    )
+
+            ### FAILED-LOGIN ACCOUNTING MULTI-INSTANCE PREREQUISITE CHECK ###
+            # Failed Admin UI sign-in counters live in redis_usage_cache when available so a
+            # brute-force run is counted once across workers instead of once per worker.
+            if os.getenv("NUM_WORKERS", "1") != "1" and redis_usage_cache is None:
+                global _login_throttle_no_redis_warning_emitted
+                if not _login_throttle_no_redis_warning_emitted:
+                    _login_throttle_no_redis_warning_emitted = True
+                    verbose_proxy_logger.warning(
+                        "Running %s workers but Redis is not configured for LiteLLM caching. "
+                        "Failed Admin UI sign-in attempts are counted per worker, so an attacker "
+                        "gets max_failed_login_attempts guesses per worker instead of overall. "
+                        "Configure Redis via the 'cache' section in your proxy config.",
+                        os.getenv("NUM_WORKERS", "1"),
                     )
 
             ### STORE MODEL IN DB ### feature flag for `/model/new`
@@ -14756,13 +14772,26 @@ async def login(request: Request):
     password: Final = str(form.get("password"))
 
     # Authenticate user and get login result
-    login_result: Final = await authenticate_user(
-        username=username,
-        password=password,
-        master_key=master_key,
-        prisma_client=prisma_client,
-        throttle=LoginThrottle.from_request(request),
-    )
+    try:
+        login_result: Final = await authenticate_user(
+            username=username,
+            password=password,
+            master_key=master_key,
+            prisma_client=prisma_client,
+            throttle=LoginThrottle.from_request(request),
+        )
+    except ProxyException as exc:
+        if int(exc.code) != status.HTTP_429_TOO_MANY_REQUESTS:
+            raise
+        retry_after: Final = exc.headers.get("Retry-After", "30")
+        return HTMLResponse(
+            content=(
+                "<html><body><h1>Too many sign-in attempts</h1>"
+                f"<p>Try again in about {retry_after} seconds</p></body></html>"
+            ),
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            headers=exc.headers,
+        )
 
     # Create UI token object
     returned_ui_token_object: Final = create_ui_token_object(

@@ -145,9 +145,14 @@ async def authenticate_user(
             code=500,
         )
 
-    await throttle.raise_if_blocked(username)
-
     ui_username, ui_password = get_ui_credentials(master_key)
+
+    admin_credentials_match: Final = secrets.compare_digest(
+        username.encode("utf-8"), ui_username.encode("utf-8")
+    ) and secrets.compare_digest(password.encode("utf-8"), ui_password.encode("utf-8"))
+
+    if not admin_credentials_match:
+        await throttle.raise_if_blocked(username)
 
     # Check if we can find the `username` in the db. On the UI, users can enter username=their email
     _user_row: LiteLLM_UserTable | None = None
@@ -174,9 +179,7 @@ async def authenticate_user(
     - Login with UI_USERNAME and UI_PASSWORD
     - Login with Invite Link `user_email` and `password` combination
     """
-    if secrets.compare_digest(username.encode("utf-8"), ui_username.encode("utf-8")) and secrets.compare_digest(
-        password.encode("utf-8"), ui_password.encode("utf-8")
-    ):
+    if admin_credentials_match:
         # Non SSO -> If user is using UI_USERNAME and UI_PASSWORD they are Proxy admin
         user_role = LitellmUserRoles.PROXY_ADMIN
         user_id = LITELLM_PROXY_ADMIN_NAME
@@ -314,7 +317,7 @@ async def authenticate_user(
                 login_method="username_password",
             )
         else:
-            await throttle.record_failure(username)
+            await throttle.delay_for(username, await throttle.record_failure(username))
             raise ProxyException(
                 message=INVALID_UI_CREDENTIALS_MESSAGE,
                 type=ProxyErrorTypes.auth_error,
@@ -322,7 +325,7 @@ async def authenticate_user(
                 code=401,
             )
     else:
-        await throttle.record_failure(username)
+        await throttle.delay_for(username, await throttle.record_failure(username))
         raise ProxyException(
             message=INVALID_UI_CREDENTIALS_MESSAGE,
             type=ProxyErrorTypes.auth_error,
