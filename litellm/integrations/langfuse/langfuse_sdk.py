@@ -216,16 +216,7 @@ class DiscardingSpanExporter(SpanExporter):
 def _evict_if_stale_locked(
     *, public_key: object, secret_key: object, base_url: object
 ) -> LangfuseResourceManager | None:
-    """Assumes ``LangfuseResourceManager._lock`` is held; returns the still-valid cached bundle, if any.
-
-    langfuse keys its client registry on the public key alone, so a rotated
-    secret or a moved host silently keeps exporting with the original values.
-    Only the one stale entry is removed; the SDK's own reset would shut down
-    every other tenant in the process. A stale bundle no live litellm client
-    still holds also has its export thread stopped — but only when litellm
-    built the provider, because a bundle adopted from user code may share the
-    process-global provider.
-    """
+    """Assumes ``LangfuseResourceManager._lock`` is held; returns the still-valid cached bundle, if any."""
     if not public_key:
         return None
     cached: Final = LangfuseResourceManager._instances.get(public_key)  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
@@ -234,12 +225,6 @@ def _evict_if_stale_locked(
     if getattr(cached, "secret_key", None) == secret_key and getattr(cached, "base_url", None) == base_url:
         return cached
     LangfuseResourceManager._instances.pop(public_key, None)  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
-    with _LIVE_CLIENTS_LOCK:
-        holders: Final = _live_clients.get(cached)
-        abandoned: Final = holders is None or len(holders) == 0
-    provider: Final = getattr(cached, "tracer_provider", None)
-    if abandoned and provider is not None and provider in _litellm_built_providers:
-        provider.shutdown()
     return None
 
 
