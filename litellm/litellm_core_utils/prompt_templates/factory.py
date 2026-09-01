@@ -7,7 +7,7 @@ import re
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator, Mapping, Sequence
 from enum import Enum
-from typing import Any, Final, TypedDict, cast, overload
+from typing import Any, Final, TypeAlias, TypedDict, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
@@ -18,6 +18,7 @@ from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
+from litellm.llms.anthropic.mid_conversation_system import anthropic_system_messages
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
 from litellm.types.files import get_file_extension_from_mime_type
 from litellm.types.llms.anthropic import *
@@ -2316,14 +2317,20 @@ def _drop_unsignable_thinking_blocks(
     return [block for block in thinking_blocks if not _is_unsignable_thinking_block(block)]
 
 
+# mutable-ok: anthropic_messages_pt's callers have always appended to the list it returns
+_AnthropicMessageList: TypeAlias = list[AllAnthropicPassThroughMessageValues]
+
+
 def anthropic_messages_pt(
     messages: list[AllMessageValues],
     model: str,
     llm_provider: str,
-) -> list[AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam]:
+) -> _AnthropicMessageList:
     """
     format messages for anthropic
-    1. Anthropic supports roles like "user" and "assistant" (system prompt sent separately)
+    1. Anthropic supports roles like "user" and "assistant" (system prompt sent separately).
+       Models flagged ``supports_mid_conversation_system`` also accept "system" inside
+       messages after a user turn; the caller decides placement, this keeps such messages.
     2. The first message always needs to be of role "user"
     3. Each message must alternate between "user" and "assistant" (this is not addressed as now by litellm)
     4. final assistant content cannot end with trailing whitespace (anthropic raises an error otherwise)
@@ -2348,7 +2355,7 @@ def anthropic_messages_pt(
     # add role=tool support to allow function call result/error submission
     user_message_types: Final = {"user", "tool", "function"}
     # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, merge them.
-    new_messages: Final[list[AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam]] = []
+    new_messages: Final[_AnthropicMessageList] = []  # mutable-ok: accumulator behind the mutable return contract
 
     if len(messages) == 0:
         if not litellm.modify_params:
@@ -2740,6 +2747,11 @@ def anthropic_messages_pt(
 
         if assistant_content:
             new_messages.append({"role": "assistant", "content": assistant_content})
+
+        ## MID-CONVERSATION SYSTEM MESSAGES (placement is the caller's job) ##
+        while msg_i < len(messages) and messages[msg_i]["role"] == "system":
+            new_messages.extend(anthropic_system_messages(messages[msg_i]))
+            msg_i += 1
 
         if msg_i == init_msg_i:  # prevent infinite loops
             raise litellm.BadRequestError(

@@ -383,7 +383,8 @@ class AnthropicMessagesSystemMessageParam(TypedDict, total=False):
 
 AllAnthropicMessageValues = AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam
 
-# System is not a native Anthropic message role; only pass-through adapters use this union.
+# role=system inside messages is accepted after a user turn on models flagged
+# supports_mid_conversation_system; pass-through adapters and the chat translator both emit it.
 AllAnthropicPassThroughMessageValues: TypeAlias = (
     AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam | AnthropicMessagesSystemMessageParam
 )

@@ -2794,6 +2794,15 @@ def supports_reasoning(model: str, custom_llm_provider: str | None = None) -> bo
     return _supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_reasoning")
 
 
+def supports_mid_conversation_system(model: str, custom_llm_provider: str | None = None) -> bool:
+    """
+    Check if the given model accepts role=system messages after the first turn and return a boolean value.
+    """
+    return _supports_factory(
+        model=model, custom_llm_provider=custom_llm_provider, key="supports_mid_conversation_system"
+    )
+
+
 def supports_native_structured_output(model: str, custom_llm_provider: str | None = None) -> bool:
     """
     Check if the given model supports native structured outputs and return a boolean value.

@@ -1,4 +1,5 @@
 
+import copy
 import pytest
 
 from unittest.mock import MagicMock, patch
@@ -16,6 +17,13 @@ from litellm.constants import (
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
+)
+from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
+from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+    AmazonAnthropicClaudeConfig,
+)
+from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+    VertexAIAnthropicConfig,
 )
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.utils import ServerToolUse, Usage
@@ -6207,3 +6215,213 @@ def test_disabled_thinking_omitted_only_for_always_on_models(
         assert "thinking" not in request
     else:
         assert request["thinking"] == {"type": "disabled"}
+
+
+# ---------------------------------------------------------------------------
+# Mid-conversation ``role: "system"`` on the chat completions path.
+#
+# Hoisting a later system message into the top-level ``system`` block rewrites
+# the cached prefix and re-bills the whole conversation at cache-write pricing
+# on every reminder (#36559). The chat path must keep the prefix stable: leading
+# system messages still become the ``system`` param, later ones stay in place as
+# ``role: "system"`` on models flagged ``supports_mid_conversation_system`` and
+# become a user turn on models that reject the role inside ``messages``.
+# ---------------------------------------------------------------------------
+
+UNFLAGGED_CLAUDE = "claude-opus-4-7"
+FLAGGED_CLAUDE = "claude-opus-4-8"
+CONVERTED_SYSTEM_NOTE = (
+    "Operator note (not from the user): the following was originally a mid-conversation system-role reminder."
+)
+REMINDER_TEXT = "<system-reminder>Answer with exactly one word.</system-reminder>"
+CACHED_SYSTEM_BLOCK = {"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}
+
+
+def _chat_request(config: AnthropicConfig, model: str, messages: list[dict]) -> dict:
+    return config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+
+def _reminder_conversation() -> list[dict]:
+    """The shape Claude Code sends mid-session: cached system prompt, turns, a
+    reminder right after a user turn, an assistant turn, a fresh user turn."""
+    return [
+        {"role": "system", "content": [dict(CACHED_SYSTEM_BLOCK)]},
+        {"role": "user", "content": "First question"},
+        {"role": "assistant", "content": "First answer"},
+        {"role": "user", "content": "Second question"},
+        {"role": "system", "content": REMINDER_TEXT},
+        {"role": "assistant", "content": "Second answer"},
+        {"role": "user", "content": "Third question"},
+    ]
+
+
+def _texts(message: dict) -> list[str]:
+    return [block["text"] for block in message["content"] if block.get("type") == "text"]
+
+
+def test_chat_unflagged_model_converts_mid_conversation_system_to_user_turn(local_model_cost_map):
+    result = _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, _reminder_conversation())
+
+    assert result["system"] == [CACHED_SYSTEM_BLOCK]
+    assert [m["role"] for m in result["messages"]] == ["user", "assistant", "user", "assistant", "user"]
+    assert _texts(result["messages"][2]) == ["Second question", CONVERTED_SYSTEM_NOTE, REMINDER_TEXT]
+
+
+def test_chat_flagged_model_keeps_mid_conversation_system_in_messages(local_model_cost_map):
+    result = _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, _reminder_conversation())
+
+    assert result["system"] == [CACHED_SYSTEM_BLOCK]
+    assert [m["role"] for m in result["messages"]] == ["user", "assistant", "user", "system", "assistant", "user"]
+    assert result["messages"][3] == {"role": "system", "content": [{"type": "text", "text": REMINDER_TEXT}]}
+
+
+def test_chat_flagged_model_keeps_cache_control_on_mid_conversation_system(local_model_cost_map):
+    messages = _reminder_conversation()
+    messages[4] = {
+        "role": "system",
+        "content": [{"type": "text", "text": REMINDER_TEXT, "cache_control": {"type": "ephemeral"}}],
+    }
+
+    result = _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, messages)
+
+    assert result["messages"][3]["content"] == [
+        {"type": "text", "text": REMINDER_TEXT, "cache_control": {"type": "ephemeral"}}
+    ]
+
+
+def test_chat_flagged_model_moves_system_after_the_user_turn_it_precedes(local_model_cost_map):
+    """Anthropic only accepts role=system directly after a user turn; an
+    OpenAI-shaped client that puts the reminder before its next question gets a
+    placement-valid request without the reminder leaving ``messages``."""
+    messages = [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "First question"},
+        {"role": "assistant", "content": "First answer"},
+        {"role": "system", "content": REMINDER_TEXT},
+        {"role": "user", "content": "Second question"},
+    ]
+
+    result = _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, messages)
+
+    assert [m["role"] for m in result["messages"]] == ["user", "assistant", "user", "system"]
+    assert _texts(result["messages"][2]) == ["Second question"]
+    assert _texts(result["messages"][3]) == [REMINDER_TEXT]
+
+
+def test_chat_flagged_model_converts_system_with_no_following_user_turn(local_model_cost_map):
+    messages = [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "First question"},
+        {"role": "assistant", "content": "First answer"},
+        {"role": "system", "content": REMINDER_TEXT},
+    ]
+
+    result = _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, messages)
+
+    assert [m["role"] for m in result["messages"]] == ["user", "assistant", "user"]
+    assert _texts(result["messages"][2]) == [CONVERTED_SYSTEM_NOTE, REMINDER_TEXT]
+
+
+def test_chat_flagged_model_merges_adjacent_system_messages(local_model_cost_map):
+    messages = [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "First question"},
+        {"role": "system", "content": "Reminder one."},
+        {"role": "system", "content": "Reminder two."},
+        {"role": "assistant", "content": "First answer"},
+        {"role": "user", "content": "Second question"},
+    ]
+
+    result = _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, messages)
+
+    assert [m["role"] for m in result["messages"]] == ["user", "system", "assistant", "user"]
+    assert _texts(result["messages"][1]) == ["Reminder one.", "Reminder two."]
+
+
+def test_chat_unflagged_model_keeps_tool_result_first_when_system_precedes_tool_message(local_model_cost_map):
+    messages = [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "Weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "system", "content": REMINDER_TEXT},
+        {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+    result = _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, messages)
+
+    assert [m["role"] for m in result["messages"]] == ["user", "assistant", "user"]
+    blocks = result["messages"][2]["content"]
+    assert blocks[0]["type"] == "tool_result"
+    assert blocks[0]["tool_use_id"] == "call_1"
+    assert _texts(result["messages"][2]) == [CONVERTED_SYSTEM_NOTE, REMINDER_TEXT, "Thanks"]
+
+
+def test_chat_transform_request_does_not_mutate_caller_messages(local_model_cost_map):
+    messages = _reminder_conversation()
+    snapshot = copy.deepcopy(messages)
+
+    _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, messages)
+
+    assert messages == snapshot
+
+
+_CHAT_CONFIGS = [
+    pytest.param(AnthropicConfig, UNFLAGGED_CLAUDE, id="anthropic-unflagged"),
+    pytest.param(AnthropicConfig, FLAGGED_CLAUDE, id="anthropic-flagged"),
+    pytest.param(VertexAIAnthropicConfig, UNFLAGGED_CLAUDE, id="vertex_ai-unflagged"),
+    pytest.param(VertexAIAnthropicConfig, FLAGGED_CLAUDE, id="vertex_ai-flagged"),
+    pytest.param(AzureAnthropicConfig, UNFLAGGED_CLAUDE, id="azure_ai-unflagged"),
+    pytest.param(AzureAnthropicConfig, FLAGGED_CLAUDE, id="azure_ai-flagged"),
+    pytest.param(AmazonAnthropicClaudeConfig, "invoke/us.anthropic.claude-opus-4-7", id="bedrock_invoke-unflagged"),
+    pytest.param(AmazonAnthropicClaudeConfig, "invoke/us.anthropic.claude-opus-4-8", id="bedrock_invoke-flagged"),
+]
+
+
+@pytest.mark.parametrize("config_cls, model", _CHAT_CONFIGS)
+def test_chat_mid_conversation_system_keeps_earlier_turns_a_prefix_of_the_next_request(
+    local_model_cost_map, config_cls, model
+):
+    """The provider-side prompt cache is a prefix match over ``system`` +
+    ``messages``. Whatever the policy for the reminder, turn N's request must
+    stay a prefix of turn N+1's request or the whole conversation is re-billed.
+
+    Anthropic combines consecutive same-role messages into one turn, so the
+    cache-relevant sequence is ``(role, content block)`` pairs, not the message
+    list: a reminder that joins the preceding user turn still extends the prefix.
+    """
+    conversation = _reminder_conversation()
+
+    earlier = _chat_request(config_cls(), model, copy.deepcopy(conversation[:4]))
+    later = _chat_request(config_cls(), model, copy.deepcopy(conversation))
+
+    assert later["system"] == earlier["system"]
+    earlier_blocks = _role_block_pairs(earlier["messages"])
+    later_blocks = _role_block_pairs(later["messages"])
+    assert later_blocks[: len(earlier_blocks)] == earlier_blocks
+    assert len(later_blocks) > len(earlier_blocks)
+
+
+def _role_block_pairs(messages: list[dict]) -> list[tuple[str, object]]:
+    return [
+        (message["role"], block)
+        for message in messages
+        for block in (message["content"] if isinstance(message["content"], list) else [message["content"]])
+    ]
+

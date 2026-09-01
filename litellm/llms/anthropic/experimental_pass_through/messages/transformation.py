@@ -31,6 +31,7 @@ from ...common_utils import (
     optionally_handle_anthropic_oauth,
     strip_advisor_blocks_from_messages,
 )
+from ...mid_conversation_system import CONVERTED_SYSTEM_NOTE
 
 DEFAULT_ANTHROPIC_API_VERSION: Final = "2023-06-01"
 
@@ -165,9 +166,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     def _is_system_role_message(message: Any) -> bool:
         return isinstance(message, dict) and message.get("role") == "system"
 
-    _CONVERTED_SYSTEM_NOTE: Final = (
-        "Operator note (not from the user): the following was originally a mid-conversation system-role reminder."
-    )
+    _CONVERTED_SYSTEM_NOTE: Final = CONVERTED_SYSTEM_NOTE
 
     def _system_role_message_as_user(self, message: Mapping) -> Mapping:
         return {
