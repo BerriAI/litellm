@@ -15,6 +15,14 @@
   assertions: [access_group_scoped]
   source: "test_mcp_access_group_e2e.py"
   rationale: "A key granted an MCP access group sees the tagged server's tools; a key with a different group does not. Access-group-scoped tool selection at key creation"
+- id: mcp.list_tools.api_key.alias_grant_persists
+  module: mcp
+  tier: P1
+  operation: list_tools
+  auth_family: api_key
+  assertions: [alias_grant_persists]
+  source: "object_permission_utils.py validate_key_mcp_servers_against_team"
+  rationale: "A key granted an MCP server by alias keeps the alias verbatim in its stored object_permission (shared-DB multi-region instances each resolve it to their local server id at read time) and still lists the server's tools"
 - id: mcp.list_tools.api_key.denied_without_permission
   module: mcp
   tier: P0
