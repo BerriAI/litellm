@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     TokenTypeCostBreakdown,
     _calculate_input_cost,
     _get_token_base_cost,
+    _is_off_peak,
     _is_within_off_peak_window,
     calculate_cache_writing_cost,
     generic_cost_per_token,
@@ -477,6 +478,141 @@ def test_is_within_off_peak_window_malformed_returns_false():
     assert _is_within_off_peak_window("not-a-window", now) is False
     assert _is_within_off_peak_window("16:30", now) is False
     assert _is_within_off_peak_window("25:00-26:00", now) is False
+
+
+def test_is_off_peak_weekday_qualified_windows_deepseek_schedule():
+    """DeepSeek since 2026-08-23: peak is 01:00-04:00 and 06:00-10:00 UTC on weekdays only, with
+    weekends off-peak around the clock. The weekday axis is not a filter on one window set; on
+    two days of seven the off-peak window becomes the whole day, so the schedule needs two
+    day-qualified rules. The weekend instants inside would-be peak hours are the ones a
+    time-only implementation bills wrong."""
+    from datetime import datetime, timezone
+
+    deepseek = {
+        "windows": [
+            {"hours_utc": ["00:00-01:00", "04:00-06:00", "10:00-00:00"], "weekdays": [1, 2, 3, 4, 5]},
+            {"hours_utc": "00:00-00:00", "weekdays": [6, 7]},
+        ],
+    }
+    peak_instants = [
+        datetime(2026, 8, 24, 1, 30, tzinfo=timezone.utc),
+        datetime(2026, 8, 26, 7, 0, tzinfo=timezone.utc),
+        datetime(2026, 8, 28, 9, 59, tzinfo=timezone.utc),
+    ]
+    off_peak_instants = [
+        datetime(2026, 8, 23, 1, 30, tzinfo=timezone.utc),
+        datetime(2026, 8, 29, 2, 0, tzinfo=timezone.utc),
+        datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc),
+        datetime(2026, 8, 26, 5, 0, tzinfo=timezone.utc),
+        datetime(2026, 8, 28, 16, 30, tzinfo=timezone.utc),
+        datetime(2026, 8, 24, 0, 30, tzinfo=timezone.utc),
+    ]
+    for when in peak_instants:
+        assert _is_off_peak(deepseek, when) is False, f"{when.isoformat()} should bill peak"
+    for when in off_peak_instants:
+        assert _is_off_peak(deepseek, when) is True, f"{when.isoformat()} should bill off-peak"
+
+
+def test_is_off_peak_weekday_timezone_reads_vendor_calendar():
+    """The UTC and Asia/Shanghai calendars only disagree about the date over 16:00-24:00 UTC, so
+    a window in that stretch is the one place a vendor-local weekday differs from a UTC one:
+    2026-08-28T16:30Z is Friday in UTC but already Saturday in Beijing."""
+    from datetime import datetime, timezone
+
+    shanghai_saturday = {
+        "weekday_timezone": "Asia/Shanghai",
+        "windows": [{"hours_utc": "16:00-17:00", "weekdays": [6]}],
+    }
+    assert _is_off_peak(shanghai_saturday, datetime(2026, 8, 28, 16, 30, tzinfo=timezone.utc)) is True
+    assert _is_off_peak(shanghai_saturday, datetime(2026, 8, 29, 16, 30, tzinfo=timezone.utc)) is False
+
+
+def test_is_off_peak_weekdays_default_utc_calendar_and_accept_names():
+    from datetime import datetime, timezone
+
+    named_weekend = {"windows": [{"hours_utc": "00:00-00:00", "weekdays": ["Sat", "sunday"]}]}
+    assert _is_off_peak(named_weekend, datetime(2026, 8, 29, 12, 0, tzinfo=timezone.utc)) is True
+    assert _is_off_peak(named_weekend, datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)) is False
+
+    utc_friday = {"windows": [{"hours_utc": "16:00-17:00", "weekdays": [5]}]}
+    assert _is_off_peak(utc_friday, datetime(2026, 8, 28, 16, 30, tzinfo=timezone.utc)) is True
+    assert _is_off_peak(utc_friday, datetime(2026, 8, 29, 16, 30, tzinfo=timezone.utc)) is False
+
+
+def test_is_off_peak_naive_current_time_read_as_utc():
+    from datetime import datetime
+
+    block = {"windows": [{"hours_utc": "16:00-17:00", "weekdays": [5]}]}
+    assert _is_off_peak(block, datetime(2026, 8, 28, 16, 30)) is True
+    assert _is_off_peak(block, datetime(2026, 8, 29, 16, 30)) is False
+
+
+def test_is_off_peak_invalid_weekday_timezone_falls_back_to_utc():
+    from datetime import datetime, timezone
+
+    block = {"weekday_timezone": "Not/AZone", "windows": [{"hours_utc": "16:00-17:00", "weekdays": [5]}]}
+    assert _is_off_peak(block, datetime(2026, 8, 28, 16, 30, tzinfo=timezone.utc)) is True
+    assert _is_off_peak(block, datetime(2026, 8, 29, 16, 30, tzinfo=timezone.utc)) is False
+
+
+def test_is_off_peak_ignores_malformed_weekday_rules():
+    from datetime import datetime, timezone
+
+    when = datetime(2026, 8, 29, 12, 0, tzinfo=timezone.utc)
+    assert _is_off_peak({"windows": [{"hours_utc": "00:00-00:00", "weekdays": []}]}, when) is False
+    assert _is_off_peak({"windows": [{"hours_utc": "00:00-00:00", "weekdays": [0, 8, "noday", True]}]}, when) is False
+    assert _is_off_peak({"windows": [{"weekdays": [6]}]}, when) is False
+    assert _is_off_peak({"windows": [{"hours_utc": 1630}]}, when) is False
+    assert _is_off_peak({"windows": ["00:00-00:00"]}, when) is False
+    assert _is_off_peak({"windows": "00:00-00:00"}, when) is False
+    assert _is_off_peak({"hours_utc": 1630}, when) is False
+    assert _is_off_peak({}, when) is False
+
+
+def test_is_off_peak_flat_hours_and_windows_are_a_union():
+    from datetime import datetime, timezone
+
+    block = {
+        "hours_utc": "04:00-06:00",
+        "windows": [{"hours_utc": "00:00-00:00", "weekdays": [7]}],
+    }
+    assert _is_off_peak(block, datetime(2026, 8, 28, 5, 0, tzinfo=timezone.utc)) is True
+    assert _is_off_peak(block, datetime(2026, 8, 30, 20, 0, tzinfo=timezone.utc)) is True
+    assert _is_off_peak(block, datetime(2026, 8, 28, 20, 0, tzinfo=timezone.utc)) is False
+
+
+def test_get_token_base_cost_weekend_only_off_peak_rate():
+    from datetime import datetime, timezone
+    from typing import cast
+
+    from litellm.types.utils import ModelInfo
+
+    model_info = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "off_peak_pricing": {
+                "windows": [
+                    {"hours_utc": ["00:00-01:00", "04:00-06:00", "10:00-00:00"], "weekdays": [1, 2, 3, 4, 5]},
+                    {"hours_utc": "00:00-00:00", "weekdays": [6, 7]},
+                ],
+                "input_cost_per_token": 5e-7,
+                "output_cost_per_token": 1e-6,
+            },
+        },
+    )
+    usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+
+    saturday_peak_hours = _get_token_base_cost(
+        model_info, usage, current_time=datetime(2026, 8, 29, 2, 0, tzinfo=timezone.utc)
+    )
+    assert saturday_peak_hours[:2] == (5e-7, 1e-6)
+
+    monday_same_hours = _get_token_base_cost(
+        model_info, usage, current_time=datetime(2026, 8, 24, 2, 0, tzinfo=timezone.utc)
+    )
+    assert monday_same_hours[:2] == (1e-6, 2e-6)
 
 
 def test_get_token_base_cost_applies_off_peak_pricing():
