@@ -106,12 +106,11 @@ def expected_output(case: TransformationCase) -> JsonValue:
     return case.expected
 
 
-class ContractSuiteV1(_ContractModel):
-    schema_version: Literal[1]
+class ContractSuite(_ContractModel):
     cases: tuple[TransformationCase, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def validate_id_namespaces(self) -> ContractSuiteV1:
+    def validate_id_namespaces(self) -> ContractSuite:
         invalid: tuple[TransformationCase, ...] = tuple(
             case for case in self.cases if not case.id.startswith(f"{case.operation}.")
         )
@@ -121,4 +120,4 @@ class ContractSuiteV1(_ContractModel):
         raise ValueError(f"case id must start with '{case.operation}.'")
 
 
-CONTRACT_SUITE_ADAPTER: TypeAdapter[ContractSuiteV1] = TypeAdapter(ContractSuiteV1)
+CONTRACT_SUITE_ADAPTER: TypeAdapter[ContractSuite] = TypeAdapter(ContractSuite)

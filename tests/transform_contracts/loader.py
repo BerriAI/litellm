@@ -6,7 +6,7 @@ from typing import Final
 
 from pydantic import ValidationError
 
-from tests.transform_contracts.schema import CONTRACT_SUITE_ADAPTER, ContractSuiteV1, TransformationCase
+from tests.transform_contracts.schema import CONTRACT_SUITE_ADAPTER, ContractSuite, TransformationCase
 
 CONTRACTS_ROOT: Final = Path(__file__).resolve().parent
 CASES_ROOT: Final = CONTRACTS_ROOT / "cases"
@@ -21,7 +21,7 @@ def discover_contract_paths(root: Path = CASES_ROOT) -> tuple[Path, ...]:
     raise FileNotFoundError(f"no transformation contract files found under: {root}")
 
 
-def load_contract_file(path: Path) -> ContractSuiteV1:
+def load_contract_file(path: Path) -> ContractSuite:
     try:
         return CONTRACT_SUITE_ADAPTER.validate_json(path.read_text(encoding="utf-8"))
     except (OSError, ValidationError) as exc:

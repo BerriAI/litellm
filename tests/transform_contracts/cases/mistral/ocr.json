@@ -1,5 +1,4 @@
 {
-  "schema_version": 1,
   "cases": [
     {
       "id": "mistral.ocr.get_supported_ocr_params.latest",

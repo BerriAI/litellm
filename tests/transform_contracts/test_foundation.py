@@ -7,7 +7,6 @@ from tests.transform_contracts.loader import discover_contract_paths, load_contr
 
 _VALID_CASE: Final = """
 {
-  "schema_version": 1,
   "cases": [
     {
       "id": "mistral.ocr.get_supported_ocr_params.latest",
@@ -35,12 +34,6 @@ def test_contract_discovery_is_sorted(tmp_path: Path) -> None:
 
 def test_invalid_json_fails_loudly(tmp_path: Path) -> None:
     _write(tmp_path / "invalid.json", "{")
-    with pytest.raises(ValueError, match="invalid transformation contract file"):
-        load_contract_cases(tmp_path)
-
-
-def test_unsupported_schema_version_fails_loudly(tmp_path: Path) -> None:
-    _write(tmp_path / "future.json", _VALID_CASE.replace('"schema_version": 1', '"schema_version": 2'))
     with pytest.raises(ValueError, match="invalid transformation contract file"):
         load_contract_cases(tmp_path)
 
