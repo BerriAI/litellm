@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 import zipfile
 from pathlib import Path
-from types import ModuleType
+from types import MappingProxyType, ModuleType
 from typing import Final
 
 import pytest
@@ -47,16 +47,26 @@ def _write_wheel(
     return wheel
 
 
-def _fake_subprocess_run(command: tuple[str, ...], **_: object) -> subprocess.CompletedProcess[str]:
+def _fake_subprocess_run(
+    command: tuple[str, ...],
+    *,
+    check: bool,
+    capture_output: bool,
+    text: bool,
+) -> subprocess.CompletedProcess[str]:
+    assert check and capture_output and text
     if command == ("rustc", "--version"):
-        stdout = "rustc 1.98.0 (regression-test)\n"
-    elif "--sections" in command:
-        stdout = "[ 1] .text PROGBITS\n"
-    elif "--dyn-syms" in command:
-        stdout = "PyInit__native\n"
-    else:
-        raise AssertionError(f"unexpected subprocess command: {command}")
-    return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="rustc 1.98.0 (regression-test)\n", stderr="")
+    if "--sections" in command:
+        return subprocess.CompletedProcess(command, 0, stdout="[ 1] .text PROGBITS\n", stderr="")
+    if "--dyn-syms" in command:
+        return subprocess.CompletedProcess(command, 0, stdout="PyInit__native\n", stderr="")
+    raise AssertionError(f"unexpected subprocess command: {command}")
+
+
+class _NativeModuleWithPanicHook(ModuleType):
+    def _panic_for_test(self) -> None:
+        return None
 
 
 def _run_verifier(
@@ -64,14 +74,16 @@ def _run_verifier(
     *,
     exposes_panic: bool = False,
 ) -> int:
-    native_module: Final = ModuleType("litellm.rust_bridge._native")
-    if exposes_panic:
-        setattr(native_module, "_panic_for_test", lambda: None)
+    native_module: Final = (
+        _NativeModuleWithPanicHook("litellm.rust_bridge._native")
+        if exposes_panic
+        else ModuleType("litellm.rust_bridge._native")
+    )
 
     def _fake_load_native_module(_: Path) -> ModuleType:
         return native_module
 
-    environment: Final = {"GITHUB_STEP_SUMMARY": str(wheel.parent / "summary.md")}
+    environment: Final = MappingProxyType({"GITHUB_STEP_SUMMARY": str(wheel.parent / "summary.md")})
     return verifier.main(
         (str(_MODULE_PATH), str(wheel)),
         environment,
@@ -102,8 +114,8 @@ def test_rejects_non_linux_platform_tag(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "metadata_tags",
-    [None, ("cp312-cp312-linux_x86_64",)],
-    ids=["missing", "mismatched"],
+    (None, ("cp312-cp312-linux_x86_64",)),
+    ids=("missing", "mismatched"),
 )
 def test_rejects_missing_or_mismatched_wheel_metadata_tag(
     tmp_path: Path,
