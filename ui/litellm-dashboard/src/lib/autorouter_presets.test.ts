@@ -573,8 +573,6 @@ describe("autorouter_presets", () => {
       expect(prefill.escalationKeywords).toEqual([]);
     });
 
-    // The prefill mapping is a hand-written field list, so a new config key is silently dropped
-    // unless mapped; false is the value a `||` default would erase (the #38453 class).
     it("carries a preset's context-window escalation opt-out and buffer through the prefill", () => {
       const prefill = buildPresetPrefill(
         {

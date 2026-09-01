@@ -8,13 +8,16 @@ const ContextWindowEscalationConfig: React.FC<{
   onChange: (value: ComplexityRouterConfigValue) => void;
 }> = ({ value, onChange }) => {
   const enabled = value.enable_context_window_escalation ?? true;
+  // A number input renders Number("0.") as "0", so a decimal cannot be typed without a local draft.
   const [bufferDraft, setBufferDraft] = React.useState<string | null>(null);
-  // min/max are inert on a text input, and a plain number input renders Number("0.") as "0" so a
-  // decimal cannot be typed. Hence the local draft plus an explicit clamp on commit.
   const commitBuffer = (raw: string) => {
     setBufferDraft(null);
+    if (raw.trim() === "") {
+      onChange({ ...value, context_window_escalation_buffer: undefined });
+      return;
+    }
     const parsed = Number(raw);
-    if (raw.trim() === "" || !Number.isFinite(parsed)) return;
+    if (!Number.isFinite(parsed)) return;
     onChange({ ...value, context_window_escalation_buffer: Math.min(1, Math.max(0.01, parsed)) });
   };
   return (

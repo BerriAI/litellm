@@ -394,8 +394,6 @@ describe("AddAutoRouterTab", () => {
     });
   });
 
-  // A plain number input renders Number("1.5") fine but the clamp is ours: values above 1 must commit as 1,
-  // and an untouched buffer must stay out of the payload so the router tracks the backend default.
   it("clamps the context-window buffer to 1 and keeps an untouched buffer out of the payload", async () => {
     const user = userEvent.setup();
     vi.mocked(getMissingTiersError).mockReturnValue(null);
@@ -415,6 +413,29 @@ describe("AddAutoRouterTab", () => {
     const config = vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config;
     expect(config).toMatchObject({ context_window_escalation_buffer: 1 });
     expect(config).not.toHaveProperty("enable_context_window_escalation");
+  });
+
+  it("clearing the buffer removes it from the payload so the router tracks the backend default", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+    renderWithProviders(<Harness />);
+
+    await user.type(screen.getByPlaceholderText(/smart_router/i), "ctx-clear-router");
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Context Window Escalation"));
+    const buffer = await screen.findByLabelText("Window fit buffer");
+    fireEvent.change(buffer, { target: { value: "0.8" } });
+    fireEvent.blur(buffer, { target: { value: "0.8" } });
+    fireEvent.change(buffer, { target: { value: "" } });
+    fireEvent.blur(buffer, { target: { value: "" } });
+
+    await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).not.toHaveProperty(
+      "context_window_escalation_buffer",
+    );
   });
 
   // The scalar floor is the one scorer knob with no group dict behind it, so its wiring into the create

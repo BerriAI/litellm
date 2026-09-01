@@ -59,8 +59,6 @@ describe("buildComplexityRouterConfig", () => {
     expect(config).toEqual(expected);
   });
 
-  // False is the value a truthy guard would silently drop, and it is the whole point of the toggle:
-  // an untouched form tracks the backend default (enabled), an explicit false is a real opt-out.
   it("carries an explicit context-window escalation opt-out and buffer, false included", () => {
     const config = buildComplexityRouterConfig({
       ...baseParams,
