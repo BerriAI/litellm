@@ -84,7 +84,6 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-      pull-requests: write
     env:
       CARGO_TERM_COLOR: always
 
@@ -126,7 +125,6 @@ jobs:
       - name: Verify stripped native extension
         env:
           RELEASE_WHEEL_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-          RELEASE_WHEEL_REPORT: dist/release-wheel-report.md
         run: python .github/scripts/verify_linux_native_wheel.py dist/*.whl
 
       - name: Build panic contract wheel
@@ -136,43 +134,6 @@ jobs:
 
       - name: Smoke-test native panic unwinding
         run: python .github/scripts/smoke_test_native_wheel.py panic-dist/*.whl
-
-      - name: Report release wheel size on PR
-        if: >-
-          github.event_name == 'pull_request' &&
-          github.event.pull_request.head.repo.full_name == github.repository
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
-        env:
-          COMMENT_MARKER: "<!-- litellm-release-wheel-size -->"
-          REPORT_PATH: dist/release-wheel-report.md
-        with:
-          script: |
-            const fs = require("fs");
-            const marker = process.env.COMMENT_MARKER;
-            const report = fs.readFileSync(process.env.REPORT_PATH, "utf8");
-            const body = `${marker}\n${report}`;
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              per_page: 100,
-            });
-            const existing = comments.find((comment) => comment.body?.includes(marker));
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-            }
 
       - name: Upload release wheel
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
