@@ -1,17 +1,17 @@
-import { ComplexityTier, KeywordTierRule } from "./KeywordTierRules";
+import { KeywordTierRule } from "./KeywordTierRules";
 
 /**
  * Stored shape of a keyword tier rule inside `complexity_router_config`. The UI's
  * KeywordTierRule carries an extra `id` used only as a React key, so it is stripped on the
  * way out and synthesized on the way back in. Both the create form and the edit modal go
- * through here so the two directions cannot drift.
+ * through here so the two directions cannot drift. The tier is any active tier name: a
+ * built-in one, or with tier_definitions, an operator-defined one, so hydration must not
+ * filter on the built-in set or an edit would silently delete a custom tier's rules.
  */
 export interface StoredKeywordTierRule {
   keywords: string[];
-  tier: ComplexityTier;
+  tier: string;
 }
-
-const TIERS: ReadonlySet<string> = new Set<ComplexityTier>(["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]);
 
 const asKeywords = (value: unknown): string[] =>
   Array.isArray(value)
@@ -40,7 +40,7 @@ export const hydrateKeywordTierRules = (value: unknown): KeywordTierRule[] => {
     const record = entry as Record<string, unknown>;
     const keywords = asKeywords(record.keywords).filter(Boolean);
     const tier = record.tier;
-    if (keywords.length === 0 || typeof tier !== "string" || !TIERS.has(tier)) return [];
-    return [{ id: `stored-${index}`, keywords, tier: tier as ComplexityTier }];
+    if (keywords.length === 0 || typeof tier !== "string" || !tier.trim()) return [];
+    return [{ id: `stored-${index}`, keywords, tier }];
   });
 };

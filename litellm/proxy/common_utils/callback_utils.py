@@ -1,12 +1,19 @@
 import copy
 import os
-from collections.abc import Callable, Iterable
-from typing import TYPE_CHECKING, Any, Final, Optional
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias
+
+from typing_extensions import assert_never
 
 import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
+from litellm.constants import (
+    CONSUMED_REQUEST_TAGS_METADATA_KEY,
+    PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+    SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
@@ -32,18 +39,80 @@ _EXTRA_SENSITIVE_CALLBACK_KEYS: Final = {"gcs_path_service_account"}
 # already-encrypted input cheaply (no decrypt-attempt round trip) and
 # avoid double-encrypting if `LITELLM_SALT_KEY` is rotated between writes.
 _CALLBACK_VAR_ENCRYPTED_PREFIX: Final = "litellm_enc::"
-# Metadata slots that hold operator-configured callback setup (and therefore
-# integration credentials). Resolved from UserAPIKeyAuth during pre-call setup,
-# never read back off the copies stamped into request metadata.
-_CALLBACK_CONFIG_SLOTS: Final = frozenset({"logging", "callback_settings"})
+# Metadata slots that hold operator-configured callback and secret-manager setup
+# (and therefore integration credentials). Resolved from UserAPIKeyAuth during
+# pre-call setup, never read back off the copies stamped into request metadata.
+_CALLBACK_CONFIG_SLOTS: Final = frozenset({"logging", "callback_settings", "secret_manager_settings"})
 
 blue_color_code: Final = "\033[94m"
 reset_color_code: Final = "\033[0m"
 
 TRUSTED_PILLAR_RESPONSE_HEADERS_METADATA_KEY: Final = "_pillar_response_headers_trusted"
 
+GUARDRAIL_SCAN_IDS_METADATA_KEY: Final = "guardrail_scan_ids"
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+
+@dataclass(frozen=True, slots=True)
+class _CallbackResolvedToClass:
+    entry: str
+    loaded: type
+    tag: Literal["resolved_to_class"] = "resolved_to_class"
+
+
+@dataclass(frozen=True, slots=True)
+class _CallbackNotDispatchable:
+    entry: str
+    loaded: object
+    tag: Literal["not_dispatchable"] = "not_dispatchable"
+
+
+_CallbackLoadError: TypeAlias = _CallbackResolvedToClass | _CallbackNotDispatchable
+
+
+def _classify_loaded_callback(entry: str, loaded: object) -> CustomLogger | Callable[..., object] | _CallbackLoadError:
+    """
+    Decide whether what a ``litellm_settings.callbacks`` dotted path resolved to can be dispatched.
+
+    A dotted path only ever runs as a ``CustomLogger`` instance or as a callback function. Anything
+    else (most commonly a class instead of an instance) used to load without complaint and then be
+    skipped on every request, with no log line and no error.
+    """
+    if isinstance(loaded, CustomLogger) or (callable(loaded) and not isinstance(loaded, type)):
+        return loaded
+    if isinstance(loaded, type):
+        return _CallbackResolvedToClass(entry=entry, loaded=loaded)
+    return _CallbackNotDispatchable(entry=entry, loaded=loaded)
+
+
+def _raise_callback_load_error(error: _CallbackLoadError) -> NoReturn:
+    """The one edge that raises: map a load error onto config load's failure contract."""
+    match error:
+        case _CallbackResolvedToClass():
+            module_path: Final = error.entry.rsplit(".", 1)[0] if "." in error.entry else error.entry
+            raise ValueError(
+                f"litellm_settings.callbacks entry '{error.entry}' resolved to the class "
+                f"{error.loaded.__module__}.{error.loaded.__qualname__}, which is neither a "
+                "CustomLogger instance nor a callable, so the proxy would never run it."
+                f" Point it at an instance instead, e.g. add `proxy_handler_instance = {error.loaded.__name__}()` to "
+                f'{module_path} and set `callbacks: ["{module_path}.proxy_handler_instance"]`.'
+            )
+        case _CallbackNotDispatchable():
+            raise ValueError(
+                f"litellm_settings.callbacks entry '{error.entry}' resolved to "
+                f"{type(error.loaded).__name__} {error.loaded!r}, which is neither a "
+                "CustomLogger instance nor a callable, so the proxy would never run it."
+            )
+    assert_never(error)
+
+
+def _loaded_callback_or_raise(entry: str, loaded: object) -> CustomLogger | Callable[..., object]:
+    resolved: Final = _classify_loaded_callback(entry=entry, loaded=loaded)
+    if isinstance(resolved, _CallbackResolvedToClass | _CallbackNotDispatchable):
+        _raise_callback_load_error(resolved)
+    return resolved
 
 
 def initialize_callbacks_on_proxy(
@@ -301,15 +370,18 @@ def initialize_callbacks_on_proxy(
                     "%s attempting to import custom calback=%s %s", blue_color_code, callback, reset_color_code
                 )
                 imported_list.append(
-                    get_instance_fn(
-                        value=callback,
-                        config_file_path=config_file_path,
+                    _loaded_callback_or_raise(
+                        entry=callback,
+                        loaded=get_instance_fn(
+                            value=callback,
+                            config_file_path=config_file_path,
+                        ),
                     )
                 )
         if isinstance(litellm.callbacks, list):
             litellm.callbacks.extend(imported_list)
         else:
-            litellm.callbacks = imported_list  # type: ignore
+            litellm.callbacks = imported_list
 
         if "prometheus" in value:
             from litellm.integrations.prometheus import PrometheusLogger
@@ -317,9 +389,12 @@ def initialize_callbacks_on_proxy(
             PrometheusLogger._mount_metrics_endpoint()
     else:
         litellm.callbacks = [
-            get_instance_fn(
-                value=value,
-                config_file_path=config_file_path,
+            _loaded_callback_or_raise(
+                entry=value,
+                loaded=get_instance_fn(
+                    value=value,
+                    config_file_path=config_file_path,
+                ),
             )
         ]
     verbose_proxy_logger.debug("%s Initialized Callbacks - %s %s", blue_color_code, litellm.callbacks, reset_color_code)
@@ -387,6 +462,10 @@ def get_logging_caching_headers(request_data: dict) -> dict | None:
     if "applied_guardrails" in _metadata:
         headers["x-litellm-applied-guardrails"] = ",".join(_metadata["applied_guardrails"])
 
+    scan_ids: Final = _metadata.get(GUARDRAIL_SCAN_IDS_METADATA_KEY)
+    if scan_ids:
+        headers["x-litellm-guardrail-scan-id"] = ",".join(scan_ids)
+
     if "applied_policies" in _metadata:
         headers["x-litellm-applied-policies"] = ",".join(_metadata["applied_policies"])
 
@@ -419,12 +498,15 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS: Final = frozenset(
     {
         "applied_policies",
         "applied_guardrails",
+        GUARDRAIL_SCAN_IDS_METADATA_KEY,
         "policy_sources",
         "guardrails",
         "guardrail_config",
         "_guardrail_pipelines",
         "_pipeline_managed_guardrails",
         PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+        SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+        CONSUMED_REQUEST_TAGS_METADATA_KEY,
         "disable_global_guardrails",
         "disable_global_guardrail",
         "opted_out_global_guardrails",
@@ -443,16 +525,16 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS: Final = frozenset(
 
 
 def sanitize_openai_provider_metadata(
-    metadata: dict[str, Any] | None,
-) -> dict[str, str] | None:
+    metadata: Mapping[str, object] | None,
+) -> Mapping[str, object] | None:
     """
     Keep only provider-safe OpenAI metadata entries (string keys -> string values).
 
     Strips LiteLLM proxy-internal tracking fields that must not be forwarded to
     OpenAI batch/file APIs.
     """
-    if not metadata:
-        return metadata
+    if metadata is None:
+        return None
     sanitized: Final[dict[str, str]] = {}
     for key, value in metadata.items():
         if key in LITELLM_PROXY_INTERNAL_METADATA_KEYS:
@@ -465,7 +547,7 @@ def sanitize_openai_provider_metadata(
                 key,
                 type(value).__name__,
             )
-    return sanitized or None
+    return None if metadata and not sanitized else sanitized
 
 
 def add_guardrail_to_applied_guardrails_header(request_data: dict, guardrail_name: str | None):
@@ -477,6 +559,22 @@ def add_guardrail_to_applied_guardrails_header(request_data: dict, guardrail_nam
             _metadata["applied_guardrails"].append(guardrail_name)
     else:
         _metadata["applied_guardrails"] = [guardrail_name]
+
+
+def add_guardrail_scan_id(request_data: dict, scan_id: str | None) -> None:
+    """
+    Record a provider scan id so it can be surfaced to the caller.
+
+    Guardrails only return scan details to the client when they block, so allowed requests carry no
+    audit trail. Ids recorded here become the x-litellm-guardrail-scan-id response header.
+    """
+    if not scan_id:
+        return
+    _, _metadata = get_or_create_metadata_bucket(request_data)
+    existing: Final = _metadata.get(GUARDRAIL_SCAN_IDS_METADATA_KEY)
+    scan_ids: Final = tuple(existing) if isinstance(existing, (list, tuple)) else ()
+    if scan_id not in scan_ids:
+        _metadata[GUARDRAIL_SCAN_IDS_METADATA_KEY] = (*scan_ids, scan_id)
 
 
 def add_policy_to_applied_policies_header(request_data: dict, policy_name: str | None):
@@ -546,13 +644,13 @@ def process_callback(_callback: str, callback_type: str, environment_variables: 
     return {"name": _callback, "variables": env_vars_dict, "type": callback_type}
 
 
-def normalize_callback_names(callbacks: Iterable[Any]) -> list[Any]:
+def normalize_callback_names(callbacks: Iterable[object] | None) -> list[object]:
     if callbacks is None:
         return []
     return [c.lower() if isinstance(c, str) else c for c in callbacks]
 
 
-def strip_callback_config(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+def strip_callback_config(metadata: dict[str, object] | None) -> dict[str, object] | None:
     """Return key/team metadata without the slots that carry callback credentials."""
     if not isinstance(metadata, dict):
         return metadata
@@ -576,7 +674,7 @@ def decrypt_callback_vars(metadata: Any) -> Any:
     return _transform_callback_vars(metadata, _decrypt_or_passthrough)
 
 
-def _transform_callback_vars(metadata: Any, transform: Callable[[str, Any], Any]) -> Any:
+def _transform_callback_vars(metadata: object, transform: Callable[[str, Any], Any]) -> object:
     if not isinstance(metadata, dict):
         return metadata
     out: Final = copy.deepcopy(metadata)
@@ -606,7 +704,7 @@ def is_sensitive_callback_key(
     return _CALLBACK_VAR_MASKER.is_sensitive_key(key)
 
 
-def _encrypt_if_plaintext(key: str, value: Any) -> Any:
+def _encrypt_if_plaintext(key: str, value: object) -> object:
     if not isinstance(value, str) or not value:
         return value
     if not is_sensitive_callback_key(key):
@@ -627,7 +725,7 @@ def _encrypt_if_plaintext(key: str, value: Any) -> Any:
         return value
 
 
-def _decrypt_or_passthrough(key: str, value: Any) -> Any:
+def _decrypt_or_passthrough(key: str, value: object) -> object:
     if not isinstance(value, str) or not value:
         return value
     if not value.startswith(_CALLBACK_VAR_ENCRYPTED_PREFIX):

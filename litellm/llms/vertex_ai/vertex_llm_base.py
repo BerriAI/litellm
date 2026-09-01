@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import threading
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import urlparse
 
@@ -25,6 +26,15 @@ from .common_utils import (
     get_vertex_base_model_name,
     get_vertex_base_url,
 )
+
+
+def _graft_default_vertex_path(api_base: str, default_url: str) -> str:
+    parsed_api_base: Final = urlparse(api_base)
+    default_segments: Final = urlparse(default_url).path.lstrip("/").split("/")
+    graft_segments: Final = default_segments[1:] if default_segments[0] in ("v1", "v1beta1") else default_segments
+    grafted_path: Final = parsed_api_base.path.rstrip("/") + "/" + "/".join(graft_segments)
+    return parsed_api_base._replace(path=grafted_path).geturl()
+
 
 GOOGLE_IMPORT_ERROR_MESSAGE: Final = (
     "Google Cloud SDK not found. Install it with: pip install 'litellm[google]' or pip install google-cloud-aiplatform"
@@ -68,7 +78,8 @@ class VertexBase:
         # re-acquire it without deadlocking the current thread.
         self._sync_refresh_lock = threading.RLock()
 
-    def get_vertex_region(self, vertex_region: str | None, model: str) -> str:
+    @staticmethod
+    def get_vertex_region(vertex_region: str | None, model: str) -> str:
         import litellm
 
         # Try to get supported_regions directly from model_cost
@@ -342,7 +353,7 @@ class VertexBase:
     def refresh_auth(self, credentials: Any) -> None:
         try:
             from google.auth.transport.requests import (
-                Request,  # type: ignore[import-untyped]
+                Request,
             )
         except ImportError:
             raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
@@ -619,8 +630,9 @@ class VertexBase:
 
         Handles custom api_base for:
         1. Gemini (Google AI Studio) - constructs /models/{model}:{endpoint}
-        2. Vertex AI with standard proxies - constructs {api_base}:{endpoint};
-           if api_base has no path (bare host), grafts the default vertex URL path onto it
+        2. Vertex AI with standard proxies - grafts the default vertex URL path onto the
+           api_base when its path is empty or only an API version (/v1, /v1beta1);
+           otherwise constructs {api_base}:{endpoint}
         3. Vertex AI with PSC endpoints - constructs full path structure
            {api_base}/v1/projects/{project}/locations/{location}/endpoints/{model}:{endpoint}
            (only when use_psc_endpoint_format=True)
@@ -643,7 +655,7 @@ class VertexBase:
                         "Missing Gemini API key. Set the GEMINI_API_KEY or GOOGLE_API_KEY environment variable."
                     )
                 if gemini_api_key is not None:
-                    auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
+                    auth_header = {"x-goog-api-key": gemini_api_key}
             else:
                 # For Vertex AI
                 if use_psc_endpoint_format:
@@ -667,10 +679,14 @@ class VertexBase:
                     )
                 elif urlparse(api_base).path in ("", "/"):
                     url = api_base.rstrip("/") + urlparse(url).path
+                elif urlparse(api_base).path.rstrip("/") in ("/v1", "/v1beta1") and "/projects/" in urlparse(url).path:
+                    url = _graft_default_vertex_path(api_base=api_base, default_url=url)
                 else:
                     url = f"{api_base}:{endpoint}"
             if stream is True:
-                url = url + "?alt=sse"
+                parsed_stream_url: Final = urlparse(url)
+                stream_query: Final = f"{parsed_stream_url.query}&alt=sse" if parsed_stream_url.query else "alt=sse"
+                url = parsed_stream_url._replace(query=stream_query).geturl()
         return auth_header, url
 
     def _get_token_and_url(
@@ -707,7 +723,7 @@ class VertexBase:
                 model=model,
                 stream=stream,
             )
-            auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
+            auth_header = {"x-goog-api-key": gemini_api_key}
         else:
             vertex_location = self.get_vertex_region(
                 vertex_region=vertex_location,
@@ -1191,7 +1207,18 @@ class VertexBase:
         )
 
     @staticmethod
-    def safe_get_vertex_ai_location(litellm_params: dict) -> str | None:
+    def explicit_vertex_ai_location(params: Mapping[str, object]) -> str | None:
+        """
+        The location explicitly configured in the given params, without any
+        module-level or environment fallback. None when not configured.
+        """
+        for configured in (params.get("vertex_location"), params.get("vertex_ai_location")):
+            if isinstance(configured, str) and configured:
+                return configured
+        return None
+
+    @staticmethod
+    def safe_get_vertex_ai_location(litellm_params: Mapping[str, object]) -> str | None:
         """
         Safely get Vertex AI location without mutating the litellm_params dict.
 
@@ -1205,8 +1232,7 @@ class VertexBase:
             Vertex AI location/region or None
         """
         return (
-            litellm_params.get("vertex_location")
-            or litellm_params.get("vertex_ai_location")
+            VertexBase.explicit_vertex_ai_location(litellm_params)
             or litellm.vertex_location
             or get_secret_str("VERTEXAI_LOCATION")
             or get_secret_str("VERTEX_LOCATION")

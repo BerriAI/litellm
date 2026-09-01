@@ -5,9 +5,11 @@ Pre-call hook that filters MCP tools semantically before LLM inference.
 Reduces context window size and improves tool selection accuracy.
 """
 
-from typing import TYPE_CHECKING, Any, Final, Optional
+from collections.abc import Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Final, Optional
 
 from fastapi import HTTPException
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -27,6 +29,13 @@ if TYPE_CHECKING:
     )
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.router import Router
+
+
+class SemanticToolFilterConfig(TypedDict, total=False):
+    enabled: ReadOnly[bool]
+    embedding_model: ReadOnly[str]
+    top_k: ReadOnly[int]
+    similarity_threshold: ReadOnly[float]
 
 
 def _truncate_csv_at_tool_name_boundary(tool_names_csv: str, max_length: int) -> str:
@@ -67,7 +76,7 @@ class SemanticToolFilterHook(CustomLogger):
             semantic_filter.top_k,
         )
 
-    def _should_expand_mcp_tools(self, tools: list[Any]) -> bool:
+    def _should_expand_mcp_tools(self, tools: Iterable[Mapping[str, object]]) -> bool:
         """
         Check if tools contain MCP references with server_url="litellm_proxy".
 
@@ -81,9 +90,9 @@ class SemanticToolFilterHook(CustomLogger):
 
     async def _expand_mcp_tools(
         self,
-        tools: list[Any],
+        tools: Iterable[Mapping[str, object]],
         user_api_key_dict: "UserAPIKeyAuth",
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, object]]:
         """
         Expand MCP references to actual tool definitions.
 
@@ -110,7 +119,7 @@ class SemanticToolFilterHook(CustomLogger):
         )
 
         # Convert Pydantic models to dicts for compatibility
-        openai_tools_as_dicts: Final = []
+        openai_tools_as_dicts: Final[list[dict[str, object]]] = []
         for tool in openai_tools:
             if hasattr(tool, "model_dump"):
                 tool_dict = tool.model_dump(exclude_none=True)
@@ -140,8 +149,8 @@ class SemanticToolFilterHook(CustomLogger):
     async def _filter_expanded_tools(
         self,
         data: dict,
-        expanded_tools: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
+        expanded_tools: list[dict[str, object]],
+    ) -> list[dict[str, object]]:
         """
         Apply the semantic filter to expanded MCP tool definitions.
 
@@ -158,13 +167,13 @@ class SemanticToolFilterHook(CustomLogger):
 
         return await self.filter.filter_tools(query=user_query, available_tools=expanded_tools)
 
-    def _selected_tool_names(self, filtered_tools: list[dict[str, Any]]) -> list[str]:
+    def _selected_tool_names(self, filtered_tools: Sequence[object]) -> list[str]:
         """Names of the semantically selected tools, as produced by the MCP expansion."""
         names: Final = (self.filter._extract_tool_info(tool)[0] for tool in filtered_tools)
         return [name for name in names if name]
 
     @staticmethod
-    def _narrow_mcp_references(tools: list[Any], selected_tool_names: list[str]) -> list[Any]:
+    def _narrow_mcp_references(tools: Sequence[Mapping[str, object]], selected_tool_names: list[str]) -> list[object]:
         """
         Restrict each litellm_proxy MCP reference to the semantically selected tools.
 
@@ -216,10 +225,10 @@ class SemanticToolFilterHook(CustomLogger):
     def _emit_filter_metadata(
         self,
         data: dict,
-        mcp_tools: list[object],
-        filtered_mcp_tools: list[object],
-        native_tools: list[object],
-        filtered_tools: list[object],
+        mcp_tools: Sequence[object],
+        filtered_mcp_tools: Sequence[object],
+        native_tools: Sequence[object],
+        filtered_tools: Sequence[object],
     ) -> None:
         """
         Emit response-header metadata when MCP tools were filtered.
@@ -251,10 +260,10 @@ class SemanticToolFilterHook(CustomLogger):
     def _emit_filter_metadata_safe(
         self,
         data: dict,
-        mcp_tools: list[object],
-        filtered_mcp_tools: list[object],
-        native_tools: list[object],
-        filtered_tools: list[object],
+        mcp_tools: Sequence[object],
+        filtered_mcp_tools: Sequence[object],
+        native_tools: Sequence[object],
+        filtered_tools: Sequence[object],
     ) -> None:
         """
         Emit filter metadata without letting an emission failure abort the
@@ -374,9 +383,9 @@ class SemanticToolFilterHook(CustomLogger):
             )
 
             if mcp_tools:
-                filtered_mcp_tools = await self.filter.filter_tools(
+                filtered_mcp_tools: list[object] = await self.filter.filter_tools(
                     query=user_query,
-                    available_tools=mcp_tools,  # type: ignore
+                    available_tools=mcp_tools,
                 )
             else:
                 filtered_mcp_tools = []
@@ -418,9 +427,9 @@ class SemanticToolFilterHook(CustomLogger):
         self,
         data: dict,
         user_api_key_dict: "UserAPIKeyAuth",
-        response: Any,
+        response: object,
         request_headers: dict[str, str] | None = None,
-        litellm_call_info: dict[str, Any] | None = None,
+        litellm_call_info: dict[str, object] | None = None,
     ) -> dict[str, str] | None:
         """Add semantic filter stats and tool names to response headers."""
         from litellm.constants import MAX_MCP_SEMANTIC_FILTER_TOOLS_HEADER_LENGTH
@@ -445,7 +454,7 @@ class SemanticToolFilterHook(CustomLogger):
 
         return headers
 
-    def _get_tool_names_csv(self, tools: list[Any]) -> str:
+    def _get_tool_names_csv(self, tools: Sequence[object]) -> str:
         """Extract tool names and return as CSV string."""
         if not tools:
             return ""
@@ -460,7 +469,7 @@ class SemanticToolFilterHook(CustomLogger):
 
     @staticmethod
     async def initialize_from_config(
-        config: dict[str, Any] | None,
+        config: SemanticToolFilterConfig | None,
         llm_router: Optional["Router"],
     ) -> Optional["SemanticToolFilterHook"]:
         """

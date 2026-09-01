@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any, Final
 
 import httpx
@@ -8,6 +8,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
+from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import verbose_logger
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -37,6 +38,11 @@ DROP_UNSUPPORTED_ADAPTIVE_EFFORT_WARNING: Final = (
     "Dropping adaptive `thinking`/`output_config.effort` for model=%s: the model "
     "does not support extended thinking, or max_tokens is too small to fit the "
     "minimum thinking budget."
+)
+
+DROP_UNFITTING_REASONING_EFFORT_WARNING: Final = (
+    "Dropping `thinking` mapped from reasoning_effort=%s for model=%s: max_tokens=%s "
+    "is too small to fit the minimum thinking budget."
 )
 
 
@@ -159,8 +165,61 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     def _is_system_role_message(message: Any) -> bool:
         return isinstance(message, dict) and message.get("role") == "system"
 
+    _CONVERTED_SYSTEM_NOTE: Final = (
+        "Operator note (not from the user): the following was originally a mid-conversation system-role reminder."
+    )
+
+    def _system_role_message_as_user(self, message: Mapping) -> Mapping:
+        return {
+            "role": "user",
+            "content": self._as_system_content_blocks(self._CONVERTED_SYSTEM_NOTE)
+            + self._as_system_content_blocks(message.get("content")),
+        }
+
+    @staticmethod
+    def _opens_with_tool_results(message: object) -> bool:
+        if not isinstance(message, dict) or message.get("role") != "user":
+            return False
+        content: Final = message.get("content")
+        return (
+            isinstance(content, list)
+            and len(content) > 0
+            and isinstance(content[0], dict)
+            and content[0].get("type") == "tool_result"
+        )
+
+    def _system_run_before(self, messages: Sequence, index: int) -> Sequence:
+        start: Final = next(
+            (j + 1 for j in range(index - 1, -1, -1) if not self._is_system_role_message(messages[j])),
+            0,
+        )
+        return messages[start:index]
+
+    def _system_run_end(self, messages: Sequence, index: int) -> int:
+        return next(
+            (j for j in range(index, len(messages)) if not self._is_system_role_message(messages[j])),
+            len(messages),
+        )
+
+    def _reordered_around_tool_results(self, messages: Sequence, index: int) -> tuple:
+        message: Final = messages[index]
+        if self._opens_with_tool_results(message):
+            return (message, *self._system_run_before(messages, index))
+        if not self._is_system_role_message(message):
+            return (message,)
+        run_end: Final = self._system_run_end(messages, index)
+        follower: Final = messages[run_end] if run_end < len(messages) else None
+        return () if self._opens_with_tool_results(follower) else (message,)
+
+    def _system_turns_after_tool_results(self, messages: Sequence) -> tuple:
+        return tuple(
+            message
+            for index in range(len(messages))
+            for message in self._reordered_around_tool_results(messages, index)
+        )
+
     def _normalize_system_role_messages(self, anthropic_messages_request: dict, model: str) -> None:
-        """Move ``role: "system"`` entries out of ``messages`` per the Anthropic
+        """Normalize ``role: "system"`` entries in ``messages`` per the Anthropic
         ``/v1/messages`` contract, which the first-party API, Bedrock Invoke,
         Vertex, and Azure Foundry all enforce identically.
 
@@ -173,9 +232,18 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         stay: hoisting one mutates the ``system`` prefix and invalidates the
         prompt cache for the whole message history. Older Claude models reject the
         role in every position ("role 'system' is not supported on this model"),
-        so without the flag every system entry is hoisted to keep the request from
-        400-ing. Billing-header system blocks are stripped from the top-level
-        ``system`` field regardless of whether anything was hoisted.
+        so without the flag a mid-conversation entry is converted to a user turn
+        in place (prefixed with an operator note) rather than hoisted: hoisting
+        would mutate the ``system`` prefix and likewise collapse the cache, while
+        the in-place conversion keeps everything before it byte-identical. Like
+        the hoist, the conversion carries only the entry's content. A run of
+        entries wedged between an assistant ``tool_use`` turn and its
+        ``tool_result`` turn is placed after that turn instead, since a user
+        turn in between would split the tool call from its result ("tool_use
+        ids were found without tool_result blocks immediately after") while
+        consecutive user turns merge upstream.
+        Billing-header system blocks are stripped from the top-level ``system``
+        field regardless of whether anything was hoisted.
 
         Subclasses whose upstream rejects the role opt in by calling this from
         their ``transform_anthropic_messages_request``; the first-party Anthropic
@@ -185,21 +253,24 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         messages: Final = anthropic_messages_request.get("messages")
         if not isinstance(messages, list):
             return
-        if _supports_factory(
-            model=model,
-            custom_llm_provider=self.custom_llm_provider,
-            key="supports_mid_conversation_system",
-        ):
-            leading_count: Final = next(
-                (i for i, m in enumerate(messages) if not self._is_system_role_message(m)),
-                len(messages),
+        leading_count: Final = next(
+            (i for i, m in enumerate(messages) if not self._is_system_role_message(m)),
+            len(messages),
+        )
+        hoisted: Final = messages[:leading_count]
+        remaining: Final = (
+            messages[leading_count:]
+            if _supports_factory(
+                model=model,
+                custom_llm_provider=self.custom_llm_provider,
+                key="supports_mid_conversation_system",
             )
-            hoisted = messages[:leading_count]
-            remaining = messages[leading_count:]
-        else:
-            hoisted = [m for m in messages if self._is_system_role_message(m)]
-            remaining = [m for m in messages if not self._is_system_role_message(m)]
-        if hoisted:
+            else [
+                self._system_role_message_as_user(m) if self._is_system_role_message(m) else m
+                for m in self._system_turns_after_tool_results(messages[leading_count:])
+            ]
+        )
+        if hoisted or remaining != messages:
             anthropic_messages_request["messages"] = remaining
         system_content: Final = [
             block
@@ -242,10 +313,20 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         # Check for Anthropic OAuth token in Authorization header
         headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
 
-        if "x-api-key" not in headers and "authorization" not in headers:
+        header_names: Final = frozenset(name.lower() for name in headers)
+        if "x-api-key" not in header_names and "authorization" not in header_names:
             auth_header: Final = AnthropicModelInfo.get_auth_header(api_key)
-            if auth_header is not None:
-                headers.update(auth_header)
+            if auth_header is None:
+                raise AuthenticationError(
+                    message=(
+                        "Missing Anthropic API Key - A call is being made to anthropic but no key is set "
+                        "either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` "
+                        "or `ANTHROPIC_AUTH_TOKEN` in your environment vars"
+                    ),
+                    llm_provider=self._resolved_provider,
+                    model=model,
+                )
+            headers.update(auth_header)
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION
         if "content-type" not in headers:
@@ -259,11 +340,15 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         return headers, api_base
 
     @staticmethod
-    def _translate_reasoning_effort_to_anthropic(model: str, optional_params: dict, custom_llm_provider: str) -> None:
+    def _translate_reasoning_effort_to_anthropic(
+        model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str
+    ) -> None:
         """Map OpenAI-style ``reasoning_effort`` to native Anthropic params.
 
         Caller-supplied ``thinking`` / ``output_config`` win over the alias.
-        ``effort='none'`` clears both. Invalid efforts raise a 400.
+        ``effort='none'`` clears both. Invalid efforts raise a 400. A mapped
+        thinking budget is capped below ``max_tokens`` and dropped when even
+        the minimum budget cannot fit.
         """
         from litellm.exceptions import BadRequestError as _BadRequestError
         from litellm.llms.anthropic.chat.transformation import (
@@ -289,7 +374,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params.pop("output_config", None)
             return
 
-        optional_params.setdefault("thinking", mapped_thinking)
+        fitted_thinking: Final = AnthropicConfig.cap_thinking_budget_to_max_tokens(mapped_thinking, max_tokens)
+        if fitted_thinking is None:
+            verbose_logger.warning(DROP_UNFITTING_REASONING_EFFORT_WARNING, reasoning_effort, model, max_tokens)
+            return
+
+        optional_params.setdefault("thinking", fitted_thinking)
         if AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
             mapped_effort: Final = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
             if mapped_effort is None:
@@ -314,12 +404,18 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     def _translate_legacy_thinking_for_adaptive_model(
         model: str, optional_params: dict, custom_llm_provider: str
     ) -> None:
-        """Translate legacy ``thinking.type=enabled`` to adaptive for 4.6/4.7.
-        Caller-provided ``output_config.effort`` is never overridden.
+        """Translate legacy ``thinking.type=enabled`` to adaptive for the
+        adaptive-thinking models that reject it (4.7+ and the 5 families).
+        Models flagged ``supports_legacy_thinking`` (the 4.6 family) accept the
+        legacy shape natively, so it is forwarded verbatim and the caller's
+        ``budget_tokens`` cap keeps applying. Caller-provided
+        ``output_config.effort`` is never overridden.
         """
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
         if not AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
+            return
+        if AnthropicModelInfo._supports_legacy_thinking(model, custom_llm_provider):
             return
         thinking: Final = optional_params.get("thinking")
         if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
@@ -428,7 +524,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         except _BadRequestError as e:
             raise AnthropicError(message=str(e.message), status_code=400)
         capped_thinking: Final = (
-            AnthropicConfig._cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
+            AnthropicConfig.cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
             if legacy_thinking is not None
             else None
         )
@@ -500,6 +596,13 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self._translate_reasoning_effort_to_anthropic(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
+            max_tokens=max_tokens,
+            custom_llm_provider=self._resolved_provider,
+        )
+
+        AnthropicModelInfo.maybe_drop_disabled_thinking(
+            model=model,
+            optional_params=anthropic_messages_optional_request_params,
             custom_llm_provider=self._resolved_provider,
         )
 
@@ -552,7 +655,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         _tools: Final = anthropic_messages_optional_request_params.get("tools") or []
         _has_advisor: Final = any(isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for t in _tools)
         if not _has_advisor:
-            messages = strip_advisor_blocks_from_messages(messages)  # type: ignore[assignment]
+            messages = strip_advisor_blocks_from_messages(messages)
 
         anthropic_messages_request: Final[AnthropicMessagesRequest] = AnthropicMessagesRequest(
             messages=messages,

@@ -8,6 +8,7 @@
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
 
 import asyncio
+import contextlib
 import copy
 import enum
 import hashlib
@@ -18,19 +19,21 @@ import re
 import threading
 import time
 import traceback
+import weakref
 from collections import defaultdict
-from collections.abc import AsyncGenerator, Callable, Generator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Generator, Mapping, Sequence
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeVar, Union, cast
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypeVar, Union, cast
 
 import anyio
 import httpx
 import openai
 from openai import AsyncOpenAI
+from pydantic import BaseModel
 from typing_extensions import overload
 
 import litellm
-import litellm.litellm_core_utils
 import litellm.litellm_core_utils.exception_mapping_utils
 from litellm import get_secret_str
 from litellm._logging import verbose_router_logger
@@ -42,28 +45,43 @@ from litellm.caching.caching import (
     RedisClusterCache,
 )
 from litellm.constants import (
+    CONSUMED_REQUEST_TAGS_METADATA_KEY,
+    DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
+    SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     coerce_token_limit,
+    get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
 )
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.ptu_pricing import (
+    PTU_COST_ATTRIBUTION_ENV_VAR,
+    declares_ptu,
+    is_ptu_cost_attribution_enabled,
+    ptu_config_error,
+    ptu_identity_error,
+    ptu_terms,
+    zeroed_ptu_pricing,
+)
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.sensitive_data_masker import (
     SensitiveDataMasker,
+    mask_credentials_in_payload,
     mask_sensitive_structure,
 )
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
@@ -91,6 +109,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
     response_in_flight_token_count,
 )
 from litellm.router_utils.auto_router_model_naming import (
+    AUTO_ROUTER_MODEL_PREFIX,
     classify_strategy_router_model,
 )
 from litellm.router_utils.batch_utils import (
@@ -108,17 +127,21 @@ from litellm.router_utils.common_utils import (
     filter_team_based_models,
     filter_web_search_deployments,
     resolve_model_group_alias,
+    truncate_fallback_error_detail,
+    warn_on_provider_credential_mismatch,
 )
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.router_utils.cooldown_handlers import (
     DEFAULT_COOLDOWN_TIME_SECONDS,
     _async_get_cooldown_deployments,
     _async_get_cooldown_deployments_with_debug_info,
+    _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper across router_utils submodules, matching the other cooldown_handlers imports on this line
     _get_cooldown_deployments,
     _set_cooldown_deployments,
     is_advisor_orchestration_failure,
 )
 from litellm.router_utils.fallback_event_handlers import (
+    AttemptedFallbackTargets,
     _check_non_standard_fallback_format,
     get_fallback_model_group,
     run_async_fallback,
@@ -133,6 +156,7 @@ from litellm.router_utils.handle_error import (
 from litellm.router_utils.health_state_cache import DeploymentHealthCache
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
+    warn_on_unknown_model_group_affinity_flags,
 )
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     build_io_token_rate_limit_headers,
@@ -145,6 +169,11 @@ from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
 )
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
+)
+from litellm.router_utils.reasoning_effort_capability import (
+    deployment_is_catalog_mapped,
+    intersect_supported_reasoning_efforts,
+    resolve_supported_reasoning_efforts,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
@@ -163,10 +192,12 @@ from litellm.types.router import (
     AlertingConfig,
     AllowedFailsPolicy,
     AssistantsTypedDict,
+    ConsumedRequestTagsStamp,
     CredentialLiteLLMParams,
     CustomRoutingStrategyBase,
     Deployment,
     DeploymentTypedDict,
+    FallbackAccessCheck,
     GuardrailTypedDict,
     LiteLLM_Params,
     MockRouterTestingParams,
@@ -175,6 +206,7 @@ from litellm.types.router import (
     PreRoutingStrategy,
     RetryPolicy,
     RouterCacheEnum,
+    RouterErrors,
     RouterGeneralSettings,
     RouterModelGroupAliasItem,
     RouterRateLimitError,
@@ -192,11 +224,13 @@ from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     GenericBudgetConfigType,
     LiteLLMBatch,
+    LlmProviders,
     ModelInfo,
     ModelResponseStream,
     StandardLoggingPayload,
     StandardLoggingRoutingDecision,
     Usage,
+    all_litellm_params,
     shared_backend_model_info,
 )
 from litellm.types.utils import ModelInfo as ModelMapInfo
@@ -211,6 +245,8 @@ from litellm.utils import (
     get_secret,
     get_utc_datetime,
     is_region_allowed,
+    provider_rejectable_params,
+    set_live_deployment_replay,
 )
 
 from .router_utils.pattern_match_deployments import PatternMatchRouter
@@ -218,6 +254,7 @@ from .router_utils.pattern_match_deployments import PatternMatchRouter
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.exceptions import MidStreamFallbackError
     from litellm.responses.streaming_iterator import (
         BaseResponsesAPIStreamingIterator,
     )
@@ -234,6 +271,9 @@ if TYPE_CHECKING:
     from litellm.router_strategy.quality_router.quality_router import (
         QualityRouter,
     )
+    from litellm.types.llms.anthropic_messages.anthropic_response import (
+        AnthropicMessagesResponse,
+    )
     from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
     from litellm.types.llms.openai import (
         ResponseAPIUsage,
@@ -241,7 +281,7 @@ if TYPE_CHECKING:
         ResponsesAPIResponse,
     )
 
-    Span = Union[_Span, Any]
+    Span = _Span
 else:
     Span = Any
     AutoRouter = Any
@@ -249,6 +289,14 @@ else:
     AdaptiveRouter = Any
     QualityRouter = Any
     PreRoutingHookResponse = Any
+
+RouterStrategySelector: TypeAlias = (
+    LeastBusyLoggingHandler
+    | LowestCostLoggingHandler
+    | LowestLatencyLoggingHandler
+    | LowestTPMLoggingHandler
+    | LowestTPMLoggingHandler_v2
+)
 
 
 def _cost_value_as_float(value: str | float | None) -> float | None:
@@ -299,6 +347,9 @@ def model_info_is_active_for_environment(model_info: Mapping[str, object] | None
 
 _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
 
+_ALIAS_PARAMS_NEVER_FORWARDED: Final = frozenset({"model", "api_base", "api_key", "api_version"})
+_ALIAS_MARKER_FORWARDED_PARAMS_KWARG: Final = "_alias_marker_forwarded_params"
+
 
 def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream]) -> bool:
     for chunk in chunks:
@@ -320,8 +371,191 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
     return False
 
 
+# Router._aanthropic_messages_streaming_iterator buffers lifecycle chunks
+# until real content commits the primary stream; a hostile or slow-starting
+# upstream that never emits content or an error could otherwise grow that
+# buffer without bound, so hitting this cap forces an early commit instead.
+MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS: Final = 200
+
+
+def _anthropic_stream_should_drop_pre_content_ping(chunk: object, has_generated_content: bool) -> bool:
+    """A `ping` keepalive seen before any real content is dropped outright - it recurs indefinitely on a
+    slow-starting connection and carries nothing worth buffering toward a possible fallback."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import is_anthropic_ping_chunk
+
+    if has_generated_content:
+        return False
+    return is_anthropic_ping_chunk(chunk)
+
+
+def _anthropic_stream_forwards_ping_live(chunk: object, has_generated_content: bool, buffered_chunk_count: int) -> bool:
+    """A `ping` that no lifecycle frame precedes reaches the client live: a fallback's own message_start can still
+    follow it without overlapping lifecycles, and AgenticAnthropicStreamingIterator's hold-back keepalive is exactly
+    such a ping."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import is_anthropic_ping_chunk
+
+    if has_generated_content or buffered_chunk_count:
+        return False
+    return is_anthropic_ping_chunk(chunk)
+
+
+def _is_retriable_anthropic_status(status_code: int) -> bool:
+    return status_code == 429 or status_code >= 500
+
+
+def _anthropic_stream_error_is_gateway_verdict(chunk: object) -> bool:
+    """AgenticAnthropicStreamingIterator's own retrieval-failure frame is the gateway's verdict, not a provider
+    failure: another deployment would rerun the same failed hook, so it reaches the client instead of falling back."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
+        is_server_fulfilled_tool_leak_error,
+    )
+
+    return is_server_fulfilled_tool_leak_error(chunk)
+
+
+def _anthropic_stream_should_decline_fallback(has_generated_content: bool, error: "MidStreamFallbackError") -> bool:
+    """
+    A MidStreamFallbackError raised directly by the source iterator (the
+    completion-bridge path's CustomStreamWrapper, e.g. on a transport drop)
+    carries its own pre_first_chunk bookkeeping - gated the same way a
+    detected SSE error event is, so a fallback is never appended after real
+    content already reached the client on either path.
+    """
+    return has_generated_content or not error.is_pre_first_chunk
+
+
+def _anthropic_stream_raised_error_status(error: Exception) -> int | None:
+    raw_status: Final = getattr(error, "status_code", None)
+    if isinstance(raw_status, int):
+        return raw_status
+    if isinstance(raw_status, str) and raw_status.isdigit():
+        return int(raw_status)
+    response_status: Final = getattr(getattr(error, "response", None), "status_code", None)
+    return response_status if isinstance(response_status, int) else None
+
+
+def _anthropic_stream_fallback_error_for_raised(
+    error: Exception, model: str, has_generated_content: bool
+) -> "MidStreamFallbackError | None":
+    """Same gate as a detected SSE error event; None means the raise propagates unchanged."""
+    from litellm.exceptions import MidStreamFallbackError
+
+    if has_generated_content:
+        return None
+    status_code: Final = _anthropic_stream_raised_error_status(error)
+    if status_code is not None and not _is_retriable_anthropic_status(status_code):
+        return None
+    return MidStreamFallbackError(
+        message=str(error),
+        model=model,
+        llm_provider="anthropic",
+        original_exception=error,
+        is_pre_first_chunk=True,
+    )
+
+
+def _anthropic_stream_commits_now(chunk: object, has_generated_content: bool, buffered_chunk_count: int) -> bool:
+    """
+    Whether `chunk` should make Router._aanthropic_messages_streaming_iterator
+    commit to the primary Anthropic stream (real content arrived, or the
+    pre-content buffer cap was hit) rather than keep buffering lifecycle
+    frames toward a possible fallback.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+        is_anthropic_content_delta_chunk,
+    )
+
+    if has_generated_content:
+        return False
+    return is_anthropic_content_delta_chunk(chunk) or buffered_chunk_count >= MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS
+
+
+class FallbackAwareAnthropicMessagesStream:
+    """
+    Bare async generators can't carry the `_hidden_params` attribute the
+    proxy reads response headers off of (see
+    router_utils.add_retry_fallback_headers.get_hidden_params_dict), so this
+    thin wrapper carries it through from the source iterator - mirrors
+    AnthropicMessagesStreamingResponse. Used by
+    Router._aanthropic_messages_streaming_iterator.
+    """
+
+    def __init__(self, async_generator: AsyncGenerator[bytes, None], source_iterator: object) -> None:
+        self._async_generator = async_generator
+        self._source_iterator = source_iterator
+        self._hidden_params = dict(  # mutable-ok: mutated in place by merge_fallback_hidden_params
+            getattr(source_iterator, "_hidden_params", None) or {}
+        )
+
+    @property
+    def has_buffered_provider_output(self) -> bool:
+        return getattr(self._source_iterator, "has_buffered_provider_output", False) is True
+
+    def adopt_fallback_source(self, fallback_response: object) -> None:
+        self._source_iterator = fallback_response
+
+    def __aiter__(self) -> "FallbackAwareAnthropicMessagesStream":
+        return self
+
+    async def __anext__(self) -> bytes:
+        return await self._async_generator.__anext__()
+
+    async def aclose(self) -> None:
+        await self._async_generator.aclose()
+
+    def merge_fallback_hidden_params(
+        self,
+        fallback_hidden_params: Mapping[str, object],
+        fallback_headers: Mapping[str, object],
+    ) -> None:
+        """
+        Raw bytes can't carry their own _hidden_params the way a
+        ModelResponseStream/ResponsesAPI event can, so a mid-stream
+        fallback's provider headers (e.g. Bedrock's x-amzn-requestid) are
+        merged onto the wrapper itself instead - mirrors
+        Router._apply_fallback_hidden_params_to_item's merge shape.
+        """
+        existing_headers: Final = cast(  # cast-ok: additional_headers is always a dict[str, object] when present
+            "dict[str, object]", self._hidden_params.get("additional_headers") or {}
+        )
+        self._hidden_params = {  # mutable-ok: matches _hidden_params' existing dict[str, object] shape
+            **self._hidden_params,
+            **fallback_hidden_params,
+            "additional_headers": {**existing_headers, **fallback_headers},  # mutable-ok: same shape
+        }
+
+
 class RoutingArgs(enum.Enum):
     ttl = 60  # 1min (RPM/TPM expire key)
+
+
+# Routers that are still in use, so a price data reload can rebuild the cost-map
+# entries their deployments own. Weak so a router nothing references any more, such
+# as the per-request one built from a caller-supplied user_config, drops out on its
+# own rather than leaving entries behind that nothing can withdraw.
+_live_routers: Final["weakref.WeakSet[Router]"] = weakref.WeakSet()  # mutable-ok: identity set of live routers
+
+
+def _replay_live_router_model_cost() -> None:
+    """Re-assert every live router's deployments after the cost map is refreshed."""
+    for router in tuple(_live_routers):
+        router._replay_model_cost_registrations()
+
+
+set_live_deployment_replay(_replay_live_router_model_cost)
+
+
+# Kwargs that carry no signal about the failed attempt, so log_retry drops them from a
+# breadcrumb entirely: the request payload and the router-internal walk state. Credentials are
+# handled separately by mask_credentials_in_payload, which scrubs credential-named values from
+# whatever kwargs remain rather than trying to enumerate every credential-bearing key here.
+RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(
+    (
+        "messages",
+        "original_function",
+        "attempted_targets",
+    )
+)
 
 
 class Router:
@@ -372,6 +606,7 @@ class Router:
         enable_pre_call_checks: bool = False,
         enable_tag_filtering: bool = False,
         tag_filtering_match_any: bool = True,
+        tag_routing_prefix: str = "",
         plugins: list[RoutingPlugin] | None = None,
         retry_after: int = 0,  # min time to wait before retrying a failed request
         retry_policy: RetryPolicy | dict | None = None,  # set custom retries for different exceptions
@@ -401,7 +636,9 @@ class Router:
         enable_health_check_routing: bool = False,
         health_check_staleness_threshold: int | None = None,
         health_check_ignore_transient_errors: bool = False,
+        background_health_check_model_groups: Sequence[str] | None = None,
         enable_weighted_failover: bool = False,
+        fallback_access_check: FallbackAccessCheck | None = None,
     ) -> None:
         """
         Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -438,6 +675,7 @@ class Router:
             deployment_affinity_ttl_seconds (int): TTL for user-key -> deployment affinity mapping. Defaults to 3600.
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
             enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
+            fallback_access_check (Optional[FallbackAccessCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects is skipped. Defaults to None (every configured fallback is attempted).
         Returns:
             Router: An instance of the litellm.Router class.
 
@@ -477,10 +715,12 @@ class Router:
 
         self.set_verbose = set_verbose
         self.ignore_invalid_deployments = ignore_invalid_deployments
+        self.fallback_access_check: Final = fallback_access_check
         self.debug_level = debug_level
         self.enable_pre_call_checks = enable_pre_call_checks
         self.enable_tag_filtering = enable_tag_filtering
         self.tag_filtering_match_any = tag_filtering_match_any
+        self.tag_routing_prefix = tag_routing_prefix
         from litellm._service_logger import ServiceLogging
 
         self.service_logger_obj: ServiceLogging = ServiceLogging()
@@ -513,7 +753,7 @@ class Router:
                 cache_config["host"] = redis_host
 
             if redis_port is not None:
-                cache_config["port"] = str(redis_port)  # type: ignore
+                cache_config["port"] = str(redis_port)
 
             if redis_password is not None:
                 cache_config["password"] = redis_password
@@ -531,7 +771,7 @@ class Router:
         if cache_responses:
             if litellm.cache is None:
                 # the cache can be initialized on the proxy server. We should not overwrite it
-                litellm.cache = litellm.Cache(type=cache_type, **cache_config)  # type: ignore
+                litellm.cache = litellm.Cache(type=cache_type, **cache_config)
             self.cache_responses = cache_responses
         self.cache = DualCache(
             redis_cache=redis_cache, in_memory_cache=InMemoryCache()
@@ -568,8 +808,10 @@ class Router:
         self.team_public_model_names: frozenset[str] = frozenset()
 
         # Initialize cache attributes that ``_invalidate_model_group_info_cache``
-        # touches *before* the first ``set_model_list`` below (which calls
-        # that invalidation as part of building the model index).
+        # and ``_invalidate_access_groups_cache`` touch *before* the first
+        # ``set_model_list`` below (which calls those invalidations as part of
+        # building the model index) and before ``_init_routing_groups(None)``
+        # (which calls them on every group rebuild).
         self._access_groups_cache: dict[str, list[str]] | None = None
         # Per-router cache for the proxy auth-layer "is this model explicitly
         # zero-cost?" check. Lives on the router so it is invalidated alongside
@@ -577,11 +819,20 @@ class Router:
         # ``id()``-reuse risk after GC). See
         # ``litellm.proxy.auth.auth_checks._is_model_cost_zero``.
         self._zero_cost_cache: dict[str, bool] = {}
+        self._routing_group_rows: tuple[DeploymentTypedDict, ...] | None = None
+        self._init_routing_groups(None)
+
+        self.deployment_affinity_ttl_seconds = deployment_affinity_ttl_seconds
+        self.model_group_affinity_config = model_group_affinity_config
+        warn_on_unknown_model_group_affinity_flags(model_group_affinity_config)
 
         if model_list is not None:
             # set_model_list will build indices automatically
             self.set_model_list(model_list)
-            self.healthy_deployments: list = self.model_list  # type: ignore
+            # Track this router so a price data reload can rebuild its deployments'
+            # cost-map entries from the list it is serving at that moment.
+            _live_routers.add(self)
+            self.healthy_deployments: list = self.model_list
             for m in model_list:
                 if "model" in m["litellm_params"]:
                     self.deployment_latency_map[m["litellm_params"]["model"]] = 0
@@ -598,6 +849,11 @@ class Router:
         self.enable_health_check_routing = enable_health_check_routing
         self.enable_weighted_failover = enable_weighted_failover
         self.health_check_ignore_transient_errors = health_check_ignore_transient_errors
+        self.background_health_check_model_groups: frozenset[str] | None = (
+            frozenset(background_health_check_model_groups)
+            if background_health_check_model_groups is not None
+            else None
+        )
         _staleness: Final = health_check_staleness_threshold or (
             DEFAULT_HEALTH_CHECK_INTERVAL * DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER
         )
@@ -691,7 +947,7 @@ class Router:
                 routing_strategy_args=routing_strategy_args,
             )
         self._init_routing_groups(self._routing_groups_input)
-        self._override_selectors: dict[str, Any] = {}
+        self._override_selectors: dict[str, RouterStrategySelector | None] = {}
         self._override_selectors_lock = threading.Lock()
         self.access_groups = None
         ## USAGE TRACKING ##
@@ -716,7 +972,6 @@ class Router:
             litellm.failure_callback = [self.deployment_callback_on_failure]
         self.routing_strategy_args = routing_strategy_args
         self.provider_budget_config = provider_budget_config
-        self.deployment_affinity_ttl_seconds = deployment_affinity_ttl_seconds
         self.router_budget_logger: RouterBudgetLimiting | None = None
         if RouterBudgetLimiting.should_init_router_budget_limiter(
             model_list=model_list, provider_budget_config=self.provider_budget_config
@@ -738,7 +993,6 @@ class Router:
                 )
 
         self.model_group_retry_policy: dict[str, RetryPolicy] | None = model_group_retry_policy
-        self.model_group_affinity_config: dict[str, list[str]] | None = model_group_affinity_config
 
         self.allowed_fails_policy: AllowedFailsPolicy | None = None
         if allowed_fails_policy is not None:
@@ -761,21 +1015,8 @@ class Router:
         # If model_group_affinity_config is set but no global affinity checks were
         # enabled, we still need the DeploymentAffinityCheck callback (with global
         # flags all False) so per-group config can activate affinity per model group.
-        if self.model_group_affinity_config and not any(
-            isinstance(cb, DeploymentAffinityCheck) for cb in (self.optional_callbacks or [])
-        ):
-            if self.optional_callbacks is None:
-                self.optional_callbacks = []
-            affinity_callback: Final = DeploymentAffinityCheck(
-                cache=self.cache,
-                ttl_seconds=self.deployment_affinity_ttl_seconds,
-                enable_user_key_affinity=False,
-                enable_responses_api_affinity=False,
-                enable_session_id_affinity=False,
-                model_group_affinity_config=self.model_group_affinity_config,
-            )
-            self.optional_callbacks.append(affinity_callback)
-            litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
+        if self.model_group_affinity_config:
+            self._ensure_deployment_affinity_callback()
 
         if self.alerting_config is not None:
             self._initialize_alerting()
@@ -808,6 +1049,9 @@ class Router:
         Pseudo-destructor to be invoked to clean up global data structures when router is no longer used.
         For now, unhook router's callbacks from all lists
         """
+        # Stop contributing to cost-map rebuilds straight away rather than waiting
+        # for this router to be collected.
+        _live_routers.discard(self)
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm._async_success_callback, self)
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.success_callback, self)
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm._async_failure_callback, self)
@@ -896,21 +1140,21 @@ class Router:
         strategy: RoutingStrategy | str,
         routing_strategy_args: dict,
         register_callbacks: bool = True,
-    ) -> Any | None:
+    ) -> RouterStrategySelector | None:
         """
         Constructs a strategy selector for a given strategy.
         Returns None for `simple-shuffle` (no selector needed) and unknown
         strategies.
         """
-        selector: Any | None = None
+        selector: RouterStrategySelector | None = None
         match self._normalize_strategy(strategy):
             case RoutingStrategy.LEAST_BUSY.value:
                 selector = LeastBusyLoggingHandler(router_cache=self.cache)
                 if register_callbacks:
                     if isinstance(litellm.input_callback, list):
-                        litellm.input_callback.append(selector)  # type: ignore
+                        litellm.input_callback.append(selector)
                     else:
-                        litellm.input_callback = [selector]  # type: ignore
+                        litellm.input_callback = [selector]
             case RoutingStrategy.USAGE_BASED_ROUTING.value:
                 selector = LowestTPMLoggingHandler(
                     router_cache=self.cache,
@@ -935,11 +1179,11 @@ class Router:
                 pass
 
         if selector is not None and register_callbacks and isinstance(litellm.callbacks, list):
-            litellm.logging_callback_manager.add_litellm_callback(selector)  # type: ignore
+            litellm.logging_callback_manager.add_litellm_callback(selector)
 
         return selector
 
-    def _unregister_router_selectors(self, selectors: list[Any]) -> None:
+    def _unregister_router_selectors(self, selectors: Sequence[object]) -> None:
         """
         Drop router-owned strategy selectors from litellm's global callback
         lists by identity. Used before re-init (`routing_strategy_init` /
@@ -996,13 +1240,16 @@ class Router:
         `"default"` group, whose selectors are the `self.<strategy>_logger`
         attributes set up in `routing_strategy_init`.
         """
-        self._unregister_router_selectors(
-            [sel for selectors in getattr(self, "_group_selectors", {}).values() for sel in selectors.values()]
+        group_selectors: Final[Mapping[str, Mapping[str, RouterStrategySelector]]] = getattr(
+            self, "_group_selectors", {}
         )
+        self._unregister_router_selectors([sel for selectors in group_selectors.values() for sel in selectors.values()])
 
         self._routing_groups: dict[str, RoutingGroup] = {}
         self._model_to_group: dict[str, str] = {}
-        self._group_selectors: dict[str, dict[str, Any]] = {}
+        self._group_selectors: dict[str, dict[str, RouterStrategySelector]] = {}
+        self._invalidate_model_group_info_cache()
+        self._invalidate_access_groups_cache()
 
         if not groups_input:
             return
@@ -1017,6 +1264,12 @@ class Router:
                 raise ValueError("routing_groups: group_name must be non-empty.")
             if group.group_name == "default":
                 raise ValueError("routing_groups: 'default' is reserved for the implicit fallback group.")
+            if group.group_name in known_model_names or group.group_name in (self.model_group_alias or {}):
+                verbose_router_logger.warning(
+                    "routing_groups: group_name '%s' is shadowed by an existing model_name or model_group_alias; "
+                    "the group's strategy still applies to its members, but the name is not callable until renamed.",
+                    group.group_name,
+                )
             if group.group_name in seen_group_names:
                 raise ValueError(
                     f"routing_groups: group names must be unique, duplicate group_name '{group.group_name}'."
@@ -1053,6 +1306,82 @@ class Router:
                 {strategy_value: group_selector} if group_selector is not None else {}
             )
 
+    def get_routing_group(self, model_name: str) -> RoutingGroup | None:
+        """
+        The routing group callable as `model_name`, or None. A real deployment
+        `model_name` added after init shadows a same-named group (mirroring
+        `_try_early_resolve_deployments_for_model_not_in_names`, where concrete
+        models win over indirection); config-time collisions are rejected by
+        `_init_routing_groups`.
+        """
+        if not self._routing_groups:
+            return None
+        group: Final = self._routing_groups.get(model_name)
+        if (
+            group is None
+            or model_name in self.model_name_to_deployment_indices
+            or model_name in (self.model_group_alias or {})
+        ):
+            return None
+        return group
+
+    def _get_routing_group_deployments(
+        self, model: str, team_id: str | None = None
+    ) -> list[DeploymentTypedDict] | None:  # mutable-ok: list matches _get_all_deployments' contract for callers
+        """
+        The union of member deployments for a routing group called as `model`,
+        or None when `model` is not a callable group. The requested name stays
+        the group name so strategy selectors key their state by it.
+
+        `_common_checks_available_deployment` consults this BEFORE its
+        early-resolve step so a wildcard `default_deployment` or pattern route
+        cannot hijack a group call. Overall resolution precedence there:
+        specific deployment > model id > model_group_alias > routing group >
+        model_name > team/pattern/default fallbacks.
+        """
+        if not self._routing_groups:
+            return None
+        routing_group: Final = self.get_routing_group(model)
+        if routing_group is None:
+            return None
+        return [  # mutable-ok: matches _get_all_deployments' list contract expected by downstream filters
+            deployment
+            for member in routing_group.models
+            for deployment in self._get_all_deployments(model_name=member, team_id=team_id)
+        ]
+
+    def is_recognized_model(self, model: str) -> bool:
+        """
+        Whether `model` names something this router serves directly: a
+        deployment model_name, a deployment id, a `model_group_alias`, or a
+        callable routing group. Proxy request gates share this predicate so a
+        new virtual-model kind cannot be forgotten at one of them; wildcard,
+        default-deployment, and deployment-name fallbacks stay caller policy.
+        """
+        return (
+            model in self.model_names
+            or self.has_model_id(model)
+            or (self.model_group_alias is not None and model in self.model_group_alias)
+            or self.get_routing_group(model) is not None
+        )
+
+    def routing_group_has_alternatives(self, model_group: str | None) -> bool:
+        """
+        True when `model_group` names a callable routing group whose member
+        union spans more than one deployment. Cooldown handling passes the
+        FAILING REQUEST's model group here: a 429 on a group call cools the
+        member down so selection moves to the group's alternatives, while a
+        direct call to a single-deployment member keeps the
+        single-deployment-model-group cooldown exemption.
+        """
+        if model_group is None:
+            return False
+        resolved: Final = self._get_model_from_alias(model=model_group) or model_group
+        group: Final = self.get_routing_group(resolved)
+        if group is None:
+            return False
+        return sum(len(self.model_name_to_deployment_indices.get(member) or ()) for member in group.models) > 1
+
     _OVERRIDABLE_ROUTING_STRATEGIES: frozenset[str] = frozenset({"simple-shuffle", *_DEFAULT_SELECTOR_ATTR_BY_STRATEGY})
 
     def _get_request_routing_strategy_override(self, request_kwargs: dict | None) -> str | None:
@@ -1080,7 +1409,7 @@ class Router:
             return None
         return strategy
 
-    def _get_override_strategy_selector(self, strategy: str) -> Any | None:
+    def _get_override_strategy_selector(self, strategy: str) -> RouterStrategySelector | None:
         """
         Returns the selector for a per-request strategy override.
 
@@ -1101,7 +1430,9 @@ class Router:
                 )
             return self._override_selectors[strategy]
 
-    def _get_routing_context(self, model: str, request_kwargs: dict | None = None) -> tuple[str | None, Any | None]:
+    def _get_routing_context(
+        self, model: str, request_kwargs: dict | None = None
+    ) -> tuple[str | None, RouterStrategySelector | None]:
         """
         Resolves the routing strategy and selector to use for the given model.
 
@@ -1111,8 +1442,10 @@ class Router:
         the most specific expression of caller intent.
 
         Otherwise every model belongs to exactly one group: an explicit entry
-        from `routing_groups`, or the implicit `"default"` group driven by the
-        router's top-level `routing_strategy` / `routing_strategy_args`.
+        from `routing_groups` (either because `model` IS a callable group name,
+        or because it is a member of one), or the implicit `"default"` group
+        driven by the router's top-level `routing_strategy` /
+        `routing_strategy_args`.
 
         `self.routing_strategy` may be either a string or a `RoutingStrategy`
         enum member (the constructor accepts both), so it is normalized to a
@@ -1124,7 +1457,7 @@ class Router:
             verbose_router_logger.debug("routing_group=request-override model=%s strategy=%s", model, override)
             return override, self._get_override_strategy_selector(override)
 
-        group_name: Final = self._model_to_group.get(model)
+        group_name: Final = model if self.get_routing_group(model) is not None else self._model_to_group.get(model)
         if group_name is None:
             strategy = self._normalize_strategy(self.routing_strategy)
             attr: Final = self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.get(strategy or "")
@@ -1497,7 +1830,7 @@ class Router:
 
         # Auto-register JSON-generated container file endpoints
         for name, func in container_file_endpoints.items():
-            setattr(self, name, self.factory_function(func, call_type=name))  # type: ignore[arg-type]
+            setattr(self, name, self.factory_function(func, call_type=name))
 
     def _initialize_skills_endpoints(self):
         """Initialize Anthropic Skills API endpoints."""
@@ -1630,6 +1963,28 @@ class Router:
 
             _move_before_deployment_affinity(self.optional_callbacks, ec_callback)
             _move_before_deployment_affinity(litellm.callbacks, ec_callback)
+
+    def _ensure_deployment_affinity_callback(self) -> None:
+        """Register the DeploymentAffinityCheck callback (global flags all False) if absent.
+
+        Needed when nothing enabled a global affinity flag but affinity can still
+        activate per request: per-group `model_group_affinity_config` entries, or the
+        session-affinity marker a complexity router stamps at pre-routing time.
+        """
+        if any(isinstance(cb, DeploymentAffinityCheck) for cb in (self.optional_callbacks or [])):
+            return
+        if self.optional_callbacks is None:
+            self.optional_callbacks = []
+        affinity_callback: Final = DeploymentAffinityCheck(
+            cache=self.cache,
+            ttl_seconds=self.deployment_affinity_ttl_seconds,
+            enable_user_key_affinity=False,
+            enable_responses_api_affinity=False,
+            enable_session_id_affinity=False,
+            model_group_affinity_config=self.model_group_affinity_config,
+        )
+        self.optional_callbacks.append(affinity_callback)
+        litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
 
     def add_optional_pre_call_checks(self, optional_pre_call_checks: OptionalPreCallChecks | None):
         if optional_pre_call_checks is None:
@@ -1832,6 +2187,13 @@ class Router:
                         llm_provider="",
                     )
 
+            if (
+                isinstance(response, CustomStreamWrapper)
+                and response.completion_stream is None
+                and response.make_call is not None
+            ):
+                response.fetch_sync_stream()
+
             # Wrap streaming responses so MidStreamFallbackError (raised
             # during iteration) triggers the Router's fallback chain.
             if isinstance(response, CustomStreamWrapper):
@@ -1847,7 +2209,7 @@ class Router:
             # Set per-deployment num_retries on exception for retry logic
             if deployment is not None:
                 self._set_deployment_num_retries_on_exception(e, deployment)
-                self._set_failed_deployment_id_on_exception(e, deployment)
+                self._stamp_failed_deployment_id_with_effective_model_info(e, deployment, kwargs)
             raise e
 
     def _get_silent_experiment_kwargs(self, **kwargs) -> dict:
@@ -1895,7 +2257,7 @@ class Router:
 
         return silent_kwargs
 
-    def _silent_experiment_completion(self, silent_model: str, messages: list[Any], **kwargs):
+    def _silent_experiment_completion(self, silent_model: str, messages: Sequence[Mapping[str, str]], **kwargs):
         """
         Run a silent experiment in the background (thread).
         """
@@ -2029,7 +2391,7 @@ class Router:
         if (
             complete_response_object_usage is not None
             and hasattr(complete_response_object_usage, "usage")
-            and complete_response_object_usage.usage is not None  # type: ignore
+            and complete_response_object_usage.usage is not None
         ):
             usage_objects.append(complete_response_object_usage)
         combined_usage: Final = BaseTokenUsageProcessor.combine_usage_objects(usage_objects=usage_objects)
@@ -2149,7 +2511,7 @@ class Router:
                     # If fallback returns a streaming response, iterate over it
                     if hasattr(fallback_response, "__aiter__"):
                         prepared_fallback_hidden_params = Router._prepare_fallback_hidden_params(fallback_response)
-                        async for fallback_item in fallback_response:  # type: ignore
+                        async for fallback_item in fallback_response:
                             Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                             if (
                                 fallback_item
@@ -2245,7 +2607,7 @@ class Router:
                     # in __init__ rather than declaring it as a class field, so
                     # static narrowing doesn't expose it. Mirror the sync path
                     # (_completion_streaming_iterator) and pull via getattr.
-                    chat: Final = getattr(built, "usage", None) if built is not None else None
+                    chat: Final[object | None] = getattr(built, "usage", None) if built is not None else None
                     if chat is not None:
                         # getattr-with-default because the test path may
                         # substitute a SimpleNamespace lacking some fields;
@@ -2339,7 +2701,7 @@ class Router:
         # ResponseOutputMessageParam, ...) — annotating as List[Dict[str, Any]]
         # rejects the list() spread of input_val. We cast the combined list to
         # ResponseInputParam at the return.
-        base: list[Any]
+        base: list[object]
         if isinstance(input_val, str):
             base = [
                 {
@@ -2352,7 +2714,7 @@ class Router:
             base = list(input_val)
         else:
             base = []
-        continuation: Final[list[Any]] = [
+        continuation: Final[list[object]] = [
             {
                 "type": "message",
                 "role": "developer",
@@ -2456,9 +2818,9 @@ class Router:
                 # because the surrounding function body wasn't fully
                 # type-narrowed; the new typed terminal-event tuple above
                 # is what made these surface.
-                self.response = getattr(source_iterator, "response", None)  # type: ignore[assignment]
-                self.model = getattr(source_iterator, "model", None)  # type: ignore[assignment]
-                self.logging_obj = getattr(  # type: ignore[assignment]
+                self.response = getattr(source_iterator, "response", None)
+                self.model = getattr(source_iterator, "model", None)
+                self.logging_obj = getattr(
                     source_iterator,
                     "logging_obj",
                     getattr(source_iterator, "litellm_logging_obj", None),
@@ -2575,7 +2937,7 @@ class Router:
 
                     if hasattr(fallback_response, "__aiter__"):
                         prepared_fallback_hidden_params = Router._prepare_fallback_hidden_params(fallback_response)
-                        async for fallback_item in fallback_response:  # type: ignore
+                        async for fallback_item in fallback_response:
                             Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                             if partial_usage is not None:
                                 Router._combine_responses_fallback_usage(fallback_item, partial_usage)
@@ -2594,7 +2956,7 @@ class Router:
                 with anyio.CancelScope(shield=True):
                     if hasattr(source_iterator, "aclose"):
                         try:
-                            await source_iterator.aclose()  # type: ignore[func-returns-value]
+                            await source_iterator.aclose()
                         except BaseException as exc:
                             verbose_router_logger.debug(
                                 "stream_with_fallbacks(aresponses): error closing source: %s",
@@ -2712,7 +3074,7 @@ class Router:
             finally:
                 if hasattr(model_response, "close"):
                     try:
-                        model_response.close()  # type: ignore[reportAttributeAccessIssue]
+                        model_response.close()
                     except BaseException as close_err:
                         verbose_router_logger.debug(
                             "stream_with_fallbacks: error closing model_response: %s",
@@ -2729,7 +3091,7 @@ class Router:
 
         return SyncFallbackStreamWrapper(stream_with_fallbacks())
 
-    async def _silent_experiment_acompletion(self, silent_model: str, messages: list[Any], **kwargs):
+    async def _silent_experiment_acompletion(self, silent_model: str, messages: Sequence[Mapping[str, str]], **kwargs):
         """
         Run a silent experiment in the background.
         """
@@ -2910,7 +3272,7 @@ class Router:
             # Set per-deployment num_retries on exception for retry logic
             if deployment is not None:
                 self._set_deployment_num_retries_on_exception(e, deployment)
-                self._set_failed_deployment_id_on_exception(e, deployment)
+                self._stamp_failed_deployment_id_with_effective_model_info(e, deployment, kwargs)
             raise e
         except Exception as e:
             verbose_router_logger.info("litellm.acompletion(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
@@ -2919,7 +3281,7 @@ class Router:
             # Set per-deployment num_retries on exception for retry logic
             if deployment is not None:
                 self._set_deployment_num_retries_on_exception(e, deployment)
-                self._set_failed_deployment_id_on_exception(e, deployment)
+                self._stamp_failed_deployment_id_with_effective_model_info(e, deployment, kwargs)
             raise e
 
     def _update_kwargs_before_fallbacks(
@@ -2954,18 +3316,18 @@ class Router:
         per-deployment retry settings instead of the global setting.
         """
         # Only set if exception doesn't already have num_retries
-        if hasattr(exception, "num_retries") and exception.num_retries is not None:  # type: ignore
+        if hasattr(exception, "num_retries") and exception.num_retries is not None:
             return
 
         litellm_params: Final = deployment.get("litellm_params", {})
         dep_num_retries: Final = litellm_params.get("num_retries")
         if dep_num_retries is not None:
             try:
-                exception.num_retries = int(dep_num_retries)  # type: ignore  # Handle both int and str
+                exception.num_retries = int(dep_num_retries)  # Handle both int and str
             except (ValueError, TypeError):
                 pass  # Skip if value can't be converted to int
 
-    def _set_failed_deployment_id_on_exception(self, exception: Exception, deployment: dict) -> None:
+    def _set_failed_deployment_id_on_exception(self, exception: Exception, deployment: Mapping[str, Any]) -> None:
         """
         Stamp the failed deployment's `model_info.id` on the exception so the
         fallback layer can exclude it from subsequent re-picks within the same
@@ -2980,9 +3342,19 @@ class Router:
         deployment_id: Final = (deployment.get("model_info") or {}).get("id")
         if deployment_id:
             try:
-                exception.failed_deployment_id = deployment_id  # type: ignore[attr-defined]
+                exception.failed_deployment_id = deployment_id
             except Exception:
                 pass
+
+    def _stamp_failed_deployment_id_with_effective_model_info(
+        self, exception: Exception, deployment: Mapping[str, object], kwargs: Mapping[str, object]
+    ) -> None:
+        # A client-side-credential call gets a dynamic deployment id generated inside
+        # _update_kwargs_with_deployment and stamped into kwargs["model_info"]; stamping
+        # the static shared deployment's id instead would let one tenant's bad credentials
+        # cool down the deployment every other tenant sharing this config relies on.
+        effective_model_info: Final = kwargs.get("model_info") or deployment.get("model_info") or MappingProxyType({})
+        self._set_failed_deployment_id_on_exception(exception, MappingProxyType({"model_info": effective_model_info}))
 
     def _update_kwargs_with_default_litellm_params(
         self, kwargs: dict, metadata_variable_name: str | None = "metadata"
@@ -3019,7 +3391,7 @@ class Router:
             function_name=function_name,
         )
         model_group: Final = kwargs.get(metadata_variable_name, {}).get("model_group")
-        _model_id: Final = self._generate_model_id(model_group=model_group, litellm_params=dynamic_litellm_params)
+        _model_id: Final = self.generate_model_id(model_group=model_group, litellm_params=dynamic_litellm_params)
         original_model_id: Final = model_info.get("id")
         model_info["id"] = _model_id
         model_info["original_model_id"] = original_model_id
@@ -3063,6 +3435,10 @@ class Router:
         - Adds default litellm params to kwargs, if set.
         - Merges tools from deployment with request (proxy-configured tools + request tools).
         """
+        for key in self._forwarded_alias_marker_keys_the_deployment_sets(
+            deployment=deployment, forwarded_keys=kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, ())
+        ):
+            kwargs.pop(key, None)
         self._merge_tools_from_deployment(deployment=deployment, kwargs=kwargs)
 
         model_info = deployment.get("model_info", {}).copy()
@@ -3262,7 +3638,7 @@ class Router:
             _tasks = []
             for model in models:
                 # add each task but if the task fails
-                _tasks.append(_async_completion_no_exceptions(model=model, messages=messages, **kwargs))  # type: ignore
+                _tasks.append(_async_completion_no_exceptions(model=model, messages=messages, **kwargs))
             response = await asyncio.gather(*_tasks)
             return response
         elif isinstance(messages, list) and all(isinstance(m, list) for m in messages):
@@ -3274,7 +3650,7 @@ class Router:
                         _async_completion_no_exceptions_return_idx(
                             model=model,
                             idx=idx,
-                            messages=message,  # type: ignore[arg-type]
+                            messages=message,
                             **kwargs,
                         )
                     )
@@ -3365,7 +3741,7 @@ class Router:
             Wrapper around self.acompletion that catches exceptions and returns them as a result
             """
             try:
-                result = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)  # type: ignore
+                result = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)
                 return result
             except asyncio.CancelledError:
                 verbose_router_logger.debug("Received 'task.cancel'. Cancelling call w/ model=%s.", model)
@@ -3373,7 +3749,7 @@ class Router:
             except Exception as e:
                 return e
 
-        pending_tasks = []  # type: ignore
+        pending_tasks = []
 
         async def check_response(task: asyncio.Task):
             nonlocal pending_tasks
@@ -3403,9 +3779,7 @@ class Router:
 
         # Await the first task to complete successfully
         while pending_tasks:
-            done, pending_tasks = await asyncio.wait(  # type: ignore
-                pending_tasks, return_when=asyncio.FIRST_COMPLETED
-            )
+            done, pending_tasks = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED)
             for completed_task in done:
                 result = await check_response(completed_task)
 
@@ -3500,8 +3874,8 @@ class Router:
         model: str,
         priority: int,
         original_function: Callable,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
+        args: tuple[object, ...],
+        kwargs: dict[str, object],
     ):
         parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
         ### FLOW ITEM ###
@@ -3627,6 +4001,7 @@ class Router:
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
             prompt_label=prompt_label,
+            request_kwargs=kwargs,
         )
 
         # Filter out prompt management specific parameters from data before merging
@@ -4098,7 +4473,7 @@ class Router:
                     kwargs[k].update(v)
 
             # call via litellm.completion()
-            return litellm.text_completion(**{**data, "prompt": prompt, "caching": self.cache_responses, **kwargs})  # type: ignore
+            return litellm.text_completion(**{**data, "prompt": prompt, "caching": self.cache_responses, **kwargs})
         except Exception as e:
             raise e
 
@@ -4275,12 +4650,12 @@ class Router:
                     await self.async_routing_strategy_pre_call_checks(
                         deployment=deployment, parent_otel_span=parent_otel_span
                     )
-                    response = await response  # type: ignore
+                    response = await response
             else:
                 await self.async_routing_strategy_pre_call_checks(
                     deployment=deployment, parent_otel_span=parent_otel_span
                 )
-                response = await response  # type: ignore
+                response = await response
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info("litellm.aadapter_completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -4472,10 +4847,11 @@ class Router:
 
         passthrough_on_no_deployment: Final = kwargs.pop("passthrough_on_no_deployment", False)
         function_name: Final = "_ageneric_api_call_with_fallbacks"
+        deployment = None  # rebind-ok: pre-init so the except block can stamp a failure with no deployment picked
         try:
             parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
             try:
-                deployment: Final = await self.async_get_available_deployment(
+                deployment = await self.async_get_available_deployment(  # rebind-ok: set on success, see pre-init above
                     model=model,
                     request_kwargs=kwargs,
                     messages=kwargs.get("messages", None),
@@ -4535,12 +4911,12 @@ class Router:
                     await self.async_routing_strategy_pre_call_checks(
                         deployment=deployment, parent_otel_span=parent_otel_span
                     )
-                    response = await response  # type: ignore
+                    response = await response
             else:
                 await self.async_routing_strategy_pre_call_checks(
                     deployment=deployment, parent_otel_span=parent_otel_span
                 )
-                response = await response  # type: ignore
+                response = await response
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info("ageneric_api_call_with_fallbacks(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -4552,6 +4928,8 @@ class Router:
             )
             if model is not None:
                 self.fail_calls[model] += 1
+            if deployment is not None:
+                self._stamp_failed_deployment_id_with_effective_model_info(e, deployment, kwargs)
             raise e
 
     async def _aresponses_with_streaming_fallbacks(
@@ -4586,7 +4964,7 @@ class Router:
         # fallback to the original reference for any non-picklable value.
         # The original_generic_function is preserved so the per-attempt
         # helper knows which underlying API to call on fallback.
-        fallback_kwargs: Final[dict[str, Any]] = kwargs.copy()
+        fallback_kwargs: Final[dict[str, object]] = kwargs.copy()
         if isinstance(fallback_kwargs.get("litellm_metadata"), dict):
             fallback_kwargs["litellm_metadata"] = safe_deep_copy(fallback_kwargs["litellm_metadata"])
         if isinstance(fallback_kwargs.get("metadata"), dict):
@@ -4601,6 +4979,304 @@ class Router:
                 initial_kwargs=fallback_kwargs,
             )
         return response
+
+    async def _aanthropic_messages_streaming_iterator(
+        self,
+        response: AsyncIterator[bytes],
+        initial_kwargs: dict[str, Any],  # mutable-ok: mutated in-place before re-entering the fallback chain
+    ) -> AsyncIterator[bytes]:
+        """
+        Wrap an anthropic_messages (/v1/messages) streaming response so a
+        mid-stream provider error triggers the Router's fallback chain
+        (parity with _acompletion_streaming_iterator for the
+        chat-completions path). See #24004.
+
+        anthropic_messages goes through _ageneric_api_call_with_fallbacks
+        rather than _acompletion, so the returned byte iterator is never
+        wrapped by the chat-completions fallback handler. Two failure
+        shapes land here:
+          - the completion-bridge path (deployments with no native
+            /v1/messages endpoint, via
+            LiteLLMMessagesToCompletionTransformationHandler) already
+            raises MidStreamFallbackError out of its underlying
+            CustomStreamWrapper; this wrapper only needs to catch it.
+          - a native Anthropic/Bedrock passthrough never raises anything
+            for a provider SSE `event: error` frame (e.g. `overloaded_error`,
+            `internal_server_error`) - it is forwarded to the client as-is -
+            so this wrapper detects it via parse_anthropic_error_event and
+            raises MidStreamFallbackError itself.
+
+        Only an error before any real content (a content_block_delta frame)
+        has reached the caller triggers a fallback attempt, mirroring the
+        restriction _acompletion_streaming_iterator applies: once generated
+        output has already reached the caller, retrying would start a
+        second, overlapping Anthropic message lifecycle on the same SSE
+        stream, so the error is left to propagate instead of being retried
+        invisibly. A non-retriable client error (4xx other than 429) is
+        never worth a fallback attempt either, so it is also left to
+        propagate.
+
+        Lifecycle/bookkeeping frames (message_start, content_block_start,
+        ping, ...) do not by themselves disqualify a fallback attempt -
+        Anthropic routinely sends message_start before an overload error -
+        but they are BUFFERED rather than forwarded immediately, since
+        forwarding one and then appending a fallback attempt's own
+        message_start would produce two overlapping message lifecycles on
+        one SSE stream. Buffered frames are flushed, in order, the moment
+        real content arrives (the primary attempt has committed by then
+        anyway) or once the stream ends without ever producing content or
+        an error.
+        """
+        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+            aclose_if_supported,
+            parse_anthropic_error_event,
+        )
+
+        source_iterator: Final = response
+
+        async def stream_with_fallbacks() -> AsyncGenerator[bytes, None]:
+            from litellm.exceptions import MidStreamFallbackError
+
+            # Lifecycle/bookkeeping frames (message_start, content_block_start,
+            # ping, ...) are held back rather than forwarded immediately:
+            # Anthropic routinely sends message_start before an overload
+            # error, and once a byte reaches the client a fallback attempt
+            # can only append its OWN message_start, producing two
+            # overlapping message lifecycles on one SSE stream. Buffered
+            # frames are flushed the moment real content (content_block_delta)
+            # arrives - at that point the primary attempt has committed and a
+            # clean retry is no longer possible anyway - or once the primary
+            # stream ends without ever producing content. A `ping` keepalive
+            # that nothing precedes is forwarded live (it is how a hold-back
+            # turn keeps its connection alive); one behind buffered frames is
+            # dropped outright rather than buffered, since it can recur
+            # indefinitely on a slow-starting connection and carries nothing
+            # worth preserving; hitting MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS
+            # forces the same early commit as real content arriving, so a
+            # hostile or pathological upstream can't grow the buffer forever.
+            has_generated_content = False  # rebind-ok: set once real content is seen, or the buffer cap is hit
+            buffered_lifecycle_chunks: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
+            model: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
+            try:
+                async for chunk in source_iterator:
+                    if _anthropic_stream_forwards_ping_live(
+                        chunk, has_generated_content, len(buffered_lifecycle_chunks)
+                    ):
+                        yield chunk
+                        continue
+                    if _anthropic_stream_should_drop_pre_content_ping(chunk, has_generated_content):
+                        continue
+                    if _anthropic_stream_commits_now(chunk, has_generated_content, len(buffered_lifecycle_chunks)):
+                        has_generated_content = True  # rebind-ok: real content seen, or the buffer cap was hit
+                    error_event = parse_anthropic_error_event(chunk)
+                    retriable_pending_error = (  # rebind-ok: freshly computed each iteration, never carried over
+                        not has_generated_content
+                        and error_event is not None
+                        and _is_retriable_anthropic_status(error_event[2])
+                        and not _anthropic_stream_error_is_gateway_verdict(chunk)
+                    )
+                    if not has_generated_content and not retriable_pending_error and error_event is None:
+                        buffered_lifecycle_chunks = (*buffered_lifecycle_chunks, chunk)
+                        continue
+                    if retriable_pending_error:
+                        assert error_event is not None  # guard-ok: retriable_pending_error implies this
+                        _error_type, message, status_code = error_event
+                        raise MidStreamFallbackError(
+                            message=message,
+                            model=model,
+                            llm_provider="anthropic",
+                            original_exception=litellm.exceptions.APIError(
+                                status_code=status_code,
+                                message=message,
+                                llm_provider="anthropic",
+                                model=model,
+                            ),
+                            is_pre_first_chunk=True,
+                        )
+                    for buffered_chunk in buffered_lifecycle_chunks:
+                        yield buffered_chunk
+                    buffered_lifecycle_chunks = ()
+                    yield chunk
+                for buffered_chunk in buffered_lifecycle_chunks:
+                    yield buffered_chunk
+            except Exception as stream_error:  # noqa: BLE001  # any raised provider error must reach the fallback gate
+                async for item in self._aanthropic_messages_recover_stream_error(
+                    stream_error,
+                    has_generated_content,
+                    buffered_lifecycle_chunks,
+                    model,
+                    initial_kwargs,
+                    wrapper,
+                ):
+                    yield item
+            finally:
+                with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
+                    await aclose_if_supported(source_iterator)
+
+        # Referenced by stream_with_fallbacks via closure - assigned here, before
+        # the generator body ever runs, so the reference resolves fine despite
+        # being defined textually after the function that captures it.
+        wrapper: Final = FallbackAwareAnthropicMessagesStream(stream_with_fallbacks(), source_iterator)
+        return wrapper
+
+    async def _aanthropic_messages_recover_stream_error(
+        self,
+        stream_error: Exception,
+        has_generated_content: bool,
+        buffered_lifecycle_chunks: tuple[bytes, ...],
+        model: str,
+        initial_kwargs: dict[str, Any],  # mutable-ok: handed to _aanthropic_messages_fallback_attempt, which mutates it
+        wrapper: "FallbackAwareAnthropicMessagesStream",
+    ) -> AsyncGenerator[bytes, None]:
+        """Turns a source-iterator failure into a fallback attempt or the error reaching the caller."""
+        from litellm.exceptions import MidStreamFallbackError
+
+        if isinstance(stream_error, MidStreamFallbackError) and _anthropic_stream_should_decline_fallback(
+            has_generated_content, stream_error
+        ):
+            for buffered_chunk in buffered_lifecycle_chunks:
+                yield buffered_chunk
+            if stream_error.original_exception is not None:
+                raise stream_error.original_exception from stream_error
+            raise stream_error
+        fallback_error: Final = (
+            stream_error
+            if isinstance(stream_error, MidStreamFallbackError)
+            else _anthropic_stream_fallback_error_for_raised(stream_error, model, has_generated_content)
+        )
+        if fallback_error is None:
+            raise stream_error
+        async for item in self._aanthropic_messages_fallback_attempt(fallback_error, initial_kwargs, wrapper):
+            yield item
+
+    async def _aanthropic_messages_fallback_attempt(
+        self,
+        e: "MidStreamFallbackError",
+        initial_kwargs: dict[str, Any],  # mutable-ok: mutated in-place before re-entering the fallback chain
+        wrapper: "FallbackAwareAnthropicMessagesStream",
+    ) -> AsyncGenerator[bytes, None]:
+        """
+        Re-enters the Router's fallback chain for a mid-stream
+        anthropic_messages error and yields whatever the fallback attempt
+        produces. Split out of _aanthropic_messages_streaming_iterator to
+        keep each function's cyclomatic complexity within the repo's C901
+        budget.
+        """
+        from litellm.exceptions import MidStreamFallbackError
+        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+            aclose_if_supported,
+            anthropic_messages_response_as_sse_events,
+        )
+
+        fallback_response = None  # rebind-ok: pre-init so finally can close it if a fallback was actually attempted
+        try:
+            model_group: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: model group
+            fallbacks: Final[list | None] = initial_kwargs.get(  # mutable-ok: matches the common_utils list|None param
+                "fallbacks", self.fallbacks
+            )
+            context_window_fallbacks: Final[list | None] = initial_kwargs.get(  # mutable-ok: matches the param below
+                "context_window_fallbacks", self.context_window_fallbacks
+            )
+            content_policy_fallbacks: Final[list | None] = initial_kwargs.get(  # mutable-ok: matches the param below
+                "content_policy_fallbacks", self.content_policy_fallbacks
+            )
+            initial_kwargs["original_function"] = self._ageneric_api_call_with_fallbacks_helper
+            self._update_kwargs_before_fallbacks(
+                model=model_group,
+                kwargs=initial_kwargs,
+                metadata_variable_name="litellm_metadata",
+            )
+            fallback_response = await self.async_function_with_fallbacks_common_utils(  # rebind-ok: set on success
+                e=e,
+                disable_fallbacks=False,
+                fallbacks=fallbacks,
+                context_window_fallbacks=context_window_fallbacks,
+                content_policy_fallbacks=content_policy_fallbacks,
+                model_group=model_group,
+                args=(),
+                kwargs=initial_kwargs,
+                include_fallback_errors=initial_kwargs.get("include_fallback_errors", False) is True,
+            )
+            fallback_hidden_params, fallback_headers = Router._prepare_fallback_hidden_params(fallback_response)
+            wrapper.merge_fallback_hidden_params(fallback_hidden_params, fallback_headers)
+            wrapper.adopt_fallback_source(fallback_response)
+            if hasattr(fallback_response, "__aiter__"):
+                async for fallback_item in fallback_response:
+                    yield fallback_item
+            else:
+                # A fallback can resolve to a complete AnthropicMessagesResponse
+                # dict even for a streaming request (e.g. an agentic tool-use
+                # interception loop) - yielding it as-is would put a raw dict
+                # into a byte stream, so it's synthesized into the SSE
+                # lifecycle a real stream would have sent instead.
+                for event in anthropic_messages_response_as_sse_events(
+                    cast("AnthropicMessagesResponse", fallback_response)  # cast-ok: non-streaming shape by elimination
+                ):
+                    yield event
+        except Exception as fallback_error:
+            verbose_router_logger.error("Anthropic messages streaming fallback also failed: %s", fallback_error)
+            if isinstance(fallback_error, MidStreamFallbackError) and fallback_error.original_exception is not None:
+                raise fallback_error.original_exception from fallback_error
+            raise
+        finally:
+            if fallback_response is not None:
+                with anyio.CancelScope(shield=True), contextlib.suppress(BaseException):
+                    await aclose_if_supported(fallback_response)
+
+    async def _aanthropic_messages_with_streaming_fallbacks(
+        self,
+        original_function: Callable,
+        **kwargs: object,  # kwargs-ok: forwarded verbatim to original_function, shape varies per call site
+    ) -> Union["AnthropicMessagesResponse", AsyncIterator[bytes]]:
+        """
+        _ageneric_api_call_with_fallbacks for anthropic_messages, with the
+        addition of mid-stream fallback handling (see
+        _aanthropic_messages_streaming_iterator). Parity with
+        _aresponses_with_streaming_fallbacks for the Responses API.
+        """
+        from litellm.litellm_core_utils.core_helpers import safe_deep_copy
+
+        # Snapshot the request kwargs before the primary attempt mutates them
+        # in place: _update_kwargs_with_deployment writes deployment-specific
+        # fields (deployment, model_info, api_base, tags, ...) into the
+        # SAME litellm_metadata/metadata dicts a shallow .copy() would still
+        # share, leaking primary-deployment metadata into the mid-stream
+        # fallback request. safe_deep_copy avoids deep-copying the full
+        # kwargs (which can hold non-deepcopyable logging handles/clients).
+        fallback_kwargs: Final[dict[str, object]] = kwargs.copy()  # mutable-ok: mutated below before re-entry
+        if isinstance(fallback_kwargs.get("litellm_metadata"), dict):
+            fallback_kwargs["litellm_metadata"] = safe_deep_copy(fallback_kwargs["litellm_metadata"])
+        if isinstance(fallback_kwargs.get("metadata"), dict):
+            fallback_kwargs["metadata"] = safe_deep_copy(fallback_kwargs["metadata"])
+        fallback_kwargs["original_generic_function"] = original_function
+
+        response: Final = await self._ageneric_api_call_with_fallbacks(original_function=original_function, **kwargs)
+
+        if kwargs.get("stream") and hasattr(response, "__aiter__"):
+            return await self._aanthropic_messages_streaming_iterator(
+                response=cast("AsyncIterator[bytes]", response),  # cast-ok: stream=True always returns a byte iterator
+                initial_kwargs=fallback_kwargs,
+            )
+        return response
+
+    async def _dispatch_generic_call_type(
+        self,
+        call_type: str,
+        original_function: Callable,
+        **kwargs: object,  # kwargs-ok: forwarded verbatim to the per-call-type helper, shape varies per call site
+    ):
+        """
+        factory_function's shared dispatch for call types with no
+        call-specific handling, except anthropic_messages: kept out of
+        factory_function's own async_wrapper (already at the repo's C901
+        complexity ceiling) so routing its mid-stream fallback handling
+        (#24004) doesn't add another branch there.
+        """
+        if call_type == "anthropic_messages":
+            return await self._aanthropic_messages_with_streaming_fallbacks(
+                original_function=original_function, **kwargs
+            )
+        return await self._ageneric_api_call_with_fallbacks(original_function=original_function, **kwargs)
 
     def _generic_api_call_with_fallbacks(self, model: str, original_function: Callable, **kwargs):
         """
@@ -4912,6 +5588,13 @@ class Router:
                     )
 
                     kwargs_copy["file"] = file
+                if custom_llm_provider == LlmProviders.LITELLM_PROXY.value:
+                    kwargs_copy["extra_body"] = MappingProxyType(
+                        {
+                            **(kwargs_copy.get("extra_body") or MappingProxyType({})),
+                            "target_model_names": stripped_model,
+                        }
+                    )
                 if (
                     "gcs_bucket_name" in data
                 ):  # TODO: Remove this once we have a better way to handle GCS bucket name:  Problem is that we need to pass the gcs_bucket_name to the router for the create_file call but it doesn't show up there
@@ -4941,12 +5624,12 @@ class Router:
                         await self.async_routing_strategy_pre_call_checks(
                             deployment=deployment, parent_otel_span=parent_otel_span
                         )
-                        response = await response  # type: ignore
+                        response = await response
                 else:
                     await self.async_routing_strategy_pre_call_checks(
                         deployment=deployment, parent_otel_span=parent_otel_span
                     )
-                    response = await response  # type: ignore
+                    response = await response
 
                 self.success_calls[model_name] += 1
                 verbose_router_logger.info("litellm.acreate_file(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -5173,17 +5856,17 @@ class Router:
                     await self.async_routing_strategy_pre_call_checks(
                         deployment=deployment, parent_otel_span=parent_otel_span
                     )
-                    response = await response  # type: ignore
+                    response = await response
             else:
                 await self.async_routing_strategy_pre_call_checks(
                     deployment=deployment, parent_otel_span=parent_otel_span
                 )
-                response = await response  # type: ignore
+                response = await response
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info("litellm.acreate_batch(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
-            return response  # type: ignore
+            return response
         except Exception as e:
             verbose_router_logger.exception(
                 "litellm._acreate_batch(model=%s, %s)\x1b[31m Exception %s\x1b[0m", model, kwargs, e
@@ -5233,9 +5916,7 @@ class Router:
                     # Update kwargs with the current model name or any other model-specific adjustments
                     ## SET CUSTOM PROVIDER TO SELECTED DEPLOYMENT ##
                     if not custom_llm_provider:
-                        _, custom_llm_provider, _, _ = get_llm_provider(  # type: ignore
-                            model=model
-                        )
+                        _, custom_llm_provider, _, _ = get_llm_provider(model=model)
                     new_kwargs: Final = safe_deep_copy(kwargs)
                     self._update_kwargs_with_deployment(
                         deployment=cast(dict, model_name),
@@ -5248,7 +5929,7 @@ class Router:
                         **{
                             **data,
                             "custom_llm_provider": custom_llm_provider,
-                            **new_kwargs,  # type: ignore
+                            **new_kwargs,
                         },
                     )
                 except Exception as e:
@@ -5395,17 +6076,17 @@ class Router:
                     await self.async_routing_strategy_pre_call_checks(
                         deployment=deployment, parent_otel_span=parent_otel_span
                     )
-                    response = await response  # type: ignore
+                    response = await response
             else:
                 await self.async_routing_strategy_pre_call_checks(
                     deployment=deployment, parent_otel_span=parent_otel_span
                 )
-                response = await response  # type: ignore
+                response = await response
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info("litellm.acancel_batch(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
-            return response  # type: ignore
+            return response
         except Exception as e:
             verbose_router_logger.exception(
                 "litellm._acancel_batch(model=%s, %s)\x1b[31m Exception %s\x1b[0m", model, kwargs, e
@@ -5451,7 +6132,7 @@ class Router:
                 if final_results["first_id"] is None and hasattr(result, "first_id"):
                     final_results["first_id"] = getattr(result, "first_id")
                 final_results["last_id"] = getattr(result, "last_id")
-                final_results["data"].extend(result.data)  # type: ignore
+                final_results["data"].extend(result.data)
 
                 ## check 'has_more'
                 if getattr(result, "has_more", False) is True:
@@ -5635,7 +6316,7 @@ class Router:
 
             def sync_wrapper(
                 custom_llm_provider: str | None = None,
-                client: Any | None = None,
+                client: object | None = None,
                 **kwargs,
             ):
                 return self._generic_api_call_with_fallbacks(original_function=original_function, **kwargs)
@@ -5651,7 +6332,7 @@ class Router:
 
             def vector_store_sync_wrapper(
                 custom_llm_provider: str | None = None,
-                client: Any | None = None,
+                client: object | None = None,
                 **kwargs,
             ):
                 if custom_llm_provider and "custom_llm_provider" not in kwargs:
@@ -5673,7 +6354,7 @@ class Router:
 
             def vector_store_file_sync_wrapper(
                 custom_llm_provider: str | None = None,
-                client: Any | None = None,
+                client: object | None = None,
                 **kwargs,
             ):
                 return original_function(
@@ -5694,7 +6375,7 @@ class Router:
 
             def managed_agents_sync_wrapper(
                 custom_llm_provider: str | None = None,
-                client: Any | None = None,
+                client: object | None = None,
                 **kwargs,
             ):
                 if custom_llm_provider and "custom_llm_provider" not in kwargs:
@@ -5783,7 +6464,8 @@ class Router:
                 "aget_skill",
                 "adelete_skill",
             ):
-                return await self._ageneric_api_call_with_fallbacks(
+                return await self._dispatch_generic_call_type(
+                    call_type=call_type,
                     original_function=original_function,
                     **kwargs,
                 )
@@ -5804,6 +6486,8 @@ class Router:
                     **kwargs,
                 )
             elif call_type == "allm_passthrough_route":
+                if client:
+                    kwargs["client"] = client
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
                     passthrough_on_no_deployment=True,
@@ -6022,9 +6706,7 @@ class Router:
                 raise Exception(
                     "'custom_llm_provider' must be set. Either via:\n `Router(assistants_config={'custom_llm_provider': ..})` \nor\n `router.arun_thread(custom_llm_provider=..)`"
                 )
-        return await original_function(  # type: ignore
-            custom_llm_provider=custom_llm_provider, client=client, **kwargs
-        )
+        return await original_function(custom_llm_provider=custom_llm_provider, client=client, **kwargs)
 
     #### [END] ASSISTANTS API ####
 
@@ -6120,10 +6802,11 @@ class Router:
         """
         Common utilities for async_function_with_fallbacks
         """
-        verbose_router_logger.debug("Traceback", exc_info=True)
+        if verbose_router_logger.isEnabledFor(logging.DEBUG):
+            verbose_router_logger.debug("Traceback%s", redact_string(traceback.format_exc()))
         original_exception: Final = e
         fallback_model_group = None
-        original_model_group: Final[str | None] = kwargs.get("model")  # type: ignore
+        original_model_group: Final[str | None] = kwargs.get("model")
         fallback_failure_exception_str = ""
 
         if disable_fallbacks is True or original_model_group is None:
@@ -6317,7 +7000,7 @@ class Router:
                         masked_fallbacks,
                     )
                     if hasattr(original_exception, "message") and litellm.expose_router_debug_in_errors:
-                        original_exception.message += f"No fallback model group found for original model_group={model_group}. Fallbacks={masked_fallbacks}"  # type: ignore
+                        original_exception.message += f"No fallback model group found for original model_group={model_group}. Fallbacks={masked_fallbacks}"
                     raise original_exception
 
                 input_kwargs.update(
@@ -6335,8 +7018,8 @@ class Router:
                 return response
         except Exception as new_exception:
             parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
-            fallback_failure_exception_str = redact_string(str(new_exception))
-            cooldown_info = await _async_get_cooldown_deployments_with_debug_info(
+            fallback_failure_exception_str = truncate_fallback_error_detail(redact_string(str(new_exception)))
+            cooldown_info: Final = await _async_get_cooldown_deployments_with_debug_info(
                 litellm_router_instance=self,
                 parent_otel_span=parent_otel_span,
             )
@@ -6346,19 +7029,13 @@ class Router:
                 "Debug Information:\nCooldown Deployments=%s",
                 fallback_failure_exception_str,
                 cooldown_info,
-                exc_info=True,
             )
 
         if hasattr(original_exception, "message") and litellm.expose_router_debug_in_errors:
             # add the available fallbacks to the exception
-            original_exception.message += ". Received Model Group={}\nAvailable Model Group Fallbacks={}".format(  # type: ignore
-                model_group,
-                mask_sensitive_structure(fallback_model_group),
-            )
+            original_exception.message += f". Received Model Group={model_group}\nAvailable Model Group Fallbacks={mask_sensitive_structure(fallback_model_group)}"
             if len(fallback_failure_exception_str) > 0:
-                original_exception.message += (  # type: ignore
-                    f"\nError doing the fallback: {fallback_failure_exception_str}"
-                )
+                original_exception.message += f"\nError doing the fallback: {fallback_failure_exception_str}"
 
         raise original_exception
 
@@ -6369,6 +7046,22 @@ class Router:
         If it fails after num_retries, fall back to another model group
         """
         model_group: Final[str | None] = kwargs.get("model")
+        if not isinstance(kwargs.get("attempted_targets"), AttemptedFallbackTargets):
+            _fallback_metadata_key: Final = _get_router_metadata_variable_name(
+                function_name=getattr(kwargs.get("original_function"), "__name__", None)
+            )
+            _sibling_metadata_key: Final = (
+                "metadata" if _fallback_metadata_key == "litellm_metadata" else "litellm_metadata"
+            )
+            if isinstance(_sibling_metadata := kwargs.get(_sibling_metadata_key), dict):
+                # In place, like every other router bucket write: downstream resolves the bucket by
+                # key presence, so rebinding kwargs to a copy detaches the proxy's request_data write-backs
+                _sibling_metadata.pop("attempted_fallbacks", None)
+                _sibling_metadata.pop("original_model_group", None)
+            if isinstance(_fallback_metadata := kwargs.get(_fallback_metadata_key), dict):
+                _fallback_metadata["attempted_fallbacks"] = 0
+                if model_group is not None:
+                    _fallback_metadata["original_model_group"] = model_group
         include_fallback_errors: Final = kwargs.get("include_fallback_errors", False) is True
         disable_fallbacks: Final[bool | None] = kwargs.pop("disable_fallbacks", False)
         fallbacks: Final[list | None] = kwargs.get("fallbacks", self.fallbacks)
@@ -6592,7 +7285,7 @@ class Router:
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
                     remaining_retries = num_retries - current_attempt - 1
-                    _model: str | None = kwargs.get("model")  # type: ignore
+                    _model: str | None = kwargs.get("model")
                     if _model is not None:
                         (
                             _healthy_deployments,
@@ -6730,7 +7423,7 @@ class Router:
             ):
                 raise error  # then raise the error
 
-        if isinstance(error, openai.AuthenticationError):
+        if isinstance(error, (openai.AuthenticationError, openai.PermissionDeniedError)):
             """
             - if other deployments available -> retry
             - else -> raise error
@@ -6814,10 +7507,10 @@ class Router:
             return 0
 
         response_headers: httpx.Headers | None = None
-        if hasattr(e, "response") and hasattr(e.response, "headers"):  # type: ignore
-            response_headers = e.response.headers  # type: ignore
+        if hasattr(e, "response") and hasattr(e.response, "headers"):
+            response_headers = e.response.headers
         if hasattr(e, "litellm_response_headers"):
-            response_headers = e.litellm_response_headers  # type: ignore
+            response_headers = e.litellm_response_headers
 
         if response_headers is not None:
             timeout = litellm._calculate_retry_after(
@@ -7038,7 +7731,9 @@ class Router:
             )
 
             # Determine cooldown time with priority: deployment config > response header > router default
-            deployment_cooldown: Final = litellm_params.get("cooldown_time", None)
+            deployment_cooldown: Final = _first_present(
+                _model_info if isinstance(_model_info, dict) else None, litellm_params, key="cooldown_time"
+            )
 
             header_cooldown = None
             if exception_headers is not None:
@@ -7072,6 +7767,7 @@ class Router:
                     original_exception=exception,
                     deployment=deployment_id,
                     time_to_cooldown=_time_to_cooldown,
+                    requested_model_group=(get_litellm_metadata_from_kwargs(kwargs) or {}).get("model_group"),
                 )  # setting deployment_id in cooldown deployments
 
                 return result
@@ -7084,7 +7780,9 @@ class Router:
         except Exception as e:
             raise e
 
-    async def async_deployment_callback_on_failure(self, kwargs, completion_response: Any | None, start_time, end_time):
+    async def async_deployment_callback_on_failure(
+        self, kwargs, completion_response: object | None, start_time, end_time
+    ):
         """
         Update RPM usage for a deployment
         """
@@ -7141,19 +7839,20 @@ class Router:
                 k,
                 v,
             ) in kwargs.items():  # log everything in kwargs except the old previous_models value - prevent nesting
-                if k not in [_metadata_var, "messages", "original_function"]:
+                if k != _metadata_var and k not in RETRY_BREADCRUMB_EXCLUDED_KWARGS:
                     previous_model[k] = v
                 elif k == _metadata_var and isinstance(v, dict):
-                    previous_model[_metadata_var] = {}  # type: ignore
+                    previous_model[_metadata_var] = {}
                     for metadata_k, metadata_v in kwargs[_metadata_var].items():
                         if metadata_k != "previous_models":
-                            previous_model[k][metadata_k] = metadata_v  # type: ignore
+                            previous_model[k][metadata_k] = metadata_v
 
             # check current size of self.previous_models, if it's larger than 3, remove the first element
             if len(self.previous_models) > 3:
                 self.previous_models.pop(0)
 
-            self.previous_models.append(previous_model)
+            scrubbed_previous_model: Final = mask_credentials_in_payload(previous_model)
+            self.previous_models.append(scrubbed_previous_model)
             kwargs[_metadata_var]["previous_models"] = self.previous_models
             return kwargs
         except Exception as e:
@@ -7224,7 +7923,7 @@ class Router:
     def _get_healthy_deployments(self, model: str, parent_otel_span: Span | None):
         _all_deployments: list = []
         try:
-            _, _all_deployments = self._common_checks_available_deployment(  # type: ignore
+            _, _all_deployments = self._common_checks_available_deployment(
                 model=model,
             )
             if isinstance(_all_deployments, dict):
@@ -7252,7 +7951,7 @@ class Router:
         """
         _all_deployments: list = []
         try:
-            _, _all_deployments = self._common_checks_available_deployment(  # type: ignore
+            _, _all_deployments = self._common_checks_available_deployment(
                 model=model,
             )
             if isinstance(_all_deployments, dict):
@@ -7399,13 +8098,14 @@ class Router:
 
     @staticmethod
     def _json_default_stable_id(value: object) -> str:
-        """json.dumps default= for _generate_model_id: plain str() on an arbitrary
+        """json.dumps default= for generate_model_id: plain str() on an arbitrary
         object (e.g. a RoutingPlugin instance) falls back to object.__repr__'s
         `<module.Class object at 0x...>`, so the hash -- and deployment id -- would
         change every restart. Use the class name instead, stable across restarts."""
         return f"{type(value).__module__}.{type(value).__qualname__}"
 
-    def _generate_model_id(self, model_group: str, litellm_params: dict):
+    @staticmethod
+    def generate_model_id(model_group: str, litellm_params: dict) -> str:  # mutable-ok: hashed read-only
         """
         Helper function to consistently generate the same id for a deployment
 
@@ -7420,14 +8120,14 @@ class Router:
             if isinstance(k, str):
                 parts.append(k)
             elif isinstance(k, dict):
-                parts.append(json.dumps(k, default=self._json_default_stable_id))
+                parts.append(json.dumps(k, default=Router._json_default_stable_id))
             else:
                 parts.append(str(k))
 
             if isinstance(v, str):
                 parts.append(v)
             elif isinstance(v, dict):
-                parts.append(json.dumps(v, default=self._json_default_stable_id))
+                parts.append(json.dumps(v, default=Router._json_default_stable_id))
             else:
                 parts.append(str(v))
 
@@ -7465,12 +8165,48 @@ class Router:
                 if backend_value is not None:
                     model_info[field] = backend_value
 
+    @staticmethod
+    def _inherit_builtin_tiered_output_rate(
+        model_info: dict, backend_model: str, custom_llm_provider: str | None
+    ) -> None:
+        """Fill a missing entry-level output rate on a deployment entry whose tier
+        table omits one, from the backend model's built-in cost map entry.
+
+        A deployment's custom pricing is registered as its own standalone
+        ``litellm.model_cost`` entry holding only the supplied fields, and the
+        tiered-cost output fallback reads that same entry, so a tier table that
+        spells out only input-side rates would bill every completion at 0.
+
+        A user-specified ``output_cost_per_token`` always wins. No-op without a
+        tier table, when every tier declares its own output rate, or when the
+        backend model has no canonical entry or no flat output rate:
+        ``get_model_info`` synthesizes a zero for tiered-only backends, and
+        storing that zero would mark the deployment as explicitly priced free.
+        """
+        tiers: Final = model_info.get("tiered_pricing")
+        if not isinstance(tiers, list) or not tiers:
+            return
+        if model_info.get("output_cost_per_token") is not None:
+            return
+        if all(isinstance(tier, dict) and "output_cost_per_token" in tier for tier in tiers):
+            return
+        try:
+            backend_info: Final = litellm.get_model_info(model=backend_model, custom_llm_provider=custom_llm_provider)
+        except Exception:  # noqa: BLE001  # get_model_info raises plain Exception for an unmapped backend model
+            return
+        backend_rate: Final = backend_info.get("output_cost_per_token")
+        if backend_rate:
+            model_info["output_cost_per_token"] = backend_rate
+
     def _create_deployment(
         self,
         deployment_info: dict,
         _model_name: str,
         _litellm_params: dict,
         _model_info: dict,
+        *,
+        declared_id: str | None = None,
+        duplicate_ids: frozenset[str] = frozenset(),
     ) -> Deployment | None:
         """
         Create a deployment object and add it to the model list
@@ -7482,14 +8218,38 @@ class Router:
         - None: If the deployment is not active for the current environment (if 'supported_environments' is set in litellm_params)
         """
         try:
-            litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(**_litellm_params)
+            config_sourced: Final = _model_info.get("db_model") is not True
+            identity_error: Final = (
+                ptu_identity_error(
+                    declared_id=declared_id,
+                    taken=declared_id in duplicate_ids,
+                    current_id=_model_info.get("id"),
+                    model_name=_model_name,
+                )
+                if config_sourced and ptu_terms(_model_info) is not None
+                else None
+            )
+            ptu_error: Final = (
+                (ptu_config_error(_model_info, model_name=_model_name) or identity_error) if config_sourced else None
+            )
+            if ptu_error is not None and is_ptu_cost_attribution_enabled():
+                raise ValueError(ptu_error)
+            zeroed_pricing: Final = zeroed_ptu_pricing(_model_info, _litellm_params) if config_sourced else None
+            litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(
+                **(
+                    _litellm_params
+                    if zeroed_pricing is None
+                    else MappingProxyType({**_litellm_params, **zeroed_pricing})
+                )
+            )
+            warn_on_provider_credential_mismatch(model_name=_model_name, litellm_params=_litellm_params)
             deployment = Deployment(
                 **deployment_info,
                 model_name=_model_name,
                 litellm_params=litellm_params,
                 model_info=_model_info,
             )
-            for field in CustomPricingLiteLLMParams.model_fields.keys():
+            for field in CustomPricingLiteLLMParams.model_fields:
                 if deployment.litellm_params.get(field) is not None:
                     _model_info[field] = deployment.litellm_params[field]
 
@@ -7499,59 +8259,19 @@ class Router:
                     backend_model=deployment.litellm_params.model,
                     custom_llm_provider=deployment.litellm_params.custom_llm_provider,
                 )
+            Router._inherit_builtin_tiered_output_rate(
+                model_info=_model_info,
+                backend_model=deployment.litellm_params.model,
+                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+            )
 
             ## REGISTER MODEL INFO IN LITELLM MODEL COST MAP
-            model_id: Final = deployment.model_info.id
-            if model_id is not None:
-                litellm.register_model(
-                    model_cost={
-                        model_id: _model_info,
-                    }
-                )
-
-            ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
-            _model_name = deployment.litellm_params.model
-            if deployment.litellm_params.custom_llm_provider is not None:
-                _model_name = deployment.litellm_params.custom_llm_provider + "/" + _model_name
-
-            # For the shared backend key, keep only cost-map schema fields
-            # (minus custom pricing) so that one deployment's pricing overrides
-            # or custom metadata (id, access_via_team_ids, arbitrary keys)
-            # don't pollute another deployment sharing the same backend model
-            # name. Each deployment's full model_info is already stored under
-            # its unique model_id above.
-            _shared_model_info: Final = shared_backend_model_info(_model_info)
-            _existing_shared_mode = (cast(dict | None, litellm.model_cost.get(_model_name, {})) or {}).get("mode")
-            _deployment_mode: Final = _shared_model_info.get("mode")
-            # Keep the built-in bridge mode stable for shared backend keys.
-            # Multiple aliases can point at the same provider/model backend,
-            # but their deployment-level overrides should not downgrade the
-            # backend from responses -> chat via last-write-wins registration.
-            # Only preserve in that specific direction so legitimate upgrades
-            # (e.g. chat -> responses) and unrelated mode changes still apply,
-            # and so a missing deployment mode does not silently clear the
-            # existing shared backend mode.
-            _is_responses_to_chat_downgrade: Final = _existing_shared_mode == "responses" and _deployment_mode == "chat"
-            _would_clear_existing_mode: Final = _existing_shared_mode is not None and _deployment_mode is None
-            if _is_responses_to_chat_downgrade or _would_clear_existing_mode:
-                if _deployment_mode is not None:
-                    verbose_router_logger.warning(
-                        "Router: preserving existing mode=%s for shared backend "
-                        "key %s instead of the deployment-specified mode=%s "
-                        "(prevents alias registration from downgrading the "
-                        "shared backend mode).",
-                        _existing_shared_mode,
-                        _model_name,
-                        _deployment_mode,
-                    )
-                _shared_model_info["mode"] = _existing_shared_mode
-
-            # Always register the (possibly mode-preserved) shared backend info.
-            _backend_alias_cost: Final = {_model_name: _shared_model_info}
-            if "responses/" in _model_name:
-                _stripped_model_name: Final = _model_name.replace("responses/", "")
-                _backend_alias_cost[_stripped_model_name] = _shared_model_info
-            litellm.register_model(model_cost=_backend_alias_cost)
+            Router._register_deployment_in_model_cost(
+                model_id=deployment.model_info.id,
+                model_info=_model_info,
+                model=deployment.litellm_params.model,
+                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+            )
 
             ## Check if LLM Deployment is allowed for this deployment
             if self.deployment_is_active_for_environment(deployment=deployment) is not True:
@@ -7630,6 +8350,8 @@ class Router:
                 "auto_router_embedding_model is required for auto-router deployments. Please set it in the litellm_params"
             )
 
+        max_input_chars: Final[int | None] = deployment.litellm_params.auto_router_max_input_chars
+
         autor_router: Final[AutoRouter] = AutoRouter(
             model_name=deployment.model_name,
             auto_router_config_path=auto_router_config_path,
@@ -7637,6 +8359,7 @@ class Router:
             default_model=default_model,
             embedding_model=embedding_model,
             litellm_router_instance=self,
+            max_input_chars=(max_input_chars if max_input_chars is not None else DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS),
         )
         self._register_pre_routing_strategy(
             registry=self.auto_routers,
@@ -7665,20 +8388,29 @@ class Router:
         from litellm.router_strategy.complexity_router.complexity_router import (
             ComplexityRouter,
         )
+        from litellm.router_strategy.complexity_router.config import (
+            ComplexityRouterConfig,
+        )
 
         complexity_router_config: Final[dict | None] = deployment.litellm_params.complexity_router_config
 
         default_model: str | None = deployment.litellm_params.complexity_router_default_model
 
-        # If no default model specified, try to get from config tiers
+        # If no default model specified, try to get from config tiers. Derived from the
+        # validated model, not the raw dict, so normalization (e.g. fallback_tier
+        # whitespace) is applied by its one owner before the tiers lookup.
         if default_model is None and complexity_router_config:
-            tiers: Final = complexity_router_config.get("tiers", {})
-            # Use MEDIUM tier as fallback default
-            medium: Final = tiers.get("MEDIUM") or tiers.get("SIMPLE")
-            if isinstance(medium, list):
-                default_model = medium[0] if medium else None
+            validated: Final = ComplexityRouterConfig.model_validate(complexity_router_config)
+            # Custom tier sets name their fallback tier; built-in sets default to MEDIUM or SIMPLE
+            derived: Final = (
+                (validated.tiers.get(validated.fallback_tier) if validated.fallback_tier is not None else None)
+                or validated.tiers.get("MEDIUM")
+                or validated.tiers.get("SIMPLE")
+            )
+            if isinstance(derived, list):
+                default_model = derived[0] if derived else None
             else:
-                default_model = medium
+                default_model = derived
 
         if default_model is None:
             raise ValueError(
@@ -7698,6 +8430,8 @@ class Router:
             strategy=complexity_router,
             strategy_label="Complexity-router",
         )
+        if complexity_router._uses_deployment_pin:
+            self._ensure_deployment_affinity_callback()
 
     def _is_adaptive_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
         """True when this deployment opts in via the `auto_router/adaptive_router` model prefix."""
@@ -7824,7 +8558,7 @@ class Router:
                     continue
                 if self._has_registered_strategy(self.adaptive_routers, model_name, tagged.tags):
                     continue
-                adaptive_router = complexity_router._ensure_adaptive_router()
+                adaptive_router: AdaptiveRouter | None = complexity_router._ensure_adaptive_router()
                 if adaptive_router is not None:
                     self.adaptive_routers[model_name] = [
                         *self.adaptive_routers.get(model_name, []),
@@ -8000,6 +8734,28 @@ class Router:
         self._invalidate_access_groups_cache()
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
 
+        declared_ids: Final = tuple(
+            str(entry["model_info"]["id"])
+            for entry in original_model_list
+            if isinstance(entry.get("model_info"), dict) and entry["model_info"].get("id") is not None
+        )
+        duplicate_ids: Final = frozenset(model_id for model_id in declared_ids if declared_ids.count(model_id) > 1)
+
+        ptu_declared: Final = tuple(
+            str(entry.get("model_name"))
+            for entry in original_model_list
+            if isinstance(entry.get("model_info"), dict)
+            and entry["model_info"].get("db_model") is not True
+            and declares_ptu(entry["model_info"])
+        )
+        if ptu_declared and not is_ptu_cost_attribution_enabled():
+            verbose_router_logger.warning(
+                "PTU fields are set on config.yaml deployment(s) %s, but PTU cost attribution is disabled, so no "
+                "flat cost accrues and this traffic is billed per token. Set %s=True to enable it",
+                ", ".join(ptu_declared),
+                PTU_COST_ATTRIBUTION_ENV_VAR,
+            )
+
         for model in original_model_list:
             _model_name = model.pop("model_name")
             _litellm_params = model.pop("litellm_params")
@@ -8011,9 +8767,11 @@ class Router:
 
             _model_info: dict = model.pop("model_info", {})
 
+            declared_id = None if _model_info.get("id") is None else str(_model_info["id"])
+
             # check if model info has id
             if "id" not in _model_info:
-                _id = self._generate_model_id(_model_name, _litellm_params)
+                _id = self.generate_model_id(_model_name, _litellm_params)
                 _model_info["id"] = _id
 
             if _litellm_params.get("organization", None) is not None and isinstance(
@@ -8026,6 +8784,8 @@ class Router:
                         _model_name=_model_name,
                         _litellm_params=_litellm_params,
                         _model_info=_model_info,
+                        declared_id=declared_id,
+                        duplicate_ids=duplicate_ids,
                     )
             else:
                 self._create_deployment(
@@ -8033,6 +8793,8 @@ class Router:
                     _model_name=_model_name,
                     _litellm_params=_litellm_params,
                     _model_info=_model_info,
+                    declared_id=declared_id,
+                    duplicate_ids=duplicate_ids,
                 )
 
         verbose_router_logger.debug("\nInitialized Model List %s", self.get_model_names())
@@ -8075,6 +8837,7 @@ class Router:
             ) = litellm.get_llm_provider(
                 model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.get("custom_llm_provider", None),
+                api_base=deployment.litellm_params.api_base,
             )
             # done reading model["litellm_params"]
             # Check if provider is supported: either in enum or JSON-configured
@@ -8112,7 +8875,7 @@ class Router:
                 self.provider_default_deployment_ids.append(deployment.model_info.id)
 
         _team_id: Final = deployment.model_info.get("team_id")
-        _team_public_model_name: Final = deployment.model_info.get("team_public_model_name")
+        _team_public_model_name: Final[str | None] = deployment.model_info.get("team_public_model_name")
         if _team_id is not None and _team_public_model_name is not None and "*" in _team_public_model_name:
             if _team_id not in self.team_pattern_routers:
                 self.team_pattern_routers[_team_id] = PatternMatchRouter()
@@ -8140,7 +8903,6 @@ class Router:
             self._initialize_deployment_for_pass_through(
                 deployment=deployment,
                 custom_llm_provider=custom_llm_provider,
-                model=deployment.litellm_params.model,
             )
 
         #########################################################
@@ -8167,55 +8929,39 @@ class Router:
 
         return deployment
 
-    def _initialize_deployment_for_pass_through(self, deployment: Deployment, custom_llm_provider: str, model: str):
+    def _initialize_deployment_for_pass_through(self, deployment: Deployment, custom_llm_provider: str):
         """
-        Optional: Initialize deployment for pass-through endpoints if `deployment.litellm_params.use_in_pass_through` is True
+        Optional: Register vertex credentials for pass-through endpoints if `deployment.litellm_params.use_in_pass_through` is True
 
-        Each provider uses diff .env vars for pass-through endpoints, this helper uses the deployment credentials to set the .env vars for pass-through endpoints
+        Other providers need no registration here: PassthroughEndpointRouter.get_credentials resolves their credentials per-request from the live router deployments
         """
-        if deployment.litellm_params.use_in_pass_through is True:
-            from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
-                passthrough_endpoint_router,
+        if deployment.litellm_params.use_in_pass_through is not True:
+            return
+        if custom_llm_provider != "vertex_ai":
+            return
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            passthrough_endpoint_router,
+        )
+
+        credential_name: Final = deployment.litellm_params.litellm_credential_name
+        credential_values: Final = (
+            CredentialAccessor.get_credential_values(credential_name) if credential_name is not None else {}
+        )
+        vertex_project: Final = credential_values.get("vertex_project") or deployment.litellm_params.vertex_project
+        vertex_location: Final = credential_values.get("vertex_location") or deployment.litellm_params.vertex_location
+        vertex_credentials: Final = (
+            credential_values.get("vertex_credentials") or deployment.litellm_params.vertex_credentials
+        )
+
+        if vertex_project is None or vertex_location is None:
+            raise ValueError(
+                "vertex_project, and vertex_location must be set in litellm_params for pass-through endpoints."
             )
-
-            if deployment.litellm_params.litellm_credential_name is not None:
-                credential_values = CredentialAccessor.get_credential_values(
-                    deployment.litellm_params.litellm_credential_name
-                )
-            else:
-                credential_values = {}
-
-            if custom_llm_provider == "vertex_ai":
-                vertex_project = credential_values.get("vertex_project") or deployment.litellm_params.vertex_project
-                vertex_location = credential_values.get("vertex_location") or deployment.litellm_params.vertex_location
-                vertex_credentials: Final = (
-                    credential_values.get("vertex_credentials") or deployment.litellm_params.vertex_credentials
-                )
-
-                if vertex_project is None or vertex_location is None:
-                    raise ValueError(
-                        "vertex_project, and vertex_location must be set in litellm_params for pass-through endpoints."
-                    )
-                passthrough_endpoint_router.add_vertex_credentials(
-                    project_id=vertex_project,
-                    location=vertex_location,
-                    vertex_credentials=vertex_credentials,
-                )
-            else:
-                api_base: Final = credential_values.get("api_base") or deployment.litellm_params.api_base
-                api_key: Final = credential_values.get("api_key") or deployment.litellm_params.api_key
-                if api_key is None:
-                    verbose_router_logger.debug(
-                        "Skipping pass-through credential setup for deployment model=%s, custom_llm_provider=%s; no api_key set. Providers like bedrock resolve credentials at request time.",
-                        model,
-                        custom_llm_provider,
-                    )
-                    return
-                passthrough_endpoint_router.set_pass_through_credentials(
-                    custom_llm_provider=custom_llm_provider,
-                    api_base=api_base,
-                    api_key=api_key,
-                )
+        passthrough_endpoint_router.add_vertex_credentials(
+            project_id=vertex_project,
+            location=vertex_location,
+            vertex_credentials=vertex_credentials,
+        )
 
     def add_deployment(self, deployment: Deployment) -> Deployment | None:
         """
@@ -8232,13 +8978,18 @@ class Router:
         if _deployment_model_id and self.has_model_id(_deployment_model_id):
             return None
 
+        warn_on_provider_credential_mismatch(
+            model_name=deployment.model_name,
+            litellm_params=deployment.litellm_params.model_dump(exclude_none=True),
+        )
+
         # add to model list
         _deployment: Final = deployment.to_json(exclude_none=True)
         # initialize client
         self._add_deployment(deployment=deployment)
 
         _model_info_dict: Final[dict] = deployment.model_info.model_dump(exclude_none=True)
-        for field in CustomPricingLiteLLMParams.model_fields.keys():
+        for field in CustomPricingLiteLLMParams.model_fields:
             field_value = deployment.litellm_params.get(field)
             if field_value is not None:
                 _model_info_dict[field] = field_value
@@ -8249,34 +9000,23 @@ class Router:
                 backend_model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.custom_llm_provider,
             )
+        Router._inherit_builtin_tiered_output_rate(
+            model_info=_model_info_dict,
+            backend_model=deployment.litellm_params.model,
+            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+        )
 
         # Register custom pricing in litellm.model_cost.
         # Mirrors _create_deployment() logic to ensure dynamically-added deployments
         # (e.g., loaded from DB) also have their custom pricing registered.
         # Without this, _is_model_cost_zero() cannot detect explicitly-configured
         # zero-cost models, causing budget checks to block free models.
-        _model_id: Final = deployment.model_info.id
-        if _model_id is not None:
-            litellm.register_model(model_cost={_model_id: _model_info_dict})
-
-        ## REGISTER MODEL INFO IN LITELLM MODEL COST MAP
-        ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
-        _model_name = deployment.litellm_params.model
-        if deployment.litellm_params.custom_llm_provider is not None:
-            _model_name = deployment.litellm_params.custom_llm_provider + "/" + _model_name
-
-        # For the shared backend key, keep only cost-map schema fields
-        # (minus custom pricing) so that one deployment's pricing overrides
-        # or custom metadata (id, access_via_team_ids, arbitrary keys)
-        # don't pollute another deployment sharing the same backend model
-        # name. Each deployment's full model_info is already stored under
-        # its unique model_id above (when present).
-        _shared_model_info: Final = shared_backend_model_info(_model_info_dict)
-        _backend_alias_cost: Final = {_model_name: _shared_model_info}
-        if "responses/" in _model_name:
-            _stripped_model_name: Final = _model_name.replace("responses/", "")
-            _backend_alias_cost[_stripped_model_name] = _shared_model_info
-        litellm.register_model(model_cost=_backend_alias_cost)
+        Router._register_deployment_in_model_cost(
+            model_id=deployment.model_info.id,
+            model_info=_model_info_dict,
+            model=deployment.litellm_params.model,
+            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+        )
 
         # add to model names
         self._add_model_to_list_and_index_map(model=_deployment, model_id=deployment.model_info.id)
@@ -8320,6 +9060,7 @@ class Router:
                 self.model_name_to_deployment_indices[model_name] = updated_indices
             else:
                 del self.model_name_to_deployment_indices[model_name]
+                self.model_names.discard(model_name)
 
         # Update team_model_to_deployment_indices
         for key, indices in list(self.team_model_to_deployment_indices.items()):
@@ -8407,15 +9148,14 @@ class Router:
         Returns:
         - The added/updated deployment
         """
+        _deployment_model_id: Final = deployment.model_info.id or ""
+        _deployment_on_router: Final[Deployment | None] = self.get_deployment(model_id=_deployment_model_id)
         try:
-            # check if deployment already exists
-            _deployment_model_id: Final = deployment.model_info.id or ""
-
-            _deployment_on_router: Final[Deployment | None] = self.get_deployment(model_id=_deployment_model_id)
             if _deployment_on_router is not None:
                 # deployment with this model_id exists on the router
                 if (
-                    deployment.litellm_params == _deployment_on_router.litellm_params
+                    deployment.model_name == _deployment_on_router.model_name
+                    and deployment.litellm_params == _deployment_on_router.litellm_params
                     and deployment.model_info == _deployment_on_router.model_info
                 ):
                     # No need to update
@@ -8462,9 +9202,162 @@ class Router:
                     deployment.model_info.id,
                     e,
                 )
+                self._restore_deployment_after_failed_upsert(
+                    previous_deployment=_deployment_on_router, model_id=_deployment_model_id
+                )
                 return None
             else:
                 raise e
+
+    def _restore_deployment_after_failed_upsert(self, previous_deployment: Deployment | None, model_id: str) -> None:
+        if previous_deployment is None or self.has_model_id(model_id):
+            return
+        try:
+            self.add_deployment(deployment=previous_deployment)
+            verbose_router_logger.info(
+                "Restored deployment %s (id=%s); it keeps serving its previous configuration.",
+                previous_deployment.model_name,
+                model_id,
+            )
+        except Exception as restore_error:  # noqa: BLE001  # best-effort restore: a second failure must not abort the reload
+            verbose_router_logger.warning(
+                "Could not restore previously served deployment %s (id=%s) after the failed upsert: %s",
+                previous_deployment.model_name,
+                model_id,
+                restore_error,
+            )
+
+    @staticmethod
+    def _backend_cost_map_keys(model: str, custom_llm_provider: str | None) -> tuple[str, ...]:
+        """The ``litellm.model_cost`` keys a deployment's shared backend info is registered under."""
+        backend_key: Final = model if custom_llm_provider is None else f"{custom_llm_provider}/{model}"
+        if "responses/" in backend_key:
+            return (backend_key, backend_key.replace("responses/", ""))
+        return (backend_key,)
+
+    @staticmethod
+    def _deployment_model_cost_payload(deployment: Deployment) -> dict:  # mutable-ok: cost-map entry
+        """The ``model_info`` a deployment contributes to ``litellm.model_cost``.
+
+        Custom pricing lives on ``litellm_params`` rather than ``model_info``, and
+        the built-in cache-pricing inheritance is derived rather than stored, so
+        both are folded back in here. That keeps this reproducible from a
+        deployment alone, which is what lets a refresh rebuild the same entries.
+        """
+        model_info: Final[dict] = deployment.model_info.model_dump(exclude_none=True)  # mutable-ok: built in place
+        for field in CustomPricingLiteLLMParams.model_fields:
+            field_value = deployment.litellm_params.get(field)
+            if field_value is not None:
+                model_info[field] = field_value
+        if model_info.get("input_cost_per_token") is not None:
+            Router._inherit_builtin_cache_pricing(
+                model_info=model_info,
+                backend_model=deployment.litellm_params.model,
+                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+            )
+        Router._inherit_builtin_tiered_output_rate(
+            model_info=model_info,
+            backend_model=deployment.litellm_params.model,
+            custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+        )
+        return model_info
+
+    @staticmethod
+    def _register_deployment_in_model_cost(
+        *,
+        model_id: str | None,
+        model_info: dict,  # mutable-ok: cost-map entry
+        model: str,
+        custom_llm_provider: str | None,
+    ) -> None:
+        """Write a deployment's metadata into ``litellm.model_cost``.
+
+        Runs when a deployment is added and again after a price data reload, so
+        the entries a refresh rebuilds are the ones a fresh boot would produce.
+        Nothing is recorded for replay: a refresh walks the live routers instead,
+        so a deleted, repointed or never-added deployment, and a discarded router,
+        drop out of the rebuild on their own.
+
+        A strategy-router alias is never the deployment actually called or
+        billed, so custom pricing configured on it must not become a cost-map
+        price: an explicit zero would let ``_is_cost_explicitly_configured``
+        treat the alias as a genuinely free model and waive budget checks for
+        requests that route to (and bill as) a real deployment.
+        """
+        if classify_strategy_router_model(model) is not None:
+            model_info = {  # mutable-ok: filtered copy of the caller's entry, handed straight to register_model
+                k: v for k, v in model_info.items() if k not in CustomPricingLiteLLMParams.model_fields
+            }
+
+        if model_id is not None:
+            litellm.register_model(
+                model_cost={model_id: model_info},
+                persist_across_reloads=False,
+                warning_display_name=model,
+            )
+
+        ## OLD MODEL REGISTRATION ## Kept to prevent breaking changes
+        backend_keys: Final = Router._backend_cost_map_keys(model=model, custom_llm_provider=custom_llm_provider)
+        backend_key: Final = backend_keys[0]
+
+        # For the shared backend key, keep only cost-map schema fields
+        # (minus custom pricing) so that one deployment's pricing overrides
+        # or custom metadata (id, access_via_team_ids, arbitrary keys)
+        # don't pollute another deployment sharing the same backend model
+        # name. Each deployment's full model_info is already stored under
+        # its unique model_id above.
+        shared_model_info: Final = shared_backend_model_info(model_info)
+        existing_shared_mode: Final = (cast(dict | None, litellm.model_cost.get(backend_key, {})) or {}).get("mode")
+        deployment_mode: Final = shared_model_info.get("mode")
+        # Keep the built-in bridge mode stable for shared backend keys.
+        # Multiple aliases can point at the same provider/model backend,
+        # but their deployment-level overrides should not downgrade the
+        # backend from responses -> chat via last-write-wins registration.
+        # Only preserve in that specific direction so legitimate upgrades
+        # (e.g. chat -> responses) and unrelated mode changes still apply,
+        # and so a missing deployment mode does not silently clear the
+        # existing shared backend mode.
+        is_responses_to_chat_downgrade: Final = existing_shared_mode == "responses" and deployment_mode == "chat"
+        would_clear_existing_mode: Final = existing_shared_mode is not None and deployment_mode is None
+        if is_responses_to_chat_downgrade or would_clear_existing_mode:
+            if deployment_mode is not None:
+                verbose_router_logger.warning(
+                    "Router: preserving existing mode=%s for shared backend "
+                    "key %s instead of the deployment-specified mode=%s "
+                    "(prevents alias registration from downgrading the "
+                    "shared backend mode).",
+                    existing_shared_mode,
+                    backend_key,
+                    deployment_mode,
+                )
+            shared_model_info["mode"] = existing_shared_mode
+
+        # Always register the (possibly mode-preserved) shared backend info.
+        litellm.register_model(
+            model_cost={_key: shared_model_info for _key in backend_keys},
+            persist_across_reloads=False,
+        )
+
+    def _replay_model_cost_registrations(self) -> None:
+        """Re-assert this router's deployments onto a freshly fetched catalog.
+
+        Reads ``model_list`` at call time, so only deployments the router still
+        serves are restored.
+        """
+        for entry in tuple(self.model_list):
+            try:
+                deployment = entry if isinstance(entry, Deployment) else Deployment(**entry)
+            except Exception:  # noqa: BLE001  # a malformed entry must not abort the rest of the rebuild
+                verbose_router_logger.exception(
+                    "Router: could not rebuild cost-map entry for a deployment during a price data reload"
+                )
+                continue
+            Router._register_deployment_in_model_cost(
+                model_id=deployment.model_info.id,
+                model_info=Router._deployment_model_cost_payload(deployment),
+                model=deployment.litellm_params.model,
+                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+            )
 
     def delete_deployment(self, id: str) -> Deployment | None:
         """
@@ -8680,7 +9573,7 @@ class Router:
 
         Example:
             credentials = router.get_deployment_credentials_with_provider("gpt-4o-litellm")
-            # Returns: {"api_key": "sk-...", "custom_llm_provider": "openai", ...}
+            # Returns: {"api_key": "sk-...", "custom_llm_provider": "openai", "model": "gpt-4o", ...}
         """
         # Try to get deployment by model_id first
         deployment = self.get_deployment(model_id=model_id)
@@ -8738,6 +9631,8 @@ class Router:
             credentials.update(credential_values)
             # Remove the credential name since we've resolved it
             credentials.pop("litellm_credential_name", None)
+
+        credentials["model"] = deployment.litellm_params.model
 
         # Add custom_llm_provider
         if deployment.litellm_params.custom_llm_provider:
@@ -8817,10 +9712,27 @@ class Router:
 
         ## SET MODEL TO 'model=' - if base_model is None + not azure
         if custom_llm_provider == "azure" and base_model is None:
-            verbose_router_logger.error(
-                "Could not identify azure model '%s'. Set azure 'base_model' for accurate max tokens, cost tracking, etc.- https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models",
-                _model,
+            # Router init auto-registers every deployment name into
+            # litellm.model_cost as a zeroed stub, so membership alone can't
+            # tell a resolvable name apart; require usable limits/costs.
+            _azure_fallback_key = _model if _model.startswith("azure/") else f"azure/{_model}"
+            _fallback_entry = litellm.model_cost.get(_azure_fallback_key)
+            _fallback_resolves = _fallback_entry is not None and (
+                (_fallback_entry.get("max_input_tokens") or 0) > 0
+                or (_fallback_entry.get("max_tokens") or 0) > 0
+                or (_fallback_entry.get("input_cost_per_token") or 0) > 0
             )
+            if _fallback_resolves:
+                verbose_router_logger.debug(
+                    "Azure deployment '%s' has no base_model set; using '%s' from the model cost map for max tokens, cost tracking, etc.",
+                    _model,
+                    _azure_fallback_key,
+                )
+            else:
+                verbose_router_logger.error(
+                    "Could not identify azure model '%s'. Set azure 'base_model' for accurate max tokens, cost tracking, etc.- https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models",
+                    _model,
+                )
         elif custom_llm_provider != "azure":
             model = _model
 
@@ -8849,14 +9761,26 @@ class Router:
             model_info_name = model
 
         model_info: Final = litellm.get_model_info(model=model_info_name)
+        if model_info is None:
+            return model_info
 
         ## CHECK USER SET MODEL INFO
-        user_model_info: Final = deployment.get("model_info") or {}
+        raw_user_model_info: Final = deployment.get("model_info")
+        user_model_info: Final = (
+            raw_user_model_info.model_dump(exclude_none=True)
+            if isinstance(raw_user_model_info, BaseModel)
+            else raw_user_model_info
+        )
 
-        if model_info is not None:
-            model_info.update(cast(ModelInfo, user_model_info))
+        # get_model_info() hands back an lru_cache'd dict, so merge into a copy; unset
+        # values are skipped or Deployment's None pricing defaults would erase the map's
+        merged_model_info: Final = copy.deepcopy(model_info)
+        if user_model_info:
+            for key, value in user_model_info.items():
+                if value is not None:
+                    merged_model_info[key] = value
 
-        return model_info
+        return merged_model_info
 
     def get_model_info(self, id: str) -> dict | None:
         """
@@ -8901,7 +9825,7 @@ class Router:
         litellm_model_name_model_info: ModelInfo | None = None
 
         try:
-            custom_model_info = litellm.model_cost.get(model_id)
+            custom_model_info = copy.deepcopy(litellm.model_cost.get(model_id))
         except Exception:
             pass
 
@@ -8916,9 +9840,8 @@ class Router:
                 base_model: Final = custom_model_info.get("base_model", None)
                 if base_model is not None:
                     ## update litellm model info with base model info
-                    base_model_info: Final = litellm.get_model_info(model=base_model)
+                    base_model_info: Final = copy.deepcopy(litellm.get_model_info(model=base_model))
                     if base_model_info is not None:
-                        custom_model_info = custom_model_info or {}
                         # Base model provides defaults, custom model info overrides
                         custom_model_info = _update_dictionary(
                             cast(dict, base_model_info),
@@ -8934,13 +9857,13 @@ class Router:
             model_info = cast(
                 ModelInfo,
                 _update_dictionary(
-                    cast(dict, litellm_model_name_model_info).copy(),
+                    copy.deepcopy(cast(dict, litellm_model_name_model_info)),
                     custom_model_info,
                 ),
             )
         elif litellm_model_name_model_info is not None:
             # (2) Built-in only — no custom pricing to merge
-            model_info = litellm_model_name_model_info
+            model_info = copy.deepcopy(litellm_model_name_model_info)
         elif custom_model_info is not None:
             # (3) Custom only — model not in built-in cost map yet
             # custom_model_info already includes base_model defaults at this point, if applicable
@@ -8979,7 +9902,7 @@ class Router:
             if not is_match:
                 continue
             # model in model group found #
-            litellm_params = LiteLLM_Params(**model["litellm_params"])  # type: ignore
+            litellm_params = LiteLLM_Params(**model["litellm_params"])
             # get configurable clientside auth params
             configurable_clientside_auth_params = litellm_params.configurable_clientside_auth_params
 
@@ -8990,32 +9913,32 @@ class Router:
             # get model tpm
             _deployment_tpm: int | None = None
             if _deployment_tpm is None:
-                _deployment_tpm = model.get("tpm", None)  # type: ignore
+                _deployment_tpm = model.get("tpm", None)
             if _deployment_tpm is None:
-                _deployment_tpm = model_litellm_params.get("tpm", None)  # type: ignore
+                _deployment_tpm = model_litellm_params.get("tpm", None)
             if _deployment_tpm is None:
-                _deployment_tpm = model_info_dict.get("tpm", None)  # type: ignore
+                _deployment_tpm = model_info_dict.get("tpm", None)
 
             # get model rpm
             _deployment_rpm: int | None = None
             if _deployment_rpm is None:
-                _deployment_rpm = model.get("rpm", None)  # type: ignore
+                _deployment_rpm = model.get("rpm", None)
             if _deployment_rpm is None:
-                _deployment_rpm = model_litellm_params.get("rpm", None)  # type: ignore
+                _deployment_rpm = model_litellm_params.get("rpm", None)
             if _deployment_rpm is None:
-                _deployment_rpm = model_info_dict.get("rpm", None)  # type: ignore
+                _deployment_rpm = model_info_dict.get("rpm", None)
 
-            _deployment_itpm: int | None = model.get("itpm")  # type: ignore
+            _deployment_itpm: int | None = model.get("itpm")
             if _deployment_itpm is None:
-                _deployment_itpm = model_litellm_params.get("itpm", None)  # type: ignore
+                _deployment_itpm = model_litellm_params.get("itpm", None)
             if _deployment_itpm is None:
-                _deployment_itpm = model_info_dict.get("itpm", None)  # type: ignore
+                _deployment_itpm = model_info_dict.get("itpm", None)
 
-            _deployment_otpm: int | None = model.get("otpm")  # type: ignore
+            _deployment_otpm: int | None = model.get("otpm")
             if _deployment_otpm is None:
-                _deployment_otpm = model_litellm_params.get("otpm", None)  # type: ignore
+                _deployment_otpm = model_litellm_params.get("otpm", None)
             if _deployment_otpm is None:
-                _deployment_otpm = model_info_dict.get("otpm", None)  # type: ignore
+                _deployment_otpm = model_info_dict.get("otpm", None)
 
             # get model info
             try:
@@ -9026,6 +9949,8 @@ class Router:
                     model_info = None
             except Exception:
                 model_info = None
+
+            deployment_is_mapped = deployment_is_catalog_mapped(model_info, model_info_dict)
 
             # get llm provider
             litellm_model, llm_provider = "", ""
@@ -9064,11 +9989,12 @@ class Router:
                 )
 
             if model_group_info is None:
-                model_group_info = ModelGroupInfo(  # type: ignore
+                model_group_info = ModelGroupInfo(
                     **{
                         "model_group": user_facing_model_group_name,
                         "providers": [llm_provider],
                         **model_info,
+                        "supported_reasoning_efforts": None,
                     }
                 )
             else:
@@ -9113,32 +10039,28 @@ class Router:
                     model_group_info.output_cost_per_token = _output_cost_per_token
                 if (
                     model_info.get("supports_parallel_function_calling", None) is not None
-                    and model_info["supports_parallel_function_calling"] is True  # type: ignore
+                    and model_info["supports_parallel_function_calling"] is True
                 ):
                     model_group_info.supports_parallel_function_calling = True
-                if (
-                    model_info.get("supports_vision", None) is not None and model_info["supports_vision"] is True  # type: ignore
-                ):
+                if model_info.get("supports_vision", None) is not None and model_info["supports_vision"] is True:
                     model_group_info.supports_vision = True
                 if (
                     model_info.get("supports_function_calling", None) is not None
-                    and model_info["supports_function_calling"] is True  # type: ignore
+                    and model_info["supports_function_calling"] is True
                 ):
                     model_group_info.supports_function_calling = True
                 if (
                     model_info.get("supports_web_search", None) is not None
-                    and model_info["supports_web_search"] is True  # type: ignore
+                    and model_info["supports_web_search"] is True
                 ):
                     model_group_info.supports_web_search = True
                 if (
                     model_info.get("supports_url_context", None) is not None
-                    and model_info["supports_url_context"] is True  # type: ignore
+                    and model_info["supports_url_context"] is True
                 ):
                     model_group_info.supports_url_context = True
 
-                if (
-                    model_info.get("supports_reasoning", None) is not None and model_info["supports_reasoning"] is True  # type: ignore
-                ):
+                if model_info.get("supports_reasoning", None) is not None and model_info["supports_reasoning"] is True:
                     model_group_info.supports_reasoning = True
                 if (
                     model_info.get("supported_openai_params", None) is not None
@@ -9150,25 +10072,30 @@ class Router:
                 if model_info.get("rpm", None) is not None and _deployment_rpm is None:
                     _deployment_rpm = model_info.get("rpm")
 
+            model_group_info.supported_reasoning_efforts = intersect_supported_reasoning_efforts(
+                model_group_info.supported_reasoning_efforts,
+                resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=deployment_is_mapped),
+            )
+
             if _deployment_tpm is not None:
                 if total_tpm is None:
                     total_tpm = 0
-                total_tpm += _deployment_tpm  # type: ignore
+                total_tpm += _deployment_tpm
 
             if _deployment_rpm is not None:
                 if total_rpm is None:
                     total_rpm = 0
-                total_rpm += _deployment_rpm  # type: ignore
+                total_rpm += _deployment_rpm
 
             if _deployment_itpm is not None:
                 if total_itpm is None:
                     total_itpm = 0
-                total_itpm += _deployment_itpm  # type: ignore
+                total_itpm += _deployment_itpm
 
             if _deployment_otpm is not None:
                 if total_otpm is None:
                     total_otpm = 0
-                total_otpm += _deployment_otpm  # type: ignore
+                total_otpm += _deployment_otpm
         if model_group_info is not None:
             ## UPDATE WITH TOTAL TPM/RPM FOR MODEL GROUP
             if total_tpm is not None:
@@ -9238,7 +10165,7 @@ class Router:
             return None, None
 
         for model in model_list:
-            id: str | None = model.get("model_info", {}).get("id")  # type: ignore
+            id: str | None = model.get("model_info", {}).get("id")
             litellm_model: str | None = model["litellm_params"].get(
                 "model"
             )  # USE THE MODEL SENT TO litellm.completion() - consistent with how global_router cache is written.
@@ -9299,7 +10226,7 @@ class Router:
             return None, None
 
         for model in model_list:
-            model_id: str | None = model.get("model_info", {}).get("id")  # type: ignore
+            model_id: str | None = model.get("model_info", {}).get("id")
             litellm_model: str | None = model["litellm_params"].get("model")
             if model_id is None or litellm_model is None:
                 continue
@@ -9384,7 +10311,7 @@ class Router:
 
     async def set_response_headers(
         self,
-        response: Any,
+        response: object,
         model_group: str | None = None,
         request_kwargs: dict | None = None,
     ) -> Any:
@@ -9455,7 +10382,7 @@ class Router:
             if model_id is None:
                 model_name = model.get("model_name", "")
                 litellm_params = model.get("litellm_params", {})
-                model_id = self._generate_model_id(model_name, litellm_params)
+                model_id = self.generate_model_id(model_name, litellm_params)
                 # Update the model_info in the original list
                 if "model_info" not in model:
                     model["model_info"] = {}
@@ -9487,7 +10414,7 @@ class Router:
         else:
             # When model_name is None, return all model IDs
             # Use the index map keys for O(n) where n = total deployments
-            for model_id in self.model_id_to_deployment_index_map.keys():
+            for model_id in self.model_id_to_deployment_index_map:
                 idx = self.model_id_to_deployment_index_map[model_id]
                 model = self.model_list[idx]
                 if "model_info" in model and "id" in model["model_info"]:
@@ -9853,17 +10780,170 @@ class Router:
             if isinstance(model_value, str):
                 _router_model_name: str = model_value
             elif isinstance(model_value, dict):
-                _model_value = RouterModelGroupAliasItem(**model_value)  # type: ignore
-                if _model_value["hidden"] is True:
+                _model_value = RouterModelGroupAliasItem(**model_value)
+                if _model_value["hidden"] is True and model_name is None:
                     continue
-                else:
-                    _router_model_name = _model_value["model"]
+                _router_model_name = _model_value["model"]
             else:
                 continue
 
             returned_models.extend(self._get_all_deployments(model_name=_router_model_name, model_alias=model_alias))
 
         return returned_models
+
+    def get_model_list_from_routing_groups(self, model_name: str | None = None) -> Sequence[DeploymentTypedDict]:
+        """
+        Callable routing groups materialized as model-list rows, mirroring
+        `get_model_list_from_model_alias`: each member deployment is emitted
+        under the group's name (via `_get_all_deployments`' `model_alias`
+        rewrite), which is what surfaces groups in `get_model_names`,
+        `/v1/models` discovery, `get_model_group_usage`, and the
+        blocked/unhealthy hiding that all read `get_model_list`.
+        """
+        if model_name is not None:
+            group: Final = self.get_routing_group(model_name)
+            return self._materialize_routing_group_rows((group,)) if group is not None else ()
+        cached: Final = self._routing_group_rows
+        if cached is not None:
+            return cached
+        rows: Final = self._materialize_routing_group_rows(
+            tuple(
+                callable_group
+                for name in self._routing_groups
+                if (callable_group := self.get_routing_group(name)) is not None
+            )
+        )
+        self._routing_group_rows = rows
+        return rows
+
+    def _materialize_routing_group_rows(self, groups: tuple[RoutingGroup, ...]) -> tuple[DeploymentTypedDict, ...]:
+        return tuple(
+            self._as_routing_group_row(deployment)
+            for group in groups
+            for member in group.models
+            for deployment in self._get_all_deployments(model_name=member, model_alias=group.group_name)
+        )
+
+    @staticmethod
+    def _as_routing_group_row(deployment: DeploymentTypedDict) -> DeploymentTypedDict:
+        """
+        A member deployment re-emitted under its group's name must not carry
+        the member's `access_groups`: access groups grant member names, never
+        the group, so inheriting them here would let a key holding a member's
+        access group list and call the whole group.
+        """
+        model_info: Final = {  # mutable-ok: DeploymentTypedDict rows are plain dicts
+            k: v for k, v in (deployment.get("model_info") or {}).items() if k != "access_groups"
+        }
+        return {**deployment, "model_info": model_info}  # mutable-ok: DeploymentTypedDict rows are plain dicts
+
+    TIER_PARAMS_NEVER_DROPPED: Final = frozenset(all_litellm_params) | frozenset(
+        {
+            "additional_drop_params",
+            "drop_params",
+            "messages",
+            "model",
+            "extra_headers",
+            "max_tokens",
+            "max_completion_tokens",
+        }
+    )
+
+    @staticmethod
+    def _declared_param_allowlist(params: Mapping[str, object]) -> frozenset[str]:
+        declared: Final = params.get("allowed_openai_params")
+        if not isinstance(declared, (list, tuple, set, frozenset)):
+            return frozenset()
+        return frozenset(entry for entry in declared if isinstance(entry, str))
+
+    @staticmethod
+    def _deployment_accepts_param(deployment: DeploymentTypedDict, group: str, param: str) -> bool:
+        deployment_params: Final = deployment.get("litellm_params")
+        if not deployment_params:
+            return True
+        if param in Router._declared_param_allowlist(deployment_params):
+            return True
+        if declared_authenticating_provider(
+            str(deployment_params.get("model") or ""), deployment_params.get("custom_llm_provider")
+        ):
+            return True
+        deployment_model_info: Final = deployment.get("model_info")
+        base_model: Final = (
+            deployment_model_info.get("base_model") if deployment_model_info else None
+        ) or deployment_params.get("base_model")
+        try:
+            model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                model=deployment_params.get("model") or group,
+                custom_llm_provider=deployment_params.get("custom_llm_provider"),
+            )
+            supported: Final = litellm.get_supported_openai_params(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                base_model=base_model if isinstance(base_model, str) else None,
+            )
+        except Exception as e:  # noqa: BLE001  # best-effort filter: an unresolvable provider must not narrow the request
+            verbose_router_logger.debug(
+                "litellm.router.py::_deployment_accepts_param: keeping %s for model=%s. Got - %s", param, group, e
+            )
+            return True
+        return supported is None or param in supported
+
+    def _tier_params_the_target_accepts(
+        self, model: str, tier_params: Mapping[str, object], request_kwargs: Mapping[str, object]
+    ) -> Mapping[str, object]:
+        """Drop an OpenAI param that no deployment behind ``model`` declares.
+
+        A tier's litellm_params are an operator override applied to every request the tier routes,
+        so one the target cannot take turns that whole tier into a 400 raised before the request
+        leaves the proxy. The candidates are exactly what get_optional_params can reject, asked of
+        the module that raises, so credentials and endpoint controls are never at risk.
+
+        TIER_PARAMS_NEVER_DROPPED is excluded on top of that, for two reasons. No provider lists a
+        litellm control among its supported params, so "no deployment declares it" means litellm
+        consumes it rather than that the target refuses it, and dropping one changes litellm's own
+        behavior: dropping drop_params or additional_drop_params silently disables the sanitization
+        the operator configured. Providers do list extra_headers, but it carries auth, tenancy and
+        routing information, so sending fewer headers than configured is worse than today's error.
+        Token ceilings stay for the same reason: a tier's max_tokens or max_completion_tokens is a
+        cost bound, and dropping it would let a caller's own larger value through where today the
+        mismatch fails loudly.
+
+        The trade this filter makes is a param for a working request, which is right for one that
+        only shapes how the model answers and wrong for anything else.
+
+        A param survives if ANY deployment could take it, because routing has not chosen one yet,
+        and it survives both an unresolvable provider and a group with no deployments, because a
+        best-effort filter must never narrow what the request already did.
+
+        A github_copilot or chatgpt deployment counts as accepting everything, decided before any
+        lookup: resolving either provider runs its OAuth device flow, so a capability question
+        asked from the routing path can freeze the event loop for minutes waiting on a human.
+
+        allowed_openai_params is the documented escape hatch for an outdated or incomplete
+        supported-params list: request-time validation extends the supported list with it before
+        comparing. The filter asks the same question, so a param named by the allowlist on the tier
+        overlay, the request, or a deployment's own litellm_params is never a drop candidate.
+        """
+        deployments: Final = self.get_model_list(model_name=model) or ()
+        if not deployments:
+            return tier_params
+        allowlisted: Final = self._declared_param_allowlist(tier_params) | self._declared_param_allowlist(
+            request_kwargs
+        )
+        candidates: Final = provider_rejectable_params(tier_params) - self.TIER_PARAMS_NEVER_DROPPED - allowlisted
+        unsupported: Final = frozenset(
+            param
+            for param in candidates
+            if not any(self._deployment_accepts_param(deployment, model, param) for deployment in deployments)
+        )
+        if not unsupported:
+            return tier_params
+        verbose_router_logger.warning(
+            "litellm.router.py: dropping tier params %s for model=%s, no deployment behind it declares them",
+            ", ".join(sorted(unsupported)),
+            model,
+        )
+        return MappingProxyType({key: value for key, value in tier_params.items() if key not in unsupported})
 
     def get_model_list(
         self, model_name: str | None = None, team_id: str | None = None
@@ -9881,18 +10961,21 @@ class Router:
             returned_models.extend(self._get_all_deployments(model_name=model_name, team_id=team_id))
 
         returned_models.extend(self.get_model_list_from_model_alias(model_name=model_name))
+        returned_models.extend(self.get_model_list_from_routing_groups(model_name=model_name))
 
         if len(returned_models) == 0:  # check if wildcard route
-            potential_wildcard_models: Final = self.pattern_router.route(model_name) or []
+            potential_wildcard_models: Final = self.pattern_router.get_deployments_by_pattern(model=model_name or "")
 
             ## check for team-specific wildcard models
             if team_id is not None and team_id in self.team_pattern_routers:
-                potential_team_only_wildcard_models: Final = self.team_pattern_routers[team_id].route(model_name) or []
+                potential_team_only_wildcard_models: Final = self.team_pattern_routers[
+                    team_id
+                ].get_deployments_by_pattern(model=model_name or "")
                 potential_wildcard_models.extend(potential_team_only_wildcard_models)
 
             if model_name is not None and potential_wildcard_models is not None:
                 for m in potential_wildcard_models:
-                    deployment_typed_dict = DeploymentTypedDict(**m)  # type: ignore
+                    deployment_typed_dict = DeploymentTypedDict(**m)
                     deployment_typed_dict["model_name"] = model_name
                     returned_models.append(deployment_typed_dict)
 
@@ -9900,6 +10983,25 @@ class Router:
             returned_models += self.model_list
 
         return returned_models
+
+    def resolved_litellm_models(self, model_name: str, team_id: str | None = None) -> tuple[str, ...]:
+        """The provider model strings `model_name` can actually be served by on this proxy.
+
+        `get_model_list` composes every channel the request path itself uses (exact name,
+        model_group_alias, routing groups, wildcards), so this answers "which models will
+        answer a call to this name" rather than "what did the admin call it": the deployment
+        name is admin-arbitrary, and two names over one provider model are one model.
+
+        Empty when the name resolves to no deployment. That is not the same fact as "the
+        call will fail" - a provider-qualified public name is served by the SDK with no
+        deployment behind it - so the fallback for an empty result is the caller's policy,
+        never this function's.
+        """
+        return tuple(
+            litellm_model
+            for deployment in self.get_model_list(model_name=model_name, team_id=team_id) or ()
+            if isinstance(litellm_model := deployment.get("litellm_params", {}).get("model"), str) and litellm_model
+        )
 
     def _invalidate_model_group_info_cache(self) -> None:
         """Invalidate the cached model group info.
@@ -9912,6 +11014,7 @@ class Router:
         """
         self._cached_get_model_group_info.cache_clear()
         self._zero_cost_cache.clear()
+        self._routing_group_rows = None
 
     def _invalidate_access_groups_cache(self) -> None:
         """Invalidate the cached access groups.
@@ -10008,6 +11111,7 @@ class Router:
             "model_group_alias",
             "enable_weighted_failover",
             "enable_tag_filtering",
+            "tag_routing_prefix",
         ]
 
         for var in vars_to_include:
@@ -10045,6 +11149,7 @@ class Router:
             "model_group_alias",
             "enable_weighted_failover",
             "enable_tag_filtering",
+            "tag_routing_prefix",
         ]
 
         _int_settings: Final = [
@@ -10180,6 +11285,64 @@ class Router:
             return litellm.token_counter(messages=cast(list, input_messages))  # cast-ok: transformed chat messages
         raise ValueError("Either messages or input must be provided to count tokens")
 
+    def _deployment_max_input_tokens(self, model: str, deployment: Mapping[str, object]) -> int | None:
+        """The deployment's declared context window, or None when it declares none or cannot be resolved."""
+        try:
+            model_info: Final = self.get_router_model_info(
+                deployment=cast(dict, deployment),  # cast-ok: router deployments are plain dicts
+                received_model_name=model,
+            )
+        except Exception as e:  # noqa: BLE001  # best-effort: an unmappable deployment must not hide the others
+            verbose_router_logger.debug(
+                "litellm.router.py::_deployment_max_input_tokens: skipping deployment. Got - %s", e
+            )
+            return None
+        max_input_tokens: Final = model_info.get("max_input_tokens")
+        return max_input_tokens if isinstance(max_input_tokens, int) else None
+
+    def _pre_call_checks_need_token_count(
+        self, model: str, healthy_deployments: Sequence[Mapping[str, object]]
+    ) -> bool:
+        """Whether any healthy deployment declares a context window that a token count could exceed.
+
+        Resolves each deployment the way ``_pre_call_checks`` does, so one unmappable deployment
+        cannot hide a later one that does declare a limit.
+        """
+        return any(
+            self._deployment_max_input_tokens(model, deployment) is not None for deployment in healthy_deployments
+        )
+
+    async def _acount_pre_call_check_tokens(
+        self,
+        model: str,
+        healthy_deployments: Sequence[Mapping[str, object]],
+        messages: Sequence[Mapping[str, str]] | None,
+        input: str | Sequence[object] | None,
+        request_kwargs: Mapping[str, object] | None,
+    ) -> int | None:
+        """Count input tokens off the event loop, so a multi-MB prompt cannot stall the proxy.
+
+        Returns None when no deployment limits its context window, and when counting fails. The
+        caller pairs this with ``skip_inline_token_count`` so neither case puts the count back on
+        the loop: a failed count leaves the deployments unfiltered, exactly as before.
+        """
+        if messages is None and input is None:
+            return None
+        raw_instructions: Final = request_kwargs.get("instructions") if request_kwargs else None
+        try:
+            if not self._pre_call_checks_need_token_count(model, healthy_deployments):
+                return None
+            return await asyncify(self._count_pre_call_check_tokens)(
+                messages=cast(list[dict[str, str]] | None, messages),  # cast-ok: forwarded to the sync counter
+                input=cast(str | list | None, input),  # cast-ok: forwarded to the sync counter
+                instructions=raw_instructions if isinstance(raw_instructions, str) else None,
+            )
+        except Exception as e:  # noqa: BLE001  # best-effort: an uncountable prompt must not fail the request
+            verbose_router_logger.error(
+                "litellm.router.py::_acount_pre_call_check_tokens: failed to count tokens. Got - %s", e
+            )
+            return None
+
     def _pre_call_checks(
         self,
         model: str,
@@ -10187,6 +11350,8 @@ class Router:
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
         request_kwargs: dict | None = None,
+        input_token_count: int | None = None,
+        skip_inline_token_count: bool = False,
     ):
         """
         Filter out model in model group, if:
@@ -10208,7 +11373,9 @@ class Router:
         # Token counting (tiktoken) is the dominant on-loop cost for large prompts.
         # Only count when a deployment actually declares max_input_tokens, and count
         # at most once; for model groups with no context-window limit it is skipped.
-        input_tokens: int | None = None
+        # Async callers pass the count in, already computed off the event loop, and set
+        # skip_inline_token_count so a failed off-loop count is not retried back on the loop.
+        input_tokens: int | None = input_token_count
 
         _context_window_error = False
         _potential_error_str = ""
@@ -10237,12 +11404,14 @@ class Router:
                 base_model = _model_info.get("base_model", None)
                 if base_model is None:
                     base_model = _litellm_params.get("base_model", None)
-                model_info = self.get_router_model_info(deployment=deployment, received_model_name=model)
                 _deployment_model = base_model or _litellm_params.get("model", None)
+                model_info = self.get_router_model_info(deployment=deployment, received_model_name=model)
 
                 max_input_tokens = model_info.get("max_input_tokens") if isinstance(model_info, dict) else None
                 if isinstance(max_input_tokens, int) and has_countable_input:
                     if input_tokens is None:
+                        if skip_inline_token_count:
+                            return _returned_deployments
                         try:
                             input_tokens = self._count_pre_call_check_tokens(
                                 messages=messages, input=input, instructions=instructions
@@ -10296,16 +11465,24 @@ class Router:
             ## INVALID PARAMS ## -> catch 'gpt-3.5-turbo-16k' not supporting 'response_format' param
             if request_kwargs is not None and litellm.drop_params is False:
                 # get supported params — use per-deployment model to avoid overwriting the outer model group name
-                _dep_model_for_params = _deployment_model or model
-                (
-                    _dep_model_for_params,
-                    custom_llm_provider,
-                    _,
-                    _,
-                ) = litellm.get_llm_provider(
-                    model=_dep_model_for_params,
-                    litellm_params=LiteLLM_Params(**_litellm_params),
-                )
+                _dep_model_for_params: str = _deployment_model or model
+                try:
+                    (
+                        _dep_model_for_params,
+                        custom_llm_provider,
+                        _,
+                        _,
+                    ) = litellm.get_llm_provider(
+                        model=_dep_model_for_params,
+                        litellm_params=LiteLLM_Params(**_litellm_params),
+                    )
+                except Exception as e:  # noqa: BLE001  # best-effort filter: an unresolvable provider must not fail the request
+                    verbose_router_logger.debug(
+                        "litellm.router.py::_pre_call_checks: skipping supported-params check for model=%s. Got - %s",
+                        _dep_model_for_params,
+                        e,
+                    )
+                    continue
 
                 supported_openai_params = litellm.get_supported_openai_params(
                     model=_dep_model_for_params,
@@ -10432,6 +11609,14 @@ class Router:
 
         return None
 
+    @staticmethod
+    def _is_strategy_marker_deployment(deployment: Mapping[str, object]) -> bool:
+        litellm_params: Final = deployment.get("litellm_params")
+        if not isinstance(litellm_params, Mapping):
+            return False
+        deployment_model: Final = litellm_params.get("model")
+        return isinstance(deployment_model, str) and classify_strategy_router_model(deployment_model) is not None
+
     def _common_checks_available_deployment(
         self,
         model: str,
@@ -10472,17 +11657,23 @@ class Router:
         if _model_from_alias is not None:
             model = _model_from_alias
 
-        early: Final = self._try_early_resolve_deployments_for_model_not_in_names(
-            model=model,
-            request_team_id=request_team_id,
-            include_team_models=_is_proxy_admin_request(request_kwargs),
-        )
-        if early is not None:
-            return early
+        _routing_group_deployments: Final = self._get_routing_group_deployments(model=model, team_id=request_team_id)
+        if _routing_group_deployments is None:
+            early: Final = self._try_early_resolve_deployments_for_model_not_in_names(
+                model=model,
+                request_team_id=request_team_id,
+                include_team_models=_is_proxy_admin_request(request_kwargs),
+            )
+            if early is not None:
+                return early
 
         ## get healthy deployments
         ### get all deployments
-        healthy_deployments = self._get_all_deployments(model_name=model, team_id=request_team_id)
+        healthy_deployments = (
+            _routing_group_deployments
+            if _routing_group_deployments is not None
+            else self._get_all_deployments(model_name=model, team_id=request_team_id)
+        )
         _pre_model_access_group_filter_len: Final = len(healthy_deployments)
         healthy_deployments = self._filter_deployments_by_model_access_groups(
             model=model,
@@ -10540,10 +11731,8 @@ class Router:
 
             # If still no deployments after checking for fallbacks, raise an error
             if len(healthy_deployments) == 0:
-                message: Final = f"You passed in model={model}. There are no healthy deployments for this model"
-
                 raise litellm.BadRequestError(
-                    message=message,
+                    message=f"You passed in model={model}. {RouterErrors.no_healthy_deployments.value}",
                     model=model,
                     llm_provider="",
                 )
@@ -10553,7 +11742,19 @@ class Router:
                 model
             ]  # update the model to the actual value if an alias has been passed in
 
-        return model, healthy_deployments
+        marker_flags: Final = tuple(self._is_strategy_marker_deployment(d) for d in healthy_deployments)
+        if not any(marker_flags):
+            return model, healthy_deployments
+        selectable: Final = [  # mutable-ok: matches this function's list contract expected by downstream filters
+            d for d, is_marker in zip(healthy_deployments, marker_flags, strict=True) if not is_marker
+        ]
+        if not selectable:
+            raise litellm.BadRequestError(
+                message=f"You passed in model={model}. {RouterErrors.only_strategy_marker_deployments.value}",
+                model=model,
+                llm_provider="",
+            )
+        return model, selectable
 
     def _filter_deployments_by_model_access_groups(
         self,
@@ -10633,7 +11834,7 @@ class Router:
             input=input,
             specific_deployment=specific_deployment,
             request_kwargs=request_kwargs,
-        )  # type: ignore
+        )
 
         # IF TEAM ID SPECIFIED ON MODEL, AND REQUEST CONTAINS USER_API_KEY_TEAM_ID, FILTER OUT MODELS THAT ARE NOT IN THE TEAM
         ## THIS PREVENTS WRITING FILES OF OTHER TEAMS TO MODELS THAT ARE TEAM-ONLY MODELS
@@ -10698,15 +11899,24 @@ class Router:
         )
 
         if self.enable_pre_call_checks and (messages is not None or input is not None):
+            deployments_to_check: Final = cast(list[dict], healthy_deployments)
             healthy_deployments = self._pre_call_checks(
                 model=model,
-                healthy_deployments=cast(list[dict], healthy_deployments),
+                healthy_deployments=deployments_to_check,
                 messages=messages,
                 input=input,
                 request_kwargs=request_kwargs,
+                input_token_count=await self._acount_pre_call_check_tokens(
+                    model=model,
+                    healthy_deployments=deployments_to_check,
+                    messages=messages,
+                    input=input,
+                    request_kwargs=request_kwargs,
+                ),
+                skip_inline_token_count=True,
             )
         # check if user wants to do tag based routing
-        healthy_deployments = await get_deployments_for_tag(  # type: ignore
+        healthy_deployments = await get_deployments_for_tag(
             llm_router_instance=self,
             model=model,
             request_kwargs=request_kwargs,
@@ -10744,6 +11954,33 @@ class Router:
             raise exception
 
         return healthy_deployments
+
+    @staticmethod
+    def _pop_effort_from_nested_carrier(request_kwargs: dict[str, object], carrier: str) -> None:
+        nested: Final = request_kwargs.get(carrier)
+        if not isinstance(nested, dict):
+            return
+        nested.pop("effort", None)
+        if not nested:
+            request_kwargs.pop(carrier, None)
+
+    @staticmethod
+    def _drop_client_effort_carriers_a_tier_pin_supersedes(
+        request_kwargs: dict[str, object],
+        tier_litellm_params: Mapping[str, object],
+    ) -> None:
+        """Tier litellm_params are deliberate operator overrides, but provider
+        translations let a caller-supplied carrier of the same setting
+        (``thinking``, ``output_config.effort``, ``reasoning.effort``) outrank
+        the ``reasoning_effort`` alias, so a pinned effort only reaches the wire
+        if the client's other encodings are removed before the merge. Non-effort
+        fields a carrier also holds (``output_config.format``,
+        ``reasoning.summary``) are kept."""
+        if "reasoning_effort" not in tier_litellm_params:
+            return
+        request_kwargs.pop("thinking", None)
+        Router._pop_effort_from_nested_carrier(request_kwargs, "output_config")
+        Router._pop_effort_from_nested_carrier(request_kwargs, "reasoning")
 
     async def async_get_available_deployment(
         self,
@@ -10789,6 +12026,12 @@ class Router:
             if pre_routing_hook_response is not None:
                 model = pre_routing_hook_response.model
                 messages = pre_routing_hook_response.messages
+                if pre_routing_hook_response.litellm_params:
+                    accepted_tier_params: Final = self._tier_params_the_target_accepts(
+                        model, pre_routing_hook_response.litellm_params, request_kwargs
+                    )
+                    self._drop_client_effort_carriers_a_tier_pin_supersedes(request_kwargs, accepted_tier_params)
+                    request_kwargs.update(accepted_tier_params)
             #########################################################
 
             # Resolve the strategy and logger AFTER the pre-routing hook, since
@@ -10822,7 +12065,7 @@ class Router:
                 strategy=strategy,
                 selector=strategy_selector,
                 model=model,
-                healthy_deployments=healthy_deployments,  # type: ignore
+                healthy_deployments=healthy_deployments,
                 messages=messages,
                 input=input,
                 request_kwargs=request_kwargs,
@@ -10868,9 +12111,7 @@ class Router:
                         args=(e, traceback_exception),
                     ).start()  # log response
                     # Handle any exceptions that might occur during streaming
-                    asyncio.create_task(
-                        logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
-                    )
+                    asyncio.create_task(logging_obj.async_failure_handler(e, traceback_exception))
             raise e
 
     async def async_get_available_deployment_for_pass_through(
@@ -10900,6 +12141,12 @@ class Router:
             if pre_routing_hook_response is not None:
                 model = pre_routing_hook_response.model
                 messages = pre_routing_hook_response.messages
+                if pre_routing_hook_response.litellm_params:
+                    accepted_tier_params: Final = self._tier_params_the_target_accepts(
+                        model, pre_routing_hook_response.litellm_params, request_kwargs
+                    )
+                    self._drop_client_effort_carriers_a_tier_pin_supersedes(request_kwargs, accepted_tier_params)
+                    request_kwargs.update(accepted_tier_params)
 
             # 2. Get healthy deployments
             healthy_deployments: Final = await self.async_get_healthy_deployments(
@@ -10952,7 +12199,7 @@ class Router:
                 strategy=strategy,
                 selector=strategy_selector,
                 model=model,
-                healthy_deployments=pass_through_deployments,  # type: ignore
+                healthy_deployments=pass_through_deployments,
                 messages=messages,
                 input=input,
                 request_kwargs=request_kwargs,
@@ -10995,9 +12242,7 @@ class Router:
                         target=logging_obj.failure_handler,
                         args=(e, traceback_exception),
                     ).start()
-                    asyncio.create_task(
-                        logging_obj.async_failure_handler(e, traceback_exception)  # type: ignore
-                    )
+                    asyncio.create_task(logging_obj.async_failure_handler(e, traceback_exception))
             raise e
 
     async def _run_routing_plugins(
@@ -11016,10 +12261,7 @@ class Router:
             resolve_structured_messages,
         )
 
-        deployments: Final = self.get_model_list(model_name=model) or []
-        candidate_models: Final = [
-            d["litellm_params"]["model"] for d in deployments if d.get("litellm_params", {}).get("model")
-        ]
+        candidate_models: Final = list(self.resolved_litellm_models(model))
 
         metadata_key: Final = self._get_metadata_variable_name_from_kwargs(request_kwargs)
         metadata: Final = request_kwargs.setdefault(metadata_key, {})
@@ -11070,11 +12312,28 @@ class Router:
 
         return filtered
 
-    def _select_pre_routing_strategy(self, model: str, request_kwargs: dict) -> "PreRoutingStrategy | None":
+    def _model_name_has_plain_deployments(self, model: str) -> bool:
+        indices: Final = self.model_name_to_deployment_indices.get(model) or ()
+        return any(not self._is_strategy_marker_deployment(self.model_list[idx]) for idx in indices)
+
+    def _select_pre_routing_strategy(
+        self, model: str, request_kwargs: dict
+    ) -> "TaggedPreRoutingStrategy[PreRoutingStrategy] | None":
         """
         Resolve the pre-routing strategy for `model`, disambiguating deployments
         that share a `model_name` by matching the request's tags against each
         registered strategy's tags before falling back to the first registered.
+        Returns the tagged registry entry so the caller can tell whether the
+        request's tags were what selected it, and can locate the marker
+        deployment the strategy was registered from via its (model_name, tags)
+        pair.
+
+        With tag filtering enabled, router-wide or by the request's
+        enable_tag_filtering (which the proxy sets from key/team
+        router_settings), strategies that all carry real tags matching none of
+        the request's do not capture it when the name also has plain
+        deployments: returning None hands the request to ordinary tag-aware
+        deployment selection.
         """
         candidates: Final[list[TaggedPreRoutingStrategy[PreRoutingStrategy]]] = [
             *self.auto_routers.get(model, []),
@@ -11084,8 +12343,6 @@ class Router:
         ]
         if not candidates:
             return None
-        if len(candidates) == 1:
-            return candidates[0].strategy
 
         request_tags: Final = _get_tags_from_request_kwargs(request_kwargs)
         if request_tags:
@@ -11093,11 +12350,18 @@ class Router:
                 if tagged.tags and is_valid_deployment_tag(
                     list(tagged.tags), request_tags, self.tag_filtering_match_any
                 ):
-                    return tagged.strategy
+                    return tagged
         for tagged in candidates:
             if "default" in tagged.tags:
-                return tagged.strategy
-        return candidates[0].strategy
+                return tagged
+        request_scoped_filtering: Final = request_kwargs.get("enable_tag_filtering") is True
+        if (
+            (self.enable_tag_filtering or request_scoped_filtering)
+            and all(tagged.tags for tagged in candidates)
+            and self._model_name_has_plain_deployments(model)
+        ):
+            return None
+        return candidates[0]
 
     async def async_pre_routing_hook(
         self,
@@ -11111,7 +12375,15 @@ class Router:
         This hook is called before the routing decision is made.
 
         Used for the litellm auto-router to modify the request before the routing decision is made.
+
+        `model` is whatever the caller asked for, which may be a `model_group_alias` key, while the
+        strategy registries and the marker deployment are keyed by the marker's own `model_name`, so
+        every lookup below resolves the alias first. Only the lookups: the caller-facing name stays
+        the alias, since spend metadata is stamped before routing and the response carries the tier
+        group the strategy picked.
         """
+        registered_model_name: Final = self._get_model_from_alias(model=model) or model
+
         #########################################################
         # Run the routing-plugin pipeline, if any plugins are configured.
         # Plugins narrow the candidate deployment pool (consumed later by
@@ -11119,15 +12391,25 @@ class Router:
         # downstream strategies (auto-router, complexity-router, ...) to read.
         #########################################################
         if self.routing_plugins:
-            await self._run_routing_plugins(model=model, request_kwargs=request_kwargs, messages=messages)
+            await self._run_routing_plugins(
+                model=registered_model_name, request_kwargs=request_kwargs, messages=messages
+            )
 
-        router_strategy: Final = self._select_pre_routing_strategy(model=model, request_kwargs=request_kwargs)
-        if router_strategy is None:
+        selected_strategy: Final = self._select_pre_routing_strategy(
+            model=registered_model_name, request_kwargs=request_kwargs
+        )
+        if selected_strategy is None:
             self._record_routing_decision(request_kwargs=request_kwargs, routing_decision=None)
+            self._stamp_or_clear_metadata_key(
+                request_kwargs=request_kwargs, key=SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, value=None
+            )
+            self._stamp_or_clear_metadata_key(
+                request_kwargs=request_kwargs, key=CONSUMED_REQUEST_TAGS_METADATA_KEY, value=None
+            )
             return None
 
-        pre_routing_hook_response: Final = await router_strategy.async_pre_routing_hook(
-            model=model,
+        pre_routing_hook_response: Final = await selected_strategy.strategy.async_pre_routing_hook(
+            model=registered_model_name,
             request_kwargs=request_kwargs,
             messages=messages,
             input=input,
@@ -11137,23 +12419,123 @@ class Router:
             request_kwargs=request_kwargs,
             routing_decision=(pre_routing_hook_response.routing_decision if pre_routing_hook_response else None),
         )
+        self._stamp_or_clear_metadata_key(
+            request_kwargs=request_kwargs,
+            key=SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+            value=(pre_routing_hook_response.session_affinity_ttl_seconds if pre_routing_hook_response else None),
+        )
+        self._stamp_or_clear_metadata_key(
+            request_kwargs=request_kwargs,
+            key=CONSUMED_REQUEST_TAGS_METADATA_KEY,
+            value=self._consumed_request_tags_stamp(
+                selected_strategy=selected_strategy,
+                pre_routing_hook_response=pre_routing_hook_response,
+                request_tags=_get_tags_from_request_kwargs(request_kwargs),
+            ),
+        )
 
         # `model` (the alias, e.g. "smart-router") is never the deployment actually
-        # called - apply the alias's own litellm_params (besides `model` itself,
-        # which is just the alias marker) to the request, since the tier/route
-        # deployment the hook selected won't have them. Router-only fields
-        # (tpm, rpm, weight, complexity_router_config, ...) are excluded from the
-        # actual outbound LLM call downstream by litellm.types.utils.all_litellm_params,
-        # not here.
-        if pre_routing_hook_response is not None:
-            alias_index: Final = self.model_name_to_deployment_indices.get(model, [])
-            if alias_index:
-                alias_litellm_params: Final = self.model_list[alias_index[0]].get("litellm_params", {})
-                for key, value in alias_litellm_params.items():
-                    if key != "model" and value is not None:
-                        request_kwargs.setdefault(key, value)
+        # called - apply the router marker's own litellm_params to the request,
+        # since the tier/route deployment the hook selected won't have them. The
+        # marker entry is looked up by its `auto_router/` model prefix and the
+        # selected strategy's tags, never by list position: plain deployments may
+        # share the alias `model_name` and must not leak their params (`api_base`,
+        # `api_key`, ...) onto the routed call. Router-only fields (tpm, rpm,
+        # weight, complexity_router_config, ...) are excluded from the actual
+        # outbound LLM call downstream by litellm.types.utils.all_litellm_params,
+        # not here. Custom pricing fields ARE call params, so they must be
+        # excluded here: they price the alias, not the deployment the hook
+        # selected, and forwarding them re-registers the routed deployment at
+        # the alias's price (an explicit 0 makes every alias request bill $0).
+        # Forwarded params only fill gaps: the keys inserted here ride along on the
+        # request (top level, so sibling requests sharing a `metadata` dict never see
+        # them) until `_update_kwargs_with_deployment` drops any the selected
+        # deployment sets itself (its own `aws_region_name` beats the marker's).
+        # Per-tier `litellm_params` on the hook response are deliberate overrides
+        # the caller applies on top, so those keys are never forwarded here.
+        marker_params: Final = (
+            self._forwardable_alias_marker_params(model=registered_model_name, strategy_tags=selected_strategy.tags)
+            if pre_routing_hook_response is not None
+            else ()
+        )
+        tier_param_keys: Final = (
+            tuple(pre_routing_hook_response.litellm_params or ()) if pre_routing_hook_response is not None else ()
+        )
+        newly_forwarded: Final = tuple(
+            (key, value) for key, value in marker_params if key not in request_kwargs and key not in tier_param_keys
+        )
+        request_kwargs.pop(_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, None)
+        request_kwargs.update(newly_forwarded)
+        if newly_forwarded:
+            request_kwargs.update(((_ALIAS_MARKER_FORWARDED_PARAMS_KWARG, tuple(key for key, _ in newly_forwarded)),))
 
         return pre_routing_hook_response
+
+    def _forwardable_alias_marker_params(
+        self, model: str, strategy_tags: tuple[str, ...]
+    ) -> tuple[tuple[str, object], ...]:
+        marker_params: Final = tuple(
+            litellm_params
+            for idx in self.model_name_to_deployment_indices.get(model, ())
+            if isinstance(litellm_params := self.model_list[idx].get("litellm_params", {}), dict)
+            and str(litellm_params.get("model", "")).startswith(AUTO_ROUTER_MODEL_PREFIX)
+        )
+        tag_matched: Final = tuple(
+            params for params in marker_params if tuple(params.get("tags") or ()) == strategy_tags
+        )
+        selected: Final = tag_matched[0] if tag_matched else (marker_params[0] if marker_params else None)
+        if selected is None:
+            return ()
+        return tuple(
+            (key, value)
+            for key, value in selected.items()
+            if key not in _ALIAS_PARAMS_NEVER_FORWARDED
+            and key not in CustomPricingLiteLLMParams.model_fields
+            and value is not None
+        )
+
+    @staticmethod
+    def _forwarded_alias_marker_keys_the_deployment_sets(
+        deployment: Mapping[str, object], forwarded_keys: object
+    ) -> tuple[str, ...]:
+        deployment_litellm_params: Final = deployment.get("litellm_params")
+        if not isinstance(deployment_litellm_params, Mapping) or not isinstance(forwarded_keys, tuple):
+            return ()
+        return tuple(
+            key
+            for key in forwarded_keys
+            if isinstance(key, str) and Router._deployment_sets_litellm_param(deployment_litellm_params, key)
+        )
+
+    @staticmethod
+    def _deployment_sets_litellm_param(deployment_litellm_params: Mapping[str, object], key: str) -> bool:
+        value: Final = deployment_litellm_params.get(key)
+        if value is None:
+            return False
+        field: Final = LiteLLM_Params.model_fields.get(key)
+        return field is None or value != field.default
+
+    def _consumed_request_tags_stamp(
+        self,
+        selected_strategy: "TaggedPreRoutingStrategy[PreRoutingStrategy]",
+        pre_routing_hook_response: PreRoutingHookResponse | None,
+        request_tags: Sequence[str],
+    ) -> ConsumedRequestTagsStamp | None:
+        """Record which tags picked the router and which model group it rewrote to, or None.
+
+        A request whose tags matched the selected strategy's tags has already spent those
+        tags on picking the router; re-applying them to the routed tier's model group would
+        empty the pool unless every tier deployment repeats the marker's tag. Only the
+        strategy's own tags are spent: the request's other tags keep constraining
+        deployment selection inside the routed group, and key/team policy tags are
+        untouched because tag filtering separately re-applies whatever
+        `metadata.inherited_tags` carries for the stamped group.
+        """
+        if pre_routing_hook_response is None or not selected_strategy.tags or not request_tags:
+            return None
+        if not is_valid_deployment_tag(selected_strategy.tags, request_tags, self.tag_filtering_match_any):
+            return None
+        return ConsumedRequestTagsStamp(model_group=pre_routing_hook_response.model, tags=selected_strategy.tags)
 
     @staticmethod
     def _record_routing_decision(
@@ -11168,25 +12550,44 @@ class Router:
         to the deployment that actually served the request. Every attempt therefore
         writes or clears, never just writes.
         """
-        if routing_decision is None:
-            for bucket in (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata")):
-                if isinstance(bucket, dict):
-                    bucket.pop("routing_decision", None)
-            return
-
-        # `get_or_create_metadata_bucket` is the single owner of "which dict holds
-        # proxy-internal metadata": it picks `litellm_metadata` when present (so the
-        # decision never lands in the `metadata` dict that routes like /v1/messages
-        # forward to the provider) and replaces a non-dict value rather than silently
-        # skipping the write.
-        _, metadata_bucket = get_or_create_metadata_bucket(request_kwargs)
-        metadata_bucket["routing_decision"] = Router._redact_prompt_text_if_needed(
-            request_kwargs=request_kwargs, routing_decision=routing_decision
+        Router._stamp_or_clear_metadata_key(
+            request_kwargs=request_kwargs,
+            key="routing_decision",
+            value=(
+                None
+                if routing_decision is None
+                else Router._redact_prompt_text_if_needed(
+                    request_kwargs=request_kwargs, routing_decision=routing_decision
+                )
+            ),
         )
 
     @staticmethod
+    def _stamp_or_clear_metadata_key(request_kwargs: dict, key: str, value: object | None) -> None:
+        """Write a proxy-internal metadata key for THIS routing attempt, or clear it.
+
+        Fallbacks and retries re-enter the pre-routing hook with the same
+        `request_kwargs`, so every attempt must write or clear, never just write;
+        a value left behind by an earlier attempt would be attributed to this one.
+        `get_or_create_metadata_bucket` is the single owner of "which dict holds
+        proxy-internal metadata": it picks `litellm_metadata` when present (so the
+        value never lands in the `metadata` dict that routes like /v1/messages
+        forward to the provider) and replaces a non-dict value rather than silently
+        skipping the write. Clearing pops from BOTH buckets so a request whose
+        bucket resolution changed between attempts cannot resurrect a stale value.
+        """
+        if value is None:
+            for bucket in (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata")):
+                if isinstance(bucket, dict):
+                    bucket.pop(key, None)
+            return
+
+        _, metadata_bucket = get_or_create_metadata_bucket(request_kwargs)
+        metadata_bucket[key] = value
+
+    @staticmethod
     def _redact_prompt_text_if_needed(
-        request_kwargs: Mapping[str, Any],
+        request_kwargs: Mapping[str, object],
         routing_decision: StandardLoggingRoutingDecision,
     ) -> StandardLoggingRoutingDecision:
         """Drop verbatim prompt text from the record when message logging is redacted.
@@ -11335,7 +12736,7 @@ class Router:
             strategy=strategy,
             selector=strategy_selector,
             model=model,
-            healthy_deployments=healthy_deployments,  # type: ignore
+            healthy_deployments=healthy_deployments,
             messages=messages,
             input=input,
             request_kwargs=request_kwargs,
@@ -11477,7 +12878,7 @@ class Router:
             strategy=strategy,
             selector=strategy_selector,
             model=model,
-            healthy_deployments=pass_through_deployments,  # type: ignore
+            healthy_deployments=pass_through_deployments,
             messages=messages,
             input=input,
             request_kwargs=request_kwargs,
@@ -11548,7 +12949,7 @@ class Router:
         flag. Used by credential-lookup helpers so passthrough file / batch endpoints
         cannot bypass the pause by resolving credentials directly.
         """
-        model_info: Final = getattr(deployment, "model_info", None)
+        model_info: Final[object | None] = getattr(deployment, "model_info", None)
         if model_info is None:
             return False
         return getattr(model_info, "blocked", None) is True
@@ -11561,6 +12962,10 @@ class Router:
         """
         Filter out deployments marked unhealthy by background health checks.
         No-op when enable_health_check_routing is False.
+        When background_health_check_model_groups is set, only deployments in the
+        listed model groups are filtered; every other group keeps its configured
+        routing strategy untouched, and a router-level allowed_fails_policy no
+        longer disables the filter for the listed groups.
         Returns all deployments if health state is unavailable, stale, or would
         exclude every candidate (safety net).
         """
@@ -11569,8 +12974,10 @@ class Router:
 
         # When allowed_fails_policy is set, cooldown is the sole routing exclusion
         # mechanism -- skip the binary health check filter so the policy threshold
-        # is respected before any deployment is excluded.
-        if self.allowed_fails_policy is not None:
+        # is respected before any deployment is excluded. With a model-group
+        # allowlist the filter is already scoped, so listed groups keep it.
+        scoped_groups: Final = self.background_health_check_model_groups
+        if self.allowed_fails_policy is not None and scoped_groups is None:
             return healthy_deployments
 
         unhealthy_ids: Final = await self.health_state_cache.async_get_unhealthy_deployment_ids(
@@ -11579,7 +12986,12 @@ class Router:
         if not unhealthy_ids:
             return healthy_deployments
 
-        filtered: Final = [d for d in healthy_deployments if d["model_info"]["id"] not in unhealthy_ids]
+        filtered: Final = [
+            d
+            for d in healthy_deployments
+            if d["model_info"]["id"] not in unhealthy_ids
+            or (scoped_groups is not None and d["model_name"] not in scoped_groups)
+        ]
 
         if not filtered:
             verbose_router_logger.warning("All deployments marked unhealthy by health checks, bypassing health filter")
@@ -11596,14 +13008,20 @@ class Router:
         if not self.enable_health_check_routing:
             return healthy_deployments
 
-        if self.allowed_fails_policy is not None:
+        scoped_groups: Final = self.background_health_check_model_groups
+        if self.allowed_fails_policy is not None and scoped_groups is None:
             return healthy_deployments
 
         unhealthy_ids: Final = self.health_state_cache.get_unhealthy_deployment_ids(parent_otel_span=parent_otel_span)
         if not unhealthy_ids:
             return healthy_deployments
 
-        filtered: Final = [d for d in healthy_deployments if d["model_info"]["id"] not in unhealthy_ids]
+        filtered: Final = [
+            d
+            for d in healthy_deployments
+            if d["model_info"]["id"] not in unhealthy_ids
+            or (scoped_groups is not None and d["model_name"] not in scoped_groups)
+        ]
 
         if not filtered:
             verbose_router_logger.warning("All deployments marked unhealthy by health checks, bypassing health filter")
@@ -11692,6 +13110,23 @@ class Router:
             and allowed_fails_policy.BadRequestErrorAllowedFails is not None
         ):
             return allowed_fails_policy.BadRequestErrorAllowedFails
+        if (
+            isinstance(exception, litellm.InternalServerError)
+            and allowed_fails_policy.InternalServerErrorAllowedFails is not None
+        ):
+            return allowed_fails_policy.InternalServerErrorAllowedFails
+        if (
+            isinstance(exception, litellm.ServiceUnavailableError)
+            and allowed_fails_policy.ServiceUnavailableErrorAllowedFails is not None
+        ):
+            return allowed_fails_policy.ServiceUnavailableErrorAllowedFails
+        if (
+            isinstance(exception, litellm.BadGatewayError)
+            and allowed_fails_policy.BadGatewayErrorAllowedFails is not None
+        ):
+            return allowed_fails_policy.BadGatewayErrorAllowedFails
+        if isinstance(exception, litellm.NotFoundError) and allowed_fails_policy.NotFoundErrorAllowedFails is not None:
+            return allowed_fails_policy.NotFoundErrorAllowedFails
 
     def _initialize_alerting(self):
         from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
@@ -11709,7 +13144,7 @@ class Router:
 
         self.slack_alerting_logger = _slack_alerting_logger
 
-        litellm.logging_callback_manager.add_litellm_callback(_slack_alerting_logger)  # type: ignore
+        litellm.logging_callback_manager.add_litellm_callback(_slack_alerting_logger)
         litellm.logging_callback_manager.add_litellm_success_callback(
             _slack_alerting_logger.response_taking_too_long_callback
         )

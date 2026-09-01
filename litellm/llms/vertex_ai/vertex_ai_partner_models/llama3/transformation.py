@@ -1,6 +1,6 @@
 import types
 from collections.abc import AsyncIterator, Iterator
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -19,6 +19,9 @@ from litellm.types.utils import (
 )
 
 from ...common_utils import VertexAIError
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 class VertexAILlama3Config(OpenAIGPTConfig):
@@ -109,7 +112,7 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -123,7 +126,7 @@ class VertexAILlama3Config(OpenAIGPTConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response: Final = OpenAIChatCompletionResponse(**raw_response.json())  # type: ignore
+            completion_response: Final = OpenAIChatCompletionResponse(**raw_response.json())
         except Exception as e:
             response_headers: Final = getattr(raw_response, "headers", None)
             raise VertexAIError(
@@ -136,7 +139,7 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         model_response.created = completion_response.get("created", 0)
         setattr(model_response, "usage", Usage(**completion_response.get("usage", {})))
 
-        model_response.choices = self._transform_choices(  # type: ignore
+        model_response.choices = self._transform_choices(
             choices=completion_response["choices"],
             json_mode=json_mode,
         )
@@ -187,7 +190,7 @@ class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
                     ],
                 )
                 # Modify current chunk to be the first chunk with role but no finish_reason
-                result.choices[0].finish_reason = None  # type: ignore[assignment]
+                result.choices[0].finish_reason = None
                 delta.role = "assistant"
                 # Ensure content is empty string for first chunk, not None
                 if delta.content is None:

@@ -13,7 +13,7 @@ import copy
 import json
 import os
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
@@ -90,7 +90,7 @@ class _ApplyPoliciesResultBase(TypedDict):
 class ApplyPoliciesResult(_ApplyPoliciesResultBase, total=False):
     """Result of apply_policies. agent_response set when agent_id provided."""
 
-    agent_response: Any
+    agent_response: object
 
 
 class _ApplyPoliciesPerItemResultBase(TypedDict):
@@ -103,7 +103,7 @@ class _ApplyPoliciesPerItemResultBase(TypedDict):
 class ApplyPoliciesPerItemResult(_ApplyPoliciesPerItemResultBase, total=False):
     """Result for one input when using inputs_list. agent_response set when agent_id provided."""
 
-    agent_response: Any
+    agent_response: object
 
 
 class ApplyPoliciesListResult(TypedDict):
@@ -212,7 +212,7 @@ def _chat_body_from_inputs(inputs: GenericGuardrailAPIInputs, agent_id: str, req
     structured: Final = inputs.get("structured_messages")
     texts: Final = inputs.get("texts")
     if structured:
-        messages = list(structured)  # type: ignore[arg-type]
+        messages = list(structured)
     elif texts:
         if len(texts) == 1:
             messages = [{"role": "user", "content": texts[0]}]
@@ -295,8 +295,8 @@ async def test_policies_and_guardrails(
     from litellm.proxy.proxy_server import chat_completion, proxy_logging_obj
     from litellm.proxy.utils import handle_exception_on_proxy
 
-    def _serialize_chat_response(response: Any) -> Any:
-        if hasattr(response, "model_dump"):
+    def _serialize_chat_response(response: object) -> object:
+        if isinstance(response, BaseModel):
             return response.model_dump(exclude_unset=True)
         if isinstance(response, dict):
             return response
@@ -306,7 +306,7 @@ async def test_policies_and_guardrails(
         inputs: GenericGuardrailAPIInputs,
         agent_id: str,
         user_api_key_dict: UserAPIKeyAuth,
-    ) -> Any:
+    ) -> object:
         body: Final = _chat_body_from_inputs(inputs, agent_id, data.request_data)
         req: Final = _request_with_json_body(body)
         resp: Final = Response()
@@ -789,7 +789,7 @@ async def _stream_llm_competitor_names(
     )
     buffer = ""
     count = len(existing)
-    async for chunk in response:  # type: ignore[union-attr]
+    async for chunk in response:
         delta = chunk.choices[0].delta.content or ""
         buffer += delta
         while "\n" in buffer:
@@ -923,7 +923,7 @@ async def _generate_competitor_variations(competitors: list, model: str = DEFAUL
             messages=[{"role": "user", "content": prompt}],
             temperature=COMPETITOR_LLM_TEMPERATURE,
         )
-        raw: Final = response.choices[0].message.content or ""  # type: ignore
+        raw: Final = response.choices[0].message.content or ""
         return _parse_variations_response(raw, capped)
     except Exception as e:
         verbose_proxy_logger.error("LLM competitor variation generation failed: %s", e)
@@ -963,7 +963,7 @@ async def _discover_competitors_via_llm(prompt: str, model: str = DEFAULT_COMPET
             messages=[{"role": "user", "content": prompt}],
             temperature=COMPETITOR_LLM_TEMPERATURE,
         )
-        raw: Final = response.choices[0].message.content or ""  # type: ignore
+        raw: Final = response.choices[0].message.content or ""
         competitors = [name for line in raw.strip().split("\n") if (name := _clean_competitor_line(line)) is not None]
         return competitors[:MAX_COMPETITOR_NAMES]
     except Exception as e:

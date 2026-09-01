@@ -14,6 +14,7 @@ Pattern Overview:
 This pattern can be replicated for other message formats (e.g., Anthropic).
 """
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
 import litellm
@@ -23,10 +24,14 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
     StreamTransformSink,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
-    openai_messages_without_system,
-    openai_messages_without_tool,
+    merge_guardrailed_scoped_messages,
+    merge_returned_tools_into_request_tools,
+    openai_tool_name,
+    role_out_of_guardrail_scope,
+    scoped_structured_message_indices,
 )
 from litellm.main import stream_chunk_builder
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -42,7 +47,10 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
+    from fastapi import HTTPException
+
     from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class OpenAIChatCompletionsHandler(BaseTranslation):
@@ -71,7 +79,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> Any:
         """
         Process input messages by applying guardrails to text content.
@@ -82,6 +90,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
+        scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
 
         texts_to_check: Final[list[str]] = []
         images_to_check: Final[list[str]] = []
@@ -101,6 +110,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 tool_call_task_mappings=tool_call_task_mappings,
                 skip_system_message=skip_system,
                 skip_tool_message=skip_tool,
+                scan_only_tool_results=scan_only_tool_results,
             )
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
@@ -109,17 +119,19 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if images_to_check:
                 inputs["images"] = images_to_check
             if tool_calls_to_check:
-                inputs["tool_calls"] = tool_calls_to_check  # type: ignore
-            structured_messages = self.get_structured_messages(data)
+                inputs["tool_calls"] = tool_calls_to_check
+            structured_messages: Final = self.get_structured_messages(data)
+            scoped_message_indices: Final = scoped_structured_message_indices(
+                structured_messages or [],
+                scan_only_tool_results=scan_only_tool_results,
+                skip_system=skip_system,
+                skip_tool=skip_tool,
+            )
             if structured_messages:
-                if skip_system:
-                    structured_messages = openai_messages_without_system(structured_messages)
-                if skip_tool:
-                    structured_messages = openai_messages_without_tool(structured_messages)
-                inputs["structured_messages"] = structured_messages
+                inputs["structured_messages"] = [structured_messages[index] for index in scoped_message_indices]
             # Pass tools (function definitions) to the guardrail
             tools: Final = data.get("tools")
-            if tools:
+            if tools and not scan_only_tool_results:
                 inputs["tools"] = tools
             # Include model information if available
             model: Final = data.get("model")
@@ -138,14 +150,30 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             guardrailed_tool_calls: Final = guardrailed_inputs.get("tool_calls", [])
             guardrailed_tools: Final = guardrailed_inputs.get("tools")
             if guardrailed_tools is not None:
-                data["tools"] = guardrailed_tools
+                data["tools"] = (
+                    merge_returned_tools_into_request_tools(
+                        request_tools=tools,
+                        returned_tools=guardrailed_tools,
+                        tool_name=openai_tool_name,
+                    )
+                    if scan_only_tool_results
+                    else guardrailed_tools
+                )
 
             guardrailed_structured_messages: Final = guardrailed_inputs.get("structured_messages")
             if (
                 guardrailed_structured_messages is not None
                 and guardrailed_structured_messages is not original_structured_messages
             ):
-                data["messages"] = guardrailed_structured_messages
+                data["messages"] = (
+                    guardrailed_structured_messages
+                    if guardrail_to_apply.structured_messages_cover_full_request()
+                    else merge_guardrailed_scoped_messages(
+                        full_messages=structured_messages or [],
+                        scoped_indices=scoped_message_indices,
+                        guardrailed_scoped=guardrailed_structured_messages,
+                    )
+                )
             else:
                 # Step 3: Map guardrail responses back to original message structure
                 if guardrailed_texts and texts_to_check:
@@ -159,7 +187,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 if guardrailed_tool_calls:
                     await self._apply_guardrail_responses_to_input_tool_calls(
                         messages=messages,
-                        tool_calls=guardrailed_tool_calls,  # type: ignore
+                        tool_calls=guardrailed_tool_calls,
                         task_mappings=tool_call_task_mappings,
                     )
 
@@ -194,16 +222,19 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         tool_call_task_mappings: list[tuple[int, int]],
         skip_system_message: bool = False,
         skip_tool_message: bool = False,
+        scan_only_tool_results: bool = False,
     ) -> None:
         """
         Extract text content, images, and tool calls from a message.
 
         Override this method to customize text/image/tool call extraction logic.
         """
-        role: Final = str(message.get("role") or "").lower()
-        if skip_system_message and role == "system":
-            return
-        if skip_tool_message and role == "tool":
+        if role_out_of_guardrail_scope(
+            str(message.get("role") or "").lower(),
+            skip_system_message=skip_system_message,
+            skip_tool_message=skip_tool_message,
+            scan_only_tool_results=scan_only_tool_results,
+        ):
             return
 
         content: Final = message.get("content", None)
@@ -297,7 +328,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self,
         response: "ModelResponse",
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: Any | None = None,
         request_data: dict | None = None,
     ) -> Any:
@@ -354,17 +385,13 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 if "response" not in request_data:
                     request_data["response"] = response
 
-            # Add user API key metadata with prefixed keys
-            if "litellm_metadata" not in request_data:
-                user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-                if user_metadata:
-                    request_data["litellm_metadata"] = user_metadata
+            self.merge_user_api_key_metadata_into_request(request_data, user_api_key_dict)
 
             inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
                 inputs["images"] = images_to_check
             if tool_calls_to_check:
-                inputs["tool_calls"] = tool_calls_to_check  # type: ignore
+                inputs["tool_calls"] = tool_calls_to_check
             # Include model information from the response if available
             if hasattr(response, "model") and response.model:
                 inputs["model"] = response.model
@@ -408,7 +435,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self,
         responses_so_far: list["ModelResponseStream"],
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: Any | None = None,
         request_data: dict | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
@@ -458,7 +485,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         *,
         responses_so_far: list["ModelResponseStream"],
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
         user_api_key_dict: Any | None,
         request_data: dict | None,
     ) -> list["ModelResponseStream"]:
@@ -527,11 +554,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 if "responses" not in request_data:
                     request_data["responses"] = responses_so_far
 
-            # Add user API key metadata with prefixed keys
-            if "litellm_metadata" not in request_data:
-                user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-                if user_metadata:
-                    request_data["litellm_metadata"] = user_metadata
+            self.merge_user_api_key_metadata_into_request(request_data, user_api_key_dict)
 
             inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
             if images_to_check:
@@ -562,6 +585,18 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         )
 
         return responses_so_far
+
+    def build_stream_error_items(
+        self,
+        exc: "HTTPException",
+        responses_so_far: Sequence[Any] | None = None,
+    ) -> Sequence[Any] | None:
+        import json
+
+        from litellm.proxy.common_request_processing import sse_error_payload
+
+        _, error_obj = sse_error_payload(exc)
+        return (f'data: {{"error": {json.dumps(error_obj)}}}\n\n'.encode(),)
 
     @staticmethod
     def _accumulate_string_content_by_choice_index(
@@ -594,7 +629,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         *,
         responses_so_far: list["ModelResponseStream"],
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
         user_api_key_dict: Any | None,
         request_data: dict | None,
         sink: StreamTransformSink,
@@ -625,10 +660,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             request_data = {"responses": responses_so_far}
         elif "responses" not in request_data:
             request_data["responses"] = responses_so_far
-        if "litellm_metadata" not in request_data:
-            user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-            if user_metadata:
-                request_data["litellm_metadata"] = user_metadata
+        self.merge_user_api_key_metadata_into_request(request_data, user_api_key_dict)
 
         inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
         if responses_so_far and getattr(responses_so_far[0], "model", None):

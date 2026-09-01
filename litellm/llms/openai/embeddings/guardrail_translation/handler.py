@@ -13,6 +13,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.utils import EmbeddingResponse
 
 
@@ -35,7 +36,7 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> Any:
         """
         Process input text by applying guardrails to text content.
@@ -70,7 +71,7 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
         data: dict,
         input_data: str,
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
     ) -> dict:
         """Process a single string input through the guardrail."""
         inputs: Final = GenericGuardrailAPIInputs(texts=[input_data])
@@ -99,7 +100,7 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
         data: dict,
         input_data: list[str | int | list[int]],
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None",
     ) -> dict:
         """Process a list input through the guardrail (if it contains strings)."""
         if len(input_data) == 0:
@@ -120,7 +121,7 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
             return data
 
         # List of strings - apply guardrail
-        inputs: Final = GenericGuardrailAPIInputs(texts=input_data)  # type: ignore
+        inputs: Final = GenericGuardrailAPIInputs(texts=input_data)
         if model := data.get("model"):
             inputs["model"] = model
 
@@ -144,7 +145,7 @@ class OpenAIEmbeddingsHandler(BaseTranslation):
         self,
         response: "EmbeddingResponse",
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Any | None = None,
+        litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: Any | None = None,
         request_data: dict | None = None,
     ) -> Any:

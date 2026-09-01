@@ -21,12 +21,13 @@ import httpx
 
 import litellm
 from litellm import verbose_logger
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.secret_managers.main import get_secret
+from litellm.secret_managers.main import get_secret, get_secret_str
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
@@ -34,6 +35,44 @@ if TYPE_CHECKING:
 
 class BedrockError(BaseLLMException):
     pass
+
+
+_BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "aws_region_name",
+    "aws_session_name",
+    "aws_profile_name",
+    "aws_role_name",
+    "aws_web_identity_token",
+    "aws_sts_endpoint",
+    "aws_external_id",
+)
+
+
+def merge_bedrock_aws_request_params(
+    litellm_params: Mapping[str, Any],
+    optional_params: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Merge deployment and request parameters without allowing auth escalation.
+
+    Deployment configuration is authoritative for AWS authentication. When a
+    deployment supplies static credentials, caller-supplied profile/role/token
+    selectors must not redirect signing to another identity available on the
+    server. Requests may still provide AWS credentials when the deployment has
+    no static credentials configured.
+    """
+    request_params: Final = {**optional_params, **litellm_params}  # mutable-ok: AWS helpers require a plain dict
+    has_static_deployment_credentials: Final = all(
+        isinstance(litellm_params.get(key), str) and bool(litellm_params.get(key))
+        for key in ("aws_access_key_id", "aws_secret_access_key", "aws_region_name")
+    )
+    if has_static_deployment_credentials:
+        for key in _BEDROCK_AWS_AUTH_PARAMETER_KEYS:
+            if key not in litellm_params:
+                request_params.pop(key, None)
+    return request_params
 
 
 # Lazy import cache to avoid circular imports and performance impact
@@ -138,13 +177,14 @@ def convert_bedrock_invoke_output_format_to_inline_schema(
     request_body["messages"] = new_messages
 
 
-def remove_custom_field_from_tools(request_body: dict) -> None:
+def normalize_custom_field_on_tools(request_body: dict) -> None:
     """
-    Remove ``custom`` field from each tool in the request body.
+    Drop the ``custom`` field from each tool, first hoisting a boolean
+    ``custom.defer_loading`` onto the top-level ``defer_loading`` flag that
+    Bedrock and Anthropic actually document, unless the tool already carries one.
 
-    Claude Code (v2.1.69+) sends ``custom: {defer_loading: true}`` on tool
-    definitions, which Anthropic's API accepts but Bedrock rejects with
-    ``"Extra inputs are not permitted"``.
+    Claude Code (v2.1.69+) is reported to send ``custom: {defer_loading: true}`` on
+    tool definitions, which Bedrock rejects with ``"Extra inputs are not permitted"``.
 
     Args:
         request_body: The request dictionary to modify in-place.
@@ -155,8 +195,14 @@ def remove_custom_field_from_tools(request_body: dict) -> None:
     if not tools or not isinstance(tools, list):
         return
     for tool in tools:
-        if isinstance(tool, dict):
-            tool.pop("custom", None)
+        if not isinstance(tool, dict):
+            continue
+        custom: dict[str, object] | None = tool.pop("custom", None)
+        if not isinstance(custom, dict) or "defer_loading" in tool:
+            continue
+        deferred: object = custom.get("defer_loading")
+        if isinstance(deferred, bool):
+            tool["defer_loading"] = deferred
 
 
 def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
@@ -373,7 +419,7 @@ def init_bedrock_client(
     # Iterate over parameters and update if needed
     for i, param in enumerate(params_to_check):
         if param and param.startswith("os.environ/"):
-            params_to_check[i] = get_secret(param)  # type: ignore
+            params_to_check[i] = get_secret(param)
     # Assign updated values back to parameters
     (
         aws_access_key_id,
@@ -389,15 +435,15 @@ def init_bedrock_client(
     ssl_verify: Final = _get_bedrock_client_ssl_verify()
 
     ### SET REGION NAME
-    if region_name:
-        pass
-    elif aws_region_name:
-        region_name = aws_region_name
-    elif litellm_aws_region_name:
-        region_name = litellm_aws_region_name
-    elif standard_aws_region_name:
-        region_name = standard_aws_region_name
-    else:
+    resolved_region_name: Final = next(
+        (
+            candidate
+            for candidate in (region_name, aws_region_name, litellm_aws_region_name, standard_aws_region_name)
+            if isinstance(candidate, str) and candidate
+        ),
+        None,
+    )
+    if resolved_region_name is None:
         raise BedrockError(
             message="AWS region not set: set AWS_REGION_NAME or AWS_REGION env variable or in .env file",
             status_code=401,
@@ -410,18 +456,16 @@ def init_bedrock_client(
     elif env_aws_bedrock_runtime_endpoint:
         endpoint_url = env_aws_bedrock_runtime_endpoint
     else:
-        endpoint_url = f"https://bedrock-runtime.{region_name}.amazonaws.com"
+        endpoint_url = f"https://bedrock-runtime.{resolved_region_name}.{get_aws_dns_suffix(resolved_region_name)}"
 
     import boto3
 
     if isinstance(timeout, float):
-        config = boto3.session.Config(connect_timeout=timeout, read_timeout=timeout)  # type: ignore
+        config = boto3.session.Config(connect_timeout=timeout, read_timeout=timeout)
     elif isinstance(timeout, httpx.Timeout):
-        config = boto3.session.Config(  # type: ignore
-            connect_timeout=timeout.connect, read_timeout=timeout.read
-        )
+        config = boto3.session.Config(connect_timeout=timeout.connect, read_timeout=timeout.read)
     else:
-        config = boto3.session.Config()  # type: ignore
+        config = boto3.session.Config()
 
     ### CHECK STS ###
     if aws_web_identity_token is not None and aws_role_name is not None and aws_session_name is not None:
@@ -449,7 +493,7 @@ def init_bedrock_client(
             aws_access_key_id=sts_response["Credentials"]["AccessKeyId"],
             aws_secret_access_key=sts_response["Credentials"]["SecretAccessKey"],
             aws_session_token=sts_response["Credentials"]["SessionToken"],
-            region_name=region_name,
+            region_name=resolved_region_name,
             endpoint_url=endpoint_url,
             config=config,
             verify=ssl_verify,
@@ -470,7 +514,7 @@ def init_bedrock_client(
             aws_access_key_id=sts_response["Credentials"]["AccessKeyId"],
             aws_secret_access_key=sts_response["Credentials"]["SecretAccessKey"],
             aws_session_token=sts_response["Credentials"]["SessionToken"],
-            region_name=region_name,
+            region_name=resolved_region_name,
             endpoint_url=endpoint_url,
             config=config,
             verify=ssl_verify,
@@ -483,7 +527,7 @@ def init_bedrock_client(
             service_name="bedrock-runtime",
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
-            region_name=region_name,
+            region_name=resolved_region_name,
             endpoint_url=endpoint_url,
             config=config,
             verify=ssl_verify,
@@ -493,7 +537,7 @@ def init_bedrock_client(
 
         client = boto3.Session(profile_name=aws_profile_name).client(
             service_name="bedrock-runtime",
-            region_name=region_name,
+            region_name=resolved_region_name,
             endpoint_url=endpoint_url,
             config=config,
             verify=ssl_verify,
@@ -504,7 +548,7 @@ def init_bedrock_client(
 
         client = boto3.client(
             service_name="bedrock-runtime",
-            region_name=region_name,
+            region_name=resolved_region_name,
             endpoint_url=endpoint_url,
             config=config,
             verify=ssl_verify,
@@ -784,7 +828,7 @@ def _get_bedrock_output_config_effort_ceiling(
 
     ceiling = model_info.get("bedrock_output_config_effort_ceiling")
     if isinstance(ceiling, str) and ceiling in _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER:
-        return ceiling  # type: ignore[return-value]
+        return ceiling
 
     model_cost_key: Final = model_info.get("key")
     if not isinstance(model_cost_key, str):
@@ -793,7 +837,7 @@ def _get_bedrock_output_config_effort_ceiling(
     local_model_info: Final = _get_local_model_cost_map().get(model_cost_key, {})
     ceiling = local_model_info.get("bedrock_output_config_effort_ceiling")
     if isinstance(ceiling, str) and ceiling in _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER:
-        return ceiling  # type: ignore[return-value]
+        return ceiling
     return None
 
 
@@ -1258,13 +1302,13 @@ class BedrockEventStreamDecoderBase:
             chunk = parsed_response.get("chunk")
             if not chunk:
                 return None
-            return chunk.get("bytes").decode()  # type: ignore[no-any-return]
+            return chunk.get("bytes").decode()
         else:
             chunk = response_dict.get("body")
             if not chunk:
                 return None
 
-            return chunk.decode()  # type: ignore[no-any-return]
+            return chunk.decode()
 
 
 def get_anthropic_beta_from_headers(headers: dict) -> list[str]:
@@ -1304,6 +1348,23 @@ def get_anthropic_beta_from_headers(headers: dict) -> list[str]:
         return [beta.strip() for beta in anthropic_beta_header.split(",")]
 
     return []
+
+
+def resolve_s3_encryption_key_id(
+    litellm_params: Mapping[str, Any],
+    optional_params: Mapping[str, Any] | None = None,
+) -> str | None:
+    """
+    Resolve the SSE-KMS key configured for Bedrock batch/file S3 objects.
+
+    Precedence: `s3_encryption_key_id` in litellm_params, then optional_params
+    (client-side / request params), then the AWS_S3_ENCRYPTION_KEY_ID env var.
+    """
+    candidates: Final = tuple(
+        source.get("s3_encryption_key_id") for source in (litellm_params, optional_params) if source is not None
+    )
+    explicit: Final = next((value for value in candidates if isinstance(value, str) and value), None)
+    return explicit or get_secret_str("AWS_S3_ENCRYPTION_KEY_ID")
 
 
 class CommonBatchFilesUtils:
@@ -1426,6 +1487,7 @@ class CommonBatchFilesUtils:
             aws_role_name=optional_params.get("aws_role_name"),
             aws_web_identity_token=optional_params.get("aws_web_identity_token"),
             aws_sts_endpoint=optional_params.get("aws_sts_endpoint"),
+            aws_external_id=optional_params.get("aws_external_id"),
         )
 
         # Prepare the request data

@@ -38,7 +38,7 @@ def initialize_guardrail(
         patterns=litellm_params.patterns,
         blocked_words=litellm_params.blocked_words,
         blocked_words_file=litellm_params.blocked_words_file,
-        event_hook=litellm_params.mode,  # type: ignore
+        event_hook=litellm_params.mode,
         default_on=litellm_params.default_on or False,
         categories=getattr(litellm_params, "categories", None),
         severity_threshold=getattr(litellm_params, "severity_threshold", "medium"),

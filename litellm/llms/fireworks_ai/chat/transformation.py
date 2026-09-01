@@ -1,6 +1,6 @@
 import json
-from collections.abc import AsyncIterator, Iterator
-from typing import Any, Final, Literal, cast
+from collections.abc import AsyncIterator, Iterator, Mapping
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import httpx
 
@@ -39,7 +39,14 @@ from ...openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
-from ..common_utils import FireworksAIException, FireworksAIMixin
+from ..common_utils import (
+    FireworksAIException,
+    FireworksAIMixin,
+    resolve_fireworks_resource_name,
+)
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 def _extract_fireworks_hidden_params(payload: dict) -> dict:
@@ -59,6 +66,61 @@ def _extract_fireworks_hidden_params(payload: dict) -> dict:
         if any(field in c for c in choices)
     }
     return {**top_level, **per_choice}
+
+
+def _json_schema_response_format(schema: object, name: str) -> Mapping[str, object]:
+    return {"type": "json_schema", "json_schema": {"name": name, "schema": schema}}  # mutable-ok: JSON request body
+
+
+EFFORT_KWARG_KEYS: Final = frozenset({"enable_thinking", "thinking", "reasoning_budget", "low_effort"})
+
+
+def _bool_from_kwargs(kwargs: Mapping[str, object], keys: tuple[str, ...]) -> bool | None:
+    for key in keys:
+        value = kwargs.get(key)
+        if isinstance(value, bool):
+            return value
+    return None
+
+
+def effort_from_chat_template_kwargs(kwargs: Mapping[str, object]) -> object:
+    enable_thinking: Final = _bool_from_kwargs(kwargs, ("enable_thinking", "thinking"))
+    if enable_thinking is False:
+        return "none"
+    budget: Final = kwargs.get("reasoning_budget")
+    if isinstance(budget, (int, float)) and not isinstance(budget, bool) and budget > 0:
+        return int(budget)
+    low_effort: Final = _bool_from_kwargs(kwargs, ("low_effort",))
+    if low_effort is True:
+        return "low"
+    return None
+
+
+NIM_VLLM_STRIP_PARAMS: Final = frozenset(
+    {
+        "stop_token_ids",
+        "include_stop_str_in_output",
+        "skip_special_tokens",
+        "spaces_between_special_tokens",
+        "best_of",
+        "use_beam_search",
+        "guided_decoding_backend",
+        "guided_regex",
+        "add_generation_prompt",
+        "continue_final_message",
+        "add_special_tokens",
+        "detokenize",
+        "allowed_token_ids",
+        "bad_words",
+        "include_reasoning",
+        "nvext",
+    }
+)
+
+_EXTRA_BODY_CONSUMED_PARAMS: Final = (
+    frozenset({"truncate_prompt_tokens", "chat_template_kwargs", "guided_json", "guided_grammar", "guided_choice"})
+    | NIM_VLLM_STRIP_PARAMS
+)
 
 
 class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
@@ -265,13 +327,126 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                     optional_params["reasoning_effort"] = "medium"
                 elif value is False:
                     optional_params["reasoning_effort"] = "none"
-                else:
+                elif value != "auto":
                     optional_params["reasoning_effort"] = value
             elif param in supported_openai_params:
                 if value is not None:
                     optional_params[param] = value
 
         return optional_params
+
+    def map_extra_body_params(
+        self, optional_params: Mapping[str, object], model: str
+    ) -> dict:  # mutable-ok: http handler pops extra_body off the returned dict
+        extra_body: Final = optional_params.get("extra_body")
+        if not isinstance(extra_body, dict):
+            return dict(optional_params)  # mutable-ok: JSON request body
+
+        stripped: Final = tuple(sorted(k for k in extra_body if k in NIM_VLLM_STRIP_PARAMS))
+        if stripped:
+            verbose_logger.debug(
+                "fireworks_ai does not support NIM/vLLM params %s for model=%s; dropping them from the request.",
+                stripped,
+                model,
+            )
+        promoted: Final = (
+            *self._translate_truncate_prompt_tokens(extra_body, optional_params),
+            *self._translate_chat_template_kwargs(extra_body, optional_params, model),
+            *self.translate_guided_params(extra_body, optional_params),
+        )
+        if "response_format" in extra_body and "response_format" in optional_params:
+            verbose_logger.debug(
+                "fireworks_ai dropping extra_body.response_format; the top-level response_format takes precedence."
+            )
+        remaining: Final = tuple(
+            (k, v)
+            for k, v in extra_body.items()
+            if k not in _EXTRA_BODY_CONSUMED_PARAMS
+            and (k != "response_format" or "response_format" not in optional_params)
+        )
+        base: Final = {k: v for k, v in optional_params.items() if k != "extra_body"}  # mutable-ok: JSON request body
+        return {  # mutable-ok: JSON request body
+            **base,
+            **dict(promoted),  # mutable-ok: JSON request body
+            **({"extra_body": dict(remaining)} if remaining else {}),  # mutable-ok: JSON request body
+        }
+
+    @staticmethod
+    def _translate_truncate_prompt_tokens(
+        extra_body: Mapping[str, object], optional_params: Mapping[str, object]
+    ) -> tuple[tuple[str, object], ...]:
+        if extra_body.get("truncate_prompt_tokens") is None:
+            return ()
+        if "prompt_truncate_len" in extra_body or "prompt_truncate_len" in optional_params:
+            verbose_logger.debug(
+                "fireworks_ai ignoring truncate_prompt_tokens; explicit prompt_truncate_len takes precedence."
+            )
+            return ()
+        return (("prompt_truncate_len", extra_body["truncate_prompt_tokens"]),)
+
+    def _translate_chat_template_kwargs(
+        self, extra_body: Mapping[str, object], optional_params: Mapping[str, object], model: str
+    ) -> tuple[tuple[str, object], ...]:
+        chat_template_kwargs: Final = extra_body.get("chat_template_kwargs")
+        if chat_template_kwargs is None:
+            return ()
+        if not isinstance(chat_template_kwargs, dict):
+            verbose_logger.debug(
+                "fireworks_ai dropping chat_template_kwargs for model=%s; expected an object, got %s.",
+                model,
+                type(chat_template_kwargs).__name__,
+            )
+            return ()
+        other_keys: Final = tuple(sorted(k for k in chat_template_kwargs if k not in EFFORT_KWARG_KEYS))
+        if other_keys:
+            verbose_logger.debug(
+                "fireworks_ai does not support chat_template_kwargs keys %s for model=%s; dropping them.",
+                other_keys,
+                model,
+            )
+        if any(key in optional_params or key in extra_body for key in ("reasoning_effort", "thinking")):
+            verbose_logger.debug(
+                "fireworks_ai ignoring chat_template_kwargs; explicit reasoning_effort/thinking takes precedence."
+            )
+            return ()
+        effort: Final = effort_from_chat_template_kwargs(chat_template_kwargs)
+        if effort is None:
+            return ()
+        if not supports_reasoning(model=model, custom_llm_provider="fireworks_ai"):
+            verbose_logger.debug(
+                "fireworks_ai model %r does not support reasoning; dropping chat_template_kwargs effort keys.",
+                model,
+            )
+            return ()
+        return (("reasoning_effort", effort),)
+
+    @staticmethod
+    def translate_guided_params(
+        extra_body: Mapping[str, object], optional_params: Mapping[str, object]
+    ) -> tuple[tuple[str, object], ...]:
+        has_guided: Final = any(
+            extra_body.get(key) is not None for key in ("guided_json", "guided_grammar", "guided_choice")
+        )
+        if not has_guided:
+            return ()
+        if "response_format" in optional_params or "response_format" in extra_body:
+            verbose_logger.debug(
+                "fireworks_ai ignoring guided decoding params; explicit response_format takes precedence."
+            )
+            return ()
+        if extra_body.get("guided_json") is not None:
+            return (("response_format", _json_schema_response_format(extra_body["guided_json"], "response")),)
+        if extra_body.get("guided_grammar") is not None:
+            grammar_response_format: Final = {  # mutable-ok: JSON request body
+                "type": "grammar",
+                "grammar": extra_body["guided_grammar"],
+            }
+            return (("response_format", grammar_response_format),)
+        choice_schema: Final = {  # mutable-ok: JSON request body
+            "type": "string",
+            "enum": extra_body["guided_choice"],
+        }
+        return (("response_format", _json_schema_response_format(choice_schema, "choice")),)
 
     def _transform_tools(self, tools: list[OpenAIChatCompletionToolParam]) -> list[OpenAIChatCompletionToolParam]:
         for tool in tools:
@@ -332,6 +507,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                 m = cast(dict, message)
                 m.pop("provider_specific_fields", None)
                 m.pop("thinking_blocks", None)
+                m.pop("reasoning_content", None)
 
         return messages
 
@@ -459,12 +635,10 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        if not model.startswith("accounts/") and "#" not in model:
-            if model.endswith("-fast"):
-                model = f"accounts/fireworks/routers/{model}"
-            else:
-                model = f"accounts/fireworks/models/{model}"
-        messages = self._transform_messages_helper(messages=messages, model=model, litellm_params=litellm_params)
+        resolved_model: Final = resolve_fireworks_resource_name(model)
+        messages = self._transform_messages_helper(
+            messages=messages, model=resolved_model, litellm_params=litellm_params
+        )
         if "tools" in optional_params and optional_params["tools"] is not None:
             tools: Final = self._transform_tools(tools=optional_params["tools"])
             optional_params["tools"] = tools
@@ -478,7 +652,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                     "include_usage": True,
                 }
         return super().transform_request(
-            model=model,
+            model=resolved_model,
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
@@ -520,7 +694,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -581,7 +755,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
-        api_base = api_base or get_secret_str("FIREWORKS_API_BASE") or "https://api.fireworks.ai/inference/v1"  # type: ignore
+        api_base = api_base or get_secret_str("FIREWORKS_API_BASE") or "https://api.fireworks.ai/inference/v1"
         dynamic_api_key: Final = api_key or (
             get_secret_str("FIREWORKS_API_KEY")
             or get_secret_str("FIREWORKS_AI_API_KEY")

@@ -77,7 +77,7 @@ def _make_logging_obj(
     call_type: str,
     optional_params: dict[str, Any],
 ) -> LiteLLMLoggingObj:
-    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")  # type: ignore
+    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
     litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,

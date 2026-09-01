@@ -48,7 +48,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
                     api_base,
                     headers=headers,
                     data=json.dumps(data),
-                )  # type: ignore
+                )
 
                 response.raise_for_status()
 
@@ -124,9 +124,9 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
                 timeout=timeout,
                 client=client,
                 headers=headers,
-            )  # type: ignore
+            )
         if client is None or isinstance(client, AsyncHTTPHandler):
-            self.client = HTTPHandler(timeout=timeout)  # type: ignore
+            self.client = HTTPHandler(timeout=timeout)
         else:
             self.client = client
 
@@ -136,11 +136,11 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
                 api_base,
                 headers=headers,
                 data=json.dumps(data),
-            )  # type: ignore
+            )
 
-            response.raise_for_status()  # type: ignore
+            response.raise_for_status()
 
-            response_json: Final = response.json()  # type: ignore
+            response_json: Final = response.json()
         except httpx.HTTPStatusError as e:
             raise OpenAILikeError(
                 status_code=e.response.status_code,

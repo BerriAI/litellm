@@ -86,4 +86,4 @@ class DataRobotConfig(OpenAILikeChatConfig):
         Returns:
             str: The complete URL for the API call.
         """
-        return str(api_base)  # type: ignore
+        return str(api_base)

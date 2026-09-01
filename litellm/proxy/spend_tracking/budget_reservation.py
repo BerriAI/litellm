@@ -5,13 +5,13 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Final, NoReturn, cast
+from types import MappingProxyType
+from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, cast
 
 from fastapi import HTTPException, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.proxy._types import (
@@ -24,8 +24,18 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_utils import get_model_from_request
 from litellm.proxy.auth.budget_throttle import should_throttle_budget_exceeded
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    end_user_cache_key,
+    model_access_group_cache_key,
+    model_access_group_spend_counter_key,
+    tag_cache_key,
+    team_membership_reservation_cache_key,
+)
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
+from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
+from litellm.types.router import DeploymentTypedDict
 
 
 @dataclass
@@ -37,6 +47,7 @@ class _BudgetCounter:
     entity_id: str
     source_cache_key: str | None = None
     spend_log_entity_id: str | None = None
+    window_duration: str | None = None
     window_start: datetime | None = None
 
 
@@ -47,6 +58,7 @@ _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
     "User": Litellm_EntityType.USER.value,
     "EndUser": Litellm_EntityType.END_USER.value,
     "Tag": Litellm_EntityType.TAG.value,
+    "Model access group": Litellm_EntityType.MODEL_ACCESS_GROUP.value,
     "Organization": Litellm_EntityType.ORGANIZATION.value,
 }
 
@@ -104,8 +116,8 @@ def _key_reservation_should_release_for_throttle(counter_key: str, valid_token: 
 async def _apply_over_budget_reservation_policy(
     counter: _BudgetCounter,
     valid_token: UserAPIKeyAuth | None,
-    entry: dict[str, Any],
-    applied_entries: list[dict[str, Any]],
+    entry: dict[str, float | str],
+    applied_entries: list[dict[str, float | str]],
     reservation_cost: float,
     current_spend: float,
 ) -> float:
@@ -152,15 +164,23 @@ async def reserve_budget_for_request(
     team_object: LiteLLM_TeamTable | None,
     user_object: LiteLLM_UserTable | None,
     prisma_client: PrismaClient | None,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     end_user_id: str | None = None,
-    end_user_object: Any | None = None,
+    end_user_object: object = None,
+    apply_user_budget_to_team_keys: bool = False,
     fail_closed_budget_enforcement: bool = False,
 ) -> dict | None:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
         return None
-    if route in {"/models", "/v1/models", "/utils/token_counter"}:
+    if route in {
+        "/models",
+        "/v1/models",
+        "/utils/token_counter",
+        "/responses/input_tokens",
+        "/v1/responses/input_tokens",
+        "/openai/v1/responses/input_tokens",
+    }:
         return None
     if get_model_from_request(request_body, route, llm_router=llm_router) is None:
         return None
@@ -175,15 +195,23 @@ async def reserve_budget_for_request(
         proxy_logging_obj=proxy_logging_obj,
         end_user_id=end_user_id,
         end_user_object=end_user_object,
+        apply_user_budget_to_team_keys=apply_user_budget_to_team_keys,
     )
     if not counters:
         return None
+
+    input_token_counts: Final = await count_request_input_tokens(
+        request_body=request_body,
+        route=route,
+        llm_router=llm_router,
+    )
 
     current_spend_by_counter_key: Final[dict[str, float]] = {}
     reservation_cost = estimate_request_max_cost(
         request_body=request_body,
         route=route,
         llm_router=llm_router,
+        input_token_counts=input_token_counts,
     )
     # estimate_request_max_cost still returns None when the model is unknown
     # to the cost map (no token-priced cost fields, e.g. image/audio routes).
@@ -191,7 +219,7 @@ async def reserve_budget_for_request(
     if reservation_cost is None or reservation_cost <= 0:
         return None
 
-    applied_entries: Final[list[dict[str, Any]]] = []
+    applied_entries: Final[list[dict[str, float | str]]] = []
     try:
         for counter in counters:
             entry = _counter_to_reservation_entry(
@@ -242,7 +270,12 @@ async def reserve_budget_for_request(
     if not applied_entries:
         return None
 
-    input_cost: Final = estimate_request_input_cost(request_body=request_body, route=route, llm_router=llm_router)
+    input_cost: Final = estimate_request_input_cost(
+        request_body=request_body,
+        route=route,
+        llm_router=llm_router,
+        input_token_counts=input_token_counts,
+    )
     return {
         "reserved_cost": reservation_cost,
         "entries": applied_entries,
@@ -328,10 +361,11 @@ async def _get_budget_counters(
     team_object: LiteLLM_TeamTable | None,
     user_object: LiteLLM_UserTable | None,
     prisma_client: PrismaClient | None,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     end_user_id: str | None = None,
-    end_user_object: Any | None = None,
+    end_user_object: object = None,
+    apply_user_budget_to_team_keys: bool = False,
 ) -> list[_BudgetCounter]:
     counters: Final[list[_BudgetCounter]] = []
 
@@ -380,8 +414,9 @@ async def _get_budget_counters(
             )
         )
 
+    is_team_key: Final = team_object is not None and team_object.team_id is not None
     if (
-        (team_object is None or team_object.team_id is None)
+        (not is_team_key or apply_user_budget_to_team_keys)
         and user_object is not None
         and user_object.user_id is not None
         and user_object.max_budget is not None
@@ -415,6 +450,14 @@ async def _get_budget_counters(
         )
     )
 
+    counters.extend(
+        await _get_model_access_group_budget_counters(
+            valid_token=valid_token,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+    )
+
     team_member_counter: Final = await _get_team_member_budget_counter(
         valid_token=valid_token,
         team_object=team_object,
@@ -438,13 +481,13 @@ async def _get_budget_counters(
 async def _get_end_user_budget_counter(
     valid_token: UserAPIKeyAuth,
     end_user_id: str | None,
-    end_user_object: Any | None,
+    end_user_object: object,
 ) -> _BudgetCounter | None:
     end_user_id = end_user_id or valid_token.end_user_id
     if end_user_id is None:
         return None
 
-    source_cache_key: Final = f"end_user_id:{end_user_id}"
+    source_cache_key: Final = end_user_cache_key(end_user_id)
     max_budget = _to_float(valid_token.end_user_max_budget)
     fallback_spend = 0.0
     if end_user_object is not None:
@@ -469,7 +512,7 @@ async def _get_end_user_budget_counter(
 async def _get_tag_budget_counters(
     request_body: dict,
     prisma_client: PrismaClient | None,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
 ) -> list[_BudgetCounter]:
     from litellm.proxy.auth.auth_checks import get_tag_objects_batch
@@ -498,7 +541,7 @@ async def _get_tag_budget_counters(
         counters.append(
             _BudgetCounter(
                 counter_key=f"spend:tag:{tag_name}",
-                source_cache_key=f"tag:{tag_name}",
+                source_cache_key=tag_cache_key(tag_name),
                 max_budget=max_budget,
                 fallback_spend=_to_float(_get_value(tag_object, "spend")) or 0.0,
                 entity_type="Tag",
@@ -506,6 +549,46 @@ async def _get_tag_budget_counters(
             )
         )
     return counters
+
+
+async def _get_model_access_group_budget_counters(
+    valid_token: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> list[_BudgetCounter]:
+    """Reservation counters for the model access groups that authorized this request.
+
+    The names come off the auth object rather than the request body: ``common_checks`` already
+    resolved which granted groups serve the requested model, and re-deriving that here would both
+    duplicate the walk and risk disagreeing with what the spend writer attributes.
+    """
+    from litellm.proxy.auth.auth_checks import get_model_access_group_budgets_batch
+
+    group_names: Final = tuple(dict.fromkeys(valid_token.matched_model_access_groups or ()))
+    if not group_names:
+        return []
+
+    budgets: Final = await get_model_access_group_budgets_batch(
+        access_group_names=group_names,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    )
+    candidates: Final = (_model_access_group_counter(group, budgets.get(group)) for group in group_names)
+    return [counter for counter in candidates if counter is not None]
+
+
+def _model_access_group_counter(group: str, budget: ModelAccessGroupBudget | None) -> _BudgetCounter | None:
+    """A counter for one group, or nothing when the group carries no budget to reserve against."""
+    if budget is None or budget.max_budget is None or budget.max_budget <= 0:
+        return None
+    return _BudgetCounter(
+        counter_key=model_access_group_spend_counter_key(group),
+        source_cache_key=model_access_group_cache_key(group),
+        max_budget=budget.max_budget,
+        fallback_spend=budget.spend,
+        entity_type="Model access group",
+        entity_id=group,
+    )
 
 
 def _dedupe_tags(tags: list[str]) -> list[str]:
@@ -523,12 +606,14 @@ async def _get_team_member_budget_counter(
     valid_token: UserAPIKeyAuth,
     team_object: LiteLLM_TeamTable | None,
     user_object: LiteLLM_UserTable | None,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
 ) -> _BudgetCounter | None:
     if team_object is None or team_object.team_id is None or user_object is None or valid_token.user_id is None:
         return None
 
-    membership_cache_key: Final = f"team_membership:{valid_token.user_id}:{team_object.team_id}"
+    membership_cache_key: Final = team_membership_reservation_cache_key(
+        user_id=valid_token.user_id, team_id=team_object.team_id
+    )
     cached_team_membership: Final = await user_api_key_cache.async_get_cache(key=membership_cache_key)
     team_membership: LiteLLM_TeamMembership | None = None
     if isinstance(cached_team_membership, LiteLLM_TeamMembership):
@@ -564,7 +649,7 @@ async def _get_team_member_budget_counter(
 async def _get_org_budget_counter(
     valid_token: UserAPIKeyAuth,
     team_object: LiteLLM_TeamTable | None,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
 ) -> _BudgetCounter | None:
     org_id: str | None = None
     if valid_token.org_id is not None:
@@ -603,7 +688,7 @@ def _get_budget_limit_counters(
     entity_prefix: str,
     entity_type: str,
     entity_id: str,
-    budget_limits: Sequence[Any] | None,
+    budget_limits: Sequence[object] | None,
     fallback_spend: float,
 ) -> list[_BudgetCounter]:
     counters: Final[list[_BudgetCounter]] = []
@@ -613,7 +698,7 @@ def _get_budget_limit_counters(
     for window in budget_limits:
         window_dict = _coerce_window(window)
         budget_duration = window_dict.get("budget_duration")
-        max_budget = window_dict.get("max_budget")
+        max_budget = _to_float(window_dict.get("max_budget"))
         if not budget_duration or max_budget is None or max_budget <= 0:
             continue
         window_start = get_budget_window_start(window_dict)
@@ -633,24 +718,27 @@ def _get_budget_limit_counters(
                 entity_type=entity_type,
                 entity_id=f"{entity_id}:{budget_duration}",
                 spend_log_entity_id=entity_id,
+                window_duration=str(budget_duration),
                 window_start=window_start,
             )
         )
     return counters
 
 
-def _coerce_window(window: Any) -> dict:
-    if isinstance(window, dict):
+def _coerce_window(window: object) -> Mapping[str, object]:
+    if isinstance(window, Mapping):
         return window
     if isinstance(window, str):
         try:
-            parsed: Final = json.loads(window)
-            return parsed if isinstance(parsed, dict) else {}
+            parsed: Final[object] = json.loads(window)
         except Exception:
             return {}
-    if hasattr(window, "model_dump"):
-        return window.model_dump()
-    return {}
+        return parsed if isinstance(parsed, Mapping) else {}
+    model_dump: Final = getattr(window, "model_dump", None)
+    if not callable(model_dump):
+        return {}
+    dumped: Final[object] = model_dump()
+    return dumped if isinstance(dumped, Mapping) else {}
 
 
 async def _reserve_counter(
@@ -676,6 +764,7 @@ async def _reserve_counter(
                 counter_key=counter.counter_key,
                 entity_type=counter.entity_type,
                 entity_id=counter.spend_log_entity_id,
+                window_duration=counter.window_duration,
                 window_start=counter.window_start,
             )
             if initialized is False:
@@ -850,7 +939,7 @@ async def _resize_applied_reservation(
 def _counter_to_reservation_entry(
     counter: _BudgetCounter,
     reserved_cost: float,
-) -> dict[str, Any]:
+) -> dict[str, float | str]:
     return {
         "counter_key": counter.counter_key,
         "entity_type": counter.entity_type,
@@ -867,7 +956,7 @@ def _get_entry_reserved_cost(entry: dict, default_reserved_cost: float) -> float
         return default_reserved_cost
 
 
-def get_budget_window_start(window: Any) -> datetime | None:
+def get_budget_window_start(window: object) -> datetime | None:
     window_dict: Final = _coerce_window(window)
     budget_duration: Final = window_dict.get("budget_duration")
     if budget_duration is None:
@@ -885,7 +974,7 @@ def get_budget_window_start(window: Any) -> datetime | None:
     return reset_at - timedelta(seconds=duration_seconds)
 
 
-def _coerce_datetime(value: Any) -> datetime | None:
+def _coerce_datetime(value: object) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -902,20 +991,17 @@ def estimate_request_max_cost(
     request_body: dict,
     route: str,
     llm_router: Router | None,
+    input_token_counts: Mapping[str, int] | None = None,
 ) -> float | None:
-    model: Final = get_model_from_request(request_body, route, llm_router=llm_router)
-    if model is None:
-        return None
-
-    models: Final = [model] if isinstance(model, str) else model
     estimates = [
         _estimate_request_max_cost_for_model(
             request_body=request_body,
             route=route,
             model=model_name,
             llm_router=llm_router,
+            input_tokens=(input_token_counts or {}).get(model_name),
         )
-        for model_name in models
+        for model_name in _get_request_models(request_body=request_body, route=route, llm_router=llm_router)
     ]
     estimates = [estimate for estimate in estimates if estimate is not None]
     if not estimates:
@@ -927,6 +1013,7 @@ def estimate_request_input_cost(
     request_body: dict,
     route: str,
     llm_router: Router | None,
+    input_token_counts: Mapping[str, int] | None = None,
 ) -> float | None:
     """Cost of the request's input tokens alone.
 
@@ -935,19 +1022,15 @@ def estimate_request_input_cost(
     cancelled in-flight request has already incurred. A cancelled reservation is
     reconciled to this instead of being refunded to zero.
     """
-    model: Final = get_model_from_request(request_body, route, llm_router=llm_router)
-    if model is None:
-        return None
-
-    models: Final = [model] if isinstance(model, str) else model
     estimates = [
         _estimate_request_input_cost_for_model(
             request_body=request_body,
             route=route,
             model=model_name,
             llm_router=llm_router,
+            input_tokens=(input_token_counts or {}).get(model_name),
         )
-        for model_name in models
+        for model_name in _get_request_models(request_body=request_body, route=route, llm_router=llm_router)
     ]
     estimates = [estimate for estimate in estimates if estimate is not None]
     if not estimates:
@@ -960,6 +1043,7 @@ def _estimate_request_input_cost_for_model(
     route: str,
     model: str,
     llm_router: Router | None,
+    input_tokens: int | None = None,
 ) -> float | None:
     estimates: Final = [
         _input_cost_for_cost_info(
@@ -967,6 +1051,7 @@ def _estimate_request_input_cost_for_model(
             route=route,
             model=model,
             model_info=model_info,
+            input_tokens=input_tokens,
         )
         for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
     ]
@@ -978,25 +1063,27 @@ def _input_cost_for_cost_info(
     request_body: dict,
     route: str,
     model: str,
-    model_info: dict[str, Any],
+    model_info: Mapping[str, object],
+    input_tokens: int | None = None,
 ) -> float | None:
-    input_tokens: Final = _estimate_input_tokens(
+    estimated_input_tokens: Final = _estimate_input_tokens(
         request_body=request_body,
         route=route,
         model=model,
         model_info=model_info,
+        input_tokens=input_tokens,
     )
-    if input_tokens is None:
+    if estimated_input_tokens is None:
         return None
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if isinstance(tiered_pricing, list) and tiered_pricing:
-        tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=input_tokens)
+        tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
         if tier is not None:
-            return input_tokens * tier_rate(tier, "input_cost_per_token")
+            return estimated_input_tokens * tier_rate(tier, "input_cost_per_token")
     input_cost_per_token: Final = _to_float(model_info.get("input_cost_per_token"))
     if input_cost_per_token is None:
         return None
-    return input_tokens * input_cost_per_token
+    return estimated_input_tokens * input_cost_per_token
 
 
 def _estimate_request_max_cost_for_model(
@@ -1004,6 +1091,7 @@ def _estimate_request_max_cost_for_model(
     route: str,
     model: str,
     llm_router: Router | None,
+    input_tokens: int | None = None,
 ) -> float | None:
     estimates: Final = [
         _max_cost_for_cost_info(
@@ -1011,6 +1099,7 @@ def _estimate_request_max_cost_for_model(
             route=route,
             model=model,
             model_info=model_info,
+            input_tokens=input_tokens,
         )
         for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
     ]
@@ -1022,7 +1111,8 @@ def _max_cost_for_cost_info(
     request_body: dict,
     route: str,
     model: str,
-    model_info: dict[str, Any],
+    model_info: Mapping[str, object],
+    input_tokens: int | None = None,
 ) -> float | None:
     image_cost: Final = _estimate_image_generation_cost(
         request_body=request_body,
@@ -1031,30 +1121,31 @@ def _max_cost_for_cost_info(
     if image_cost is not None:
         return image_cost
 
-    input_tokens: Final = _estimate_input_tokens(
+    estimated_input_tokens: Final = _estimate_input_tokens(
         request_body=request_body,
         route=route,
         model=model,
         model_info=model_info,
+        input_tokens=input_tokens,
     )
     output_tokens: Final = _estimate_output_tokens(
         request_body=request_body,
         route=route,
         model_info=model_info,
     )
-    if input_tokens is None or output_tokens is None:
+    if estimated_input_tokens is None or output_tokens is None:
         return None
 
     output_multiplier: Final = _get_output_multiplier(request_body=request_body)
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if isinstance(tiered_pricing, list) and tiered_pricing:
-        tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=input_tokens)
+        tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
         if tier is not None:
             output_rate = max(
                 tier_rate(tier, "output_cost_per_token"),
                 tier_rate(tier, "output_cost_per_reasoning_token"),
             )
-            return (input_tokens * tier_rate(tier, "input_cost_per_token")) + (
+            return (estimated_input_tokens * tier_rate(tier, "input_cost_per_token")) + (
                 output_tokens * output_multiplier * output_rate
             )
 
@@ -1063,8 +1154,8 @@ def _max_cost_for_cost_info(
     output_cost_per_reasoning_token: Final = _to_float(model_info.get("output_cost_per_reasoning_token"))
     cost = 0.0
     if input_cost_per_token is not None:
-        cost += input_tokens * input_cost_per_token
-    elif input_tokens > 0:
+        cost += estimated_input_tokens * input_cost_per_token
+    elif estimated_input_tokens > 0:
         return None
 
     # The reasoning-token share is unknown before the request runs, so reserve every
@@ -1081,7 +1172,7 @@ def _max_cost_for_cost_info(
 
 def _estimate_image_generation_cost(
     request_body: dict,
-    model_info: dict[str, Any],
+    model_info: Mapping[str, object],
 ) -> float | None:
     """
     Reserve `n × per-image cost` for image-generation requests so concurrent
@@ -1120,7 +1211,7 @@ def _estimate_image_generation_cost(
 def _get_model_cost_info(
     model: str,
     llm_router: Router | None,
-) -> dict[str, Any] | None:
+) -> Mapping[str, object] | None:
     if llm_router is not None:
         model_group_info: Final = llm_router.get_model_group_info(model_group=model)
         if model_group_info is not None:
@@ -1131,7 +1222,7 @@ def _get_model_cost_info(
 def _get_model_cost_infos(
     model: str,
     llm_router: Router | None,
-) -> list[dict[str, Any]]:
+) -> Sequence[Mapping[str, object]]:
     """Cost-info candidates to estimate a request against for one model group.
 
     Reservation runs before routing, so the deployment that will serve the request
@@ -1157,11 +1248,11 @@ def _get_model_cost_infos(
 
 
 def _deployment_tiered_pricing_table(
-    deployment: dict[str, Any],
+    deployment: DeploymentTypedDict,
     llm_router: Router,
-) -> list[dict] | None:
-    model_id: Final = deployment.get("model_info", {}).get("id")
-    backend_model: Final = deployment.get("litellm_params", {}).get("model")
+) -> Sequence[Mapping[str, object]] | None:
+    model_id: Final = _get_value(_get_value(deployment, "model_info"), "id")
+    backend_model: Final = _get_value(_get_value(deployment, "litellm_params"), "model")
     if not isinstance(model_id, str) or not isinstance(backend_model, str):
         return None
     deployment_model_info: Final = llm_router.get_deployment_model_info(model_id=model_id, model_name=backend_model)
@@ -1176,7 +1267,7 @@ def _deployment_tiered_pricing_table(
 def _get_deployment_tiered_pricing_tables(
     model: str,
     llm_router: Router | None,
-) -> list[list[dict]]:
+) -> Sequence[Sequence[Mapping[str, object]]]:
     if llm_router is None:
         return []
     deployments: Final = llm_router.get_model_list(model_name=model) or []
@@ -1187,12 +1278,70 @@ def _get_deployment_tiered_pricing_tables(
     ]
 
 
-def _estimate_input_tokens(
+def _get_request_models(
     request_body: dict,
     route: str,
-    model: str,
-    model_info: dict[str, Any],
-) -> int | None:
+    llm_router: Router | None,
+) -> Sequence[str]:
+    model: Final = get_model_from_request(request_body, route, llm_router=llm_router)
+    if model is None:
+        return ()
+    return (model,) if isinstance(model, str) else tuple(model)
+
+
+TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS: Final = 30_000
+
+
+async def count_request_input_tokens(
+    request_body: dict,
+    route: str,
+    llm_router: Router | None,
+) -> Mapping[str, int]:
+    """Input-token count per candidate model, counted once per request.
+
+    Tokenizing is the reservation path's dominant CPU cost and is O(prompt), so
+    counting a large prompt inline stalls every other request on the worker.
+    Large prompts are counted in a worker thread, and the counts are reused by
+    both the max-cost and the input-cost estimate.
+    """
+    models: Final = _get_request_models(request_body=request_body, route=route, llm_router=llm_router)
+    if not models:
+        return MappingProxyType({})
+    if _approximate_input_size(request_body) < TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS:
+        return _count_input_tokens_for_models(request_body=request_body, models=models)
+    return await asyncio.to_thread(
+        _count_input_tokens_for_models,
+        request_body=request_body,
+        models=models,
+    )
+
+
+def _count_input_tokens_for_models(
+    request_body: dict,
+    models: Sequence[str],
+) -> Mapping[str, int]:
+    return MappingProxyType(
+        {
+            model: tokens
+            for model in models
+            if (tokens := _count_input_tokens(request_body=request_body, model=model)) is not None
+        }
+    )
+
+
+_INPUT_SIZE_FIELDS: Final = ("messages", "prompt", "input", "query", "documents", "tools", "tool_choice")
+
+
+def _approximate_input_size(request_body: Mapping[str, object]) -> int:
+    """Length of the request's input text, a cheap stand-in for tokenizing cost.
+
+    Every field _count_input_tokens hands the tokenizer is sized here, and
+    rendering rather than walking keeps mapping keys in the total, which a tool
+    schema's property names are."""
+    return sum(len(str(request_body.get(field, ""))) for field in _INPUT_SIZE_FIELDS)
+
+
+def _count_input_tokens(request_body: dict, model: str) -> int | None:
     try:
         if "messages" in request_body:
             return litellm.token_counter(
@@ -1214,6 +1363,21 @@ def _estimate_input_tokens(
             return query_tokens + document_tokens
     except Exception:
         verbose_proxy_logger.debug("Unable to count input tokens for budget reservation", exc_info=True)
+    return None
+
+
+def _estimate_input_tokens(
+    request_body: dict,
+    route: str,
+    model: str,
+    model_info: Mapping[str, object],
+    input_tokens: int | None = None,
+) -> int | None:
+    counted: Final = (
+        input_tokens if input_tokens is not None else _count_input_tokens(request_body=request_body, model=model)
+    )
+    if counted is not None:
+        return counted
 
     max_input_tokens: Final = _to_int(model_info.get("max_input_tokens"))
     if max_input_tokens is not None:
@@ -1228,7 +1392,7 @@ DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK: Final = 16384
 def _estimate_output_tokens(
     request_body: dict,
     route: str,
-    model_info: dict[str, Any],
+    model_info: Mapping[str, object],
 ) -> int | None:
     if _is_input_only_route(route=route):
         return 0
@@ -1253,7 +1417,7 @@ def _estimate_output_tokens(
     return min(requested, model_ceiling)
 
 
-def _count_text_tokens(model: str, text: Any) -> int:
+def _count_text_tokens(model: str, text: object) -> int:
     if text is None:
         return 0
 
@@ -1293,8 +1457,8 @@ def _is_input_only_route(route: str) -> bool:
     )
 
 
-def _to_float(value: Any) -> float | None:
-    if value is None:
+def _to_float(value: object) -> float | None:
+    if not isinstance(value, (SupportsFloat, SupportsIndex, str, bytes, bytearray)):
         return None
     try:
         return float(value)
@@ -1302,8 +1466,8 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
-def _to_int(value: Any) -> int | None:
-    if value is None:
+def _to_int(value: object) -> int | None:
+    if not isinstance(value, (SupportsInt, SupportsIndex, str, bytes, bytearray)):
         return None
     try:
         return int(value)
@@ -1311,7 +1475,7 @@ def _to_int(value: Any) -> int | None:
         return None
 
 
-def _get_value(obj: Any, key: str) -> Any:
-    if isinstance(obj, dict):
+def _get_value(obj: object, key: str) -> object:
+    if isinstance(obj, Mapping):
         return obj.get(key)
     return getattr(obj, key, None)

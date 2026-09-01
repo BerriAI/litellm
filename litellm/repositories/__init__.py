@@ -28,6 +28,7 @@ from litellm.repositories.table_repositories import (
     ClaudeCodePluginRepository,
     ConfigOverridesRepository,
     DailyGuardrailMetricsRepository,
+    DailyGuardrailUsageUnitsRepository,
     DailyPolicyMetricsRepository,
     DailyTagSpendRepository,
     DailyToolSpendRepository,
@@ -70,10 +71,14 @@ from litellm.repositories.table_repositories import (
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.unit_of_work import (
+    BudgetCascadeUnitOfWork,
+    BudgetWindowWrites,
     KeySpendResetWrites,
+    LinkedSpendResetWrites,
     SpendResetUnitOfWork,
     TeamSpendResetWrites,
     UserSpendResetWrites,
+    budget_cascade_unit_of_work,
     spend_reset_unit_of_work,
 )
 from litellm.repositories.user_repository import UserRepository
@@ -88,13 +93,16 @@ __all__ = [
     "AgentsRepository",
     "AuditLogRepository",
     "BatchTable",
+    "BudgetCascadeUnitOfWork",
     "BudgetRepository",
+    "BudgetWindowWrites",
     "CacheConfigRepository",
     "ClaudeCodePluginRepository",
     "ConfigOverridesRepository",
     "ConfigRepository",
     "CredentialsRepository",
     "DailyGuardrailMetricsRepository",
+    "DailyGuardrailUsageUnitsRepository",
     "DailyPolicyMetricsRepository",
     "DailyTagSpendRepository",
     "DailyToolSpendRepository",
@@ -107,6 +115,7 @@ __all__ = [
     "InvitationLinkRepository",
     "JWTKeyMappingRepository",
     "KeySpendResetWrites",
+    "LinkedSpendResetWrites",
     "MCPServerRepository",
     "MCPToolsetRepository",
     "MCPUserCredentialsRepository",
@@ -149,5 +158,6 @@ __all__ = [
     "WorkflowEventRepository",
     "WorkflowMessageRepository",
     "WorkflowRunRepository",
+    "budget_cascade_unit_of_work",
     "spend_reset_unit_of_work",
 ]
