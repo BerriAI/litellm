@@ -1,7 +1,7 @@
 use std::future::Future;
 
 use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
-use litellm_core::error::CoreResult;
+use litellm_core::error::Error;
 use litellm_python_interop::from_py;
 use pyo3::prelude::*;
 use serde_json::Value;
@@ -12,7 +12,7 @@ use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
 fn prepare_ocr(
     py: Python<'_>,
     inputs: OcrInputs,
-) -> PyResult<impl Future<Output = CoreResult<Value>> + Send + 'static> {
+) -> PyResult<impl Future<Output = Result<Value, Error>> + Send + 'static> {
     let document = from_py(inputs.document.bind(py))?;
     let options = RouteOptions::from_python(
         py,

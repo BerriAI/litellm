@@ -91,7 +91,7 @@ mod tests {
     use std::ffi::CString;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use litellm_core::error::{CoreError, CoreResult};
+    use litellm_core::error::Error;
     use pyo3::exceptions::PyLookupError;
     use pyo3::types::{PyDict, PyList};
 
@@ -131,15 +131,15 @@ mod tests {
         fn prepare_echo(
             _py: Python<'_>,
             inputs: EchoInputs,
-        ) -> PyResult<impl Future<Output = CoreResult<String>> + Send + 'static> {
+        ) -> PyResult<impl Future<Output = Result<String, Error>> + Send + 'static> {
             FUTURE_DROPPED.store(false, Ordering::SeqCst);
             let drop_guard = (inputs.value == "pending").then_some(DropGuard);
             Ok(async move {
                 let _drop_guard = drop_guard;
                 tokio::task::yield_now().await;
                 match inputs.value.as_str() {
-                    "error" => Err(CoreError::InvalidRequest("synthetic error".to_string())),
-                    "map_panic" => Err(CoreError::InvalidRequest("panic in mapper".to_string())),
+                    "error" => Err(Error::InvalidRequest("synthetic error".to_string())),
+                    "map_panic" => Err(Error::InvalidRequest("panic in mapper".to_string())),
                     "panic" => panic!("synthetic panic"),
                     "pending" => {
                         pending::<()>().await;
@@ -150,9 +150,8 @@ mod tests {
             })
         }
 
-        fn map_error(error: CoreError) -> PyErr {
-            if matches!(&error, CoreError::InvalidRequest(message) if message == "panic in mapper")
-            {
+        fn map_error(error: Error) -> PyErr {
+            if matches!(&error, Error::InvalidRequest(message) if message == "panic in mapper") {
                 panic!("synthetic mapper panic")
             }
             PyLookupError::new_err(error.to_string())
@@ -417,7 +416,7 @@ asyncio.run(exercise())
     }
 
     #[test]
-    fn messages_routes_map_declines_before_python_fallback() {
+    fn messages_routes_preserve_invalid_provider_errors() {
         Python::initialize();
         Python::attach(|py| {
             let module = PyModule::new(py, "routes").expect("module should be created");
@@ -431,8 +430,8 @@ asyncio.run(exercise())
             let sync_error = module
                 .getattr("messages")
                 .and_then(|function| function.call(("model", &body), Some(&kwargs)))
-                .expect_err("unsupported provider should decline");
-            assert!(sync_error.is_instance_of::<crate::errors::RustBridgeDeclined>(py));
+                .expect_err("unsupported provider should fail validation");
+            assert!(sync_error.is_instance_of::<pyo3::exceptions::PyValueError>(py));
 
             let locals = PyDict::new(py);
             locals
@@ -446,16 +445,16 @@ async def exercise():
     try:
         await routes.amessages("model", {}, custom_llm_provider="openai")
     except Exception as error:
-        assert type(error).__name__ == "RustBridgeDeclined"
+        assert isinstance(error, ValueError)
     else:
-        raise AssertionError("unsupported provider did not decline")
+        raise AssertionError("unsupported provider passed validation")
 
 asyncio.run(exercise())
 "#,
             )
             .expect("Python source should not contain null bytes");
             py.run(&code, Some(&locals), Some(&locals))
-                .expect("async route should preserve the decline contract");
+                .expect("async route should preserve validation errors");
         });
     }
 

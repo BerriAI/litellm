@@ -4,7 +4,7 @@ use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::error::{CoreError, CoreResult};
+use crate::error::Error;
 
 use super::common_utils::{
     has_bearer_auth, has_header, messages_provider_config, string_headers, truncate_error_body,
@@ -22,7 +22,7 @@ impl AnthropicMessagesProviderConfig for RejectingResponseConfig {
         _api_base: Option<&str>,
         _model: &str,
         _env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String> {
+    ) -> Result<String, Error> {
         unreachable!()
     }
 
@@ -30,7 +30,7 @@ impl AnthropicMessagesProviderConfig for RejectingResponseConfig {
         &self,
         _api_key: Option<&str>,
         _env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String> {
+    ) -> Result<String, Error> {
         unreachable!()
     }
 
@@ -38,8 +38,8 @@ impl AnthropicMessagesProviderConfig for RejectingResponseConfig {
         &self,
         _model: &str,
         _response: AnthropicMessagesResponse,
-    ) -> CoreResult<AnthropicMessagesResponse> {
-        Err(CoreError::MissingField("normalized_content"))
+    ) -> Result<AnthropicMessagesResponse, Error> {
+        Err(Error::MissingField("normalized_content"))
     }
 }
 
@@ -110,7 +110,7 @@ fn truncate_error_body_caps_long_payloads() {
 fn string_headers_rejects_non_string_values() {
     let headers = json!({"x-count": 3}).as_object().unwrap().clone();
     let err = string_headers(Some(headers)).expect_err("non-string header rejected");
-    assert!(matches!(err, CoreError::InvalidRequest(_)));
+    assert!(matches!(err, Error::InvalidRequest(_)));
 }
 
 #[test]
@@ -240,7 +240,7 @@ async fn post_response_transform_errors_are_non_retryable() {
 
     server.await.expect("server task completes");
     assert!(
-        matches!(error, CoreError::InvalidResponse(message) if message.contains("normalized_content"))
+        matches!(error, Error::InvalidResponse(message) if message.contains("normalized_content"))
     );
 }
 
@@ -407,7 +407,7 @@ async fn messages_requires_auth_when_no_key_and_no_header() {
     .await
     .expect_err("missing auth errors");
 
-    assert!(matches!(err, CoreError::Auth(_)));
+    assert!(matches!(err, Error::Auth(_)));
 }
 
 #[tokio::test]
@@ -486,7 +486,7 @@ async fn messages_maps_provider_error_status_to_http_error() {
     .await
     .expect_err("provider error propagates");
 
-    assert!(matches!(err, CoreError::Http { status: 401, .. }));
+    assert!(matches!(err, Error::Http { status: 401, .. }));
 }
 
 #[tokio::test]
@@ -503,7 +503,7 @@ async fn messages_rejects_unsupported_provider() {
     .await
     .expect_err("unsupported provider errors");
 
-    assert!(matches!(err, CoreError::InvalidProvider(provider) if provider == "openai"));
+    assert!(matches!(err, Error::InvalidProvider(provider) if provider == "openai"));
 }
 
 #[tokio::test]
@@ -524,7 +524,7 @@ async fn messages_classifies_a_refused_connection_as_safe_to_fallback() {
     .await
     .expect_err("nothing is listening");
 
-    assert!(matches!(error, CoreError::Connect(_)));
+    assert!(matches!(error, Error::Connect(_)));
 }
 
 #[tokio::test]
@@ -564,5 +564,5 @@ async fn messages_classifies_an_established_request_timeout_as_network_error() {
     assert!(request.starts_with("POST /v1/messages "), "{request}");
     release_server_tx.send(()).expect("releases server");
     server.await.expect("server task completes");
-    assert!(matches!(error, CoreError::Network(_)));
+    assert!(matches!(error, Error::Network(_)));
 }

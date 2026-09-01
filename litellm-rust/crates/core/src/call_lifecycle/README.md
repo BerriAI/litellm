@@ -110,7 +110,7 @@ impl CallLifecycleHooks<
 The public entrypoint stays thin:
 
 ```rust
-pub async fn messages(request: MessagesRequest<'_>) -> CoreResult<MessagesResponse> {
+pub async fn messages(request: MessagesRequest<'_>) -> Result<MessagesResponse, Error> {
     let PreparedMessagesCall { request, hooks } = prepare_messages_call(request)?;
 
     CallLifecycle::default()

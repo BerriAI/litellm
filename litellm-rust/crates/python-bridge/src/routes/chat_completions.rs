@@ -4,7 +4,7 @@ use litellm_core::chat_completions::types::{ChatCompletionsRequest, ChatCompleti
 use litellm_core::chat_completions::{
     chat_completions as run_chat_completions, chat_completions_decline_reason,
 };
-use litellm_core::error::CoreResult;
+use litellm_core::error::Error;
 use litellm_python_interop::from_py;
 use pyo3::prelude::*;
 use serde_json::Value;
@@ -15,7 +15,7 @@ use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty, required
 fn prepare_chat_completions(
     py: Python<'_>,
     inputs: ChatCompletionsInputs,
-) -> PyResult<impl Future<Output = CoreResult<ChatCompletionsResponse>> + Send + 'static> {
+) -> PyResult<impl Future<Output = Result<ChatCompletionsResponse, Error>> + Send + 'static> {
     let messages = required_value(py, "messages", inputs.messages, Value::is_array, "list")?;
     let optional_params = object_or_empty(py, "optional_params", inputs.optional_params)?;
     let options = RouteOptions::from_python(

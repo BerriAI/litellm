@@ -1,9 +1,8 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use litellm_core::CoreResult;
+use litellm_core::Error;
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
-use litellm_core::error::CoreError;
 use litellm_core::ocr::transformation::OcrAuthStrategy;
 use serde_json::{Map, Value, json};
 
@@ -27,7 +26,7 @@ pub(crate) struct OcrLifecycleHooks {
     request_metadata: RequestMetadata,
 }
 
-type OcrFuture<'a, T> = Pin<Box<dyn Future<Output = CoreResult<T>> + Send + 'a>>;
+type OcrFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
 type OcrLogFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 
 impl OcrLifecycleHooks {
@@ -46,7 +45,7 @@ impl OcrLifecycleHooks {
     async fn run_pre_call_guardrails(
         &self,
         request: PreparedOcrRequest,
-    ) -> CoreResult<PreparedOcrRequest> {
+    ) -> Result<PreparedOcrRequest, Error> {
         if self.guardrail_runner.is_empty() {
             return Ok(request);
         }
@@ -74,9 +73,9 @@ impl OcrLifecycleHooks {
     async fn prepare_provider_request(
         &self,
         request: PreparedOcrRequest,
-    ) -> CoreResult<ProviderOcrRequest> {
+    ) -> Result<ProviderOcrRequest, Error> {
         let config = ocr_provider_config(&request.custom_llm_provider, &request.model)
-            .ok_or_else(|| CoreError::InvalidProvider(request.custom_llm_provider.clone()))?;
+            .ok_or_else(|| Error::InvalidProvider(request.custom_llm_provider.clone()))?;
         let env_lookup = |key: &str| std::env::var(key).ok();
         let headers = string_headers(request.extra_headers)?;
         let auth_strategy = config.auth_strategy();
@@ -120,7 +119,7 @@ impl OcrLifecycleHooks {
         custom_llm_provider: &str,
         url: &str,
         body: Value,
-    ) -> CoreResult<Value> {
+    ) -> Result<Value, Error> {
         if self.guardrail_runner.is_empty() {
             return Ok(body);
         }
@@ -217,7 +216,7 @@ impl CallLifecycleHooks<PreparedOcrRequest, ProviderOcrRequest, Value> for OcrLi
     fn async_log_failure_event<'a>(
         &'a self,
         context: &'a CallLifecycleContext,
-        error: &'a CoreError,
+        error: &'a Error,
         timing: &'a CallLifecycleTiming,
     ) -> Self::FailureFuture<'a> {
         Box::pin(async move {
@@ -278,19 +277,19 @@ fn guardrail_context(metadata: &RequestMetadata) -> GuardrailContext {
 
 fn parse_ocr_pre_call_guardrail_request(
     request: GuardrailRequest,
-) -> CoreResult<(Value, Map<String, Value>)> {
+) -> Result<(Value, Map<String, Value>), Error> {
     let Value::Object(mut data) = request.data else {
-        return Err(CoreError::InvalidRequest(
+        return Err(Error::InvalidRequest(
             "OCR pre_call guardrail must return an object".to_string(),
         ));
     };
     let document = data.remove("document").ok_or_else(|| {
-        CoreError::InvalidRequest("OCR pre_call guardrail removed document".to_string())
+        Error::InvalidRequest("OCR pre_call guardrail removed document".to_string())
     })?;
     let optional_params = match data.remove("optional_params") {
         Some(Value::Object(params)) => params,
         Some(_) => {
-            return Err(CoreError::InvalidRequest(
+            return Err(Error::InvalidRequest(
                 "OCR pre_call guardrail optional_params must be an object".to_string(),
             ));
         }
@@ -299,33 +298,32 @@ fn parse_ocr_pre_call_guardrail_request(
     Ok((document, optional_params))
 }
 
-fn parse_ocr_during_call_guardrail_request(request: GuardrailRequest) -> CoreResult<Value> {
+fn parse_ocr_during_call_guardrail_request(request: GuardrailRequest) -> Result<Value, Error> {
     let Value::Object(mut data) = request.data else {
-        return Err(CoreError::InvalidRequest(
+        return Err(Error::InvalidRequest(
             "OCR during_call guardrail must return an object".to_string(),
         ));
     };
-    data.remove("body").ok_or_else(|| {
-        CoreError::InvalidRequest("OCR during_call guardrail removed body".to_string())
-    })
+    data.remove("body")
+        .ok_or_else(|| Error::InvalidRequest("OCR during_call guardrail removed body".to_string()))
 }
 
-fn guardrail_error_to_core_error(error: GuardrailError) -> CoreError {
-    CoreError::InvalidRequest(format!("{}: {}", error.kind, error.message))
+fn guardrail_error_to_core_error(error: GuardrailError) -> Error {
+    Error::InvalidRequest(format!("{}: {}", error.kind, error.message))
 }
 
-fn core_error_kind(error: &CoreError) -> &'static str {
+fn core_error_kind(error: &Error) -> &'static str {
     match error {
-        CoreError::Auth(_) => "AuthError",
-        CoreError::InvalidProvider(_) => "InvalidProvider",
-        CoreError::InvalidRequest(_) => "InvalidRequest",
-        CoreError::InvalidType { .. } => "InvalidType",
-        CoreError::MissingField(_) => "MissingField",
-        CoreError::Http { .. } => "HttpError",
-        CoreError::InvalidResponse(_) => "InvalidResponse",
-        CoreError::Network(_) => "NetworkError",
-        CoreError::Connect(_) => "ConnectError",
-        CoreError::Routing(_) => "RoutingError",
-        CoreError::Unsupported(_) => "UnsupportedRequest",
+        Error::Auth(_) => "AuthError",
+        Error::InvalidProvider(_) => "InvalidProvider",
+        Error::InvalidRequest(_) => "InvalidRequest",
+        Error::InvalidType { .. } => "InvalidType",
+        Error::MissingField(_) => "MissingField",
+        Error::Http { .. } => "HttpError",
+        Error::InvalidResponse(_) => "InvalidResponse",
+        Error::Network(_) => "NetworkError",
+        Error::Connect(_) => "ConnectError",
+        Error::Routing(_) => "RoutingError",
+        Error::Unsupported(_) => "UnsupportedRequest",
     }
 }

@@ -15,8 +15,7 @@ use std::time::Duration;
 
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
-use litellm_core::CoreResult;
-use litellm_core::error::CoreError;
+use litellm_core::Error;
 use litellm_core::realtime::transformation::RealtimeProviderConfig;
 use litellm_core::realtime::types::RealtimeEvent;
 use tokio::net::TcpStream;
@@ -48,7 +47,7 @@ pub(crate) type UpstreamRx = SplitStream<UpstreamWs>;
 /// Resolve the OpenAI API key from the explicit param or the environment.
 ///
 /// Blank/whitespace values are treated as absent (guard at resolution time).
-pub(crate) fn resolve_api_key(api_key: Option<&str>) -> CoreResult<String> {
+pub(crate) fn resolve_api_key(api_key: Option<&str>) -> Result<String, Error> {
     api_key
         .map(str::trim)
         .filter(|key| !key.is_empty())
@@ -58,7 +57,7 @@ pub(crate) fn resolve_api_key(api_key: Option<&str>) -> CoreResult<String> {
                 .ok()
                 .filter(|key| !key.trim().is_empty())
         })
-        .ok_or_else(|| CoreError::Auth(MISSING_KEY_MESSAGE.to_string()))
+        .ok_or_else(|| Error::Auth(MISSING_KEY_MESSAGE.to_string()))
 }
 
 /// Open the upstream WebSocket to OpenAI for `(model, api_key, api_base)`.
@@ -70,24 +69,24 @@ pub(crate) async fn dial_upstream(
     model: &str,
     api_key: &str,
     api_base: Option<&str>,
-) -> CoreResult<UpstreamWs> {
+) -> Result<UpstreamWs, Error> {
     let url = OPENAI_REALTIME_CONFIG.complete_url(api_base, model);
 
     let mut request = url
         .as_str()
         .into_client_request()
-        .map_err(|err| CoreError::Network(err.to_string()))?;
+        .map_err(|err| Error::Network(err.to_string()))?;
     // GA realtime: only Authorization. The legacy OpenAI-Beta header triggers
     // beta_api_shape_disabled, so we do not send it.
     request.headers_mut().insert(
         AUTHORIZATION,
         HeaderValue::from_str(&format!("Bearer {api_key}"))
-            .map_err(|err| CoreError::Auth(err.to_string()))?,
+            .map_err(|err| Error::Auth(err.to_string()))?,
     );
 
     let (upstream, _response) = connect_async(request)
         .await
-        .map_err(|err| CoreError::Network(err.to_string()))?;
+        .map_err(|err| Error::Network(err.to_string()))?;
     Ok(upstream)
 }
 
@@ -96,22 +95,22 @@ pub(crate) async fn dial_upstream(
 /// Used by the pool to pre-read OpenAI's unprompted `session.created`. Returns an
 /// error on a non-text frame, a closed socket, or undecodable JSON so the pool can
 /// discard a misbehaving socket rather than warm it.
-pub(crate) async fn read_event(upstream_rx: &mut UpstreamRx) -> CoreResult<RealtimeEvent> {
+pub(crate) async fn read_event(upstream_rx: &mut UpstreamRx) -> Result<RealtimeEvent, Error> {
     loop {
         let message = upstream_rx
             .next()
             .await
-            .ok_or_else(|| CoreError::Network("upstream closed before first event".to_string()))?
-            .map_err(|err| CoreError::Network(err.to_string()))?;
+            .ok_or_else(|| Error::Network("upstream closed before first event".to_string()))?
+            .map_err(|err| Error::Network(err.to_string()))?;
         match message {
             Message::Text(text) => {
                 return serde_json::from_str(&text)
-                    .map_err(|err| CoreError::InvalidResponse(err.to_string()));
+                    .map_err(|err| Error::InvalidResponse(err.to_string()));
             }
             // Ignore protocol frames (ping/pong) while waiting for the first event.
             Message::Ping(_) | Message::Pong(_) => continue,
             Message::Close(_) => {
-                return Err(CoreError::Network(
+                return Err(Error::Network(
                     "upstream closed before first event".to_string(),
                 ));
             }
@@ -139,7 +138,7 @@ pub(crate) async fn splice<In, Out>(
     mut observe: impl FnMut(&RealtimeEvent) + Send,
     mut client_in: In,
     mut client_out: Out,
-) -> CoreResult<()>
+) -> Result<(), Error>
 where
     In: Stream<Item = RealtimeEvent> + Unpin + Send,
     Out: Sink<RealtimeEvent> + Unpin + Send,
@@ -154,7 +153,7 @@ where
             client_out
                 .send(outbound)
                 .await
-                .map_err(|err| CoreError::Network(err.to_string()))?;
+                .map_err(|err| Error::Network(err.to_string()))?;
         }
     }
 
@@ -175,26 +174,26 @@ where
                 // inflate its own spend log. Logging observes upstream events only.
                 for outbound in config.transform_realtime_request(&event, model)?.events {
                     let payload = serde_json::to_string(&outbound)
-                        .map_err(|err| CoreError::InvalidResponse(err.to_string()))?;
+                        .map_err(|err| Error::InvalidResponse(err.to_string()))?;
                     upstream_tx
                         .send(Message::Text(payload))
                         .await
-                        .map_err(|err| CoreError::Network(err.to_string()))?;
+                        .map_err(|err| Error::Network(err.to_string()))?;
                 }
             }
             // upstream -> client
             upstream_message = upstream_rx.next() => {
                 let Some(message) = upstream_message else { break }; // upstream closed
-                match message.map_err(|err| CoreError::Network(err.to_string()))? {
+                match message.map_err(|err| Error::Network(err.to_string()))? {
                     Message::Text(text) => {
                         let event: RealtimeEvent = serde_json::from_str(&text)
-                            .map_err(|err| CoreError::InvalidResponse(err.to_string()))?;
+                            .map_err(|err| Error::InvalidResponse(err.to_string()))?;
                         observe(&event);
                         for outbound in config.transform_realtime_response(&event, model)?.events {
                             client_out
                                 .send(outbound)
                                 .await
-                                .map_err(|err| CoreError::Network(err.to_string()))?;
+                                .map_err(|err| Error::Network(err.to_string()))?;
                         }
                     }
                     Message::Close(_) => break,
@@ -225,7 +224,7 @@ pub async fn realtime<In, Out>(
     observe: impl FnMut(&RealtimeEvent) + Send,
     client_in: In,
     client_out: Out,
-) -> CoreResult<()>
+) -> Result<(), Error>
 where
     In: Stream<Item = RealtimeEvent> + Unpin + Send,
     Out: Sink<RealtimeEvent> + Unpin + Send,
@@ -258,7 +257,7 @@ pub async fn realtime_warm<In, Out>(
     observe: impl FnMut(&RealtimeEvent) + Send,
     client_in: In,
     client_out: Out,
-) -> CoreResult<()>
+) -> Result<(), Error>
 where
     In: Stream<Item = RealtimeEvent> + Unpin + Send,
     Out: Sink<RealtimeEvent> + Unpin + Send,

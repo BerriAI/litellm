@@ -1,4 +1,4 @@
-use litellm_core::error::CoreError;
+use litellm_core::error::Error;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
@@ -16,39 +16,30 @@ pyo3::create_exception!(
     "The provider call was already issued and failed. Args are (status, message); status is 0 when there was no HTTP response."
 );
 
-pub(crate) fn core_error_to_pyerr(err: CoreError) -> PyErr {
+pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
     match err {
-        CoreError::Auth(message) => PyValueError::new_err(message),
-        CoreError::InvalidProvider(_)
-        | CoreError::InvalidRequest(_)
-        | CoreError::InvalidType { .. }
-        | CoreError::MissingField(_) => PyValueError::new_err(err.to_string()),
+        Error::Auth(message) => PyValueError::new_err(message),
+        Error::InvalidProvider(_)
+        | Error::InvalidRequest(_)
+        | Error::InvalidType { .. }
+        | Error::MissingField(_) => PyValueError::new_err(err.to_string()),
         other => PyRuntimeError::new_err(other.to_string()),
     }
 }
 
-/// Map a core error for a route whose host keeps a Python implementation.
-///
-/// The distinction the host needs is whether the provider was already called.
-/// Everything raised before the request goes out is safe for the host to retry
-/// on its own path; anything after it is not, because the provider has already
-/// done the work and billed for it.
-pub(crate) fn fallback_route_error_to_pyerr(err: CoreError) -> PyErr {
+pub(crate) fn fallback_route_error_to_pyerr(err: Error) -> PyErr {
     match err {
-        CoreError::Unsupported(_)
-        | CoreError::Auth(_)
-        | CoreError::InvalidProvider(_)
-        | CoreError::InvalidRequest(_)
-        | CoreError::InvalidType { .. }
-        | CoreError::MissingField(_)
-        | CoreError::Routing(_)
-        // Nothing reached the provider, so serving it on Python cannot double
-        // bill and is the only way the caller gets an answer at all.
-        | CoreError::Connect(_) => RustBridgeDeclined::new_err(err.to_string()),
-        CoreError::Http { status, body } => {
+        Error::Unsupported(reason) => RustBridgeDeclined::new_err(reason),
+        validation @ (Error::Auth(_)
+        | Error::InvalidProvider(_)
+        | Error::InvalidRequest(_)
+        | Error::InvalidType { .. }
+        | Error::MissingField(_)) => core_error_to_pyerr(validation),
+        Error::Routing(message) => PyRuntimeError::new_err(message),
+        Error::Http { status, body } => {
             RustUpstreamError::new_err((status, format!("{status}: {body}")))
         }
-        CoreError::Network(message) | CoreError::InvalidResponse(message) => {
+        Error::Connect(message) | Error::Network(message) | Error::InvalidResponse(message) => {
             RustUpstreamError::new_err((0u16, message))
         }
     }
@@ -65,41 +56,56 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fallback_routes_distinguish_declines_from_upstream_failures() {
+    fn fallback_routes_only_decline_unsupported_requests() {
         Python::initialize();
         Python::attach(|py| {
-            let declines = [
-                CoreError::Unsupported("unsupported"),
-                CoreError::Auth("missing key".to_string()),
-                CoreError::InvalidProvider("unsupported".to_string()),
-                CoreError::InvalidRequest("invalid".to_string()),
-                CoreError::InvalidType {
+            let declined = fallback_route_error_to_pyerr(Error::Unsupported("unsupported"));
+            assert!(declined.is_instance_of::<RustBridgeDeclined>(py));
+            assert_eq!(
+                declined
+                    .value(py)
+                    .getattr("args")
+                    .and_then(|args| args.extract::<(String,)>())
+                    .expect("decline should retain its bounded reason"),
+                ("unsupported".to_string(),)
+            );
+
+            let validation_failures = [
+                Error::Auth("missing key".to_string()),
+                Error::InvalidProvider("unsupported".to_string()),
+                Error::InvalidRequest("invalid".to_string()),
+                Error::InvalidType {
                     expected: "string",
                     actual: "number",
                 },
-                CoreError::MissingField("model"),
-                CoreError::Routing("no route".to_string()),
-                CoreError::Connect("connection refused".to_string()),
+                Error::MissingField("model"),
             ];
-            for error in declines {
+            for error in validation_failures {
                 let mapped = fallback_route_error_to_pyerr(error);
-                assert!(mapped.is_instance_of::<RustBridgeDeclined>(py));
+                assert!(mapped.is_instance_of::<PyValueError>(py));
             }
+
+            let routing = fallback_route_error_to_pyerr(Error::Routing("no route".to_string()));
+            assert!(routing.is_instance_of::<PyRuntimeError>(py));
 
             let upstream_failures = [
                 (
-                    CoreError::Http {
+                    Error::Http {
                         status: 429,
                         body: "rate limited".to_string(),
                     },
                     (429, "429: rate limited"),
                 ),
                 (
-                    CoreError::Network("request timed out".to_string()),
+                    Error::Connect("connection refused".to_string()),
+                    (0, "connection refused"),
+                ),
+                (
+                    Error::Network("request timed out".to_string()),
                     (0, "request timed out"),
                 ),
                 (
-                    CoreError::InvalidResponse("bad JSON".to_string()),
+                    Error::InvalidResponse("bad JSON".to_string()),
                     (0, "bad JSON"),
                 ),
             ];

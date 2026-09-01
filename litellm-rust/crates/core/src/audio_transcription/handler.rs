@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::error::{CoreError, CoreResult};
+use crate::error::Error;
 use crate::http_utils::truncate_error_body;
 
 use super::client::http_client;
@@ -8,10 +8,9 @@ use super::types::ProviderAudioTranscriptionRequest;
 
 pub(super) async fn execute_audio_transcription_provider_call(
     request: ProviderAudioTranscriptionRequest,
-) -> CoreResult<Value> {
-    let body = serde_json::to_vec(&request.body).map_err(|error| {
-        CoreError::InvalidRequest(format!("invalid audio request body: {error}"))
-    })?;
+) -> Result<Value, Error> {
+    let body = serde_json::to_vec(&request.body)
+        .map_err(|error| Error::InvalidRequest(format!("invalid audio request body: {error}")))?;
     let headers = signed_headers(&request, &body).await?;
     let mut request_builder = http_client().post(&request.url).body(body);
     for (key, value) in headers {
@@ -23,21 +22,20 @@ pub(super) async fn execute_audio_transcription_provider_call(
     let response = request_builder
         .send()
         .await
-        .map_err(|error| CoreError::Network(error.to_string()))?;
+        .map_err(|error| Error::Network(error.to_string()))?;
     let status = response.status();
     let text = response
         .text()
         .await
-        .map_err(|error| CoreError::Network(error.to_string()))?;
+        .map_err(|error| Error::Network(error.to_string()))?;
     if !status.is_success() {
-        return Err(CoreError::Http {
+        return Err(Error::Http {
             status: status.as_u16(),
             body: truncate_error_body(&text),
         });
     }
-    let response_json = serde_json::from_str(&text).map_err(|error| {
-        CoreError::InvalidResponse(format!("invalid audio response JSON: {error}"))
-    })?;
+    let response_json = serde_json::from_str(&text)
+        .map_err(|error| Error::InvalidResponse(format!("invalid audio response JSON: {error}")))?;
     Ok(request
         .config
         .transform_transcription_response(&request.model, response_json)?
@@ -48,7 +46,7 @@ pub(super) async fn execute_audio_transcription_provider_call(
 async fn signed_headers(
     request: &ProviderAudioTranscriptionRequest,
     body: &[u8],
-) -> CoreResult<Vec<(String, String)>> {
+) -> Result<Vec<(String, String)>, Error> {
     use std::collections::BTreeMap;
     use std::time::SystemTime;
 
@@ -81,11 +79,11 @@ async fn signed_headers(
 async fn signed_headers(
     request: &ProviderAudioTranscriptionRequest,
     _body: &[u8],
-) -> CoreResult<Vec<(String, String)>> {
+) -> Result<Vec<(String, String)>, Error> {
     use crate::audio_transcription::transformation::AudioTranscriptionAuth;
 
     match request.auth {
-        AudioTranscriptionAuth::AwsSigV4 { .. } => Err(CoreError::Unsupported(
+        AudioTranscriptionAuth::AwsSigV4 { .. } => Err(Error::Unsupported(
             "AWS SigV4 requires the bedrock-auth feature",
         )),
         AudioTranscriptionAuth::Bearer => Ok(request.upstream_headers.clone()),
