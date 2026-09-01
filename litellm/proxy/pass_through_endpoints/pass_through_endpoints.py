@@ -762,8 +762,12 @@ def _build_passthrough_failure_request_payload(
 
 @dataclass(frozen=True, slots=True)
 class _TeamCallbackWiring:
-    success_callbacks: "list[str | Callable | CustomLogger] | None" = None  # mutable-ok: Logging.__init__ signature constraint
-    failure_callbacks: "list[str | Callable | CustomLogger] | None" = None  # mutable-ok: Logging.__init__ signature constraint
+    success_callbacks: "list[str | Callable | CustomLogger] | None" = (
+        None  # mutable-ok: Logging.__init__ signature constraint
+    )
+    failure_callbacks: "list[str | Callable | CustomLogger] | None" = (
+        None  # mutable-ok: Logging.__init__ signature constraint
+    )
     logging_kwargs: dict[str, str | dict[str, str]] | None = None  # mutable-ok: Logging.__init__ signature constraint
 
 
@@ -791,7 +795,9 @@ def _resolve_team_callback_wiring(
             user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
         )
         if callback_settings_obj and callback_settings_obj.callback_vars:
-            for item in callback_settings_obj.callback_vars.items():  # rebind-ok: dict.items iteration for env-ref validation
+            for (
+                item
+            ) in callback_settings_obj.callback_vars.items():  # rebind-ok: dict.items iteration for env-ref validation
                 validate_no_callback_env_reference(item[0], item[1], source="key/team callback metadata")
     except Exception:  # noqa: BLE001 - a broken logging config must never fail the passthrough request
         verbose_proxy_logger.exception(
