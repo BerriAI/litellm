@@ -89,6 +89,7 @@ const CONSTANT_CAUSE_LABELS: Record<string, string> = {
   semantic_keyword_match: "Semantic keyword match",
   session_affinity_pin: "Pinned to session",
   session_affinity_escalation: "Escalated from session pin",
+  user_turn_continuation: "Continuation turn, classifier skipped",
   quality_tier: "Quality tier mapping",
   bandit: "Adaptive bandit",
   default_fallback: "Default model, no route matched",

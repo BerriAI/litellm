@@ -18,12 +18,11 @@ import { openPlayground, selectModel, sendMessage } from "../../helpers/playgrou
 
 const uniqueSuffix = (): string => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-/**
- * Walking up from the label is the only stable handle: the header carries no role, test id or class,
- * and its copy button is icon-only with a hover-only tooltip.
- */
-const sectionHeader = (drawer: Locator, label: "Input" | "Output"): Locator =>
-  drawer.getByText(label, { exact: true }).locator("xpath=../../..");
+const sectionToggle = (drawer: Locator, label: "Input" | "Output"): Locator =>
+  drawer.getByRole("button", { name: new RegExp(`^${label}\\b`) });
+
+const sectionCopy = (drawer: Locator, label: "Input" | "Output"): Locator =>
+  drawer.getByRole("button", { name: `Copy ${label.toLowerCase()}` });
 
 /** Every tab stays mounted, so the DOM holds four tables at once; scope to the visible one. */
 const requestLogsRows = (page: PlaywrightPage): Locator =>
@@ -119,14 +118,14 @@ test.describe("Logs page", () => {
     await expect(drawer).toBeVisible({ timeout: 20_000 });
 
     // Copy request: the Input card's copy button puts the prompt on the clipboard.
-    await sectionHeader(drawer, "Input").getByRole("button").click();
+    await sectionCopy(drawer, "Input").click();
     await expect(page.getByText("Input copied")).toBeVisible({
       timeout: 10_000,
     });
     expect(await page.evaluate(() => navigator.clipboard.readText())).toContain(prompt);
 
     // Copy response: the Output card's copy button puts the completion on it.
-    await sectionHeader(drawer, "Output").getByRole("button").click();
+    await sectionCopy(drawer, "Output").click();
     await expect(page.getByText("Output copied")).toBeVisible({
       timeout: 10_000,
     });
@@ -149,24 +148,15 @@ test.describe("Logs page", () => {
       timeout: 20_000,
     });
 
-    // The body collapses via `max-height: 0; overflow: hidden`, which zeroes its own bounding
-    // box, so the wrapper reads as hidden while the clipped text node inside it does not.
-    const header = sectionHeader(drawer, "Input");
-    const body = header.locator("xpath=following-sibling::div[1]");
-    await expect(header.locator(".lucide-chevron-up")).toBeVisible();
-    await expect(body).toBeVisible();
+    const toggle = sectionToggle(drawer, "Input");
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(drawer.getByText(prompt, { exact: false })).toBeVisible();
 
-    await header.click();
-    await expect(header.locator(".lucide-chevron-down")).toBeVisible({
-      timeout: 10_000,
-    });
-    await expect(body).toBeHidden({ timeout: 10_000 });
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false", { timeout: 10_000 });
 
-    await header.click();
-    await expect(header.locator(".lucide-chevron-up")).toBeVisible({
-      timeout: 10_000,
-    });
-    await expect(body).toBeVisible({ timeout: 10_000 });
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true", { timeout: 10_000 });
     await expect(drawer.getByText(prompt, { exact: false })).toBeVisible({
       timeout: 10_000,
     });
