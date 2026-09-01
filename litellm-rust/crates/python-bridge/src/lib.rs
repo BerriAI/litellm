@@ -87,6 +87,14 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::CString;
+    use std::time::Duration;
+
+    use futures_util::{SinkExt, StreamExt};
+    use pyo3::types::PyDict;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::{accept_async, tungstenite::Message};
+
     use super::*;
 
     #[test]
@@ -122,5 +130,70 @@ mod tests {
                 .collect();
             assert_eq!(public_names, expected);
         });
+    }
+
+    #[test]
+    fn responses_websocket_connection_round_trips_through_python() {
+        Python::initialize();
+        let runtime = pyo3_async_runtimes::tokio::get_runtime();
+        let listener = runtime
+            .block_on(TcpListener::bind("127.0.0.1:0"))
+            .expect("listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("listener should have an address");
+        let server = runtime.spawn(async move {
+            let (stream, _) = listener.accept().await.expect("server should accept");
+            let mut socket = accept_async(stream)
+                .await
+                .expect("handshake should succeed");
+
+            let message = socket
+                .next()
+                .await
+                .expect("client should send a frame")
+                .expect("client frame should be valid");
+            assert_eq!(message, Message::Text("from-python".into()));
+            socket
+                .send(Message::Text("from-server".into()))
+                .await
+                .expect("server should reply");
+            assert!(matches!(socket.next().await, Some(Ok(Message::Close(_)))));
+        });
+
+        Python::attach(|py| {
+            let module = PyModule::new(py, "_native").expect("module should be created");
+            _native(&module).expect("module should register");
+            let locals = PyDict::new(py);
+            locals
+                .set_item("native", &module)
+                .expect("module should enter Python locals");
+            locals
+                .set_item("url", format!("ws://{address}"))
+                .expect("URL should enter Python locals");
+            let code = CString::new(
+                r#"
+import asyncio
+
+async def exercise():
+    connection = await native.ResponsesWebSocketConnection.connect(url)
+    assert type(connection) is native.ResponsesWebSocketConnection
+    await connection.send_text("from-python")
+    assert await connection.recv_text() == "from-server"
+    await connection.close()
+    assert await connection.recv_text() is None
+
+asyncio.run(asyncio.wait_for(exercise(), timeout=5))
+"#,
+            )
+            .expect("Python source should not contain null bytes");
+            py.run(&code, Some(&locals), Some(&locals))
+                .expect("Python WebSocket methods should round trip");
+        });
+
+        runtime
+            .block_on(async { tokio::time::timeout(Duration::from_secs(5), server).await })
+            .expect("server should finish")
+            .expect("server task should not panic");
     }
 }

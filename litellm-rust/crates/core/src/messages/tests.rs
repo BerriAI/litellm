@@ -526,3 +526,43 @@ async fn messages_classifies_a_refused_connection_as_safe_to_fallback() {
 
     assert!(matches!(error, CoreError::Connect(_)));
 }
+
+#[tokio::test]
+async fn messages_classifies_an_established_request_timeout_as_network_error() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+    let addr = listener.local_addr().expect("has an address");
+    let (request_received_tx, request_received_rx) = tokio::sync::oneshot::channel();
+    let (release_server_tx, release_server_rx) = tokio::sync::oneshot::channel();
+
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("accepts request");
+        let request = read_http_request(&mut socket).await;
+        request_received_tx.send(request).expect("reports request");
+        release_server_rx.await.expect("server is released");
+    });
+
+    let error = tokio::time::timeout(
+        Duration::from_secs(2),
+        messages(MessagesRequest {
+            model: "claude-test",
+            body: json!({"model": "claude-test", "max_tokens": 8, "messages": []}),
+            api_key: Some("sk"),
+            api_base: Some(&format!("http://{addr}")),
+            custom_llm_provider: Some("anthropic"),
+            extra_headers: None,
+            timeout: Some(Duration::from_millis(100)),
+        }),
+    )
+    .await
+    .expect("client call completes")
+    .expect_err("established request times out");
+
+    let request = tokio::time::timeout(Duration::from_secs(2), request_received_rx)
+        .await
+        .expect("server observes request")
+        .expect("server reports request");
+    assert!(request.starts_with("POST /v1/messages "), "{request}");
+    release_server_tx.send(()).expect("releases server");
+    server.await.expect("server task completes");
+    assert!(matches!(error, CoreError::Network(_)));
+}

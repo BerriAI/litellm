@@ -295,6 +295,20 @@ async def test_gate_surfaces_an_upstream_failure_without_fallback(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_gate_maps_statusless_upstream_failure_to_500_without_fallback(monkeypatch):
+    _install_fake_bridge_exceptions(monkeypatch)
+    bridge = RaisingAsyncMessages(FakeUpstreamError(0, "request timed out"))
+    litellm.use_litellm_rust(True, amessages=bridge)
+
+    with pytest.raises(APIError) as exc_info:
+        await _gate()
+
+    assert exc_info.value.status_code == 500
+    assert "request timed out" in str(exc_info.value)
+    assert bridge.calls == 1
+
+
+@pytest.mark.asyncio
 async def test_gate_reraises_an_unknown_bridge_failure():
     bridge = RaisingAsyncMessages(RuntimeError("unknown bridge failure"))
     litellm.use_litellm_rust(True, amessages=bridge)

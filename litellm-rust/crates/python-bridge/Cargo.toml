@@ -28,6 +28,7 @@ tokio.workspace = true
 
 [dev-dependencies]
 criterion = "0.8.2"
+tokio-tungstenite.workspace = true
 
 [[bench]]
 name = "serialization"
