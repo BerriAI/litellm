@@ -27,12 +27,19 @@ export interface RoutingDecision {
   escalated?: boolean;
   tier_boundaries?: RoutingDecisionTierBoundaries;
   reasoning_override_min_score?: number;
+  probability_threshold?: number;
+  candidate_probabilities?: Record<string, number>;
+  candidate_costs?: Record<string, number>;
+  qualified_models?: string[];
+  fallback_reason?: string;
+  cached?: boolean;
 }
 
 const ROUTER_TYPE_LABELS: Record<string, string> = {
   complexity: "Auto-Router v2",
   adaptive: "Adaptive router",
   quality: "Quality router",
+  capability: "Capability router",
 };
 
 /**
@@ -96,6 +103,9 @@ const CONSTANT_CAUSE_LABELS: Record<string, string> = {
   default_fallback: "Default model, no route matched",
   classifier_fallback: "Fallback tier, LLM classifier failed",
   default_model_fallback: "Default model, LLM classifier failed",
+  capability_classifier: "Capability classifier",
+  capability_cache: "Cached capability decision",
+  capability_fallback: "Capability fallback",
 };
 
 function describeCause(decision: RoutingDecision): string {
@@ -168,6 +178,12 @@ export function RoutingDecisionCard({
     escalated,
     escalation_keyword: escalationKeyword,
     tier_boundaries: tierBoundaries,
+    probability_threshold: probabilityThreshold,
+    candidate_probabilities: candidateProbabilities,
+    candidate_costs: candidateCosts,
+    qualified_models: qualifiedModels,
+    fallback_reason: fallbackReason,
+    cached,
   } = decision;
 
   // On an override row the score did not decide the tier, so showing it against a
@@ -214,6 +230,25 @@ export function RoutingDecisionCard({
         )}
 
         {routedModel && <Row label="Routed to">{routedModel}</Row>}
+
+        {probabilityThreshold !== undefined && <Row label="Threshold">{Math.round(probabilityThreshold * 100)}%</Row>}
+
+        {candidateProbabilities && Object.keys(candidateProbabilities).length > 0 && (
+          <Row label="Candidates">
+            <span className="space-y-1">
+              {Object.entries(candidateProbabilities).map(([model, probability]) => (
+                <span key={model} className="block">
+                  {model}: {Math.round(probability * 100)}%
+                  {candidateCosts?.[model] !== undefined && ` · $${candidateCosts[model].toFixed(6)}`}
+                  {qualifiedModels?.includes(model) ? " · qualified" : ""}
+                </span>
+              ))}
+            </span>
+          </Row>
+        )}
+
+        {fallbackReason && <Row label="Fallback">{fallbackReason.replaceAll("_", " ")}</Row>}
+        {cached !== undefined && <Row label="Cached">{cached ? "Yes" : "No"}</Row>}
 
         {escalated !== undefined && <Row label="Escalated">{describeEscalation(escalated, escalationKeyword)}</Row>}
 

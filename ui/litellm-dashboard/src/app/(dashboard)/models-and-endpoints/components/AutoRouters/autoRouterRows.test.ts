@@ -42,6 +42,32 @@ const semanticDeployment = {
 };
 
 describe("autoRouterRows", () => {
+  it("classifies a capability router and lists its candidate models", () => {
+    const row = toAutoRouterRow(
+      {
+        model_name: "cost-router",
+        litellm_params: {
+          model: "auto_router/capability_router",
+          capability_router_config: {
+            candidates: [
+              { model: "small", description: "bounded tasks" },
+              { model: "frontier", description: "hard tasks" },
+            ],
+          },
+        },
+        model_info: { id: "cap-1", db_model: true },
+      },
+      0,
+      ADMIN,
+      null,
+    );
+
+    expect(row.kind).toBe("capability");
+    expect(row.typeLabel).toBe("Capability");
+    expect(row.targets).toEqual(["small", "frontier"]);
+    expect(row.canEdit).toBe(true);
+  });
+
   it("classifies a complexity router and unions its tier models as targets", () => {
     const row = toAutoRouterRow(complexityDeployment, 0, ADMIN, null);
 
