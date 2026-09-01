@@ -8144,6 +8144,36 @@ class TestPreemptive401ModeAware:
         assert "www-authenticate" in {k.lower() for k in exc.value.headers}
 
     @pytest.mark.asyncio
+    async def test_duplicate_alias_challenges_when_toolset_allows_one_server(self):
+        from litellm.proxy._experimental.mcp_server import server as server_module
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+
+        west = _make_oauth2_server("shared").model_copy(update={"server_id": "west-id", "server_name": "west"})
+        central = west.model_copy(update={"server_id": "central-id", "server_name": "central"})
+        manager = MCPServerManager()
+        manager.registry.update({west.server_id: west, central.server_id: central})
+
+        with (
+            patch.object(server_module, "global_mcp_server_manager", manager),
+            patch.object(manager, "ensure_oauth_metadata_discovered", new=AsyncMock(side_effect=lambda server: server)),
+            patch.object(manager, "has_user_oauth_token", new=AsyncMock(return_value=False)),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope=self._scope("shared"),
+                mcp_servers=["shared"],
+                oauth2_headers=None,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key"),
+                client_ip=None,
+                allowed_server_ids={"west-id"},
+            )
+
+        assert exc.value.status_code == 401
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "original_path, expected_as_path",
         (

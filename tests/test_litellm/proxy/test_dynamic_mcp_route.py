@@ -109,6 +109,47 @@ async def test_dynamic_mcp_route_resolves_registered_server():
     fake_forward.assert_awaited_once_with("my_server", request)
 
 
+@pytest.mark.asyncio
+async def test_dynamic_mcp_route_forwards_duplicate_alias_to_permission_aware_router():
+    from starlette.responses import Response
+
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.proxy.proxy_server import dynamic_mcp_route
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    manager = MCPServerManager()
+    manager.registry.update(
+        {
+            server_id: MCPServer(
+                server_id=server_id,
+                name="shared",
+                alias="shared",
+                server_name=server_id,
+                url=f"https://{server_id}.example.com/mcp",
+                transport=MCPTransport.http,
+                available_on_public_internet=True,
+            )
+            for server_id in ("west-id", "central-id")
+        }
+    )
+    request = _make_request("/shared/mcp")
+    forward = AsyncMock(return_value=Response(content=b"{}", status_code=200))
+
+    with (
+        patch(_MCP_MANAGER, manager),
+        patch(_PRISMA, new=None),
+        patch(_IS_ACCESS_GROUP, new=AsyncMock(return_value=False)),
+        patch(_FORWARD, new=forward),
+    ):
+        response = await dynamic_mcp_route("shared", request)
+
+    assert response.status_code == 200
+    forward.assert_awaited_once_with("shared", request)
+
+
 # ---------------------------------------------------------------------------
 # 2. Comma-separated list (short-circuits before toolset DB call)
 # ---------------------------------------------------------------------------
@@ -261,6 +302,40 @@ async def test_resolve_mcp_csv_tokens_drops_unknown_and_resolves_access_groups()
         "dev_group",
         "ghost",
     }
+
+
+@pytest.mark.asyncio
+async def test_resolve_mcp_csv_tokens_preserves_duplicate_alias_for_permission_aware_router():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.proxy.proxy_server import _resolve_mcp_csv_tokens
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    manager = MCPServerManager()
+    manager.registry.update(
+        {
+            server_id: MCPServer(
+                server_id=server_id,
+                name="shared",
+                alias="shared",
+                server_name=server_id,
+                url=f"https://{server_id}.example.com/mcp",
+                transport=MCPTransport.http,
+                available_on_public_internet=True,
+            )
+            for server_id in ("west-id", "central-id")
+        }
+    )
+
+    with (
+        patch(_MCP_MANAGER, manager),
+        patch(_IS_ACCESS_GROUP, new=AsyncMock(return_value=False)),
+    ):
+        resolved = await _resolve_mcp_csv_tokens("shared", client_ip=None)
+
+    assert resolved == ["shared"]
 
 
 # ---------------------------------------------------------------------------

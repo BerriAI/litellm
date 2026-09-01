@@ -919,6 +919,27 @@ async def test_scoped_authorize_runs_connect_page_with_sealed_scope():
 
 
 @pytest.mark.asyncio
+async def test_scoped_authorize_rejects_ambiguous_resource_instead_of_minting_unscoped():
+    from unittest.mock import patch
+
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    west = _scoped_mcp_server()
+    central = west.model_copy(update={"server_id": "central-id", "server_name": "central"})
+    manager = MCPServerManager()
+    manager.registry.update({west.server_id: west, central.server_id: central})
+
+    with patch(_MANAGER_PATCH, manager):
+        response = _scoped_authorize(client_id, SCOPED_RESOURCE)
+
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"] == "invalid_target"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "resource, resolves",
     [

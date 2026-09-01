@@ -797,6 +797,190 @@ async def test_validate_db_mcp_server_alias_outside_team_scope_raises_when_regis
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored_permission",
+    [
+        pytest.param({"mcp_servers": ["future-private"]}, id="mcp-servers"),
+        pytest.param(
+            {"mcp_tool_permissions": {"future-private": ["read"]}},
+            id="mcp-tool-permissions",
+        ),
+    ],
+)
+async def test_teamless_non_admin_stale_reference_must_not_rebind_to_future_private_server(
+    monkeypatch, stored_permission
+):
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        MCPRequestHandler,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    west_manager = MCPServerManager()
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        west_manager,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+        lambda: set(),
+    )
+    monkeypatch.setattr(
+        MCPRequestHandler,
+        "_get_mcp_servers_from_access_groups",
+        AsyncMock(return_value=[]),
+    )
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+
+    try:
+        persisted = await validate_key_mcp_servers_against_team(
+            object_permission=stored_permission,
+            team_obj=None,
+            prisma_client=mock_prisma_client,
+            is_proxy_admin=False,
+        )
+    except HTTPException as exc:
+        # Rejecting an unresolved non-admin grant at write time is safe. If it is
+        # preserved for cross-region use instead, runtime must keep it from
+        # binding to a private server later.
+        assert exc.status_code == 403
+        return
+
+    assert persisted == stored_permission
+
+    central_manager = MCPServerManager()
+    central_manager.registry["private-id"] = MCPServer(
+        server_id="private-id",
+        name="future-private",
+        alias="future-private",
+        transport="sse",
+        allow_all_keys=False,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        central_manager,
+    )
+    permission_row = LiteLLM_ObjectPermissionTable(
+        object_permission_id="permission-id",
+        **stored_permission,
+    )
+    auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="key-owner",
+        object_permission=permission_row,
+    )
+    monkeypatch.setattr(
+        MCPRequestHandler,
+        "_get_allowed_mcp_servers_for_team",
+        AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(
+        MCPRequestHandler,
+        "_get_key_access_group_mcp_server_extras",
+        AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(
+        MCPRequestHandler,
+        "_get_allowed_mcp_servers_for_user",
+        AsyncMock(return_value=()),
+    )
+
+    allowed = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+
+    assert allowed == []
+
+
+@pytest.mark.asyncio
+async def test_preserved_tool_permission_alias_must_survive_server_alias_rename(
+    monkeypatch,
+):
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        MCPRequestHandler,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    manager_before_rename = MCPServerManager()
+    manager_before_rename.registry["server-id"] = MCPServer(
+        server_id="server-id",
+        name="old-alias",
+        alias="old-alias",
+        transport="sse",
+        allow_all_keys=True,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        manager_before_rename,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+        lambda: {"server-id"},
+    )
+    monkeypatch.setattr(
+        MCPRequestHandler,
+        "_get_mcp_servers_from_access_groups",
+        AsyncMock(return_value=[]),
+    )
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+    stored_permission = {
+        "mcp_servers": ["server-id"],
+        "mcp_tool_permissions": {"old-alias": ["read"]},
+    }
+
+    persisted = await validate_key_mcp_servers_against_team(
+        object_permission=stored_permission,
+        team_obj=None,
+        prisma_client=mock_prisma_client,
+        is_proxy_admin=False,
+    )
+
+    assert persisted == stored_permission
+
+    manager_after_rename = MCPServerManager()
+    manager_after_rename.registry["server-id"] = MCPServer(
+        server_id="server-id",
+        name="new-alias",
+        alias="new-alias",
+        transport="sse",
+        allow_all_keys=True,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        manager_after_rename,
+    )
+    permission_row = LiteLLM_ObjectPermissionTable(
+        object_permission_id="permission-id",
+        **stored_permission,
+    )
+    auth = UserAPIKeyAuth(api_key="test-key", object_permission=permission_row)
+    monkeypatch.setattr(
+        MCPRequestHandler,
+        "_get_team_object_permission",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        MCPRequestHandler,
+        "_get_user_object_permission",
+        AsyncMock(return_value=None),
+    )
+
+    allowed_tools = await MCPRequestHandler.get_allowed_tools_for_server(
+        server_id="server-id",
+        user_api_key_auth=auth,
+    )
+
+    assert allowed_tools == ["read"]
+
+
+@pytest.mark.asyncio
 @patch(
     "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
     return_value=set(),

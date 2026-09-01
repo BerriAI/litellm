@@ -529,6 +529,58 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
     assert mock_get_tools.await_args.kwargs["list_tools_log_source"] == "responses"
 
 
+@pytest.mark.asyncio
+async def test_get_mcp_tools_duplicate_alias_does_not_fall_through_to_toolset(monkeypatch):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    resolver = MCPServerManager()
+    resolver.registry.update(
+        {
+            server_id: MCPServer(
+                server_id=server_id,
+                name="shared",
+                alias="shared",
+                server_name=server_id,
+                url=f"https://{server_id}.example.com/mcp",
+                transport=MCPTransport.http,
+                available_on_public_internet=True,
+            )
+            for server_id in ("west-id", "central-id")
+        }
+    )
+    west = resolver.registry["west-id"]
+    toolset_lookup = AsyncMock(return_value=types.SimpleNamespace(toolset_id="toolset-id"))
+    manager = types.SimpleNamespace(
+        get_mcp_server_by_name=resolver.get_mcp_server_by_name,
+        resolve_single_target=resolver.resolve_single_target,
+        get_toolset_by_name_cached=toolset_lookup,
+        get_allowed_mcp_servers=AsyncMock(return_value=["west-id"]),
+        get_mcp_servers_from_ids=MagicMock(return_value=[west]),
+    )
+    listing = AsyncMock(return_value=AggregateToolListing(tools=[], outcomes={}))
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        manager,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.server._get_tools_from_mcp_servers",
+        listing,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+
+    await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
+        user_api_key_auth=None,
+        mcp_tools_with_litellm_proxy=[{"type": "mcp", "server_url": "litellm_proxy/mcp/shared"}],
+    )
+
+    assert listing.await_args.kwargs["mcp_servers"] == ["shared"]
+    toolset_lookup.assert_not_awaited()
+
+
 def test_get_parent_request_tags_from_metadata():
     tags = LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(
         {"metadata": {"tags": ["team-a", "prod"]}}
