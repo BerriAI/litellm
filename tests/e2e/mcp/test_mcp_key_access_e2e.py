@@ -30,6 +30,35 @@ def _key(client: McpClient, resources: ResourceManager, *, mcp_servers: list[str
     return key
 
 
+class TestMcpKeyGrantByAlias:
+    @pytest.mark.covers("mcp.list_tools.api_key.alias_grant_persists")
+    def test_alias_grant_persists_verbatim_and_lists_tools(
+        self,
+        client: McpClient,
+        resources: ResourceManager,
+    ) -> None:
+        """A key granted an MCP server by its alias must store the alias, not the
+        resolved server_id: in a shared-DB multi-region deployment each instance
+        derives a different id for the same config server, so only the alias
+        grants access on every region. The same key must still see the server's
+        tools, proving the alias grant is honored at request time."""
+        server_id = register_datadog_mcp(client, resources)
+        client.await_registered(server_id)
+        alias = next(row.alias for row in client.registered_servers() if row.server_id == server_id)
+        assert alias, f"registered server {server_id} has no alias to grant by"
+
+        key = _key(client, resources, mcp_servers=[alias])
+
+        stored = client.proxy.key_info(key).object_permission
+        assert stored is not None and stored.mcp_servers == [alias], (
+            f"alias grant was rewritten before persisting (expected [{alias!r}]): "
+            f"{stored.mcp_servers if stored else None}. A stored server_id is region-local "
+            f"and breaks the grant on every other instance sharing this database"
+        )
+
+        _ = client.await_tool(key, server_id, SEARCH_LOGS_TOOL)
+
+
 class TestMcpKeyWithoutAccessIsDenied:
     @pytest.mark.covers("mcp.list_tools.api_key.denied_without_permission")
     def test_list_tools_denied_without_permission(
