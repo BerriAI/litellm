@@ -8694,6 +8694,8 @@ class ProviderConfigManager:
             return litellm.LiteLLMProxyResponsesAPIConfig()
         elif litellm.LlmProviders.VOLCENGINE == provider:
             return litellm.VolcEngineResponsesAPIConfig()
+        elif litellm.LlmProviders.DASHSCOPE == provider:
+            return litellm.DashScopeResponsesAPIConfig()
         elif litellm.LlmProviders.MANUS == provider:
             return litellm.ManusResponsesAPIConfig()
         elif litellm.LlmProviders.PERPLEXITY == provider:

@@ -31,6 +31,7 @@ EXCLUDED_GUARD_ONLY_VARS = {
 EXCLUDED_ROLLOUT_FLAGS = {
     "LITELLM_USE_RUST_OCR",
     "LITELLM_RUST",
+    "DASHSCOPE_RESPONSES_API_BASE",
 }
 
 # Internal infrastructure tuning parameters for streaming/queue management
