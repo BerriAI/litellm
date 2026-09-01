@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch, ANY
 import litellm.experimental_mcp_client.client as mcp_client_module
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.types.mcp import MCPAuth, MCPTransport
-from mcp.types import Tool as MCPTool, CallToolResult as MCPCallToolResult
+from mcp.types import Tool as MCPTool, CallToolResult as MCPCallToolResult, ListToolsResult
 
 
 def test_mcp_client_uses_configurable_default_timeout():
@@ -174,9 +174,7 @@ class TestMCPClientUnitTests:
                 },
             )
         ]
-        mock_result = MagicMock()
-        mock_result.tools = mock_tools
-        mock_session_instance.list_tools.return_value = mock_result
+        mock_session_instance.list_tools.return_value = ListToolsResult(tools=mock_tools)
 
         client = MCPClient("http://example.com")
         result = await client.list_tools()

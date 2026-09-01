@@ -42,7 +42,7 @@ async def collect_pages(
         return items
     if pages_read >= MCP_LIST_MAX_PAGES:
         verbose_logger.warning(
-            "MCP %s from %s still paginating after %s pages (LITELLM_MCP_LIST_MAX_PAGES); returning what was read",
+            "MCP %s from %s still paginating after %s pages (MCP_LIST_MAX_PAGES); returning what was read",
             method,
             server,
             pages_read,

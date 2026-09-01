@@ -79,4 +79,4 @@ async def test_collect_pages_honors_the_page_cap(monkeypatch, caplog):
 
     assert len(upstream.cursors_seen) == 3
     assert len(tools) == 30
-    assert any("LITELLM_MCP_LIST_MAX_PAGES" in record.getMessage() for record in caplog.records)
+    assert any("MCP_LIST_MAX_PAGES" in record.getMessage() for record in caplog.records)
