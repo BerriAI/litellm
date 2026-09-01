@@ -1,7 +1,20 @@
 import { toast } from "@/lib/toast";
-import { Model, modelCreateCall } from "../networking";
+import { credentialListCall, Model, modelCreateCall } from "../networking";
 import { provider_map } from "../provider_info_helpers";
 import { ptuPickerToUtcIso } from "../../utils/ptuDatetime";
+
+const assertCredentialAccessible = async (credentialName: unknown, accessToken: string) => {
+  if (typeof credentialName !== "string" || credentialName === "") {
+    throw new Error("litellm_credential_name in LiteLLM Params must be a non-empty string");
+  }
+  const response = await credentialListCall(accessToken);
+  const accessibleNames = (response?.credentials ?? []).map(
+    (credential: { credential_name: string }) => credential.credential_name,
+  );
+  if (!accessibleNames.includes(credentialName)) {
+    throw new Error(`Credential '${credentialName}' does not match any credential you have access to`);
+  }
+};
 
 export const prepareModelAddRequest = async (formValues: Record<string, any>, accessToken: string, form: any) => {
   try {
@@ -127,12 +140,16 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
           if (value && value != undefined) {
             try {
               litellmExtraParams = JSON.parse(value);
-              if ("litellm_credential_name" in litellmExtraParams && formValues.litellm_credential_name) {
-                delete litellmExtraParams.litellm_credential_name;
-              }
             } catch (error) {
               toast.fromError("Failed to parse LiteLLM Extra Params: " + error);
               throw new Error("Failed to parse litellm_extra_params: " + error);
+            }
+            if ("litellm_credential_name" in litellmExtraParams) {
+              if (formValues.litellm_credential_name) {
+                delete litellmExtraParams.litellm_credential_name;
+              } else {
+                await assertCredentialAccessible(litellmExtraParams.litellm_credential_name, accessToken);
+              }
             }
             for (const [key, value] of Object.entries(litellmExtraParams)) {
               litellmParamsObj[key] = value;

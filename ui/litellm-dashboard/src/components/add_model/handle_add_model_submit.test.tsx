@@ -1,7 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareModelAddRequest } from "./handle_add_model_submit";
+import { credentialListCall } from "../networking";
+
+vi.mock("../networking", () => ({
+  credentialListCall: vi.fn(),
+  modelCreateCall: vi.fn(),
+}));
+
+const credentialListCallMock = vi.mocked(credentialListCall);
 
 describe("prepareModelAddRequest", () => {
+  beforeEach(() => {
+    credentialListCallMock.mockReset();
+  });
   it("returns deployment data for the most basic form", async () => {
     const formValues = {
       model_mappings: [
@@ -74,7 +85,11 @@ describe("prepareModelAddRequest", () => {
     expect(deployment.litellmParamsObj.timeout).toBe(5);
   });
 
-  it("keeps litellm_credential_name from LiteLLM Params JSON when no credential is selected", async () => {
+  it("keeps litellm_credential_name from LiteLLM Params JSON when it matches an accessible credential", async () => {
+    credentialListCallMock.mockResolvedValue({
+      success: true,
+      credentials: [{ credential_name: "from-json", credential_values: {}, credential_info: {} }],
+    });
     const formValues = {
       model_mappings: [
         {
@@ -96,5 +111,30 @@ describe("prepareModelAddRequest", () => {
     const [deployment] = deployments!;
     expect(deployment.litellmParamsObj.litellm_credential_name).toBe("from-json");
     expect(deployment.litellmParamsObj.timeout).toBe(5);
+    expect(credentialListCallMock).toHaveBeenCalledWith("token");
+  });
+
+  it("rejects a JSON litellm_credential_name that matches no accessible credential", async () => {
+    credentialListCallMock.mockResolvedValue({
+      success: true,
+      credentials: [{ credential_name: "someone-elses-credential", credential_values: {}, credential_info: {} }],
+    });
+    const formValues = {
+      model_mappings: [
+        {
+          public_name: "Public Model",
+          litellm_model: "litellm/public",
+        },
+      ],
+      model_name: "custom-model-name",
+      litellm_extra_params: JSON.stringify({
+        litellm_credential_name: "from-json",
+      }),
+      litellm_credential_name: null,
+    };
+
+    const deployments = await prepareModelAddRequest({ ...formValues }, "token", null);
+
+    expect(deployments).toBeUndefined();
   });
 });
