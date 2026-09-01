@@ -111,17 +111,17 @@ describe("ModelsAndEndpointsPage", () => {
   // POST /model/new 403s a proxy_admin_viewer, so the form's tab must not render for one.
   it("hides the Add Model tab for a view-only admin session", () => {
     mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
-    const { getByRole, queryByRole } = renderPage();
-    expect(queryByRole("tab", { name: "Add Model" })).not.toBeInTheDocument();
-    expect(getByRole("tab", { name: "All Models" })).toBeInTheDocument();
+    renderPage();
+    expect(screen.queryByRole("tab", { name: "Add Model" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "All Models" })).toBeInTheDocument();
   });
 
   // Read parity: the Auto-Routers list stays reachable for a view-only admin; only the
   // create affordance inside it is withheld, which AutoRoutersTabPanel decides.
   it("keeps the Auto-Routers tab for a view-only admin session", () => {
     mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
-    const { getByRole } = renderPage();
-    expect(getByRole("tab", { name: /Auto-Routers/ })).toBeInTheDocument();
+    renderPage();
+    expect(screen.getByRole("tab", { name: /Auto-Routers/ })).toBeInTheDocument();
   });
 
   // Auto-routers are excluded from the All Models table, so this tab is their home: the only
