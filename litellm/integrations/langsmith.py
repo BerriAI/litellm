@@ -1,6 +1,7 @@
 #### What this does ####
 #    On success, logs events to Langsmith
 import asyncio
+import json
 import os
 import random
 import traceback
@@ -424,8 +425,8 @@ class LangsmithLogger(CustomBatchLogger):
                 verbose_logger.debug("[LANGSMITH MOCK] Mock mode enabled - API calls will be intercepted")
             response: Final = await self.async_httpx_client.post(
                 url=url,
-                json={"post": elements_to_log},
-                headers=headers,
+                content=json.dumps({"post": elements_to_log}, default=str, allow_nan=False),
+                headers={**headers, "Content-Type": "application/json"},
             )
             response.raise_for_status()
 
