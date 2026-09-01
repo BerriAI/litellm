@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, NoReturn, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, runtime_checkable
 
 import httpx
 
@@ -65,22 +65,29 @@ class RouterVectorStoreEmbeddingExecutor:
     router: Router
     metadata: Mapping[str, object]
 
+    def _embedding_kwargs(self, configuration: Mapping[str, object]) -> dict[str, object]:
+        configured_metadata: Final = configuration.get("metadata")
+        metadata: Final = {
+            **(configured_metadata if isinstance(configured_metadata, Mapping) else {}),
+            **self.metadata,
+        }
+        return {
+            **{key: value for key, value in configuration.items() if key not in ("input", "metadata", "model")},
+            "metadata": metadata,
+        }
+
     def embed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
-        if configuration:
-            return LiteLLMVectorStoreEmbeddingExecutor().embed(model, query, configuration)
         return self.router.embedding(  # pyright: ignore[reportUnknownMemberType]  # Router embedding input retains a legacy untyped list
             model=model,
             input=[query],  # mutable-ok: Router embedding requires a mutable input list
-            metadata=dict(self.metadata),  # mutable-ok: Router metadata requires a concrete dict
+            **self._embedding_kwargs(configuration),  # pyright: ignore[reportArgumentType]  # provider kwargs are intentionally dynamic
         )
 
     async def aembed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
-        if configuration:
-            return await LiteLLMVectorStoreEmbeddingExecutor().aembed(model, query, configuration)
         return await self.router.aembedding(  # pyright: ignore[reportUnknownMemberType]  # Router embedding input retains a legacy untyped list
             model=model,
             input=[query],  # mutable-ok: Router embedding requires a mutable input list
-            metadata=dict(self.metadata),  # mutable-ok: Router metadata requires a concrete dict
+            **self._embedding_kwargs(configuration),  # pyright: ignore[reportArgumentType]  # provider kwargs are intentionally dynamic
         )
 
 

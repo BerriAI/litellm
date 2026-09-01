@@ -97,14 +97,53 @@ class TestRouterEmbeddingIntegration:
             metadata={"user_api_key_team_id": "team-a"},
         )
 
-        with patch("litellm.embedding", return_value=response) as explicit_embedding:
-            assert router_executor.embed("openai/model", "query", {"api_key": "store-key"}) is response
-        explicit_embedding.assert_called_once_with(model="openai/model", input=["query"], api_key="store-key")
-        mock_router.embedding.assert_called_once()
+        alias_router = Router(
+            model_list=[
+                {
+                    "model_name": "team-alias",
+                    "litellm_params": {
+                        "model": "openai/text-embedding-3-small",
+                        "api_key": "deployment-key",
+                    },
+                }
+            ]
+        )
+        alias_executor = RouterVectorStoreEmbeddingExecutor(
+            router=alias_router,
+            metadata={"user_api_key_team_id": "team-a"},
+        )
+        explicit_config = {
+            "api_base": "https://embedding.example/v1",
+            "api_key": "store-key",
+            "metadata": {
+                "configured": True,
+                "user_api_key_team_id": "untrusted-team",
+            },
+            "model": "untrusted-model",
+        }
 
-        with patch("litellm.aembedding", new=AsyncMock(return_value=response)) as explicit_aembedding:
-            assert await router_executor.aembed("openai/model", "query", {"api_key": "store-key"}) is response
-        explicit_aembedding.assert_awaited_once_with(model="openai/model", input=["query"], api_key="store-key")
+        with (
+            patch("litellm.embedding", return_value=response) as explicit_embedding,
+            patch("litellm.aembedding", new=AsyncMock(return_value=response)) as explicit_aembedding,
+        ):
+            assert alias_executor.embed("team-alias", "sync query", explicit_config) is response
+            assert await alias_executor.aembed("team-alias", "async query", explicit_config) is response
+
+        sync_kwargs = explicit_embedding.call_args.kwargs
+        assert sync_kwargs["model"] == "openai/text-embedding-3-small"
+        assert sync_kwargs["input"] == ["sync query"]
+        assert sync_kwargs["api_base"] == "https://embedding.example/v1"
+        assert sync_kwargs["api_key"] == "store-key"
+        assert sync_kwargs["metadata"]["configured"] is True
+        assert sync_kwargs["metadata"]["user_api_key_team_id"] == "team-a"
+
+        async_kwargs = explicit_aembedding.await_args.kwargs
+        assert async_kwargs["model"] == "openai/text-embedding-3-small"
+        assert async_kwargs["input"] == ["async query"]
+        assert async_kwargs["api_base"] == "https://embedding.example/v1"
+        assert async_kwargs["api_key"] == "store-key"
+        assert async_kwargs["metadata"]["configured"] is True
+        assert async_kwargs["metadata"]["user_api_key_team_id"] == "team-a"
 
     def test_embedding_with_deployment_specific_headers(self):
         """
