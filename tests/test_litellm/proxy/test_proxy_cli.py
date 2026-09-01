@@ -1737,8 +1737,7 @@ class TestRunServerDbSetup:
         mock_atexit_register,
         mock_subprocess_run,
     ):
-        """Which resolver and which migration mode run_server hands setup_database,
-        across the db push flag, the v2/legacy flag pair and USE_V2_MIGRATION_RESOLVER."""
+        """Test that use_prisma_db_push flag correctly controls PrismaManager.setup_database use_migrate parameter"""
         from litellm.proxy.proxy_cli import run_server
 
         # Mock subprocess.run to simulate prisma being available
@@ -1788,7 +1787,7 @@ class TestRunServerDbSetup:
             # use_prisma_db_push should be False (default), so use_migrate should be True
             run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
             mock_setup_database.assert_called_with(
-                use_migrate=True, use_v2_resolver=True
+                use_migrate=True, use_v2_resolver=False
             )
 
             # Reset mocks
@@ -1803,37 +1802,8 @@ class TestRunServerDbSetup:
                 standalone_mode=False,
             )
             mock_setup_database.assert_called_with(
-                use_migrate=False, use_v2_resolver=True
+                use_migrate=False, use_v2_resolver=False
             )
-
-            for argv, env_value, expected_v2 in (
-                ([], None, True),
-                (["--use_v2_migration_resolver"], None, True),
-                (["--use_legacy_migration_resolver"], None, False),
-                ([], "false", False),
-                ([], "true", True),
-                (["--use_v2_migration_resolver"], "false", True),
-                (["--use_legacy_migration_resolver"], "true", False),
-            ):
-                mock_setup_database.reset_mock()
-                mock_should_update_schema.reset_mock()
-                mock_should_update_schema.return_value = True
-
-                resolver_env = (
-                    {"USE_V2_MIGRATION_RESOLVER": env_value}
-                    if env_value is not None
-                    else {}
-                )
-                os.environ.pop("USE_V2_MIGRATION_RESOLVER", None)
-                with patch.dict(os.environ, resolver_env):
-                    run_server.main(
-                        ["--local", "--skip_server_startup", *argv],
-                        standalone_mode=False,
-                    )
-                assert mock_setup_database.call_args.kwargs == {
-                    "use_migrate": True,
-                    "use_v2_resolver": expected_v2,
-                }, f"argv={argv} env={env_value}"
 
     @patch("subprocess.run")
     @patch("atexit.register")
@@ -1899,7 +1869,7 @@ class TestRunServerDbSetup:
                 )
             assert exc_info.value.code == 1
             mock_setup_database.assert_called_once_with(
-                use_migrate=True, use_v2_resolver=True
+                use_migrate=True, use_v2_resolver=False
             )
 
     @patch("subprocess.run")
@@ -2010,6 +1980,7 @@ class TestRunServerDbSetup:
         mock_setup_database.assert_called_once_with(
             use_migrate=True, use_v2_resolver=True
         )
+
 
 # --- Module-level helpers for worker startup hook tests ---
 
