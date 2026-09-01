@@ -737,8 +737,8 @@ def _check_allowed_routes_caller_permission(
 
 
 def _is_safe_preset_route_transition(
-    incoming_allowed_routes: list | None,
-    existing_allowed_routes: list | None,
+    incoming_allowed_routes: Sequence[str] | None,
+    existing_allowed_routes: Sequence[str] | None,
 ) -> bool:
     """
     True when every route on BOTH sides is a safe `key_type` preset bucket
@@ -748,7 +748,7 @@ def _is_safe_preset_route_transition(
     """
     return all(
         route in _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS
-        for route in (*(incoming_allowed_routes or []), *(existing_allowed_routes or []))
+        for route in (*(incoming_allowed_routes or ()), *(existing_allowed_routes or ()))
     )
 
 
