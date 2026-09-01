@@ -7,13 +7,17 @@ on:
       - litellm_internal_staging
       - litellm_oss_staging
       - "litellm_**"
+  push:
+    branches:
+      - main
+      - litellm_internal_staging
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   code-quality:
@@ -52,6 +56,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-uv-
 
+      - name: Cache the Rust build
+        uses: ./.github/actions/cache-cargo-build
+
       - name: Install dependencies
         run: uv sync --frozen --all-groups --all-extras
 
@@ -60,6 +67,12 @@ jobs:
 
       - name: check_provider_folders_documented
         run: uv run --no-sync python ./tests/code_coverage_tests/check_provider_folders_documented.py
+
+      - name: check_prisma_binary_cache
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_prisma_binary_cache.py
+
+      - name: check_workflow_startup_safety
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_workflow_startup_safety.py
 
       - name: router_code_coverage
         run: uv run --no-sync python ./tests/code_coverage_tests/router_code_coverage.py
@@ -117,6 +130,9 @@ jobs:
 
       - name: check_e2e_no_raw_requests
         run: uv run --no-sync python ./tests/code_coverage_tests/check_e2e_no_raw_requests.py
+
+      - name: check_migrations_no_data_rewrites
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_migrations_no_data_rewrites.py
 
       - name: memory_test
         run: uv run --no-sync python ./tests/code_coverage_tests/memory_test.py

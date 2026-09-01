@@ -52,7 +52,7 @@ locals {
     "/queue/chat/*",
     "/v1beta/*",
     "/interactions/*",
-    "/anthropic/*", "/azure/*", "/azure_ai/*", "/aws/*", "/bedrock/*",
+    "/anthropic/*", "/azure/*", "/azure_ai/*", "/aws/*", "/bedrock/*", "/comprehendmedical*",
     "/cohere/*", "/gemini/*", "/google/*",
     "/vertex_ai/*", "/vertex-ai/*",
     "/assemblyai/*", "/eu.assemblyai/*",

@@ -139,6 +139,59 @@ is false the chart uses the provided name, or the namespace `default` SA.
 {{- end -}}
 
 {{/*
+ServiceAccount name for the migrations Job.
+
+The Job is a pre-install / pre-upgrade hook, so it is created before the
+chart's ordinary resources. A ServiceAccount the chart creates is one of
+those ordinary resources, which makes borrowing the backend name a cycle:
+the hook pod is rejected because the account does not exist yet. So when
+`serviceAccounts.backend.create` is true the Job falls back to the namespace
+`default` account unless the operator names one that already exists. With
+`create` false the backend name is either an operator-supplied existing
+account or `default`, both of which are safe for the hook, so the Job keeps
+sharing it.
+
+`migrationJob.serviceAccountName` always wins when set, which is how a Job
+that needs credentials of its own (IRSA / Workload Identity for IAM database
+auth) gets them.
+*/}}
+{{- define "litellm.migrations.serviceAccountName" -}}
+{{- if .Values.migrationJob.serviceAccountName -}}
+{{ .Values.migrationJob.serviceAccountName }}
+{{- else if .Values.serviceAccounts.backend.create -}}
+default
+{{- else -}}
+{{ include "litellm.backend.serviceAccountName" . }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Extra pod labels for a component's Deployment, validated against its selector.
+
+Invoke with a dict:
+  (dict "podLabels" .Values.gateway.podLabels "componentName" "gateway")
+
+The three selector keys are also emitted on the pod template, so a podLabels
+entry reusing one renders a duplicate YAML key whose later value wins. That
+leaves the pod template no longer matching the (immutable) selector and the
+apiserver rejects the Deployment. Fail at template time naming the key
+instead, so the operator gets the reason here rather than an opaque
+`selector does not match template labels` from the apiserver.
+
+The migrations Job takes podLabels unvalidated: a Job's selector is generated
+by the controller rather than declared, so nothing there can collide.
+*/}}
+{{- define "litellm.podLabels" -}}
+{{- $componentName := .componentName -}}
+{{- range $key, $value := .podLabels }}
+{{- if has $key (list "app.kubernetes.io/name" "app.kubernetes.io/instance" "app.kubernetes.io/component") }}
+{{- fail (printf "%s.podLabels cannot set %s: it is part of the Deployment's immutable selector" $componentName $key) }}
+{{- end }}
+{{- end }}
+{{- toYaml .podLabels }}
+{{- end -}}
+
+{{/*
 Master-key + database + redis env block — shared by gateway, backend, and the
 migrations Job.
 
@@ -160,18 +213,21 @@ whenever the password contains a URL-reserved character (@, /, ?, %, +,
 
 When `database.writer.useIAMAuth: true`, the chart injects
 IAM_TOKEN_DB_AUTH=true and omits DATABASE_PASSWORD — the entrypoint mints
-the URL from DATABASE_HOST/PORT/USER/NAME plus a short-lived IAM token
-instead of a static password.
+the URL from DATABASE_HOST/PORT/USER/NAME plus a short-lived AWS RDS IAM
+token instead of a static password. `database.writer.useAzureEntraAuth: true`
+does the same with AZURE_POSTGRESQL_AUTH=true and a Microsoft Entra ID token,
+for Azure Database for PostgreSQL. The two are mutually exclusive.
 
 The read replica is opt-in via `database.reader.host`. The chart emits
 DATABASE_HOST_READ_REPLICA / DATABASE_PORT_READ_REPLICA /
 DATABASE_NAME_READ_REPLICA (+ DATABASE_SCHEMA_READ_REPLICA) for both auth
 modes, plus DATABASE_USER_READ_REPLICA / DATABASE_PASSWORD_READ_REPLICA for
-password auth. When `database.reader.useIAMAuth: true` it omits
+password auth. When `database.reader.useIAMAuth: true` (or
+`database.reader.useAzureEntraAuth: true`) it omits
 DATABASE_PASSWORD_READ_REPLICA and the entrypoint mints the reader URL the
-same way. Reader IAM only takes effect when the writer also uses IAM auth
-(the proxy gates URL minting on IAM_TOKEN_DB_AUTH, which only the writer
-sets).
+same way. Reader token auth only takes effect when the writer uses the same
+token source, since the proxy gates URL minting on the single global
+IAM_TOKEN_DB_AUTH / AZURE_POSTGRESQL_AUTH toggle that only the writer sets.
 */}}
 {{- define "litellm.serverEnv" -}}
 {{- $root := .root -}}
@@ -201,8 +257,14 @@ sets).
 - name: DATABASE_SCHEMA
   value: {{ .schema | quote }}
 {{- end }}
+{{- if and .useIAMAuth .useAzureEntraAuth }}
+{{- fail "database.writer.useIAMAuth and database.writer.useAzureEntraAuth are mutually exclusive: the database password can only come from one token source" }}
+{{- end }}
 {{- if .useIAMAuth }}
 - name: IAM_TOKEN_DB_AUTH
+  value: "true"
+{{- else if .useAzureEntraAuth }}
+- name: AZURE_POSTGRESQL_AUTH
   value: "true"
 {{- else }}
 - name: DATABASE_PASSWORD
@@ -217,6 +279,9 @@ sets).
 {{- if and .useIAMAuth (not $root.Values.database.writer.useIAMAuth) }}
 {{- fail "database.reader.useIAMAuth requires database.writer.useIAMAuth: true (the proxy gates IAM URL minting on IAM_TOKEN_DB_AUTH, which is only set by the writer)" }}
 {{- end }}
+{{- if and .useAzureEntraAuth (not $root.Values.database.writer.useAzureEntraAuth) }}
+{{- fail "database.reader.useAzureEntraAuth requires database.writer.useAzureEntraAuth: true (the proxy gates Entra URL minting on AZURE_POSTGRESQL_AUTH, which is only set by the writer)" }}
+{{- end }}
 - name: DATABASE_HOST_READ_REPLICA
   value: {{ .host | quote }}
 - name: DATABASE_PORT_READ_REPLICA
@@ -227,7 +292,7 @@ sets).
 - name: DATABASE_SCHEMA_READ_REPLICA
   value: {{ .schema | quote }}
 {{- end }}
-{{- if .useIAMAuth }}
+{{- if or .useIAMAuth .useAzureEntraAuth }}
 {{- if .passwordSecret.name }}
 - name: DATABASE_USER_READ_REPLICA
   valueFrom:

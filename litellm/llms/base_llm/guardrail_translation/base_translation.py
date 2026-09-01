@@ -1,8 +1,11 @@
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 if TYPE_CHECKING:
+    from fastapi import HTTPException
+
     from litellm.integrations.custom_guardrail import (
         CustomGuardrail,
         ModifyResponseException,
@@ -36,7 +39,7 @@ class BaseTranslation(ABC):
     @staticmethod
     def transform_user_api_key_dict_to_metadata(
         user_api_key_dict: Any | None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Transform user_api_key_dict to a metadata dict with prefixed keys.
 
@@ -59,7 +62,7 @@ class BaseTranslation(ABC):
             return {}
 
         # Transform keys to be prefixed with 'user_api_key_'
-        transformed = {}
+        transformed: Final = {}
         for key, value in user_dict.items():
             # Skip None values and internal fields
             if value is None or key.startswith("_"):
@@ -73,6 +76,31 @@ class BaseTranslation(ABC):
 
         return transformed
 
+    @staticmethod
+    def merge_user_api_key_metadata_into_request(
+        request_data: dict[str, Any],  # mutable-ok: proxy hooks share and mutate the request payload dict in place
+        user_api_key_dict: Optional["UserAPIKeyAuth"],
+    ) -> None:
+        """
+        Add the prefixed ``user_api_key_*`` metadata to the request's resolved
+        metadata bucket without overwriting existing keys.
+
+        Writes must go through ``get_or_create_metadata_bucket``: creating a
+        ``litellm_metadata`` key on a route whose bucket is ``metadata`` (chat
+        completions) flips the bucket for every later metadata write, and spend
+        logging never sees those writes (e.g. guardrail_information).
+        """
+        from litellm.litellm_core_utils.core_helpers import (
+            get_or_create_metadata_bucket,
+        )
+
+        user_metadata: Final = BaseTranslation.transform_user_api_key_dict_to_metadata(user_api_key_dict)
+        if not user_metadata:
+            return
+        _, metadata_bucket = get_or_create_metadata_bucket(request_data)
+        for key, value in user_metadata.items():
+            metadata_bucket.setdefault(key, value)
+
     @abstractmethod
     async def process_input_messages(
         self,
@@ -85,7 +113,6 @@ class BaseTranslation(ABC):
 
         Note: user_api_key_dict metadata should be available in the data dict.
         """
-        pass
 
     @abstractmethod
     async def process_output_response(
@@ -105,11 +132,10 @@ class BaseTranslation(ABC):
             litellm_logging_obj: Optional logging object
             user_api_key_dict: User API key metadata (passed separately since response doesn't contain it)
         """
-        pass
 
     async def process_output_streaming_response(
         self,
-        responses_so_far: List[Any],
+        responses_so_far: list[Any],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
@@ -149,7 +175,27 @@ class BaseTranslation(ABC):
         """
         return None
 
-    def get_structured_messages(self, data: dict) -> List["AllMessageValues"] | None:
+    def build_stream_error_items(
+        self,
+        exc: "HTTPException",
+        responses_so_far: Sequence[Any] | None = None,
+    ) -> Sequence[Any] | None:
+        """
+        Build the stream items that surface a guardrail HTTPException (a block
+        with the default exception-on-block config, or a failed scan) after the
+        response has already started streaming, in this endpoint's wire format.
+
+        Called only once chunks have been sent: the HTTP status is gone, so the
+        failure must travel as an in-stream error frame. ``responses_so_far``
+        holds the chunks the client has already received, for formats whose
+        error frame continues the stream (e.g. sequence numbers).
+
+        Returns None when the format has no in-stream error frame; the caller
+        then re-raises ``exc``. Override in endpoint subclasses.
+        """
+        return None
+
+    def get_structured_messages(self, data: dict) -> list["AllMessageValues"] | None:
         """
         Convert request data to OpenAI-spec structured messages.
 
@@ -159,7 +205,7 @@ class BaseTranslation(ABC):
         """
         return None
 
-    def extract_request_tool_names(self, data: dict) -> List[str]:
+    def extract_request_tool_names(self, data: dict) -> list[str]:
         """
         Extract tool names from the request body for allowlist/policy checks.
         Override in tool-capable handlers; default returns [].

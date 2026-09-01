@@ -4,6 +4,9 @@ Unit tests for AttachmentRegistry - tests policy attachment matching.
 Tests the main entry point: get_attached_policies()
 """
 
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from litellm.proxy.policy_engine.attachment_registry import (
@@ -389,3 +392,75 @@ class TestAttachmentRegistrySingleton:
         registry1 = get_attachment_registry()
         registry2 = get_attachment_registry()
         assert registry1 is registry2
+
+
+def _make_db_attachment_row(attachment_id="att-1", policy_name="db-policy", scope=None, teams=None):
+    row = MagicMock()
+    row.attachment_id = attachment_id
+    row.policy_name = policy_name
+    row.scope = scope
+    row.teams = teams or []
+    row.keys = []
+    row.models = []
+    row.tags = []
+    row.created_at = datetime.now(timezone.utc)
+    row.updated_at = datetime.now(timezone.utc)
+    row.created_by = None
+    row.updated_by = None
+    return row
+
+
+def _prisma_with_attachment_rows(rows):
+    prisma = MagicMock()
+    prisma.db.litellm_policyattachmenttable.find_many = AsyncMock(return_value=rows)
+    return prisma
+
+
+class TestConfigAttachmentsPreservedAcrossDbSync:
+    """Config-defined attachments must survive sync_attachments_from_db (regression for issue #35255)."""
+
+    @pytest.mark.asyncio
+    async def test_sync_with_empty_db_preserves_config_attachments(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments([{"policy": "config-policy", "scope": "*"}])
+
+        await registry.sync_attachments_from_db(_prisma_with_attachment_rows([]))
+
+        context = PolicyMatchContext(team_alias="any-team", key_alias="any-key", model="gpt-5.2")
+        assert registry.get_attached_policies(context) == ["config-policy"]
+
+    @pytest.mark.asyncio
+    async def test_sync_merges_db_attachments_with_config_attachments(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments([{"policy": "config-policy", "scope": "*"}])
+        db_row = _make_db_attachment_row(policy_name="db-policy", teams=["db-team"])
+
+        await registry.sync_attachments_from_db(_prisma_with_attachment_rows([db_row]))
+
+        assert len(registry.get_all_attachments()) == 2
+        assert len(registry.get_config_attachments()) == 1
+        context = PolicyMatchContext(team_alias="db-team", key_alias="k", model="gpt-5.2")
+        attached = registry.get_attached_policies(context)
+        assert "config-policy" in attached
+        assert "db-policy" in attached
+
+    @pytest.mark.asyncio
+    async def test_repeated_syncs_do_not_duplicate_config_attachments(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments([{"policy": "config-policy", "scope": "*"}])
+
+        await registry.sync_attachments_from_db(_prisma_with_attachment_rows([]))
+        await registry.sync_attachments_from_db(_prisma_with_attachment_rows([]))
+
+        assert len(registry.get_all_attachments()) == 1
+
+    @pytest.mark.asyncio
+    async def test_clear_removes_config_snapshot_so_sync_does_not_resurrect(self):
+        registry = AttachmentRegistry()
+        registry.load_attachments([{"policy": "config-policy", "scope": "*"}])
+
+        registry.clear()
+        await registry.sync_attachments_from_db(_prisma_with_attachment_rows([]))
+
+        assert registry.get_all_attachments() == []
+        assert registry.get_config_attachments() == ()
