@@ -18,6 +18,7 @@ from litellm.proxy._types import (
     ReconcileOutcome,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     ModelManagementAuthChecks,
     _get_team_deployments,
@@ -290,6 +291,17 @@ class TestModelManagementAuthChecks:
             litellm_params=LiteLLM_Params(model="test_model", litellm_credential_name="shared-credential"),
             user_api_key_dict=self.team_admin_user,
             existing_litellm_params=LiteLLM_Params(model="test_model", litellm_credential_name="shared-credential"),
+        )
+        assert result is True
+
+    def test_can_user_attach_credential_unchanged_encrypted_existing_allows_any_role(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+        encrypted_name = encrypt_value_helper(value="shared-credential")
+        assert encrypted_name != "shared-credential"
+        result = ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=LiteLLM_Params(model="test_model", litellm_credential_name="shared-credential"),
+            user_api_key_dict=self.team_admin_user,
+            existing_litellm_params=LiteLLM_Params(model="test_model", litellm_credential_name=encrypted_name),
         )
         assert result is True
 

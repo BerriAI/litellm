@@ -54,7 +54,10 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
 )
-from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
@@ -1478,10 +1481,15 @@ class ModelManagementAuthChecks:
     ) -> Literal[True]:
         if litellm_params is None or litellm_params.litellm_credential_name is None:
             return True
-        if existing_litellm_params is not None and (
-            litellm_params.litellm_credential_name == existing_litellm_params.litellm_credential_name
-        ):
-            return True
+        if existing_litellm_params is not None and existing_litellm_params.litellm_credential_name is not None:
+            existing_credential_name: Final = decrypt_value_helper(
+                value=existing_litellm_params.litellm_credential_name,
+                key="litellm_credential_name",
+                exception_type="debug",
+                return_original_value=True,
+            )
+            if litellm_params.litellm_credential_name == existing_credential_name:
+                return True
         if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
             return True
         raise ProxyException(
