@@ -1123,6 +1123,7 @@ model LiteLLM_DailyGuardrailUsageUnits {
   api_key      String   // hashed virtual key; empty string when unknown
   usage_unit   String   // provider counter name, e.g. Bedrock's contentPolicyUnits
   units        BigInt   @default(0)
+  cost         Float?   // USD billed for these units; null when any contributing increment was unpriced
   created_at   DateTime @default(now())
   updated_at   DateTime @updatedAt
 

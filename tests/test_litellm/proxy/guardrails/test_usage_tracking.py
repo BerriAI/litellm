@@ -30,6 +30,8 @@ def _payload(
     api_key: str = "hashed-key-1",
     usage: dict[str, Any] | None = None,
     guardrail_status: str = "success",
+    cost_by_unit: dict[str, Any] | None = None,
+    cost_in_spend: bool | None = None,
 ) -> dict[str, Any]:
     entry: dict[str, Any] = {
         "guardrail_id": "bedrock-guard",
@@ -37,6 +39,10 @@ def _payload(
     }
     if usage is not None:
         entry["guardrail_usage"] = usage
+    if cost_by_unit is not None:
+        entry["guardrail_cost_by_unit"] = cost_by_unit
+    if cost_in_spend is not None:
+        entry["guardrail_cost_in_spend"] = cost_in_spend
     return {
         "request_id": request_id,
         "startTime": datetime(2026, 8, 17, 12, 0, tzinfo=timezone.utc),
@@ -56,6 +62,18 @@ def _units_upserts(prisma: MagicMock) -> dict[tuple, int]:
         assert {k: create[k] for k in where} == where
         out[tuple(where[k] for k in ("guardrail_id", "date", "team_id", "api_key", "usage_unit"))] = create["units"]
     return out
+
+
+def _cost_upserts(prisma: MagicMock) -> dict[str, tuple[float | None, object]]:
+    """usage_unit -> (cost written on create, cost clause sent on update)."""
+    calls = prisma.db.litellm_dailyguardrailusageunits.upsert.call_args_list
+    return {
+        c.kwargs["data"]["create"]["usage_unit"]: (
+            c.kwargs["data"]["create"]["cost"],
+            c.kwargs["data"]["update"]["cost"],
+        )
+        for c in calls
+    }
 
 
 @pytest.mark.asyncio
@@ -181,7 +199,9 @@ async def test_retry_exhausted_rows_are_requeued_and_land_on_the_next_flush():
         down, [_payload("r1", usage={"topicPolicyUnits": 2})], sleep=sleep, pending=pending
     )
 
-    assert dict(pending.units) == {("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "topicPolicyUnits"): 2}
+    assert dict(pending.units) == {
+        ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "topicPolicyUnits"): (2, None)
+    }
 
     recovered = _prisma()
     await process_spend_logs_guardrail_usage(
@@ -320,3 +340,111 @@ async def test_payload_without_request_id_is_skipped_like_the_metrics_path():
         ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "topicPolicyUnits"): 1,
     }
     assert prisma.db.litellm_dailyguardrailmetrics.upsert.call_args.kwargs["data"]["create"]["requests_evaluated"] == 1
+
+
+@pytest.mark.asyncio
+async def test_cost_rolled_up_per_counter_alongside_units():
+    """LIT-5652: the hook's per-counter cost lands on the same daily row as the
+    units it priced, summed across payloads exactly like the units are, and the
+    update path increments it so a second flush on the same day keeps adding."""
+    prisma = _prisma()
+    logs = [
+        _payload(
+            "r1",
+            usage={"contentPolicyUnits": 1000, "wordPolicyUnits": 50},
+            cost_by_unit={"contentPolicyUnits": 0.15, "wordPolicyUnits": 0.0},
+        ),
+        _payload(
+            "r2",
+            usage={"contentPolicyUnits": 2000, "wordPolicyUnits": 10},
+            cost_by_unit={"contentPolicyUnits": 0.3, "wordPolicyUnits": 0.0},
+        ),
+    ]
+
+    await process_spend_logs_guardrail_usage(prisma, logs)
+
+    assert _units_upserts(prisma) == {
+        ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "contentPolicyUnits"): 3000,
+        ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "wordPolicyUnits"): 60,
+    }
+    costs = _cost_upserts(prisma)
+    assert costs["contentPolicyUnits"][0] == pytest.approx(0.45)
+    assert costs["contentPolicyUnits"][1] == {"increment": pytest.approx(0.45)}
+    assert costs["wordPolicyUnits"] == (0.0, {"increment": 0.0})
+
+
+@pytest.mark.asyncio
+async def test_unpriced_increment_makes_the_rows_cost_unknown_not_partial():
+    """A payload with usage but no per-counter cost (a hook without pricing, a
+    pre-upgrade proxy in a mixed fleet) must poison that row's cost to NULL on
+    both create and update. Keeping the priced part would understate the day
+    while looking exact."""
+    prisma = _prisma()
+    logs = [
+        _payload("r1", usage={"contentPolicyUnits": 1000}, cost_by_unit={"contentPolicyUnits": 0.15}),
+        _payload("r2", usage={"contentPolicyUnits": 1000}),
+    ]
+
+    await process_spend_logs_guardrail_usage(prisma, logs)
+
+    assert _units_upserts(prisma) == {
+        ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "contentPolicyUnits"): 2000,
+    }
+    assert _cost_upserts(prisma) == {"contentPolicyUnits": (None, None)}
+
+
+@pytest.mark.asyncio
+async def test_report_only_and_forged_costs_are_not_rolled_up_but_units_are():
+    """guardrail_cost_in_spend=False (Azure Prompt Shield) keeps its cost out of
+    spend, so the rollup must not record it either or the dashboard would show
+    a number the budget never charged. A negative or non-finite per-counter cost
+    is treated the same way rather than subtracting from the day."""
+    prisma = _prisma()
+    logs = [
+        _payload("r1", usage={"text_records": 3}, cost_by_unit={"text_records": 0.5}, cost_in_spend=False),
+        _payload("r2", usage={"contentPolicyUnits": 10}, cost_by_unit={"contentPolicyUnits": -0.5}),
+        _payload("r3", usage={"topicPolicyUnits": 10}, cost_by_unit={"topicPolicyUnits": float("inf")}),
+    ]
+
+    await process_spend_logs_guardrail_usage(prisma, logs)
+
+    assert _units_upserts(prisma) == {
+        ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "text_records"): 3,
+        ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "contentPolicyUnits"): 10,
+        ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "topicPolicyUnits"): 10,
+    }
+    assert _cost_upserts(prisma) == {
+        "text_records": (None, None),
+        "contentPolicyUnits": (None, None),
+        "topicPolicyUnits": (None, None),
+    }
+
+
+@pytest.mark.asyncio
+async def test_requeued_cost_is_added_to_the_next_flush():
+    """Cost must survive the connection-error requeue the same way units do, or
+    a DB blip would silently drop dollars while keeping the units they bought."""
+    pending = PendingRollups()
+    down = _prisma()
+    down.db.litellm_dailyguardrailmetrics.upsert.side_effect = httpx.ConnectError("db down")
+    down.db.litellm_dailyguardrailusageunits.upsert.side_effect = httpx.ConnectError("db down")
+    sleep, _ = _fake_sleep()
+
+    await process_spend_logs_guardrail_usage(
+        down,
+        [_payload("r1", usage={"contentPolicyUnits": 1000}, cost_by_unit={"contentPolicyUnits": 0.15})],
+        sleep=sleep,
+        pending=pending,
+    )
+    recovered = _prisma()
+    await process_spend_logs_guardrail_usage(
+        recovered,
+        [_payload("r2", usage={"contentPolicyUnits": 2000}, cost_by_unit={"contentPolicyUnits": 0.3})],
+        sleep=sleep,
+        pending=pending,
+    )
+
+    assert _units_upserts(recovered) == {
+        ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "contentPolicyUnits"): 3000,
+    }
+    assert _cost_upserts(recovered)["contentPolicyUnits"][0] == pytest.approx(0.45)
