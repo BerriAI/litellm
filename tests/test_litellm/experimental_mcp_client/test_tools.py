@@ -8,6 +8,7 @@ from mcp.types import (
     CallToolRequestParams,
     CallToolResult,
     ListToolsResult,
+    PaginatedRequestParams,
     TextContent,
 )
 from mcp.types import Tool as MCPTool
@@ -104,6 +105,39 @@ async def test_load_mcp_tools_openai_format(mock_session, mock_list_tools_result
     assert result[0]["type"] == "function"
     assert result[0]["function"]["name"] == "test_tool"
     mock_session.list_tools.assert_called_once()
+
+
+@pytest.mark.asyncio()
+async def test_load_mcp_tools_follows_pagination(mock_session):
+    mock_session.list_tools.side_effect = [
+        ListToolsResult(
+            tools=[
+                MCPTool(name="tool_a", description="a", inputSchema={}),
+                MCPTool(name="tool_b", description="b", inputSchema={}),
+            ],
+            nextCursor="page-2",
+        ),
+        ListToolsResult(tools=[MCPTool(name="tool_c", description="c", inputSchema={})]),
+    ]
+    result = await load_mcp_tools(mock_session, format="mcp")
+    assert [tool.name for tool in result] == ["tool_a", "tool_b", "tool_c"]
+    assert mock_session.list_tools.call_count == 2
+    second_call_params = mock_session.list_tools.call_args_list[1].kwargs["params"]
+    assert isinstance(second_call_params, PaginatedRequestParams)
+    assert second_call_params.cursor == "page-2"
+
+
+@pytest.mark.asyncio()
+async def test_load_mcp_tools_openai_format_spans_pages(mock_session):
+    mock_session.list_tools.side_effect = [
+        ListToolsResult(
+            tools=[MCPTool(name="tool_a", description="a", inputSchema={})],
+            nextCursor="page-2",
+        ),
+        ListToolsResult(tools=[MCPTool(name="tool_b", description="b", inputSchema={})]),
+    ]
+    result = await load_mcp_tools(mock_session, format="openai")
+    assert [t["function"]["name"] for t in result] == ["tool_a", "tool_b"]
 
 
 def test_get_function_arguments():
