@@ -317,8 +317,9 @@ def test_list_access_groups_attributes_teams_per_group_with_one_query(client_and
     assert body[1]["assigned_team_ids"] == ["team-y", "team-z"]
 
     mock_team_table.find_many.assert_awaited_once()
-    (carrying,) = mock_team_table.find_many.call_args.kwargs["where"]["OR"]
+    carrying, listed = mock_team_table.find_many.call_args.kwargs["where"]["OR"]
     assert list(carrying["access_group_ids"]["hasSome"]) == ["ag-1", "ag-2"]
+    assert list(listed["team_id"]["in"]) == []
 
 
 @pytest.mark.parametrize("base_path", ACCESS_GROUP_PATHS)
@@ -1238,7 +1239,7 @@ def test_update_access_group_syncs_removed_teams(client_and_mocks):
     mock_access_group_table.find_unique = AsyncMock(return_value=existing)
 
     team_to_remove = _make_team_record("team-remove", ["ag-update"])
-    mock_team_table.find_many = AsyncMock(return_value=[_make_team_record("team-keep", ["ag-update"])])
+    mock_team_table.find_many = AsyncMock(return_value=[_make_team_record("team-keep", ["ag-update"]), team_to_remove])
     mock_team_table.find_unique = AsyncMock(return_value=team_to_remove)
 
     resp = client.put(
@@ -1256,6 +1257,28 @@ def test_update_access_group_syncs_removed_teams(client_and_mocks):
     assert "ag-update" not in call_kwargs["data"]["access_group_ids"]
 
 
+def test_update_access_group_detaches_team_the_mirror_missed(client_and_mocks):
+    """Update removes the group from a team that carries it but was never written to the stored column."""
+    client, mock_prisma, mock_access_group_table, *_ = client_and_mocks
+    mock_team_table = mock_prisma.db.litellm_teamtable
+
+    existing = _make_access_group_record(access_group_id="ag-update", assigned_team_ids=["team-keep"])
+    mock_access_group_table.find_unique = AsyncMock(return_value=existing)
+
+    unmirrored = _make_team_record("team-unmirrored", ["ag-update", "ag-other"])
+    mock_team_table.find_many = AsyncMock(return_value=[_make_team_record("team-keep", ["ag-update"]), unmirrored])
+    mock_team_table.find_unique = AsyncMock(return_value=unmirrored)
+
+    resp = client.put("/v1/access_group/ag-update", json={"assigned_team_ids": ["team-keep"]})
+    assert resp.status_code == 200
+
+    mock_team_table.find_unique.assert_awaited_once_with(where={"team_id": "team-unmirrored"})
+    mock_team_table.update.assert_awaited_once()
+    call_kwargs = mock_team_table.update.call_args.kwargs
+    assert call_kwargs["where"] == {"team_id": "team-unmirrored"}
+    assert call_kwargs["data"]["access_group_ids"] == ["ag-other"]
+
+
 def test_update_access_group_no_team_sync_when_ids_not_in_payload(client_and_mocks):
     """Update does not sync teams when assigned_team_ids is absent from the payload."""
     client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = (
@@ -1271,7 +1294,6 @@ def test_update_access_group_no_team_sync_when_ids_not_in_payload(client_and_moc
     resp = client.put("/v1/access_group/ag-update", json={"description": "new desc"})
     assert resp.status_code == 200
 
-    mock_team_table.find_many.assert_not_awaited()
     mock_team_table.find_unique.assert_not_awaited()
     mock_team_table.update.assert_not_awaited()
 
@@ -1405,7 +1427,7 @@ def test_delete_access_group_handles_out_of_sync_assigned_keys(client_and_mocks)
 
 def test_update_access_group_null_assigned_ids_treated_as_empty(client_and_mocks):
     """Update with explicit null for assigned_*_ids clears the list and writes [] to DB."""
-    client, mock_prisma, mock_table, *_ = client_and_mocks
+    client, _, mock_table, *_ = client_and_mocks
 
     existing = _make_access_group_record(
         access_group_id="ag-update",
@@ -1425,4 +1447,3 @@ def test_update_access_group_null_assigned_ids_treated_as_empty(client_and_mocks
     update_call_kwargs = mock_table.update.call_args.kwargs
     assert update_call_kwargs["data"]["assigned_team_ids"] == []
     assert update_call_kwargs["data"]["assigned_key_ids"] == []
-    mock_prisma.db.litellm_teamtable.find_many.assert_not_awaited()
