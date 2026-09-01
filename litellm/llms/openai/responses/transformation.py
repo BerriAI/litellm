@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
 )
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.responses.litellm_completion_transformation.custom_tools import TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import *
 from litellm.types.responses.main import *
@@ -35,6 +36,7 @@ else:
 _NO_TOOL_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 _MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("gpt-4", "gpt-3.5", "chatgpt-4o", "o1", "o3", "o4")
 _PROVIDERS_WITH_COMBINATOR_REJECTING_VALIDATOR: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
+_PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
 
 
 class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
@@ -179,8 +181,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         )
         if sanitized_tools is not None:
             response_api_optional_request_params["tools"] = sanitized_tools
+        replay_safe_input: Final = self._drop_foreign_tool_call_item_ids(input)
         final_request_params: Final = dict(
-            ResponsesAPIRequestParams(model=model, input=input, **response_api_optional_request_params)
+            ResponsesAPIRequestParams(model=model, input=replay_safe_input, **response_api_optional_request_params)
         )
 
         return final_request_params
@@ -216,6 +219,23 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     filter_value_from_dict(cast(dict, tool), "cache_control")
 
         return input, tools
+
+    def _drop_foreign_tool_call_item_ids(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
+        if self.custom_llm_provider not in _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS or not isinstance(input, list):
+            return input
+        sanitized_items: Final = [self._without_foreign_tool_call_item_id(item) for item in input]
+        return cast("ResponseInputParam", sanitized_items)  # cast-ok: items keep their shape, minus a rejected id
+
+    @staticmethod
+    def _without_foreign_tool_call_item_id(item: object) -> object:
+        if not isinstance(item, dict):
+            return item
+        item_type: Final = item.get("type")
+        item_id: Final = item.get("id")
+        genuine_prefix: Final = TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE.get(item_type) if isinstance(item_type, str) else None
+        if genuine_prefix is None or not isinstance(item_id, str) or item_id.startswith(genuine_prefix):
+            return item
+        return {key: value for key, value in item.items() if key != "id"}  # mutable-ok: outgoing JSON request item
 
     def _flatten_tool_schema_combinators_for_openai(
         self,
@@ -742,7 +762,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         )
         if sanitized_tools is not None:
             response_api_optional_request_params["tools"] = sanitized_tools
-        data: Final = dict(ResponsesAPIRequestParams(model=model, input=input, **response_api_optional_request_params))
+        replay_safe_input: Final = self._drop_foreign_tool_call_item_ids(input)
+        data: Final = dict(
+            ResponsesAPIRequestParams(model=model, input=replay_safe_input, **response_api_optional_request_params)
+        )
 
         return url, data
 

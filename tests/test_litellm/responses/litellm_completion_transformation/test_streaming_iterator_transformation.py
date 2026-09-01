@@ -349,7 +349,8 @@ def test_tool_call_delta_without_id_uses_index_mapping():
         if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
     ]
     assert len(output_item_added_events) == 1
-    assert output_item_added_events[0].item.id == "call_abc123"
+    assert output_item_added_events[0].item.id == "fc_call_abc123"
+    assert output_item_added_events[0].item.call_id == "call_abc123"
 
 
 def test_parallel_tool_calls_without_ids_use_index_mapping():
