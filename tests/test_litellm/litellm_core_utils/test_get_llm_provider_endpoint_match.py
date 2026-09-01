@@ -133,3 +133,77 @@ class TestGetLlmProviderRejectsAttackerSmuggledApiBase:
 
         assert provider == "groq"
         assert dynamic_api_key == "server-real-groq-key"
+
+
+class TestTogetherApiBaseResolvesProvider:
+    """
+    Regression for the Together host migration: both the current
+    ``api.together.ai`` host and the legacy ``api.together.xyz`` host must
+    resolve to ``together_ai`` when passed as ``api_base``. Before the fix
+    the endpoint list carried the legacy host but the provider-mapping
+    chain had no branch for it, so the match fell through with a None
+    provider and the deployment failed with "LLM Provider NOT provided".
+    """
+
+    @pytest.mark.parametrize(
+        "api_base",
+        [
+            "https://api.together.ai/v1",
+            "https://api.together.xyz/v1",
+        ],
+    )
+    def test_together_api_base_resolves_to_together_ai(self, api_base, monkeypatch):
+        monkeypatch.setenv("TOGETHER_API_KEY", "together-key-from-env")
+
+        model, provider, dynamic_api_key, returned_api_base = get_llm_provider(
+            model="some-model",
+            api_base=api_base,
+        )
+
+        assert provider == "together_ai"
+        assert dynamic_api_key == "together-key-from-env"
+        assert returned_api_base == api_base
+        assert model == "some-model"
+
+    def test_explicit_api_key_beats_together_env_key(self, monkeypatch):
+        monkeypatch.setenv("TOGETHER_API_KEY", "together-key-from-env")
+
+        _, provider, dynamic_api_key, _ = get_llm_provider(
+            model="some-model",
+            api_base="https://api.together.ai/v1",
+            api_key="explicit-caller-key",
+        )
+
+        assert provider == "together_ai"
+        assert dynamic_api_key == "explicit-caller-key"
+
+    def test_together_default_api_base_is_together_ai(self, monkeypatch):
+        monkeypatch.delenv("TOGETHER_AI_API_BASE", raising=False)
+
+        _, provider, _, api_base = get_llm_provider(model="together_ai/some-model")
+
+        assert provider == "together_ai"
+        assert api_base == "https://api.together.ai/v1"
+
+
+class TestGigachatApiBaseResolvesProvider:
+    """
+    Regression for the GigaChat api_base branch: the provider-mapping chain
+    carried an ``endpoint == "https://gigachat.devices.sberbank.ru/api/v1"``
+    elif, but the URL was never added to ``openai_compatible_endpoints``, so
+    the endpoint loop never fired the branch and a caller-supplied GigaChat
+    api_base raised BadRequestError instead of resolving to ``gigachat``.
+    """
+
+    def test_gigachat_api_base_resolves_to_gigachat(self, monkeypatch):
+        monkeypatch.setenv("GIGACHAT_API_KEY", "gigachat-key-from-env")
+
+        model, provider, dynamic_api_key, returned_api_base = get_llm_provider(
+            model="GigaChat-2",
+            api_base="https://gigachat.devices.sberbank.ru/api/v1",
+        )
+
+        assert provider == "gigachat"
+        assert dynamic_api_key == "gigachat-key-from-env"
+        assert returned_api_base == "https://gigachat.devices.sberbank.ru/api/v1"
+        assert model == "GigaChat-2"

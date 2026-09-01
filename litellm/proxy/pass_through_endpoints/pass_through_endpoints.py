@@ -5,10 +5,11 @@ import json
 import posixpath
 import traceback
 from base64 import b64encode
-from collections.abc import AsyncGenerator, Callable, Iterable, Mapping
+from collections.abc import AsyncGenerator, Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from itertools import groupby
-from typing import Any, Final, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -47,6 +48,8 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
 )
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_no_callback_env_reference
+from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -77,7 +80,10 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.litellm_pre_call_utils import (
+    LiteLLMProxyRequestSetup,
+    _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
+)
 from litellm.proxy.utils import normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
@@ -89,7 +95,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
     PassthroughStandardLoggingPayload,
 )
-from litellm.types.utils import Usage
+from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, Usage
 
 from .streaming_handler import PassThroughStreamingHandler
 from .success_handler import PassThroughEndpointLogging
@@ -97,6 +103,9 @@ from .upstream_usage_headers import (
     UpstreamReportedUsage,
     apply_upstream_reported_usage,
 )
+
+if TYPE_CHECKING:
+    from litellm.proxy.proxy_server import ProxyConfig
 
 router: Final = APIRouter()
 
@@ -470,7 +479,10 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         ``items()`` collapses duplicate keys to the last value. Files go out as a
         list of ``(field_name, (filename, content, content_type))`` tuples and
         repeated non-file fields are grouped into list values, both of which httpx
-        encodes as separate multipart parts.
+        encodes as separate multipart parts. A form with no file parts is sent
+        entirely through ``files`` as ``(field_name, (None, value))`` tuples,
+        because httpx downgrades a file-less ``data=`` payload to
+        application/x-www-form-urlencoded.
         """
         form_items: Final = (await request.form()).multi_items()
 
@@ -500,6 +512,11 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             )
         }
 
+        multipart_files: Final = (
+            files if files else tuple((field_name, (None, field_value)) for field_name, field_value in non_file_items)
+        )
+        multipart_data: Final = form_data_dict if files else None
+
         # Remove content-type header - httpx will set it correctly with the new boundary
         # when it creates the multipart body from files/data parameters
         headers_copy: Final = headers.copy()
@@ -512,8 +529,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 url,
                 headers=headers_copy,
                 params=requested_query_params,
-                files=files,
-                data=form_data_dict,
+                files=multipart_files,
+                data=multipart_data,
             )
             return await async_client.send(req, stream=True)
 
@@ -522,8 +539,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             url=url,
             headers=headers_copy,
             params=requested_query_params,
-            files=files,
-            data=form_data_dict,
+            files=multipart_files,
+            data=multipart_data,
         )
 
     @staticmethod
@@ -569,6 +586,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         _metadata["user_api_key"] = user_api_key_dict.api_key
         _metadata["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
         _metadata["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
+        _metadata[MODEL_ACCESS_GROUP_METADATA_KEY] = user_api_key_dict.matched_model_access_groups
         # The per-model budget counters are keyed off these. get_sanitized_user_information_from_key
         # returns StandardLoggingUserAPIKeyMetadata, which carries no budget field, so without this
         # the post-call increment finds nothing and every passthrough request goes untracked and
@@ -742,6 +760,67 @@ def _build_passthrough_failure_request_payload(
     return request_payload
 
 
+@dataclass(frozen=True, slots=True)
+class _TeamCallbackWiring:
+    success_callbacks: "list[str | Callable | CustomLogger] | None" = None  # mutable-ok: Logging.__init__ arg
+    failure_callbacks: "list[str | Callable | CustomLogger] | None" = None  # mutable-ok: Logging.__init__ arg
+    logging_kwargs: dict[str, str | dict[str, str]] | None = None  # mutable-ok: Logging.__init__ arg
+
+
+def _resolve_team_callback_wiring(
+    user_api_key_dict: UserAPIKeyAuth,
+    proxy_config: "ProxyConfig",
+    route_description: str,
+) -> _TeamCallbackWiring:
+    """Resolve key/team dynamic logging callbacks for a passthrough request.
+
+    Mirrors add_litellm_data_to_request: callback_vars are unpacked top-level
+    (read by initialize_standard_callback_dynamic_params) and also stamped on
+    the proxy-owned trusted-vars field (read by get_trusted_callback_params).
+
+    Fails open: a callback resolution or validation error is logged at error
+    level and the request proceeds without dynamic callbacks, since a broken
+    logging config must not fail the customer's upstream call (and the
+    websocket is already accepted by the time this runs on that path). The
+    env-reference check runs here because the deprecated callback_settings
+    branch skips AddTeamCallback validation, and Logging.__init__ would
+    otherwise reject the vars mid-request.
+    """
+    try:
+        callback_settings_obj: Final = _get_dynamic_logging_metadata(
+            user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
+        )
+        if callback_settings_obj and callback_settings_obj.callback_vars:
+            for (
+                item
+            ) in callback_settings_obj.callback_vars.items():  # rebind-ok: dict.items iteration for env-ref validation
+                validate_no_callback_env_reference(item[0], item[1], source="key/team callback metadata")
+    except Exception:  # noqa: BLE001 - a broken logging config must never fail the passthrough request
+        verbose_proxy_logger.exception(
+            "%s: failed to resolve team logging callbacks, continuing without them",
+            route_description,
+        )
+        return _TeamCallbackWiring()
+    if callback_settings_obj is None:
+        return _TeamCallbackWiring()
+    callback_vars: Final = callback_settings_obj.callback_vars
+    success_callbacks: Final = callback_settings_obj.success_callback
+    failure_callbacks: Final = callback_settings_obj.failure_callback
+    logging_kwargs: Final = (
+        None
+        if not callback_vars
+        else {  # mutable-ok: Logging arg
+            **callback_vars,
+            TRUSTED_CALLBACK_VARS_FIELD: callback_vars,
+        }
+    )
+    return _TeamCallbackWiring(
+        success_callbacks=None if success_callbacks is None else [*success_callbacks],  # mutable-ok: Logging arg
+        failure_callbacks=None if failure_callbacks is None else [*failure_callbacks],  # mutable-ok: Logging arg
+        logging_kwargs=logging_kwargs,
+    )
+
+
 async def _log_passthrough_upstream_failure(
     response: httpx.Response,
     user_api_key_dict: UserAPIKeyAuth,
@@ -835,7 +914,7 @@ async def pass_through_request(
     from litellm.proxy.pass_through_endpoints.passthrough_guardrails import (
         PassthroughGuardrailHandler,
     )
-    from litellm.proxy.proxy_server import proxy_logging_obj
+    from litellm.proxy.proxy_server import proxy_config, proxy_logging_obj
 
     #########################################################
     # Initialize variables
@@ -920,6 +999,11 @@ async def pass_through_request(
         # read e.g. ``chat gpt-4o`` instead of ``chat unknown``.
         passthrough_model: Final = (_parsed_body.get("model") if isinstance(_parsed_body, dict) else None) or "unknown"
         start_time: Final = datetime.now()
+        team_callbacks: Final = _resolve_team_callback_wiring(
+            user_api_key_dict=user_api_key_dict,
+            proxy_config=proxy_config,
+            route_description="pass_through_endpoint",
+        )
         logging_obj = Logging(
             model=passthrough_model,
             messages=[{"role": "user", "content": safe_dumps(_parsed_body)}],
@@ -928,6 +1012,9 @@ async def pass_through_request(
             start_time=start_time,
             litellm_call_id=litellm_call_id,
             function_id="1245",
+            dynamic_success_callbacks=team_callbacks.success_callbacks,
+            dynamic_failure_callbacks=team_callbacks.failure_callbacks,
+            kwargs=team_callbacks.logging_kwargs,
         )
 
         # Store passthrough guardrails config on logging_obj for field targeting
@@ -1201,14 +1288,19 @@ async def pass_through_request(
 
             return StreamingResponse(
                 wrap_passthrough_sse_bytes_with_keepalive_pings(
-                    stream=PassThroughStreamingHandler.chunk_processor(
-                        response=response,
-                        request_body=_parsed_body,
-                        litellm_logging_obj=logging_obj,
-                        endpoint_type=endpoint_type,
-                        start_time=start_time,
-                        passthrough_success_handler_obj=pass_through_endpoint_logging,
-                        url_route=str(url),
+                    stream=_own_streamed_managed_ids(
+                        stream=PassThroughStreamingHandler.chunk_processor(
+                            response=response,
+                            request_body=_parsed_body,
+                            litellm_logging_obj=logging_obj,
+                            endpoint_type=endpoint_type,
+                            start_time=start_time,
+                            passthrough_success_handler_obj=pass_through_endpoint_logging,
+                            url_route=str(url),
+                        ),
+                        managed_id_provider=_managed_id_provider,
+                        request=request,
+                        user_api_key_dict=user_api_key_dict,
                     ),
                     ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
                     upstream_headers=response.headers,
@@ -1277,14 +1369,19 @@ async def pass_through_request(
 
             return StreamingResponse(
                 wrap_passthrough_sse_bytes_with_keepalive_pings(
-                    stream=PassThroughStreamingHandler.chunk_processor(
-                        response=response,
-                        request_body=_parsed_body,
-                        litellm_logging_obj=logging_obj,
-                        endpoint_type=endpoint_type,
-                        start_time=start_time,
-                        passthrough_success_handler_obj=pass_through_endpoint_logging,
-                        url_route=str(url),
+                    stream=_own_streamed_managed_ids(
+                        stream=PassThroughStreamingHandler.chunk_processor(
+                            response=response,
+                            request_body=_parsed_body,
+                            litellm_logging_obj=logging_obj,
+                            endpoint_type=endpoint_type,
+                            start_time=start_time,
+                            passthrough_success_handler_obj=pass_through_endpoint_logging,
+                            url_route=str(url),
+                        ),
+                        managed_id_provider=_managed_id_provider,
+                        request=request,
+                        user_api_key_dict=user_api_key_dict,
                     ),
                     ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
                     upstream_headers=response.headers,
@@ -2002,7 +2099,7 @@ async def websocket_passthrough_request(
         setup_model_rewriter: Optional rewrite of the setup frame's model before it reaches the upstream
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.proxy.proxy_server import proxy_logging_obj
+    from litellm.proxy.proxy_server import proxy_config, proxy_logging_obj
     from litellm.types.passthrough_endpoints.pass_through_endpoints import (
         PassthroughStandardLoggingPayload,
     )
@@ -2035,6 +2132,11 @@ async def websocket_passthrough_request(
                 upstream_headers[header_name] = header_value
 
     # Initialize logging object similar to HTTP passthrough
+    team_callbacks: Final = _resolve_team_callback_wiring(
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=proxy_config,
+        route_description="websocket_passthrough",
+    )
     logging_obj: Final = Logging(
         model="unknown",
         messages=[{"role": "user", "content": "WebSocket connection"}],
@@ -2043,6 +2145,9 @@ async def websocket_passthrough_request(
         start_time=start_time,
         litellm_call_id=litellm_call_id,
         function_id="websocket_passthrough",
+        dynamic_success_callbacks=team_callbacks.success_callbacks,
+        dynamic_failure_callbacks=team_callbacks.failure_callbacks,
+        kwargs=team_callbacks.logging_kwargs,
     )
 
     # Create passthrough logging payload
@@ -2431,6 +2536,36 @@ def _is_streaming_response(response: httpx.Response) -> bool:
     if _content_type is not None and "text/event-stream" in _content_type:
         return True
     return False
+
+
+def _own_streamed_managed_ids(
+    stream: AsyncGenerator[bytes, None],
+    managed_id_provider: str | None,
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> AsyncGenerator[bytes, None]:
+    from litellm.proxy.proxy_server import general_settings, prisma_client, proxy_logging_obj
+
+    if (
+        managed_id_provider is None
+        or not general_settings.get("passthrough_managed_object_ids", False)
+        or prisma_client is None
+        or proxy_logging_obj.get_proxy_hook("managed_files") is None
+    ):
+        return stream
+    from litellm.proxy.auth.auth_utils import get_request_route
+    from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
+        rewrite_streamed_response_ids,
+    )
+
+    return rewrite_streamed_response_ids(
+        stream=stream,
+        provider=managed_id_provider,
+        method=request.method,
+        route=get_request_route(request),
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
 
 
 def _should_buffer_passthrough_response(response: httpx.Response) -> bool:
@@ -3098,6 +3233,14 @@ def _get_pass_through_endpoints_from_config() -> list[PassThroughGenericEndpoint
     return returned_endpoints
 
 
+def _config_field_endpoints(response: ConfigFieldInfo) -> list[object] | None:
+    return response.field_value
+
+
+def _request_app(request: Request) -> FastAPI:
+    return request.app
+
+
 async def _get_pass_through_endpoints_from_db(
     endpoint_id: str | None = None,
     user_api_key_dict: UserAPIKeyAuth | None = None,
@@ -3114,7 +3257,7 @@ async def _get_pass_through_endpoints_from_db(
     except Exception:
         return []
 
-    pass_through_endpoint_data: Final[list | None] = response.field_value
+    pass_through_endpoint_data: Final = _config_field_endpoints(response)
     if pass_through_endpoint_data is None:
         return []
 
@@ -3175,13 +3318,18 @@ async def _filter_endpoints_by_team_allowed_routes(
         )
 
     # retrieve team metadata
-    team_metadata: Final = team.metadata
+    team_metadata: Final = cast(  # cast-ok: prisma types the Json column as str; reads hand back the decoded value
+        "Mapping[str, object] | None", team.metadata
+    )
     if team_metadata is not None and team_metadata.get("allowed_passthrough_routes") is not None:
         ## FILTER pass_through_endpoints by allowed_passthrough_routes
         pass_through_endpoints = [
             endpoint
             for endpoint in pass_through_endpoints
-            if endpoint.path in team_metadata.get("allowed_passthrough_routes")
+            if endpoint.path
+            in cast(  # cast-ok: guarded above; team metadata stores this key as a list of route paths
+                "Sequence[str]", team_metadata.get("allowed_passthrough_routes")
+            )
         ]
 
     return pass_through_endpoints
@@ -3272,7 +3420,7 @@ async def update_pass_through_endpoints(
             detail={"error": "No pass-through endpoints found"},
         )
 
-    pass_through_endpoint_data: Final[list | None] = response.field_value
+    pass_through_endpoint_data: Final[list | None] = _config_field_endpoints(response)
     if pass_through_endpoint_data is None:
         raise HTTPException(
             status_code=404,
@@ -3343,7 +3491,7 @@ async def update_pass_through_endpoints(
     _custom_headers: dict | None = updated_endpoint.headers or {}
     _custom_headers = await set_env_variables_in_header(custom_headers=_custom_headers)
 
-    route_app: Final[FastAPI] = request.app
+    route_app: Final = _request_app(request)
     if updated_endpoint.include_subpath:
         InitPassThroughEndpointHelpers.add_subpath_route(
             app=route_app,
@@ -3435,7 +3583,7 @@ async def create_pass_through_endpoints(
     _custom_headers: dict | None = created_endpoint.headers or {}
     _custom_headers = await set_env_variables_in_header(custom_headers=_custom_headers)
 
-    route_app: Final[FastAPI] = request.app
+    route_app: Final = _request_app(request)
     if created_endpoint.include_subpath:
         InitPassThroughEndpointHelpers.add_subpath_route(
             app=route_app,
@@ -3503,7 +3651,7 @@ async def delete_pass_through_endpoints(
         response = ConfigFieldInfo(field_name="pass_through_endpoints", field_value=None)
 
     ## Update field by removing endpoint
-    pass_through_endpoint_data: Final[list | None] = response.field_value
+    pass_through_endpoint_data: Final[list | None] = _config_field_endpoints(response)
     if response.field_value is None or pass_through_endpoint_data is None:
         raise HTTPException(
             status_code=400,

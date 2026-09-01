@@ -10,7 +10,7 @@ import { Tag, TagUpdateRequest } from "@/components/tag_management/types";
 import { toast } from "@/lib/toast";
 import NumericalInput from "@/components/shared/numerical_input";
 import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { Badge } from "@/components/ui/badge";

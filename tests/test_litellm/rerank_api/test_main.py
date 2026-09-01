@@ -1,6 +1,10 @@
 import logging
 from unittest.mock import MagicMock, patch
 
+import httpx
+import pytest
+import respx
+
 
 import litellm
 
@@ -62,3 +66,66 @@ def test_rerank_does_not_log_request_content_at_info(caplog):
     assert all(
         r.levelno == logging.DEBUG for r in optional_params_logs
     ), "optional_rerank_params must be logged at DEBUG, not INFO"
+
+
+TOGETHER_RERANK_BODY = {
+    "id": "rerank-mock-id",
+    "results": [{"index": 0, "relevance_score": 0.95}],
+    "usage": {"prompt_tokens": 10, "total_tokens": 10},
+}
+
+
+def test_together_rerank_defaults_to_together_ai_host(respx_mock: respx.MockRouter, monkeypatch):
+    """Regression for the Together host migration: rerank used to hardcode
+    https://api.together.xyz/v1/rerank. The default must now be api.together.ai."""
+    monkeypatch.delenv("TOGETHER_AI_API_BASE", raising=False)
+
+    mock_route = respx_mock.post("https://api.together.ai/v1/rerank")
+    mock_route.return_value = httpx.Response(200, json=TOGETHER_RERANK_BODY)
+
+    response = litellm.rerank(
+        model="together_ai/mixedbread-ai/mxbai-rerank-large-v2",
+        query=MARKER_QUERY,
+        documents=[MARKER_DOC],
+        api_key="fake-together-key",
+    )
+
+    assert mock_route.called
+    assert response.results[0]["relevance_score"] == 0.95
+
+
+def test_together_rerank_honors_api_base(respx_mock: respx.MockRouter):
+    """Regression: a custom api_base was silently ignored by the Together rerank handler."""
+    mock_route = respx_mock.post("https://custom-together.example/v1/rerank")
+    mock_route.return_value = httpx.Response(200, json=TOGETHER_RERANK_BODY)
+
+    litellm.rerank(
+        model="together_ai/mixedbread-ai/mxbai-rerank-large-v2",
+        query=MARKER_QUERY,
+        documents=[MARKER_DOC],
+        api_key="fake-together-key",
+        api_base="https://custom-together.example/v1",
+    )
+
+    assert mock_route.called
+    assert mock_route.calls[0].request.headers["authorization"] == "Bearer fake-together-key"
+
+
+@pytest.mark.asyncio
+async def test_together_rerank_async_honors_env_api_base(respx_mock: respx.MockRouter, monkeypatch):
+    """Regression: TOGETHER_AI_API_BASE was honored by chat but ignored by rerank."""
+    monkeypatch.setenv("TOGETHER_AI_API_BASE", "https://env-together.example/v1")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+
+    mock_route = respx_mock.post("https://env-together.example/v1/rerank")
+    mock_route.return_value = httpx.Response(200, json=TOGETHER_RERANK_BODY)
+
+    response = await litellm.arerank(
+        model="together_ai/mixedbread-ai/mxbai-rerank-large-v2",
+        query=MARKER_QUERY,
+        documents=[MARKER_DOC],
+        api_key="fake-together-key",
+    )
+
+    assert mock_route.called
+    assert response.results[0]["relevance_score"] == 0.95

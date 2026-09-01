@@ -2770,7 +2770,7 @@ def mock_team_lookup(monkeypatch):
 
     existing_team_ids: set = set()
 
-    async def _find_many(where):
+    async def _find_many(where, **_):
         requested = where["team_id"]["in"]
         return [{"team_id": team_id} for team_id in requested if team_id in existing_team_ids]
 

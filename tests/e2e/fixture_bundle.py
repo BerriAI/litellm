@@ -6,15 +6,17 @@ per provider-bound interaction in call order. Bundles older than
 ``MAX_BUNDLE_AGE`` hard-fail replay at collection time (see conftest), so a
 green replay run can never certify against fixtures that have drifted more than
 a week from the live providers. Bump ``BUNDLE_FORMAT_VERSION`` whenever a change
-moves recorded keys: a bundle recorded under the old rules then fails naming
-both versions instead of quietly missing on every call.
+moves recorded keys or changes the stored shape: a bundle recorded under the old
+rules then fails naming both versions instead of quietly missing on every call.
 
 This module owns the format only. The provider-edge server that produces and
-consumes it lives in provider_edge.py (LIT-5745) and the canonical match keys
-it computes live in fixture_canonical.py (LIT-5741); streaming chunk fidelity
-is a follow-up (LIT-5742). Every interaction file stores the full redacted
-request because replay matches on its canonicalized content, and the response
-as the raw HTTP status, filtered headers, and base64 body the provider sent.
+consumes it lives in provider_edge.py (LIT-5745) and the canonical match keys it
+computes live in fixture_canonical.py (LIT-5741). Every interaction file stores
+the full redacted request because replay matches on its canonicalized content,
+and a response in one of two shapes, told apart by their ``kind`` tag: an
+ordinary ``RecordedHttpResponse`` holding one base64 body, or, for a response the
+provider streamed, a ``RecordedStreamedResponse`` holding its transfer chunks in
+order so replay reproduces the same split points (LIT-5742).
 """
 
 from __future__ import annotations
@@ -26,11 +28,11 @@ import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Final
+from typing import Annotated, Final, Literal
 
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, Field, JsonValue
 
-BUNDLE_FORMAT_VERSION: Final = 3
+BUNDLE_FORMAT_VERSION: Final = 4
 MAX_BUNDLE_AGE: Final = timedelta(days=7)
 MANIFEST_FILENAME: Final = "manifest.json"
 
@@ -74,14 +76,38 @@ class RecordedHttpResponse(BaseModel):
     volatile entries (see provider_edge.py), and the body as base64 so binary
     payloads survive JSON."""
 
+    kind: Literal["http"] = "http"
     status_code: int
     headers: dict[str, str]
     body_b64: str
 
 
+class RecordedStreamedResponse(BaseModel):
+    """A response the provider streamed, kept chunk by chunk instead of buffered.
+
+    ``chunks_b64`` holds one entry per upstream transfer chunk, in order, so replay
+    reproduces the split points the provider chose rather than one coalesced body.
+    ``truncated`` is None for a stream that reached its terminator and otherwise
+    says why it did not, prefixed by which side ended it (``upstream:`` for a
+    provider that hung up mid-stream, ``downstream:`` for a proxy that stopped
+    reading). Replay behaves the same for any truncation, delivering the recorded
+    chunks and then closing; the reason is there for whoever reads the bundle."""
+
+    kind: Literal["streamed"] = "streamed"
+    status_code: int
+    headers: dict[str, str]
+    chunks_b64: list[str]
+    truncated: str | None = None
+
+
+type RecordedResponse = Annotated[
+    RecordedHttpResponse | RecordedStreamedResponse, Field(discriminator="kind")
+]
+
+
 class Interaction(BaseModel):
     request: RecordedRequest
-    response: RecordedHttpResponse
+    response: RecordedResponse
 
 
 def slugify(raw: str, *, limit: int = 60) -> str:
@@ -128,7 +154,7 @@ class BundleRecorder:
     root: Path
     _ordinals: dict[str, int] = field(default_factory=dict)
 
-    def record(self, *, test_key: str, request: RecordedRequest, response: RecordedHttpResponse) -> None:
+    def record(self, *, test_key: str, request: RecordedRequest, response: RecordedResponse) -> None:
         slug = slug_for_test(test_key)
         ordinal = self._ordinals.get(slug, 0)
         self._ordinals[slug] = ordinal + 1
@@ -200,14 +226,27 @@ def _read_manifest(root: Path) -> Manifest | UnreadableBundle:
         return UnreadableBundle(reason=f"{MANIFEST_FILENAME} is invalid: {exc}")
 
 
-def check_freshness(root: Path, *, now: datetime) -> BundleFreshness:
+def _supported_manifest(root: Path) -> Manifest | UnreadableBundle:
+    """The manifest, refused when it was written under a different format version.
+    A bundle is atomic (record wipes and rewrites the whole directory and never
+    merges), so a foreign version is a hard reject rather than a partial read."""
     manifest = _read_manifest(root)
     if isinstance(manifest, UnreadableBundle):
         return manifest
     if manifest.format_version != BUNDLE_FORMAT_VERSION:
         return UnreadableBundle(
-            reason=f"format_version {manifest.format_version} != supported {BUNDLE_FORMAT_VERSION}"
+            reason=(
+                f"format_version {manifest.format_version} != supported {BUNDLE_FORMAT_VERSION}; "
+                "re-record with E2E_FIXTURE_MODE=record"
+            )
         )
+    return manifest
+
+
+def check_freshness(root: Path, *, now: datetime) -> BundleFreshness:
+    manifest = _supported_manifest(root)
+    if isinstance(manifest, UnreadableBundle):
+        return manifest
     recorded_at = (
         manifest.recorded_at
         if manifest.recorded_at.tzinfo is not None
@@ -231,7 +270,7 @@ class LoadedBundle:
 
 
 def load_bundle(root: Path) -> LoadedBundle | UnreadableBundle:
-    manifest = _read_manifest(root)
+    manifest = _supported_manifest(root)
     if isinstance(manifest, UnreadableBundle):
         return manifest
     interactions = {

@@ -5,8 +5,9 @@ import json
 from pathlib import Path
 import re
 import sys
+import time
 import tomllib
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, Final, List, Optional, Protocol, Set, Tuple
 
 from packaging.requirements import Requirement
 import requests
@@ -37,6 +38,13 @@ DEFAULT_TRANSITIVE_PIN_PACKAGES = (
 # of the identifier, not an operator.
 _SPDX_OPERATOR_SPLIT = re.compile(r"\s+(?:OR|AND)\s+")
 _SPDX_WITH_SUFFIX = re.compile(r"\s+WITH\s+.*", re.DOTALL)
+_PYPI_FETCH_ATTEMPTS: Final[int] = 3
+_PYPI_FETCH_BACKOFF_SECONDS: Final[float] = 0.5
+
+
+class _HttpGet(Protocol):
+    def __call__(self, url: str, *, timeout: float) -> requests.Response:
+        ...
 
 
 @dataclass
@@ -50,7 +58,10 @@ class PackageLicense:
 
 class LicenseChecker:
     def __init__(
-        self, config_file: Path = Path("./tests/code_coverage_tests/liccheck.ini")
+        self,
+        config_file: Path = Path("./tests/code_coverage_tests/liccheck.ini"),
+        http_get: Optional[_HttpGet] = None,
+        sleep: Optional[Callable[[float], None]] = None,
     ):
         if not config_file.exists():
             print(f"Error: Config file {config_file} not found")
@@ -79,6 +90,8 @@ class LicenseChecker:
 
         # Track package results
         self.package_results: List[PackageLicense] = []
+        self._http_get = http_get
+        self._sleep = sleep
 
     @staticmethod
     def _normalize_package_name(package_name: str) -> str:
@@ -123,21 +136,38 @@ class LicenseChecker:
         last resort derives the license from the ``License :: OSI Approved ::
         ...`` trove classifiers.
         """
-        try:
-            url = f"https://pypi.org/pypi/{package_name}/{version}/json"
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            info = response.json().get("info", {}) or {}
-            return (
-                info.get("license_expression")
-                or info.get("license")
-                or self._license_from_classifiers(info.get("classifiers") or [])
-            )
-        except Exception as e:
-            print(
-                f"Warning: Failed to fetch license for {package_name} {version}: {str(e)}"
-            )
-            return None
+        url = f"https://pypi.org/pypi/{package_name}/{version}/json"
+        http_get = self._http_get if self._http_get is not None else requests.get
+        sleep = self._sleep if self._sleep is not None else time.sleep
+
+        for attempt in range(_PYPI_FETCH_ATTEMPTS):
+            try:
+                response = http_get(url, timeout=10)
+                response.raise_for_status()
+                info = response.json().get("info", {}) or {}
+                return (
+                    info.get("license_expression")
+                    or info.get("license")
+                    or self._license_from_classifiers(info.get("classifiers") or [])
+                )
+            except Exception as error:
+                if self._is_retryable_pypi_error(error) and attempt < _PYPI_FETCH_ATTEMPTS - 1:
+                    sleep(_PYPI_FETCH_BACKOFF_SECONDS)
+                    continue
+                print(
+                    f"Warning: Failed to fetch license for {package_name} {version}: {str(error)}"
+                )
+                return None
+        return None
+
+    @staticmethod
+    def _is_retryable_pypi_error(error: Exception) -> bool:
+        if isinstance(error, (requests.ConnectionError, requests.Timeout)):
+            return True
+        if not isinstance(error, requests.HTTPError) or error.response is None:
+            return False
+        status_code = error.response.status_code
+        return status_code == 429 or status_code >= 500
 
     @staticmethod
     def _license_from_classifiers(classifiers: List[str]) -> Optional[str]:

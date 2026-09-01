@@ -2398,7 +2398,7 @@ async def test_delete_user_cleans_up_created_by_invitation_links(mocker):
     mock_user_row.user_id = "admin-creator"
     mock_user_row.user_email = "admin@example.com"
     mock_user_row.teams = []
-    mock_user_row.json.return_value = "{}"
+    mock_user_row.model_dump_json.return_value = "{}"
     mock_user_row.model_dump.return_value = {
         "user_id": "admin-creator",
         "user_email": "admin@example.com",

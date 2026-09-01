@@ -65,10 +65,19 @@ vi.mock("@/components/EntityUsageExport/EntityUsageExportModal", () => ({
 }));
 
 vi.mock("@/components/EntityUsageExport", () => ({
-  UsageExportHeader: ({ filterLabel, filterSlot }: { filterLabel?: string; filterSlot?: ReactNode }) => (
+  UsageExportHeader: ({
+    filterLabel,
+    filterSlot,
+    showFilters,
+  }: {
+    filterLabel?: string;
+    filterSlot?: ReactNode;
+    showFilters?: boolean;
+  }) => (
     <div>
       <span>Usage Export Header</span>
       <span>{filterLabel}</span>
+      <span>{`show-filters:${showFilters === true}`}</span>
       {filterSlot}
     </div>
   ),
@@ -737,6 +746,26 @@ describe("EntityUsage", () => {
     await waitFor(() => {
       expect(screen.getAllByText("Tag 1").length).toBeGreaterThan(0);
     });
+  });
+
+  it("should still request the filter when the caller's tag scope is empty", async () => {
+    render(<EntityUsage {...defaultProps} entityList={[]} />);
+
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("show-filters:true")).toBeInTheDocument();
+  });
+
+  it("should not request the filter while the entity list is still unresolved", async () => {
+    render(<EntityUsage {...defaultProps} entityList={null} />);
+
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("show-filters:false")).toBeInTheDocument();
   });
 
   it("should display Agent Activity tab for team entity type", async () => {

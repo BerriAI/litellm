@@ -84,7 +84,7 @@ def test_jsonify_object_fallback_for_unserializable_dict(
 
 
 def test_jsonify_object_error_on_non_dict(prisma_client: PrismaClient) -> None:
-    with pytest.raises(AttributeError):
+    with pytest.raises(TypeError):
         prisma_client.jsonify_object(None)  # type: ignore[arg-type]
 
 
@@ -134,7 +134,7 @@ def test_jsonify_team_object_converts_budget_limits_to_json_string(
 
 
 def test_jsonify_team_object_error_on_non_dict(prisma_client: PrismaClient) -> None:
-    with pytest.raises(AttributeError):
+    with pytest.raises(TypeError):
         prisma_client.jsonify_team_object(None)  # type: ignore[arg-type]
 
 

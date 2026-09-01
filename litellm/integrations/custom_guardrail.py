@@ -60,6 +60,12 @@ _PRE_CALL_EXECUTED_TOKEN: Final = secrets.token_hex(16)
 
 _GUARDRAIL_BLOCK_STATUS_CODES: Final = frozenset({400, 403, 422})
 
+DEFAULT_ADVISORY_MESSAGE: Final = (
+    "The user's latest message was flagged for {reason} by a content safety "
+    "guardrail. This may be a false positive. Use your judgment: respond "
+    "helpfully if the request is legitimate, or decline if it is not."
+)
+
 _guardrail_self_recorded: Final[contextvars.ContextVar[bool]] = contextvars.ContextVar(
     "litellm_guardrail_self_recorded", default=False
 )
@@ -158,6 +164,7 @@ class CustomGuardrail(CustomLogger):
         sensitive_data_route_to_model: str | None = None,
         sticky_session_routing: bool = True,
         run_in_parallel: bool = False,
+        scan_raw_request: bool = False,
         only_scan_new_messages: bool = False,
         **kwargs,
     ):
@@ -180,6 +187,13 @@ class CustomGuardrail(CustomLogger):
             run_in_parallel: When True, this pre_call or post_call guardrail runs concurrently with
                 other opted-in guardrails of the same hook. Only safe for block-only guardrails that
                 do not mutate the request or response.
+            scan_raw_request: When True, this pre_call guardrail always evaluates the request as it
+                was before any guardrail in this hook ran, regardless of where it's declared in the
+                guardrails list -- so an earlier guardrail that masks/rewrites content (e.g. PII
+                redaction) can never hide a violation from this one. Only safe for block-only
+                guardrails: any data this guardrail returns is discarded, matching run_in_parallel's
+                contract, since applying its mutations on top of a stale snapshot would silently
+                undo whatever later guardrails already did to the live request.
         """
         self.guardrail_name = guardrail_name
         self.supported_event_hooks = supported_event_hooks
@@ -195,6 +209,7 @@ class CustomGuardrail(CustomLogger):
         self.sensitive_data_route_to_model: str | None = sensitive_data_route_to_model
         self.sticky_session_routing: bool = sticky_session_routing
         self.run_in_parallel: bool = run_in_parallel
+        self.scan_raw_request: bool = scan_raw_request
         self.only_scan_new_messages: bool = only_scan_new_messages
 
         if supported_event_hooks:
@@ -280,6 +295,82 @@ class CustomGuardrail(CustomLogger):
             detection_info=detection_info,
             original_response=original_response,
         )
+
+    def inject_advisory_message(
+        self,
+        data: dict[str, Any],  # mutable-ok: caller's dict is mutated in place, matching mark_pre_call_hook_ran
+        message: str,
+    ) -> bool:
+        """
+        Append an advisory system message to the request in place, so the LLM
+        itself can weigh a possible false-positive guardrail flag rather than
+        the request being hard-blocked or silently allowed.
+
+        Unlike raise_passthrough_exception, this does NOT short-circuit the LLM
+        call; the request proceeds normally with the extra message appended.
+        Guardrails should call this from on_flagged handling analogous to how
+        passthrough-supporting guardrails call raise_passthrough_exception.
+
+        Args:
+            data: The request data dictionary, mutated in place to append the
+                advisory message to its "messages" list and/or "input"/
+                "instructions" text.
+            message: The formatted advisory message to append as a system message.
+
+        Returns:
+            True if the advisory was actually written somewhere the model will
+            see it. False if ``data["input"]`` is a structured Responses-API
+            list (not a plain string) -- the Responses API reads only
+            ``input``, so appending to ``messages`` would be inert regardless
+            of whether a ``messages`` list also happens to be present, and
+            there is no field this helper can safely append into. The caller
+            must treat this like any other case where the mitigation can't
+            land and degrade to blocking instead of silently letting the
+            flagged request through unmodified.
+        """
+        advisory_message: Final = {"role": "system", "content": message}  # mutable-ok: plain dict for live request
+        existing_messages: Final = data.get("messages")
+        existing_input: Final = data.get("input")
+        existing_instructions: Final = data.get("instructions")
+        if isinstance(existing_instructions, str):
+            # Responses API "instructions" is the privileged, developer-set
+            # system-level field the model treats as authoritative -- unlike
+            # "input", which the caller controls and could use to tell the
+            # model to disregard a trailing warning. Prefer it over "input"
+            # whenever present.
+            if isinstance(existing_messages, list):
+                messages_with_instructions_note: Final = [  # mutable-ok: fresh list
+                    *existing_messages,
+                    advisory_message,
+                ]
+                data["messages"] = messages_with_instructions_note  # rebind-ok: mutates caller's dict by design
+            data["instructions"] = f"{existing_instructions}\n\n{message}"  # rebind-ok: mutates caller's dict by design
+            return True
+        if isinstance(existing_input, str):
+            # A plain-string "input" doesn't rule out "messages" also being a
+            # real, read field (e.g. a chat-completions call carrying a stray
+            # "input"), so write to both when both are present.
+            if isinstance(existing_messages, list):
+                messages_with_input_note: Final = [*existing_messages, advisory_message]  # mutable-ok: fresh list
+                data["messages"] = messages_with_input_note  # rebind-ok: mutates caller's dict by design
+            # The Responses API reads "input", not "messages" -- appending only to
+            # "messages" would leave the advisory unreachable for that endpoint.
+            data["input"] = f"{existing_input}\n\n{message}"  # rebind-ok: mutates caller's dict by design
+            return True
+        if existing_input is not None:
+            # existing_input is a structured (non-string) Responses-API item
+            # list. That endpoint reads only "input", so appending to
+            # "messages" -- even if "messages" also happens to be present --
+            # would never reach the model. Leave data untouched and report
+            # non-delivery so the caller degrades to blocking.
+            return False
+        if isinstance(existing_messages, list):
+            messages_without_input_note: Final = [*existing_messages, advisory_message]  # mutable-ok: fresh list
+            data["messages"] = messages_without_input_note  # rebind-ok: mutates caller's dict by design
+            return True
+        sole_message: Final = [advisory_message]  # mutable-ok: plain list for the live JSON request
+        data["messages"] = sole_message  # rebind-ok: mutates caller's dict by design
+        return True
 
     def raise_sensitive_data_route_exception(
         self,

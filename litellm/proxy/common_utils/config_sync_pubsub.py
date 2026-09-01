@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Final, Protocol, cast  # noqa: TID251  # untyped prisma/redis boundary needs cast
 
 from litellm._logging import verbose_proxy_logger
+from litellm.repositories.prisma_protocols import RowT_co, TableActions
 
 if TYPE_CHECKING:
     from litellm.caching.redis_cache import RedisCache
@@ -163,13 +164,14 @@ class _PublishOnWriteActions:
 
 
 def wrap_table_actions_for_config_sync(
-    actions: object,
+    actions: "TableActions[RowT_co]",
     table_name: str,
     publish: Callable[[str], Awaitable[None]] = publish_config_change_for_object_type,
-) -> object:
+) -> "TableActions[RowT_co]":
     if table_name not in _CONFIG_SYNCED_TABLE_NAMES:
         return actions
-    return _PublishOnWriteActions(actions=actions, object_type=table_name, publish=publish)
+    wrapped: Final = _PublishOnWriteActions(actions=actions, object_type=table_name, publish=publish)
+    return cast("TableActions[RowT_co]", wrapped)  # cast-ok: dynamic write-through proxy keeps the wrapped row type
 
 
 class ConfigSyncSubscriber:

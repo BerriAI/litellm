@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import CacheDashboard from "./cache_dashboard";
 
@@ -47,6 +47,11 @@ const cacheActivity = {
     key_aliases: ["my-key", "Unnamed Key"],
     models: ["gpt-5.1", "text-embedding-3-large"],
   },
+  error_breakdown: [
+    { call_type: "acompletion", error_code: "429", error_class: "RateLimitError", count: 150 },
+    { call_type: "acompletion", error_code: "401", error_class: "AuthenticationError", count: 50 },
+    { call_type: "aembedding", error_code: "500", error_class: "InternalServerError", count: 50 },
+  ],
 };
 
 const renderDashboard = () =>
@@ -183,6 +188,52 @@ describe("CacheDashboard cache analytics charts", () => {
       keyAliases: [],
       models: [],
     });
+  });
+
+  it("opens the error-code drilldown for a call_type when its failed segment is clicked, and closes it again", async () => {
+    renderDashboard();
+    const { requestsCard } = await findChartCards();
+
+    const redBar = Array.from(requestsCard.querySelectorAll(".recharts-bar")).find((bar) =>
+      bar.querySelector("path.recharts-rectangle")?.getAttribute("fill")?.includes("red"),
+    );
+    expect(redBar).toBeDefined();
+    expect(screen.queryByText(/Failed requests by error code/)).not.toBeInTheDocument();
+
+    fireEvent.click(redBar!.querySelectorAll("path.recharts-rectangle")[0]);
+
+    const drilldownCard = cardTitled("Failed requests by error code: acompletion");
+    expect(within(drilldownCard).getAllByText("429").length).toBeGreaterThan(0);
+    expect(within(drilldownCard).getAllByText("401").length).toBeGreaterThan(0);
+    expect(within(drilldownCard).queryByText("500")).not.toBeInTheDocument();
+
+    fireEvent.click(within(drilldownCard).getByRole("button", { name: "Close error breakdown" }));
+    expect(screen.queryByText(/Failed requests by error code/)).not.toBeInTheDocument();
+  });
+
+  it("dismisses an open drilldown when refetched data no longer has failures for that call_type", async () => {
+    const { rerender } = renderDashboard();
+    const { requestsCard } = await findChartCards();
+
+    const redBar = Array.from(requestsCard.querySelectorAll(".recharts-bar")).find((bar) =>
+      bar.querySelector("path.recharts-rectangle")?.getAttribute("fill")?.includes("red"),
+    );
+    fireEvent.click(redBar!.querySelectorAll("path.recharts-rectangle")[0]);
+    expect(screen.getByText("Failed requests by error code: acompletion")).toBeInTheDocument();
+
+    useCacheActivity.mockReturnValue({
+      data: {
+        ...cacheActivity,
+        groups: cacheActivity.groups.map((group) =>
+          group.call_type === "acompletion" ? { ...group, failed_requests: 0 } : group,
+        ),
+        error_breakdown: cacheActivity.error_breakdown.filter((bucket) => bucket.call_type !== "acompletion"),
+      },
+      refetch: vi.fn(),
+    });
+    rerender(<CacheDashboard accessToken="sk-test" token="tok" userRole="Admin" userID="u1" premiumUser={false} />);
+
+    expect(screen.queryByText(/Failed requests by error code/)).not.toBeInTheDocument();
   });
 
   it("formats y-axis ticks with compact notation", async () => {

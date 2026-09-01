@@ -4,7 +4,7 @@ organizations, teams, and keys.
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Optional
 
@@ -19,6 +19,8 @@ from litellm.repositories.object_permission_repository import ObjectPermissionRe
 from litellm.repositories.table_repositories import MCPServerRepository
 
 if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
     from litellm.proxy._types import (
         LiteLLM_ObjectPermissionTable,
         LiteLLM_TeamTableCachedObj,
@@ -26,7 +28,7 @@ if TYPE_CHECKING:
 
 
 async def attach_object_permission_to_dict(
-    data_dict: dict,
+    data_dict: dict[str, object],
     prisma_client: PrismaClient,
 ) -> dict:
     """
@@ -61,7 +63,7 @@ async def attach_object_permission_to_dict(
             try:
                 object_permission = object_permission.model_dump()
             except Exception:
-                object_permission = object_permission.dict()
+                object_permission = object_permission.dict()  # pyright: ignore[reportDeprecated]  # pydantic v1 fallback
             data_dict["object_permission"] = object_permission
     return data_dict
 
@@ -188,7 +190,9 @@ async def _set_object_permission(
         return data_json
 
     # Clean data: exclude None values and object_permission_id
-    clean_data: Final = {k: v for k, v in permission_data.items() if v is not None and k != "object_permission_id"}
+    clean_data: Final[dict[str, object]] = {
+        k: v for k, v in permission_data.items() if v is not None and k != "object_permission_id"
+    }
 
     # Serialize mcp_tool_permissions to JSON string for GraphQL compatibility
     if "mcp_tool_permissions" in clean_data:
@@ -224,7 +228,7 @@ def _mcp_server_identifier_matches(server: Any, identifier: str) -> bool:
 async def _get_db_mcp_servers_by_identifiers(
     identifiers: set[str],
     prisma_client: PrismaClient | None,
-) -> list[Any]:
+) -> "Sequence[prisma_models.LiteLLM_MCPServerTable]":
     if prisma_client is None or not identifiers:
         return []
 
@@ -282,7 +286,7 @@ async def _resolve_mcp_server_identifiers_to_ids(
     return resolved
 
 
-def _rewrite_object_permission_mcp_servers(
+def _drop_stale_object_permission_mcp_servers(
     object_permission: ObjectPermissionDict,
     identifier_to_server_ids: dict[str, set[str]],
 ) -> None:
@@ -290,16 +294,18 @@ def _rewrite_object_permission_mcp_servers(
     if not isinstance(mcp_servers, list):
         return
 
-    normalized_servers: Final[list[str]] = []
-    for identifier in mcp_servers:
-        if identifier == SpecialMCPServerNames.no_mcp_servers.value:
-            normalized_servers.append(SpecialMCPServerNames.no_mcp_servers.value)
-            continue
-        normalized_servers.extend(sorted(identifier_to_server_ids.get(identifier, [])))
-    object_permission["mcp_servers"] = _dedupe_preserving_order(normalized_servers)
+    # Persist original identifiers, never resolved ids: shared-DB multi-region
+    # instances each expand a name/alias to their own local server id at read
+    # time. Only entries resolving to nothing (deleted servers, typos) drop.
+    kept_servers: Final = [
+        identifier
+        for identifier in mcp_servers
+        if identifier == SpecialMCPServerNames.no_mcp_servers.value or identifier_to_server_ids.get(identifier)
+    ]
+    object_permission["mcp_servers"] = _dedupe_preserving_order(kept_servers)
 
 
-def _rewrite_object_permission_mcp_tool_permissions(
+def _drop_stale_object_permission_mcp_tool_permissions(
     object_permission: ObjectPermissionDict,
     identifier_to_server_ids: dict[str, set[str]],
 ) -> None:
@@ -307,31 +313,25 @@ def _rewrite_object_permission_mcp_tool_permissions(
     if not isinstance(mcp_tool_permissions, dict):
         return
 
-    normalized_tool_permissions: Final[dict[str, list[str]]] = {}
-    for identifier, tools in mcp_tool_permissions.items():
-        if not isinstance(tools, list):
-            tools = []
-        for server_id in sorted(identifier_to_server_ids.get(identifier, [])):
-            normalized_tool_permissions.setdefault(server_id, [])
-            normalized_tool_permissions[server_id].extend(tools)
-
     object_permission["mcp_tool_permissions"] = {
-        server_id: _dedupe_preserving_order(tools) for server_id, tools in normalized_tool_permissions.items()
+        identifier: _dedupe_preserving_order(tools if isinstance(tools, list) else [])
+        for identifier, tools in mcp_tool_permissions.items()
+        if identifier_to_server_ids.get(identifier)
     }
 
 
-def _rewrite_object_permission_mcp_identifiers(
+def _drop_stale_object_permission_mcp_identifiers(
     object_permission: ObjectPermissionDict | None,
     identifier_to_server_ids: dict[str, set[str]],
 ) -> None:
     if not object_permission or not isinstance(object_permission, dict):
         return
 
-    _rewrite_object_permission_mcp_servers(
+    _drop_stale_object_permission_mcp_servers(
         object_permission=object_permission,
         identifier_to_server_ids=identifier_to_server_ids,
     )
-    _rewrite_object_permission_mcp_tool_permissions(
+    _drop_stale_object_permission_mcp_tool_permissions(
         object_permission=object_permission,
         identifier_to_server_ids=identifier_to_server_ids,
     )
@@ -443,6 +443,36 @@ async def enforce_all_proxy_mcp_servers_grant_is_admin_only(
     )
 
 
+async def _get_grandfathered_key_mcp_server_ids(
+    existing_object_permission: Optional["LiteLLM_ObjectPermissionTable"],
+    prisma_client: PrismaClient | None,
+) -> frozenset[str]:
+    """
+    Resolve the canonical MCP server IDs a key's stored object_permission already
+    grants. Updates that keep or shrink those grants stay valid even when the
+    team allowlist has since changed; sentinels are excluded so they cannot
+    grandfather anything.
+    """
+    if existing_object_permission is None or prisma_client is None:
+        return frozenset()
+    raw_tool_perms: Final = existing_object_permission.mcp_tool_permissions or {}
+    tool_perm_keys: Final[frozenset[str]] = frozenset(
+        json.loads(raw_tool_perms).keys() if isinstance(raw_tool_perms, str) else raw_tool_perms.keys()
+    )
+    identifiers: Final = (frozenset(existing_object_permission.mcp_servers or []) | tool_perm_keys) - {
+        SpecialMCPServerNames.no_mcp_servers.value,
+        SpecialMCPServerName.all_proxy_servers.value,
+    }
+    return frozenset(
+        _flatten_resolved_mcp_server_ids(
+            await _resolve_mcp_server_identifiers_to_ids(
+                identifiers=set(identifiers),
+                prisma_client=prisma_client,
+            )
+        )
+    )
+
+
 async def _get_team_allowed_mcp_servers(
     team_obj: Optional["LiteLLM_TeamTableCachedObj"],
     prisma_client: PrismaClient | None = None,
@@ -523,9 +553,15 @@ async def validate_key_mcp_servers_against_team(
     team_obj: Optional["LiteLLM_TeamTableCachedObj"],
     prisma_client: PrismaClient | None = None,
     is_proxy_admin: bool = False,
+    existing_key_object_permission: Optional["LiteLLM_ObjectPermissionTable"] = None,
 ) -> ObjectPermissionDict | None:
     """
     Validate that MCP servers requested on a key are within the allowed scope.
+
+    When ``existing_key_object_permission`` is provided (key updates), servers
+    the key already holds are grandfathered: keeping or removing them stays valid
+    even if the team allowlist has since shrunk, while adding new servers outside
+    the allowlist is still rejected.
 
     Rules:
     - If key is in a team: key's mcp_servers must be a subset of
@@ -575,7 +611,7 @@ async def validate_key_mcp_servers_against_team(
                 "validate_key_mcp_servers_against_team: ignoring stale MCP server identifiers (no longer in registry or DB): %s",
                 sorted(stale_identifiers),
             )
-        _rewrite_object_permission_mcp_identifiers(
+        _drop_stale_object_permission_mcp_identifiers(
             object_permission=object_permission,
             identifier_to_server_ids=identifier_to_server_ids,
         )
@@ -585,7 +621,11 @@ async def validate_key_mcp_servers_against_team(
         if teamless_admin_assignment:
             allowed_servers = all_allowed_servers | active_requested_servers
 
-        disallowed_servers: Final = active_requested_servers - allowed_servers
+        grandfathered_servers: Final = await _get_grandfathered_key_mcp_server_ids(
+            existing_object_permission=existing_key_object_permission,
+            prisma_client=prisma_client,
+        )
+        disallowed_servers: Final = active_requested_servers - allowed_servers - grandfathered_servers
         if disallowed_servers:
             if team_obj is not None:
                 team_id = team_obj.team_id

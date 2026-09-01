@@ -30,7 +30,7 @@ class PolicyMatcher:
         """
         Check if a value matches any of the given patterns.
 
-        Uses the existing RouteChecks._route_matches_wildcard_pattern helper.
+        Uses the existing RouteChecks.route_matches_wildcard_pattern helper.
 
         Args:
             value: The value to check (e.g., team alias, key alias, model)
@@ -45,7 +45,7 @@ class PolicyMatcher:
 
         for pattern in patterns:
             # Use existing wildcard pattern matching helper
-            if RouteChecks._route_matches_wildcard_pattern(route=value, pattern=pattern):
+            if RouteChecks.route_matches_wildcard_pattern(route=value, pattern=pattern):
                 return True
 
         return False

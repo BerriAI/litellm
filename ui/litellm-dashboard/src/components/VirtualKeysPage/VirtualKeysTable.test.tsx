@@ -207,6 +207,8 @@ it("left-anchors the create-key CTA below the title, between the header and the 
   renderWithProviders(<VirtualKeysTable headerActions={<button>Create New Key</button>} />);
 
   const heading = screen.getByRole("heading", { name: "Virtual Keys" });
+  expect(screen.getByText("Every key that authenticates requests to the gateway.")).toBeInTheDocument();
+  expect(document.querySelector(".lucide-key-round")).not.toBeNull();
   const ctas = screen.getAllByRole("button", { name: "Create New Key" });
   expect(ctas).toHaveLength(1);
   const cta = ctas[0];

@@ -15,7 +15,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import NewBadge from "@/components/common_components/NewBadge";
 import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
@@ -25,6 +24,7 @@ import { deleteMCPServer } from "@/components/networking";
 import { MCPSubmissionsTab } from "./MCPSubmissionsTab";
 import { MCPToolsetsTab } from "./MCPToolsetsTab";
 import CreateMCPServer from "./CreateMCPServer";
+import ImportMCPServers from "./ImportMCPServers";
 import MCPConnect from "./mcp_connect";
 import MCPServerCard from "./MCPServerCard";
 import { MCPServerView } from "./mcp_server_view";
@@ -149,6 +149,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [filteredServers, setFilteredServers] = useState<MCPServer[]>([]);
   const [isModalVisible, setModalVisible] = useState(false);
   const [isDiscoveryVisible, setDiscoveryVisible] = useState(false);
+  const [isImportVisible, setImportVisible] = useState(false);
   const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
@@ -483,9 +484,14 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           </div>
           <div className="flex items-center gap-2">
             {isAdminRole(userRole) && (
-              <Button className="shrink-0" onClick={() => setDiscoveryVisible(true)}>
-                + Add New MCP Server
-              </Button>
+              <>
+                <Button className="shrink-0" variant="secondary" onClick={() => setImportVisible(true)}>
+                  Import from JSON
+                </Button>
+                <Button className="shrink-0" onClick={() => setDiscoveryVisible(true)}>
+                  + Add New MCP Server
+                </Button>
+              </>
             )}
             {!isAdminRole(userRole) && (
               <Button
@@ -501,6 +507,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             )}
           </div>
         </div>
+        <ImportMCPServers
+          accessToken={accessToken}
+          open={isImportVisible}
+          onClose={() => setImportVisible(false)}
+          onImported={() => refetch()}
+        />
         <MCPDiscovery
           isVisible={isDiscoveryVisible}
           onClose={() => setDiscoveryVisible(false)}
@@ -538,8 +550,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
               </TabsTrigger>
             )}
             {isAdminRole(userRole) && (
-              <TabsTrigger value="submitted" className="flex-none gap-2 rounded-none px-4 py-2">
-                Submitted MCPs <NewBadge />
+              <TabsTrigger value="submitted" className="flex-none rounded-none px-4 py-2">
+                Submitted MCPs
               </TabsTrigger>
             )}
           </TabsList>

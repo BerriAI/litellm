@@ -846,6 +846,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         api_key: str,
         data: dict,
         headers: dict,
+        deployment_name: str | None = None,
     ) -> httpx.Response:
         """
         Implemented for azure dall-e-2 image gen calls
@@ -957,7 +958,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 content=json.dumps(result).encode("utf-8"),
                 request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
             )
-        request_json: Final = azure_deployment_image_generation_json_body(api_base, data)
+        request_json: Final = azure_deployment_image_generation_json_body(api_base, data, deployment_name)
         return await async_handler.post(
             url=api_base,
             json=request_json,
@@ -973,6 +974,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         api_key: str,
         data: dict,
         headers: dict,
+        deployment_name: str | None = None,
     ) -> httpx.Response:
         """
         Implemented for azure dall-e-2 image gen calls
@@ -1073,7 +1075,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 content=json.dumps(result).encode("utf-8"),
                 request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
             )
-        request_json: Final = azure_deployment_image_generation_json_body(api_base, data)
+        request_json: Final = azure_deployment_image_generation_json_body(api_base, data, deployment_name)
         return sync_handler.post(
             url=api_base,
             json=request_json,
@@ -1091,9 +1093,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             AzureFoundryMAIImageGenerationConfig,
         )
 
-        api_base: str = azure_client_params.get("azure_endpoint", "")  # "https://example-endpoint.openai.azure.com"
-        if api_base.endswith("/"):
-            api_base = api_base.rstrip("/")
+        # deployment-scoped endpoints are moved to "base_url" by select_azure_base_url_or_endpoint
+        api_base: str = (azure_client_params.get("azure_endpoint") or azure_client_params.get("base_url") or "").rstrip(
+            "/"
+        )
         api_version: Final[str] = azure_client_params.get("api_version", "")
         if model is None:
             model = ""
@@ -1112,6 +1115,14 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 model=model,
                 api_version=api_version,
             )
+
+        v1_url: Final = BaseAzureLLM.get_azure_v1_image_url(
+            api_base=api_base,
+            api_version=api_version,
+            route="/openai/images/generations",
+        )
+        if v1_url is not None:
+            return v1_url
 
         if "/openai/deployments/" in api_base:
             base_url_with_deployment = api_base
@@ -1167,6 +1178,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 api_key=api_key,
                 data=data,
                 headers=headers,
+                deployment_name=model,
             )
 
             provider_config: Final = get_azure_image_generation_config(data.get("model", "dall-e-2"))
@@ -1302,6 +1314,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 api_key=api_key or "",
                 data=data,
                 headers=headers,
+                deployment_name=model,
             )
             provider_config: Final = get_azure_image_generation_config(data.get("model", "dall-e-2"))
             if isinstance(provider_config, AzureFoundryMAIImageGenerationConfig):

@@ -79,7 +79,7 @@ function ConfirmDialog({ action, serverName, isCurrentlyActive, onConfirm, onCan
     ? "This server is currently live. Rejecting it will immediately remove it from the proxy runtime."
     : "This will mark the submission as rejected.";
   return (
-    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-overlay">
       <div className="bg-card rounded-xl shadow-xl p-6 max-w-sm w-full mx-4">
         <div
           className={`w-10 h-10 rounded-full flex items-center justify-center mb-4 ${

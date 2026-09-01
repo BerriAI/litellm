@@ -143,7 +143,6 @@ def test_spend_logs_payload(model_id: Optional[str]):
             "completion_start_time": datetime.datetime(2024, 6, 7, 12, 43, 30, 954146),
             "max_tokens": 10,
             "extra_body": {},
-            "custom_llm_provider": "azure",
             "input": [
                 {"role": "system", "content": "you are a helpful assistant.\n"},
                 {"role": "user", "content": "bom dia"},

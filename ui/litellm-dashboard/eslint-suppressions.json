@@ -1465,9 +1465,6 @@
   "src/components/add_model/conditional_public_model_name.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "local/no-complex-jsx-arrow": {
-      "count": 1
     }
   },
   "src/components/add_model/handle_add_auto_router_submit.tsx": {
@@ -2018,11 +2015,6 @@
       "count": 1
     }
   },
-  "src/components/shared/form/field.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
   "src/components/shared/numerical_input.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2138,6 +2130,11 @@
       "count": 1
     }
   },
+  "src/components/ui/alert.tsx": {
+    "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
   "src/components/ui/avatar.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2198,6 +2195,11 @@
       "count": 1
     }
   },
+  "src/components/ui/field.tsx": {
+    "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
   "src/components/ui/hover-card.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2214,11 +2216,6 @@
     }
   },
   "src/components/ui/label.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/components/ui/meter.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     }
@@ -2249,11 +2246,6 @@
     }
   },
   "src/components/ui/sheet.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/components/ui/sidebar.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     }

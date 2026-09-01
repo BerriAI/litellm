@@ -1,7 +1,7 @@
 import type { RoleMappings as RoleMappingsType } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 import type { ColumnDef } from "@tanstack/react-table";
 import { DataTable } from "@/components/shared/DataTable";
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/shared/table_cells/status_badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Users } from "lucide-react";
@@ -34,9 +34,7 @@ export default function RoleMappings({ roleMappings }: { roleMappings: RoleMappi
         row.original.groups.length > 0 ? (
           <div className="flex flex-wrap gap-1">
             {row.original.groups.map((group, index) => (
-              <Badge key={index} variant="info">
-                {group}
-              </Badge>
+              <StatusBadge key={index} tone="info" label={group} />
             ))}
           </div>
         ) : (

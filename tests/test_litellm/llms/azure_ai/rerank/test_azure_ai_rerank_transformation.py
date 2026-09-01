@@ -2,6 +2,7 @@
 import pytest
 
 
+import litellm
 from litellm.llms.azure_ai.rerank.transformation import AzureAIRerankConfig
 
 
@@ -92,3 +93,26 @@ class TestAzureAIRerankConfigGetCompleteUrl:
             model=self.model,
         )
         assert url == "https://my-resource.services.ai.azure.com/v1/rerank?r=1"
+
+
+class TestAzureAIRerankConfigValidateEnvironment:
+    def test_uses_api_key_when_set(self):
+        headers = AzureAIRerankConfig().validate_environment(
+            headers={},
+            model="azure_ai/cohere-rerank-v3-english",
+            api_key="my-key",
+        )
+
+        assert headers["Authorization"] == "Bearer my-key"
+
+    def test_falls_back_to_entra_token(self, monkeypatch):
+        monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
+        monkeypatch.setattr(litellm, "azure_key", None)
+
+        headers = AzureAIRerankConfig().validate_environment(
+            headers={},
+            model="azure_ai/cohere-rerank-v3-english",
+            litellm_params={"azure_ad_token": "entra-token"},
+        )
+
+        assert headers["Authorization"] == "Bearer entra-token"

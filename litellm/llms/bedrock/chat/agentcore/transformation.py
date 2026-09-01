@@ -13,6 +13,7 @@ import httpx
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -38,6 +39,8 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
@@ -97,7 +100,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         if aws_bedrock_runtime_endpoint:
             base_url = aws_bedrock_runtime_endpoint
         else:
-            base_url = f"https://bedrock-agentcore.{region}.amazonaws.com"
+            base_url = f"https://bedrock-agentcore.{region}.{get_aws_dns_suffix(region)}"
 
         # Based on boto3 client.invoke_agent_runtime, the path is:
         # /runtimes/{URL-ENCODED-ARN}/invocations?qualifier=<value>
@@ -974,7 +977,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

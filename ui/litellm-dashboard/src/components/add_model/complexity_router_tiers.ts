@@ -1,12 +1,22 @@
-import type { ComplexityTiers } from "./ComplexityRouterConfig";
 import type { ComplexityTier } from "./KeywordTierRules";
+import { TIER_ORDER } from "./tier_rows";
 
 export type TierModelParams = Record<string, unknown>;
 
 export type TierModelParamsByTier = Record<string, Record<string, TierModelParams>>;
 
+/**
+ * Fallback offered only when a proxy does not report supported_reasoning_efforts per model group.
+ * max is deliberately absent: it is opt-in per model in the model map, so a capability-blind list
+ * must not offer it; a proxy that reports capabilities supplies max itself where supported.
+ */
 export const REASONING_EFFORT_OPTIONS = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
-export type ReasoningEffort = (typeof REASONING_EFFORT_OPTIONS)[number];
+
+/**
+ * Open on purpose: the valid set is per model group at runtime (supported_reasoning_efforts), and
+ * hand-authored configs can carry any level, so the known literals only add autocompletion.
+ */
+export type ReasoningEffort = (typeof REASONING_EFFORT_OPTIONS)[number] | (string & {});
 
 const asRecord = (raw: unknown): Record<string, unknown> | undefined =>
   typeof raw === "object" && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : undefined;
@@ -70,13 +80,13 @@ export const hydrateTierModelParams = (
  * tiers this editor does not render pass through rather than being dropped now the key is managed.
  */
 export const serializeTierModelConfigs = (
-  tiers: ComplexityTiers,
+  tiers: Record<string, string[]>,
   tierModelParams: TierModelParamsByTier | undefined,
 ): Record<string, { model_name: string; litellm_params: TierModelParams }[]> | undefined => {
   if (tierModelParams === undefined) return undefined;
   const serialized = Object.entries(tierModelParams)
     .map(([tier, byModel]) => {
-      const selected = (TIER_ORDER as string[]).includes(tier) ? new Set(tiers[tier as ComplexityTier]) : undefined;
+      const selected = tier in tiers ? new Set(tiers[tier]) : undefined;
       const entries = Object.entries(byModel)
         .filter(([model, params]) => (selected === undefined || selected.has(model)) && Object.keys(params).length > 0)
         .map(([model_name, litellm_params]) => ({ model_name, litellm_params }));
@@ -116,14 +126,6 @@ export const pruneTierModelParams = (
   return Object.keys(next).length > 0 ? next : undefined;
 };
 
-/**
- * Mirrors `init_complexity_router_deployment` (litellm/router.py): an explicit pin wins, otherwise
- * the default is `MEDIUM or SIMPLE`. Deriving past SIMPLE would name a model the backend never
- * picks, and it raises rather than falling through to COMPLEX/REASONING.
- */
-export const resolveComplexityDefaultModel = (tiers: ComplexityTiers, pinned?: string): string | undefined =>
-  pinned?.trim() || tiers.MEDIUM[0] || tiers.SIMPLE[0];
-
 export const DEFAULT_TIER_LABELS: Record<ComplexityTier, string> = {
   SIMPLE: "Simple",
   MEDIUM: "Medium",
@@ -131,9 +133,30 @@ export const DEFAULT_TIER_LABELS: Record<ComplexityTier, string> = {
   REASONING: "Reasoning",
 };
 
-export const TIER_ORDER: ComplexityTier[] = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
+const isBuiltInTier = (tier: string): tier is ComplexityTier => (TIER_ORDER as string[]).includes(tier);
+
+const builtInTierLabel = (
+  tierLabels: Partial<Record<ComplexityTier, string>> | undefined,
+  tier: ComplexityTier,
+): string => tierLabels?.[tier]?.trim() || DEFAULT_TIER_LABELS[tier];
+
+// What a tier row is called on screen. A row the operator named shows that name; an untouched
+// built-in row shows its display label. The one owner for every surface that renders a tier.
+export const tierRowLabel = (
+  row: { id: string; name: string },
+  tierLabels?: Partial<Record<ComplexityTier, string>>,
+): string => {
+  const builtIn = TIER_ORDER.find((tier) => tier === row.id);
+  const named = row.name.trim();
+  if (!builtIn || named !== builtIn) return named || "New";
+  return builtInTierLabel(tierLabels, builtIn);
+};
 
 export const tierOptions = (
   tierLabels: Partial<Record<ComplexityTier, string>> | undefined,
-): { value: ComplexityTier; label: string }[] =>
-  TIER_ORDER.map((tier) => ({ value: tier, label: tierLabels?.[tier]?.trim() || DEFAULT_TIER_LABELS[tier] }));
+  tierNames?: readonly string[],
+): { value: string; label: string }[] =>
+  (tierNames ?? TIER_ORDER).map((tier) => ({
+    value: tier,
+    label: isBuiltInTier(tier) ? builtInTierLabel(tierLabels, tier) : tier,
+  }));
