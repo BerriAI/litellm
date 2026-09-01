@@ -6176,6 +6176,7 @@ def test_is_anthropic_usage_object_rejects_responses_api_usage():
     [
         # always-on-thinking models reject thinking.type=disabled with a 400
         ("claude-fable-5", True),
+        ("claude-fable-5-1", True),
         ("claude-mythos-5", True),
         # unmapped future family member -> claude-always-on-thinking fallback rule
         ("claude-fable-6-1", True),
@@ -6207,3 +6208,107 @@ def test_disabled_thinking_omitted_only_for_always_on_models(
         assert "thinking" not in request
     else:
         assert request["thinking"] == {"type": "disabled"}
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    ["required", {"type": "required"}, {"type": "function", "function": {"name": "get_weather"}}],
+)
+def test_forced_tool_choice_raises_clean_error_on_fable_5_1_without_drop_params(
+    local_model_cost_map, tool_choice, monkeypatch
+):
+    """Fable 5.1 400s on tool_choice type any/tool (thinking is always on and a
+    forced call would skip it); without drop_params the caller gets a clean
+    client-side 400 that explains the workaround, not a provider error."""
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AnthropicConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="forced tool use"):
+        config.map_openai_params(
+            non_default_params={"tool_choice": tool_choice},
+            optional_params={},
+            model="claude-fable-5-1",
+            drop_params=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    ["required", {"type": "required"}, {"type": "function", "function": {"name": "get_weather"}}],
+)
+def test_forced_tool_choice_downgraded_to_auto_on_fable_5_1_with_drop_params(
+    local_model_cost_map, tool_choice
+):
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"tool_choice": tool_choice},
+        optional_params={},
+        model="claude-fable-5-1",
+        drop_params=True,
+    )
+
+    assert result["tool_choice"] == {"type": "auto"}
+
+
+def test_forced_tool_choice_downgrade_keeps_parallel_tool_calls_flag(local_model_cost_map):
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"tool_choice": "required", "parallel_tool_calls": False},
+        optional_params={},
+        model="claude-fable-5-1",
+        drop_params=True,
+    )
+
+    assert result["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True}
+
+
+@pytest.mark.parametrize("tool_choice, expected_type", [("auto", "auto"), ("none", "none")])
+def test_unforced_tool_choice_forwarded_on_fable_5_1(
+    local_model_cost_map, tool_choice, expected_type, monkeypatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"tool_choice": tool_choice},
+        optional_params={},
+        model="claude-fable-5-1",
+        drop_params=False,
+    )
+
+    assert result["tool_choice"]["type"] == expected_type
+
+
+@pytest.mark.parametrize("model", ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"])
+def test_forced_tool_choice_forwarded_on_models_that_support_it(
+    local_model_cost_map, model, monkeypatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"tool_choice": "required"},
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+
+    assert result["tool_choice"] == {"type": "any"}
+
+
+def test_forced_tool_choice_gating_driven_by_model_map_flag(local_model_cost_map, monkeypatch):
+    """The gate must read ``supports_forced_tool_use`` from the model map, not
+    the model name: a flagged entry gates a model whose name says nothing."""
+    monkeypatch.setitem(litellm.model_cost, "claude-zeta-9", {"supports_forced_tool_use": False})
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"tool_choice": "required"},
+        optional_params={},
+        model="claude-zeta-9",
+        drop_params=True,
+    )
+
+    assert result["tool_choice"] == {"type": "auto"}
