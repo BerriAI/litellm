@@ -269,20 +269,6 @@ class _ProxyDBLogger(CustomLogger):
                 served_model_id=sl_object.get("model_id") if sl_object is not None else None,
                 router=get_llm_router(),
             )
-            # LIT-6314: post-call guardrail evaluations run after SLP is built, so
-            # guardrail_information is missing from SLP. Populate it from post-call evals
-            # before spend-log write so reports show accurate guardrail results.
-            if sl_object is not None:
-                litellm_metadata: Final = kwargs.get("litellm_metadata")
-                guardrail_info_from_hooks: Final = (
-                    litellm_metadata.get("standard_logging_guardrail_information")
-                    if isinstance(litellm_metadata, dict)
-                    else None
-                )
-                if guardrail_info_from_hooks is not None and not sl_object.get("guardrail_information"):
-                    sl_object["guardrail_information"] = (
-                        guardrail_info_from_hooks  # mutable-ok: populate SLP before spend-log write
-                    )
 
             if response_cost is not None:
                 user_api_key: Final = metadata.get("user_api_key", None)
