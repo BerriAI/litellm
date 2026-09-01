@@ -1483,11 +1483,11 @@ class ModelManagementAuthChecks:
             return True
         if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
             return True
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": f"Only a proxy admin can attach a stored credential (litellm_credential_name) to a model. Your role={user_api_key_dict.user_role}."
-            },
+        raise ProxyException(
+            message=f"Only a proxy admin can attach a stored credential (litellm_credential_name) to a model. Your role={user_api_key_dict.user_role}.",
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param="litellm_credential_name",
         )
 
     @staticmethod
@@ -1988,6 +1988,16 @@ async def update_model(
             prisma_client=prisma_client,
             premium_user=premium_user,
         )
+
+        if (
+            model_params.litellm_params is not None
+            and model_params.litellm_params.litellm_credential_name is not None
+            and model_params.litellm_params.litellm_credential_name != deployment.litellm_params.litellm_credential_name
+        ):
+            ModelManagementAuthChecks.can_user_attach_credential(
+                litellm_params=model_params.litellm_params,
+                user_api_key_dict=user_api_key_dict,
+            )
 
         _raise_on_strategy_router_write_violation(
             incoming_params=model_params.litellm_params,
