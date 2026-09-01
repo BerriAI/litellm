@@ -1408,7 +1408,7 @@ if MCP_AVAILABLE:
             listing_deadline: Final = max(MCP_CLIENT_TIMEOUT, MCP_TOOL_LISTING_TIMEOUT)
             list_tools_result = None  # rebind-ok: set inside the timeout scope below
             with anyio.move_on_after(listing_deadline):
-                list_tools_result = await client.list_tools(raise_on_error=True)
+                list_tools_result = await client.list_tools(raise_on_error=True)  # rebind-ok: fills the init above
             if list_tools_result is None:
                 verbose_logger.warning(
                     "MCP tools/list preview timed out after %s seconds while paginating upstream tools",
