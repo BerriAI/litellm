@@ -159,7 +159,7 @@ class TestServiceLoggerOTEL(unittest.IsolatedAsyncioTestCase):
                 warnings.simplefilter("always")
                 from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
-                with patch(
+                with patch(  # test-quality-ok: mocking litellm credential resolver so test runs without real API keys
                     "litellm.integrations.langfuse.langfuse.resolve_langfuse_credentials",
                     return_value=("pk", "sk", "https://cloud.langfuse.com"),
                 ):
