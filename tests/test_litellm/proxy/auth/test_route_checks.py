@@ -3670,6 +3670,39 @@ def test_path_placeholder_matches_what_the_router_accepts(pattern, route, matche
     assert RouteChecks._route_matches_pattern(route=route, pattern=pattern) is matches
 
 
+# Every other route the proxy mounts under /team/{team_id}, spelled the way it
+# is registered. None of them takes a path converter, so none can be reached by
+# a URL that ends in the callback suffix.
+PROTECTED_TEAM_ROUTES = (
+    "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112",
+    "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112/disable_logging",
+    "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112/members/me",
+    "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112/member/u-1/reset_spend",
+    # the same routes with the callback suffix spliced in, which is the shape a
+    # caller would craft to make a protected route look self-managed
+    "/team/06bda574/callback/disable_logging/x",
+    "/team/06bda574/callback/member/u-1/reset_spend",
+    "/team/06bda574/callback/members/me",
+)
+
+
+@pytest.mark.parametrize("route", PROTECTED_TEAM_ROUTES)
+def test_the_callback_grant_does_not_reach_another_team_route(route):
+    """Widening the callback templates must not hand out any neighbouring route.
+
+    The grant is two templates ending in the callback suffix. Every other team
+    route registers an ordinary single-segment placeholder, so no URL the router
+    sends to one of them can end in "/callback" or "/callback/<name>" -- and the
+    gate must agree, or a crafted team id would carry a caller into a handler
+    the grant never covered.
+    """
+    for template in (
+        "/team/{team_id:path}/callback",
+        "/team/{team_id:path}/callback/{callback_name}",
+    ):
+        assert RouteChecks._route_matches_pattern(route=route, pattern=template) is False
+
+
 def test_team_disable_logging_stays_proxy_admin_only():
     """disable_logging was left out of the grant, so it must still be rejected at
     the gate. It is the one team callback route a team admin cannot reach."""
