@@ -245,7 +245,12 @@ describe("autorouter_presets", () => {
       ["some-model", "prov/some-model-20991399"],
     ])("never lets %s be satisfied by a deployment of %s", (presetModel, underlying) => {
       const availability = availabilityFor("some-group", underlying);
-      const config = { tiers: { SIMPLE: [presetModel], MEDIUM: [], COMPLEX: [], REASONING: [] }, classifier_type: "heuristic" as const, session_affinity: false, deployment_affinity: true };
+      const config = {
+        tiers: { SIMPLE: [presetModel], MEDIUM: [], COMPLEX: [], REASONING: [] },
+        classifier_type: "heuristic" as const,
+        session_affinity: false,
+        deployment_affinity: true,
+      };
       expect(getMissingModels(config, availability)).toEqual([presetModel]);
     });
 
