@@ -12,6 +12,7 @@ from litellm.proxy.hooks.tag_rate_limits_shared import (
     bucket_ttl_seconds,
     entry_applies,
     extract_identity,
+    extract_key_alias,
     extract_key_hash,
     fixed_length_identity,
     order_tags_for_identity_resolution,
@@ -123,6 +124,19 @@ def test_extract_key_hash_ignores_a_forged_value_in_the_non_authoritative_field(
 def test_extract_key_hash_reads_metadata_when_it_is_the_authoritative_field():
     request_kwargs = {"metadata": {"user_api_key": "real-hash"}}
     assert extract_key_hash(request_kwargs, "metadata") == "real-hash"
+
+
+def test_extract_key_hash_ignores_a_non_mapping_authoritative_field():
+    """Bugbot finding: metadata can arrive as an unparsed JSON string (see
+    apply_client_tag_policy_pre_auth's own docstring on multipart/extra_body
+    routes); a truthy non-Mapping must not reach .get() and crash."""
+    request_kwargs = {"metadata": '{"user_api_key": "forged"}'}
+    assert extract_key_hash(request_kwargs, "metadata") is None
+
+
+def test_extract_key_alias_ignores_a_non_mapping_authoritative_field():
+    request_kwargs = {"metadata": '{"user_api_key_alias": "forged"}'}
+    assert extract_key_alias(request_kwargs, "metadata") is None
 
 
 # ---------------------------------------------------------------------------
