@@ -178,6 +178,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             model_specific_params.append(
                 "user"
             )  # user is not a param supported by all openai-compatible endpoints - e.g. azure ai
+        else:
+            model_specific_params.append(
+                "reasoning_effort"
+            )  # unknown model: likely a proxy alias for a reasoning-capable model, so forward and let the server decide
         return base_params + model_specific_params
 
     def _map_openai_params(

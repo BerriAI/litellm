@@ -145,6 +145,47 @@ class TestGetOptionalParamsIntegration:
         assert regular_params.get("user") == "my-end-user"
         assert responses_params.get("user") == "my-end-user"
 
+    def test_reasoning_effort_supported_for_unknown_model_alias(self):
+        """An openai/-routed model litellm doesn't recognize is likely a proxy alias:
+        reasoning_effort must be forwarded so the server decides support."""
+        supported_params = OpenAIGPTConfig().get_supported_openai_params(
+            "my-claude-alias"
+        )
+        assert "reasoning_effort" in supported_params
+
+    def test_reasoning_effort_not_supported_for_known_non_reasoning_models(self):
+        """Known OpenAI models keep failing closed client-side."""
+        config = OpenAIGPTConfig()
+        assert "reasoning_effort" not in config.get_supported_openai_params("gpt-4o")
+        assert "reasoning_effort" not in config.get_supported_openai_params(
+            "responses/gpt-4.1-mini"
+        )
+
+    def test_reasoning_effort_forwarded_in_optional_params_for_unknown_model_alias(
+        self,
+    ):
+        """Regression test for reasoning_effort raising UnsupportedParamsError
+        client-side for openai/-prefixed proxy aliases before any HTTP request."""
+        from litellm.utils import get_optional_params
+
+        optional_params = get_optional_params(
+            model="my-claude-alias",
+            custom_llm_provider="openai",
+            reasoning_effort="low",
+        )
+        assert optional_params.get("reasoning_effort") == "low"
+
+    def test_reasoning_effort_still_rejected_for_known_non_reasoning_model(self):
+        """A real OpenAI model that doesn't reason still rejects the param client-side."""
+        from litellm.utils import get_optional_params
+
+        with pytest.raises(litellm.utils.UnsupportedParamsError):
+            get_optional_params(
+                model="gpt-4o",
+                custom_llm_provider="openai",
+                reasoning_effort="low",
+            )
+
 
 class TestOpenAIChatCompletionStreamingHandler:
     """Tests for OpenAIChatCompletionStreamingHandler.chunk_parser()"""
