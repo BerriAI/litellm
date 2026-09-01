@@ -9,6 +9,7 @@ Provides:
 import base64
 import json
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import orjson
@@ -19,6 +20,9 @@ from starlette.datastructures import UploadFile
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
+    LiteLLM_ManagedVectorStore,
+)
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_utils import is_request_body_safe
@@ -37,7 +41,7 @@ from litellm.proxy.rag_endpoints.upload_security import (
     validate_upload,
 )
 from litellm.proxy.vector_store_endpoints.endpoints import (
-    _update_request_data_with_litellm_managed_vector_store_registry,  # pyright: ignore[reportPrivateUsage]  # shared registry-merge helper used by the direct search endpoint
+    build_request_data_from_managed_vector_store,
 )
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
@@ -123,12 +127,21 @@ def _collect_vector_store_ids_from_payload(payload: object) -> set[str]:
 async def _authorize_nested_vector_store_ids(
     payload: object,
     user_api_key_dict: UserAPIKeyAuth,
-) -> None:
-    for vector_store_id in sorted(_collect_vector_store_ids_from_payload(payload)):
-        await assert_user_can_access_vector_store_id(
-            vector_store_id=vector_store_id,
-            user_api_key_dict=user_api_key_dict,
-        )
+) -> Mapping[str, LiteLLM_ManagedVectorStore]:
+    """Authorize every nested vector store id and return the managed stores it resolved."""
+    return MappingProxyType(
+        {
+            vector_store_id: store
+            for vector_store_id in sorted(_collect_vector_store_ids_from_payload(payload))
+            if (
+                store := await assert_user_can_access_vector_store_id(
+                    vector_store_id=vector_store_id,
+                    user_api_key_dict=user_api_key_dict,
+                )
+            )
+            is not None
+        }
+    )
 
 
 def _build_file_metadata_entry(
@@ -703,23 +716,24 @@ async def rag_query(
                 status_code=400,
                 detail={"error": "retrieval_config must contain 'vector_store_id'"},
             )
-        await _authorize_nested_vector_store_ids(
+        resolved_stores: Final = await _authorize_nested_vector_store_ids(
             payload=retrieval_config,
             user_api_key_dict=user_api_key_dict,
         )
 
         # Merge litellm-managed vector store params (provider, region, embedding
-        # model, credentials, ...) from the registry — same source the direct
-        # /vector_stores/{id}/search endpoint uses. User-supplied
-        # retrieval_config keys win on conflict.
-        store_data: Final = await _update_request_data_with_litellm_managed_vector_store_registry(
-            data={},  # mutable-ok: the helper mutates and returns the seed dict
-            vector_store_id=retrieval_config["vector_store_id"],
-            user_api_key_dict=user_api_key_dict,
+        # model, credentials, ...) from the registry: the same source the direct
+        # /vector_stores/{id}/search endpoint uses. Store-managed keys win on
+        # conflict so callers cannot override the store's provider or credentials.
+        managed_store: Final = resolved_stores.get(retrieval_config["vector_store_id"])
+        store_data: Final = (
+            await build_request_data_from_managed_vector_store(managed_store)
+            if managed_store is not None
+            else MappingProxyType({})
         )
         merged_retrieval_config: Final = {
-            **store_data,
             **retrieval_config,
+            **store_data,
         }  # mutable-ok: litellm.aquery requires a plain dict payload
 
         # Add litellm data
@@ -733,7 +747,12 @@ async def rag_query(
             proxy_config=proxy_config,
         )
 
-        verbose_proxy_logger.debug("RAG Query - model: %s, retrieval_config: %s", model, merged_retrieval_config)
+        verbose_proxy_logger.debug(
+            "RAG Query - model: %s, vector_store_id: %s, custom_llm_provider: %s",
+            model,
+            retrieval_config["vector_store_id"],
+            merged_retrieval_config.get("custom_llm_provider"),
+        )
 
         # Call query
         response: Final = await litellm.aquery(
