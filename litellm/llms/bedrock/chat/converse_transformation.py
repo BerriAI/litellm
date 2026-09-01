@@ -588,6 +588,10 @@ class AmazonConverseConfig(BaseConfig):
             supported_params.append("context_management")
         return supported_params
 
+    @staticmethod
+    def _auto_tool_choice() -> ToolChoiceValuesBlock:
+        return ToolChoiceValuesBlock(auto={})
+
     def map_tool_choice_values(
         self, model: str, tool_choice: str | dict, drop_params: bool
     ) -> ToolChoiceValuesBlock | None:
@@ -600,10 +604,14 @@ class AmazonConverseConfig(BaseConfig):
                     status_code=400,
                 )
         elif tool_choice == "required":
+            if AnthropicModelInfo.forced_tool_use_downgraded(model, drop_params):
+                return self._auto_tool_choice()
             return ToolChoiceValuesBlock(any={})
         elif tool_choice == "auto":
-            return ToolChoiceValuesBlock(auto={})
+            return self._auto_tool_choice()
         elif isinstance(tool_choice, dict):
+            if AnthropicModelInfo.forced_tool_use_downgraded(model, drop_params):
+                return self._auto_tool_choice()
             # only supported for anthropic + mistral models - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             specific_tool: Final = SpecificToolChoiceBlock(
                 name=make_valid_bedrock_tool_name(tool_choice.get("function", {}).get("name", ""))

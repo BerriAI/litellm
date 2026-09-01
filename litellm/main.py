@@ -6292,18 +6292,15 @@ def embedding(
             if headers is not None and headers != {}:
                 optional_params["extra_headers"] = headers
 
-            if encoding_format is not None:
-                optional_params["encoding_format"] = encoding_format
+            requested_encoding_format: Final = (
+                encoding_format
+                or optional_params.get("encoding_format")
+                or get_secret_str("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT")
+            )
+            if requested_encoding_format is None or requested_encoding_format.strip().lower() == "none":
+                optional_params.pop("encoding_format", None)
             else:
-                env_fmt: Final = get_secret_str("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT")
-                if env_fmt is not None and env_fmt.strip().lower() == "none":
-                    optional_params.pop("encoding_format", None)
-                else:
-                    _default_fmt: Final = optional_params.get("encoding_format") or env_fmt or "float"
-                    if _default_fmt.strip().lower() == "none":
-                        optional_params.pop("encoding_format", None)
-                    else:
-                        optional_params["encoding_format"] = _default_fmt
+                optional_params["encoding_format"] = requested_encoding_format
 
             api_version = None
 
@@ -6952,12 +6949,18 @@ def embedding(
                 aembedding=aembedding,
                 headers=headers,
             )
-        elif custom_llm_provider == "dashscope":
-            dashscope_key: Final = api_key or litellm.api_key or get_secret_str("DASHSCOPE_API_KEY")
+        elif custom_llm_provider in ("dashscope", "qwencloud", "qwen_ai_platform"):
+            from litellm.llms.dashscope.common_utils import (
+                missing_dashscope_family_key_message,
+                resolve_dashscope_family_api_key,
+            )
+
+            dashscope_key: Final = resolve_dashscope_family_api_key(
+                custom_llm_provider=custom_llm_provider,
+                api_key=api_key or litellm.api_key,
+            )
             if dashscope_key is None:
-                raise ValueError(
-                    "Missing API key for DashScope. Set DASHSCOPE_API_KEY environment variable or pass api_key parameter."
-                )
+                raise ValueError(missing_dashscope_family_key_message(custom_llm_provider))
             if extra_headers is not None and isinstance(extra_headers, dict):
                 headers = extra_headers
             else:
