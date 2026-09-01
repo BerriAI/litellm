@@ -32,7 +32,7 @@ async def arerank(
     query: str,
     documents: list[str | dict[str, Any]],
     custom_llm_provider: (
-        Literal["cohere", "together_ai", "deepinfra", "fireworks_ai", "voyage", "watsonx"] | None
+        Literal["cohere", "together_ai", "deepinfra", "fireworks_ai", "voyage", "watsonx", "xinference"] | None
     ) = None,
     top_n: int | None = None,
     rank_fields: list[str] | None = None,
@@ -90,6 +90,7 @@ def rerank(
             "fireworks_ai",
             "voyage",
             "watsonx",
+            "xinference",
         ]
         | None
     ) = None,
@@ -484,6 +485,37 @@ def rerank(
 
             if credentials.get("token") is not None:
                 optional_rerank_params["token"] = credentials["token"]
+
+            response = base_llm_http_handler.rerank(
+                model=model,
+                custom_llm_provider=_custom_llm_provider,
+                provider_config=rerank_provider_config,
+                optional_rerank_params=optional_rerank_params,
+                logging_obj=litellm_logging_obj,
+                timeout=optional_params.timeout,
+                api_key=api_key,
+                api_base=api_base,
+                _is_async=_is_async,
+                headers=headers or litellm.headers or {},
+                client=client,
+                model_response=model_response,
+                litellm_params=rerank_litellm_params,
+            )
+        elif _custom_llm_provider == litellm.LlmProviders.XINFERENCE:
+            api_key = (
+                dynamic_api_key
+                or optional_params.api_key
+                or litellm.api_key
+                or get_secret_str("XINFERENCE_API_KEY")
+                or "stub-xinference-key"
+            )
+            api_base = (
+                dynamic_api_base
+                or optional_params.api_base
+                or litellm.api_base
+                or get_secret_str("XINFERENCE_API_BASE")
+                or "http://127.0.0.1:9997/v1"
+            )
 
             response = base_llm_http_handler.rerank(
                 model=model,

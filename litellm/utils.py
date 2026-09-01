@@ -8407,6 +8407,15 @@ class ProviderConfigManager:
         return None
 
     @staticmethod
+    def _get_dashscope_or_xinference_rerank_config(provider: LlmProviders) -> BaseRerankConfig:
+        if litellm.LlmProviders.XINFERENCE == provider:
+            return litellm.XinferenceRerankConfig()
+
+        from litellm.llms.dashscope.rerank.transformation import DashScopeRerankConfig
+
+        return DashScopeRerankConfig()
+
+    @staticmethod
     def get_provider_rerank_config(
         model: str,
         provider: LlmProviders,
@@ -8444,12 +8453,8 @@ class ProviderConfigManager:
             return litellm.VoyageRerankConfig()
         elif litellm.LlmProviders.WATSONX == provider:
             return litellm.IBMWatsonXRerankConfig()
-        elif litellm.LlmProviders.DASHSCOPE == provider:
-            from litellm.llms.dashscope.rerank.transformation import (
-                DashScopeRerankConfig,
-            )
-
-            return DashScopeRerankConfig()
+        elif provider in (litellm.LlmProviders.XINFERENCE, litellm.LlmProviders.DASHSCOPE):
+            return ProviderConfigManager._get_dashscope_or_xinference_rerank_config(provider)
         return litellm.CohereRerankConfig()
 
     @staticmethod
