@@ -2405,8 +2405,8 @@ class BaseLLMHTTPHandler:
             from litellm.rust_bridge import get_native_bridge
 
             native_bridge: Final = get_native_bridge()
-            declined = getattr(native_bridge, "RustBridgeDeclined", None)
-            upstream_failed = getattr(native_bridge, "RustUpstreamError", None)
+            declined: Final = getattr(native_bridge, "RustBridgeDeclined", None)
+            upstream_failed: Final = getattr(native_bridge, "RustUpstreamError", None)
             if isinstance(upstream_failed, type) and isinstance(rust_error, upstream_failed):
                 args: Final = rust_error.args
                 status: Final = args[0] if args else 0
