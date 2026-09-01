@@ -15,6 +15,9 @@ import litellm.types.utils
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
+from litellm.llms.openai.responses.guardrail_translation.handler import (
+    OpenAIResponsesHandler,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.model_armor import ModelArmorGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.model_armor.model_armor import (
@@ -3778,3 +3781,399 @@ async def test_moderation_hook_skips_chat_traffic_when_configured_for_during_mcp
 
     assert result == data
     mock_post.assert_not_called()
+
+
+_ANTHROPIC_SSE_CHUNKS = (
+    b'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message",'
+    b'"role":"assistant","model":"claude","content":[],"usage":{"input_tokens":5,"output_tokens":0}}}\n\n',
+    b'event: content_block_start\ndata: {"type":"content_block_start","index":0,'
+    b'"content_block":{"type":"text","text":""}}\n\n',
+    b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+    b'"delta":{"type":"text_delta","text":"my card is 4111-1111-1111-1111"}}\n\n',
+    b'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+    b'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
+    b'"usage":{"output_tokens":9}}\n\n',
+    b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+)
+
+_MODEL_ARMOR_CLEAN = {"sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND"}}
+
+_MODEL_ARMOR_BLOCK = {
+    "sanitizationResult": {
+        "filterMatchState": "MATCH_FOUND",
+        "filterResults": {
+            "sdp": {
+                "sdpFilterResult": {
+                    "inspectResult": {
+                        "matchState": "MATCH_FOUND",
+                        "findings": [
+                            {"infoType": "CREDIT_CARD_NUMBER", "likelihood": "VERY_LIKELY"}
+                        ],
+                    }
+                }
+            }
+        },
+    }
+}
+
+# The streaming hook checks _should_block_content without allow_sanitization, so a
+# deidentifyResult MATCH_FOUND blocks rather than masks. The root-level sanitizedText
+# fallback in _get_sanitized_content is the shape that reaches the masking branch.
+_MODEL_ARMOR_SANITIZED = {
+    "sanitizedText": "my card is [REDACTED]",
+    "sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND"},
+}
+
+
+def _surface_guardrail(**kwargs):
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+        **kwargs,
+    )
+    guardrail._ensure_access_token_async = AsyncMock(
+        return_value=("test-token", "test-project")
+    )
+    return guardrail
+
+
+def _armor_post_mock(payload):
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.json = AsyncMock(return_value=payload)
+    return AsyncMock(return_value=mock_response)
+
+
+async def _anthropic_sse_stream():
+    for chunk in _ANTHROPIC_SSE_CHUNKS:
+        yield chunk
+
+
+def _responses_api_events():
+    from litellm.types.llms.openai import (
+        OutputTextDeltaEvent,
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    completed = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        model="gpt-4o-mini",
+        object="response",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "my card is 4111-1111-1111-1111"}],
+            }
+        ],
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+    )
+    return (
+        OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            delta="my card is 4111-1111-1111-1111",
+        ),
+        ResponseCompletedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            response=completed,
+        ),
+    )
+
+
+async def _drain_surface_hook(guardrail, chunks):
+    async def _stream():
+        for chunk in chunks:
+            yield chunk
+
+    return [
+        item
+        async for item in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_stream(),
+            request_data={
+                "model": "claude-haiku",
+                "messages": [{"role": "user", "content": "show me a card"}],
+                "metadata": {"guardrails": ["model-armor-test"]},
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_scans_raw_anthropic_sse_instead_of_crashing():
+    """A /v1/messages stream arrives as raw SSE bytes and must be assembled, then scanned.
+
+    Regression for the 500 `Error building chunks for logging/streaming usage calculation`:
+    stream_chunk_builder calls .get() on each chunk, which raises on bytes.
+    """
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, _ANTHROPIC_SSE_CHUNKS)
+
+    post.assert_called_once()
+    scanned = post.call_args.kwargs["json"]["modelResponseData"]["text"]
+    assert "my card is 4111-1111-1111-1111" in scanned
+    assert tuple(delivered) == _ANTHROPIC_SSE_CHUNKS
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_scans_responses_api_events_instead_of_crashing():
+    """A /v1/responses stream arrives as typed Responses events, which stream_chunk_builder
+    cannot subscript. The final response.completed event carries the text to scan."""
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+    events = _responses_api_events()
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, events)
+
+    post.assert_called_once()
+    scanned = post.call_args.kwargs["json"]["modelResponseData"]["text"]
+    assert scanned == "my card is 4111-1111-1111-1111"
+    assert tuple(delivered) == events
+
+
+@pytest.mark.asyncio
+async def test_streaming_block_emits_anthropic_error_frame():
+    """A block on /v1/messages must terminate the stream in Anthropic's error format.
+
+    The OpenAI-shaped `data: {"error": ...}` frame the chat surface uses is rejected by
+    Anthropic clients.
+    """
+    guardrail = _surface_guardrail()
+
+    with patch.object(
+        guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_BLOCK)
+    ):
+        delivered = await _drain_surface_hook(guardrail, _ANTHROPIC_SSE_CHUNKS)
+
+    body = b"".join(delivered)
+    assert b"event: error" in body
+    assert b'"type": "error"' in body
+    assert b"guardrail_error" in body
+    assert b"Streaming response blocked by Model Armor" in body
+    assert b"4111-1111-1111-1111" not in body
+
+
+@pytest.mark.asyncio
+async def test_streaming_block_emits_responses_api_error_event():
+    """A block on /v1/responses must terminate the stream with a Responses ErrorEvent."""
+    from litellm.types.llms.openai import ErrorEvent
+
+    guardrail = _surface_guardrail()
+
+    with patch.object(
+        guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_BLOCK)
+    ):
+        delivered = await _drain_surface_hook(guardrail, _responses_api_events())
+
+    assert len(delivered) == 1
+    error_event = delivered[0]
+    assert isinstance(error_event, ErrorEvent)
+    assert error_event.error.type == "guardrail_error"
+    assert error_event.error.code == "400"
+    assert error_event.error.message == "Streaming response blocked by Model Armor"
+
+
+@pytest.mark.asyncio
+async def test_streaming_masking_re_emits_anthropic_sse_with_sanitized_text():
+    """mask_response_content on /v1/messages must ship the sanitized text, not the original."""
+    guardrail = _surface_guardrail(mask_response_content=True)
+
+    with patch.object(
+        guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_SANITIZED)
+    ):
+        delivered = await _drain_surface_hook(guardrail, _ANTHROPIC_SSE_CHUNKS)
+
+    body = b"".join(delivered)
+    assert b"[REDACTED]" in body
+    assert b"4111-1111-1111-1111" not in body
+
+
+@pytest.mark.asyncio
+async def test_streaming_masking_blocks_responses_api_stream():
+    """A Responses event stream cannot be rebuilt from sanitized text, so releasing it would
+    ship the content the guardrail just rewrote. It is blocked instead."""
+    from litellm.types.llms.openai import ErrorEvent
+
+    guardrail = _surface_guardrail(mask_response_content=True)
+
+    with patch.object(
+        guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_SANITIZED)
+    ):
+        delivered = await _drain_surface_hook(guardrail, _responses_api_events())
+
+    assert len(delivered) == 1
+    assert isinstance(delivered[0], ErrorEvent)
+    assert delivered[0].error.code == "400"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["anthropic_sse", "responses"])
+async def test_streaming_api_failure_frames_error_per_surface(surface):
+    """A Model Armor outage with fail_on_error must terminate the stream in the endpoint's
+    own error format rather than leaking an OpenAI SSE frame onto it."""
+    from litellm.types.llms.openai import ErrorEvent
+
+    guardrail = _surface_guardrail(fail_on_error=True)
+    chunks = _ANTHROPIC_SSE_CHUNKS if surface == "anthropic_sse" else _responses_api_events()
+
+    mock_response = AsyncMock()
+    mock_response.status_code = 500
+    mock_response.text = "Internal Server Error"
+
+    with patch.object(
+        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
+    ):
+        delivered = await _drain_surface_hook(guardrail, chunks)
+
+    assert len(delivered) >= 1
+    if surface == "anthropic_sse":
+        assert b"event: error" in b"".join(delivered)
+    else:
+        assert isinstance(delivered[0], ErrorEvent)
+        assert delivered[0].error.code == "500"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        pytest.param(
+            (b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+             b'"delta":{"type":"text_delta","text":"hi"}}\n\n',),
+            id="anthropic-sse-without-message-start",
+        ),
+        pytest.param(None, id="responses-stream-without-completed-event"),
+    ],
+)
+async def test_streaming_hook_fails_closed_when_a_surface_stream_cannot_be_assembled(chunks):
+    """Forwarding an unscannable /v1/messages or /v1/responses stream would silently disable the
+    guardrail, so the stream is refused in its own wire format instead of released unscanned."""
+    from litellm.types.llms.openai import (
+        ErrorEvent,
+        OutputTextDeltaEvent,
+        ResponsesAPIStreamEvents,
+    )
+
+    if chunks is None:
+        chunks = (
+            OutputTextDeltaEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+                item_id="msg_1",
+                output_index=0,
+                content_index=0,
+                delta="hi",
+            ),
+        )
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, chunks)
+
+    post.assert_not_called()
+    assert tuple(delivered) != tuple(chunks)
+    if isinstance(chunks[0], bytes):
+        joined = b"".join(item.encode() if isinstance(item, str) else item for item in delivered).decode()
+        assert "event: error" in joined
+        assert "could not be assembled for scanning" in joined
+        return
+    assert len(delivered) == 1
+    assert isinstance(delivered[0], ErrorEvent)
+    assert "could not be assembled for scanning" in delivered[0].error.message
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_forwards_a_preceding_guardrails_error_item():
+    """A guardrail earlier in the post_call chain replaces the stream with its own terminal
+    error item. That item is not a chat delta, and feeding it to stream_chunk_builder is what
+    surfaced the ticket's 500, so it has to be forwarded untouched instead."""
+    from litellm.types.llms.openai import (
+        ErrorEvent,
+        ErrorEventError,
+        ResponsesAPIStreamEvents,
+    )
+
+    chunks = (
+        ErrorEvent(
+            type=ResponsesAPIStreamEvents.ERROR,
+            sequence_number=1,
+            error=ErrorEventError(
+                type="guardrail_error",
+                code="400",
+                message="Streaming response blocked by Model Armor",
+                param=None,
+            ),
+        ),
+    )
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, chunks)
+
+    post.assert_not_called()
+    assert tuple(delivered) == chunks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        pytest.param(None, id="anthropic-error-event"),
+        pytest.param(
+            ('data: {"error": {"message": "Streaming response blocked by the first guardrail", "code": "400"}}\n\n',),
+            id="chat-completions-error-payload",
+        ),
+    ],
+)
+async def test_streaming_hook_forwards_a_preceding_guardrails_error_frame(chunks):
+    """Chained post_call guardrails hand each other their output. An earlier guardrail's error
+    frame carries no message to assemble, and replacing it would hide the real refusal."""
+    from litellm.proxy.guardrails.anthropic_sse import anthropic_sse_error_frames
+
+    if chunks is None:
+        chunks = anthropic_sse_error_frames("Streaming response blocked by the first guardrail")
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, chunks)
+
+    post.assert_not_called()
+    assert tuple(delivered) == chunks
+
+
+@pytest.mark.asyncio
+async def test_streaming_responses_error_falls_back_to_sse_when_the_handler_declines():
+    """build_stream_error_items may return None, which must not swallow the block into a clean
+    200: the refusal falls back to the chat-completions SSE form that still carries the status."""
+    guardrail = _surface_guardrail()
+    exc = HTTPException(status_code=400, detail={"message": "blocked"})
+
+    with patch.object(OpenAIResponsesHandler, "build_stream_error_items", return_value=None):
+        items = guardrail._stream_error_items(
+            exc,
+            {"message": "blocked", "code": "400"},
+            raw_sse=False,
+            responses_stream=True,
+        )
+
+    assert len(items) == 1
+    assert '"code": "400"' in items[0]
+    assert "blocked" in items[0]

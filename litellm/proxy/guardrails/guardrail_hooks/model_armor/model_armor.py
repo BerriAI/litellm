@@ -25,14 +25,24 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.llms.openai.responses.guardrail_translation.handler import (
+    OpenAIResponsesHandler,
+)
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.anthropic_sse import (
+    anthropic_sse_chunks_from_response,
+    anthropic_sse_error_frames,
+    assemble_anthropic_sse_stream,
+    is_raw_sse_stream,
+    is_sse_error_stream,
+)
 from litellm.proxy.guardrails.guardrail_hooks.model_armor.file_scanning import (
     MODEL_ARMOR_MAX_FILE_SIZE_BYTES,
     plan_file_scans,
 )
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
     CallTypesLiteral,
@@ -41,6 +51,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     StandardLoggingGuardrailInformation,
+    TextCompletionResponse,
 )
 
 GUARDRAIL_NAME: Final = "model_armor"
@@ -831,6 +842,91 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         return response
 
+    @staticmethod
+    def _final_responses_api_response(
+        all_chunks: Sequence[object],
+    ) -> tuple[bool, ResponsesAPIResponse | None]:
+        """Detect a ``/v1/responses`` event stream and return its final response body.
+
+        Returns ``(is_responses_stream, final_response)`` so the caller can tell a stream
+        that is not a Responses stream apart from one whose terminal ``response.completed``
+        event never arrived.
+        """
+        events: Final = tuple(
+            (event_type, getattr(chunk, "response", None))
+            for chunk in all_chunks
+            if isinstance(event_type := getattr(chunk, "type", None), str)
+        )
+        return (
+            any(event_type.startswith("response.") for event_type, _ in events),
+            next(
+                (body for _, body in reversed(events) if isinstance(body, ResponsesAPIResponse)),
+                None,
+            ),
+        )
+
+    @staticmethod
+    def _responses_api_response_text(response: ResponsesAPIResponse) -> str:
+        """Concatenate the output text carried by a Responses API response."""
+        texts: Final[list[str]] = []  # mutable-ok: the shared extractor below appends into caller-owned lists
+        handler: Final = OpenAIResponsesHandler()
+        for output_idx, output_item in enumerate(response.output or ()):
+            handler._extract_output_text_and_images(  # pyright: ignore[reportPrivateUsage]  # the shared Responses output extractor; forking it would duplicate per-item parsing
+                output_item,
+                output_idx,
+                texts,
+                [],  # mutable-ok: the extractor's images sink, unused here
+                [],  # mutable-ok: the extractor's task-mapping sink, unused here
+            )
+        return "".join(texts)
+
+    def _extract_streaming_content(self, assembled_response: object) -> str:
+        """Text to scan from an assembled stream, for every endpoint shape this hook serves."""
+        if isinstance(assembled_response, ResponsesAPIResponse):
+            return self._responses_api_response_text(assembled_response)
+        return self._extract_content_from_response(assembled_response)
+
+    @staticmethod
+    def _apply_sanitized_content(assembled_response: ModelResponse, sanitized_content: str) -> None:
+        """Replace every non-empty choice message with the Model Armor sanitized text."""
+        for choice in assembled_response.choices:
+            if isinstance(choice, Choices) and choice.message.content:
+                choice.message.content = sanitized_content
+
+    @staticmethod
+    def _assemble_chat_completion_stream(
+        all_chunks: list[Any],  # mutable-ok: stream_chunk_builder only accepts a mutable list
+    ) -> ModelResponse | TextCompletionResponse | None:
+        """Assemble chat-completion chunks, returning ``None`` when they are not chat deltas."""
+        from litellm.main import stream_chunk_builder
+
+        try:
+            return stream_chunk_builder(chunks=all_chunks)
+        except Exception as exc:
+            verbose_proxy_logger.warning(
+                "Model Armor: could not assemble the streamed response for scanning (%s), forwarding it unscanned",
+                exc,
+            )
+            return None
+
+    @staticmethod
+    def _stream_error_items(
+        exc: HTTPException,
+        error_obj: Mapping[str, object],
+        *,
+        raw_sse: bool,
+        responses_stream: bool,
+    ) -> Sequence[object]:
+        """Frame a guardrail failure as terminal stream items in this endpoint's wire format."""
+        chat_completions_form: Final = (f"data: {json.dumps({'error': error_obj})}\n\n",)
+        if raw_sse:
+            return anthropic_sse_error_frames(str(error_obj.get("message", "")))
+        if responses_stream:
+            return (
+                OpenAIResponsesHandler().build_stream_error_items(exc, responses_so_far=None) or chat_completions_form
+            )
+        return chat_completions_form
+
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -840,19 +936,48 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         """Process streaming response chunks."""
 
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
-        from litellm.main import stream_chunk_builder
 
         # Collect all chunks
-        all_chunks: Final[list[ModelResponseStream]] = []
+        all_chunks: Final[list[Any]] = []
         async for chunk in response:
             all_chunks.append(chunk)
 
-        # Build complete response
-        assembled_response: Final = stream_chunk_builder(chunks=all_chunks)
+        raw_sse: Final = is_raw_sse_stream(all_chunks)
+        responses_stream, final_responses_api_response = (
+            (False, None) if raw_sse else self._final_responses_api_response(all_chunks)
+        )
 
-        if isinstance(assembled_response, ModelResponse):
+        # Build complete response
+        assembled_response: Final = (
+            assemble_anthropic_sse_stream(all_chunks, restore_identity=True)
+            if raw_sse
+            else final_responses_api_response
+            if responses_stream
+            else self._assemble_chat_completion_stream(all_chunks)
+        )
+
+        if (
+            assembled_response is None
+            and (raw_sse or responses_stream)
+            and not (raw_sse and is_sse_error_stream(all_chunks))
+        ):
+            # Forwarding an unscannable stream would silently disable the guardrail, so fail closed
+            unscannable: Final = HTTPException(
+                status_code=500,
+                detail=f"{self.guardrail_name}: streamed response could not be assembled for scanning, blocking it",
+            )
+            for error_item in self._stream_error_items(
+                unscannable,
+                {"message": str(unscannable.detail), "code": "500"},
+                raw_sse=raw_sse,
+                responses_stream=responses_stream,
+            ):
+                yield error_item
+            return
+
+        if assembled_response is not None:
             # Extract content
-            content: Final = self._extract_content_from_response(assembled_response)
+            content: Final = self._extract_streaming_content(assembled_response)
 
             if content:
                 try:
@@ -895,13 +1020,27 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                     if self.mask_response_content:
                         sanitized_content: Final = self._get_sanitized_content(armor_response)
                         if sanitized_content and sanitized_content != content:
+                            if not isinstance(assembled_response, ModelResponse):
+                                verbose_proxy_logger.warning(
+                                    "Model Armor: sanitized content cannot be re-emitted on this "
+                                    "streaming endpoint, blocking the response instead"
+                                )
+                                raise HTTPException(
+                                    status_code=400,
+                                    detail=self._build_block_error_detail(
+                                        "Streaming response blocked by Model Armor",
+                                        armor_response,
+                                    ),
+                                )
+
                             # Update assembled response
-                            for choice in assembled_response.choices:
-                                if isinstance(choice, Choices):
-                                    if choice.message.content:
-                                        choice.message.content = sanitized_content
+                            self._apply_sanitized_content(assembled_response, sanitized_content)
 
                             # Return sanitized stream
+                            if raw_sse:
+                                for sse_chunk in anthropic_sse_chunks_from_response(assembled_response):
+                                    yield sse_chunk
+                                return
                             mock_response: Final = MockResponseIterator(model_response=assembled_response)
                             async for chunk in mock_response:
                                 yield chunk
@@ -910,11 +1049,17 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 except ModelArmorAPIError as e:
                     if self.optional_params.get("fail_on_error", True):
                         error_obj = {"message": e.detail, "code": "500"}
-                        yield f"data: {json.dumps({'error': error_obj})}\n\n"
+                        for error_item in self._stream_error_items(
+                            HTTPException(status_code=500, detail=e.detail),
+                            error_obj,
+                            raw_sse=raw_sse,
+                            responses_stream=responses_stream,
+                        ):
+                            yield error_item
                         return
                 except HTTPException as e:
-                    # Yield error as SSE event so create_response() detects it and
-                    # returns a proper JSON error response with the correct status code.
+                    # Yield the error as a terminal stream item so create_response() detects
+                    # it and returns a proper JSON error response with the correct status code.
                     # (Raising from a generator hits create_response's generic except → 500.)
                     detail: Final = e.detail if isinstance(e.detail, dict) else {"message": str(e.detail)}
                     error_value: Final = detail.get("error", detail)
@@ -923,7 +1068,13 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                     else:
                         error_obj = {"message": str(error_value)}
                     error_obj["code"] = str(e.status_code)
-                    yield f"data: {json.dumps({'error': error_obj})}\n\n"
+                    for error_item in self._stream_error_items(
+                        e,
+                        error_obj,
+                        raw_sse=raw_sse,
+                        responses_stream=responses_stream,
+                    ):
+                        yield error_item
                     return
                 except Exception as e:
                     verbose_proxy_logger.error("Model Armor streaming error: %s", str(e), exc_info=True)

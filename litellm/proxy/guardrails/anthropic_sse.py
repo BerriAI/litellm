@@ -111,6 +111,29 @@ def anthropic_sse_error_frames(message: str) -> tuple[bytes, ...]:
     )
 
 
+def is_sse_error_stream(all_chunks: Sequence[object]) -> bool:
+    """Whether the buffered stream carries nothing but error frames.
+
+    post_call guardrails run in a chain, so a hook can be handed the terminal error frames an
+    earlier guardrail emitted when it blocked. Those carry no message to assemble, and replacing
+    them would hide the refusal the client is owed. Covers both wire forms a guardrail emits: the
+    Anthropic ``error`` event and the chat-completions ``{"error": ...}`` payload.
+    """
+    sse_stream: Final = _joined_sse_stream(all_chunks)
+    if sse_stream is None:
+        return False
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+        AnthropicPassthroughLoggingHandler,
+    )
+
+    events: Final = tuple(
+        event_data
+        for event in AnthropicPassthroughLoggingHandler._split_sse_chunk_into_events(sse_stream)  # pyright: ignore[reportPrivateUsage]  # same parser the assembler uses
+        if (event_data := AnthropicPassthroughLoggingHandler._extract_sse_data(event)) is not None  # pyright: ignore[reportPrivateUsage]  # same parser the assembler uses
+    )
+    return len(events) > 0 and all(event.get("type") == "error" or "error" in event for event in events)
+
+
 def anthropic_sse_chunks_from_response(assembled: ModelResponse) -> tuple[bytes, ...]:
     from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
