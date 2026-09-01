@@ -292,14 +292,22 @@ class ProxyExtrasDBManager:
             return ""
 
         cleaned_url = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
+        ledger_table = psycopg.sql.SQL("{}.{}").format(
+            psycopg.sql.Identifier(
+                ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"
+            ),
+            psycopg.sql.Identifier("_prisma_migrations"),
+        )
         try:
             with psycopg.connect(
                 cleaned_url, connect_timeout=10, autocommit=True
             ) as conn:
                 row = conn.execute(
-                    "SELECT logs FROM _prisma_migrations "
-                    "WHERE migration_name = %s AND finished_at IS NULL "
-                    "AND rolled_back_at IS NULL",
+                    psycopg.sql.SQL(
+                        "SELECT logs FROM {} "
+                        "WHERE migration_name = %s AND finished_at IS NULL "
+                        "AND rolled_back_at IS NULL"
+                    ).format(ledger_table),
                     (migration_name,),
                 ).fetchone()
         except (psycopg.OperationalError, psycopg.DatabaseError):
