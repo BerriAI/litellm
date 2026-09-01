@@ -195,3 +195,57 @@ def test_mlflow_stream_handler_uses_async_complete_response():
             is final_response
         )
         assert "abc123" not in mlflow_logger._stream_id_to_span
+
+
+def test_mlflow_stream_handler_pops_span_when_end_raises():
+    modules = _mock_mlflow_modules()
+    with patch.dict("sys.modules", modules):
+        from litellm.integrations.mlflow import MlflowLogger
+
+        mlflow_logger = MlflowLogger()
+        mlflow_logger._start_span_or_trace = MagicMock(return_value="mock_span")
+        mlflow_logger._end_span_or_trace = MagicMock(
+            side_effect=TypeError("unexpected keyword argument 'trace_id'")
+        )
+        mlflow_logger._extract_and_set_chat_attributes = MagicMock()
+
+        response_obj = MagicMock()
+        response_obj.choices = []
+
+        kwargs = {
+            "litellm_call_id": "leak123",
+            "complete_streaming_response": MagicMock(),
+        }
+
+        with pytest.raises(TypeError):
+            mlflow_logger._handle_stream_event(
+                kwargs=kwargs,
+                response_obj=response_obj,
+                start_time=datetime.utcnow(),
+                end_time=datetime.utcnow(),
+            )
+
+        assert "leak123" not in mlflow_logger._stream_id_to_span
+
+
+def test_mlflow_end_span_or_trace_passes_request_id_positionally():
+    modules = _mock_mlflow_modules()
+    with patch.dict("sys.modules", modules):
+        from litellm.integrations.mlflow import MlflowLogger
+
+        mlflow_logger = MlflowLogger()
+        mlflow_logger._client = MagicMock()
+
+        root_span = MagicMock(parent_id=None, request_id="req-1")
+        mlflow_logger._end_span_or_trace(
+            span=root_span, outputs="out", end_time_ns=1, status="OK"
+        )
+        assert mlflow_logger._client.end_trace.call_args.args == ("req-1",)
+        assert "trace_id" not in mlflow_logger._client.end_trace.call_args.kwargs
+
+        child_span = MagicMock(parent_id="parent-1", request_id="req-2", span_id="span-2")
+        mlflow_logger._end_span_or_trace(
+            span=child_span, outputs="out", end_time_ns=1, status="OK"
+        )
+        assert mlflow_logger._client.end_span.call_args.args == ("req-2", "span-2")
+        assert "trace_id" not in mlflow_logger._client.end_span.call_args.kwargs
