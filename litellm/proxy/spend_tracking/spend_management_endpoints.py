@@ -2703,6 +2703,14 @@ async def ui_view_spend_logs(
 
         data: Final = await prisma_client.db.query_raw(sql_query, *sql_params)
 
+        if request_id is not None and not is_v2 and not is_admin_view:
+            await _assert_user_owns_fetched_spend_rows(
+                prisma_client=prisma_client,
+                user_api_key_dict=user_api_key_dict,
+                rows=data,
+                request_id=request_id,
+            )
+
         _hydrate_spend_log_metadata(data)
 
         # Calculate total pages
@@ -2855,7 +2863,8 @@ async def ui_view_request_response_for_request_id(
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    if not _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+    caller_is_admin: Final = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+    if not caller_is_admin:
         if prisma_client is None:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -2899,7 +2908,7 @@ async def ui_view_request_response_for_request_id(
         )
 
         sql_query: Final = """
-            SELECT messages, response, proxy_server_request, metadata
+            SELECT messages, response, proxy_server_request, metadata, "user", team_id
             FROM "LiteLLM_SpendLogs"
             WHERE request_id = $1 OR litellm_call_id = $1
             LIMIT 1
@@ -2908,6 +2917,13 @@ async def ui_view_request_response_for_request_id(
             prisma_client, sql_query, request_id
         )
         if db_result and len(db_result) > 0:
+            if not caller_is_admin:
+                await _assert_user_owns_fetched_spend_rows(
+                    prisma_client=prisma_client,
+                    user_api_key_dict=user_api_key_dict,
+                    rows=db_result,
+                    request_id=request_id,
+                )
             resolved = await _resolve_request_response_payload(db_result[0], cold_storage_handler=ColdStorageHandler())
             return resolved._asdict()
 
@@ -4309,15 +4325,16 @@ def _can_user_view_spend_log(user_api_key_dict: UserAPIKeyAuth) -> bool:
 async def _user_can_view_spend_log_owner(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
-    owner: _SpendLogOwnerRow,
+    owner_user: str | None,
+    owner_team_id: str | None,
 ) -> bool:
-    if owner["user"] is not None and owner["user"] == user_api_key_dict.user_id:
+    if owner_user is not None and owner_user == user_api_key_dict.user_id:
         return True
-    if owner["team_id"]:
+    if owner_team_id:
         return await _can_team_member_view_log(
             prisma_client=prisma_client,
             user_api_key_dict=user_api_key_dict,
-            team_id=owner["team_id"],
+            team_id=owner_team_id,
         )
     return False
 
@@ -4336,7 +4353,37 @@ async def _assert_user_can_view_request_id(
     """
     owners: Final = await _find_spend_log_owners(prisma_client, request_id)
     for owner in owners:
-        if not await _user_can_view_spend_log_owner(prisma_client, user_api_key_dict, owner):
+        if not await _user_can_view_spend_log_owner(prisma_client, user_api_key_dict, owner["user"], owner["team_id"]):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": f"Not authorized to view spend log for request_id={request_id}"},
+            )
+
+
+def _fetched_row_owner(row: Mapping[str, object]) -> tuple[str | None, str | None]:
+    user: Final = row.get("user")
+    team_id: Final = row.get("team_id")
+    return (
+        user if isinstance(user, str) else None,
+        team_id if isinstance(team_id, str) else None,
+    )
+
+
+async def _assert_user_owns_fetched_spend_rows(
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    rows: Sequence[Mapping[str, object]],
+    request_id: str,
+) -> None:
+    """
+    Re-verify ownership on the rows an id lookup actually fetched.
+    ``_assert_user_can_view_request_id`` and the data query read the table at
+    different moments, so a foreign row inserted between them could otherwise be
+    returned even though the pre-check passed. Checking the fetched rows
+    themselves means no interleaving can return another tenant's row.
+    """
+    for user, team_id in frozenset(_fetched_row_owner(row) for row in rows):
+        if not await _user_can_view_spend_log_owner(prisma_client, user_api_key_dict, user, team_id):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"error": f"Not authorized to view spend log for request_id={request_id}"},
