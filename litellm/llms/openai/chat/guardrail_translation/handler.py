@@ -51,6 +51,7 @@ if TYPE_CHECKING:
 
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy._types import UserAPIKeyAuth
 
 
 class OpenAIChatCompletionsHandler(BaseTranslation):
@@ -80,7 +81,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-    ) -> Any:
+    ) -> dict:
         """
         Process input messages by applying guardrails to text content.
         """
@@ -329,9 +330,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         response: "ModelResponse",
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-        user_api_key_dict: Any | None = None,
+        user_api_key_dict: "UserAPIKeyAuth | None" = None,
         request_data: dict | None = None,
-    ) -> Any:
+    ) -> ModelResponse:
         """
         Process output response by applying guardrails to text content.
 
@@ -436,7 +437,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         responses_so_far: list["ModelResponseStream"],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-        user_api_key_dict: Any | None = None,
+        user_api_key_dict: "UserAPIKeyAuth | None" = None,
         request_data: dict | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
     ) -> list["ModelResponseStream"]:
@@ -486,7 +487,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         responses_so_far: list["ModelResponseStream"],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
-        user_api_key_dict: Any | None,
+        user_api_key_dict: "UserAPIKeyAuth | None",
         request_data: dict | None,
     ) -> list["ModelResponseStream"]:
         """Block-only streaming path: run the guardrail so an in-flight BLOCK can
@@ -589,8 +590,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     def build_stream_error_items(
         self,
         exc: "HTTPException",
-        responses_so_far: Sequence[Any] | None = None,
-    ) -> Sequence[Any] | None:
+        responses_so_far: Sequence[object] | None = None,
+    ) -> Sequence[bytes] | None:
         import json
 
         from litellm.proxy.common_request_processing import sse_error_payload
@@ -630,7 +631,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         responses_so_far: list["ModelResponseStream"],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
-        user_api_key_dict: Any | None,
+        user_api_key_dict: "UserAPIKeyAuth | None",
         request_data: dict | None,
         sink: StreamTransformSink,
     ) -> None:
@@ -794,7 +795,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         # Determine content source and tool calls based on choice type
         content = None
-        tool_calls: list[Any] | None = None
+        tool_calls: Sequence[object] | None = None
         if isinstance(choice, litellm.Choices):
             content = choice.message.content
             tool_calls = choice.message.tool_calls

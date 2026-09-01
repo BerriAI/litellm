@@ -935,7 +935,7 @@ def test_bedrock_messages_strips_output_config():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=False,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -970,7 +970,7 @@ def test_bedrock_messages_preserves_output_config_for_claude_4_6():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -1003,7 +1003,7 @@ def test_bedrock_messages_checks_output_config_support_with_bedrock_provider():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ) as mock_supports_factory:
         result = cfg.transform_anthropic_messages_request(
@@ -1014,11 +1014,7 @@ def test_bedrock_messages_checks_output_config_support_with_bedrock_provider():
             headers={},
         )
 
-    mock_supports_factory.assert_called_with(
-        model="us.anthropic.claude-opus-4-7",
-        custom_llm_provider="bedrock",
-        key="supports_output_config",
-    )
+    mock_supports_factory.assert_called_with("us.anthropic.claude-opus-4-7", "supports_output_config")
     assert result["output_config"] == {"effort": "high"}
 
 
@@ -1038,7 +1034,7 @@ def test_bedrock_messages_forwards_output_config():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -1054,27 +1050,29 @@ def test_bedrock_messages_forwards_output_config():
 
 
 def test_bedrock_messages_forwards_output_config_with_output_format():
-    """``output_config`` is forwarded; ``output_format`` is converted to inline schema."""
+    """Legacy ``output_format`` is forwarded as ``output_config.format`` on models
+    that support native structured outputs, alongside the effort key."""
     from unittest.mock import patch
 
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
     messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    schema_format = {
+        "type": "json_schema",
+        "schema": {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+        },
+    }
     optional_params = {
         "max_tokens": 4096,
         "output_config": {"effort": "low"},
-        "output_format": {
-            "type": "json_schema",
-            "schema": {
-                "type": "object",
-                "properties": {"answer": {"type": "string"}},
-            },
-        },
+        "output_format": schema_format,
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -1085,12 +1083,14 @@ def test_bedrock_messages_forwards_output_config_with_output_format():
             headers={},
         )
 
-    assert result.get("output_config") == {"effort": "low"}
+    assert result.get("output_config") == {"effort": "low", "format": schema_format}
     assert "output_format" not in result
+    assert "answer" not in json.dumps(result["messages"])
 
 
 def test_bedrock_messages_converts_output_config_format_to_inline_schema():
-    """``output_config.format`` is consumed so Bedrock does not see an unknown nested key."""
+    """Without native structured-output support, ``output_config.format`` falls back
+    to the inline schema so Bedrock does not see an unknown nested key."""
     from unittest.mock import patch
 
     from litellm.types.router import GenericLiteLLMParams
@@ -1110,8 +1110,8 @@ def test_bedrock_messages_converts_output_config_format_to_inline_schema():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
-        return_value=True,
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
+        side_effect=lambda _model, key: key == "supports_output_config",
     ):
         result = cfg.transform_anthropic_messages_request(
             model="anthropic.claude-opus-4-7",
@@ -1146,7 +1146,7 @@ def test_bedrock_messages_normalizes_output_config_effort_for_opus(
     cfg = AmazonAnthropicClaudeMessagesConfig()
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -1184,8 +1184,8 @@ def test_bedrock_messages_does_not_mutate_callers_messages_when_embedding_schema
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
-        return_value=True,
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
+        side_effect=lambda _model, key: key == "supports_output_config",
     ):
         result = cfg.transform_anthropic_messages_request(
             model="anthropic.claude-opus-4-7",
@@ -1229,7 +1229,7 @@ def test_bedrock_messages_does_not_mutate_callers_output_config():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ):
         cfg.transform_anthropic_messages_request(
@@ -1271,7 +1271,7 @@ def test_bedrock_messages_strips_output_config_with_output_format():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=False,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -1332,7 +1332,7 @@ def test_bedrock_messages_drop_params_keeps_output_config_for_4_7():
     litellm.drop_params = True
     try:
         with patch(
-            "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+            "litellm.llms.bedrock.common_utils._bedrock_model_supports",
             return_value=True,
         ):
             result = cfg.transform_anthropic_messages_request(
@@ -1375,7 +1375,7 @@ def test_bedrock_messages_maps_reasoning_effort_for_adaptive_model(
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -1482,7 +1482,7 @@ def test_bedrock_messages_explicit_output_config_wins_over_reasoning_effort():
     }
 
     with patch(
-        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
         return_value=True,
     ):
         result = cfg.transform_anthropic_messages_request(
@@ -3104,3 +3104,149 @@ async def test_bedrock_sse_wrapper_dispatches_logging_on_client_disconnect():
             break
         await asyncio.sleep(0.01)
     assert logging_obj.completion_start_time is not None
+
+
+def test_bedrock_messages_forwards_output_config_format_natively(local_model_cost_map):
+    """Regression: on a model Bedrock enforces structured outputs for (Claude
+    Sonnet 4.5), ``output_config.format`` must be forwarded verbatim, not
+    silently rewritten into inline prompt text."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    schema_format = {
+        "type": "json_schema",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "zebra_count": {"type": "integer"},
+                "is_tuesday": {"type": "boolean"},
+            },
+            "required": ["zebra_count", "is_tuesday"],
+            "additionalProperties": False,
+        },
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "say hello"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 100,
+            "output_config": {"format": schema_format},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("output_config") == {"format": schema_format}
+    assert "zebra_count" not in json.dumps(result["messages"])
+
+
+def test_bedrock_messages_inlines_schema_for_claude_5(local_model_cost_map):
+    """Bedrock rejects ``output_config.format`` for the Claude 5 family, so the
+    schema falls back to the inline-text path instead of a deterministic 400."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    schema = {
+        "type": "object",
+        "properties": {"zebra_count": {"type": "integer"}},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-5",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "say hello"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 100,
+            "output_config": {"format": {"type": "json_schema", "schema": schema}},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "output_config" not in result
+    last_content = result["messages"][-1]["content"]
+    assert json.loads(last_content[-1]["text"]) == schema
+
+
+def test_bedrock_messages_legacy_output_format_wins_over_output_config_format(local_model_cost_map):
+    """When a request carries both schema forms, the legacy top-level
+    ``output_format`` keeps winning, matching the pre-existing precedence."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    legacy_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"legacy_field": {"type": "string"}}},
+    }
+    newer_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"newer_field": {"type": "string"}}},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "say hello"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 100,
+            "output_format": legacy_format,
+            "output_config": {"format": newer_format},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("output_config") == {"format": legacy_format}
+    assert "output_format" not in result
+    assert "newer_field" not in json.dumps(result)
+
+
+def test_bedrock_messages_drop_params_keeps_native_output_config_format(local_model_cost_map, monkeypatch):
+    """``drop_params=True`` must not strip a natively forwarded
+    ``output_config.format`` on models without effort support (Sonnet 4.5)."""
+    import litellm
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    schema_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "say hello"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 100,
+            "output_config": {"format": schema_format},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("output_config") == {"format": schema_format}
+
+
+def test_bedrock_messages_strips_effort_but_keeps_format_for_sonnet_4_5(local_model_cost_map):
+    """Sonnet 4.5 has native structured-output support but no effort support, so
+    a mixed ``output_config`` keeps ``format`` and drops ``effort``."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    schema_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "say hello"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 4096,
+            "output_config": {"format": schema_format, "effort": "high"},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("output_config") == {"format": schema_format}

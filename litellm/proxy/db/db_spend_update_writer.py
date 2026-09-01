@@ -211,7 +211,7 @@ class DBSpendUpdateWriter:
         org_id: str | None,
         # Completion object fields
         kwargs: dict | None,
-        completion_response: litellm.ModelResponse | Any | Exception | None,
+        completion_response: object,
         start_time: datetime | None,
         end_time: datetime | None,
         response_cost: float | None,
@@ -323,7 +323,7 @@ class DBSpendUpdateWriter:
     async def _enqueue_tool_usage_transaction(
         self,
         payload: SpendLogsPayload,
-        completion_response: "litellm.ModelResponse | Any | Exception | None",
+        completion_response: object,
         prisma_client: "PrismaClient | None",
         kwargs: "dict | None" = None,
     ) -> None:
@@ -396,7 +396,7 @@ class DBSpendUpdateWriter:
     def _enqueue_tool_registry_upsert(
         self,
         kwargs: dict | None,
-        completion_response: Any | None,
+        completion_response: object,
         hashed_token: str | None = None,
         team_id: str | None = None,
     ) -> None:
@@ -849,7 +849,7 @@ class DBSpendUpdateWriter:
                 return
 
             # Parse tags from JSON string
-            tags = []
+            tags: Sequence[object] = []
             if isinstance(request_tags, str):
                 tags = safe_json_loads(request_tags, default=[])
                 if not tags:
@@ -2260,7 +2260,7 @@ class DBSpendUpdateWriter:
             verbose_proxy_logger.debug("request_tags is None for request. Skipping incrementing tag spend.")
             return
 
-        request_tags = []
+        request_tags: Sequence[str] = []
         if isinstance(payload["request_tags"], str):
             request_tags = json.loads(payload["request_tags"])
         elif isinstance(payload["request_tags"], list):
