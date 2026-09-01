@@ -193,14 +193,33 @@ class AgenticLoopParams(TypedDict, total=False):
     """The LLM provider name (e.g., 'bedrock', 'anthropic')"""
 
 
-class OffPeakPricing(TypedDict, total=False):
-    """Time-windowed off-peak rates for providers that discount by time of day (e.g. DeepSeek).
+class OffPeakWindow(TypedDict, total=False):
+    """One off-peak rule: UTC time-of-day windows, optionally restricted to weekdays.
 
-    hours_utc is a "HH:MM-HH:MM" string in UTC, or a list of them for multiple daily windows;
-    a window may wrap past midnight. Any rate left unset falls back to the standard rate.
+    hours_utc is a "HH:MM-HH:MM" string in UTC, or a list of them; a window may wrap past
+    midnight and an equal-ended window covers the whole day. weekdays is a list of days the
+    rule applies on, as ISO-8601 numbers (1 = Monday .. 7 = Sunday) or English day names;
+    omitted means every day. The weekday is read on the calendar named by the block's
+    weekday_timezone.
     """
 
     hours_utc: ReadOnly[str | Sequence[str]]
+    weekdays: ReadOnly[Sequence[int | str]]
+
+
+class OffPeakPricing(TypedDict, total=False):
+    """Time-windowed off-peak rates for providers that discount by time of day (e.g. DeepSeek).
+
+    hours_utc is a "HH:MM-HH:MM" string in UTC, or a list of them for multiple daily windows,
+    applying on every day of the week; a window may wrap past midnight. windows adds
+    day-of-week-qualified rules (e.g. weekend-only whole-day off-peak), matched as a union
+    with hours_utc. weekday_timezone names the IANA calendar weekdays are read on, defaulting
+    to UTC. Any rate left unset falls back to the standard rate.
+    """
+
+    hours_utc: ReadOnly[str | Sequence[str]]
+    windows: ReadOnly[Sequence[OffPeakWindow]]
+    weekday_timezone: ReadOnly[str]
     input_cost_per_token: ReadOnly[float]
     output_cost_per_token: ReadOnly[float]
     cache_read_input_token_cost: ReadOnly[float]
