@@ -212,7 +212,7 @@ struct KeyRow {
     tpm_limit: Option<i64>,
     rpm_limit: Option<i64>,
     blocked: Option<bool>,
-    expires: Option<String>,
+    expires: Option<chrono::NaiveDateTime>,
     allowed_routes: Vec<String>,
 }
 
@@ -243,7 +243,9 @@ impl KeyRow {
                     .unwrap_or_default()
                     .as_secs_f64(),
             ),
-            expires: self.expires,
+            expires: self
+                .expires
+                .map(|naive| chrono::DateTime::from_naive_utc_and_offset(naive, chrono::Utc)),
         }
     }
 }

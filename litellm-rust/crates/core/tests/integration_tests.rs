@@ -136,21 +136,27 @@ async fn spend_tracking_end_to_end() {
 
     let hashed_key = hash_token("sk-test-key");
 
-    worker.record_update(SpendUpdateItem {
-        entity_type: EntityType::Key,
-        entity_id: hashed_key.clone(),
-        cost: 0.05,
-    });
-    worker.record_update(SpendUpdateItem {
-        entity_type: EntityType::User,
-        entity_id: "user-1".to_string(),
-        cost: 0.05,
-    });
-    worker.record_update(SpendUpdateItem {
-        entity_type: EntityType::Team,
-        entity_id: "team-1".to_string(),
-        cost: 0.05,
-    });
+    worker
+        .record_update(SpendUpdateItem {
+            entity_type: EntityType::Key,
+            entity_id: hashed_key.clone(),
+            cost: 0.05,
+        })
+        .await;
+    worker
+        .record_update(SpendUpdateItem {
+            entity_type: EntityType::User,
+            entity_id: "user-1".to_string(),
+            cost: 0.05,
+        })
+        .await;
+    worker
+        .record_update(SpendUpdateItem {
+            entity_type: EntityType::Team,
+            entity_id: "team-1".to_string(),
+            cost: 0.05,
+        })
+        .await;
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 

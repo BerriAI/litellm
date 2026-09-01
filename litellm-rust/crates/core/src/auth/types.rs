@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -33,16 +34,13 @@ pub struct KeyObject {
     pub metadata: Option<String>,
     /// Unix timestamp of last cache refresh.
     pub last_refreshed_at: Option<f64>,
-    /// Whether this key has expired.
-    pub expires: Option<String>,
+    /// When this key expires. None means it never expires.
+    pub expires: Option<DateTime<Utc>>,
 }
 
 impl KeyObject {
     pub fn is_expired(&self) -> bool {
-        let Some(expires) = &self.expires else {
-            return false;
-        };
-        parse_expiry(expires).is_some_and(|ts| ts < current_unix_timestamp())
+        self.expires.is_some_and(|expires| expires <= Utc::now())
     }
 
     pub fn has_model_access(&self, model: &str) -> bool {
@@ -59,15 +57,4 @@ impl KeyObject {
         };
         self.spend < max_budget
     }
-}
-
-fn current_unix_timestamp() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs_f64())
-        .unwrap_or(0.0)
-}
-
-fn parse_expiry(expiry: &str) -> Option<f64> {
-    expiry.parse::<f64>().ok()
 }

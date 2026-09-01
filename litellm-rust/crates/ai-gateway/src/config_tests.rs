@@ -33,7 +33,7 @@ model_list:
       model: openai/gpt-4
 
 general_settings:
-  master_key: os.environ/LITELLM_MASTER_KEY
+  master_key: sk-test-master-key-123
   database_url: os.environ/DATABASE_URL
   coordination_redis: os.environ/REDIS_URL
   max_parallel_requests: 100
@@ -53,7 +53,10 @@ general_settings:
 
         let config = load_config_from_yaml(file.path().to_str().unwrap()).unwrap();
 
-        assert!(config.general_settings.master_key.is_some());
+        assert_eq!(
+            config.general_settings.master_key.as_deref(),
+            Some("sk-test-master-key-123")
+        );
         assert!(config.general_settings.database_url.is_some());
         assert!(config.general_settings.coordination_redis.is_some());
         assert_eq!(config.general_settings.max_parallel_requests, Some(100));
@@ -258,6 +261,49 @@ model_list:
         // SAFETY: This test is single-threaded and only modifies this specific env var
         unsafe {
             std::env::remove_var("TEST_API_KEY");
+        }
+    }
+
+    fn load_master_key(yaml: &str) -> Option<String> {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(yaml.as_bytes()).unwrap();
+        let config = load_config_from_yaml(file.path().to_str().unwrap()).unwrap();
+        config.general_settings.master_key
+    }
+
+    #[test]
+    fn test_master_key_env_placeholder_resolves() {
+        // SAFETY: This test is single-threaded and only modifies this specific env var
+        unsafe {
+            std::env::set_var("TEST_LITELLM_MASTER_KEY", "resolved-secret");
+        }
+
+        for reference in [
+            "os.environ/TEST_LITELLM_MASTER_KEY",
+            "${TEST_LITELLM_MASTER_KEY}",
+        ] {
+            let yaml = format!(
+                "model_list:\n  - model_name: gpt-4\n    litellm_params:\n      model: openai/gpt-4\n\ngeneral_settings:\n  master_key: {reference}\n"
+            );
+            assert_eq!(load_master_key(&yaml).as_deref(), Some("resolved-secret"));
+        }
+
+        // SAFETY: This test is single-threaded and only modifies this specific env var
+        unsafe {
+            std::env::remove_var("TEST_LITELLM_MASTER_KEY");
+        }
+    }
+
+    #[test]
+    fn test_master_key_unset_placeholder_disables_auth() {
+        for reference in [
+            "os.environ/LITELLM_UNSET_PLACEHOLDER_TEST_VAR",
+            "${LITELLM_UNSET_PLACEHOLDER_TEST_VAR}",
+        ] {
+            let yaml = format!(
+                "model_list:\n  - model_name: gpt-4\n    litellm_params:\n      model: openai/gpt-4\n\ngeneral_settings:\n  master_key: {reference}\n"
+            );
+            assert_eq!(load_master_key(&yaml), None);
         }
     }
 

@@ -308,10 +308,10 @@ Create `docker-compose.yml`:
 version: '3.8'
 
 services:
+  # No `ports:` on redis/postgres: the gateway reaches them over the Compose
+  # network, and publishing them would expose them on every host interface.
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
     volumes:
       - redis-data:/data
     command: redis-server --appendonly yes
@@ -322,8 +322,6 @@ services:
       POSTGRES_USER: litellm
       POSTGRES_PASSWORD: your-secure-password
       POSTGRES_DB: litellm
-    ports:
-      - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
 

@@ -257,14 +257,16 @@ pub fn load_router_from_yaml(path: &str) -> Result<Router, String> {
     load_config_from_yaml(path).map(|config| config.router)
 }
 
-/// Resolve `os.environ/VAR_NAME` references to actual env var values.
+/// Resolve `os.environ/VAR_NAME` and `${VAR_NAME}` references to env var values.
 fn resolve_env_ref(value: String) -> String {
-    if let Some(var_name) = value.strip_prefix("os.environ/") {
-        std::env::var(var_name).unwrap_or_else(|_| {
-            eprintln!("warning: env var {var_name} not set, API key will be empty");
+    let var_name = value
+        .strip_prefix("os.environ/")
+        .or_else(|| value.strip_prefix("${").and_then(|v| v.strip_suffix('}')));
+    match var_name {
+        Some(var_name) => std::env::var(var_name).unwrap_or_else(|_| {
+            eprintln!("warning: env var {var_name} not set, resolved value will be empty");
             String::new()
-        })
-    } else {
-        value
+        }),
+        None => value,
     }
 }

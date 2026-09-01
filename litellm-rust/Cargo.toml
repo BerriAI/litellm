@@ -30,6 +30,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"]
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
 tiktoken = "4.1"
 tokenizers = "0.21"
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }

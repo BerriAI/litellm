@@ -27,6 +27,7 @@ serde.workspace = true
 subtle = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 futures = "0.3"
@@ -44,7 +45,7 @@ uuid = { version = "1.0", features = ["v4"] }
 
 [features]
 default = []
-server = ["dep:axum", "dep:subtle", "dep:sha2", "dep:sqlx"]
+server = ["dep:axum", "dep:subtle", "dep:sha2", "dep:sqlx", "dep:chrono"]
 
 [dev-dependencies]
 futures-channel = "0.3"

@@ -57,22 +57,22 @@ pub async fn run(
 
     // Check budget against live Redis spend counter (avoids stale cache)
     let mut redis_budget_checked = false;
-    if let Some(max_budget) = key_object.max_budget {
-        if let Some(ref redis) = state.redis {
-            let mut key_buf = [0u8; 256];
-            let spend_key_str = spend_key(&mut key_buf, "key", hashed_token.as_hex_str());
-            match redis.incr_by_float(spend_key_str, 0.0).await {
-                Ok(live_spend) if live_spend >= max_budget => {
-                    return Err(CoreError::Auth(format!(
-                        "API key has exceeded its budget limit of ${max_budget:.2} (${live_spend:.2} spent)"
-                    )));
-                }
-                Ok(_) => {
-                    redis_budget_checked = true;
-                }
-                Err(e) => {
-                    crate::hardening::log_degradation("redis", "key_budget_check", &e.to_string());
-                }
+    if let Some(max_budget) = key_object.max_budget
+        && let Some(ref redis) = state.redis
+    {
+        let mut key_buf = [0u8; 256];
+        let spend_key_str = spend_key(&mut key_buf, "key", hashed_token.as_hex_str());
+        match redis.incr_by_float(spend_key_str, 0.0).await {
+            Ok(live_spend) if live_spend >= max_budget => {
+                return Err(CoreError::Auth(format!(
+                    "API key has exceeded its budget limit of ${max_budget:.2} (${live_spend:.2} spent)"
+                )));
+            }
+            Ok(_) => {
+                redis_budget_checked = true;
+            }
+            Err(e) => {
+                crate::hardening::log_degradation("redis", "key_budget_check", &e.to_string());
             }
         }
     }
@@ -163,9 +163,10 @@ pub async fn run(
     }
 
     let first_provider_model = deployments[0].litellm_params.model.as_str();
-    if cost_calculator::lookup_model_pricing(first_provider_model).is_none() {
+    let enforcement_active = state.redis.is_some() || key_object.max_budget.is_some();
+    if enforcement_active && cost_calculator::lookup_model_pricing(first_provider_model).is_none() {
         return Err(CoreError::InvalidRequest(format!(
-            "no pricing data available for model '{model}', spend tracking is required"
+            "no pricing data available for model '{model}', spend enforcement is active"
         )));
     }
 
@@ -516,34 +517,42 @@ async fn record_streaming_spend_estimate(
 
     let hex = hashed_token.as_hex_str();
     if let Some(ref worker) = state.spend_worker {
-        worker.record_update(SpendUpdateItem {
-            entity_type: EntityType::Key,
-            entity_id: hex.to_string(),
-            cost,
-        });
+        worker
+            .record_update(SpendUpdateItem {
+                entity_type: EntityType::Key,
+                entity_id: hex.to_string(),
+                cost,
+            })
+            .await;
 
         if let Some(ref user_id) = key_object.user_id {
-            worker.record_update(SpendUpdateItem {
-                entity_type: EntityType::User,
-                entity_id: user_id.clone(),
-                cost,
-            });
+            worker
+                .record_update(SpendUpdateItem {
+                    entity_type: EntityType::User,
+                    entity_id: user_id.clone(),
+                    cost,
+                })
+                .await;
         }
 
         if let Some(ref team_id) = key_object.team_id {
-            worker.record_update(SpendUpdateItem {
-                entity_type: EntityType::Team,
-                entity_id: team_id.clone(),
-                cost,
-            });
+            worker
+                .record_update(SpendUpdateItem {
+                    entity_type: EntityType::Team,
+                    entity_id: team_id.clone(),
+                    cost,
+                })
+                .await;
         }
 
         if let Some(ref org_id) = key_object.org_id {
-            worker.record_update(SpendUpdateItem {
-                entity_type: EntityType::Organization,
-                entity_id: org_id.clone(),
-                cost,
-            });
+            worker
+                .record_update(SpendUpdateItem {
+                    entity_type: EntityType::Organization,
+                    entity_id: org_id.clone(),
+                    cost,
+                })
+                .await;
         }
     }
 }
@@ -632,34 +641,42 @@ async fn record_spend(
 
     // Record spend via worker (batched, async)
     if let Some(ref worker) = state.spend_worker {
-        worker.record_update(SpendUpdateItem {
-            entity_type: EntityType::Key,
-            entity_id: hex.to_string(),
-            cost,
-        });
+        worker
+            .record_update(SpendUpdateItem {
+                entity_type: EntityType::Key,
+                entity_id: hex.to_string(),
+                cost,
+            })
+            .await;
 
         if let Some(ref user_id) = key_object.user_id {
-            worker.record_update(SpendUpdateItem {
-                entity_type: EntityType::User,
-                entity_id: user_id.clone(),
-                cost,
-            });
+            worker
+                .record_update(SpendUpdateItem {
+                    entity_type: EntityType::User,
+                    entity_id: user_id.clone(),
+                    cost,
+                })
+                .await;
         }
 
         if let Some(ref team_id) = key_object.team_id {
-            worker.record_update(SpendUpdateItem {
-                entity_type: EntityType::Team,
-                entity_id: team_id.clone(),
-                cost,
-            });
+            worker
+                .record_update(SpendUpdateItem {
+                    entity_type: EntityType::Team,
+                    entity_id: team_id.clone(),
+                    cost,
+                })
+                .await;
         }
 
         if let Some(ref org_id) = key_object.org_id {
-            worker.record_update(SpendUpdateItem {
-                entity_type: EntityType::Organization,
-                entity_id: org_id.clone(),
-                cost,
-            });
+            worker
+                .record_update(SpendUpdateItem {
+                    entity_type: EntityType::Organization,
+                    entity_id: org_id.clone(),
+                    cost,
+                })
+                .await;
         }
     }
 }

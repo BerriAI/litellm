@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::time;
@@ -37,9 +38,9 @@ async fn worker_flushes_on_batch_size() {
     let flush = MemoryFlush::new();
     let worker = SpendWorker::spawn(3, Duration::from_secs(10), flush.clone());
 
-    worker.record_log(make_spend_entry("req-1", 0.01));
-    worker.record_log(make_spend_entry("req-2", 0.02));
-    worker.record_log(make_spend_entry("req-3", 0.03));
+    worker.record_log(make_spend_entry("req-1", 0.01)).await;
+    worker.record_log(make_spend_entry("req-2", 0.02)).await;
+    worker.record_log(make_spend_entry("req-3", 0.03)).await;
 
     time::sleep(Duration::from_millis(50)).await;
 
@@ -53,7 +54,7 @@ async fn worker_flushes_on_interval() {
     let flush = MemoryFlush::new();
     let worker = SpendWorker::spawn(1000, Duration::from_millis(50), flush.clone());
 
-    worker.record_log(make_spend_entry("req-1", 0.01));
+    worker.record_log(make_spend_entry("req-1", 0.01)).await;
 
     time::sleep(Duration::from_millis(100)).await;
 
@@ -67,10 +68,18 @@ async fn worker_aggregates_updates_by_entity() {
     let flush = MemoryFlush::new();
     let worker = SpendWorker::spawn(100, Duration::from_millis(50), flush.clone());
 
-    worker.record_update(make_spend_update(EntityType::Key, "key-1", 0.01));
-    worker.record_update(make_spend_update(EntityType::Key, "key-1", 0.02));
-    worker.record_update(make_spend_update(EntityType::Key, "key-2", 0.03));
-    worker.record_update(make_spend_update(EntityType::User, "user-1", 0.05));
+    worker
+        .record_update(make_spend_update(EntityType::Key, "key-1", 0.01))
+        .await;
+    worker
+        .record_update(make_spend_update(EntityType::Key, "key-1", 0.02))
+        .await;
+    worker
+        .record_update(make_spend_update(EntityType::Key, "key-2", 0.03))
+        .await;
+    worker
+        .record_update(make_spend_update(EntityType::User, "user-1", 0.05))
+        .await;
 
     time::sleep(Duration::from_millis(100)).await;
 
@@ -90,14 +99,30 @@ async fn worker_handles_all_entity_types() {
     let flush = MemoryFlush::new();
     let worker = SpendWorker::spawn(100, Duration::from_millis(50), flush.clone());
 
-    worker.record_update(make_spend_update(EntityType::Key, "k1", 1.0));
-    worker.record_update(make_spend_update(EntityType::User, "u1", 2.0));
-    worker.record_update(make_spend_update(EntityType::EndUser, "eu1", 3.0));
-    worker.record_update(make_spend_update(EntityType::Team, "t1", 4.0));
-    worker.record_update(make_spend_update(EntityType::TeamMember, "tm1", 5.0));
-    worker.record_update(make_spend_update(EntityType::Organization, "o1", 6.0));
-    worker.record_update(make_spend_update(EntityType::Tag, "tag1", 7.0));
-    worker.record_update(make_spend_update(EntityType::Agent, "a1", 8.0));
+    worker
+        .record_update(make_spend_update(EntityType::Key, "k1", 1.0))
+        .await;
+    worker
+        .record_update(make_spend_update(EntityType::User, "u1", 2.0))
+        .await;
+    worker
+        .record_update(make_spend_update(EntityType::EndUser, "eu1", 3.0))
+        .await;
+    worker
+        .record_update(make_spend_update(EntityType::Team, "t1", 4.0))
+        .await;
+    worker
+        .record_update(make_spend_update(EntityType::TeamMember, "tm1", 5.0))
+        .await;
+    worker
+        .record_update(make_spend_update(EntityType::Organization, "o1", 6.0))
+        .await;
+    worker
+        .record_update(make_spend_update(EntityType::Tag, "tag1", 7.0))
+        .await;
+    worker
+        .record_update(make_spend_update(EntityType::Agent, "a1", 8.0))
+        .await;
 
     time::sleep(Duration::from_millis(100)).await;
 
@@ -119,8 +144,8 @@ async fn worker_flushes_remaining_on_drop() {
     let flush = MemoryFlush::new();
     {
         let worker = SpendWorker::spawn(1000, Duration::from_secs(60), flush.clone());
-        worker.record_log(make_spend_entry("req-1", 0.01));
-        worker.record_log(make_spend_entry("req-2", 0.02));
+        worker.record_log(make_spend_entry("req-1", 0.01)).await;
+        worker.record_log(make_spend_entry("req-2", 0.02)).await;
     }
 
     time::sleep(Duration::from_millis(50)).await;
@@ -133,10 +158,56 @@ async fn worker_flushes_remaining_on_drop() {
 async fn null_flush_discards_data() {
     let worker = SpendWorker::spawn(100, Duration::from_millis(50), NullFlush);
 
-    worker.record_log(make_spend_entry("req-1", 0.01));
-    worker.record_update(make_spend_update(EntityType::Key, "key-1", 0.01));
+    worker.record_log(make_spend_entry("req-1", 0.01)).await;
+    worker
+        .record_update(make_spend_update(EntityType::Key, "key-1", 0.01))
+        .await;
 
     time::sleep(Duration::from_millis(100)).await;
+}
+
+#[derive(Clone)]
+struct SlowFirstFlush {
+    delay: Duration,
+    stalled: Arc<std::sync::atomic::AtomicBool>,
+    inner: MemoryFlush,
+}
+
+impl SpendFlush for SlowFirstFlush {
+    async fn flush(&self, batch: SpendUpdateBatch) {
+        if !self.stalled.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            time::sleep(self.delay).await;
+        }
+        self.inner.flush(batch).await;
+    }
+}
+
+#[tokio::test]
+async fn worker_applies_backpressure_instead_of_dropping_records() {
+    let flush = SlowFirstFlush {
+        delay: Duration::from_secs(2),
+        stalled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        inner: MemoryFlush::new(),
+    };
+    // Channel capacity is 10_000; the stalled first flush guarantees it fills.
+    let worker = SpendWorker::spawn(5, Duration::from_secs(60), flush.clone());
+
+    let sender = tokio::spawn(async move {
+        for i in 0..12_000u32 {
+            worker
+                .record_update(make_spend_update(
+                    EntityType::Key,
+                    &format!("key-{i}"),
+                    0.001,
+                ))
+                .await;
+        }
+        drop(worker);
+    });
+    sender.await.unwrap();
+
+    time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(flush.inner.total_entries().await, 12_000);
 }
 
 #[test]

@@ -76,22 +76,23 @@ impl SpendWorker {
     }
 
     /// Record a spend update for a specific entity (key, user, team, etc.).
-    /// Non-blocking: sends to the background worker via channel.
-    pub fn record_update(&self, item: SpendUpdateItem) {
-        if self.tx.try_send(SpendMessage::Update(item)).is_err() {
-            eprintln!("[warn] spend worker channel full, dropping spend update");
+    /// Awaits when the channel is full so accounting is never dropped.
+    pub async fn record_update(&self, item: SpendUpdateItem) {
+        if self.tx.send(SpendMessage::Update(item)).await.is_err() {
+            eprintln!("[error] spend worker is gone; spend update lost");
         }
     }
 
     /// Record a spend log entry (the per-request log row).
-    /// Non-blocking: sends to the background worker via channel.
-    pub fn record_log(&self, entry: SpendEntry) {
+    /// Awaits when the channel is full so accounting is never dropped.
+    pub async fn record_log(&self, entry: SpendEntry) {
         if self
             .tx
-            .try_send(SpendMessage::Log(Box::new(entry)))
+            .send(SpendMessage::Log(Box::new(entry)))
+            .await
             .is_err()
         {
-            eprintln!("[warn] spend worker channel full, dropping spend log");
+            eprintln!("[error] spend worker is gone; spend log lost");
         }
     }
 }

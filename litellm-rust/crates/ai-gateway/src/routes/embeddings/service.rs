@@ -451,34 +451,42 @@ async fn record_spend(
 
     // Record spend via worker (batched, async)
     if let Some(ref worker) = state.spend_worker {
-        worker.record_update(SpendUpdateItem {
-            entity_type: EntityType::Key,
-            entity_id: hex.to_string(),
-            cost,
-        });
+        worker
+            .record_update(SpendUpdateItem {
+                entity_type: EntityType::Key,
+                entity_id: hex.to_string(),
+                cost,
+            })
+            .await;
 
         if let Some(ref user_id) = key_object.user_id {
-            worker.record_update(SpendUpdateItem {
-                entity_type: EntityType::User,
-                entity_id: user_id.clone(),
-                cost,
-            });
+            worker
+                .record_update(SpendUpdateItem {
+                    entity_type: EntityType::User,
+                    entity_id: user_id.clone(),
+                    cost,
+                })
+                .await;
         }
 
         if let Some(ref team_id) = key_object.team_id {
-            worker.record_update(SpendUpdateItem {
-                entity_type: EntityType::Team,
-                entity_id: team_id.clone(),
-                cost,
-            });
+            worker
+                .record_update(SpendUpdateItem {
+                    entity_type: EntityType::Team,
+                    entity_id: team_id.clone(),
+                    cost,
+                })
+                .await;
         }
 
         if let Some(ref org_id) = key_object.org_id {
-            worker.record_update(SpendUpdateItem {
-                entity_type: EntityType::Organization,
-                entity_id: org_id.clone(),
-                cost,
-            });
+            worker
+                .record_update(SpendUpdateItem {
+                    entity_type: EntityType::Organization,
+                    entity_id: org_id.clone(),
+                    cost,
+                })
+                .await;
         }
     }
 

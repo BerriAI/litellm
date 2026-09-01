@@ -339,7 +339,8 @@ mod tests {
             .split_once("\r\n\r\n")
             .expect("upstream request has body");
         let head = head.to_ascii_lowercase();
-        assert!(head.contains("x-api-key: request-upstream-key"));
+        assert!(head.contains("x-api-key: upstream-key"));
+        assert!(!head.contains("request-upstream-key"));
         assert!(head.contains("anthropic-beta: beta-feature"));
         assert!(!head.contains("authorization: bearer master-key"));
         let body: serde_json::Value = serde_json::from_str(body).expect("upstream body is json");

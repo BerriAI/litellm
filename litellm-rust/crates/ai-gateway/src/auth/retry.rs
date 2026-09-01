@@ -395,17 +395,38 @@ mod tests {
                 status: 429,
                 body: "rate limited".to_string()
             }),
-            ErrorCategory::Http
+            ErrorCategory::RateLimit
+        );
+        assert_eq!(
+            categorize_error(&litellm_core::CoreError::Http {
+                status: 400,
+                body: "bad".to_string()
+            }),
+            ErrorCategory::BadRequest
+        );
+        assert_eq!(
+            categorize_error(&litellm_core::CoreError::Http {
+                status: 401,
+                body: "unauthorized".to_string()
+            }),
+            ErrorCategory::Authentication
+        );
+        assert_eq!(
+            categorize_error(&litellm_core::CoreError::Http {
+                status: 408,
+                body: "timeout".to_string()
+            }),
+            ErrorCategory::Timeout
         );
         assert_eq!(
             categorize_error(&litellm_core::CoreError::InvalidRequest(
                 "bad request".to_string()
             )),
-            ErrorCategory::Application
+            ErrorCategory::BadRequest
         );
         assert_eq!(
             categorize_error(&litellm_core::CoreError::Auth("unauthorized".to_string())),
-            ErrorCategory::Application
+            ErrorCategory::Authentication
         );
         assert_eq!(
             categorize_error(&litellm_core::CoreError::InvalidProvider(

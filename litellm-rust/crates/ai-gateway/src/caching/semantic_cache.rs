@@ -99,40 +99,45 @@ impl SemanticCache {
 
     /// Get a cached response for a request embedding.
     pub fn get(&self, embedding: &[f32]) -> Option<String> {
-        let entries = self.entries.read();
+        let best_match = {
+            let entries = self.entries.read();
 
-        // Find the most similar entry above the threshold.
-        let mut best_match = None;
-        let mut best_similarity = self.config.similarity_threshold;
+            // Find the most similar entry above the threshold.
+            let mut best_match = None;
+            let mut best_similarity = self.config.similarity_threshold;
 
-        for (key, entry) in entries.iter() {
-            // Check if entry has expired.
-            if entry.cached_at.elapsed().as_secs() > entry.ttl_secs {
-                continue;
+            for (key, entry) in entries.iter() {
+                // Check if entry has expired.
+                if entry.cached_at.elapsed().as_secs() > entry.ttl_secs {
+                    continue;
+                }
+
+                let similarity = Self::cosine_similarity(embedding, &entry.embedding);
+                if similarity > best_similarity {
+                    best_similarity = similarity;
+                    best_match = Some(key.clone());
+                }
             }
 
-            let similarity = Self::cosine_similarity(embedding, &entry.embedding);
-            if similarity > best_similarity {
-                best_similarity = similarity;
-                best_match = Some(key.clone());
-            }
-        }
+            best_match
+        };
 
-        if let Some(key) = best_match {
-            let mut stats = self.stats.write();
-            stats.hits += 1;
+        let Some(key) = best_match else {
+            self.stats.write().misses += 1;
+            return None;
+        };
 
-            // Update access count.
-            if let Some(entry) = self.entries.write().get_mut(&key) {
-                entry.access_count += 1;
-            }
+        // The read guard is dropped before taking the write guard;
+        // upgrading in place would deadlock.
+        let response = {
+            let mut entries = self.entries.write();
+            let entry = entries.get_mut(&key)?;
+            entry.access_count += 1;
+            entry.response.clone()
+        };
 
-            entries.get(&key).map(|e| e.response.clone())
-        } else {
-            let mut stats = self.stats.write();
-            stats.misses += 1;
-            None
-        }
+        self.stats.write().hits += 1;
+        Some(response)
     }
 
     /// Insert a new entry into the cache.
@@ -230,7 +235,7 @@ mod tests {
     fn test_cosine_similarity() {
         let a = vec![1.0, 0.0, 0.0];
         let b = vec![1.0, 0.0, 0.0];
-        assert_eq!(SemanticCache::cosine_similarity(&a, &b), 1.0);
+        assert!((SemanticCache::cosine_similarity(&a, &b) - 1.0).abs() < 1e-6);
 
         let a = vec![1.0, 0.0, 0.0];
         let b = vec![0.0, 1.0, 0.0];
@@ -238,7 +243,7 @@ mod tests {
 
         let a = vec![1.0, 1.0, 0.0];
         let b = vec![1.0, 1.0, 0.0];
-        assert_eq!(SemanticCache::cosine_similarity(&a, &b), 1.0);
+        assert!((SemanticCache::cosine_similarity(&a, &b) - 1.0).abs() < 1e-6);
     }
 
     #[test]

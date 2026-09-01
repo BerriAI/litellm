@@ -288,7 +288,7 @@ model_list:
       mode: chat
 
 general_settings:
-  master_key: os.environ/LITELLM_MASTER_KEY
+  master_key: sk-integration-test-master-key
   max_parallel_requests: 100
   global_max_parallel_requests: 1000
   max_request_size_mb: 10
@@ -341,7 +341,10 @@ router_settings:
         assert_eq!(config.router.deployments()[0].model_name, "gpt-4");
 
         // Verify general_settings
-        assert!(config.general_settings.master_key.is_some());
+        assert_eq!(
+            config.general_settings.master_key.as_deref(),
+            Some("sk-integration-test-master-key")
+        );
         assert_eq!(config.general_settings.max_parallel_requests, Some(100));
         assert_eq!(
             config.general_settings.global_max_parallel_requests,

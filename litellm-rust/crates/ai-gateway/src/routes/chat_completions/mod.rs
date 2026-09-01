@@ -602,10 +602,23 @@ mod tests {
             .route("/metrics", axum::routing::get(crate::routes::metrics))
             .with_state(state);
 
+        let unauthenticated = tower::ServiceExt::oneshot(
+            app.clone(),
+            axum::http::Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("route responds");
+
+        assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
         let response = tower::ServiceExt::oneshot(
             app,
             axum::http::Request::builder()
                 .uri("/metrics")
+                .header("authorization", "Bearer master-key")
                 .body(Body::empty())
                 .expect("request builds"),
         )

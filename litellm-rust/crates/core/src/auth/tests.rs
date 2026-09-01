@@ -221,6 +221,20 @@ fn key_object_not_expired_without_expiry() {
 }
 
 #[test]
+fn key_object_expired_with_past_expiry() {
+    let mut key = make_key("sk-test");
+    key.expires = Some(chrono::Utc::now() - chrono::TimeDelta::seconds(1));
+    assert!(key.is_expired());
+}
+
+#[test]
+fn key_object_not_expired_with_future_expiry() {
+    let mut key = make_key("sk-test");
+    key.expires = Some(chrono::Utc::now() + chrono::TimeDelta::hours(1));
+    assert!(!key.is_expired());
+}
+
+#[test]
 fn key_object_blocked_check() {
     let mut key = make_key("sk-test");
     assert!(!key.blocked);
