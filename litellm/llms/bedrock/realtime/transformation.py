@@ -7,7 +7,7 @@ Transforms between OpenAI Realtime API format and Bedrock Nova Sonic format.
 import base64
 import json
 import uuid as uuid_lib
-from typing import Any, Final, cast
+from typing import Final, cast
 
 from pydantic import BaseModel
 
@@ -633,7 +633,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             List of Bedrock format messages (JSON strings)
         """
         try:
-            json_message: Final = json.loads(message)
+            json_message: Final[dict[str, object]] = json.loads(message)
         except json.JSONDecodeError:
             verbose_logger.warning("Invalid JSON message: %s", message[:200])
             return []
@@ -1182,7 +1182,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         # Create a function call arguments done event
         # This is a custom event format that matches what clients expect
-        function_call_event: Final[dict[str, Any]] = {
+        function_call_event: Final[dict[str, object]] = {
             "type": "response.function_call_arguments.done",
             "event_id": f"event_{uuid.uuid4()}",
             "response_id": current_response_id,
