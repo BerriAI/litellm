@@ -14,20 +14,33 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol, cast
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
-from litellm.exceptions import APIError
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     convert_to_model_response_object,
 )
 from litellm.llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
 from litellm.rust_bridge.configuration import rust_enabled
-from litellm.rust_bridge.loader import get_native_bridge
+from litellm.rust_bridge.runtime import (
+    LEGACY_RUST_HEADER,
+    UNSET,
+    BridgeErrorContext,
+    CoreEngine,
+    ExecutionResult,
+    FallbackMode,
+    NativeBinding,
+    RustHandled,
+    Unset,
+    aattempt,
+    ainvoke,
+    attempt,
+    execution_hidden_params,
+    invoke,
+)
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 from litellm.types.utils import ModelResponse
 
@@ -42,7 +55,7 @@ RUST_CHAT_COMPLETIONS_PROVIDERS: Final = frozenset({"anthropic", "bedrock"})
 # rather than narrowing an unparameterized `Mapping` and typing the result Any.
 _LITELLM_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
-RUST_RESPONSE_HEADER: Final = "x-litellm-rust"
+RUST_RESPONSE_HEADER: Final = LEGACY_RUST_HEADER
 
 
 class RustChatCompletions(Protocol):
@@ -126,67 +139,34 @@ def response_logger(
     return log
 
 
-class _Unset:
-    pass
-
-
-_UNSET: Final[_Unset] = _Unset()
-
-
-@dataclass(slots=True)
-class _RustChatCompletionsState:
-    chat_completions: RustChatCompletions | None = None
-    achat_completions: RustAchatCompletions | None = None
-    decline: RustChatCompletionsDecline | None = None
-
-
-_STATE: Final[_RustChatCompletionsState] = _RustChatCompletionsState()
+_CHAT_COMPLETIONS: Final = NativeBinding[RustChatCompletions]("chat_completions")
+_ACHAT_COMPLETIONS: Final = NativeBinding[RustAchatCompletions]("achat_completions")
+_DECLINE: Final = NativeBinding[RustChatCompletionsDecline]("chat_completions_decline")
 
 
 def set_rust_chat_completions(
     *,
-    chat_completions: RustChatCompletions | None | _Unset = _UNSET,
-    achat_completions: RustAchatCompletions | None | _Unset = _UNSET,
-    decline: RustChatCompletionsDecline | None | _Unset = _UNSET,
+    chat_completions: RustChatCompletions | None | Unset = UNSET,
+    achat_completions: RustAchatCompletions | None | Unset = UNSET,
+    decline: RustChatCompletionsDecline | None | Unset = UNSET,
 ) -> None:
     """Inject the native callables, so tests can supply a double instead of
     patching module attributes."""
-    if not isinstance(chat_completions, _Unset):
-        _STATE.chat_completions = chat_completions
-    if not isinstance(achat_completions, _Unset):
-        _STATE.achat_completions = achat_completions
-    if not isinstance(decline, _Unset):
-        _STATE.decline = decline
+    _CHAT_COMPLETIONS.update(chat_completions)
+    _ACHAT_COMPLETIONS.update(achat_completions)
+    _DECLINE.update(decline)
 
 
 def load_rust_chat_completions() -> RustChatCompletions | None:
-    if _STATE.chat_completions is not None:
-        return _STATE.chat_completions
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    loaded: RustChatCompletions | None = getattr(native_bridge, "chat_completions", None)
-    return loaded
+    return _CHAT_COMPLETIONS.load()
 
 
 def load_rust_achat_completions() -> RustAchatCompletions | None:
-    if _STATE.achat_completions is not None:
-        return _STATE.achat_completions
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    loaded: RustAchatCompletions | None = getattr(native_bridge, "achat_completions", None)
-    return loaded
+    return _ACHAT_COMPLETIONS.load()
 
 
 def _load_rust_decline() -> RustChatCompletionsDecline | None:
-    if _STATE.decline is not None:
-        return _STATE.decline
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    loaded: RustChatCompletionsDecline | None = getattr(native_bridge, "chat_completions_decline", None)
-    return loaded
+    return _DECLINE.load()
 
 
 def _anthropic_user_id_reaches_the_body(litellm_params: Mapping[str, object] | None) -> bool:
@@ -275,57 +255,6 @@ def rust_chat_completions_accepts(
     return True
 
 
-def _rust_bridge_exceptions() -> tuple[type[BaseException], type[BaseException]] | None:
-    """`(declined, upstream_failed)` from the native module, or None when absent."""
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    declined: Final = getattr(native_bridge, "RustBridgeDeclined", None)
-    upstream: Final = getattr(native_bridge, "RustUpstreamError", None)
-    if declined is None or upstream is None:
-        return None
-    return declined, upstream
-
-
-def _reraise_or_decline(
-    rust_error: BaseException,
-    *,
-    model: str,
-    custom_llm_provider: str | None,
-) -> None:
-    """Re-raise a failure the provider already saw, or return so the caller declines.
-
-    A request that never reached the provider is safe to serve on the Python
-    path. One that did is not: the provider has already done the work, so a
-    second attempt bills for it twice. Those surface as an `APIError` carrying
-    the upstream status, which LiteLLM's exception mapping already understands.
-    """
-    exceptions: Final = _rust_bridge_exceptions()
-    if exceptions is None:
-        verbose_logger.debug(
-            "Rust chat completions bridge raised %s; falling back to Python path",
-            type(rust_error).__name__,
-        )
-        return
-    declined, upstream_failed = exceptions
-    if isinstance(rust_error, upstream_failed):
-        args: Final = rust_error.args
-        status: Final = args[0] if args else 0
-        message: Final = args[1] if len(args) > 1 else ""
-        raise APIError(
-            status_code=int(status) or 500,
-            message=f"litellm rust chat completions: {message}",
-            llm_provider=custom_llm_provider or "",
-            model=model,
-        )
-    if not isinstance(rust_error, declined):
-        raise rust_error
-    verbose_logger.debug(
-        "Rust chat completions declined before calling the provider (%s); using the Python path",
-        rust_error,
-    )
-
-
 def _build_model_response(
     rust_response: Mapping[str, object],
     model_response: ModelResponse,
@@ -333,11 +262,31 @@ def _build_model_response(
     built: Final = convert_to_model_response_object(
         response_object=dict(rust_response),  # mutable-ok: the converter takes a real dict and rewrites it
         model_response_object=model_response,
-        hidden_params={"additional_headers": {RUST_RESPONSE_HEADER: "true"}},  # mutable-ok: rewritten by the converter
+        hidden_params=execution_hidden_params(None, CoreEngine.RUST),  # mutable-ok: rewritten by the converter
     )
     if not isinstance(built, ModelResponse):
         raise TypeError(f"expected a ModelResponse from the rust path, got {type(built).__name__}")
     return built
+
+
+def _unwrap_execution(result: ExecutionResult[object]) -> object:
+    value: Final = result.value
+    if isinstance(value, ModelResponse):
+        raw_hidden_params: Final = cast(  # cast-ok: runtime validation below narrows this metadata before use
+            object,
+            value._hidden_params,  # pyright: ignore[reportPrivateUsage]  # ModelResponse exposes no public hidden-params getter
+        )
+        hidden_params: Final = (
+            cast(  # cast-ok: the isinstance check validates the mapping boundary
+                Mapping[str, object], raw_hidden_params
+            )
+            if isinstance(raw_hidden_params, Mapping)
+            else None
+        )
+        value._hidden_params = execution_hidden_params(  # pyright: ignore[reportPrivateUsage]  # ModelResponse exposes no public hidden-params setter
+            hidden_params, result.source
+        )
+    return value
 
 
 def chat_completions(
@@ -354,10 +303,10 @@ def chat_completions(
     on_response: ResponseObserver,
 ) -> ModelResponse | None:
     rust_chat_completions: Final = load_rust_chat_completions()
-    if rust_chat_completions is None:
-        return None
-    try:
-        rust_response: Final = rust_chat_completions(
+    native_call: Final = (
+        None
+        if rust_chat_completions is None
+        else lambda: rust_chat_completions(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -367,11 +316,18 @@ def chat_completions(
             extra_headers=extra_headers,
             timeout_seconds=timeout_to_seconds(timeout),
         )
-    except Exception as rust_error:  # noqa: BLE001  # rollout safety: the helper re-raises anything the provider already saw
-        _reraise_or_decline(rust_error, model=model, custom_llm_provider=custom_llm_provider)
-        return None
-    on_response(rust_response)
-    return _build_model_response(rust_response, model_response)
+    )
+
+    def adapt(rust_response: Mapping[str, object]) -> ModelResponse:
+        on_response(rust_response)
+        return _build_model_response(rust_response, model_response)
+
+    result: Final = attempt(
+        native_call=native_call,
+        adapt=adapt,
+        context=BridgeErrorContext(route="chat completions", provider=custom_llm_provider or "", model=model),
+    )
+    return result.value if isinstance(result, RustHandled) else None
 
 
 async def achat_completions(
@@ -388,10 +344,10 @@ async def achat_completions(
     on_response: ResponseObserver,
 ) -> ModelResponse | None:
     rust_achat_completions: Final = load_rust_achat_completions()
-    if rust_achat_completions is None:
-        return None
-    try:
-        rust_response: Final = await rust_achat_completions(
+    native_call: Final = (
+        None
+        if rust_achat_completions is None
+        else lambda: rust_achat_completions(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -401,11 +357,63 @@ async def achat_completions(
             extra_headers=extra_headers,
             timeout_seconds=timeout_to_seconds(timeout),
         )
-    except Exception as rust_error:  # noqa: BLE001  # rollout safety: the helper re-raises anything the provider already saw
-        _reraise_or_decline(rust_error, model=model, custom_llm_provider=custom_llm_provider)
-        return None
-    on_response(rust_response)
-    return _build_model_response(rust_response, model_response)
+    )
+
+    def adapt(rust_response: Mapping[str, object]) -> ModelResponse:
+        on_response(rust_response)
+        return _build_model_response(rust_response, model_response)
+
+    result: Final = await aattempt(
+        native_call=native_call,
+        adapt=adapt,
+        context=BridgeErrorContext(route="chat completions", provider=custom_llm_provider or "", model=model),
+    )
+    return result.value if isinstance(result, RustHandled) else None
+
+
+def chat_completions_or_fallback(
+    *,
+    model: str,
+    messages: Sequence[object],
+    optional_params: Mapping[str, object],
+    model_response: ModelResponse,
+    api_key: str | None,
+    api_base: str | None,
+    custom_llm_provider: str | None,
+    extra_headers: Mapping[str, object] | None,
+    timeout: float | httpx.Timeout | None,
+    on_response: ResponseObserver,
+    python_fallback: Callable[[], object],
+) -> object:
+    rust_chat_completions: Final = load_rust_chat_completions()
+    native_call: Final = (
+        None
+        if rust_chat_completions is None
+        else lambda: rust_chat_completions(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            timeout_seconds=timeout_to_seconds(timeout),
+        )
+    )
+
+    def adapt(rust_response: Mapping[str, object]) -> object:
+        on_response(rust_response)
+        return _build_model_response(rust_response, model_response)
+
+    return _unwrap_execution(
+        invoke(
+            native_call=native_call,
+            fallback=python_fallback,
+            adapt=adapt,
+            mode=FallbackMode.PYTHON,
+            context=BridgeErrorContext(route="chat completions", provider=custom_llm_provider or "", model=model),
+        )
+    )
 
 
 async def achat_completions_or_fallback(
@@ -422,26 +430,32 @@ async def achat_completions_or_fallback(
     on_response: ResponseObserver,
     python_fallback: Callable[[], Awaitable[object]],
 ) -> object:
-    """Await the Rust path, falling back to the caller's own Python path when
-    the bridge is unavailable or the call fails.
-
-    The caller supplies the fallback, so the bridge stays free of provider
-    dispatch. This exists because a caller that dispatches asynchronously has
-    already returned a coroutine by the time a Rust failure surfaces, and so
-    cannot fall back on its own.
-    """
-    response: Final = await achat_completions(
-        model=model,
-        messages=messages,
-        optional_params=optional_params,
-        model_response=model_response,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        timeout=timeout,
-        on_response=on_response,
+    rust_achat_completions: Final = load_rust_achat_completions()
+    native_call: Final = (
+        None
+        if rust_achat_completions is None
+        else lambda: rust_achat_completions(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            timeout_seconds=timeout_to_seconds(timeout),
+        )
     )
-    if response is not None:
-        return response
-    return await python_fallback()
+
+    def adapt(rust_response: Mapping[str, object]) -> object:
+        on_response(rust_response)
+        return _build_model_response(rust_response, model_response)
+
+    return _unwrap_execution(
+        await ainvoke(
+            native_call=native_call,
+            fallback=python_fallback,
+            adapt=adapt,
+            mode=FallbackMode.PYTHON,
+            context=BridgeErrorContext(route="chat completions", provider=custom_llm_provider or "", model=model),
+        )
+    )

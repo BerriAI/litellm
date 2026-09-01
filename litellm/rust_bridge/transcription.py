@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable
-from dataclasses import dataclass
-from typing import Final, Protocol, cast
+from typing import Final, Protocol
 
 import httpx
 
+from litellm.rust_bridge.runtime import (
+    UNSET,
+    BridgeErrorContext,
+    FallbackMode,
+    NativeBinding,
+    Unset,
+    ainvoke,
+    async_none,
+    identity,
+    invoke,
+)
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
 
@@ -39,62 +49,27 @@ class RustAtranscription(Protocol):
         raise NotImplementedError
 
 
-class _Unset:
-    pass
-
-
-_UNSET: Final[_Unset] = _Unset()
-
-
-@dataclass
-class _RustTranscriptionState:
-    transcription: RustTranscription | None = None
-    atranscription: RustAtranscription | None = None
-
-
-_STATE: Final = _RustTranscriptionState()
+_TRANSCRIPTION: Final = NativeBinding[RustTranscription]("transcription")
+_ATRANSCRIPTION: Final = NativeBinding[RustAtranscription]("atranscription")
 
 
 def configure_rust_transcription(
     enabled: bool = True,
     *,
-    transcription: RustTranscription | None | _Unset = _UNSET,
-    atranscription: RustAtranscription | None | _Unset = _UNSET,
+    transcription: RustTranscription | None | Unset = UNSET,
+    atranscription: RustAtranscription | None | Unset = UNSET,
 ) -> None:
-    if not isinstance(transcription, _Unset):
-        _STATE.transcription = transcription
-    if not isinstance(atranscription, _Unset):
-        _STATE.atranscription = atranscription
+    _ = enabled
+    _TRANSCRIPTION.update(transcription)
+    _ATRANSCRIPTION.update(atranscription)
 
 
 def load_rust_transcription() -> RustTranscription | None:
-    if _STATE.transcription is not None:
-        return _STATE.transcription
-    from litellm.rust_bridge import get_native_bridge
-
-    native_bridge: Final = get_native_bridge()
-    return (
-        None
-        if native_bridge is None
-        else cast(  # cast-ok: native extension protocol is runtime-defined
-            RustTranscription, getattr(native_bridge, "transcription", None)
-        )
-    )
+    return _TRANSCRIPTION.load()
 
 
 def load_rust_atranscription() -> RustAtranscription | None:
-    if _STATE.atranscription is not None:
-        return _STATE.atranscription
-    from litellm.rust_bridge import get_native_bridge
-
-    native_bridge: Final = get_native_bridge()
-    return (
-        None
-        if native_bridge is None
-        else cast(  # cast-ok: native extension protocol is runtime-defined
-            RustAtranscription, getattr(native_bridge, "atranscription", None)
-        )
-    )
+    return _ATRANSCRIPTION.load()
 
 
 def transcription(
@@ -109,18 +84,28 @@ def transcription(
     timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
     rust_transcription: Final = load_rust_transcription()
-    if rust_transcription is None:
-        return None
-    return rust_transcription(
-        model=model,
-        audio=audio,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        optional_params=optional_params,
-        timeout_seconds=timeout_to_seconds(timeout),
+    native_call: Final = (
+        None
+        if rust_transcription is None
+        else lambda: rust_transcription(
+            model=model,
+            audio=audio,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            optional_params=optional_params,
+            timeout_seconds=timeout_to_seconds(timeout),
+        )
     )
+    result: Final = invoke(
+        native_call=native_call,
+        fallback=lambda: None,
+        adapt=identity,
+        mode=FallbackMode.RUST_REQUIRED,
+        context=BridgeErrorContext(route="audio transcription", provider=custom_llm_provider or "", model=model),
+    )
+    return result.value
 
 
 async def atranscription(
@@ -135,15 +120,25 @@ async def atranscription(
     timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
     rust_atranscription: Final = load_rust_atranscription()
-    if rust_atranscription is None:
-        return None
-    return await rust_atranscription(
-        model=model,
-        audio=audio,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        optional_params=optional_params,
-        timeout_seconds=timeout_to_seconds(timeout),
+    native_call: Final = (
+        None
+        if rust_atranscription is None
+        else lambda: rust_atranscription(
+            model=model,
+            audio=audio,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            optional_params=optional_params,
+            timeout_seconds=timeout_to_seconds(timeout),
+        )
     )
+    result: Final = await ainvoke(
+        native_call=native_call,
+        fallback=async_none,
+        adapt=identity,
+        mode=FallbackMode.RUST_REQUIRED,
+        context=BridgeErrorContext(route="audio transcription", provider=custom_llm_provider or "", model=model),
+    )
+    return result.value

@@ -7,7 +7,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from litellm.exceptions import APIError
-from litellm.rust_bridge import streaming
+from litellm.rust_bridge import runtime, streaming
+from litellm.rust_bridge.runtime import CoreEngine
 
 
 class _FakeEventStream:
@@ -101,6 +102,24 @@ class _FailingOpen:
         raise self._error
 
 
+class _MidstreamFailingStream(_FakeEventStream):
+    def next_event(self) -> Mapping[str, object] | None:
+        raise _Declined("decoder rejected event")
+
+
+class _MidstreamFailingOpen:
+    def __call__(
+        self,
+        request: Mapping[str, object],
+        provider: str,
+        credentials: Mapping[str, str] | None,
+        api_base: str | None,
+        extra_headers: Mapping[str, str] | None,
+        timeout_seconds: float | None,
+    ) -> _FakeEventStream:
+        return _MidstreamFailingStream(())
+
+
 @pytest.fixture(autouse=True)
 def reset_bridge() -> Iterator[None]:
     streaming.set_rust_streaming(
@@ -133,7 +152,7 @@ def _chat_event(text: str) -> Mapping[str, object]:
 
 
 def test_unavailable_native_bridge_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(streaming, "get_native_bridge", lambda: None)
+    monkeypatch.setattr(runtime, "get_native_bridge", lambda: None)
     result: Final = streaming.open_stream(
         api="chat_completions",
         provider="anthropic",
@@ -144,15 +163,16 @@ def test_unavailable_native_bridge_falls_back(monkeypatch: pytest.MonkeyPatch) -
         timeout=None,
     )
 
-    assert result is None
+    assert result.value is None
+    assert result.source is CoreEngine.PYTHON
 
 
-def test_declined_open_failure_falls_back(
+def test_guaranteed_not_sent_open_failure_falls_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     python_calls = 0
 
-    monkeypatch.setattr(streaming, "get_native_bridge", lambda: _NativeErrors())
+    monkeypatch.setattr(runtime, "get_native_bridge", lambda: _NativeErrors())
     streaming.set_rust_streaming(
         chat=_FailingOpen(_Declined("unsupported request")),
     )
@@ -166,16 +186,17 @@ def test_declined_open_failure_falls_back(
         extra_headers=None,
         timeout=None,
     )
-    if result is None:
+    if result.value is None:
         python_calls += 1
 
     assert python_calls == 1
+    assert result.source is CoreEngine.PYTHON
 
 
-def test_upstream_open_failure_never_falls_back(
+def test_possibly_sent_open_failure_never_falls_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(streaming, "get_native_bridge", lambda: _NativeErrors())
+    monkeypatch.setattr(runtime, "get_native_bridge", lambda: _NativeErrors())
     streaming.set_rust_streaming(
         chat=_FailingOpen(_Upstream(503, "connection closed after request")),
     )
@@ -206,10 +227,12 @@ def test_sync_typed_events_preserve_shape_metadata_and_close() -> None:
         timeout=1.0,
     )
 
-    assert result is not None
-    assert tuple(event["text"] for event in result) == ("one", "two")
-    assert result.metadata["provider"] == "anthropic"
-    result.close()
+    assert result.source is CoreEngine.RUST
+    assert result.value is not None
+    assert result.value.core_engine is CoreEngine.RUST
+    assert tuple(event["text"] for event in result.value) == ("one", "two")
+    assert result.value.metadata["provider"] == "anthropic"
+    result.value.close()
     assert opener.calls == 1
 
 
@@ -231,6 +254,25 @@ def test_chat_events_flow_through_custom_stream_wrapper() -> None:
     assert chunk.choices[0].delta.content == "hello"
 
 
+def test_rust_stream_never_falls_back_after_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runtime, "get_native_bridge", lambda: _NativeErrors())
+    streaming.set_rust_streaming(chat=_MidstreamFailingOpen())
+    result: Final = streaming.open_stream(
+        api="chat_completions",
+        provider="anthropic",
+        request={"model": "claude", "messages": []},
+        credentials=None,
+        api_base=None,
+        extra_headers=None,
+        timeout=None,
+    )
+
+    assert result.source is CoreEngine.RUST
+    assert result.value is not None
+    with pytest.raises(_Declined, match="decoder rejected event"):
+        next(result.value)
+
+
 @pytest.mark.asyncio
 async def test_async_typed_events_and_cancellation() -> None:
     opener: Final = _RecordingAsyncOpen((_chat_event("one"), _chat_event("two")))
@@ -245,10 +287,11 @@ async def test_async_typed_events_and_cancellation() -> None:
         timeout=None,
     )
 
-    assert result is not None
-    collected: Final = tuple([event async for event in result])
+    assert result.source is CoreEngine.RUST
+    assert result.value is not None
+    collected: Final = tuple([event async for event in result.value])
     assert tuple(event["text"] for event in collected) == ("one", "two")
-    await result.aclose()
+    await result.value.aclose()
 
 
 def test_messages_events_are_wrapped_in_existing_sse_bytes() -> None:

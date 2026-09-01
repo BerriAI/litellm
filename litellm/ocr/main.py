@@ -29,6 +29,7 @@ from litellm.llms.base_llm.ocr.transformation import (
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import ocr as rust_ocr_bridge
+from litellm.rust_bridge.runtime import CoreEngine, execution_hidden_params
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
@@ -58,6 +59,24 @@ class _PreparedRustOCRCall:
     api_base: str | None
     headers: dict[str, object]
     optional_params: dict[str, object]
+
+
+def _with_core_engine(response: OCRResponse, source: CoreEngine) -> OCRResponse:
+    existing_hidden_params: Final = cast(  # cast-ok: OCRResponse initializes hidden params as a mapping
+        Mapping[str, object],
+        response._hidden_params,  # pyright: ignore[reportPrivateUsage]  # provenance uses the response's established metadata channel
+    )
+    response._hidden_params = execution_hidden_params(  # pyright: ignore[reportPrivateUsage]  # OCRResponse has no public hidden-params setter
+        existing_hidden_params, source
+    )
+    return response
+
+
+async def _await_with_core_engine(
+    response: Coroutine[object, object, OCRResponse],
+    source: CoreEngine,
+) -> OCRResponse:
+    return _with_core_engine(await response, source)
 
 
 _RUST_OCR_PROVIDERS: Final = {
@@ -306,7 +325,7 @@ def _run_rust_ocr(
     )
     if rust_response is None:
         return None
-    return OCRResponse.model_validate(rust_response)
+    return _with_core_engine(OCRResponse.model_validate(rust_response), CoreEngine.RUST)
 
 
 async def _run_rust_aocr(
@@ -331,7 +350,7 @@ async def _run_rust_aocr(
     )
     if rust_response is None:
         return None
-    return OCRResponse.model_validate(rust_response)
+    return _with_core_engine(OCRResponse.model_validate(rust_response), CoreEngine.RUST)
 
 
 @client
@@ -461,7 +480,7 @@ async def aocr(
         if response is None:
             raise ValueError(f"Got an unexpected None response from the OCR API: {response}")
 
-        return response
+        return _with_core_engine(response, CoreEngine.PYTHON)
     except Exception as e:
         raise litellm.exception_type(
             model=model,
@@ -727,7 +746,9 @@ def ocr(
             litellm_params=prepared.litellm_params,
         )
 
-        return response
+        if asyncio.iscoroutine(response):
+            return _await_with_core_engine(response, CoreEngine.PYTHON)
+        return _with_core_engine(response, CoreEngine.PYTHON)
     except Exception as e:
         raise litellm.exception_type(
             model=model,

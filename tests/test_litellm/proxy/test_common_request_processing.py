@@ -1241,6 +1241,28 @@ class TestProxyBaseLLMRequestProcessing:
         breakdown_none = _get_cost_breakdown_from_logging_obj(None)
         assert all(value is None for value in breakdown_none)
 
+    def test_get_custom_headers_sets_and_reserves_core_provenance(self):
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        python_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            **{"x-litellm-core": "rust", "x-litellm-rust": "true"},
+        )
+        rust_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            hidden_params={"core_engine": "rust"},
+            **{"x-litellm-core": "python", "x-litellm-rust": "false"},
+        )
+
+        assert python_headers["x-litellm-core"] == "python"
+        assert "x-litellm-rust" not in python_headers
+        assert rust_headers["x-litellm-core"] == "rust"
+        assert rust_headers["x-litellm-rust"] == "true"
+
     def test_get_custom_headers_key_spend_includes_response_cost(self):
         """
         Test that x-litellm-key-spend header includes the current request's response_cost.

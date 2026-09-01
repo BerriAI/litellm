@@ -4,9 +4,10 @@ mod service;
 
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{Json, State};
+use axum::extract::{Json, Request, State};
 use axum::http::StatusCode;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, HeaderMap, HeaderValue};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use litellm_core::Error;
@@ -16,9 +17,23 @@ use crate::auth::RequireMasterKey;
 use crate::constants::{MESSAGES_HEADERS_NOT_FORWARDED, MESSAGES_ROUTE_PATH};
 use crate::state::AppState;
 
+const CORE_ENGINE_HEADER: &str = "x-litellm-core";
+const RUST_CORE_ENGINE: &str = "rust";
+
 /// This route's contribution to the app router.
 pub fn router() -> Router<AppState> {
-    Router::new().route(MESSAGES_ROUTE_PATH, post(handle))
+    Router::new()
+        .route(MESSAGES_ROUTE_PATH, post(handle))
+        .route_layer(middleware::from_fn(core_engine_header))
+}
+
+async fn core_engine_header(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        CORE_ENGINE_HEADER,
+        HeaderValue::from_static(RUST_CORE_ENGINE),
+    );
+    response
 }
 
 async fn handle(
@@ -143,6 +158,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::super::app;
+    use super::{CORE_ENGINE_HEADER, RUST_CORE_ENGINE};
     use crate::io::realtime_pool::RealtimePool;
     use crate::state::AppState;
 
@@ -290,6 +306,7 @@ mod tests {
             .await
             .expect("route responds");
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[CORE_ENGINE_HEADER], RUST_CORE_ENGINE);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("response body reads");
@@ -340,6 +357,7 @@ mod tests {
             .await
             .expect("route responds");
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[CORE_ENGINE_HEADER], RUST_CORE_ENGINE);
         let upstream_request = server.await.expect("upstream task completes");
         let (_, upstream_body) = upstream_request
             .split_once("\r\n\r\n")
@@ -378,6 +396,7 @@ mod tests {
             .await
             .expect("route responds");
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[CORE_ENGINE_HEADER], RUST_CORE_ENGINE);
         assert_eq!(
             response
                 .headers()
@@ -443,6 +462,7 @@ mod tests {
             .await
             .expect("route responds");
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(response.headers()[CORE_ENGINE_HEADER], RUST_CORE_ENGINE);
         let response_body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("response body reads");
@@ -473,6 +493,7 @@ mod tests {
             .await
             .expect("route responds");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(response.headers()[CORE_ENGINE_HEADER], RUST_CORE_ENGINE);
     }
 
     #[tokio::test]
@@ -495,6 +516,7 @@ mod tests {
             .await
             .expect("route responds");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(response.headers()[CORE_ENGINE_HEADER], RUST_CORE_ENGINE);
     }
 
     #[tokio::test]
@@ -517,5 +539,6 @@ mod tests {
             .await
             .expect("route responds");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.headers()[CORE_ENGINE_HEADER], RUST_CORE_ENGINE);
     }
 }

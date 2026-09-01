@@ -1550,6 +1550,16 @@ class ProxyBaseLLMRequestProcessing:
             logging_obj=litellm_logging_obj,
             use_logging_obj=read_timing_from_logging_obj,
         )
+        core_engine_value: Final = hidden_params.get("core_engine")
+        core_engine: Final = (
+            core_engine_value
+            if isinstance(core_engine_value, str) and core_engine_value in ("python", "rust")
+            else "python"
+        )
+        reserved_core_headers: Final = frozenset({"x-litellm-core", "x-litellm-rust"})
+        forwarded_headers: Final = {  # mutable-ok: response headers are assembled into a mutable transport dict
+            key: value for key, value in kwargs.items() if key.lower() not in reserved_core_headers
+        }
 
         cost_breakdown: Final = _get_cost_breakdown_from_logging_obj(
             litellm_logging_obj=litellm_logging_obj, response_cost=response_cost
@@ -1634,7 +1644,12 @@ class ProxyBaseLLMRequestProcessing:
                 str(fastest_response_batch_completion) if fastest_response_batch_completion is not None else None
             ),
             "x-litellm-timeout": str(timeout) if timeout is not None else None,
-            **{k: str(v) for k, v in kwargs.items()},
+            **{  # mutable-ok: response header assembly requires a mutable dict
+                key: str(value) for key, value in forwarded_headers.items()
+            },
+            "x-litellm-core": core_engine,
+            # mutable-ok: conditionally extending the mutable response header dict
+            **({"x-litellm-rust": "true"} if core_engine == "rust" else {}),
         }
         if request_data:
             remaining_tokens_header: Final = get_remaining_tokens_and_requests_from_request_data(request_data)

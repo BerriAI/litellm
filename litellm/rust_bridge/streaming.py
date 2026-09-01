@@ -1,16 +1,27 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Generator, Iterator, Mapping
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Iterator, Mapping
 from functools import lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, NoReturn, Protocol, TypeAlias, runtime_checkable
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, runtime_checkable
 
 import httpx
 
-from litellm.exceptions import APIError
-from litellm.rust_bridge.loader import get_native_bridge
+from litellm.rust_bridge.runtime import (
+    UNSET,
+    BridgeErrorContext,
+    CoreEngine,
+    ExecutionResult,
+    FallbackMode,
+    NativeBinding,
+    Unset,
+    acall,
+    ainvoke,
+    async_none,
+    call,
+    invoke,
+)
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
 if TYPE_CHECKING:
@@ -59,171 +70,49 @@ class RustAsyncStreamOpen(Protocol):
     ) -> RustEventStream: ...
 
 
-@runtime_checkable
-class ObjectAwaitable(Protocol):
-    def __await__(self) -> Generator[object, None, object]: ...
-
-
-class _Unset:
-    pass
-
-
-_UNSET: Final = _Unset()
-
-
-@dataclass(slots=True)
-class _RustStreamingState:
-    chat: RustStreamOpen | None = None
-    achat: RustAsyncStreamOpen | None = None
-    messages: RustStreamOpen | None = None
-    amessages: RustAsyncStreamOpen | None = None
-    responses: RustStreamOpen | None = None
-    aresponses: RustAsyncStreamOpen | None = None
-
-
-_STATE: Final = _RustStreamingState()
+_CHAT: Final = NativeBinding[RustStreamOpen]("chat_completions_stream")
+_ACHAT: Final = NativeBinding[RustAsyncStreamOpen]("achat_completions_stream")
+_MESSAGES: Final = NativeBinding[RustStreamOpen]("messages_stream")
+_AMESSAGES: Final = NativeBinding[RustAsyncStreamOpen]("amessages_stream")
+_RESPONSES: Final = NativeBinding[RustStreamOpen]("responses_stream")
+_ARESPONSES: Final = NativeBinding[RustAsyncStreamOpen]("aresponses_stream")
 
 
 def set_rust_streaming(
     *,
-    chat: RustStreamOpen | None | _Unset = _UNSET,
-    achat: RustAsyncStreamOpen | None | _Unset = _UNSET,
-    messages: RustStreamOpen | None | _Unset = _UNSET,
-    amessages: RustAsyncStreamOpen | None | _Unset = _UNSET,
-    responses: RustStreamOpen | None | _Unset = _UNSET,
-    aresponses: RustAsyncStreamOpen | None | _Unset = _UNSET,
+    chat: RustStreamOpen | None | Unset = UNSET,
+    achat: RustAsyncStreamOpen | None | Unset = UNSET,
+    messages: RustStreamOpen | None | Unset = UNSET,
+    amessages: RustAsyncStreamOpen | None | Unset = UNSET,
+    responses: RustStreamOpen | None | Unset = UNSET,
+    aresponses: RustAsyncStreamOpen | None | Unset = UNSET,
 ) -> None:
-    if not isinstance(chat, _Unset):
-        _STATE.chat = chat
-    if not isinstance(achat, _Unset):
-        _STATE.achat = achat
-    if not isinstance(messages, _Unset):
-        _STATE.messages = messages
-    if not isinstance(amessages, _Unset):
-        _STATE.amessages = amessages
-    if not isinstance(responses, _Unset):
-        _STATE.responses = responses
-    if not isinstance(aresponses, _Unset):
-        _STATE.aresponses = aresponses
-
-
-def _native_attribute(name: str) -> object | None:
-    native: Final = get_native_bridge()
-    return None if native is None else getattr(native, name, None)
-
-
-def _native_sync_opener(name: str) -> RustStreamOpen | None:
-    opener: Final = _native_attribute(name)
-    if not callable(opener):
-        return None
-
-    def open_stream(
-        request: Mapping[str, object],
-        provider: str,
-        credentials: Mapping[str, str] | None,
-        api_base: str | None,
-        extra_headers: Mapping[str, str] | None,
-        timeout_seconds: float | None,
-    ) -> RustEventStream:
-        stream: Final = opener(
-            request,
-            provider,
-            credentials,
-            api_base,
-            extra_headers,
-            timeout_seconds,
-        )
-        if not isinstance(stream, RustEventStream):
-            raise TypeError("native stream opener returned an invalid stream")
-        return stream
-
-    return open_stream
-
-
-def _native_async_opener(name: str) -> RustAsyncStreamOpen | None:
-    opener: Final = _native_attribute(name)
-    if not callable(opener):
-        return None
-
-    async def open_stream(
-        request: Mapping[str, object],
-        provider: str,
-        credentials: Mapping[str, str] | None,
-        api_base: str | None,
-        extra_headers: Mapping[str, str] | None,
-        timeout_seconds: float | None,
-    ) -> RustEventStream:
-        pending: Final = opener(
-            request,
-            provider,
-            credentials,
-            api_base,
-            extra_headers,
-            timeout_seconds,
-        )
-        if not isinstance(pending, ObjectAwaitable):
-            raise TypeError("native async stream opener returned a non-awaitable")
-        stream: Final[object] = await pending
-        if not isinstance(stream, RustEventStream):
-            raise TypeError("native async stream opener returned an invalid stream")
-        return stream
-
-    return open_stream
+    _CHAT.update(chat)
+    _ACHAT.update(achat)
+    _MESSAGES.update(messages)
+    _AMESSAGES.update(amessages)
+    _RESPONSES.update(responses)
+    _ARESPONSES.update(aresponses)
 
 
 def _sync_opener(api: StreamApi) -> RustStreamOpen | None:
     match api:
         case "chat_completions":
-            return _STATE.chat or _native_sync_opener("chat_completions_stream")
+            return _CHAT.load()
         case "messages":
-            return _STATE.messages or _native_sync_opener("messages_stream")
+            return _MESSAGES.load()
         case "responses":
-            return _STATE.responses or _native_sync_opener("responses_stream")
+            return _RESPONSES.load()
 
 
 def _async_opener(api: StreamApi) -> RustAsyncStreamOpen | None:
     match api:
         case "chat_completions":
-            return _STATE.achat or _native_async_opener("achat_completions_stream")
+            return _ACHAT.load()
         case "messages":
-            return _STATE.amessages or _native_async_opener("amessages_stream")
+            return _AMESSAGES.load()
         case "responses":
-            return _STATE.aresponses or _native_async_opener("aresponses_stream")
-
-
-def _native_exceptions() -> tuple[type[BaseException], type[BaseException]] | None:
-    native: Final = get_native_bridge()
-    if native is None:
-        return None
-    declined: Final = getattr(native, "RustBridgeDeclined", None)
-    upstream: Final = getattr(native, "RustUpstreamError", None)
-    if not isinstance(declined, type) or not isinstance(upstream, type):
-        return None
-    return declined, upstream
-
-
-def _handle_open_error(error: Exception, provider: str) -> None:
-    exceptions: Final = _native_exceptions()
-    if exceptions is not None and isinstance(error, exceptions[0]):
-        return
-    _raise_stream_error(error, provider)
-
-
-def _raise_stream_error(error: Exception, provider: str) -> NoReturn:
-    exceptions: Final = _native_exceptions()
-    if exceptions is None or not isinstance(error, exceptions[1]):
-        raise error
-    args: Final[tuple[object, ...]] = error.args
-    status_value: Final = args[0] if args else 0
-    message_value: Final = args[1] if len(args) > 1 else str(error)
-    status: Final = status_value if isinstance(status_value, int) else 0
-    message: Final = message_value if isinstance(message_value, str) else str(message_value)
-    raise APIError(
-        status_code=status or 500,
-        message=f"litellm rust typed stream: {message}",
-        llm_provider=provider,
-        model="",
-    ) from error
+            return _ARESPONSES.load()
 
 
 class TypedEventStreamAdapter:
@@ -231,6 +120,7 @@ class TypedEventStreamAdapter:
         self._stream: Final = stream
         self._provider: Final = provider
         self.metadata: Final = stream.metadata
+        self.core_engine: Final = CoreEngine.RUST
         self._mode: Literal["sync", "async"] | None = None
 
     def _claim(self, mode: Literal["sync", "async"]) -> None:
@@ -252,10 +142,10 @@ class TypedEventStreamAdapter:
         return event
 
     def _next_event(self) -> Event | None:
-        try:
-            return self._stream.next_event()
-        except Exception as error:  # noqa: BLE001  # native stream errors cross a dynamic extension boundary
-            _raise_stream_error(error, self._provider)
+        return call(
+            self._stream.next_event,
+            BridgeErrorContext(route="typed stream", provider=self._provider, model=""),
+        )
 
     def __aiter__(self) -> AsyncIterator[Event]:
         self._claim("async")
@@ -263,10 +153,10 @@ class TypedEventStreamAdapter:
 
     async def __anext__(self) -> Event:
         self._claim("async")
-        try:
-            event: Final = await self._stream.anext_event()
-        except Exception as error:  # noqa: BLE001  # native stream errors cross a dynamic extension boundary
-            _raise_stream_error(error, self._provider)
+        event: Final = await acall(
+            self._stream.anext_event,
+            BridgeErrorContext(route="typed stream", provider=self._provider, model=""),
+        )
         if event is None:
             raise StopAsyncIteration
         return event
@@ -384,12 +274,12 @@ def open_stream(
     api_base: str | None,
     extra_headers: Mapping[str, str] | None,
     timeout: float | httpx.Timeout | None,
-) -> TypedEventStreamAdapter | None:
+) -> ExecutionResult[TypedEventStreamAdapter | None]:
     opener: Final = _sync_opener(api)
-    if opener is None:
-        return None
-    try:
-        stream: Final = opener(
+    native_call: Final = (
+        None
+        if opener is None
+        else lambda: opener(
             request,
             provider,
             credentials,
@@ -397,10 +287,14 @@ def open_stream(
             extra_headers,
             timeout_to_seconds(timeout),
         )
-    except Exception as error:  # noqa: BLE001  # native stream errors cross a dynamic extension boundary
-        _handle_open_error(error, provider)
-        return None
-    return TypedEventStreamAdapter(stream, provider)
+    )
+    return invoke(
+        native_call=native_call,
+        fallback=lambda: None,
+        adapt=lambda stream: TypedEventStreamAdapter(stream, provider),
+        mode=FallbackMode.PYTHON,
+        context=BridgeErrorContext(route=f"{api} stream", provider=provider, model=""),
+    )
 
 
 async def aopen_stream(
@@ -412,12 +306,12 @@ async def aopen_stream(
     api_base: str | None,
     extra_headers: Mapping[str, str] | None,
     timeout: float | httpx.Timeout | None,
-) -> TypedEventStreamAdapter | None:
+) -> ExecutionResult[TypedEventStreamAdapter | None]:
     opener: Final = _async_opener(api)
-    if opener is None:
-        return None
-    try:
-        stream: Final = await opener(
+    native_call: Final = (
+        None
+        if opener is None
+        else lambda: opener(
             request,
             provider,
             credentials,
@@ -425,7 +319,11 @@ async def aopen_stream(
             extra_headers,
             timeout_to_seconds(timeout),
         )
-    except Exception as error:  # noqa: BLE001  # native stream errors cross a dynamic extension boundary
-        _handle_open_error(error, provider)
-        return None
-    return TypedEventStreamAdapter(stream, provider)
+    )
+    return await ainvoke(
+        native_call=native_call,
+        fallback=async_none,
+        adapt=lambda stream: TypedEventStreamAdapter(stream, provider),
+        mode=FallbackMode.PYTHON,
+        context=BridgeErrorContext(route=f"{api} stream", provider=provider, model=""),
+    )

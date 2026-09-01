@@ -4,8 +4,10 @@ from collections.abc import Mapping
 
 import pytest
 
+from litellm.exceptions import APIError
 from litellm.llms.custom_httpx.llm_http_handler import _rust_responses_websocket_enabled
-from litellm.rust_bridge import configuration, responses_websocket
+from litellm.rust_bridge import configuration, responses_websocket, runtime
+from litellm.rust_bridge.runtime import CoreEngine
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -33,6 +35,24 @@ class _ClosedNativeConnection:
 
     async def close(self) -> None:
         return None
+
+
+class _FailingNativeConnection(_ClosedNativeConnection):
+    async def send_event(self, event: Mapping[str, object]) -> None:
+        raise _Upstream(503, "session send failed")
+
+
+class _Declined(Exception):
+    pass
+
+
+class _Upstream(Exception):
+    pass
+
+
+class _NativeErrors:
+    RustBridgeDeclined = _Declined
+    RustUpstreamError = _Upstream
 
 
 class _FakeNativeBridge:
@@ -85,19 +105,17 @@ async def test_adapter_raises_clean_close_when_rust_connection_ends() -> None:
 
 @pytest.mark.asyncio
 async def test_bridge_unavailable_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(responses_websocket, "_STATE", responses_websocket._RustResponsesWebSocketState())
-    monkeypatch.setattr(responses_websocket, "get_native_bridge", lambda: None)
+    monkeypatch.setattr(runtime, "get_native_bridge", lambda: None)
 
-    assert (
-        await responses_websocket.connect(
-            provider="openai",
-            api_key=None,
-            api_base="https://example.test",
-            headers={},
-            timeout=None,
-        )
-        is None
+    result = await responses_websocket.connect(
+        provider="openai",
+        api_key=None,
+        api_base="https://example.test",
+        headers={},
+        timeout=None,
     )
+    assert result.value is None
+    assert result.source is CoreEngine.PYTHON
 
 
 @pytest.mark.asyncio
@@ -106,7 +124,7 @@ async def test_enabled_bridge_connects_and_adapts_socket(
 ) -> None:
     responses_websocket.set_rust_responses_websocket(connection=_FakeNativeBridge)
 
-    connection = await responses_websocket.connect(
+    result = await responses_websocket.connect(
         provider="openai",
         api_key="key",
         api_base="https://example.test",
@@ -114,7 +132,20 @@ async def test_enabled_bridge_connects_and_adapts_socket(
         timeout=1.0,
     )
 
+    assert result.source is CoreEngine.RUST
+    connection = result.value
     assert connection is not None
+    assert connection.core_engine is CoreEngine.RUST
     await connection.send('{"type":"response.create","model":"gpt-5"}')
     assert await connection.recv() == '{"type":"response.completed"}'
     await connection.close()
+
+
+@pytest.mark.asyncio
+async def test_connected_rust_session_never_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runtime, "get_native_bridge", lambda: _NativeErrors())
+    connection = responses_websocket._ConnectionAdapter(_FailingNativeConnection())
+
+    assert connection.core_engine is CoreEngine.RUST
+    with pytest.raises(APIError, match="session send failed"):
+        await connection.send('{"type":"response.create"}')

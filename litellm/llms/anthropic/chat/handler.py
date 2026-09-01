@@ -4,7 +4,7 @@ Calling + translation logic for anthropic's `/v1/messages` endpoint
 
 import copy
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
 
 import httpx
@@ -380,7 +380,10 @@ class AnthropicChatCompletion(BaseLLM):
             request_data: Final = config.transform_request(
                 model=model,
                 messages=messages,
-                optional_params={**optional_params, "is_vertex_request": is_vertex_request},
+                optional_params={  # mutable-ok: provider transforms require a plain mutable request dict
+                    **optional_params,
+                    "is_vertex_request": is_vertex_request,
+                },
                 litellm_params=litellm_params,
                 headers=headers,
             )
@@ -388,6 +391,46 @@ class AnthropicChatCompletion(BaseLLM):
                 headers=headers,
                 request_data=request_data,
                 provider=custom_llm_provider,
+            )
+
+        def sync_python_path(
+            request_headers: Mapping[str, object], request_data: Mapping[str, object]
+        ) -> ModelResponse:
+            request_client: Final = (
+                _get_httpx_client(params={"timeout": timeout})  # mutable-ok: HTTP client factory requires a dict
+                if client is None or not isinstance(client, HTTPHandler)
+                else client
+            )
+            try:
+                response: Final = request_client.post(
+                    api_base,
+                    headers=dict(request_headers),  # mutable-ok: HTTP client requires mutable headers
+                    data=json.dumps(request_data),
+                    timeout=timeout,
+                    logging_obj=logging_obj,
+                )
+            except Exception as error:  # noqa: BLE001  # provider exceptions are normalized below
+                status_code: Final = getattr(error, "status_code", 500)
+                error_headers = getattr(error, "headers", None)
+                error_text = getattr(error, "text", str(error))
+                error_response: Final = getattr(error, "response", None)
+                if error_headers is None and error_response:
+                    error_headers = getattr(error_response, "headers", None)
+                if error_response and hasattr(error_response, "text"):
+                    error_text = getattr(error_response, "text", error_text)
+                raise AnthropicError(message=error_text, status_code=status_code, headers=error_headers)
+            return config.transform_response(
+                model=model,
+                raw_response=response,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                request_data=dict(request_data),  # mutable-ok: response transform mutates request metadata
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                encoding=encoding,
+                json_mode=json_mode,
             )
 
         # The Rust core owns the whole call for the subset it accepts, so ask
@@ -466,7 +509,12 @@ class AnthropicChatCompletion(BaseLLM):
                     on_response=log_rust_post_call,
                     python_fallback=python_fallback,
                 )
-            rust_response: Final = rust_chat_completions_bridge.chat_completions(
+
+            def sync_python_fallback() -> ModelResponse:
+                fallback_headers, fallback_data = build_request()
+                return sync_python_path(fallback_headers, fallback_data)
+
+            return rust_chat_completions_bridge.chat_completions_or_fallback(
                 model=model,
                 messages=messages,
                 optional_params=rust_optional_params,
@@ -477,26 +525,21 @@ class AnthropicChatCompletion(BaseLLM):
                 extra_headers=headers,
                 timeout=timeout,
                 on_response=log_rust_post_call,
+                python_fallback=sync_python_fallback,
             )
-            if rust_response is not None:
-                return rust_response
 
         headers, data = build_request()
 
         ## LOGGING
-        # Reaching here with `serves_via_rust` set means the Rust attempt
-        # declined at call time, before the provider was called, and already
-        # logged this request. That is the same attempt continuing.
-        if not serves_via_rust:
-            logging_obj.pre_call(
-                input=messages,
-                api_key=api_key,
-                additional_args={
-                    "complete_input_dict": data,
-                    "api_base": api_base,
-                    "headers": headers,
-                },
-            )
+        logging_obj.pre_call(
+            input=messages,
+            api_key=api_key,
+            additional_args={  # mutable-ok: logging callback contract requires a mutable dict
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
         print_verbose(f"_is_function_call: {_is_function_call}")
         if acompletion is True:
             if (
@@ -578,48 +621,7 @@ class AnthropicChatCompletion(BaseLLM):
                     _response_headers=process_anthropic_headers(headers),
                 )
 
-            else:
-                if client is None or not isinstance(client, HTTPHandler):
-                    client = _get_httpx_client(params={"timeout": timeout})
-                else:
-                    client = client
-
-                try:
-                    response: Final = client.post(
-                        api_base,
-                        headers=headers,
-                        data=json.dumps(data),
-                        timeout=timeout,
-                        logging_obj=logging_obj,
-                    )
-                except Exception as e:
-                    status_code: Final = getattr(e, "status_code", 500)
-                    error_headers = getattr(e, "headers", None)
-                    error_text = getattr(e, "text", str(e))
-                    error_response: Final[object] = getattr(e, "response", None)
-                    if error_headers is None and error_response:
-                        error_headers = getattr(error_response, "headers", None)
-                    if error_response and hasattr(error_response, "text"):
-                        error_text = getattr(error_response, "text", error_text)
-                    raise AnthropicError(
-                        message=error_text,
-                        status_code=status_code,
-                        headers=error_headers,
-                    )
-
-        return config.transform_response(
-            model=model,
-            raw_response=response,
-            model_response=model_response,
-            logging_obj=logging_obj,
-            api_key=api_key,
-            request_data=data,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            encoding=encoding,
-            json_mode=json_mode,
-        )
+            return sync_python_path(headers, data)
 
     def embedding(self):
         # logic for parsing in - calling - parsing out model embedding calls
