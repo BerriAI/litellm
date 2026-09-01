@@ -14143,6 +14143,311 @@ async def test_info_key_fn_v2_budget_table_fallback(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_info_key_fn_reports_budget_limits_usage(monkeypatch):
+    """
+    /key/info reports current-window spend per budget window under budget_limits_usage,
+    keyed by budget_duration and read from the same counter enforcement uses, while
+    budget_limits itself comes back exactly as stored.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LiteLLM_VerificationToken
+    from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+
+    test_key_token = "hashed_token_window_test"
+    budget_limits = [
+        {
+            "reset_at": "2026-08-15T18:00:00+00:00",
+            "max_budget": 2.0,
+            "budget_duration": "1h",
+        }
+    ]
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mock_user_api_key_cache = AsyncMock()
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    mock_get_current_spend = AsyncMock(return_value=0.73)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
+    )
+
+    mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
+    mock_key_info.token = test_key_token
+    mock_key_info.object_permission_id = None
+    mock_key_info.user_id = "user-w"
+    mock_key_info.team_id = None
+    mock_key_info.litellm_budget_table = None
+    mock_key_info.model_dump.return_value = {
+        "token": test_key_token,
+        "budget_limits": [dict(w) for w in budget_limits],
+        "user_id": "user-w",
+        "team_id": None,
+        "object_permission_id": None,
+        "litellm_budget_table": None,
+    }
+    mock_key_info.dict.return_value = mock_key_info.model_dump.return_value
+
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_key_info
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-test-window-key",
+    )
+
+    result = await info_key_fn(
+        key="sk-test-window-key",
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert result["info"]["budget_limits"] == budget_limits
+    assert result["info"]["budget_limits_usage"] == {"1h": {"current_spend": 0.73}}
+
+    mock_get_current_spend.assert_awaited_once()
+    call_kwargs = mock_get_current_spend.await_args.kwargs
+    assert call_kwargs["counter_key"] == f"spend:key:{test_key_token}:window:1h"
+    assert call_kwargs["max_budget"] == 2.0
+    assert call_kwargs["window_entity_type"] == "Key"
+    assert call_kwargs["window_entity_id"] == test_key_token
+    assert call_kwargs["window_duration"] == "1h"
+    assert call_kwargs["window_start"] is not None
+
+
+@pytest.mark.asyncio
+async def test_info_key_fn_no_budget_limits_skips_spend_lookup(monkeypatch):
+    """Keys without budget windows get no budget_limits_usage field and trigger no spend lookup."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LiteLLM_VerificationToken
+    from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+
+    test_key_token = "hashed_token_no_windows"
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mock_user_api_key_cache = AsyncMock()
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    mock_get_current_spend = AsyncMock(return_value=0.0)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
+    )
+
+    mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
+    mock_key_info.token = test_key_token
+    mock_key_info.object_permission_id = None
+    mock_key_info.user_id = "user-nw"
+    mock_key_info.team_id = None
+    mock_key_info.litellm_budget_table = None
+    mock_key_info.model_dump.return_value = {
+        "token": test_key_token,
+        "budget_limits": None,
+        "user_id": "user-nw",
+        "team_id": None,
+        "object_permission_id": None,
+        "litellm_budget_table": None,
+    }
+    mock_key_info.dict.return_value = mock_key_info.model_dump.return_value
+
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_key_info
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-test-no-window-key",
+    )
+
+    result = await info_key_fn(
+        key="sk-test-no-window-key",
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert result["info"]["budget_limits"] is None
+    assert "budget_limits_usage" not in result["info"]
+    mock_get_current_spend.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_info_key_fn_v2_reports_budget_limits_usage(monkeypatch):
+    """/v2/key/info reports budget_limits_usage per window and leaves budget_limits as stored."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import KeyRequest, LiteLLM_VerificationToken
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        info_key_fn_v2,
+    )
+
+    test_key_token = "hashed_token_v2_window_test"
+    budget_limits = [
+        {
+            "reset_at": "2026-08-15T18:00:00+00:00",
+            "max_budget": 2.0,
+            "budget_duration": "1h",
+        },
+        {
+            "reset_at": "2026-08-16T00:00:00+00:00",
+            "max_budget": 20.0,
+            "budget_duration": "1d",
+        },
+    ]
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mock_user_api_key_cache = AsyncMock()
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    mock_get_current_spend = AsyncMock(return_value=1.25)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
+    )
+
+    mock_key = MagicMock(spec=LiteLLM_VerificationToken)
+    mock_key.token = test_key_token
+    mock_key.user_id = "user-v2-w"
+    mock_key.team_id = None
+    mock_key.model_dump.return_value = {
+        "token": test_key_token,
+        "budget_limits": [dict(w) for w in budget_limits],
+        "user_id": "user-v2-w",
+        "team_id": None,
+        "litellm_budget_table": None,
+    }
+    mock_key.dict.return_value = mock_key.model_dump.return_value
+
+    mock_prisma_client.get_data = AsyncMock(return_value=[mock_key])
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-admin-v2-w",
+    )
+
+    result = await info_key_fn_v2(
+        data=KeyRequest(keys=[test_key_token]),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert len(result["info"]) == 1
+    assert result["info"][0]["budget_limits"] == budget_limits
+    assert result["info"][0]["budget_limits_usage"] == {
+        "1h": {"current_spend": 1.25},
+        "1d": {"current_spend": 1.25},
+    }
+    assert mock_get_current_spend.await_count == 2
+    counter_keys = {
+        call.kwargs["counter_key"] for call in mock_get_current_spend.await_args_list
+    }
+    assert counter_keys == {
+        f"spend:key:{test_key_token}:window:1h",
+        f"spend:key:{test_key_token}:window:1d",
+    }
+    assert {
+        call.kwargs["window_duration"] for call in mock_get_current_spend.await_args_list
+    } == {"1h", "1d"}
+
+
+@pytest.mark.asyncio
+async def test_build_budget_limits_usage_json_string_input(monkeypatch):
+    """budget_limits stored as a JSON string is parsed and reported per window."""
+    import json as json_module
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_budget_limits_usage,
+    )
+
+    mock_get_current_spend = AsyncMock(return_value=0.5)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
+    )
+
+    raw = json_module.dumps(
+        [{"budget_duration": "1h", "max_budget": 2.0, "reset_at": None}]
+    )
+    result = await _build_budget_limits_usage(budget_limits=raw, api_key_hash="hash-1")
+
+    assert result == {"1h": {"current_spend": 0.5}}
+    mock_get_current_spend.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_build_budget_limits_usage_empty_windows_returns_none(monkeypatch):
+    """A key with no windows (None, [], or "[]") returns None so the field is left off; no spend lookup runs."""
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_budget_limits_usage,
+    )
+
+    mock_get_current_spend = AsyncMock(return_value=0.0)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
+    )
+
+    for stored in (None, [], "[]"):
+        assert await _build_budget_limits_usage(budget_limits=stored, api_key_hash="hash-1") is None
+    mock_get_current_spend.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_build_budget_limits_usage_window_without_max_budget(monkeypatch):
+    """A window with only budget_duration still reports current_spend, read without a budget ceiling."""
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_budget_limits_usage,
+    )
+
+    mock_get_current_spend = AsyncMock(return_value=0.75)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
+    )
+
+    result = await _build_budget_limits_usage(
+        budget_limits=[{"budget_duration": "2d"}], api_key_hash="hash-no-max"
+    )
+
+    assert result == {"2d": {"current_spend": 0.75}}
+    call_kwargs = mock_get_current_spend.await_args.kwargs
+    assert call_kwargs["counter_key"] == "spend:key:hash-no-max:window:2d"
+    assert call_kwargs["window_duration"] == "2d"
+    assert call_kwargs["max_budget"] is None
+
+
+@pytest.mark.asyncio
+async def test_build_budget_limits_usage_pydantic_windows(monkeypatch):
+    """BudgetLimitEntry windows (the shape UserAPIKeyAuth carries) are dumped to dicts and reported."""
+    from unittest.mock import AsyncMock
+
+    from litellm.models.team import BudgetLimitEntry
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_budget_limits_usage,
+    )
+
+    mock_get_current_spend = AsyncMock(return_value=1.0)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
+    )
+
+    result = await _build_budget_limits_usage(
+        budget_limits=[BudgetLimitEntry(budget_duration="7d", max_budget=10.0)],
+        api_key_hash="hash-2",
+    )
+
+    assert result == {"7d": {"current_spend": 1.0}}
+    call_kwargs = mock_get_current_spend.await_args.kwargs
+    assert call_kwargs["counter_key"] == "spend:key:hash-2:window:7d"
+    assert call_kwargs["window_duration"] == "7d"
+    assert call_kwargs["max_budget"] == 10.0
+
+
+@pytest.mark.asyncio
 async def test_info_key_fn_reads_the_configured_budget_model_key(monkeypatch):
     """/key/info reads the one counter enforcement reads: the configured budget model.
 
