@@ -74,9 +74,10 @@ test.describe("Guardrails", () => {
     for (const name of createdGuardrails.splice(0)) {
       const guardrail = await findGuardrail(page, name);
       if (guardrail) {
-        await page.request.delete(`/guardrails/${guardrail.guardrail_id}`, {
+        const deleted = await page.request.delete(`/guardrails/${guardrail.guardrail_id}`, {
           headers: { Authorization: `Bearer ${masterKey()}` },
         });
+        expect(deleted.ok(), `DELETE /guardrails/${guardrail.guardrail_id} (${deleted.status()})`).toBe(true);
       }
     }
   });
