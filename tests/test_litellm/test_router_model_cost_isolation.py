@@ -564,6 +564,67 @@ def test_inherit_builtin_base_rates_for_off_peak_fills_missing_rates():
     assert model_info["off_peak_pricing"] == off_peak_block
 
 
+def test_inherit_builtin_base_rates_for_off_peak_carries_threshold_rates():
+    """A backend with above-threshold pricing hands the whole rate structure to
+    the deployment entry, so peak-hour billing of large prompts through that
+    entry matches the shared backend entry instead of flattening to the base
+    rate.
+    """
+    backend_model = "gemini/gemini-2.5-pro"
+    builtin_info = litellm.get_model_info(model=backend_model)
+    assert builtin_info["input_cost_per_token_above_200k_tokens"] is not None
+
+    model_info = {
+        "off_peak_pricing": {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-07},
+    }
+
+    Router._inherit_builtin_base_rates_for_off_peak(
+        model_info=model_info,
+        backend_model=backend_model,
+        custom_llm_provider="gemini",
+    )
+
+    assert model_info["input_cost_per_token"] == builtin_info["input_cost_per_token"]
+    assert (
+        model_info["input_cost_per_token_above_200k_tokens"]
+        == builtin_info["input_cost_per_token_above_200k_tokens"]
+    )
+    assert (
+        model_info["output_cost_per_token_above_200k_tokens"]
+        == builtin_info["output_cost_per_token_above_200k_tokens"]
+    )
+
+
+def test_inherit_builtin_base_rates_for_off_peak_tiered_only_backend_stores_no_zero():
+    """A tiered-only backend has no flat token rates; get_model_info synthesizes
+    zeros for them, and storing those would mark the deployment explicitly
+    priced free. The tier table itself must carry over as an isolated copy so
+    mutating the deployment entry never touches the shared cost map.
+    """
+    backend_model = "dashscope/qwen-flash"
+    raw_tiers = litellm.model_cost[backend_model]["tiered_pricing"]
+
+    model_info = {
+        "off_peak_pricing": {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-07},
+    }
+
+    Router._inherit_builtin_base_rates_for_off_peak(
+        model_info=model_info,
+        backend_model=backend_model,
+        custom_llm_provider="dashscope",
+    )
+
+    assert model_info.get("input_cost_per_token") != 0
+    assert model_info.get("output_cost_per_token") != 0
+    assert model_info["tiered_pricing"] == raw_tiers
+    assert model_info["tiered_pricing"] is not raw_tiers
+    assert model_info["tiered_pricing"][0] is not raw_tiers[0]
+
+    original_first_tier = copy.deepcopy(raw_tiers[0])
+    model_info["tiered_pricing"][0]["input_cost_per_token"] = 123.0
+    assert raw_tiers[0] == original_first_tier
+
+
 def test_inherit_builtin_base_rates_for_off_peak_leaves_explicit_rates_alone():
     """An entry that sets its own base rate beside the block already counts as
     a full custom pricing entry; the helper must not mix builtin rates into it.
