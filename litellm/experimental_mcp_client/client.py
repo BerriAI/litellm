@@ -377,29 +377,31 @@ class MCPClient:
             return provided_env
 
         # Minimal allowlist of safe/standard environment variables
-        safe_keys: Final = {
-            "PATH",
-            "HOME",
-            "USER",
-            "LOGNAME",
-            "TMPDIR",
-            "TMP",
-            "TEMP",
-            "SHELL",
-            "LANG",
-            "LC_ALL",
-            # Node/Package manager caches
-            "NPM_CONFIG_CACHE",
-            "PNPM_HOME",
-            "XDG_CACHE_HOME",
-            "XDG_CONFIG_HOME",
-            "XDG_DATA_HOME",
-            # System info
-            "SYSTEMROOT",
-            "COMSPEC",
-            "PATHEXT",
-            "WINDIR",
-        }
+        safe_keys: Final = frozenset(
+            {
+                "PATH",
+                "HOME",
+                "USER",
+                "LOGNAME",
+                "TMPDIR",
+                "TMP",
+                "TEMP",
+                "SHELL",
+                "LANG",
+                "LC_ALL",
+                # Node/Package manager caches
+                "NPM_CONFIG_CACHE",
+                "PNPM_HOME",
+                "XDG_CACHE_HOME",
+                "XDG_CONFIG_HOME",
+                "XDG_DATA_HOME",
+                # System info
+                "SYSTEMROOT",
+                "COMSPEC",
+                "PATHEXT",
+                "WINDIR",
+            }
+        )
 
         safe_env: Final = {}
         for key in safe_keys:
@@ -615,7 +617,7 @@ class MCPClient:
         try:
             tools: Final = await self.run_with_session(_list_tools_operation, quiet_on_error=raise_on_error)
             tool_count: Final = len(tools)
-            tool_names: Final = [tool.name for tool in tools]
+            tool_names: Final = tuple(tool.name for tool in tools)
             verbose_logger.info(
                 "MCP client listed %s tools from %s: %s", tool_count, self.server_url or "stdio", tool_names
             )
@@ -746,7 +748,7 @@ class MCPClient:
         try:
             prompts: Final = await self.run_with_session(_list_prompts_operation)
             prompt_count: Final = len(prompts)
-            prompt_names: Final = [prompt.name for prompt in prompts]
+            prompt_names: Final = tuple(prompt.name for prompt in prompts)
             verbose_logger.info(
                 "MCP client listed %s prompts from %s: %s", prompt_count, self.server_url or "stdio", prompt_names
             )
@@ -823,7 +825,7 @@ class MCPClient:
         try:
             resources: Final = await self.run_with_session(_list_resources_operation)
             resource_count: Final = len(resources)
-            resource_names: Final = [resource.name for resource in resources]
+            resource_names: Final = tuple(resource.name for resource in resources)
             verbose_logger.info(
                 "MCP client listed %s resources from %s: %s", resource_count, self.server_url or "stdio", resource_names
             )
@@ -859,7 +861,7 @@ class MCPClient:
         try:
             resource_templates: Final = await self.run_with_session(_list_resource_templates_operation)
             resource_template_count: Final = len(resource_templates)
-            resource_template_names: Final = [resource_template.name for resource_template in resource_templates]
+            resource_template_names: Final = tuple(resource_template.name for resource_template in resource_templates)
             verbose_logger.info(
                 "MCP client listed %s resource templates from %s: %s",
                 resource_template_count,
