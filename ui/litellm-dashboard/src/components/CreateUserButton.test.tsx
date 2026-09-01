@@ -294,6 +294,21 @@ describe("CreateUserButton", () => {
     });
   });
 
+  it("lays the send invitation email checkbox out beside its label", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    renderWithProviders(<CreateUserButton {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
+
+    const dialog = screen.getByRole("dialog", { name: /invite user/i });
+    const checkbox = within(dialog).getByRole("checkbox");
+
+    expect(checkbox.closest('[data-slot="field"]')).toHaveAttribute("data-orientation", "horizontal");
+  });
+
   describe("organizations", () => {
     it("should send organizations list in POST body when organizations are selected", async () => {
       const { useOrganizations } = await import("@/app/(dashboard)/hooks/organizations/useOrganizations");
