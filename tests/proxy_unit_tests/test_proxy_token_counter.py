@@ -388,7 +388,7 @@ async def test_internal_token_counter_anthropic_provider_detection():
     )
 
     # Test with is_direct_request=False (simulating call from Anthropic endpoint)
-    with patch(
+    with patch(  # test-quality-ok: the module-global anthropic counter is the only seam; the test checks provider detection, not the counter
         "litellm.llms.anthropic.count_tokens.token_counter.anthropic_count_tokens_handler",
         mock_handler,
     ):
