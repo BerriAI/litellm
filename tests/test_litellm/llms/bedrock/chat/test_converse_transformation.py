@@ -4622,6 +4622,7 @@ def test_parallel_tool_calls_emits_typed_auto_tool_choice(parallel_tool_calls, e
     [
         ("auto", {"auto": {}}),
         ("required", {"any": {}}),
+        ("any", {"any": {}}),
         ({"type": "function", "function": {"name": "get_current_weather"}}, {"tool": {"name": "get_current_weather"}}),
     ],
 )

@@ -599,7 +599,7 @@ class AmazonConverseConfig(BaseConfig):
                     message=f"Bedrock doesn't support tool_choice={tool_choice}. To drop it from the call, set `litellm.drop_params = True.",
                     status_code=400,
                 )
-        elif tool_choice == "required":
+        elif tool_choice == "required" or tool_choice == "any":
             return ToolChoiceValuesBlock(any={})
         elif tool_choice == "auto":
             return ToolChoiceValuesBlock(auto={})
