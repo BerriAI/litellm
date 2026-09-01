@@ -191,6 +191,43 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return tool_name, namespace
         return fn_name, None
 
+    def _queue_first_streamed_tool_call_event(
+        self,
+        call_id: str,
+        tool_name: str,
+        tool_namespace: str | None,
+        output_index: int,
+    ) -> None:
+        """Initialize a streamed call and queue its first Responses output item."""
+        if call_id in self._tool_args_by_call_id:
+            return
+
+        self._tool_args_by_call_id[call_id] = ""
+        streamed_call_ids = getattr(self, "_streamed_tool_call_ids_in_order", None)
+        if streamed_call_ids is None:
+            streamed_call_ids = self._streamed_tool_call_ids_in_order = []
+        streamed_call_ids.append(call_id)
+
+        item_kwargs = build_tool_call_item_kwargs(
+            call_id,
+            tool_name,
+            "",
+            "in_progress",
+            self._custom_tool_names,
+        )
+        self._tool_item_id_by_call_id[call_id] = item_kwargs["id"]
+        if tool_namespace:
+            item_kwargs["namespace"] = tool_namespace
+
+        self._sequence_number += 1
+        event = OutputItemAddedEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            output_index=output_index,
+            item=BaseLiteLLMOpenAIResponseObject(**item_kwargs),
+        )
+        event.__dict__["sequence_number"] = self._sequence_number
+        self._pending_tool_events.append(event)
+
     def _is_reasoning_end(self, chunk):
         delta: Final = chunk.choices[0].delta
 
@@ -252,26 +289,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             tool_name, tool_namespace = self._responses_namespace_tool_call_fields(fn_name)
 
             output_index = self._get_or_assign_tool_output_index(call_id)
-
-            if call_id not in self._tool_args_by_call_id:
-                self._tool_args_by_call_id[call_id] = ""
-                streamed_call_ids = getattr(self, "_streamed_tool_call_ids_in_order", None)
-                if streamed_call_ids is None:
-                    streamed_call_ids = self._streamed_tool_call_ids_in_order = []
-                streamed_call_ids.append(call_id)
-                self._sequence_number += 1
-                names = self._custom_tool_names
-                item_kwargs = build_tool_call_item_kwargs(call_id, tool_name, "", "in_progress", names)
-                self._tool_item_id_by_call_id[call_id] = item_kwargs["id"]
-                if tool_namespace:
-                    item_kwargs["namespace"] = tool_namespace
-                event = OutputItemAddedEvent(
-                    type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
-                    output_index=output_index,
-                    item=BaseLiteLLMOpenAIResponseObject(**item_kwargs),
-                )
-                event.__dict__["sequence_number"] = self._sequence_number
-                self._pending_tool_events.append(event)
+            self._queue_first_streamed_tool_call_event(
+                call_id,
+                tool_name,
+                tool_namespace,
+                output_index,
+            )
 
             if fn_args_delta:
                 self._tool_args_by_call_id[call_id] += fn_args_delta
