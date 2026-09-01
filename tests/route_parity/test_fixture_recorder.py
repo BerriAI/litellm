@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -50,7 +50,7 @@ class _ParityCase(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     litellm_input: _FixtureInput
-    provider_response: RecordedResponse
+    provider_responses: tuple[RecordedResponse, ...]
 
 
 class _ControlledUpstream(ThreadingHTTPServer):
@@ -90,6 +90,20 @@ class _ControlledUpstreamHandler(BaseHTTPRequestHandler):
         assert isinstance(upstream, _ControlledUpstream)
         length: Final = int(self.headers.get("content-length") or "0")
         self.rfile.read(length)
+        if self.path == "/upload":
+            self._send_json(200, b'{"file_id":"reducto://fixture.pdf"}')
+            return
+        if self.path == "/parse":
+            self._send_json(200, b'{"result":{"chunks":[]}}')
+            return
+        if self.path == "/analyze":
+            upstream: Final = self.server
+            assert isinstance(upstream, _ControlledUpstream)
+            self.send_response(202)
+            self.send_header("operation-location", f"{upstream.url}/results/1")
+            self.send_header("content-length", "0")
+            self.end_headers()
+            return
         if self.path == "/v1/chat/completions":
             with upstream.lock:
                 upstream.request_count += 1
@@ -115,6 +129,19 @@ class _ControlledUpstreamHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         finally:
             upstream.end_tracked_request()
+
+    def do_GET(self) -> None:
+        if self.path == "/results/1":
+            self._send_json(200, b'{"status":"succeeded","analyzeResult":{"pages":[]}}')
+            return
+        self.send_error(404)
+
+    def _send_json(self, status: int, body: bytes) -> None:
+        self.send_response(status)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -143,6 +170,22 @@ def _sdk_call(api_base: str, case_input: _FixtureInput) -> object:
 
 def _stream_sdk_call(api_base: str, case_input: _FixtureInput) -> object:
     return httpx.post(f"{api_base}/v1/chat/completions", content=b"{}", timeout=5)
+
+
+def _multi_sdk_call(api_base: str, case_input: _FixtureInput) -> object:
+    upload: Final = httpx.post(f"{api_base}/upload", json={"document": case_input.identifier}, timeout=5)
+    upload.raise_for_status()
+    parsed: Final = httpx.post(f"{api_base}/parse", json={"input": upload.json()["file_id"]}, timeout=5)
+    parsed.raise_for_status()
+    return parsed
+
+
+def _polling_sdk_call(api_base: str, case_input: _FixtureInput) -> object:
+    started: Final = httpx.post(f"{api_base}/analyze", json={"document": case_input.identifier}, timeout=5)
+    operation_location: Final = started.headers["operation-location"]
+    completed: Final = httpx.get(operation_location, timeout=5)
+    completed.raise_for_status()
+    return completed
 
 
 def test_generate_case_inputs_is_deterministic() -> None:
@@ -192,7 +235,7 @@ def test_streaming_response_records_and_replays_chunks(tmp_path: Path) -> None:
             _ParityCase,
         )
 
-    response: Final = result.case.provider_response
+    response: Final = result.case.provider_responses[0]
     assert isinstance(response, RecordedHttpStreamResponse)
     assert tuple(chunk.data_bytes() for chunk in response.chunks) == _SSE_CHUNKS
 
@@ -200,7 +243,7 @@ def test_streaming_response_records_and_replays_chunks(tmp_path: Path) -> None:
         provider.enqueue_response(response)
         with httpx.stream("POST", f"{provider.url}/v1/chat/completions", json={}) as replayed:
             replayed_chunks: Final = tuple(replayed.iter_raw())
-        provider.take_request()
+        provider.take_requests(1)
 
     assert replayed_chunks == _SSE_CHUNKS
 
@@ -216,3 +259,27 @@ def test_stream_response_model_rejects_buffered_body() -> None:
                 "body_b64": "",
             }
         )
+
+
+@pytest.mark.parametrize("sdk_call", (_multi_sdk_call, _polling_sdk_call))
+def test_multiple_provider_calls_record_and_replay_in_order(
+    tmp_path: Path,
+    sdk_call: Callable[[str, _FixtureInput], object],
+) -> None:
+    with _controlled_upstream() as upstream:
+        result: Final = record_case(
+            ProviderSpec(upstream_base=upstream.url),
+            tmp_path,
+            _case(sdk_call.__name__),
+            sdk_call,
+            _ParityCase,
+        )
+
+    assert len(result.case.provider_responses) == 2
+    with replay_server() as provider:
+        for response in result.case.provider_responses:
+            provider.enqueue_response(response)
+        sdk_call(provider.url, _case(sdk_call.__name__))
+        requests: Final = provider.take_requests(2)
+
+    assert len(requests) == 2

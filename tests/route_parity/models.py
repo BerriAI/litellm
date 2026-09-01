@@ -24,7 +24,7 @@ class SDKReport(BaseModel):
 class Execution(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    request: CapturedRequest
+    requests: tuple[CapturedRequest, ...]
     report: SDKReport
 
 

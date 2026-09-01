@@ -1,0 +1,126 @@
+{
+  "case": {
+    "litellm_input": {
+      "bbox_annotation_format": {
+        "json_schema": {
+          "description": "Extract the visible document fields",
+          "name": "bounding_boxes",
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "strict": true
+        },
+        "type": "json_schema"
+      },
+      "confidence_scores_granularity": "page",
+      "document": {
+        "document_url": "data:application/pdf;base64,JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvUmVzb3VyY2VzIDQgMCBSIC9NZWRpYUJveCBbMCAwIDYxMiA3OTJdIC9Db250ZW50cyA1IDAgUiA+PgplbmRvYmoKNCAwIG9iago8PCAvRm9udCA8PCAvRjEgPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+ID4+ID4+CmVuZG9iago1IDAgb2JqCjw8IC9MZW5ndGggNDQgPj4Kc3RyZWFtCkJUCi9GMSAxMiBUZgoxMDAgNzAwIFRkCihUZXN0IFBERiBGaWxlKSBUagpFVAplbmRzdHJlYW0KZW5kb2JqCnhyZWYKMCA2CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAwMDAwMDU4IDAwMDAwIG4gCjAwMDAwMDAxMTUgMDAwMDAgbiAKMDAwMDAwMDIxNCAwMDAwMCBuIAowMDAwMDAwMjkzIDAwMDAwIG4gCnRyYWlsZXIKPDwgL1NpemUgNiAvUm9vdCAxIDAgUiA+PgpzdGFydHhyZWYKMzg1CiUlRU9GCg==",
+        "type": "document_url"
+      },
+      "extract_footer": false,
+      "extract_header": true,
+      "id": "case-1",
+      "image_limit": 1,
+      "image_min_size": 300,
+      "include_blocks": false,
+      "include_image_base64": true,
+      "model": "mistral/mistral-ocr-latest",
+      "pages": [
+        0
+      ],
+      "table_format": "markdown"
+    },
+    "provider_responses": [
+      {
+        "body_b64": "eyJwYWdlcyI6W3siaW5kZXgiOjAsIm1hcmtkb3duIjoiVGVzdCBQREYgRmlsZSIsImltYWdlcyI6W10sInRhYmxlcyI6W10sImh5cGVybGlua3MiOltdLCJoZWFkZXIiOm51bGwsImZvb3RlciI6bnVsbCwiZGltZW5zaW9ucyI6eyJkcGkiOjkzLCJoZWlnaHQiOjEwMjMsIndpZHRoIjo3OTF9LCJjb25maWRlbmNlX3Njb3JlcyI6eyJ3b3JkX2NvbmZpZGVuY2Vfc2NvcmVzIjpbXSwiYXZlcmFnZV9wYWdlX2NvbmZpZGVuY2Vfc2NvcmUiOjAuOTM3NjIyOTc0NDMyMjkzNiwibWluaW11bV9wYWdlX2NvbmZpZGVuY2Vfc2NvcmUiOjAuMjI1OTA1NTA3OTYwMzY4MzV9LCJibG9ja3MiOm51bGx9XSwibW9kZWwiOiJtaXN0cmFsLW9jci1sYXRlc3QiLCJkb2N1bWVudF9hbm5vdGF0aW9uIjpudWxsLCJ1c2FnZV9pbmZvIjp7InBhZ2VzX3Byb2Nlc3NlZCI6MSwiZG9jX3NpemVfYnl0ZXMiOjU4OX19",
+        "headers": [
+          {
+            "name": "Date",
+            "value": "Tue, 01 Sep 2026 19:54:24 GMT"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "set-cookie",
+            "value": "__cf_bm=sPN0c81343UATX4OL40rLiXwZzjj6.f9wiR.sUEwidI-1788292464.0167594-1.0.1.1-1I1p0tYuzSZefNGWXeuwPPCH2oi83ZL7wHVVU_skvYhidQGDYesdwH32zscGrLGoxF1LPkg9h4yruaTw9Pai6ahKkyPofBTXU4pjatWxIYJOV8ILJQRwjJAY9r5x01g5; HttpOnly; SameSite=None; Secure; Path=/; Domain=mistral.ai; Expires=Tue, 01 Sep 2026 20:24:24 GMT"
+          },
+          {
+            "name": "mistral-correlation-id",
+            "value": "01a05e89-7deb-72b4-976d-4c244b056782"
+          },
+          {
+            "name": "x-kong-request-id",
+            "value": "01a05e89-7deb-72b4-976d-4c244b056782"
+          },
+          {
+            "name": "x-ratelimit-limit-ocr-pages-minute",
+            "value": "60"
+          },
+          {
+            "name": "x-ratelimit-remaining-ocr-pages-minute",
+            "value": "45"
+          },
+          {
+            "name": "x-ratelimit-ocr-pages-query-cost",
+            "value": "1"
+          },
+          {
+            "name": "x-envoy-upstream-service-time",
+            "value": "373"
+          },
+          {
+            "name": "Server",
+            "value": "cloudflare"
+          },
+          {
+            "name": "access-control-allow-origin",
+            "value": "*"
+          },
+          {
+            "name": "x-kong-upstream-latency",
+            "value": "373"
+          },
+          {
+            "name": "x-kong-proxy-latency",
+            "value": "17"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "cf-cache-status",
+            "value": "DYNAMIC"
+          },
+          {
+            "name": "Strict-Transport-Security",
+            "value": "max-age=15552000; includeSubDomains; preload"
+          },
+          {
+            "name": "CF-RAY",
+            "value": "a346d39c1fe5cf12-SJC"
+          },
+          {
+            "name": "alt-svc",
+            "value": "h3=\":443\"; ma=86400"
+          }
+        ],
+        "kind": "http",
+        "status_code": 200
+      }
+    ]
+  },
+  "recorded_at": "2026-09-01T19:54:24.951956Z",
+  "schema_version": 1
+}

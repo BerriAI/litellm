@@ -73,12 +73,13 @@ class PythonScriptWorker:
         self,
         case_file: Path,
         route: str,
-        response: RecordedResponse,
+        responses: tuple[RecordedResponse, ...],
     ) -> Execution:
         stdin: Final = self.process.stdin
         if stdin is None or self.process.poll() is not None:
             raise AssertionError(f"{self.mode} {self.route_label} worker exited before processing {case_file}")
-        self.provider.enqueue_response(response)
+        for response in responses:
+            self.provider.enqueue_response(response)
         command: Final = SDKCommand(case_file=str(case_file), route=route)
         try:
             stdin.write(f"{command.model_dump_json()}\n")
@@ -103,7 +104,7 @@ class PythonScriptWorker:
             )
         assert isinstance(result, WorkerSuccess)
         try:
-            return Execution(request=self.provider.take_request(), report=result.report)
+            return Execution(requests=self.provider.take_requests(len(responses)), report=result.report)
         except AssertionError:
             self.provider.reset()
             raise
@@ -160,9 +161,9 @@ def run_execution(
     worker: PythonScriptWorker,
     case_file: Path,
     route: str,
-    response: RecordedResponse,
+    responses: tuple[RecordedResponse, ...],
 ) -> Execution:
-    return worker.execute(case_file, route, response)
+    return worker.execute(case_file, route, responses)
 
 
 @contextmanager

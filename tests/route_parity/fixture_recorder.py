@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Final, Generic, Protocol, TypeVar, cast
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import pytest
@@ -29,6 +30,7 @@ from tests.route_parity.recorded_http import (
 )
 
 FIXTURE_SCHEMA_VERSION: Final = 1
+_PARITY_PROVIDER_HOST: Final = "parity-provider.invalid"
 
 _HOP_BY_HOP_HEADERS: Final = frozenset(
     {
@@ -82,7 +84,29 @@ def _excluded_headers(headers: tuple[tuple[str, str], ...]) -> frozenset[str]:
 def _end_to_end_headers(headers: httpx.Headers) -> tuple[HttpHeader, ...]:
     decoded: Final = tuple((name.decode("ascii"), value.decode("latin-1")) for name, value in headers.raw)
     excluded: Final = _excluded_headers(decoded) | {"content-encoding", "content-length"}
-    return tuple(HttpHeader(name=name, value=value) for name, value in decoded if name.lower() not in excluded)
+    return tuple(
+        HttpHeader(name=name, value=_normalized_response_header(name, value))
+        for name, value in decoded
+        if name.lower() not in excluded
+    )
+
+
+def _normalized_response_header(name: str, value: str) -> str:
+    if name.lower() not in {"location", "operation-location"}:
+        return value
+    parsed: Final = urlsplit(value)
+    if not parsed.netloc:
+        return value
+    return urlunsplit(("http", _PARITY_PROVIDER_HOST, parsed.path, parsed.query, parsed.fragment))
+
+
+def _local_response_header(name: str, value: str, provider_url: str) -> str:
+    if name.lower() not in {"location", "operation-location"}:
+        return value
+    parsed: Final = urlsplit(value)
+    if parsed.hostname != _PARITY_PROVIDER_HOST:
+        return value
+    return f"{provider_url}{parsed.path}{'?' + parsed.query if parsed.query else ''}"
 
 
 class _RecordingProvider(ThreadingHTTPServer):
@@ -97,21 +121,29 @@ class _RecordingProvider(ThreadingHTTPServer):
     def url(self) -> str:
         return f"http://127.0.0.1:{self.server_address[1]}"
 
-    def take_response(self) -> RecordedResponse:
+    def take_responses(self) -> tuple[RecordedResponse, ...]:
         try:
-            return self.responses.get(timeout=5)
+            first: Final = self.responses.get(timeout=5)
         except queue.Empty as error:
             raise RuntimeError("successful SDK call did not produce a recorded response") from error
+        remaining: Final = tuple(self.responses.get_nowait() for _ in range(self.responses.qsize()))
+        return (first, *remaining)
 
 
 class _RecordingHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def do_POST(self) -> None:
+        self._forward()
+
+    def do_GET(self) -> None:
+        self._forward()
+
+    def _forward(self) -> None:
         provider: Final = self.server
         assert isinstance(provider, _RecordingProvider)
         length: Final = int(self.headers.get("content-length") or "0")
-        request_body: Final = self.rfile.read(length)
+        request_body: Final = self.rfile.read(length) if length else b""
         raw_headers: Final = tuple(self.headers.raw_items())
         excluded: Final = _excluded_headers(raw_headers) | {"host", "content-length"}
         forwarded_headers: Final = tuple((name, value) for name, value in raw_headers if name.lower() not in excluded)
@@ -160,7 +192,9 @@ class _RecordingHandler(BaseHTTPRequestHandler):
     ) -> RecordedHttpStreamResponse:
         self.send_response_only(upstream.status_code)
         for header in headers:
-            self.send_header(header.name, header.value)
+            provider: Final = self.server
+            assert isinstance(provider, _RecordingProvider)
+            self.send_header(header.name, _local_response_header(header.name, header.value, provider.url))
         self.send_header("transfer-encoding", "chunked")
         self.end_headers()
         chunks: Final = tuple(self._relay_chunks(upstream.iter_bytes()))
@@ -184,7 +218,9 @@ class _RecordingHandler(BaseHTTPRequestHandler):
     def _send_response(self, status_code: int, headers: tuple[HttpHeader, ...], body: bytes) -> None:
         self.send_response_only(status_code)
         for header in headers:
-            self.send_header(header.name, header.value)
+            provider: Final = self.server
+            assert isinstance(provider, _RecordingProvider)
+            self.send_header(header.name, _local_response_header(header.name, header.value, provider.url))
         self.send_header("content-length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -252,9 +288,9 @@ def record_case(
 
     with _recording_provider(spec) as recorder:
         sdk_call(recorder.url, case_input)
-        upstream_response: Final = recorder.take_response()
+        upstream_responses: Final = recorder.take_responses()
 
-    case: Final = case_type.model_validate({"litellm_input": case_input, "provider_response": upstream_response})
+    case: Final = case_type.model_validate({"litellm_input": case_input, "provider_responses": upstream_responses})
     envelope: Final = FixtureEnvelope(
         schema_version=FIXTURE_SCHEMA_VERSION,
         recorded_at=datetime.now(timezone.utc),

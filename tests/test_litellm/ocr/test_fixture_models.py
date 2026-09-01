@@ -10,7 +10,10 @@ from pydantic import ValidationError
 from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
 from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.llms.reducto.ocr.transformation import ReductoParseLegacyConfig, ReductoParseV3Config
+from litellm.llms.vertex_ai.ocr.deepseek_transformation import VertexAIDeepSeekOCRConfig
 from tests.test_litellm.ocr.fixture_models import (
+    AzureDocumentIntelligenceOcrSdkInput,
+    AzureMistralOcrSdkInput,
     JsonSchemaDefinition,
     JsonSchemaResponseFormat,
     MistralDocumentUrlDocument,
@@ -26,14 +29,20 @@ from tests.test_litellm.ocr.fixture_models import (
     ReductoParseV3SdkInput,
     ReductoRetrieval,
     ReductoSettings,
+    VertexDeepSeekOcrSdkInput,
+    VertexMistralOcrSdkInput,
 )
 from tests.test_litellm.ocr.generate_fixtures import (
+    azure_document_intelligence_input_strategy,
     mistral_input_strategy,
     reducto_legacy_input_strategy,
     reducto_v3_input_strategy,
+    vertex_deepseek_input_strategy,
 )
 
-COMMON_FIELDS: Final = frozenset({"model", "document", "custom_llm_provider"})
+COMMON_FIELDS: Final = frozenset(
+    {"boundary", "model", "document", "custom_llm_provider", "vertex_project", "vertex_location"}
+)
 
 
 def _provider_fields(model: type[OcrSdkInputBase]) -> set[str]:
@@ -69,6 +78,65 @@ def test_mistral_fixture_fields_match_provider_config() -> None:
 def test_reducto_fixture_fields_match_provider_configs() -> None:
     assert _provider_fields(ReductoParseV3SdkInput) == _supported_params(ReductoParseV3Config(), "parse-v3")
     assert _provider_fields(ReductoParseLegacySdkInput) == _supported_params(ReductoParseLegacyConfig(), "parse-legacy")
+
+
+def test_deepseek_fixture_fields_match_provider_config() -> None:
+    assert _provider_fields(VertexDeepSeekOcrSdkInput) == _supported_params(
+        VertexAIDeepSeekOCRConfig(), "deepseek-ai/deepseek-ocr-maas"
+    )
+
+
+def test_deepseek_maps_litellm_params_without_duplicating_model_namespace() -> None:
+    config: Final = VertexAIDeepSeekOCRConfig()
+    optional_params: Final = config.map_ocr_params(
+        non_default_params={"temperature": 0.5, "max_tokens": 256},
+        optional_params={},
+        model="deepseek-ai/deepseek-ocr-maas",
+    )
+    request: Final = config.transform_ocr_request(
+        model="deepseek-ai/deepseek-ocr-maas",
+        document={"type": "image_url", "image_url": "gs://bucket/document.png"},
+        optional_params=optional_params,
+        headers={},
+    )
+
+    assert request.data == {
+        "model": "deepseek-ai/deepseek-ocr-maas",
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": "gs://bucket/document.png"}],
+            }
+        ],
+        "temperature": 0.5,
+        "max_tokens": 256,
+    }
+
+
+@pytest.mark.parametrize(
+    "sdk_input",
+    (
+        AzureMistralOcrSdkInput(
+            model="azure_ai/mistral-ocr-deployment",
+            document=MistralImageUrlDocument(type="image_url", image_url="data:image/png;base64,AA=="),
+        ),
+        VertexMistralOcrSdkInput(
+            document=MistralImageUrlDocument(type="image_url", image_url="data:image/png;base64,AA=="),
+            vertex_project="project-1",
+        ),
+        AzureDocumentIntelligenceOcrSdkInput(
+            model="azure_ai/doc-intelligence/prebuilt-layout",
+            document=MistralImageUrlDocument(type="image_url", image_url="data:image/png;base64,AA=="),
+        ),
+        VertexDeepSeekOcrSdkInput(
+            document=MistralImageUrlDocument(type="image_url", image_url="data:image/png;base64,AA=="),
+            vertex_project="project-1",
+        ),
+    ),
+)
+def test_provider_boundary_is_explicit_but_not_forwarded(sdk_input: OcrSdkInputBase) -> None:
+    assert sdk_input.canonical_input()["boundary"] == sdk_input.boundary
+    assert "boundary" not in sdk_input.as_sdk_kwargs()
 
 
 def test_mistral_input_preserves_omission_and_explicit_boolean_values() -> None:
@@ -227,5 +295,23 @@ def test_reducto_v3_strategy_only_generates_valid_sdk_inputs(sdk_input: ReductoP
 
 @settings(max_examples=10, deadline=None)
 @given(sdk_input=reducto_legacy_input_strategy())
-def test_reducto_legacy_strategy_omits_undocumented_enhance(sdk_input: ReductoParseLegacySdkInput) -> None:
-    assert "enhance" not in sdk_input.as_sdk_kwargs()
+def test_reducto_legacy_strategy_generates_valid_litellm_inputs(sdk_input: ReductoParseLegacySdkInput) -> None:
+    assert ReductoParseLegacySdkInput.model_validate(sdk_input.canonical_input()) == sdk_input
+
+
+@settings(max_examples=30, deadline=None)
+@given(sdk_input=azure_document_intelligence_input_strategy())
+def test_azure_document_intelligence_strategy_only_generates_litellm_inputs(
+    sdk_input: AzureDocumentIntelligenceOcrSdkInput,
+) -> None:
+    assert sdk_input.req_format == "litellm"
+    assert "boundary" not in sdk_input.as_sdk_kwargs()
+
+
+@settings(max_examples=30, deadline=None)
+@given(sdk_input=vertex_deepseek_input_strategy("project-1", "us-central1"))
+def test_vertex_deepseek_strategy_only_generates_litellm_inputs(
+    sdk_input: VertexDeepSeekOcrSdkInput,
+) -> None:
+    assert sdk_input.vertex_project == "project-1"
+    assert "boundary" not in sdk_input.as_sdk_kwargs()

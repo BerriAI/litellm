@@ -41,8 +41,49 @@ def test_discovery_requires_provider_specific_key(environ: dict[str, str]) -> No
 
 
 def test_no_discovered_targets_has_actionable_error() -> None:
-    with pytest.raises(SystemExit, match="Set MISTRAL_API_KEY"):
+    with pytest.raises(SystemExit, match="supported provider API key"):
         require_targets(())
+
+
+def test_discovery_is_explicit_per_available_provider_boundary() -> None:
+    targets: Final = discover_targets(
+        {
+            "MISTRAL_API_KEY": "mistral-secret",
+            "REDUCTO_API_KEY": "reducto-secret",
+            "AZURE_AI_API_KEY": "azure-secret",
+            "AZURE_AI_API_BASE": "https://azure.example",
+            "AZURE_AI_OCR_MODEL": "mistral-ocr-deployment",
+            "AZURE_DOCUMENT_INTELLIGENCE_API_KEY": "document-secret",
+            "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT": "https://document.example",
+            "VERTEX_AI_API_KEY": "vertex-secret",
+            "VERTEXAI_PROJECT": "project-1",
+        },
+        _unused_sdk_call,
+    )
+
+    assert tuple(target.name for target in targets) == (
+        "mistral-ocr",
+        "azure-mistral",
+        "azure-document-intelligence",
+        "vertex-mistral",
+        "vertex-deepseek",
+        "reducto-v3",
+        "reducto-legacy",
+    )
+    assert all("secret" not in repr(target) for target in targets)
+
+
+def test_azure_mistral_discovery_requires_and_normalizes_deployment_model() -> None:
+    incomplete: Final = {
+        "AZURE_AI_API_KEY": "azure-secret",
+        "AZURE_AI_API_BASE": "https://azure.example",
+    }
+    assert discover_targets(incomplete, _unused_sdk_call) == ()
+
+    target: Final = discover_targets(
+        {**incomplete, "AZURE_AI_OCR_MODEL": "mistral-ocr-deployment"}, _unused_sdk_call
+    )[0]
+    assert target.required_inputs[0].model == "azure_ai/mistral-ocr-deployment"
 
 
 @pytest.mark.parametrize(
@@ -71,6 +112,28 @@ def test_mistral_target_uses_canonical_model_and_normalized_base(
     case_inputs: Final = generate_case_inputs(target.strategy, examples=1)
     assert len(case_inputs) == 1
     assert case_inputs[0].canonical_input()["model"] == "mistral/mistral-ocr-latest"
+    assert len(target.required_inputs) == 14
+    covered_params: Final = {
+        key
+        for case_input in target.required_inputs
+        for key in case_input.as_sdk_kwargs()
+        if key not in {"model", "document", "custom_llm_provider"}
+    }
+    assert covered_params == {
+        "pages",
+        "include_image_base64",
+        "image_limit",
+        "image_min_size",
+        "bbox_annotation_format",
+        "document_annotation_format",
+        "document_annotation_prompt",
+        "extract_header",
+        "extract_footer",
+        "table_format",
+        "confidence_scores_granularity",
+        "include_blocks",
+        "id",
+    }
 
 
 def test_mistral_target_invocation_forwards_discovered_credentials() -> None:

@@ -28,7 +28,7 @@ from tests.route_parity.runner import (
     parity_worker_main,
     run_execution,
 )
-from tests.test_litellm.ocr.fixture_models import MistralOcrSdkInput, OcrParityCase
+from tests.test_litellm.ocr.fixture_models import OcrParityCase, OcrSdkInput
 
 API_KEY: Final = "test-key"
 PYTHON_HTTP_SENTINEL: Final = "python-ocr-parity-fallback"
@@ -40,7 +40,7 @@ class SDKRoute(str, Enum):
     AOCR = "aocr"
 
 
-def _call_kwargs(sdk_input: MistralOcrSdkInput, mock_url: str, route: SDKRoute) -> dict[str, object]:
+def _call_kwargs(sdk_input: OcrSdkInput, mock_url: str, route: SDKRoute) -> dict[str, object]:
     return {
         **sdk_input.as_sdk_kwargs(),
         "api_base": mock_url,
@@ -50,7 +50,7 @@ def _call_kwargs(sdk_input: MistralOcrSdkInput, mock_url: str, route: SDKRoute) 
 
 
 def _execute_sdk_case(
-    sdk_input: MistralOcrSdkInput,
+    sdk_input: OcrSdkInput,
     route: SDKRoute,
     mock_url: str,
     event_loop: asyncio.AbstractEventLoop,
@@ -67,7 +67,7 @@ def _execute_sdk_case(
     return SDKReport(response=async_response.model_dump(mode="json"))
 
 
-def _call_sdk_case(sdk_input: MistralOcrSdkInput, route: SDKRoute, mock_url: str) -> OCRResponse:
+def _call_sdk_case(sdk_input: OcrSdkInput, route: SDKRoute, mock_url: str) -> OCRResponse:
     import litellm
 
     call_kwargs: Final = _call_kwargs(sdk_input, mock_url, route)
@@ -185,12 +185,14 @@ def test_recorded_ocr_sdk_parity(
     ocr_fixture: OcrParityCase,
     route: SDKRoute,
 ) -> None:
+    if ocr_fixture.litellm_input.boundary in {"reducto_v3", "reducto_legacy"}:
+        pytest.skip("Reducto does not have a Rust OCR boundary")
     sync_spy, async_spy = _native_spies()
     with _restore_rust_ocr_state(), replay_server() as provider:
         rust_ocr_bridge.use_litellm_rust(False, ocr=sync_spy, aocr=async_spy)
         python: Final = run_in_process(
             provider,
-            ocr_fixture.provider_response,
+            ocr_fixture.provider_responses,
             lambda mock_url: _call_sdk_case(ocr_fixture.litellm_input, route, mock_url),
         )
         assert sync_spy.calls == 0
@@ -199,13 +201,13 @@ def test_recorded_ocr_sdk_parity(
         rust_ocr_bridge.use_litellm_rust(True, ocr=sync_spy, aocr=async_spy)
         rust: Final = run_in_process(
             provider,
-            ocr_fixture.provider_response,
+            ocr_fixture.provider_responses,
             lambda mock_url: _call_sdk_case(ocr_fixture.litellm_input, route, mock_url),
         )
 
     assert sync_spy.calls == (1 if route is SDKRoute.OCR else 0)
     assert async_spy.calls == (1 if route is SDKRoute.AOCR else 0)
-    assert_request_parity(python.request, rust.request)
+    assert_request_parity(python.requests, rust.requests)
     assert_model_parity(python.response, rust.response)
 
 
@@ -221,13 +223,13 @@ def test_ocr_subprocess_startup_smoke(
         python_worker,
         case_file,
         SDKRoute.OCR.value,
-        startup_ocr_fixture.provider_response,
+        startup_ocr_fixture.provider_responses,
     )
     rust: Final = run_execution(
         rust_worker,
         case_file,
         SDKRoute.OCR.value,
-        startup_ocr_fixture.provider_response,
+        startup_ocr_fixture.provider_responses,
     )
 
     assert_parity(python, rust, PYTHON_HTTP_SENTINEL)

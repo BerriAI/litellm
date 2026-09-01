@@ -25,12 +25,14 @@ class _DifferentResponse(BaseModel):
 
 def _execution(*, body: JsonValue = None, markdown: str = "same", user_agent: str | None = None) -> Execution:
     return Execution(
-        request=CapturedRequest(
-            method="POST",
-            path="/v1/test-route?mode=test",
-            headers=(("authorization", "Bearer test-key"), ("content-type", "application/json")),
-            body={"model": "test-model"} if body is None else body,
-            user_agent=user_agent,
+        requests=(
+            CapturedRequest(
+                method="POST",
+                path="/v1/test-route?mode=test",
+                headers=(("authorization", "Bearer test-key"), ("content-type", "application/json")),
+                body={"model": "test-model"} if body is None else body,
+                user_agent=user_agent,
+            ),
         ),
         report=SDKReport(response={"items": [{"text": markdown}], "model": "test-model"}),
     )

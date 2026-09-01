@@ -32,6 +32,22 @@
 - Provider responses are replayed unchanged, so the parity test does not fuzz or validate provider behavior
 - Because Hypothesis does not run the parity assertion directly, parity failures are not automatically shrunk
 
+## OCR input boundaries
+
+OCR strategies generate only public `litellm.ocr()` and `litellm.aocr()` inputs. Every case contains the normalized
+`model`, Mistral-shaped `document`, optional `custom_llm_provider`, and LiteLLM keyword arguments. The fixture-only
+`boundary` tag selects the valid keyword-argument set and is removed before calling the SDK. Strategies never build
+provider wire payloads.
+
+Each boundary has a required corpus containing a baseline and one case for every supported top-level LiteLLM OCR
+parameter. `--examples` controls additional Hypothesis-generated cases; it does not replace the required corpus.
+
+The explicit boundaries are Mistral, Azure-hosted Mistral, Vertex-hosted Mistral, Azure Document Intelligence,
+Vertex DeepSeek, Reducto v3, and Reducto legacy. Provider credentials and endpoints only control target discovery, so
+a machine records the boundaries it has configured and skips the rest. Reducto fixtures record both upload and parse
+responses, but Reducto remains outside Python/Rust parity until the Rust OCR bridge supports it.
+Azure-hosted Mistral discovery also requires `AZURE_AI_OCR_MODEL`, the deployment name or full `azure_ai/...` model.
+
 ## References
 
 - [Hypothesis documentation](https://hypothesis.readthedocs.io/en/latest/)

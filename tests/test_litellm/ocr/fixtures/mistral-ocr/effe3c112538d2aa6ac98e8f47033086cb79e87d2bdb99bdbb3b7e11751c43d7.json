@@ -1,0 +1,114 @@
+{
+  "case": {
+    "litellm_input": {
+      "document": {
+        "document_url": "data:application/pdf;base64,JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvUmVzb3VyY2VzIDQgMCBSIC9NZWRpYUJveCBbMCAwIDYxMiA3OTJdIC9Db250ZW50cyA1IDAgUiA+PgplbmRvYmoKNCAwIG9iago8PCAvRm9udCA8PCAvRjEgPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+ID4+ID4+CmVuZG9iago1IDAgb2JqCjw8IC9MZW5ndGggNDQgPj4Kc3RyZWFtCkJUCi9GMSAxMiBUZgoxMDAgNzAwIFRkCihUZXN0IFBERiBGaWxlKSBUagpFVAplbmRzdHJlYW0KZW5kb2JqCnhyZWYKMCA2CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAwMDAwMDU4IDAwMDAwIG4gCjAwMDAwMDAxMTUgMDAwMDAgbiAKMDAwMDAwMDIxNCAwMDAwMCBuIAowMDAwMDAwMjkzIDAwMDAwIG4gCnRyYWlsZXIKPDwgL1NpemUgNiAvUm9vdCAxIDAgUiA+PgpzdGFydHhyZWYKMzg1CiUlRU9GCg==",
+        "type": "document_url"
+      },
+      "document_annotation_format": {
+        "json_schema": {
+          "description": "Extract the visible document fields",
+          "name": "document_title",
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "strict": true
+        },
+        "type": "json_schema"
+      },
+      "model": "mistral/mistral-ocr-latest"
+    },
+    "provider_responses": [
+      {
+        "body_b64": "eyJwYWdlcyI6W3siaW5kZXgiOjAsIm1hcmtkb3duIjoiVGVzdCBQREYgRmlsZSIsImltYWdlcyI6W10sInRhYmxlcyI6W10sImh5cGVybGlua3MiOltdLCJoZWFkZXIiOm51bGwsImZvb3RlciI6bnVsbCwiZGltZW5zaW9ucyI6eyJkcGkiOjkzLCJoZWlnaHQiOjEwMjMsIndpZHRoIjo3OTF9LCJjb25maWRlbmNlX3Njb3JlcyI6bnVsbCwiYmxvY2tzIjpbeyJ0b3BfbGVmdF94IjoxMjYsInRvcF9sZWZ0X3kiOjEwNCwiYm90dG9tX3JpZ2h0X3giOjIyOSwiYm90dG9tX3JpZ2h0X3kiOjEyNywiY29udGVudCI6IlRlc3QgUERGIEZpbGUiLCJjb25maWRlbmNlX3Njb3JlcyI6bnVsbCwidHlwZSI6InRleHQifV19XSwibW9kZWwiOiJtaXN0cmFsLW9jci1sYXRlc3QiLCJkb2N1bWVudF9hbm5vdGF0aW9uIjoie1widGl0bGVcIjogXCJUZXN0X1BERl9GaWxlXCJ9IiwidXNhZ2VfaW5mbyI6eyJwYWdlc19wcm9jZXNzZWQiOjEsImRvY19zaXplX2J5dGVzIjo1ODl9fQ==",
+        "headers": [
+          {
+            "name": "Date",
+            "value": "Tue, 01 Sep 2026 19:54:25 GMT"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "mistral-correlation-id",
+            "value": "01a05e89-81d5-79f8-914d-e3863af2d24b"
+          },
+          {
+            "name": "x-kong-request-id",
+            "value": "01a05e89-81d5-79f8-914d-e3863af2d24b"
+          },
+          {
+            "name": "x-ratelimit-limit-ocr-pages-minute",
+            "value": "60"
+          },
+          {
+            "name": "x-ratelimit-remaining-ocr-pages-minute",
+            "value": "44"
+          },
+          {
+            "name": "x-ratelimit-ocr-pages-query-cost",
+            "value": "1"
+          },
+          {
+            "name": "x-envoy-upstream-service-time",
+            "value": "448"
+          },
+          {
+            "name": "Server",
+            "value": "cloudflare"
+          },
+          {
+            "name": "access-control-allow-origin",
+            "value": "*"
+          },
+          {
+            "name": "x-kong-upstream-latency",
+            "value": "449"
+          },
+          {
+            "name": "x-kong-proxy-latency",
+            "value": "15"
+          },
+          {
+            "name": "cf-cache-status",
+            "value": "DYNAMIC"
+          },
+          {
+            "name": "set-cookie",
+            "value": "__cf_bm=dDZPnK7j_xGIDo5mFF6PHBwL.E.iE3aIhXdIZ6xZIPg-1788292465.0206954-1.0.1.1-XVajgKnQ8WEsB75xPcp1hdJXhMUfK.oz.Apkd1nRlGofoxlEWK4F7M2bC8p67VFjDyEZK3O6mCzpiePraLUty31M1H92EBrZBT9wRwuaet2H7P73KO8QHZmO2Jm5tgyC; HttpOnly; SameSite=None; Secure; Path=/; Domain=mistral.ai; Expires=Tue, 01 Sep 2026 20:24:25 GMT"
+          },
+          {
+            "name": "Strict-Transport-Security",
+            "value": "max-age=15552000; includeSubDomains; preload"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "CF-RAY",
+            "value": "a346d3a25d0cccb8-SJC"
+          },
+          {
+            "name": "alt-svc",
+            "value": "h3=\":443\"; ma=86400"
+          }
+        ],
+        "kind": "http",
+        "status_code": 200
+      }
+    ]
+  },
+  "recorded_at": "2026-09-01T19:54:25.959391Z",
+  "schema_version": 1
+}

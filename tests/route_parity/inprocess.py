@@ -13,19 +13,20 @@ ResponseT = TypeVar("ResponseT")
 
 @dataclass(frozen=True, slots=True)
 class InProcessExecution(Generic[ResponseT]):
-    request: CapturedRequest
+    requests: tuple[CapturedRequest, ...]
     response: ResponseT
 
 
 def run_in_process(
     provider: ReplayServer,
-    recorded_response: RecordedResponse,
+    recorded_responses: tuple[RecordedResponse, ...],
     call: Callable[[str], ResponseT],
 ) -> InProcessExecution[ResponseT]:
-    provider.enqueue_response(recorded_response)
+    for recorded_response in recorded_responses:
+        provider.enqueue_response(recorded_response)
     try:
         response = call(provider.url)
-        return InProcessExecution(request=provider.take_request(), response=response)
+        return InProcessExecution(requests=provider.take_requests(len(recorded_responses)), response=response)
     except Exception:
         provider.reset()
         raise

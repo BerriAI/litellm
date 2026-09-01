@@ -10,23 +10,27 @@ ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
 def validate_harness(python: Execution, accelerated: Execution, python_user_agent: str) -> None:
-    if python.request.user_agent != python_user_agent:
-        raise AssertionError(
-            f"Python provider request did not carry fallback sentinel user-agent {python_user_agent!r}: "
-            f"{python.request.user_agent!r}"
-        )
-    if accelerated.request.user_agent == python_user_agent:
-        raise AssertionError("accelerated route fell back to the Python HTTP implementation")
+    for request in python.requests:
+        if request.user_agent != python_user_agent:
+            raise AssertionError(
+                f"Python provider request did not carry fallback sentinel user-agent {python_user_agent!r}: "
+                f"{request.user_agent!r}"
+            )
+    for request in accelerated.requests:
+        if request.user_agent == python_user_agent:
+            raise AssertionError("accelerated route fell back to the Python HTTP implementation")
 
 
 def _request_after_transformation(request: CapturedRequest) -> CapturedRequest:
     return request.model_copy(update={"user_agent": None})
 
 
-def assert_request_parity(python: CapturedRequest, accelerated: CapturedRequest) -> None:
-    python_request: Final = _request_after_transformation(python)
-    accelerated_request: Final = _request_after_transformation(accelerated)
-    assert python_request == accelerated_request
+def assert_request_parity(
+    python: tuple[CapturedRequest, ...], accelerated: tuple[CapturedRequest, ...]
+) -> None:
+    python_requests: Final = tuple(_request_after_transformation(request) for request in python)
+    accelerated_requests: Final = tuple(_request_after_transformation(request) for request in accelerated)
+    assert python_requests == accelerated_requests
 
 
 def public_model_copy(model: ModelT) -> ModelT:
@@ -42,5 +46,5 @@ def assert_model_parity(python: BaseModel, accelerated: BaseModel) -> None:
 
 def assert_parity(python: Execution, accelerated: Execution, python_user_agent: str) -> None:
     validate_harness(python, accelerated, python_user_agent)
-    assert_request_parity(python.request, accelerated.request)
+    assert_request_parity(python.requests, accelerated.requests)
     assert python.report.response == accelerated.report.response

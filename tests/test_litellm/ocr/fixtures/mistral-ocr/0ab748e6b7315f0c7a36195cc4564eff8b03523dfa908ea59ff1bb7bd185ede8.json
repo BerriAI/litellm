@@ -1,0 +1,142 @@
+{
+  "case": {
+    "litellm_input": {
+      "bbox_annotation_format": {
+        "json_schema": {
+          "description": "Extract the visible document fields",
+          "name": "bounding_boxes",
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "strict": true
+        },
+        "type": "json_schema"
+      },
+      "document": {
+        "image_url": "https://dummyjson.com/image/800x300/ffffff/000000?text=invoice%20123&fontSize=24",
+        "type": "image_url"
+      },
+      "document_annotation_format": {
+        "json_schema": {
+          "description": "Extract the visible document fields",
+          "name": "document_title",
+          "schema": {
+            "additionalProperties": false,
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "strict": true
+        },
+        "type": "json_schema"
+      },
+      "extract_header": true,
+      "image_min_size": 300,
+      "include_blocks": true,
+      "include_image_base64": false,
+      "model": "mistral/mistral-ocr-latest",
+      "pages": [
+        0
+      ],
+      "table_format": "markdown"
+    },
+    "provider_responses": [
+      {
+        "body_b64": "eyJwYWdlcyI6W3siaW5kZXgiOjAsIm1hcmtkb3duIjoiaW52b2ljZSAxMjMiLCJpbWFnZXMiOltdLCJ0YWJsZXMiOltdLCJoeXBlcmxpbmtzIjpbXSwiaGVhZGVyIjpudWxsLCJmb290ZXIiOm51bGwsImRpbWVuc2lvbnMiOnsiZHBpIjoyMDAsImhlaWdodCI6MzAwLCJ3aWR0aCI6ODAwfSwiY29uZmlkZW5jZV9zY29yZXMiOm51bGwsImJsb2NrcyI6W3sidG9wX2xlZnRfeCI6MzM1LCJ0b3BfbGVmdF95IjoxMzgsImJvdHRvbV9yaWdodF94Ijo0NjQsImJvdHRvbV9yaWdodF95IjoxNjIsImNvbnRlbnQiOiJpbnZvaWNlIDEyMyIsImNvbmZpZGVuY2Vfc2NvcmVzIjpudWxsLCJ0eXBlIjoidGV4dCJ9XX1dLCJtb2RlbCI6Im1pc3RyYWwtb2NyLWxhdGVzdCIsImRvY3VtZW50X2Fubm90YXRpb24iOiJ7XCJ0aXRsZVwiOiBcIkludm9pY2VfMTIzXCJ9IiwidXNhZ2VfaW5mbyI6eyJwYWdlc19wcm9jZXNzZWQiOjEsImRvY19zaXplX2J5dGVzIjo0MTI0fX0=",
+        "headers": [
+          {
+            "name": "Date",
+            "value": "Tue, 01 Sep 2026 19:54:26 GMT"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "set-cookie",
+            "value": "__cf_bm=c5QAleICyoEptgycuGlRuItpEqcNe2MRZASOE9DeW80-1788292466.0205042-1.0.1.1-_PjnHuYd9Ba1XjxpUtrCWo_gUI5uKAvA73jcZAj6t_RARG9jiuX8N3t6bXu7K15RP3WG6AYFN4hbSKwlEpfksa9krmM7JYpf_JEpS5GDbst5vpFFLNtv.ymdX8lDSb5a; HttpOnly; SameSite=None; Secure; Path=/; Domain=mistral.ai; Expires=Tue, 01 Sep 2026 20:24:26 GMT"
+          },
+          {
+            "name": "mistral-correlation-id",
+            "value": "01a05e89-85bd-7075-af53-8e341b35a63e"
+          },
+          {
+            "name": "x-kong-request-id",
+            "value": "01a05e89-85bd-7075-af53-8e341b35a63e"
+          },
+          {
+            "name": "x-ratelimit-limit-ocr-pages-minute",
+            "value": "60"
+          },
+          {
+            "name": "x-ratelimit-remaining-ocr-pages-minute",
+            "value": "43"
+          },
+          {
+            "name": "x-ratelimit-ocr-pages-query-cost",
+            "value": "1"
+          },
+          {
+            "name": "x-envoy-upstream-service-time",
+            "value": "432"
+          },
+          {
+            "name": "Server",
+            "value": "cloudflare"
+          },
+          {
+            "name": "access-control-allow-origin",
+            "value": "*"
+          },
+          {
+            "name": "x-kong-upstream-latency",
+            "value": "433"
+          },
+          {
+            "name": "x-kong-proxy-latency",
+            "value": "13"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "cf-cache-status",
+            "value": "DYNAMIC"
+          },
+          {
+            "name": "Strict-Transport-Security",
+            "value": "max-age=15552000; includeSubDomains; preload"
+          },
+          {
+            "name": "CF-RAY",
+            "value": "a346d3a89a85f953-SJC"
+          },
+          {
+            "name": "alt-svc",
+            "value": "h3=\":443\"; ma=86400"
+          }
+        ],
+        "kind": "http",
+        "status_code": 200
+      }
+    ]
+  },
+  "recorded_at": "2026-09-01T19:54:26.965078Z",
+  "schema_version": 1
+}

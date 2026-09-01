@@ -27,7 +27,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
         env_var=FIXTURE_DIR_ENV,
         default_directory=default_directory,
         regeneration_command=(
-            f"uv run python tests/test_litellm/ocr/generate_fixtures.py --fixture-dir {default_directory}"
+            f"uv run python -m tests.test_litellm.ocr.generate_fixtures --fixture-dir {default_directory}"
         ),
         id_builder=_fixture_id,
     )

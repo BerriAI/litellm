@@ -38,6 +38,24 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
         super().__init__()
         self.vertex_base = VertexBase()
 
+    def get_supported_ocr_params(self, model: str) -> list[str]:  # mutable-ok: base contract
+        return ["stream", "temperature", "max_tokens", "top_p", "n", "stop"]  # mutable-ok: base contract
+
+    def map_ocr_params(
+        self,
+        non_default_params: dict[str, object],  # mutable-ok: base contract
+        optional_params: dict[str, object],  # mutable-ok: base contract
+        model: str,
+    ) -> dict[str, object]:  # mutable-ok: base contract
+        return {  # mutable-ok: base contract
+            **optional_params,
+            **{  # mutable-ok: base contract
+                key: value
+                for key, value in non_default_params.items()
+                if key in self.get_supported_ocr_params(model)
+            },
+        }
+
     def get_api_key_env_var(self) -> str | None:
         return VERTEX_AI_DEEPSEEK_OCR_API_KEY_ENV_VAR
 
@@ -177,8 +195,9 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
             content_item = {"type": "image_url", "image_url": document_url}
 
         # Build DeepSeek OCR request
+        upstream_model: Final = model if model.startswith("deepseek-ai/") else f"deepseek-ai/{model}"
         data: Final = {
-            "model": "deepseek-ai/" + model,
+            "model": upstream_model,
             "messages": [{"role": "user", "content": [content_item]}],
         }
 

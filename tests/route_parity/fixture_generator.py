@@ -31,6 +31,7 @@ class FixtureTarget(Generic[InputT]):
     provider_spec: ProviderSpec
     strategy: SearchStrategy[InputT]
     invoke: Callable[[str, InputT], object]
+    required_inputs: tuple[InputT, ...] = ()
 
 
 def generate_target_fixtures(
@@ -40,10 +41,11 @@ def generate_target_fixtures(
     concurrency: int,
     case_type: type[CaseT],
 ) -> None:
-    case_inputs: Final = generate_case_inputs(target.strategy, examples)
+    generated_inputs: Final = generate_case_inputs(target.strategy, examples)
+    case_inputs: Final = (*target.required_inputs, *generated_inputs)
     results: Final = record_cases(
         target.provider_spec,
-        root,
+        root / target.name,
         case_inputs,
         target.invoke,
         case_type,

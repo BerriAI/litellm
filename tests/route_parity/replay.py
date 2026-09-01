@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import queue
 import threading
 from collections.abc import Generator
@@ -9,6 +10,7 @@ from typing import Final
 
 from pydantic import JsonValue, TypeAdapter
 
+from tests.route_parity.fixture_recorder import _local_response_header
 from tests.route_parity.models import CapturedRequest
 from tests.route_parity.recorded_http import RecordedHttpResponse, RecordedHttpStreamResponse, RecordedResponse
 
@@ -41,11 +43,11 @@ class ReplayServer(ThreadingHTTPServer):
     def enqueue_response(self, response: RecordedResponse) -> None:
         self.responses.put(response)
 
-    def take_request(self) -> CapturedRequest:
+    def take_requests(self, expected_count: int) -> tuple[CapturedRequest, ...]:
         request_count: Final = self.requests.qsize()
-        if request_count != 1:
-            raise AssertionError(f"expected exactly one provider request, received {request_count}")
-        return self.requests.get_nowait()
+        if request_count != expected_count:
+            raise AssertionError(f"expected exactly {expected_count} provider requests, received {request_count}")
+        return tuple(self.requests.get_nowait() for _ in range(request_count))
 
     def reset(self) -> None:
         while not self.responses.empty():
@@ -58,10 +60,24 @@ class _ReplayHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def do_POST(self) -> None:
+        self._replay()
+
+    def do_GET(self) -> None:
+        self._replay()
+
+    def _replay(self) -> None:
         provider: Final = self.server
         assert isinstance(provider, ReplayServer)
         length: Final = int(self.headers.get("content-length") or "0")
-        body: Final = JSON_VALUE.validate_json(self.rfile.read(length))
+        raw_body: Final = self.rfile.read(length) if length else b""
+        content_type: Final = self.headers.get("content-type", "")
+        body: Final = (
+            JSON_VALUE.validate_json(raw_body)
+            if raw_body and content_type.lower().startswith("application/json")
+            else base64.b64encode(raw_body).decode("ascii")
+            if raw_body
+            else None
+        )
         headers: Final = tuple(
             sorted(
                 (name.lower(), value)
@@ -86,7 +102,7 @@ class _ReplayHandler(BaseHTTPRequestHandler):
         self.send_response_only(response.status_code)
         for header in response.headers:
             if header.name.lower() not in EXCLUDED_RESPONSE_HEADERS:
-                self.send_header(header.name, header.value)
+                self.send_header(header.name, _local_response_header(header.name, header.value, provider.url))
         if isinstance(response, RecordedHttpResponse):
             response_body: Final = response.body_bytes()
             self.send_header("content-length", str(len(response_body)))

@@ -16,7 +16,13 @@ from tests.route_parity.fixture_models import (
     SdkInputBase,
 )
 
-__all__ = ("JsonSchemaDefinition", "JsonSchemaResponseFormat", "OcrParityCase", "OcrSdkInputBase")
+__all__ = (
+    "JsonSchemaDefinition",
+    "JsonSchemaResponseFormat",
+    "OcrParityCase",
+    "OcrSdkInput",
+    "OcrSdkInputBase",
+)
 
 OcrSdkInputBase = SdkInputBase
 
@@ -57,10 +63,8 @@ MistralModel = Literal[
 ]
 
 
-class MistralOcrSdkInput(OcrSdkInputBase):
-    model: MistralModel
+class MistralCompatibleOcrSdkInput(OcrSdkInputBase):
     document: MistralDocument
-    custom_llm_provider: Literal["mistral"] | None = None
     pages: str | list[int] | None = None
     include_image_base64: bool | None = None
     image_limit: int | None = None
@@ -76,12 +80,72 @@ class MistralOcrSdkInput(OcrSdkInputBase):
     id: str | None = None
 
     @model_validator(mode="after")
-    def validate_provider_routing(self) -> Self:
-        if not self.model.startswith("mistral/") and self.custom_llm_provider != "mistral":
-            raise ValueError("unqualified Mistral models require custom_llm_provider='mistral'")
+    def validate_annotation_prompt(self) -> Self:
         if self.document_annotation_prompt is not None and self.document_annotation_format is None:
             raise ValueError("document_annotation_prompt requires document_annotation_format")
         return self
+
+
+class MistralOcrSdkInput(MistralCompatibleOcrSdkInput):
+    boundary: Literal["mistral"] = "mistral"
+    model: MistralModel
+    custom_llm_provider: Literal["mistral"] | None = None
+
+    @model_validator(mode="after")
+    def validate_provider_routing(self) -> Self:
+        if not self.model.startswith("mistral/") and self.custom_llm_provider != "mistral":
+            raise ValueError("unqualified Mistral models require custom_llm_provider='mistral'")
+        return self
+
+
+class AzureMistralOcrSdkInput(MistralCompatibleOcrSdkInput):
+    boundary: Literal["azure_mistral"] = "azure_mistral"
+    model: str
+    custom_llm_provider: Literal["azure_ai"] | None = None
+
+    @field_validator("model")
+    @classmethod
+    def validate_model_namespace(cls, model: str) -> str:
+        if not model.startswith("azure_ai/"):
+            raise ValueError("Azure Mistral models must use the azure_ai/ LiteLLM namespace")
+        return model
+
+
+class VertexMistralOcrSdkInput(MistralCompatibleOcrSdkInput):
+    boundary: Literal["vertex_mistral"] = "vertex_mistral"
+    model: Literal["vertex_ai/mistral-ocr-2505"] = "vertex_ai/mistral-ocr-2505"
+    custom_llm_provider: Literal["vertex_ai"] | None = None
+    vertex_project: str
+    vertex_location: str = "us-central1"
+
+
+class AzureDocumentIntelligenceOcrSdkInput(OcrSdkInputBase):
+    boundary: Literal["azure_document_intelligence"] = "azure_document_intelligence"
+    model: Literal[
+        "azure_ai/doc-intelligence/prebuilt-read",
+        "azure_ai/doc-intelligence/prebuilt-layout",
+        "azure_ai/doc-intelligence/prebuilt-document",
+    ]
+    document: MistralDocument
+    custom_llm_provider: Literal["azure_ai"] | None = None
+    pages: str | list[int] | None = None
+    features: str | list[str] | None = None
+    req_format: Literal["litellm"] = "litellm"
+
+
+class VertexDeepSeekOcrSdkInput(OcrSdkInputBase):
+    boundary: Literal["vertex_deepseek"] = "vertex_deepseek"
+    model: Literal["vertex_ai/deepseek-ai/deepseek-ocr-maas"] = "vertex_ai/deepseek-ai/deepseek-ocr-maas"
+    document: MistralDocument
+    custom_llm_provider: Literal["vertex_ai"] | None = None
+    vertex_project: str
+    vertex_location: str = "us-central1"
+    stream: bool | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    top_p: float | None = None
+    n: int | None = None
+    stop: str | list[str] | None = None
 
 
 def _validate_reducto_source(source: str) -> str:
@@ -243,6 +307,7 @@ class ReductoSettings(FixtureModel):
 
 
 class ReductoParseV3SdkInput(OcrSdkInputBase):
+    boundary: Literal["reducto_v3"] = "reducto_v3"
     model: Literal["reducto/parse-v3", "parse-v3"]
     document: ReductoDocument
     custom_llm_provider: Literal["reducto"] | None = None
@@ -258,6 +323,7 @@ class ReductoParseV3SdkInput(OcrSdkInputBase):
 
 
 class ReductoParseLegacySdkInput(OcrSdkInputBase):
+    boundary: Literal["reducto_legacy"] = "reducto_legacy"
     model: Literal["reducto/parse-legacy", "parse-legacy"]
     document: ReductoDocument
     custom_llm_provider: Literal["reducto"] | None = None
@@ -270,5 +336,17 @@ class ReductoParseLegacySdkInput(OcrSdkInputBase):
         return self
 
 
-class OcrParityCase(ParityCase[MistralOcrSdkInput]):
+OcrSdkInput = Annotated[
+    MistralOcrSdkInput
+    | AzureMistralOcrSdkInput
+    | VertexMistralOcrSdkInput
+    | AzureDocumentIntelligenceOcrSdkInput
+    | VertexDeepSeekOcrSdkInput
+    | ReductoParseV3SdkInput
+    | ReductoParseLegacySdkInput,
+    Field(discriminator="boundary"),
+]
+
+
+class OcrParityCase(ParityCase[OcrSdkInput]):
     pass
