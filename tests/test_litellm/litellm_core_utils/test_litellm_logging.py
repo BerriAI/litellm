@@ -5479,6 +5479,75 @@ def test_pre_call_redacts_and_masks_raw_request(logging_obj):
     assert "key=*****" in raw_api_base
 
 
+def _streaming_logging_obj_with_callbacks(callbacks: list[CustomLogger]):
+    import datetime
+
+    obj = LitellmLogging(
+        model="anthropic/claude-opus-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="slot-leak-test",
+        function_id="slot-leak-test",
+    )
+    obj.model_call_details["litellm_params"] = {"metadata": {}}
+    return patch.object(obj, "get_combined_callback_list", return_value=callbacks), obj
+
+
+def _assembled_stream_result():
+    response = ModelResponse()
+    response.choices[0].message.content = "hello"
+    return response
+
+
+@pytest.mark.asyncio
+async def test_streaming_success_callbacks_survive_logging_hook_failure():
+    """Regression for leaked max_parallel_requests slots: a raising
+    async_logging_hook must not abort the success-callback loop that
+    releases the rate-limiter slot."""
+    broken = CustomLogger()
+    broken.async_logging_hook = AsyncMock(side_effect=RuntimeError("broken stream payload"))
+    releasing = CustomLogger()
+    releasing.async_log_success_event = AsyncMock()
+
+    patcher, logging_obj = _streaming_logging_obj_with_callbacks([broken, releasing])
+    with patcher:
+        await logging_obj.async_success_handler(result=_assembled_stream_result())
+
+    releasing.async_log_success_event.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_streaming_success_callbacks_survive_cost_calculation_failure():
+    releasing = CustomLogger()
+    releasing.async_log_success_event = AsyncMock()
+
+    patcher, logging_obj = _streaming_logging_obj_with_callbacks([releasing])
+    with patcher, patch.object(
+        logging_obj, "_response_cost_calculator", side_effect=ValueError("bad usage block")
+    ):
+        await logging_obj.async_success_handler(result=_assembled_stream_result())
+
+    assert logging_obj.model_call_details["response_cost"] is None
+    releasing.async_log_success_event.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_streaming_success_callbacks_survive_standard_logging_payload_failure():
+    releasing = CustomLogger()
+    releasing.async_log_success_event = AsyncMock()
+
+    patcher, logging_obj = _streaming_logging_obj_with_callbacks([releasing])
+    with patcher, patch.object(
+        logging_obj, "_build_standard_logging_payload", side_effect=ValueError("incomplete stream")
+    ):
+        await logging_obj.async_success_handler(result=_assembled_stream_result())
+
+    assert logging_obj.model_call_details.get("standard_logging_object") is None
+    releasing.async_log_success_event.assert_awaited_once()
+
+
 def _resolve(custom_llm_provider, litellm_params, optional_params, model):
     from litellm.litellm_core_utils.litellm_logging import (
         _resolve_vertex_location_for_cost,
