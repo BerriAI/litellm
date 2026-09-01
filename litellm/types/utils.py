@@ -40,7 +40,7 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-from typing_extensions import ReadOnly, Required, TypedDict
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -2842,6 +2842,11 @@ RoutingDecisionCause = Literal[
     "housekeeping",
     "session_affinity_pin",
     "session_affinity_escalation",
+    # classification_mode 'user_turn': the request is an agent loop's continuation turn (no new
+    # human ask), so the session's held routing decision was replayed and the classifier was never
+    # called. Distinct from "session_affinity_pin", which reports the session_affinity flag pinning
+    # every turn including new asks; this cause only appears when session_affinity is off.
+    "user_turn_continuation",
     "default_fallback",
     "keyword",
     "quality_tier",
@@ -2881,6 +2886,8 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     classifier_model: str
     classifier_cost: float
     escalated: bool
+    context_escalated: bool  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    context_escalation_original_tier: str  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
     reasoning_override_min_score: float  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     conversation_continuing: bool
@@ -2907,6 +2914,8 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "classifier_model",
         "classifier_cost",
         "escalated",
+        "context_escalated",
+        "context_escalation_original_tier",
         "tier_boundaries",
         "reasoning_override_min_score",
         "conversation_continuing",
@@ -3260,6 +3269,7 @@ class StandardLoggingPayload(TypedDict):
     cache_key: str | None
     saved_cache_cost: float
     request_tags: list
+    request_model_access_groups: NotRequired[ReadOnly[Sequence[str]]]
     end_user: str | None
     requester_ip_address: str | None
     user_agent: str | None

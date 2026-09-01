@@ -21,13 +21,10 @@ test.describe("Internal User with team memberships", () => {
     const teamSelect = page.getByTestId("team-dropdown").getByRole("combobox");
     await teamSelect.click();
 
-    const dropdown = page.locator('[data-slot="combobox-content"]:visible').first();
-    await expect(dropdown).toBeVisible({ timeout: 5_000 });
-
     // Both seeded memberships render, and nothing else does — proving the
     // dropdown is scoped to the user's teams rather than empty or unfiltered.
-    await expect(dropdown.getByText(E2E_TEAM_CRUD_ALIAS, { exact: true })).toBeVisible({ timeout: 10_000 });
-    await expect(dropdown.getByText(E2E_TEAM_ORG_ALIAS, { exact: true })).toBeVisible();
-    await expect(dropdown.getByRole("option")).toHaveCount(2);
+    await expect(page.getByRole("option", { name: E2E_TEAM_CRUD_ALIAS })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("option", { name: E2E_TEAM_ORG_ALIAS })).toBeVisible();
+    await expect(page.getByRole("option")).toHaveCount(2);
   });
 });

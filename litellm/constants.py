@@ -289,6 +289,7 @@ REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_org_spend_update
 REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_end_user_spend_update_buffer"
 REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_agent_spend_update_buffer"
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_tag_spend_update_buffer"
+REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_window_spend_update_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT: Final = int(os.getenv("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100))
 # Bounds asyncio.Queue() instances (log queues, spend update queues, etc.) to prevent unbounded memory growth
 LITELLM_ASYNCIO_QUEUE_MAXSIZE: Final = int(os.getenv("LITELLM_ASYNCIO_QUEUE_MAXSIZE", 1000))
@@ -483,6 +484,22 @@ FIREWORKS_AI_80_B: Final = int(os.getenv("FIREWORKS_AI_80_B", 80))
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING: Final = "REDACTED_BY_LITELM"
 MAX_LANGFUSE_INITIALIZED_CLIENTS: Final = int(os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50))
+# Backpressure + lifetime bounds for the /v1/messages streaming relay (see
+# BaseAnthropicMessagesStreamingIterator.async_sse_wrapper). The relay queue is
+# bounded so a slow client throttles the upstream pump instead of letting it
+# buffer the whole response in memory; the detached-drain cap bounds how many
+# post-disconnect drains may run concurrently so client behavior can't create
+# unbounded worker state.
+ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE: Final = int(
+    os.getenv("ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", "1024")
+)
+# Setting this to 0 disables detached draining entirely: every post-disconnect
+# pump bills whatever partial output it has already collected and aborts the
+# upstream stream immediately, instead of continuing to drain for the real
+# terminal usage.
+ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS: Final = int(
+    os.getenv("ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", "100")
+)
 LOGGING_WORKER_CONCURRENCY: Final = int(os.getenv("LOGGING_WORKER_CONCURRENCY", 100))  # Must be above 0
 LOGGING_WORKER_MAX_QUEUE_SIZE: Final = int(os.getenv("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000))
 LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = float(os.getenv("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0))
@@ -805,6 +822,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.meta.ai/v1",
     "https://api.cognition.ai/v1",
     "https://api.scx.ai/v1",
+    "https://gigachat.devices.sberbank.ru/api/v1",
 ]
 
 
@@ -1682,6 +1700,7 @@ DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS: Final = 16
 # Ceilings on the cached auth registries; larger tables fall back to per-row lookups
 # instead of holding an unbounded id set in every worker.
 TAG_REGISTRY_MAX_SIZE: Final = 5000
+MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE: Final = 5000
 END_USER_RESTRICTED_REGISTRY_MAX_SIZE: Final = 5000
 # How long a failed registry load is remembered as "unusable", so a degraded Postgres
 # is not re-scanned on every request on top of the per-id lookups it falls back to.
@@ -1726,6 +1745,7 @@ SENTRY_DENYLIST: Final = [
     "jwt_token",
     "private_key",
     "SLACK_WEBHOOK_URL",
+    "ALERTING_WEBHOOK_URL",
     "webhook_url",
     "LANGFUSE_SECRET_KEY",
     # Email Configuration

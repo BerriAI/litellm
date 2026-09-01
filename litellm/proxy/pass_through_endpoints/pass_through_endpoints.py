@@ -49,6 +49,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
 )
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_no_callback_env_reference
+from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -585,6 +586,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         _metadata["user_api_key"] = user_api_key_dict.api_key
         _metadata["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
         _metadata["user_api_key_budget_reservation"] = user_api_key_dict.budget_reservation
+        _metadata[MODEL_ACCESS_GROUP_METADATA_KEY] = user_api_key_dict.matched_model_access_groups
         # The per-model budget counters are keyed off these. get_sanitized_user_information_from_key
         # returns StandardLoggingUserAPIKeyMetadata, which carries no budget field, so without this
         # the post-call increment finds nothing and every passthrough request goes untracked and

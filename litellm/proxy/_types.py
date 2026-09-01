@@ -241,6 +241,7 @@ class Litellm_EntityType(enum.Enum):
     PROJECT = "project"
     TAG = "tag"
     AGENT = "agent"
+    MODEL_ACCESS_GROUP = "model_access_group"
 
     # global proxy level entity
     PROXY = "proxy"
@@ -421,6 +422,9 @@ class LiteLLMRoutes(enum.Enum):
         "/responses/{response_id}/cancel",
         "/v1/responses/{response_id}/cancel",
         "/openai/v1/responses/{response_id}/cancel",
+        "/responses/input_tokens",
+        "/v1/responses/input_tokens",
+        "/openai/v1/responses/input_tokens",
         # vector stores
         "/vector_stores",
         "/v1/vector_stores",
@@ -470,6 +474,7 @@ class LiteLLMRoutes(enum.Enum):
         "/vllm",
         "/mistral",
         "/milvus",
+        "/gigachat",
         "/watsonx",
     ]
 
@@ -1405,15 +1410,15 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
     approval_status: str | None = Field(
-        None,
+        default=None,
         description="Server-managed: set by the endpoint; caller values are overridden.",
     )
     submitted_by: str | None = Field(
-        None,
+        default=None,
         description="Server-managed: set by the endpoint; caller values are overridden.",
     )
     submitted_at: datetime | None = Field(
-        None,
+        default=None,
         description="Server-managed: set by the endpoint; caller values are overridden.",
     )
 
@@ -2540,7 +2545,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     alerting: list | None = Field(
         None,
-        description="List of alerting integrations. Today, just slack - `alerting: ['slack']`",
+        description="List of alerting integrations - e.g. `alerting: ['slack', 'webhook', 'email']`. 'slack' posts Slack-format messages to any Slack-compatible webhook (Slack, Rocket.Chat, Mattermost); 'webhook' posts structured JSON budget alerts to WEBHOOK_URL",
     )
     alert_types: list[AlertType] | None = Field(
         None,
@@ -2887,6 +2892,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         ),
     )
     budget_reservation: dict[str, Any] | None = Field(default=None, exclude=True)
+    matched_model_access_groups: list[str] | None = Field(default=None, exclude=True)
     budget_throttle_pct: float | None = Field(default=None, exclude=True)
     user: Any | None = None  # Expanded user object when expand=user is used
     created_by_user: Any | None = None  # Expanded created_by user when expand=user is used
@@ -3547,6 +3553,19 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
     )
 
 
+class SpendLogsRouterMetadata(TypedDict):
+    """
+    Router provenance stamped on spend logs for deployments flagged with
+    model_info.internal_router_model, correlating the requested model group
+    with the provider deployment that served the call
+    """
+
+    requested_model: ReadOnly[str | None]
+    selected_model: ReadOnly[str | None]
+    selected_provider: ReadOnly[str | None]
+    router_correlation_id: ReadOnly[str | None]
+
+
 class SpendLogsMetadata(TypedDict):
     """
     Specific metadata k,v pairs logged to spendlogs for easier cost tracking
@@ -3589,6 +3608,7 @@ class SpendLogsMetadata(TypedDict):
     compression_savings: CompressionSavingsMetadata | None
     autorouter_savings: ReadOnly[float | None]  # stamped by the logging payload; None = not auto-routed
     litellm_gateway_injected_cache: ReadOnly[str | None]
+    router_metadata: ReadOnly[SpendLogsRouterMetadata | None]  # None = deployment not flagged internal_router_model
 
 
 class SpendLogsPayload(TypedDict):
@@ -4921,6 +4941,7 @@ class DBSpendUpdateTransactions(TypedDict):
     org_list_transactions: dict[str, float] | None
     tag_list_transactions: dict[str, float] | None
     agent_list_transactions: dict[str, float] | None
+    model_access_group_list_transactions: ReadOnly[dict[str, float] | None]
 
 
 class SpendUpdateQueueItem(TypedDict, total=False):

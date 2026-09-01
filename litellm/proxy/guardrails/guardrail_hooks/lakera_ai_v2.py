@@ -191,6 +191,25 @@ def _breakdown_has_pii_violation(lakera_response: LakeraAIResponse | None) -> bo
     )
 
 
+def _unmaskable_reason(
+    guardrail: "LakeraAIGuardrail",
+    data: dict[str, object],
+    lakera_response: LakeraAIResponse | None,
+) -> str | None:
+    """Why a PII-only violation on ``data`` can't be masked in place, or None when it can."""
+    if has_non_string_content(data):
+        return "multimodal content, masking would drop the image/audio parts"
+    if _has_combined_messages_and_input(data):
+        return "messages and input are both present, so the write-back is positionally ambiguous"
+    if "messages" in data and not isinstance(data.get("messages"), list):
+        return "a messages key that isn't a list, so there's nothing to merge the redacted content into"
+    if not _has_responses_instructions(guardrail, data):
+        return "no write-back path for the redacted content"
+    if not (lakera_response or {}).get("payload"):
+        return "Lakera reported no locations to redact, so payload=true is likely off"
+    return None
+
+
 def _build_lakera_inspection_messages(data: Mapping[str, object]) -> Sequence[Mapping[str, str]]:
     """Like build_inspection_messages, but also covers the Responses-API
     ``instructions`` field, placed first since litellm later converts it
@@ -473,6 +492,32 @@ class LakeraAIGuardrail(CustomGuardrail):
             msg["content"] = content
         return messages
 
+    def _mask_unwritable_instructions_pii_in_place(
+        self,
+        data: dict[str, object],  # mutable-ok: writes the redacted result back into the caller's request dict in place
+        inspected_messages: Sequence[AllMessageValues],
+        lakera_response: LakeraAIResponse | None,
+        masked_entity_count: dict[str, int],
+    ) -> bool:
+        """Mask a body whose only obstacle to mask-in-place is the Responses-API
+        ``instructions`` field, writing the redacted instructions straight into
+        ``data["instructions"]``: apply_redacted_messages_back has no path for
+        that field and would fold the instructions text into ``data["input"]``.
+        Returns False without masking anything when _unmaskable_reason names an
+        obstacle this can't get around."""
+        if _unmaskable_reason(self, data, lakera_response) is not None:
+            return False
+        redacted: Final = self._mask_pii_in_messages(
+            messages=inspected_messages,
+            lakera_response=lakera_response,
+            masked_entity_count=masked_entity_count,
+        )
+        # _build_lakera_inspection_messages puts instructions first and
+        # _filter_skipped_messages kept it, so index 0 is the instructions.
+        data["instructions"] = redacted[0]["content"]
+        _apply_redacted_messages_back_preserving_fields(self, data, redacted[1:])
+        return True
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -537,11 +582,12 @@ class LakeraAIGuardrail(CustomGuardrail):
         ########## 2. Handle flagged content ##########
         #########################################################
         if lakera_guardrail_response.get("flagged") is True:
+            is_pii_only_violation: Final = self._is_only_pii_violation(lakera_guardrail_response)
             # PII-only violations get masked in place regardless of on_flagged: there's
             # no reason to expose raw PII to satisfy an advisory note, and masking is
             # strictly safer than either blocking or appending an advisory message next
             # to unredacted PII.
-            if self._is_only_pii_violation(lakera_guardrail_response) and not is_multimodal_input:
+            if is_pii_only_violation and not is_multimodal_input:
                 redacted_messages: Final = self._mask_pii_in_messages(
                     messages=new_messages,
                     lakera_response=lakera_guardrail_response,
@@ -583,18 +629,35 @@ class LakeraAIGuardrail(CustomGuardrail):
                     # blocking rather than silently letting the flagged request
                     # through with no advisory ever reaching the model.
                     raise self._get_http_exception_for_blocked_guardrail(lakera_guardrail_response)
-            else:
-                # Check on_flagged setting
-                if self.on_flagged == "monitor":
+            elif self.on_flagged == "monitor":
+                # Monitor means "don't block", not "don't redact": until the mask
+                # branch above started skipping shapes it can't write back to, a
+                # PII-only violation was masked whatever on_flagged said.
+                masked_in_place: Final = is_pii_only_violation and self._mask_unwritable_instructions_pii_in_place(
+                    data=data,
+                    inspected_messages=new_messages,
+                    lakera_response=lakera_guardrail_response,
+                    masked_entity_count=masked_entity_count,
+                )
+                if masked_in_place:
+                    verbose_proxy_logger.warning(
+                        "Lakera Guardrail: Monitoring mode - PII detected, masked in place and allowing request"
+                    )
+                elif is_pii_only_violation:
+                    verbose_proxy_logger.error(
+                        "Lakera Guardrail: Monitoring mode - PII detected but NOT masked, forwarding unredacted "
+                        "content to the model (reason: %s)",
+                        _unmaskable_reason(self, data, lakera_guardrail_response),
+                    )
+                else:
                     verbose_proxy_logger.warning(
                         "Lakera Guardrail: Monitoring mode - violation detected but allowing request"
                     )
-                    # Log violation but continue
-                elif self.on_flagged == "block":
-                    # Either non-PII violations, or PII on multimodal input
-                    # (which cannot be masked in place without dropping
-                    # image/audio parts) — raise the standard block error.
-                    raise self._get_http_exception_for_blocked_guardrail(lakera_guardrail_response)
+            elif self.on_flagged == "block":
+                # Either non-PII violations, or PII on multimodal input
+                # (which cannot be masked in place without dropping
+                # image/audio parts) — raise the standard block error.
+                raise self._get_http_exception_for_blocked_guardrail(lakera_guardrail_response)
 
         #########################################################
         ########## 3. Add the guardrail to the applied guardrails header ##########

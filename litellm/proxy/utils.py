@@ -645,7 +645,7 @@ class ProxyLogging:
         self.max_parallel_request_limiter = _PROXY_MaxParallelRequestsHandler(self.internal_usage_cache)
         self.max_budget_limiter = _PROXY_MaxBudgetLimiter()
         self.cache_control_check = _PROXY_CacheControlCheck()
-        self.alerting: list | None = None
+        self.alerting: list[str] | None = None
         self.alerting_threshold: float = 300  # default to 5 min. threshold
         self.alert_types: list[AlertType] = DEFAULT_ALERT_TYPES
         self.alert_to_webhook_url: dict | None = None
@@ -2364,7 +2364,9 @@ class ProxyLogging:
             # do nothing if alerting is not switched on (unless it's a soft_budget alert with team-specific emails)
             return
 
-        if self.alerting is not None and ("slack" in self.alerting or "ms_teams" in self.alerting):
+        if self.alerting is not None and (
+            "slack" in self.alerting or "ms_teams" in self.alerting or "webhook" in self.alerting
+        ):
             if self.slack_alerting_instance is not None:
                 await self.slack_alerting_instance.budget_alerts(
                     type=type,
@@ -6031,10 +6033,42 @@ def _should_use_smtp_ssl(smtp_port: int) -> bool:
     return os.getenv("SMTP_USE_SSL", "False") == "True" or smtp_port == 465
 
 
-def _create_smtp_connection(smtp_host: str, smtp_port: int) -> smtplib.SMTP:
+def _create_smtp_connection(smtp_host: str, smtp_port: int, timeout: float) -> smtplib.SMTP:
     if _should_use_smtp_ssl(smtp_port=smtp_port):
-        return smtplib.SMTP_SSL(host=smtp_host, port=smtp_port, context=ssl.create_default_context())
-    return smtplib.SMTP(host=smtp_host, port=smtp_port)
+        return smtplib.SMTP_SSL(host=smtp_host, port=smtp_port, context=ssl.create_default_context(), timeout=timeout)
+    return smtplib.SMTP(host=smtp_host, port=smtp_port, timeout=timeout)
+
+
+def _send_smtp_message(
+    email_message: MIMEMultipart,
+    smtp_host: str,
+    smtp_port: int,
+    smtp_username: str | None,
+    smtp_password: str | None,
+    sender_email: str,
+    receiver_email: str,
+    timeout: float,
+) -> None:
+    using_ssl: Final = _should_use_smtp_ssl(smtp_port=smtp_port)
+    with _create_smtp_connection(
+        smtp_host=smtp_host,
+        smtp_port=smtp_port,
+        timeout=timeout,
+    ) as server:
+        if not using_ssl and os.getenv("SMTP_TLS", "True") != "False":
+            server.starttls(context=ssl.create_default_context())
+
+        if smtp_username and smtp_password:
+            server.login(
+                user=smtp_username,
+                password=smtp_password,
+            )
+
+        server.send_message(
+            msg=email_message,
+            from_addr=sender_email,
+            to_addrs=receiver_email,
+        )
 
 
 async def send_email(
@@ -6080,27 +6114,18 @@ async def send_email(
     email_message.attach(MIMEText(html, "html"))
 
     try:
-        using_ssl: Final = _should_use_smtp_ssl(smtp_port=smtp_port)
-        with _create_smtp_connection(
+        smtp_timeout: Final = float(os.getenv("SMTP_TIMEOUT", "30"))
+        await asyncio.to_thread(
+            _send_smtp_message,
+            email_message=email_message,
             smtp_host=smtp_host,
             smtp_port=smtp_port,
-        ) as server:
-            if not using_ssl and os.getenv("SMTP_TLS", "True") != "False":
-                server.starttls(context=ssl.create_default_context())
-
-            # Login to your email account only if smtp_username and smtp_password are provided
-            if smtp_username and smtp_password:
-                server.login(
-                    user=smtp_username,
-                    password=smtp_password,
-                )
-
-            # Send the email
-            server.send_message(
-                msg=email_message,
-                from_addr=sender_email,
-                to_addrs=receiver_email,
-            )
+            smtp_username=smtp_username,
+            smtp_password=smtp_password,
+            sender_email=sender_email,
+            receiver_email=receiver_email,
+            timeout=smtp_timeout,
+        )
 
     except Exception as e:
         verbose_proxy_logger.exception("An error occurred while sending the email:" + str(e))
