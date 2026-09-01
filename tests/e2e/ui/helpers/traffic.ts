@@ -84,6 +84,34 @@ export async function waitForSpendLog(
   throw new Error(`spend log for request ${requestId} never appeared (last /spend/logs status ${lastStatus})`);
 }
 
+export async function waitForSpendLogByPrompt(
+  request: APIRequestContext,
+  prompt: string,
+  timeoutMs = 60_000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let lastStatus = 0;
+  while (Date.now() < deadline) {
+    const res = await request.get(`${rootPath()}/spend/logs`, {
+      headers: { Authorization: `Bearer ${masterKey()}` },
+    });
+    lastStatus = res.status();
+    if (res.ok()) {
+      const rows: { request_id?: string; messages?: unknown; proxy_server_request?: unknown }[] = await res.json();
+      const row = (Array.isArray(rows) ? rows : []).find(
+        (candidate) =>
+          JSON.stringify(candidate.messages ?? "").includes(prompt) ||
+          JSON.stringify(candidate.proxy_server_request ?? "").includes(prompt),
+      );
+      if (row?.request_id) {
+        return row.request_id;
+      }
+    }
+    await new Promise((r) => setTimeout(r, 2_000));
+  }
+  throw new Error(`no spend log row carrying prompt ${prompt} appeared (last /spend/logs status ${lastStatus})`);
+}
+
 const isoDay = (d: Date): string => d.toISOString().slice(0, 10);
 
 /**

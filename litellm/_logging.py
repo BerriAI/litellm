@@ -264,13 +264,17 @@ def _plain_log_format(stdout: TextIO | None, stderr: TextIO | None) -> str:
 
 
 class LevelRoutingStreamHandler(logging.StreamHandler):
-    """Writes records below WARNING to stdout and WARNING and above to stderr.
+    """Writes records below WARNING and invalid-key warnings to stdout, others to stderr.
 
     Collectors that derive severity from the stream report every stderr line as an error.
+    Invalid-key warnings route to stdout so LITELLM_LOG=ERROR can suppress them.
     """
 
     def emit(self, record: logging.LogRecord) -> None:
-        preferred: Final = sys.stdout if record.levelno < logging.WARNING else sys.stderr
+        is_stdout_record: Final = record.levelno < logging.WARNING or (
+            record.levelno == logging.WARNING and record.name == verbose_proxy_stdout_logger.name
+        )
+        preferred: Final = sys.stdout if is_stdout_record else sys.stderr
         if preferred is None or getattr(preferred, "closed", False):
             self.stream = sys.stderr  # rebind-ok: fall back to the pre-fix stream rather than raising per record
         else:
@@ -508,6 +512,9 @@ else:
     handler.setFormatter(formatter)
 
 verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
+# Malformed virtual key rejections log through this child; LevelRoutingStreamHandler
+# writes its WARNING records to stdout. It has no handler or level of its own.
+verbose_proxy_stdout_logger: Final = verbose_proxy_logger.getChild("stdout")
 verbose_router_logger = logging.getLogger("LiteLLM Router")
 verbose_logger = logging.getLogger("LiteLLM")
 
@@ -520,6 +527,7 @@ verbose_logger.addHandler(handler)
 # handlers (JSON mode, uvicorn log config, a host app's root handler).
 verbose_router_logger.addFilter(_stdout_truncation_filter)
 verbose_proxy_logger.addFilter(_stdout_truncation_filter)
+verbose_proxy_stdout_logger.addFilter(_stdout_truncation_filter)
 verbose_logger.addFilter(_stdout_truncation_filter)
 
 
@@ -683,6 +691,7 @@ def _turn_on_json():
     - Adds a JSON formatter to all loggers
     """
     handler: Final = LevelRoutingStreamHandler()
+    handler.setLevel(numeric_level)
     handler.setFormatter(JsonFormatter())
     _initialize_loggers_with_handler(handler)
     # Set up exception handlers
@@ -700,12 +709,14 @@ def _disable_debugging():
     verbose_logger.disabled = True
     verbose_router_logger.disabled = True
     verbose_proxy_logger.disabled = True
+    verbose_proxy_stdout_logger.disabled = True
 
 
 def _enable_debugging():
     verbose_logger.disabled = False
     verbose_router_logger.disabled = False
     verbose_proxy_logger.disabled = False
+    verbose_proxy_stdout_logger.disabled = False
 
 
 def print_verbose(print_statement):

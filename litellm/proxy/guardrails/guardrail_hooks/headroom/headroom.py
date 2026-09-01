@@ -436,7 +436,7 @@ class HeadroomGuardrail(CustomGuardrail):
             payload["model"] = model
 
         try:
-            raw_response: HttpxResponse = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]
+            raw_response: HttpxResponse = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler.post is untyped
                 url=f"{self.headroom_api_base}/v1/compress",
                 json=payload,
                 headers=self._request_headers(),
@@ -573,7 +573,7 @@ class HeadroomGuardrail(CustomGuardrail):
             params["query"] = query
 
         try:
-            raw_response: HttpxResponse = await self.async_handler.get(  # pyright: ignore[reportUnknownMemberType]
+            raw_response: HttpxResponse = await self.async_handler.get(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler.get is untyped
                 url=f"{self.headroom_api_base}/v1/retrieve/{hash_value}",
                 params=params,
                 headers=self._request_headers(),
