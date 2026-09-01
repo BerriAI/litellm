@@ -1416,6 +1416,26 @@ def test_get_provider_rerank_config():
     assert isinstance(config, HostedVLLMRerankConfig)
 
 
+def test_get_provider_text_to_speech_config_vertex_gemini_skips_cloud_tts():
+    """Regression for LIT-6501: mapping vertex Gemini TTS params through Google Cloud TTS
+    dropped response_format before the speech_to_completion bridge could honor it."""
+    from litellm.llms.vertex_ai.text_to_speech.transformation import VertexAITextToSpeechConfig
+    from litellm.utils import LlmProviders
+
+    assert (
+        ProviderConfigManager.get_provider_text_to_speech_config(
+            model="gemini-2.5-flash-preview-tts", provider=LlmProviders.VERTEX_AI
+        )
+        is None
+    )
+    assert isinstance(
+        ProviderConfigManager.get_provider_text_to_speech_config(
+            model="en-US-Studio-O", provider=LlmProviders.VERTEX_AI
+        ),
+        VertexAITextToSpeechConfig,
+    )
+
+
 # Models that should be skipped during testing
 OLD_PROVIDERS = ["aleph_alpha", "palm"]
 SKIP_MODELS = [
