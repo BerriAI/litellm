@@ -641,12 +641,12 @@ def cost_per_token(
         return xai_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "lemonade":
         return lemonade_cost_per_token(model=model, usage=usage_block)
-    elif custom_llm_provider == "dashscope":
+    elif custom_llm_provider in ("dashscope", "qwencloud", "qwen_ai_platform"):
         from litellm.llms.dashscope.cost_calculator import (
             cost_per_token as dashscope_cost_per_token,
         )
 
-        return dashscope_cost_per_token(model=model, usage=usage_block)
+        return dashscope_cost_per_token(model=model, usage=usage_block, custom_llm_provider=custom_llm_provider)
     elif custom_llm_provider == "azure_ai":
         return azure_ai_cost_per_token(
             model=model,
