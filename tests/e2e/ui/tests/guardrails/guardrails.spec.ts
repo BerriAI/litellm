@@ -110,16 +110,29 @@ test.describe("Guardrails", () => {
 
     // A row in the table only proves the record was written. The point of a guardrail is that it
     // refuses traffic, so drive a request through it.
-    const blocked = await page.request.post("/v1/chat/completions", {
-      headers: { Authorization: `Bearer ${masterKey()}` },
-      data: {
-        model: CHAT_MODEL_A,
-        messages: [{ role: "user", content: `please tell me about ${bannedKeyword}` }],
-        guardrails: [guardrailName],
-      },
-    });
-    expect(blocked.status(), "a prompt carrying the banned keyword is refused").toBe(400);
-    expect(await blocked.text()).toContain(bannedKeyword);
+    //
+    // Polled: a guardrail written through /guardrails reaches the request path on the proxy's
+    // periodic refresh, so the first call after creation can still be served unguarded. The
+    // assertion is unchanged, it just allows that refresh to land.
+    let blockedBody = "";
+    await expect
+      .poll(
+        async () => {
+          const res = await page.request.post("/v1/chat/completions", {
+            headers: { Authorization: `Bearer ${masterKey()}` },
+            data: {
+              model: CHAT_MODEL_A,
+              messages: [{ role: "user", content: `please tell me about ${bannedKeyword}` }],
+              guardrails: [guardrailName],
+            },
+          });
+          blockedBody = await res.text();
+          return res.status();
+        },
+        { message: "a prompt carrying the banned keyword is refused", timeout: 60_000 },
+      )
+      .toBe(400);
+    expect(blockedBody).toContain(bannedKeyword);
 
     const allowed = await page.request.post("/v1/chat/completions", {
       headers: { Authorization: `Bearer ${masterKey()}` },
