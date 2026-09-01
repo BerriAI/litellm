@@ -516,24 +516,29 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
             return
 
-        budget: Final = int(thinking.get("budget_tokens") or 0)
-        if budget >= DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET and (
+        effort: Final = AnthropicModelInfo._legacy_budget_to_effort(
+            model=model,
+            budget_tokens=int(thinking.get("budget_tokens") or 0),
+            custom_llm_provider=custom_llm_provider,
+        )
+        existing_output_config: Final = optional_params.get("output_config")
+        optional_params["thinking"] = {"type": "adaptive"}
+        optional_params["output_config"] = {
+            "effort": effort,
+            **(existing_output_config if isinstance(existing_output_config, dict) else MappingProxyType({})),
+        }
+
+    @staticmethod
+    def _legacy_budget_to_effort(model: str, budget_tokens: int, custom_llm_provider: str) -> str:
+        if budget_tokens >= DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET and (
             AnthropicModelInfo._supports_model_capability(model, "supports_xhigh_reasoning_effort", custom_llm_provider)
         ):
-            effort = "xhigh"
-        elif budget >= DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET:
-            effort = "high"
-        elif budget >= DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET:
-            effort = "medium"
-        else:
-            effort = "low"
-
-        optional_params["thinking"] = {"type": "adaptive"}
-        existing_output_config = optional_params.get("output_config")
-        if not isinstance(existing_output_config, dict):
-            existing_output_config = {}
-        existing_output_config.setdefault("effort", effort)
-        optional_params["output_config"] = existing_output_config
+            return "xhigh"
+        if budget_tokens >= DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET:
+            return "high"
+        if budget_tokens >= DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET:
+            return "medium"
+        return "low"
 
     def is_effort_used(
         self,
