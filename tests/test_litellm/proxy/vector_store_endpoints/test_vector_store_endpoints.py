@@ -512,9 +512,9 @@ async def test_update_request_data_resolves_embedding_config_at_use_time():
     persisted."""
     mock_vector_store: LiteLLM_ManagedVectorStore = {
         "vector_store_id": "test_store",
-        "custom_llm_provider": "azure_ai",
+        "custom_llm_provider": "milvus",
         "litellm_params": {
-            "litellm_embedding_model": "azure/text-embedding-3-large",
+            "litellm_embedding_model": "multilingual-e5-large",
             # Note: no litellm_embedding_config persisted
         },
     }
@@ -525,6 +525,7 @@ async def test_update_request_data_resolves_embedding_config_at_use_time():
     )
 
     resolved = {
+        "model": "openai/multilingual-e5-large",
         "api_key": "use-time-resolved-key",
         "api_base": "https://my-azure.example",
         "api_version": "2024-09-01",
@@ -541,8 +542,12 @@ async def test_update_request_data_resolves_embedding_config_at_use_time():
             data={}, vector_store_id="test_store"
         )
 
-    assert result["litellm_embedding_model"] == "azure/text-embedding-3-large"
-    assert result["litellm_embedding_config"] == resolved
+    assert result["litellm_embedding_model"] == "openai/multilingual-e5-large"
+    assert result["litellm_embedding_config"] == {
+        "api_key": "use-time-resolved-key",
+        "api_base": "https://my-azure.example",
+        "api_version": "2024-09-01",
+    }
 
 
 @pytest.mark.asyncio
@@ -571,7 +576,13 @@ async def test_update_request_data_passes_through_legacy_embedding_config():
         mock_vector_store
     )
 
-    resolve_mock = AsyncMock()
+    resolve_mock = AsyncMock(
+        return_value={
+            "model": "azure/text-embedding-3-large",
+            "api_key": "resolved-key",
+            "api_base": "https://resolved-azure.example",
+        }
+    )
 
     with (
         patch.object(litellm, "vector_store_registry", mock_registry),
@@ -584,8 +595,13 @@ async def test_update_request_data_passes_through_legacy_embedding_config():
             data={}, vector_store_id="legacy_store"
         )
 
-    assert result["litellm_embedding_config"] == legacy_config
-    resolve_mock.assert_not_awaited()
+    assert result["litellm_embedding_model"] == "azure/text-embedding-3-large"
+    assert result["litellm_embedding_config"] == {
+        "api_key": "legacy-cleartext-key",
+        "api_base": "https://legacy-azure.example",
+        "api_version": "2024-01-01",
+    }
+    resolve_mock.assert_awaited_once()
 
 
 class TestCheckVectorStorePermission:
@@ -2010,6 +2026,8 @@ async def test_resolve_embedding_config_from_db():
     # Mock database model with litellm_params
     mock_db_model = MagicMock()
     mock_db_model.litellm_params = {
+        "model": "openai/text-embedding-ada-002",
+        "custom_llm_provider": "openai",
         "api_key": "test-api-key",
         "api_base": "https://api.openai.com",
         "api_version": "2024-01-01",
@@ -2028,6 +2046,8 @@ async def test_resolve_embedding_config_from_db():
         )
 
     assert result is not None
+    assert result["model"] == "openai/text-embedding-ada-002"
+    assert result["custom_llm_provider"] == "openai"
     assert result["api_key"] == "test-api-key"
     assert result["api_base"] == "https://api.openai.com"
     assert result["api_version"] == "2024-01-01"
@@ -2164,6 +2184,13 @@ def test_resolve_embedding_config_from_router():
     mock_litellm_params.api_key = "config-api-key"
     mock_litellm_params.api_base = "https://config-api-base.com"
     mock_litellm_params.api_version = "2024-02-01"
+    mock_litellm_params.model_dump.return_value = {
+        "model": "openai/text-embedding-ada-002",
+        "custom_llm_provider": "openai",
+        "api_key": "config-api-key",
+        "api_base": "https://config-api-base.com",
+        "api_version": "2024-02-01",
+    }
 
     mock_deployment = MagicMock(spec=Deployment)
     mock_deployment.litellm_params = mock_litellm_params
@@ -2176,6 +2203,8 @@ def test_resolve_embedding_config_from_router():
     )
 
     assert result is not None
+    assert result["model"] == "openai/text-embedding-ada-002"
+    assert result["custom_llm_provider"] == "openai"
     assert result["api_key"] == "config-api-key"
     assert result["api_base"] == "https://config-api-base.com"
     assert result["api_version"] == "2024-02-01"
@@ -2197,6 +2226,13 @@ def test_resolve_embedding_config_from_router_with_provider_prefix():
     mock_litellm_params.api_key = "azure-api-key"
     mock_litellm_params.api_base = "https://azure-endpoint.openai.azure.com"
     mock_litellm_params.api_version = "2024-02-15"
+    mock_litellm_params.model_dump.return_value = {
+        "model": "azure/text-embedding-3-large",
+        "custom_llm_provider": "azure",
+        "api_key": "azure-api-key",
+        "api_base": "https://azure-endpoint.openai.azure.com",
+        "api_version": "2024-02-15",
+    }
 
     mock_deployment = MagicMock(spec=Deployment)
     mock_deployment.litellm_params = mock_litellm_params
@@ -2239,6 +2275,11 @@ def test_resolve_embedding_config_from_router_handles_os_environ():
     mock_litellm_params.api_key = "os.environ/OPENAI_API_KEY"
     mock_litellm_params.api_base = "https://direct-url.com"
     mock_litellm_params.api_version = None
+    mock_litellm_params.model_dump.return_value = {
+        "model": "openai/text-embedding-ada-002",
+        "api_key": "os.environ/OPENAI_API_KEY",
+        "api_base": "https://direct-url.com",
+    }
 
     mock_deployment = MagicMock(spec=Deployment)
     mock_deployment.litellm_params = mock_litellm_params
@@ -2274,6 +2315,11 @@ async def test_resolve_embedding_config_tries_router_then_db():
     mock_litellm_params.api_key = "router-api-key"
     mock_litellm_params.api_base = "https://router-api-base.com"
     mock_litellm_params.api_version = None
+    mock_litellm_params.model_dump.return_value = {
+        "model": "openai/text-embedding-ada-002",
+        "api_key": "router-api-key",
+        "api_base": "https://router-api-base.com",
+    }
 
     mock_deployment = MagicMock(spec=Deployment)
     mock_deployment.litellm_params = mock_litellm_params
@@ -2310,6 +2356,11 @@ async def test_resolve_embedding_config_caches_result():
     mock_litellm_params.api_key = "router-api-key"
     mock_litellm_params.api_base = "https://router-api-base.com"
     mock_litellm_params.api_version = None
+    mock_litellm_params.model_dump.return_value = {
+        "model": "openai/cached-model",
+        "api_key": "router-api-key",
+        "api_base": "https://router-api-base.com",
+    }
 
     mock_deployment = MagicMock(spec=Deployment)
     mock_deployment.litellm_params = mock_litellm_params
@@ -2395,6 +2446,12 @@ async def test_new_vector_store_auto_resolves_from_router():
     mock_litellm_params.api_key = "router-resolved-api-key"
     mock_litellm_params.api_base = "https://router-resolved-base.com"
     mock_litellm_params.api_version = "2024-03-01"
+    mock_litellm_params.model_dump.return_value = {
+        "model": "openai/config-embedding-model",
+        "api_key": "router-resolved-api-key",
+        "api_base": "https://router-resolved-base.com",
+        "api_version": "2024-03-01",
+    }
 
     mock_deployment = MagicMock(spec=Deployment)
     mock_deployment.litellm_params = mock_litellm_params

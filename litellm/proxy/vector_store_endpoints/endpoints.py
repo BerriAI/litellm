@@ -1,3 +1,4 @@
+from types import MappingProxyType
 from typing import (
     Annotated,
     Any,  # noqa: TID251  # jsonify_object in proxy/utils.py is annotated with a bare dict
@@ -66,29 +67,26 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
 
         if "litellm_params" in vector_store_to_run:
             litellm_params = vector_store_to_run.get("litellm_params", {}) or {}
-            # Resolve ``litellm_embedding_config`` here, at request-handling
-            # time, instead of at row-creation time. The resolved
-            # ``api_key`` / ``api_base`` / ``api_version`` lives only in
-            # this per-request ``data`` dict and is never persisted.
-            # Legacy rows that already carry a resolved (cleartext)
-            # ``litellm_embedding_config`` skip the lookup and pass through
-            # unchanged so the embed call keeps working.
             embedding_model: Final = litellm_params.get("litellm_embedding_model")
-            if embedding_model and not litellm_params.get("litellm_embedding_config"):
+            if embedding_model:
                 from litellm.proxy.proxy_server import prisma_client
 
                 resolved_config: Final = await _resolve_embedding_config(
                     embedding_model=embedding_model, prisma_client=prisma_client
                 )
                 if resolved_config:
-                    # Build a fresh dict via spread instead of mutating
-                    # ``litellm_params`` in place — the registry hands back
-                    # a reference to its cached object, so an in-place
-                    # update would persist the resolved cleartext into the
-                    # in-memory cache for the lifetime of the process.
+                    embedding_config: Final = MappingProxyType(
+                        {
+                            **resolved_config,
+                            **(litellm_params.get("litellm_embedding_config") or MappingProxyType({})),
+                        }
+                    )
                     litellm_params = {
                         **litellm_params,
-                        "litellm_embedding_config": resolved_config,
+                        "litellm_embedding_model": embedding_config.get("model", embedding_model),
+                        "litellm_embedding_config": {
+                            key: value for key, value in embedding_config.items() if key != "model"
+                        },
                     }
             data.update(litellm_params)
     return data
