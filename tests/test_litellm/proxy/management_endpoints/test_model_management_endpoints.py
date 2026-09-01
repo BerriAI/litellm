@@ -263,6 +263,36 @@ class TestModelManagementAuthChecks:
             )
         assert "403" in str(exc_info.value)
 
+    def test_can_user_attach_credential_admin_success(self):
+        result = ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=LiteLLM_Params(model="test_model", litellm_credential_name="shared-credential"),
+            user_api_key_dict=self.admin_user,
+        )
+        assert result is True
+
+    def test_can_user_attach_credential_without_credential_allows_any_role(self):
+        result = ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=LiteLLM_Params(model="test_model"),
+            user_api_key_dict=self.team_admin_user,
+        )
+        assert result is True
+
+    def test_can_user_attach_credential_team_admin_fails(self):
+        with pytest.raises(Exception, match="Only a proxy admin can attach a stored credential") as exc_info:
+            ModelManagementAuthChecks.can_user_attach_credential(
+                litellm_params=LiteLLM_Params(model="test_model", litellm_credential_name="shared-credential"),
+                user_api_key_dict=self.team_admin_user,
+            )
+        assert "403" in str(exc_info.value)
+
+    def test_can_user_attach_credential_internal_user_fails(self):
+        with pytest.raises(Exception, match="Only a proxy admin can attach a stored credential") as exc_info:
+            ModelManagementAuthChecks.can_user_attach_credential(
+                litellm_params=LiteLLM_Params(model="test_model", litellm_credential_name="shared-credential"),
+                user_api_key_dict=self.normal_user,
+            )
+        assert "403" in str(exc_info.value)
+
 
 class MockModelTable:
     def __init__(self, model_aliases: Dict[str, str], include: Optional[dict] = None):

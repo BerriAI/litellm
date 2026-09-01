@@ -701,6 +701,16 @@ async def patch_model(
                 param="blocked",
             )
 
+        if (
+            patch_data.litellm_params is not None
+            and patch_data.litellm_params.litellm_credential_name is not None
+            and patch_data.litellm_params.litellm_credential_name != db_model.litellm_params.litellm_credential_name
+        ):
+            ModelManagementAuthChecks.can_user_attach_credential(
+                litellm_params=patch_data.litellm_params,
+                user_api_key_dict=user_api_key_dict,
+            )
+
         _raise_on_strategy_router_write_violation(
             incoming_params=patch_data.litellm_params,
             existing_params=db_model.litellm_params,
@@ -1465,6 +1475,22 @@ class ModelManagementAuthChecks:
         return True
 
     @staticmethod
+    def can_user_attach_credential(
+        litellm_params: GenericLiteLLMParams | None,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> Literal[True]:
+        if litellm_params is None or litellm_params.litellm_credential_name is None:
+            return True
+        if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+            return True
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": f"Only a proxy admin can attach a stored credential (litellm_credential_name) to a model. Your role={user_api_key_dict.user_role}."
+            },
+        )
+
+    @staticmethod
     async def allow_team_model_action(
         model_params: Deployment | updateDeployment,
         user_api_key_dict: UserAPIKeyAuth,
@@ -1784,6 +1810,11 @@ async def add_new_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+        )
+
+        ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=model_params.litellm_params,
+            user_api_key_dict=user_api_key_dict,
         )
 
         _raise_on_strategy_router_write_violation(
