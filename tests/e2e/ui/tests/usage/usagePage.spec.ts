@@ -35,7 +35,8 @@ const MOCK_DEPLOYMENT = "openai/fake-gpt-4";
 async function createPricedDeployment(
   request: APIRequestContext,
   label: string,
-): Promise<{ modelName: string; modelId: string }> {
+  registerForCleanup: string[],
+): Promise<{ modelName: string }> {
   const modelName = `e2e-usage-priced-${label}`;
   const res = await request.post("/model/new", {
     headers: { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" },
@@ -51,6 +52,8 @@ async function createPricedDeployment(
     },
   });
   expect(res.ok(), `POST /model/new failed (${res.status()}): ${await res.text()}`).toBe(true);
+  // Registered before the wait below, which can fail and would otherwise strand the deployment.
+  registerForCleanup.push((await res.json()).model_info?.id as string);
 
   // /model/new returns once the row is written, but the router only picks the deployment up on its
   // next refresh, so sending traffic straight away can still get "no healthy deployments". A ping
@@ -68,7 +71,7 @@ async function createPricedDeployment(
     )
     .toBe(true);
 
-  return { modelName, modelId: (await res.json()).model_info?.id as string };
+  return { modelName };
 }
 
 test.describe("Usage page", () => {
@@ -100,8 +103,7 @@ test.describe("Usage page", () => {
     // Top Virtual Keys ranks by spend, and every mock deployment costs $0, so once a run has more
     // keys than the list shows, whether this one makes the cut is down to how ties happen to sort.
     // Give it a priced deployment of its own so it earns its place.
-    const { modelName, modelId } = await createPricedDeployment(request, alias);
-    pricedDeployments.push(modelId);
+    const { modelName } = await createPricedDeployment(request, alias, pricedDeployments);
 
     const requestId = await sendChatCompletion(request, {
       model: modelName,

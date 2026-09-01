@@ -36,13 +36,15 @@ async function findKeyByAlias(page: PlaywrightPage, alias: string): Promise<Reco
 }
 
 /** A member this test adds itself, so removing it costs the suite nothing on a retry or a re-run. */
-async function addRemovableMember(page: PlaywrightPage): Promise<string> {
+async function addRemovableMember(page: PlaywrightPage, registerForCleanup: string[]): Promise<string> {
   const userId = `e2e-removable-${Date.now()}`;
   const created = await page.request.post("/user/new", {
     headers: { Authorization: `Bearer ${masterKey()}` },
     data: { user_id: userId, user_role: "internal_user", auto_create_key: false },
   });
   expect(created.ok(), `POST /user/new failed (${created.status()}): ${await created.text()}`).toBe(true);
+  // Registered before member_add, which can fail and would otherwise strand the user.
+  registerForCleanup.push(userId);
 
   const added = await page.request.post("/team/member_add", {
     headers: { Authorization: `Bearer ${masterKey()}` },
@@ -127,8 +129,7 @@ test.describe("Team Admin", () => {
   test("Team admin can remove a member from their team", async ({ page }) => {
     // Removing the seeded member leaves nothing for the next attempt, so the retries CI runs with
     // are guaranteed to fail and the suite cannot run twice against one database. Bring our own.
-    const memberId = await addRemovableMember(page);
-    createdMembers.push(memberId);
+    const memberId = await addRemovableMember(page, createdMembers);
 
     await navigateToPage(page, Page.Teams);
     await dismissFeedbackPopup(page);
