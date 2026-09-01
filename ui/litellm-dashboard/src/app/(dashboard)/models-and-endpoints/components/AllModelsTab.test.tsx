@@ -229,6 +229,25 @@ describe("AllModelsTab", () => {
     expect(lastModelsInfoCall().page).toBe(1);
   });
 
+  it("removes the team filter while viewing all available models", async () => {
+    const user = userEvent.setup();
+    render(<AllModelsTab {...defaultProps} />);
+
+    await user.click(screen.getByTestId("models-team-select"));
+    await user.click(await screen.findByRole("option", { name: "Engineering" }));
+    await waitFor(() => expect(lastModelsInfoCall().teamId).toBe("team-1"));
+
+    await user.click(screen.getByTestId("models-view-select"));
+    await user.click(await screen.findByRole("option", { name: "All Available Models" }));
+
+    await waitFor(() => expect(lastModelsInfoCall().teamId).toBeUndefined());
+
+    await user.click(screen.getByTestId("models-view-select"));
+    await user.click(await screen.findByRole("option", { name: "Current Team Models" }));
+
+    await waitFor(() => expect(lastModelsInfoCall().teamId).toBe("team-1"));
+  });
+
   it("debounces the model name search into the server query", async () => {
     const user = userEvent.setup();
     render(<AllModelsTab {...defaultProps} />);

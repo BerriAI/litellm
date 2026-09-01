@@ -80,7 +80,8 @@ const AllModelsTab = ({
     debouncedUpdateSearch(modelNameSearch);
   }, [modelNameSearch, debouncedUpdateSearch]);
 
-  const teamIdForQuery = selectedTeamValue === PERSONAL_TEAM_VALUE ? undefined : selectedTeamValue;
+  const teamIdForQuery =
+    modelViewMode === "current_team" && selectedTeamValue !== PERSONAL_TEAM_VALUE ? selectedTeamValue : undefined;
   const isConcreteModelGroup =
     Boolean(selectedModelGroup) &&
     selectedModelGroup !== ALL_MODEL_GROUPS_VALUE &&
