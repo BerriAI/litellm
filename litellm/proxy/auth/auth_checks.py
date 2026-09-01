@@ -1013,12 +1013,21 @@ async def common_checks(
             from litellm.proxy.proxy_server import get_current_spend
 
             user_budget: Final = user_object.max_budget
+            if not math.isfinite(user_budget):
+                return
+
             user_spend: Final = await get_current_spend(
                 counter_key=f"spend:user:{user_object.user_id}",
                 fallback_spend=user_object.spend or 0.0,
                 max_budget=user_budget,
             )
-            if math.isfinite(user_budget) and user_spend >= user_budget:
+            _user_max_budget_alert_check(
+                user_id=user_object.user_id,
+                proxy_logging_obj=proxy_logging_obj,
+                spend=user_spend,
+                max_budget=user_budget,
+            )
+            if user_spend >= user_budget:
                 raise litellm.BudgetExceededError(
                     current_cost=user_spend,
                     max_budget=user_budget,
@@ -4920,6 +4929,29 @@ def _merge_budget_alert_email_configs(
     return {
         t: list(dict.fromkeys(global_cfg_normalized.get(t, []) + per_key_cfg_normalized.get(t, []))) for t in thresholds
     }
+
+
+def _user_max_budget_alert_check(
+    user_id: str,
+    proxy_logging_obj: ProxyLogging,
+    spend: float,
+    max_budget: float,
+) -> None:
+    alert_threshold: Final = max_budget * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
+    if spend < alert_threshold:
+        return
+
+    asyncio.create_task(
+        proxy_logging_obj.budget_alerts(
+            type="user_budget",
+            user_info=CallInfo(
+                spend=spend,
+                max_budget=max_budget,
+                user_id=user_id,
+                event_group=Litellm_EntityType.USER,
+            ),
+        )
+    )
 
 
 async def _virtual_key_max_budget_alert_check(
