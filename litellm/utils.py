@@ -2851,10 +2851,9 @@ def _update_dictionary(existing_dict: dict, new_dict: dict) -> dict:
             elif isinstance(v, dict):
                 existing_nested_dict = existing_dict.get(k)
                 if isinstance(existing_nested_dict, dict):
-                    existing_nested_dict.update(v)
-                    existing_dict[k] = existing_nested_dict
+                    existing_dict[k] = {**existing_nested_dict, **v}  # mutable-ok: copy-on-write merge
                 else:
-                    existing_dict[k] = v
+                    existing_dict[k] = dict(v)  # mutable-ok: detached copy, never the caller's dict by reference
             else:
                 existing_dict[k] = v
 

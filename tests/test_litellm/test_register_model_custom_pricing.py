@@ -793,3 +793,101 @@ def test_embedding_direct_sdk_custom_pricing_still_registers_shared_key():
     finally:
         litellm.model_cost.pop(model_key, None)
         _invalidate_model_cost_lowercase_map()
+
+
+def test_update_dictionary_merges_nested_dicts_without_aliasing():
+    """A nested dict must be merged copy-on-write: the pre-existing nested dict
+    object stays untouched, and the caller's incoming nested dict is never
+    inserted by reference into the merged result.
+    """
+    from litellm.utils import _update_dictionary
+
+    existing_nested = {"hours_utc": "01:00-02:00"}
+    existing = {"off_peak_pricing": existing_nested}
+    incoming_nested = {"windows": [{"hours_utc": "16:00-19:00", "weekdays": [2]}]}
+    incoming = {"off_peak_pricing": incoming_nested}
+
+    merged = _update_dictionary(existing, incoming)
+
+    assert merged["off_peak_pricing"] == {
+        "hours_utc": "01:00-02:00",
+        "windows": [{"hours_utc": "16:00-19:00", "weekdays": [2]}],
+    }
+    assert existing_nested == {"hours_utc": "01:00-02:00"}
+    assert merged["off_peak_pricing"] is not incoming_nested
+
+    fresh = _update_dictionary({}, incoming)
+    assert fresh["off_peak_pricing"] == incoming_nested
+    assert fresh["off_peak_pricing"] is not incoming_nested
+
+
+def test_router_deployments_sharing_backend_keep_their_own_off_peak_pricing():
+    """Two deployments of the same backend model with different
+    ``off_peak_pricing`` blocks must each keep their own schedule under their
+    unique model id, and neither block may leak onto the shared backend keys.
+
+    Before the fix, ``register_model`` inserted the first deployment's block by
+    reference into the built-in ``gpt-4o-mini`` entry, and the second
+    deployment's registration merged its keys into that same object, corrupting
+    the first deployment's schedule and polluting the built-in entry.
+    """
+    from litellm import Router
+
+    active_block = {
+        "windows": [{"hours_utc": "16:00-19:00", "weekdays": [2]}],
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 1e-06,
+    }
+    inactive_block = {
+        "hours_utc": "05:00-06:00",
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 1e-06,
+    }
+    shared_keys = ["gpt-4o-mini", "openai/gpt-4o-mini"]
+    deployment_ids = ["offpeak-alias-dep-1", "offpeak-alias-dep-2"]
+    original_entries = _snapshot_model_cost_entries(shared_keys)
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "offpeak-active-weekday",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key-for-registration",
+                },
+                "model_info": {
+                    "id": deployment_ids[0],
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 2e-06,
+                    "off_peak_pricing": dict(active_block),
+                },
+            },
+            {
+                "model_name": "offpeak-inactive-hours",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key-for-registration",
+                },
+                "model_info": {
+                    "id": deployment_ids[1],
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 2e-06,
+                    "off_peak_pricing": dict(inactive_block),
+                },
+            },
+        ]
+    )
+
+    try:
+        registered_first = litellm.model_cost[deployment_ids[0]]["off_peak_pricing"]
+        registered_second = litellm.model_cost[deployment_ids[1]]["off_peak_pricing"]
+        assert registered_first == active_block
+        assert registered_second == inactive_block
+        for shared_key in shared_keys:
+            shared_entry = litellm.model_cost.get(shared_key) or {}
+            assert not shared_entry.get("off_peak_pricing")
+    finally:
+        for deployment_id in deployment_ids:
+            litellm.model_cost.pop(deployment_id, None)
+        _restore_model_cost_entries(original_entries)
+        del router
