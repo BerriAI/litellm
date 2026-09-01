@@ -1,10 +1,13 @@
 """Tests for the shared guardrail content extraction helpers."""
 
+import pytest
+
 from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
     build_inspection_messages,
     has_non_string_content,
     iter_message_text,
+    map_content_text,
     walk_user_text,
 )
 
@@ -584,6 +587,7 @@ def test_apply_redacted_messages_back_skips_input_when_not_string():
 # LIT-4302: custom_tool_call_output walking
 # -------------------------------------------------------------------
 
+
 def test_iter_message_text_walks_custom_tool_call_output():
     """custom_tool_call_output items should yield their output text."""
     data = {
@@ -592,6 +596,7 @@ def test_iter_message_text_walks_custom_tool_call_output():
         ]
     }
     from litellm.proxy.guardrails._content_utils import iter_message_text
+
     texts = list(iter_message_text(data))
     assert "tool-secret" in texts
 
@@ -617,3 +622,71 @@ def test_build_inspection_messages_custom_tool_call_output():
     }
     msgs = build_inspection_messages(data)
     assert any("custom-tool-leak" in m["content"] for m in msgs)
+
+
+# ── map_content_text ────────────────────────────────────────────────────────────
+
+
+def test_map_content_text_transforms_string_and_text_parts_only():
+    content = [
+        {"type": "text", "text": "keep me"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
+        "bare fragment",
+    ]
+    assert map_content_text(content, lambda t: t.upper()) == [
+        {"type": "text", "text": "KEEP ME"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
+        "BARE FRAGMENT",
+    ]
+
+
+def test_map_content_text_does_not_mutate_the_input():
+    content = [{"type": "text", "text": "original"}]
+    map_content_text(content, lambda t: "changed")
+    assert content == [{"type": "text", "text": "original"}]
+
+
+@pytest.mark.parametrize(
+    "content, expected_visits, expected_result",
+    [
+        ("hello", 1, "HELLO"),
+        ("", 0, ""),
+        (None, 0, None),
+        (42, 0, 42),
+        ([{"type": "text", "text": ""}], 0, [{"type": "text", "text": ""}]),
+        ([{"type": "text", "text": None}], 0, [{"type": "text", "text": None}]),
+        ([{"type": "text"}], 0, [{"type": "text"}]),
+        ([{"type": "input_text", "text": "a"}], 1, [{"type": "input_text", "text": "A"}]),
+        ([{"type": "output_text", "text": "a"}], 1, [{"type": "output_text", "text": "A"}]),
+        # _part_text does not gate on the part type: any non-empty text counts.
+        ([{"type": "image_url", "text": "a"}], 1, [{"type": "image_url", "text": "A"}]),
+        (["", "a"], 1, ["", "A"]),
+        ([{"type": "text", "text": "a"}, "b"], 2, [{"type": "text", "text": "A"}, "B"]),
+    ],
+)
+def test_walk_user_text_visit_count_and_result(content, expected_visits, expected_result):
+    """Pin every branch that decides whether a fragment is visited.
+
+    The visited count is the only observable of the empty-string guards, the
+    isinstance(text, str) check and the TEXT_PART_TYPES gate, so dropping any of
+    them has to fail here.
+    """
+    data = {"messages": [{"role": "user", "content": content}]}
+    assert walk_user_text(data, str.upper) == expected_visits
+    assert data["messages"][0]["content"] == expected_result
+
+
+def test_map_content_text_matches_walk_user_text_on_every_shape():
+    """The pure mapper and the in-place walker must agree on what they rewrite."""
+    shapes = [
+        "hello",
+        "",
+        None,
+        [{"type": "text", "text": "a"}, {"type": "image_url", "image_url": {"url": "u"}}],
+        [{"type": "text", "text": ""}, "", "b"],
+        [{"type": "input_text", "text": "c"}, {"type": "output_text", "text": "d"}],
+    ]
+    for shape in shapes:
+        data = {"messages": [{"role": "user", "content": shape}]}
+        walk_user_text(data, str.upper)
+        assert data["messages"][0]["content"] == map_content_text(shape, str.upper)
