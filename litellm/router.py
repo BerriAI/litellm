@@ -84,6 +84,9 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_credentials_in_payload,
     mask_sensitive_structure,
 )
+from litellm.llms.base_llm.vector_store.transformation import (
+    RouterVectorStoreEmbeddingExecutor,
+)
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
@@ -6319,6 +6322,34 @@ class Router:
                 client: object | None = None,
                 **kwargs,
             ):
+                if call_type == "vector_store_search":
+                    metadata: Final = self._vector_store_request_metadata(kwargs)
+                    provider_kwargs: Final = (
+                        {
+                            "custom_llm_provider": custom_llm_provider
+                        }  # mutable-ok: provider kwargs are expanded into the request
+                        if custom_llm_provider is not None
+                        else MappingProxyType({})
+                    )
+                    search_kwargs: Final = {  # mutable-ok: the routed request requires dynamic keyword arguments
+                        **kwargs,
+                        **provider_kwargs,
+                        "_direct_vector_store_embedding_executor": RouterVectorStoreEmbeddingExecutor(
+                            router=self,
+                            metadata=metadata,
+                        ),
+                    }
+                    model: Final = search_kwargs.get("model")
+                    if isinstance(model, str) and model:
+                        routed_kwargs: Final = {  # mutable-ok: model must be removed before expanding routed kwargs
+                            key: value for key, value in search_kwargs.items() if key != "model"
+                        }
+                        return self._generic_api_call_with_fallbacks(
+                            model=model,
+                            original_function=original_function,
+                            **routed_kwargs,
+                        )
+                    return original_function(**search_kwargs)
                 return self._generic_api_call_with_fallbacks(original_function=original_function, **kwargs)
 
             return sync_wrapper
@@ -6512,10 +6543,21 @@ class Router:
                 "avector_store_update",
                 "avector_store_delete",
             ):
+                vector_store_kwargs: Final = (
+                    {  # mutable-ok: the async routed request requires dynamic keyword arguments
+                        **kwargs,
+                        "_direct_vector_store_embedding_executor": RouterVectorStoreEmbeddingExecutor(
+                            router=self,
+                            metadata=self._vector_store_request_metadata(kwargs),
+                        ),
+                    }
+                    if call_type == "avector_store_search"
+                    else kwargs
+                )
                 return await self._init_vector_store_api_endpoints(
                     original_function=original_function,
                     custom_llm_provider=custom_llm_provider,
-                    **kwargs,
+                    **vector_store_kwargs,
                 )
             elif call_type in ("afile_delete", "afile_content"):
                 return await self._ageneric_api_call_with_fallbacks(
@@ -6550,6 +6592,18 @@ class Router:
                 )
 
         return async_wrapper
+
+    @staticmethod
+    def _vector_store_request_metadata(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+        litellm_metadata: Final = kwargs.get("litellm_metadata")
+        if isinstance(litellm_metadata, dict):
+            return cast(  # cast-ok: isinstance validates the runtime dict boundary
+                "dict[str, object]", litellm_metadata
+            )
+        metadata: Final = kwargs.get("metadata")
+        if isinstance(metadata, dict):
+            return cast("dict[str, object]", metadata)  # cast-ok: isinstance validates the runtime dict boundary
+        return MappingProxyType({})
 
     async def _init_vector_store_api_endpoints(
         self,

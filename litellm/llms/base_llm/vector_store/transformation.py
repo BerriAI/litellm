@@ -1,10 +1,14 @@
+from __future__ import annotations
+
 from abc import abstractmethod
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, NoReturn
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, NoReturn, Protocol, runtime_checkable
 
 import httpx
 
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import EmbeddingResponse
 from litellm.types.vector_stores import (
     VECTOR_STORE_OPENAI_PARAMS,
     BaseVectorStoreAuthCredentials,
@@ -17,6 +21,7 @@ from litellm.types.vector_stores import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.router import Router
 
     from ..chat.transformation import BaseLLMException as _BaseLLMException
 
@@ -25,6 +30,58 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
     BaseLLMException = Any
+
+
+@runtime_checkable
+class VectorStoreEmbeddingExecutor(Protocol):
+    def embed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse: ...
+
+    async def aembed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse: ...
+
+
+@dataclass(frozen=True, slots=True)
+class LiteLLMVectorStoreEmbeddingExecutor:
+    def embed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
+        import litellm
+
+        return litellm.embedding(  # pyright: ignore[reportCallIssue, reportUnknownMemberType, reportUnknownVariableType]  # provider kwargs are intentionally dynamic
+            model=model,
+            input=[query],  # mutable-ok: LiteLLM embedding requires a mutable input list
+            **dict(configuration),  # pyright: ignore[reportArgumentType]  # provider-specific embedding config is validated downstream  # mutable-ok: kwargs require a concrete dict
+        )
+
+    async def aembed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
+        import litellm
+
+        return await litellm.aembedding(  # pyright: ignore[reportUnknownMemberType]  # provider kwargs are intentionally dynamic
+            model=model,
+            input=[query],  # mutable-ok: LiteLLM embedding requires a mutable input list
+            **dict(configuration),  # pyright: ignore[reportArgumentType]  # provider-specific embedding config is validated downstream  # mutable-ok: kwargs require a concrete dict
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RouterVectorStoreEmbeddingExecutor:
+    router: Router
+    metadata: Mapping[str, object]
+
+    def embed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
+        if configuration:
+            return LiteLLMVectorStoreEmbeddingExecutor().embed(model, query, configuration)
+        return self.router.embedding(  # pyright: ignore[reportUnknownMemberType]  # Router embedding input retains a legacy untyped list
+            model=model,
+            input=[query],  # mutable-ok: Router embedding requires a mutable input list
+            metadata=dict(self.metadata),  # mutable-ok: Router metadata requires a concrete dict
+        )
+
+    async def aembed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
+        if configuration:
+            return await LiteLLMVectorStoreEmbeddingExecutor().aembed(model, query, configuration)
+        return await self.router.aembedding(  # pyright: ignore[reportUnknownMemberType]  # Router embedding input retains a legacy untyped list
+            model=model,
+            input=[query],  # mutable-ok: Router embedding requires a mutable input list
+            metadata=dict(self.metadata),  # mutable-ok: Router metadata requires a concrete dict
+        )
 
 
 class BaseVectorStoreConfig:
@@ -172,6 +229,7 @@ class BaseDirectVectorStoreConfig(BaseVectorStoreConfig):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: Mapping[str, object],
+        embedding_executor: VectorStoreEmbeddingExecutor | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> VectorStoreSearchResponse:
         pass
@@ -184,6 +242,7 @@ class BaseDirectVectorStoreConfig(BaseVectorStoreConfig):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: Mapping[str, object],
+        embedding_executor: VectorStoreEmbeddingExecutor | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> VectorStoreSearchResponse:
         pass
