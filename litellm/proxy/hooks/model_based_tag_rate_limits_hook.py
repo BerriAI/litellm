@@ -273,7 +273,7 @@ def _entry_applies(entry: TagRateLimitEntry, tags: Sequence[str], key_alias: str
 
 
 def _sub_mapping(container: Mapping[str, object], key: str) -> Mapping[str, object]:
-    value = container.get(key)
+    value: Final = container.get(key)
     return value if isinstance(value, Mapping) else _EMPTY_MAPPING
 
 
@@ -600,7 +600,7 @@ class _LimitsIndex:
 
 
 def _model_name(deployment: Mapping[str, object]) -> str:
-    name = deployment["model_name"]
+    name: Final = deployment["model_name"]
     if not isinstance(name, str):
         raise TypeError(f"deployment model_name must be a string, got {type(name)!r}")
     return name
