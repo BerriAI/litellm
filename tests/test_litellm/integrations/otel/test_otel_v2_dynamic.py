@@ -713,6 +713,51 @@ def test_langfuse_dynamic_endpoint_is_none_without_a_host():
     assert dynamic_otlp_endpoint("langfuse_otel", LANGFUSE_CREDS) is None
 
 
+@pytest.mark.parametrize(
+    "partial",
+    [
+        {},
+        {"langfuse_public_key": "pk"},
+        {"langfuse_secret_key": "sk"},
+    ],
+)
+def test_langfuse_dynamic_endpoint_is_none_without_the_key_pair(partial):
+    """A host without both keys must not move the destination.
+
+    The headers builder needs both keys, so a host on its own would leave the
+    exporter carrying the operator's env-derived Authorization header while
+    pointing it at the caller's host. V1 returns None in the same state.
+    """
+    assert dynamic_otlp_endpoint("langfuse_otel", {**partial, "langfuse_host": "attacker.example.com"}) is None
+
+
+def test_operator_credentials_stay_on_the_operator_endpoint():
+    """A team that sets only a host, and reaches routing via its service name,
+    must not redirect the exporter that still carries the operator's header."""
+    cache = _cache(
+        "langfuse_otel",
+        exporters=[
+            ExporterSpec(
+                kind="otlp_http",
+                endpoint="http://env-host:3100/api/public/otel",
+                headers="Authorization=Basic operator-env",
+                owner="langfuse_otel",
+            )
+        ],
+    )
+    params = {"langfuse_host": "attacker.example.com"}
+    new_cfg = cache._routed_config(
+        cache._credential_headers(params),
+        {},
+        dynamic_otlp_endpoint("langfuse_otel", params),
+        "team-a",
+    )
+    exporter = new_cfg.exporters[0]
+    assert exporter.endpoint == "http://env-host:3100/api/public/otel"
+    assert exporter.headers == "Authorization=Basic operator-env"
+    assert new_cfg.service_name == "team-a"
+
+
 def test_langfuse_host_stamped_onto_owned_exporter_only():
     """A Langfuse key's host must never repoint a co-configured exporter owned by
     a different backend."""

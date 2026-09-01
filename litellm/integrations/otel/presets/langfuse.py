@@ -54,8 +54,14 @@ def langfuse_dynamic_endpoint(params: StandardCallbackDynamicParams) -> str | No
     ``None`` means the request does not move the destination, so the preset's
     env-resolved endpoint stands (V1 parity: ``construct_dynamic_otel_config``
     falls back to the env host when the dynamic params carry no ``langfuse_host``).
+
+    A host only counts alongside the key pair it belongs to, which is the same
+    precondition ``langfuse_dynamic_headers`` applies and the same one V1 applies.
+    A host on its own would move the endpoint while the headers builder returned
+    nothing, so the exporter would keep the operator's env-derived Authorization
+    header and post it to the caller's host.
     """
     host: Final = params.get("langfuse_host")
-    if not host:
+    if not host or not params.get("langfuse_public_key") or not params.get("langfuse_secret_key"):
         return None
     return _V1Langfuse.get_langfuse_otel_endpoint(host)

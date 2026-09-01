@@ -236,8 +236,9 @@ class TenantTracerCache:
         service_name: Final = tenant_service_name(auth_metadata)
         if not credential_headers and not project_headers and service_name is None:
             return TenantRoute(tracer=default, detached=False)
-        # A fixed per-integration region endpoint (New Relic us/eu), never a
-        # caller-supplied host; ``None`` keeps the preset's own endpoint.
+        # A fixed per-integration region endpoint (New Relic us/eu), or the host
+        # the key or team was configured with, which its own credentials come
+        # with; never a host off the request. ``None`` keeps the preset's endpoint.
         endpoint: Final = dynamic_otlp_endpoint(self._callback_name, dynamic_params)
         cache_key: Final = (
             tuple(sorted(credential_headers.items())),
