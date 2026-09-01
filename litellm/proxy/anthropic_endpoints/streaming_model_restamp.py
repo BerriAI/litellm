@@ -8,6 +8,7 @@ provider passthrough path) or as event dicts (fake-stream and agentic paths).
 """
 
 import json
+import re
 from collections.abc import Mapping
 from typing import Final
 
@@ -16,7 +17,7 @@ from pydantic import TypeAdapter, ValidationError
 _MESSAGE_START_EVENT: Final = "message_start"
 _MESSAGE_START_MARKER: Final = b"message_start"
 _SSE_DATA_FIELD: Final = "data:"
-_SSE_FRAME_END: Final = b"\n\n"
+_SSE_FRAME_END_PATTERN: Final = re.compile(rb"\r\n\r\n|\r\r|\n\n")
 _MAX_HELD_BYTES: Final = 65536
 _PING_MARKERS: Final = (b"event: ping", b'"type": "ping"', b'"type":"ping"')
 
@@ -46,15 +47,16 @@ def _restamped_data_line(line: str, requested_model: str) -> str | None:
     restamped: Final = _restamped_event(event, requested_model)
     if restamped is None:
         return None
-    return f"data: {json.dumps(restamped, separators=(',', ':'))}"
+    terminator: Final = line[len(line.rstrip("\r\n")) :]
+    return f"data: {json.dumps(restamped, separators=(',', ':'))}{terminator}"
 
 
 def _restamped_frame(frame: str, requested_model: str) -> str | None:
-    lines: Final = frame.split("\n")
+    lines: Final = frame.splitlines(keepends=True)
     restamped: Final = tuple(_restamped_data_line(line, requested_model) for line in lines)
     if all(line is None for line in restamped):
         return None
-    return "\n".join(new if new is not None else old for new, old in zip(restamped, lines))
+    return "".join(new if new is not None else old for new, old in zip(restamped, lines))
 
 
 def restamp_anthropic_stream_chunk_model(chunk: object, requested_model: str) -> object:
@@ -93,10 +95,12 @@ class AnthropicStreamModelRestamper:
     """
     Per-stream restamper for the encoded passthrough path, where chunks are raw
     transport reads: the ``message_start`` SSE frame can arrive split across
-    chunks or coalesced with later frames. Complete frames are emitted as their
-    terminator closes them and an incomplete tail is held until it completes,
-    so the restamp never misses a torn frame. Once ``message_start`` has been
-    handled, or the first real event proves the stream carries none, every
+    chunks or coalesced with later frames. Complete frames (``\\n\\n``,
+    ``\\r\\n\\r\\n``, or ``\\r\\r`` terminated) are emitted as their terminator
+    closes them and an incomplete tail is held until it completes, so the
+    restamp never misses a torn frame; ``flush`` returns whatever is still held
+    when the stream ends so no bytes are swallowed. Once ``message_start`` has
+    been handled, or the first real event proves the stream carries none, every
     later chunk passes through untouched.
     """
 
@@ -117,17 +121,27 @@ class AnthropicStreamModelRestamper:
             self._armed = False
         return restamped
 
+    def flush(self) -> bytes:
+        held: Final = self._held
+        self._held = b""
+        self._armed = False
+        if not held:
+            return b""
+        restamped: Final = restamp_anthropic_stream_chunk_model(held, self._requested_model)
+        return restamped if isinstance(restamped, bytes) else held
+
     def _process_encoded(self, data: bytes) -> bytes:
         combined: Final = self._held + data
-        if _SSE_FRAME_END not in combined:
+        boundaries: Final = tuple(match.end() for match in _SSE_FRAME_END_PATTERN.finditer(combined))
+        if not boundaries:
             if len(combined) > _MAX_HELD_BYTES:
                 self._held = b""
                 self._armed = False
                 return combined
             self._held = combined
             return b""
-        closed, _, tail = combined.rpartition(_SSE_FRAME_END)
-        emitted: Final = self._restamped_closed_block(closed + _SSE_FRAME_END)
+        emitted: Final = self._restamped_closed_block(combined[: boundaries[-1]])
+        tail: Final = combined[boundaries[-1] :]
         if not self._armed:
             self._held = b""
             return emitted + tail
@@ -135,7 +149,8 @@ class AnthropicStreamModelRestamper:
         return emitted
 
     def _restamped_closed_block(self, closed: bytes) -> bytes:
-        frames: Final = tuple(closed.split(_SSE_FRAME_END)[:-1])
+        boundaries: Final = tuple(match.end() for match in _SSE_FRAME_END_PATTERN.finditer(closed))
+        frames: Final = tuple(closed[start:end] for start, end in zip((0, *boundaries[:-1]), boundaries))
         decider: Final = next(
             (
                 index
@@ -147,13 +162,13 @@ class AnthropicStreamModelRestamper:
         if decider is None:
             return closed
         self._armed = False
-        decider_frame: Final = frames[decider] + _SSE_FRAME_END
-        if _MESSAGE_START_MARKER not in decider_frame:
+        if _MESSAGE_START_MARKER not in frames[decider]:
             return closed
-        restamped_text: Final = _restamped_frame(decider_frame.decode("utf-8", errors="ignore"), self._requested_model)
+        restamped_text: Final = _restamped_frame(
+            frames[decider].decode("utf-8", errors="ignore"), self._requested_model
+        )
         if restamped_text is None:
             return closed
         return b"".join(
-            restamped_text.encode("utf-8") if index == decider else frame + _SSE_FRAME_END
-            for index, frame in enumerate(frames)
+            restamped_text.encode("utf-8") if index == decider else frame for index, frame in enumerate(frames)
         )

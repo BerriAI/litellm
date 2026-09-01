@@ -14,12 +14,12 @@ from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
 
-def _message_start_frame(model: str) -> bytes:
+def _message_start_frame(model: str, line_end: str = "\n") -> bytes:
     payload = {
         "type": "message_start",
         "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": model, "content": []},
     }
-    return f"event: message_start\ndata: {json.dumps(payload)}\n\n".encode()
+    return f"event: message_start{line_end}data: {json.dumps(payload)}{line_end}{line_end}".encode()
 
 
 def _proxy_logging_obj_streaming(frames: list[bytes]) -> MagicMock:
@@ -190,3 +190,99 @@ async def test_sse_generator_restamps_message_start_split_across_chunks():
 
     joined = b"".join(chunk if isinstance(chunk, bytes) else chunk.encode("utf-8") for chunk in chunks)
     assert _model_from_frame(joined) == "claude-auto-1"
+
+
+def test_restamps_crlf_terminated_message_start_frame():
+    frame = _message_start_frame("claude-haiku-4-5-20251001", line_end="\r\n")
+    delta = b'event: content_block_delta\r\ndata: {"type":"content_block_delta","delta":{"text":"hi"}}\r\n\r\n'
+    restamper = AnthropicStreamModelRestamper("claude-auto-1")
+
+    emitted = restamper.process(frame)
+
+    assert isinstance(emitted, bytes)
+    assert _model_from_frame(emitted) == "claude-auto-1"
+    assert emitted.endswith(b"\r\n\r\n")
+    assert restamper.process(delta) == delta
+
+
+def test_restamps_cr_terminated_message_start_frame():
+    frame = _message_start_frame("claude-haiku-4-5-20251001", line_end="\r")
+    restamper = AnthropicStreamModelRestamper("claude-auto-1")
+
+    emitted = restamper.process(frame)
+
+    assert isinstance(emitted, bytes)
+    assert b'"model":"claude-auto-1"' in emitted
+    assert emitted.endswith(b"\r\r")
+
+
+def test_restamps_crlf_message_start_split_across_transport_chunks():
+    frame = _message_start_frame("claude-haiku-4-5-20251001", line_end="\r\n")
+    restamper = AnthropicStreamModelRestamper("claude-auto-1")
+
+    held = restamper.process(frame[:25])
+    emitted = restamper.process(frame[25:])
+
+    assert held == b""
+    assert isinstance(emitted, bytes)
+    assert _model_from_frame(emitted) == "claude-auto-1"
+
+
+def test_flush_returns_restamped_held_tail():
+    unterminated = _message_start_frame("claude-haiku-4-5-20251001")[:-2]
+    restamper = AnthropicStreamModelRestamper("claude-auto-1")
+
+    assert restamper.process(unterminated) == b""
+    flushed = restamper.flush()
+
+    assert b'"model":"claude-auto-1"' in flushed
+    assert restamper.flush() == b""
+
+
+def test_flush_disarms_the_restamper():
+    restamper = AnthropicStreamModelRestamper("claude-auto-1")
+    frame = _message_start_frame("claude-haiku-4-5-20251001")
+
+    assert restamper.flush() == b""
+    assert restamper.process(frame) == frame
+
+
+@pytest.mark.asyncio
+async def test_sse_generator_flushes_held_tail_at_end_of_stream():
+    unterminated = _message_start_frame("claude-haiku-4-5-20251001")[:-2]
+    proxy_logging_obj = _proxy_logging_obj_streaming([unterminated])
+
+    chunks = [
+        chunk
+        async for chunk in ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+            response=MagicMock(),
+            user_api_key_dict=MagicMock(),
+            request_data={"model": "claude-auto-1"},
+            proxy_logging_obj=proxy_logging_obj,
+            restamp_model="claude-auto-1",
+        )
+    ]
+
+    joined = b"".join(chunk if isinstance(chunk, bytes) else chunk.encode("utf-8") for chunk in chunks)
+    assert b'"model":"claude-auto-1"' in joined
+
+
+@pytest.mark.asyncio
+async def test_sse_generator_restamps_crlf_stream():
+    frame = _message_start_frame("claude-haiku-4-5-20251001", line_end="\r\n")
+    delta = b'event: content_block_delta\r\ndata: {"type":"content_block_delta","delta":{"text":"hi"}}\r\n\r\n'
+    proxy_logging_obj = _proxy_logging_obj_streaming([frame, delta])
+
+    chunks = [
+        chunk
+        async for chunk in ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+            response=MagicMock(),
+            user_api_key_dict=MagicMock(),
+            request_data={"model": "claude-auto-1"},
+            proxy_logging_obj=proxy_logging_obj,
+            restamp_model="claude-auto-1",
+        )
+    ]
+
+    assert _model_from_frame(chunks[0]) == "claude-auto-1"
+    assert chunks[1] == delta
