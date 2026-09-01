@@ -221,6 +221,35 @@ def test_anthropic_tool_roundtrip_and_schema_use_responses_format():
             "strict": False,
         }
     ]
+    assert OpenAICountTokensConfig._transform_tools_for_responses_api(
+        tools
+        + [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_forecast",
+                    "description": "Get forecast",
+                    "parameters": {"type": "object"},
+                    "strict": True,
+                },
+            }
+        ]
+    ) == [
+        {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get weather",
+            "parameters": tools[0]["input_schema"],
+            "strict": False,
+        },
+        {
+            "type": "function",
+            "name": "get_forecast",
+            "description": "Get forecast",
+            "parameters": {"type": "object"},
+            "strict": True,
+        },
+    ]
     assert (
         OpenAICountTokensConfig.system_to_instructions(
             [

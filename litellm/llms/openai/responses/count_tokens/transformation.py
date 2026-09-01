@@ -170,17 +170,18 @@ class OpenAICountTokensConfig:
         Chat format:  {"type": "function", "function": {"name": "...", "parameters": {...}}}
         Responses format: {"type": "function", "name": "...", "parameters": {...}}
         """
-        if any("input_schema" in tool for tool in tools):
-            return LiteLLMAnthropicToResponsesAPIAdapter().translate_tools_to_responses_api(
-                cast(  # cast-ok: input_schema identifies the Anthropic tool surface
-                    list[AllAnthropicToolsValues],
-                    tools,
-                )
-            )
-
         transformed: Final = []
         for tool in tools:
-            if tool.get("type") == "function" and "function" in tool:
+            if "input_schema" in tool:
+                transformed.extend(
+                    LiteLLMAnthropicToResponsesAPIAdapter().translate_tools_to_responses_api(
+                        cast(  # cast-ok: input_schema identifies the Anthropic tool surface
+                            list[AllAnthropicToolsValues],
+                            [tool],  # mutable-ok: adapter accepts batches; one item preserves mixed formats
+                        )
+                    )
+                )
+            elif tool.get("type") == "function" and "function" in tool:
                 func = tool["function"]
                 item: dict[str, Any] = {
                     "type": "function",
