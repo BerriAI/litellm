@@ -1,4 +1,4 @@
-import { CircleCheck, ChevronDown, TriangleAlert, X } from "lucide-react";
+import { CircleCheck, ChevronDown, MinusCircle, TriangleAlert, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import moment from "moment";
 import React, { useState } from "react";
@@ -10,9 +10,16 @@ import type { LogEntry as ViewLogsLogEntry } from "@/components/view_logs/column
 import type { LogEntry } from "./mockData";
 
 const actionConfig: Record<
-  "blocked" | "passed" | "flagged",
+  "blocked" | "passed" | "flagged" | "not_run",
   { icon: React.ElementType; color: string; bg: string; border: string; label: string }
 > = {
+  not_run: {
+    icon: MinusCircle,
+    color: "text-muted-foreground",
+    bg: "bg-muted",
+    border: "border-border",
+    label: "Not run",
+  },
   blocked: {
     icon: X,
     color: "text-destructive",

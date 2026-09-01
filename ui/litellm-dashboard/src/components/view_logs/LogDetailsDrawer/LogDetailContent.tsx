@@ -636,7 +636,9 @@ function RequestResponseSection({
 }
 
 export function GuardrailJumpLink({ guardrailEntries }: { guardrailEntries: any[] }) {
-  const allPassed = guardrailEntries.every((e) => {
+  // a not_run entry never evaluated the request, so it neither passes nor fails the banner
+  const evaluated = guardrailEntries.filter((e) => (e?.guardrail_status || e?.status) !== "not_run");
+  const allPassed = evaluated.every((e) => {
     const status = e?.guardrail_status || e?.status;
     return status === "pass" || status === "passed" || status === "success";
   });
