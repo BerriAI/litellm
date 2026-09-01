@@ -1,6 +1,7 @@
 import asyncio
 import datetime as real_datetime
 import smtplib
+import time
 
 import pytest
 from fastapi import HTTPException
@@ -2061,3 +2062,39 @@ async def test_during_call_hook_block_wins_over_reroute(install_guardrails):
 
     assert exc_info.value.status_code == 400
     assert "blocked by guardrail" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_block_does_not_wait_for_slower_guardrail(install_guardrails):
+    """A block is surfaced immediately: this hook races the provider call, so holding the
+    rejection for a slow sibling gives the provider call time to complete and bill."""
+    execution_order = []
+    install_guardrails(
+        [
+            _UnifiedDuringCallGuardrail(
+                "blocker",
+                execution_order,
+                sleep=0,
+                raise_exc=HTTPException(status_code=400, detail="blocked by guardrail"),
+            ),
+            _UnifiedDuringCallGuardrail("slowpoke", execution_order, sleep=5),
+        ]
+    )
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+
+    start = time.monotonic()
+    with pytest.raises(HTTPException) as exc_info:
+        await proxy_logging_obj.during_call_hook(
+            data=_during_call_request_data(),
+            user_api_key_dict=_during_call_key(),
+            call_type="acompletion",
+        )
+    elapsed = time.monotonic() - start
+
+    assert exc_info.value.status_code == 400
+    assert elapsed < 1, f"block waited {elapsed:.2f}s for the slower guardrail"
+    # The abandoned guardrail is cancelled, not left running as an unobserved
+    # background task that finishes its scan after the request was rejected.
+    assert "slowpoke_start" in execution_order
+    await asyncio.sleep(0.05)
+    assert "slowpoke_end" not in execution_order
