@@ -13,12 +13,13 @@
  * prefixes are matched first, and only a bare `auto_router/<name>` is the semantic router.
  */
 
-export type AutoRouterKind = "complexity" | "adaptive" | "quality" | "semantic";
+export type AutoRouterKind = "complexity" | "capability" | "adaptive" | "quality" | "semantic";
 
 export interface AutoRouterParams {
   model?: string | null;
   complexity_router_config?: unknown;
   complexity_router_default_model?: string | null;
+  capability_router_config?: unknown;
   auto_router_config?: unknown;
   auto_router_default_model?: string | null;
   adaptive_router_config?: unknown;
@@ -32,7 +33,7 @@ export interface AutoRouterStrategy {
   /** Type-pill label. The complexity router overrides this with its classifier. */
   label: string;
   configKey: keyof AutoRouterParams;
-  defaultModelKey: keyof AutoRouterParams;
+  defaultModelKey?: keyof AutoRouterParams;
   /** Whether the dashboard has a form that understands this strategy's config shape. */
   hasEditor: boolean;
   matches: (params: AutoRouterParams) => boolean;
@@ -42,6 +43,13 @@ const startsWith = (params: AutoRouterParams, prefix: string): boolean => params
 
 /** Ordered; the semantic entry matches anything left and must stay last. */
 export const AUTO_ROUTER_STRATEGIES: readonly AutoRouterStrategy[] = [
+  {
+    kind: "capability",
+    label: "Capability",
+    configKey: "capability_router_config",
+    hasEditor: true,
+    matches: (p) => startsWith(p, "auto_router/capability_router") || p.capability_router_config != null,
+  },
   {
     kind: "complexity",
     label: "Complexity",
@@ -84,10 +92,14 @@ export const autoRouterStrategy = (params: AutoRouterParams | null | undefined):
 export const isComplexityRouter = (params: AutoRouterParams | null | undefined): boolean =>
   autoRouterStrategy(params).kind === "complexity";
 
+export const isCapabilityRouter = (params: AutoRouterParams | null | undefined): boolean =>
+  autoRouterStrategy(params).kind === "capability";
+
 /** Any `auto_router/*` deployment, whatever its strategy. Use for listing and filtering. */
 export const isAutoRouterDeployment = (params: AutoRouterParams | null | undefined): boolean =>
   params?.model?.startsWith("auto_router/") === true ||
   params?.complexity_router_config != null ||
+  params?.capability_router_config != null ||
   params?.auto_router_config != null;
 
 /**

@@ -7,10 +7,12 @@ import RoutingDecisionCard from "@/components/view_logs/LogDetailsDrawer/Routing
 import { AutoRouterRoutingTestResult, testAutoRouterRouting } from "../networking";
 import { ComplexityRouterConfigPayload } from "./build_complexity_router_config";
 import { buildAutoRouterRoutingTestRequest } from "./build_auto_router_routing_test_request";
+import { CapabilityRouterConfigValue } from "./capability_router_config";
 
 interface AutoRouterRoutingTestProps {
   accessToken: string;
-  config: ComplexityRouterConfigPayload;
+  config?: ComplexityRouterConfigPayload;
+  capabilityConfig?: CapabilityRouterConfigValue;
   defaultModel: string | undefined;
   routerName: string | undefined;
   teamId: string | undefined;
@@ -25,6 +27,7 @@ type TestState =
 const AutoRouterRoutingTest: React.FC<AutoRouterRoutingTestProps> = ({
   accessToken,
   config,
+  capabilityConfig,
   defaultModel,
   routerName,
   teamId,
@@ -34,7 +37,7 @@ const AutoRouterRoutingTest: React.FC<AutoRouterRoutingTestProps> = ({
 
   const send = async () => {
     setState({ status: "running" });
-    const params = { prompt, config, defaultModel, routerName, teamId };
+    const params = { prompt, config, capabilityConfig, defaultModel, routerName, teamId };
     const request = buildAutoRouterRoutingTestRequest(params);
     const response = await testAutoRouterRouting(accessToken, request);
     setState(
