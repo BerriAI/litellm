@@ -1,4 +1,4 @@
-import type { ColumnDef, ExpandedState } from "@tanstack/react-table";
+import type { ColumnDef, ExpandedState, VisibilityState } from "@tanstack/react-table";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
@@ -463,6 +463,51 @@ describe("DataTable column visibility", () => {
     await user.click(screen.getByTestId("view-options-trigger"));
     expect(await screen.findByTestId("view-option-email")).toBeInTheDocument();
     expect(screen.queryByTestId("view-option-name")).not.toBeInTheDocument();
+  });
+
+  it("renders the visibility it is handed and reports a toggle instead of applying it", async () => {
+    const user = userEvent.setup();
+    const onColumnVisibilityChange = vi.fn();
+    const tree = (visibility: VisibilityState) => (
+      <DataTable
+        data={CHARLIE_ALICE_BOB}
+        columns={nameEmailColumns}
+        columnVisibility={visibility}
+        onColumnVisibilityChange={onColumnVisibilityChange}
+        toolbar={(table) => <DataTableViewOptions table={table} />}
+      />
+    );
+    const { container, rerender } = render(tree({ email: false }));
+
+    expect(container.querySelector('th[data-header-id="email"]')).toBeNull();
+
+    await user.click(screen.getByTestId("view-options-trigger"));
+    await user.click(await screen.findByTestId("view-option-email"));
+
+    expect(container.querySelector('th[data-header-id="email"]')).toBeNull();
+    expect(onColumnVisibilityChange).toHaveBeenCalledTimes(1);
+    const updater = onColumnVisibilityChange.mock.calls[0][0];
+    expect(typeof updater === "function" ? updater({ email: false }) : updater).toEqual({ email: true });
+
+    rerender(tree({ email: true }));
+    expect(container.querySelector('th[data-header-id="email"]')).not.toBeNull();
+  });
+
+  it("seeds from defaultColumnVisibility and still toggles when left uncontrolled", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <DataTable
+        data={CHARLIE_ALICE_BOB}
+        columns={nameEmailColumns}
+        defaultColumnVisibility={{ email: false }}
+        toolbar={(table) => <DataTableViewOptions table={table} />}
+      />,
+    );
+
+    expect(container.querySelector('th[data-header-id="email"]')).toBeNull();
+    await user.click(screen.getByTestId("view-options-trigger"));
+    await user.click(await screen.findByTestId("view-option-email"));
+    await waitFor(() => expect(container.querySelector('th[data-header-id="email"]')).not.toBeNull());
   });
 });
 
