@@ -1173,6 +1173,7 @@ if MCP_AVAILABLE:
                 transport=request.transport,
                 auth_type=request.auth_type,
                 mcp_info=request.mcp_info,
+                timeout=request.timeout,
                 command=request.command,
                 args=request.args,
                 env=request.env,

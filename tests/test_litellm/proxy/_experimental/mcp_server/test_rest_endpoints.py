@@ -214,6 +214,46 @@ class TestExecuteWithMcpClient:
         assert server.scopes == ["read", "write"]
         assert server.has_client_credentials is True
 
+    async def test_preview_forwards_per_server_timeout_to_client_factory(self, monkeypatch):
+        """The request's per-server timeout must reach the temporary MCPServer model:
+        the client factory reads ``server.timeout`` for both the per-request timeout
+        and the preview's whole-walk listing deadline."""
+        captured: dict = {}
+
+        def fake_build_stdio_env(server, raw_headers):
+            return None
+
+        async def fake_create_client(*args, **kwargs):
+            captured["server"] = kwargs.get("server")
+            return object()
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_build_stdio_env",
+            fake_build_stdio_env,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_create_mcp_client",
+            fake_create_client,
+            raising=False,
+        )
+
+        async def ok_operation(client):
+            return {"status": "ok"}
+
+        payload = NewMCPServerRequest(
+            server_name="slow-catalog-server",
+            url="https://example.com",
+            timeout=120.5,
+        )
+
+        result = await rest_endpoints._execute_with_mcp_client(payload, ok_operation)
+
+        assert result["status"] == "ok"
+        assert captured["server"].timeout == 120.5
+
     @pytest.mark.asyncio
     async def test_m2m_drops_incoming_oauth2_headers(self, monkeypatch):
         """For M2M OAuth servers the incoming Authorization header (which carries
@@ -605,6 +645,50 @@ class TestTestToolsList:
         assert result["message"] == "Successfully retrieved tools"
         assert [tool["name"] for tool in result["tools"]] == ["quick_tool"]
 
+    async def test_preview_tools_list_honors_per_server_timeout(self, monkeypatch):
+        """A per-server timeout above the global default extends the preview deadline."""
+        monkeypatch.setattr(rest_endpoints, "MCP_CLIENT_TIMEOUT", 0.05, raising=False)
+        monkeypatch.setattr(rest_endpoints, "MCP_TOOL_LISTING_TIMEOUT", 0.05, raising=False)
+
+        from mcp.types import Tool as MCPTool
+
+        class SlowConfiguredClient:
+            timeout = 1.0
+
+            async def list_tools(self, raise_on_error=False):
+                await asyncio.sleep(0.2)
+                return [MCPTool(name="slow_tool", description="s", inputSchema={})]
+
+        async def fake_execute(
+            request,
+            operation,
+            mcp_auth_header=None,
+            oauth2_headers=None,
+            raw_headers=None,
+        ):
+            return await operation(SlowConfiguredClient())
+
+        monkeypatch.setattr(rest_endpoints, "_execute_with_mcp_client", fake_execute, raising=False)
+
+        from litellm.proxy._types import LitellmUserRoles
+
+        request = _build_request()
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://example.com",
+            auth_type=MCPAuth.api_key,
+            credentials={"auth_value": "secret-key"},
+        )
+
+        result = await rest_endpoints.test_tools_list(
+            request,
+            payload,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result["error"] is None
+        assert [tool["name"] for tool in result["tools"]] == ["slow_tool"]
+
     async def test_extracts_oauth2_headers(self, monkeypatch):
         """Ensure oauth2 auth type pulls oauth headers and omits MCP auth header."""
 
@@ -867,9 +951,7 @@ class TestListToolsRestAPI:
         they do for a gateway session, never to the bare session key."""
         from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 
-        session_auth = UserAPIKeyAuth(
-            team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="grant-user", user_role="internal_user"
-        )
+        session_auth = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="grant-user", user_role="internal_user")
         admitted_auth = UserAPIKeyAuth(user_id="grant-user", org_id="admitted-org")
 
         async def fake_reload(user_id):
@@ -949,9 +1031,7 @@ class TestListToolsRestAPI:
         from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
 
-        session_auth = UserAPIKeyAuth(
-            team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="grant-user", user_role="internal_user"
-        )
+        session_auth = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="grant-user", user_role="internal_user")
         scoped_auth = UserAPIKeyAuth(
             object_permission=LiteLLM_ObjectPermissionTable(
                 object_permission_id="toolset-scope",
@@ -3219,9 +3299,7 @@ class TestRestListToolsetFiltering:
 
         mock_manager = MagicMock()
         mock_manager.expand_tool_permissions = MagicMock(side_effect=lambda perms: perms or {})
-        mock_manager.resolve_toolset_tool_permissions = AsyncMock(
-            return_value={"server-a": ["lookup_status"]}
-        )
+        mock_manager.resolve_toolset_tool_permissions = AsyncMock(return_value={"server-a": ["lookup_status"]})
 
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
