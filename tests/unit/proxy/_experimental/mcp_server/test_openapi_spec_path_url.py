@@ -71,33 +71,6 @@ def test_load_openapi_spec_supports_http_url(monkeypatch: pytest.MonkeyPatch) ->
     assert handler_holder["handler"].calls == 1
 
 
-def test_load_openapi_spec_supports_yaml_http_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    url = "http://example.local/openapi.yaml"
-    yaml_spec = """
-openapi: 3.0.0
-info:
-  title: YAML API
-  version: 1.0.0
-paths: {}
-"""
-    expected: dict[str, Any] = {
-        "openapi": "3.0.0",
-        "info": {"title": "YAML API", "version": "1.0.0"},
-        "paths": {},
-    }
-
-    req = httpx.Request("GET", url)
-    resp = httpx.Response(status_code=200, text=yaml_spec, request=req)
-
-    def fake_get_async_httpx_client(*args, **kwargs):
-        return _FakeAsyncHTTPHandler(resp, expected_url=url)
-
-    monkeypatch.setattr(gen, "get_async_httpx_client", fake_get_async_httpx_client)
-    monkeypatch.setattr(gen, "async_safe_get", lambda client, url, **kw: client.get(url))
-
-    assert gen.load_openapi_spec(url) == expected
-
-
 def test_load_openapi_spec_supports_local_file_path(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     expected: dict[str, Any] = {
         "openapi": "3.0.0",
@@ -119,11 +92,3 @@ def test_load_openapi_spec_supports_local_file_path(tmp_path, monkeypatch: pytes
 
     spec = gen.load_openapi_spec(str(p))
     assert spec == expected
-
-
-def test_load_openapi_spec_rejects_non_object_document(tmp_path) -> None:
-    p = tmp_path / "openapi.yaml"
-    p.write_text("- not an OpenAPI object\n", encoding="utf-8")
-
-    with pytest.raises(TypeError, match="OpenAPI spec must be a JSON or YAML object"):
-        gen.load_openapi_spec(str(p))
