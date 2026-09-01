@@ -6,8 +6,10 @@ should be tried first, and higher order deployments should be used as fallbacks
 when lower order deployments fail.
 """
 
+import json
 from typing import Final, Optional
 
+import httpx
 import pytest
 
 import litellm
@@ -578,6 +580,64 @@ async def test_generic_api_call_strips_target_order_from_provider_kwargs():
     assert response == "ok"
     assert captured["model"] == "gpt-4o"
     assert "_target_order" not in captured
+
+
+@pytest.mark.asyncio
+async def test_text_completion_order_fallback_hop_does_not_send_target_order_upstream():
+    upstream_bodies: Final[list[dict]] = []
+
+    def _upstream(request: httpx.Request) -> httpx.Response:
+        upstream_bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "cmpl-1",
+                "object": "text_completion",
+                "created": 0,
+                "model": "gpt-3.5-turbo-instruct",
+                "choices": [{"text": "ok from order 2", "index": 0, "logprobs": None, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    session: Final = httpx.AsyncClient(transport=httpx.MockTransport(_upstream))
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    litellm.aclient_session = session
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "text-completion-openai/gpt-3.5-turbo-instruct",
+                    "api_key": "key",
+                    "mock_response": Exception("fail order 1"),
+                    "order": 1,
+                },
+                "model_info": {"id": "1"},
+            },
+            {
+                "model_name": "test-model",
+                "litellm_params": {
+                    "model": "text-completion-openai/gpt-3.5-turbo-instruct",
+                    "api_key": "key",
+                    "api_base": "http://upstream.test",
+                    "order": 2,
+                },
+                "model_info": {"id": "2"},
+            },
+        ],
+        num_retries=0,
+    )
+    try:
+        response = await router.atext_completion(model="test-model", prompt="hi")
+    finally:
+        litellm.aclient_session = None
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        await session.aclose()
+
+    assert response._hidden_params["model_id"] == "2"
+    assert upstream_bodies
+    assert all("_target_order" not in body for body in upstream_bodies)
 
 
 def test_check_non_standard_fallback_format():

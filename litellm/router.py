@@ -558,11 +558,6 @@ RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(
 )
 
 
-def _without_target_order(kwargs: Mapping[str, object]) -> Mapping[str, object]:
-    """Drop the router-internal order-fallback target so it never reaches a provider call."""
-    return MappingProxyType({k: v for k, v in kwargs.items() if k != "_target_order"})
-
-
 class Router:
     model_names: set = set()
     cache_responses: bool | None = False
@@ -2177,7 +2172,7 @@ class Router:
                 "messages": messages,
                 "caching": self.cache_responses,
                 "client": model_client,
-                **_without_target_order(kwargs),
+                **kwargs,
             }
             response: Final = litellm.completion(**input_kwargs)
             verbose_router_logger.info("litellm.completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -3198,7 +3193,7 @@ class Router:
                 "messages": messages,
                 "caching": self.cache_responses,
                 "client": model_client,
-                **_without_target_order(kwargs),
+                **kwargs,
             }
             input_kwargs.pop("silent_model", None)
             input_kwargs.pop("include_fallback_errors", None)
@@ -4075,7 +4070,7 @@ class Router:
                     "prompt": prompt,
                     "caching": self.cache_responses,
                     "client": model_client,
-                    **_without_target_order(kwargs),
+                    **kwargs,
                 }
             )
             self.success_calls[model_name] += 1
@@ -4135,7 +4130,7 @@ class Router:
                     "prompt": prompt,
                     "caching": self.cache_responses,
                     "client": model_client,
-                    **_without_target_order(kwargs),
+                    **kwargs,
                 }
             )
 
@@ -4239,7 +4234,7 @@ class Router:
                     "file": file,
                     "caching": self.cache_responses,
                     "client": model_client,
-                    **_without_target_order(kwargs),
+                    **kwargs,
                 }
             )
 
@@ -4892,7 +4887,7 @@ class Router:
             response_kwargs: Final = {
                 **data,
                 "caching": self.cache_responses,
-                **_without_target_order(kwargs),
+                **kwargs,
                 "model": model_name,
             }
             # Only set custom_llm_provider if it's not None
@@ -5342,7 +5337,7 @@ class Router:
                     **data,
                     "custom_llm_provider": custom_llm_provider,
                     "caching": self.cache_responses,
-                    **_without_target_order(kwargs),
+                    **kwargs,
                 }
             )
 
@@ -5408,7 +5403,7 @@ class Router:
                     "input": input,
                     "caching": self.cache_responses,
                     "client": model_client,
-                    **_without_target_order(kwargs),
+                    **kwargs,
                 }
             )
             self.success_calls[model_name] += 1
@@ -5471,7 +5466,7 @@ class Router:
                     "input": input,
                     "caching": self.cache_responses,
                     "client": model_client,
-                    **_without_target_order(kwargs),
+                    **kwargs,
                 }
             )
 
@@ -11933,7 +11928,7 @@ class Router:
         )
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
-        _target_order: Final = (request_kwargs or {}).get("_target_order")
+        _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
         healthy_deployments = litellm.utils._get_order_filtered_deployments(
             cast(list[dict], healthy_deployments), target_order=_target_order
         )
@@ -12698,7 +12693,7 @@ class Router:
             )
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
-        _target_order: Final = (request_kwargs or {}).get("_target_order")
+        _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
         healthy_deployments = litellm.utils._get_order_filtered_deployments(
             healthy_deployments, target_order=_target_order
         )
