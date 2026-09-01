@@ -346,6 +346,70 @@ def test_isolated_provider_carries_environment_and_release():
     assert attributes["langfuse.release"] == "v9"
 
 
+def test_langfuse_sample_rate_drops_spans_on_the_isolated_provider(monkeypatch):
+    """The SDK only installs its sampler on providers it builds itself; v2 sampled via the same env var."""
+    monkeypatch.setenv("LANGFUSE_SAMPLE_RATE", "0")
+    dropped_exporter = InMemorySpanExporter()
+    dropping_provider = build_isolated_tracer_provider(environment=None, release=None)
+    dropping_provider.add_span_processor(SimpleSpanProcessor(dropped_exporter))
+    dropping_provider.get_tracer("test").start_span("dropped").end()
+    assert not dropped_exporter.get_finished_spans()
+
+    monkeypatch.delenv("LANGFUSE_SAMPLE_RATE")
+    kept_exporter = InMemorySpanExporter()
+    keeping_provider = build_isolated_tracer_provider(environment=None, release=None)
+    keeping_provider.add_span_processor(SimpleSpanProcessor(kept_exporter))
+    keeping_provider.get_tracer("test").start_span("kept").end()
+    assert [span.name for span in kept_exporter.get_finished_spans()] == ["kept"]
+
+
+def test_invalid_sample_rate_fails_at_construction_like_the_sdk(monkeypatch):
+    monkeypatch.setenv("LANGFUSE_SAMPLE_RATE", "1.5")
+    with pytest.raises(ValueError, match=r"between 0\.0 and 1\.0"):
+        build_isolated_tracer_provider(environment=None, release=None)
+
+
+def test_environment_override_lands_per_span_despite_shared_resources():
+    """The SDK registry is keyed on public key alone, so a second client for the
+    same key adopts the first client's provider; the observation wrapper stamps
+    each span with its own client's environment, which the server prefers over
+    the resource-level value."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    first = Langfuse(
+        public_key=PUBLIC_KEY,
+        secret_key="sk-original",
+        host="http://127.0.0.1:1",
+        environment="prod",
+        tracer_provider=provider,
+        span_exporter=exporter,
+    )
+    second = Langfuse(
+        public_key=PUBLIC_KEY,
+        secret_key="sk-original",
+        host="http://127.0.0.1:1",
+        environment="staging",
+    )
+    assert second._resources is first._resources
+
+    for client, environment in ((first, "prod"), (second, "staging")):
+        context, claim_trace_root = open_trace_context(client=client, trace_id="a" * 32, parent_observation_id=None)
+        start_generation(
+            client=client,
+            context=context,
+            name=f"generation-{environment}",
+            start_time=CALL_START,
+            claim_trace_root=claim_trace_root,
+            attributes={},
+        ).end()
+    first.flush()
+
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    assert spans["generation-prod"].attributes["langfuse.environment"] == "prod"
+    assert spans["generation-staging"].attributes["langfuse.environment"] == "staging"
+
+
 def test_client_does_not_take_over_the_process_tracer_provider():
     # the global provider can only be set once per process, so assert it is left
     # alone rather than assuming this test is the one that installed it

@@ -1544,6 +1544,42 @@ def test_update_trace_keys_input_and_output_are_gated_too():
     assert "input" in on and "output" in on
 
 
+def test_update_trace_keys_input_output_reach_the_trace_even_under_a_parent():
+    """With a real parent the generation is not the trace root, so trace-level
+    I/O must be stamped explicitly; v2 updated the trace object directly."""
+    rig = _steering_logger()
+
+    with patch.object(litellm, "langfuse_enable_update_trace_keys", True):
+        _, _, span = _emit(
+            rig,
+            metadata={
+                "existing_trace_id": "trace-1",
+                "parent_observation_id": "b" * 16,
+                "update_trace_keys": ["input", "output"],
+            },
+        )
+
+    assert "the-input" in str(span.attributes["langfuse.trace.input"])
+    assert "the-output" in str(span.attributes["langfuse.trace.output"])
+
+
+def test_trace_io_is_not_stamped_when_update_trace_keys_does_not_ask():
+    rig = _steering_logger()
+
+    with patch.object(litellm, "langfuse_enable_update_trace_keys", True):
+        _, _, span = _emit(
+            rig,
+            metadata={
+                "existing_trace_id": "trace-1",
+                "parent_observation_id": "b" * 16,
+                "update_trace_keys": ["trace_release"],
+            },
+        )
+
+    assert "langfuse.trace.input" not in (span.attributes or {})
+    assert "langfuse.trace.output" not in (span.attributes or {})
+
+
 def test_update_trace_keys_from_the_request_body_list_applies_when_enabled():
     rig = _steering_logger()
 

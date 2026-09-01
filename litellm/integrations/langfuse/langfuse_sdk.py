@@ -18,6 +18,7 @@ from opentelemetry.context import Context
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
 
 __all__ = (
     "AS_ROOT_ATTRIBUTE",
@@ -171,8 +172,14 @@ def build_isolated_tracer_provider(*, environment: str | None, release: str | No
     and langfuse spans to every other litellm destination.
 
     The resource is rebuilt here because langfuse only applies ``environment``
-    and ``release`` when it constructs the provider itself.
+    and ``release`` when it constructs the provider itself, and the sampler is
+    rebuilt for the same reason: ``LANGFUSE_SAMPLE_RATE`` is otherwise silently
+    ignored and every trace exports.
     """
+    raw_sample_rate: Final = os.environ.get("LANGFUSE_SAMPLE_RATE")
+    sample_rate: Final = float(raw_sample_rate) if raw_sample_rate is not None else 1.0
+    if not 0.0 <= sample_rate <= 1.0:
+        raise ValueError(f"Sample rate must be between 0.0 and 1.0, got {sample_rate}")
     attributes: Final = MappingProxyType(
         {
             key: value
@@ -180,7 +187,10 @@ def build_isolated_tracer_provider(*, environment: str | None, release: str | No
             if value is not None
         }
     )
-    provider: Final = TracerProvider(resource=Resource.create(dict(attributes)))
+    provider: Final = TracerProvider(
+        resource=Resource.create(dict(attributes)),
+        sampler=TraceIdRatioBased(sample_rate) if sample_rate < 1 else None,
+    )
     _litellm_built_providers.add(provider)
     return provider
 
