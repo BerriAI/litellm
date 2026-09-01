@@ -140,18 +140,33 @@ else:
     Span: TypeAlias = object
 
 
-def _entry_applies_any_admitted_model(
-    entry: TagRateLimitEntry, tags: Sequence[str], key_alias: str | None, admitted_models: frozenset[str]
+def _entry_applies_any_candidate_model(
+    entry: TagRateLimitEntry, tags: Sequence[str], key_alias: str | None, candidate_models: frozenset[str]
 ) -> bool:
     """Same as `_entry_applies`, except an `apply_to_models`-scoped entry
-    counts as applying if ANY model an admission attempt for this call_id
-    saw was in scope -- not just whichever model the call ultimately served.
-    A `_pre_call_with_fallbacks` retry re-admits with a different model for
+    counts as applying if ANY of `candidate_models` is in scope -- not just a
+    single caller-visible name. Two call sites need this: at admission, a
+    comma-separated `model` (a batch dispatch) names several models at once,
+    any of which should trip a chain-wide cap; at success-event accounting,
+    a `_pre_call_with_fallbacks` retry re-admits with a different model for
     the same call_id, and an entry that matched an earlier attempt must
-    still get its success-time accounting."""
-    if not admitted_models:
+    still get its accounting."""
+    if not candidate_models:
         return _entry_applies(entry, tags, key_alias, None)
-    return any(_entry_applies(entry, tags, key_alias, model) for model in admitted_models)
+    return any(_entry_applies(entry, tags, key_alias, model) for model in candidate_models)
+
+
+def _individual_model_names(model: str | None, call_type: str) -> tuple[str, ...]:
+    """`route_llm_request.py` splits a comma-separated `model` on this exact
+    condition before fanning out through `Router.abatch_completion`/
+    `abatch_completion_fastest_response` -- an `apply_to_models`-scoped entry
+    must check each of those individual names, not the raw joined string,
+    which is never a member of any caller-configured `apply_to_models` list."""
+    if model is None:
+        return ()
+    if call_type != "acompletion" or "," not in model:
+        return (model,)
+    return tuple(m.strip() for m in model.split(","))
 
 
 def _non_racing_batch_width(data: Mapping[str, object], call_type: str) -> int:
@@ -476,15 +491,17 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
 
     @staticmethod
     def _next_admitted_models(
-        admitted_models: frozenset[str], model: str | None, renewal_allowed: bool
+        admitted_models: frozenset[str], candidate_models: frozenset[str], renewal_allowed: bool
     ) -> frozenset[str]:
         """Only meant to be applied once this admission attempt has cleared
-        every check without raising -- a rejected attempt's model must never
-        join admitted_models, or a later successful attempt's accounting
-        could wrongly credit an apply_to_models entry that never actually
-        admitted this request under that model."""
-        if renewal_allowed and model is not None:
-            return admitted_models | frozenset((model,))
+        every check without raising -- a rejected attempt's models must
+        never join admitted_models, or a later successful attempt's
+        accounting could wrongly credit an apply_to_models entry that never
+        actually admitted this request under that model. `candidate_models`
+        is every individual name a comma-separated `model` names (see
+        `_individual_model_names`), not the raw joined string."""
+        if renewal_allowed and candidate_models:
+            return admitted_models | candidate_models
         return admitted_models
 
     @staticmethod
@@ -501,7 +518,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         key_alias: str | None,
         key_hash: str | None,
         now: float,
-        model: str | None,
+        candidate_models: frozenset[str],
     ) -> tuple[_ClassifiedGlobalCheck, ...]:
         classified: Final = []  # mutable-ok: sequential accumulator, immediately frozen into a tuple below
         for unit in _LIMIT_UNITS:
@@ -512,7 +529,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
                 tag_value = _extract_identity(tags, entry.tag_id)
                 if tag_value is None:
                     continue
-                if not _entry_applies(entry, tags, key_alias, model):
+                if not _entry_applies_any_candidate_model(entry, tags, key_alias, candidate_models):
                     continue
                 effective_key_hash = key_hash if entry.scope_by_key_hash else None
                 if unit == "concurrency":
@@ -639,6 +656,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         key_alias: Final = user_api_key_dict.key_alias
         key_hash: Final = user_api_key_dict.api_key
         model: Final = data.get("model") if isinstance(data.get("model"), str) else None
+        candidate_models: Final = frozenset(_individual_model_names(model, call_type))
 
         # Only a repeat admission carrying the SAME authenticated key_hash as
         # whichever call first claimed this stash may renew its charges --
@@ -651,9 +669,9 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         now: Final = self._time_provider().timestamp()
         if stash.admission_time is None:
             stash.admission_time = now
-        classified: Final = self._classify(config, tags, key_alias, key_hash, now, model)
+        classified: Final = self._classify(config, tags, key_alias, key_hash, now, candidate_models)
         if not classified:
-            stash.admitted_models = self._next_admitted_models(stash.admitted_models, model, renewal_allowed)
+            stash.admitted_models = self._next_admitted_models(stash.admitted_models, candidate_models, renewal_allowed)
             return data
 
         read_only_checks: Final = tuple(c for c in classified if not c.is_atomic)
@@ -746,7 +764,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
             if request_keys:
                 stash.charged_request_keys.extend(request_keys)  # mutable-ok: see field's own docstring
 
-        stash.admitted_models = self._next_admitted_models(stash.admitted_models, model, renewal_allowed)
+        stash.admitted_models = self._next_admitted_models(stash.admitted_models, candidate_models, renewal_allowed)
         return data
 
     async def _release_pending_for_call_id(self, request_kwargs: Mapping[str, object]) -> None:
@@ -878,7 +896,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
                 tag_value = _extract_identity(tags, entry.tag_id)
                 if tag_value is None:
                     continue
-                if not _entry_applies_any_admitted_model(entry, tags, key_alias, admitted_models):
+                if not _entry_applies_any_candidate_model(entry, tags, key_alias, admitted_models):
                     continue
                 increment_value = increment_by_unit[unit]
                 if increment_value == 0:
