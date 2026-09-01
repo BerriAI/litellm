@@ -421,6 +421,30 @@ def test_rag_query_store_params_win_over_user_retrieval_config(client_internal_u
     assert forwarded_config["aws_region_name"] == "eu-west-1"
 
 
+@pytest.mark.parametrize(
+    "blocked_key",
+    ["embedding_model", "litellm_embedding_model", "litellm_embedding_config", "litellm_credential_name"],
+)
+def test_rag_query_rejects_caller_embedding_selection_params(client_internal_user, blocked_key):
+    """
+    Regression: a caller must not pick the embedding model or credential used at
+    search time. Those resolve through the Router with the proxy's credentials,
+    bypassing the key's model permissions, so they may only come from the
+    managed store's server-side registration.
+    """
+    response = client_internal_user.post(
+        "/v1/rag/query",
+        json={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "retrieval_config": {"vector_store_id": "s3-store", blocked_key: "attacker-choice"},
+        },
+    )
+
+    assert response.status_code == 400, response.json()
+    assert blocked_key in str(response.json())
+
+
 EICAR = r"X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
 INGEST_REQUEST = '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'
 
