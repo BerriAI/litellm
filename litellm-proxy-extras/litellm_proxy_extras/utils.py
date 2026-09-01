@@ -331,26 +331,14 @@ class ProxyExtrasDBManager:
         return False
 
     @staticmethod
-    def _resolve_all_migrations(
-        migrations_dir: str, schema_path: str, mark_all_applied: bool = True
-    ):
-        """
-        1. Compare the current database state to schema.prisma and generate a migration for the diff.
-        2. Run prisma migrate deploy to apply any pending migrations.
-        3. Mark all existing migrations as applied.
-        """
-        database_url = os.getenv("DATABASE_URL")
-        if not database_url:
-            logger.error("DATABASE_URL not set")
-            return
-        # Prefer DIRECT_URL for schema introspection — pooler URLs (e.g. neon -pooler)
-        # do not support the extended query protocol required by prisma migrate diff.
-        diff_url = os.getenv("DIRECT_URL") or database_url
+    def _write_migration_diff(
+        diff_url: str, schema_path: str, diff_sql_path: Path
+    ) -> bool:
+        """Write the DB-vs-schema drift script, reporting whether it ran to completion.
 
-        diff_dir = Path(tempfile.mkdtemp(prefix="litellm_migration_diff_"))
-        diff_sql_path = diff_dir / "migration.sql"
-
-        # 1. Generate migration SQL for the diff between DB and schema
+        A killed or failed `prisma migrate diff` still leaves the file behind, so the
+        caller needs this rather than the file's existence to know the script is whole.
+        """
         try:
             logger.info("Generating migration diff between DB and schema.prisma...")
             with open(diff_sql_path, "w") as f:
@@ -372,8 +360,40 @@ class ProxyExtrasDBManager:
                 )
         except subprocess.CalledProcessError as e:
             logger.warning(f"Failed to generate migration diff: {e.stderr}")
+            return False
         except subprocess.TimeoutExpired:
             logger.warning("Migration diff generation timed out.")
+            return False
+        return True
+
+    @staticmethod
+    def _resolve_all_migrations(
+        migrations_dir: str, schema_path: str, mark_all_applied: bool = True
+    ):
+        """
+        1. Compare the current database state to schema.prisma and generate a migration for the diff.
+        2. Run prisma migrate deploy to apply any pending migrations.
+        3. Mark all existing migrations as applied.
+        """
+        database_url = os.getenv("DATABASE_URL")
+        if not database_url:
+            logger.error("DATABASE_URL not set")
+            return
+        # Prefer DIRECT_URL for schema introspection — pooler URLs (e.g. neon -pooler)
+        # do not support the extended query protocol required by prisma migrate diff.
+        diff_url = os.getenv("DIRECT_URL") or database_url
+
+        diff_dir = Path(tempfile.mkdtemp(prefix="litellm_migration_diff_"))
+        diff_sql_path = diff_dir / "migration.sql"
+
+        # 1. Generate migration SQL for the diff between DB and schema
+        diff_generated = ProxyExtrasDBManager._write_migration_diff(
+            diff_url, schema_path, diff_sql_path
+        )
+
+        def finish_without_applying() -> None:
+            if mark_all_applied:
+                ProxyExtrasDBManager._mark_migrations_applied(migrations_dir)
 
         # check if the migration was created
         if not diff_sql_path.exists():
@@ -414,10 +434,24 @@ class ProxyExtrasDBManager:
             return
         logger.info(f"Migration diff created at {diff_sql_path}")
 
-        if ProxyExtrasDBManager.spend_logs_is_partitioned():
-            filtered_sql = filter_partitioned_spend_logs_diff(
-                diff_sql_path.read_text()
+        if not diff_generated:
+            logger.warning(
+                "`prisma migrate diff` did not finish, so the drift script may be "
+                "truncated; not applying it"
             )
+            finish_without_applying()
+            return
+
+        diff_sql = diff_sql_path.read_text()
+        if not _without_sql_comments(diff_sql):
+            logger.info(
+                "Database already matches schema.prisma; no drift script to apply"
+            )
+            finish_without_applying()
+            return
+
+        if ProxyExtrasDBManager.spend_logs_is_partitioned():
+            filtered_sql = filter_partitioned_spend_logs_diff(diff_sql)
             diff_sql_path.write_text(filtered_sql)
             logger.info(
                 "LiteLLM_SpendLogs is partitioned; removed its primary-key "
@@ -425,9 +459,7 @@ class ProxyExtrasDBManager:
             )
             if not filtered_sql.strip():
                 logger.info("Drift script is empty after filtering; nothing to apply")
-                if not mark_all_applied:
-                    return
-                ProxyExtrasDBManager._mark_migrations_applied(migrations_dir)
+                finish_without_applying()
                 return
 
         # 2. Run prisma db execute to apply the migration
