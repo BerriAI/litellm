@@ -305,14 +305,16 @@ def _run_proxy_server_smoke_test(extra_proxy_args=None):
 
 
 def test_litellm_proxy_server_config_no_general_settings():
-    """Exercises the default (v1) migration resolver."""
+    """Exercises the default (v2) migration resolver."""
     _run_proxy_server_smoke_test()
 
 
-def test_litellm_proxy_server_config_no_general_settings_v2_resolver():
-    """Exercises the opt-in v2 migration resolver.
+def test_litellm_proxy_server_config_no_general_settings_legacy_resolver():
+    """Exercises the legacy (v1) migration resolver against a real database.
 
-    Runs in a separate CI job against a local Postgres to avoid collisions
-    with the v1 variant when they share a database.
+    v2 is the default, so the no-arg test above already covers it. This one is
+    the only place the v1 opt-out gets real-DB migration plus proxy-boot
+    coverage, and it runs in a separate CI job against its own Postgres to
+    avoid collisions with the default variant.
     """
-    _run_proxy_server_smoke_test(extra_proxy_args=["--use_v2_migration_resolver"])
+    _run_proxy_server_smoke_test(extra_proxy_args=["--use_legacy_migration_resolver"])
