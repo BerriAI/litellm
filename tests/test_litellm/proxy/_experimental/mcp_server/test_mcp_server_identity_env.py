@@ -25,11 +25,9 @@ def _env_and_reload(**env):
     saved = {key: os.environ.get(key) for key in env}
     utils_module = importlib.import_module(UTILS_MODULE)
     mgmt_module = importlib.import_module(MGMT_MODULE)
-    # Restore the pre-reload module attributes afterwards instead of reloading
-    # a third time: a reload re-creates every class in the module, so modules
-    # that imported names like MCPMissingUserEnvVarsError before this test
-    # would keep raising the old class while pytest.raises in later tests
-    # matches the new one
+    # Restore pre-reload module attributes afterwards instead of reloading again:
+    # a reload re-creates the module's classes, breaking exception identity for
+    # modules that imported them earlier
     snapshots = {module: dict(vars(module)) for module in (utils_module, mgmt_module)}
 
     def _apply_env(values):

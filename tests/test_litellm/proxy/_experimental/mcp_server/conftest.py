@@ -9,15 +9,8 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
 
 @pytest.fixture(autouse=True)
 def _hermetic_mcp_server_registry():
-    """Snapshot and restore the global manager's server-registry state around every test.
-
-    ``global_mcp_server_manager`` is a module-global singleton, and many tests in this
-    package seed ``registry``/``config_mcp_servers`` (or clear them) without cleaning up.
-    In a shared CI shard the leaked entries poison later tests in the same worker, e.g.
-    the ``all_proxy_servers`` sentinel expansion in ``auth/`` suddenly sees a bridge
-    server registered by a discovery test, so the outcome depends on xdist scheduling.
-    Restoring the state here makes ordering irrelevant.
-    """
+    """Restore the singleton ``global_mcp_server_manager``'s registry state around every
+    test, so entries seeded by one test never leak into another on a shared shard."""
     saved_registry = dict(global_mcp_server_manager.registry)
     saved_config_servers = dict(global_mcp_server_manager.config_mcp_servers)
     saved_tool_mapping = dict(global_mcp_server_manager.tool_name_to_mcp_server_name_mapping)
