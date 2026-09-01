@@ -34432,6 +34432,13 @@ export interface components {
                 [key: string]: number;
             };
             /**
+             * Domain Keywords
+             * @description Per-domain terminology for scorer_version 2's domainDepth dimension, replacing or extending the shipped domains (math, physical_science, medicine, law, finance, data, engineering). A domain named here replaces the shipped list for that domain; other shipped domains stay active. Requires scorer_version 2, rejected otherwise
+             */
+            domain_keywords?: {
+                [key: string]: string[];
+            } | null;
+            /**
              * Embedding Model
              * @description Embedding model (LiteLLM model name) used when semantic_keyword_matching is enabled
              */
@@ -34522,6 +34529,13 @@ export interface components {
              */
             route_housekeeping_to_cheapest_tier: boolean;
             /**
+             * Scorer Version
+             * @description Heuristic scorer semantics, wherever the scorer runs (classifier_type 'heuristic', the local half of 'heuristic_first', and the heuristic classifier_fallback). Version 1 maps any score below simple_medium to SIMPLE, so a prompt matching no keyword scores 0.0 and routes to the cheapest tier by default. Version 2 scores a different dimension basis (reasoningDemand, domainDepth, constraintDensity, deliverableCount, outputScope, contextOperation, multiHop, trivialityEvidence, plus a zero-weight taskType category), requires positive evidence of triviality for SIMPLE, and defaults no-evidence and below-boundary traffic to MEDIUM (cause 'insufficient_evidence'). v2 weights are provisional hand-set defaults pending calibration; override them by v2 dimension name in dimension_weights. Opt-in: existing routers stay on version 1, so routing and spend do not change on upgrade
+             * @default 1
+             * @enum {integer}
+             */
+            scorer_version: 1 | 2;
+            /**
              * Semantic Keyword Matching
              * @description Match keyword_tier_rules by embedding similarity instead of literal text
              * @default false
@@ -34541,7 +34555,7 @@ export interface components {
             session_affinity_ttl_seconds: number;
             /**
              * Simple Keywords
-             * @description Keywords indicating simple/basic queries
+             * @description Keywords indicating simple/basic queries. Under scorer_version 2 this list feeds trivialityEvidence, the only dimension that can produce SIMPLE
              */
             simple_keywords?: string[] | null;
             /**
@@ -35651,7 +35665,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "reasoning_override" | "insufficient_evidence" | "insufficient_evidence_inherit" | "llm_classifier" | "heuristic_first_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */

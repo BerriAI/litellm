@@ -71,6 +71,42 @@ describe("RoutingDecisionCard", () => {
     expect(screen.queryByText(/SIMPLE|MEDIUM|COMPLEX|at or above/)).not.toBeInTheDocument();
   });
 
+  it("labels a scorer v2 defaulted row and does not claim the score met a boundary", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          ...heuristic,
+          cause: "insufficient_evidence",
+          tier: "MEDIUM",
+          score: 0.0,
+          signals: [],
+        }}
+      />,
+    );
+    expect(screen.getByText("Heuristic scorer, defaulted on insufficient evidence")).toBeInTheDocument();
+    expect(screen.getByText("0.00")).toBeInTheDocument();
+    // The score sits below simple_medium, so the band copy would claim SIMPLE while the
+    // badge says MEDIUM: it must not render on a defaulted row.
+    expect(screen.queryByText(/below 0.15/)).not.toBeInTheDocument();
+  });
+
+  it("labels a conversation-inherited abstention and does not claim the score met a boundary", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          ...heuristic,
+          cause: "insufficient_evidence_inherit",
+          tier: "REASONING",
+          score: 0.0,
+          signals: [],
+        }}
+      />,
+    );
+    expect(screen.getByText("Heuristic scorer abstained, inherited the conversation's tier")).toBeInTheDocument();
+    expect(screen.getByText("0.00")).toBeInTheDocument();
+    expect(screen.queryByText(/below 0.15/)).not.toBeInTheDocument();
+  });
+
   it("names the judge model on the LLM classifier path and shows no score", () => {
     render(
       <RoutingDecisionCard

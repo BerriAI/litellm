@@ -2844,6 +2844,16 @@ RoutingDecisionCause = Literal[
     # that tells a reader the score did NOT choose the tier; encoding it as free text
     # meant anything that filtered `signals` silently changed what the row claimed.
     "reasoning_override",
+    # scorer_version 2 only: the score sat below simple_medium without positive evidence of
+    # triviality, so the scorer defaulted to MEDIUM instead of mapping the score. Empty
+    # `signals` means no dimension fired at all; non-empty means mixed or weak evidence.
+    "insufficient_evidence",
+    # scorer_version 2 only: the scorer abstained (see insufficient_evidence) on a continuation
+    # turn, so the request inherited the tier of the conversation's most recent informative ask
+    # instead of the MEDIUM default, derived statelessly from the request's own history. A
+    # consecutive-failure streak in recent turns raises the inherited tier one step, reported in
+    # signals as progress-stall.
+    "insufficient_evidence_inherit",
     "llm_classifier",
     # classifier_type 'heuristic_first': the local scorer produced at least one signal and landed at
     # or below heuristic_first_max_tier, so it decided the tier and the LLM classifier was never

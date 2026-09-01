@@ -36,6 +36,37 @@ The weighted sum is mapped to tiers using configurable boundaries:
 
 Tier names are defaults you can rename with [`tier_labels`](#renaming-the-tiers). The three `tier_boundaries` keys are named after those defaults but they are scorer knobs, not tiers: each one names the gap between two rungs and is persisted by name on every routing decision, so they stay `simple_medium` / `medium_complex` / `complex_reasoning` no matter what you call the tiers. The column above tells a renamed deployment which knob it is turning.
 
+### Scorer versions
+
+`scorer_version: 1` (the default) scores the seven dimensions above and maps any score below `simple_medium` to SIMPLE. Since most of that weight budget keys on software vocabulary, a prompt matching no keyword scores 0.0 and routes to the cheapest tier by default: a graduate chemistry question, a legal analysis, or a math proof all land SIMPLE with no evidence either way.
+
+`scorer_version: 2` is opt-in and replaces the feature basis. Length and question-mark counting are gone (context-window fit is already its own gate), code vocabulary no longer means difficulty, and SIMPLE requires positive evidence of triviality. The v2 dimensions:
+
+| Dimension | Detects | Weight |
+|-----------|---------|--------|
+| `reasoningDemand` | Operations required: proof, derivation, diagnosis, optimization, causal inference | 0.22 |
+| `domainDepth` | Terminology depth in the single best-matching domain (math, physical_science, medicine, law, finance, data, engineering); needs 2+ hits | 0.18 |
+| `contextOperation` | What must be done with supplied material; reconcile/synthesize/diagnose/forecast score, copy/extract/translate/summarize do not | 0.15 |
+| `constraintDensity` | Independent requirements (must, at least, exactly, without using); needs 2+ hits | 0.13 |
+| `multiHop` | Dependent inference steps (given that, based on the result, if..then) | 0.10 |
+| `deliverableCount` | Independent asks (and also, as well as, coordinated imperatives); no option-list regexes | 0.08 |
+| `outputScope` | Artifacts named for delivery next to an authoring verb | 0.07 |
+| `trivialityEvidence` | Greetings, acknowledgements, bounded transformations; the only dimension that can produce SIMPLE | 0.07 (negative) |
+| `taskType` | Descriptive category (code/math/writing/...) for logs and evaluation | 0.00, never a tier prior |
+
+The v2 weights are provisional hand-set defaults; fitting them against public model-outcome data is staged follow-up work. Override them per key in `dimension_weights` using the v2 names (v1 names are ignored under v2). Per-domain vocabulary is extendable via `domain_keywords`. The mapping: score at or above `simple_medium` maps through the shared `tier_boundaries` exactly as v1; below it, SIMPLE requires a `trivialityEvidence` match with no dimension scoring positive, and everything else defaults to MEDIUM with cause `insufficient_evidence` (empty `signals` means nothing fired at all). The reasoning override keeps working, keyed on `reasoningDemand` matches.
+
+Operator-supplied keyword lists override the defaults under both versions (`reasoning_keywords` feeds `reasoningDemand`, `simple_keywords` feeds `trivialityEvidence`). Under `heuristic_first`, a v2 request whose tier came from `insufficient_evidence` abstains to the LLM classifier rather than short-circuiting. Existing routers stay on v1, so routing and spend do not move on upgrade; opting a router in raises spend on traffic that previously defaulted to the cheapest tier.
+
+On agentic traffic most turns carry terminal or tool output as the newest message, which holds no evidence, so defaulting every such continuation to MEDIUM would override the tier the real ask earned. A v2 abstention on a continuation therefore inherits the conversation's tier: the scorer walks the request's own history newest first and takes the tier of the most recent prior ask that carried real evidence above SIMPLE (trivial interjections like "thanks" never reset it), reported with cause `insufficient_evidence_inherit`. This is stateless and unrelated to `session_affinity`: nothing is cached, no session id is needed, and it is on for every v2 router. When the last three consecutive non-assistant turns carry failure markers (tracebacks, nonzero exits, `make: ***`) the inherited tier is raised one configured step, reported in signals as `progress-stall`, so a stalled run reaches a stronger model; one clean run resets the streak. A continuation with real evidence still classifies for itself.
+
+```yaml
+      complexity_router_config:
+        scorer_version: 2
+        domain_keywords:          # optional: replace or extend a domain's vocabulary
+          gastronomy: ["sourdough starter", "lamination"]
+```
+
 ## Configuration
 
 ### Basic Configuration

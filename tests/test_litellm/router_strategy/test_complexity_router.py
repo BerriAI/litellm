@@ -653,6 +653,536 @@ class TestConfigOverrides:
         assert any("long" in s.lower() if s else False for s in signals), f"Expected 'long' signal, got {signals}"
 
 
+# Hard prompt with no keyword matches under either scorer version: every dimension stays
+# silent, so the score is exactly 0.0 and the tier is whatever the mapping defaults to.
+V2_NO_EVIDENCE_PROMPT = (
+    "Our payment service loses events when the broker partitions; design an exactly-once "
+    "delivery approach across three regions given we cannot rely on coordinated commits."
+)
+
+
+def _versioned_router(mock_router_instance, scorer_version: int, **config_overrides):
+    config = {
+        "tiers": dict(HEURISTIC_FIRST_TIERS),
+        "tier_boundaries": dict(HEURISTIC_FIRST_BOUNDARIES),
+        "scorer_version": scorer_version,
+        **config_overrides,
+    }
+    return ComplexityRouter(
+        model_name="test-complexity-router",
+        litellm_router_instance=mock_router_instance,
+        complexity_router_config=config,
+    )
+
+
+class TestScorerVersion2:
+    """scorer_version 2 requires positive evidence of triviality for SIMPLE and defaults
+    below-boundary traffic to MEDIUM; version 1 (the default) keeps mapping score 0.0 to
+    SIMPLE, so existing routers do not move."""
+
+    def test_no_evidence_defaults_medium_under_v2_and_simple_under_v1(self, mock_router_instance):
+        v1_tier, v1_score, v1_signals = _versioned_router(mock_router_instance, 1).classify(V2_NO_EVIDENCE_PROMPT)
+        assert (v1_tier, v1_score, v1_signals) == (ComplexityTier.SIMPLE, 0.0, [])
+
+        tier, score, signals, cause = _versioned_router(mock_router_instance, 2)._score_and_classify(
+            V2_NO_EVIDENCE_PROMPT
+        )
+        assert (tier, score, signals) == (ComplexityTier.MEDIUM, 0.0, ())
+        assert cause == "insufficient_evidence"
+
+    def test_absent_scorer_version_defaults_to_v1(self, mock_router_instance):
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={"tiers": dict(HEURISTIC_FIRST_TIERS)},
+        )
+        assert router.config.scorer_version == 1
+        tier, _, _ = router.classify(V2_NO_EVIDENCE_PROMPT)
+        assert tier == ComplexityTier.SIMPLE
+
+    def test_v2_mixed_evidence_below_boundary_defaults_medium(self, mock_router_instance):
+        """A weak positive signal is not triviality evidence: the prompt must not land SIMPLE
+        even though its score sits below simple_medium."""
+        prompt = (
+            "first water the plants on the balcony and then take the recycling bins out "
+            "to the curb before the truck arrives tomorrow morning"
+        )
+        tier, score, signals, cause = _versioned_router(mock_router_instance, 2)._score_and_classify(prompt)
+        assert any(s.startswith("deliverables") for s in signals)
+        assert score < HEURISTIC_FIRST_BOUNDARIES["simple_medium"]
+        assert tier == ComplexityTier.MEDIUM
+        assert cause == "insufficient_evidence"
+        v1_tier, _, _ = _versioned_router(mock_router_instance, 1).classify(prompt)
+        assert v1_tier == ComplexityTier.SIMPLE
+
+    def test_v2_triviality_evidence_still_lands_simple(self, mock_router_instance):
+        tier, _, signals, cause = _versioned_router(mock_router_instance, 2)._score_and_classify("hi")
+        assert tier == ComplexityTier.SIMPLE
+        assert cause == "heuristic_scorer"
+        assert any(s.startswith("trivial") for s in signals)
+
+    @pytest.mark.parametrize(
+        "prompt, pruned_signal_label",
+        [
+            ("Let f(x) = x^3 - 3x + 1. Find all real roots of the cubic on the real line.", "code"),
+            (
+                "Natalia sold clips to 48 of her friends in April, and then she sold half as many "
+                "clips in May. How many clips did Natalia sell altogether in April and May?",
+                "simple",
+            ),
+            ("a) buy milk from the store b) walk the dog around the block twice", "multi-step"),
+        ],
+    )
+    def test_v2_prunes_false_positive_detectors(self, mock_router_instance, prompt, pruned_signal_label):
+        """Keywords and patterns that fire on plain English are gone from the v2 defaults but
+        keep firing under v1."""
+        _, _, v1_signals = _versioned_router(mock_router_instance, 1).classify(prompt)
+        assert any(pruned_signal_label in s for s in v1_signals)
+        _, _, v2_signals = _versioned_router(mock_router_instance, 2).classify(prompt)
+        assert not any(pruned_signal_label in s for s in v2_signals)
+
+    def test_v2_operator_keyword_overrides_still_win(self, mock_router_instance):
+        """An operator-supplied list replaces the defaults under both versions, so opting into
+        v2 never silently discards configured keywords."""
+        router = _versioned_router(mock_router_instance, 2, simple_keywords=["never mind that"])
+        tier, _, signals, _ = router._score_and_classify("never mind that")
+        assert tier == ComplexityTier.SIMPLE
+        assert any(s.startswith("trivial") for s in signals)
+        default_tier, _, _, cause = _versioned_router(mock_router_instance, 2)._score_and_classify("never mind that")
+        assert (default_tier, cause) == (ComplexityTier.MEDIUM, "insufficient_evidence")
+
+    def test_v2_code_detection_survives_the_prune(self, mock_router_instance):
+        tier, _, signals = _versioned_router(mock_router_instance, 2).classify(
+            "Write a python function that returns the max of a list."
+        )
+        assert tier == ComplexityTier.MEDIUM
+        assert "task (code)" in signals
+
+    def test_v2_domain_depth_needs_multiple_hits(self, mock_router_instance):
+        """Terminology is supporting evidence only: a clinical case with several medicine terms
+        fires, a lookup with one technical term does not (the doc's easy-lookup hard negative)."""
+        _, _, signals, _ = _versioned_router(mock_router_instance, 2)._score_and_classify(
+            "A patient presents with tachycardia; describe the differential diagnosis and workup."
+        )
+        assert any(s.startswith("domain (medicine") for s in signals)
+        _, _, lookup_signals, cause = _versioned_router(mock_router_instance, 2)._score_and_classify(
+            "what port does https use"
+        )
+        assert not any(s.startswith("domain") for s in lookup_signals)
+        assert cause == "insufficient_evidence"
+
+    def test_v2_constraint_words_quoted_do_not_fire(self, mock_router_instance):
+        """The doc's hard negative: naming a constraint word once is not an imposed constraint."""
+        _, _, signals, _ = _versioned_router(mock_router_instance, 2)._score_and_classify(
+            "How often does the word must appear in the US constitution?"
+        )
+        assert not any(s.startswith("constraints") for s in signals)
+        _, _, constrained_signals, _ = _versioned_router(mock_router_instance, 2)._score_and_classify(
+            "The summary must cover every chapter, use at most 200 words, and end with exactly one question."
+        )
+        assert any(s.startswith("constraints") for s in constrained_signals)
+
+    def test_v2_context_operation_scores_the_operation_not_the_material(self, mock_router_instance):
+        """Supplied material scores nothing by itself, and a bounded extraction over it stays
+        SIMPLE-eligible; only a judgment-heavy operation counts (the doc's mechanical-extraction
+        hard negative)."""
+        v2 = _versioned_router(mock_router_instance, 2)
+        _, _, signals, _ = v2._score_and_classify(
+            "Here is a table of quarterly ledger entries. Reconcile the two accounts and flag gaps."
+        )
+        assert any(s.startswith("context op") for s in signals)
+        _, _, bounded_signals, _ = v2._score_and_classify(
+            "Here is a table of quarterly ledger entries. List the vendor names that appear in it."
+        )
+        assert not any(s.startswith("context op") for s in bounded_signals)
+
+    def test_v2_bounded_translation_of_supplied_text_stays_simple(self, mock_router_instance):
+        tier, _, signals, cause = _versioned_router(mock_router_instance, 2)._score_and_classify(
+            "Translate the following paragraph into French: We hereby agree to the terms."
+        )
+        assert tier == ComplexityTier.SIMPLE
+        assert cause == "heuristic_scorer"
+        assert any(s.startswith("trivial") for s in signals)
+
+    def test_v2_multi_hop_and_deliverables_detect_structure(self, mock_router_instance):
+        _, _, signals, _ = _versioned_router(mock_router_instance, 2)._score_and_classify(
+            "Given that the cache misses, compute the fallback latency, and if it exceeds budget "
+            "then use that to size the pool."
+        )
+        assert any(s.startswith("multi-hop") for s in signals)
+        _, _, deliverable_signals, _ = _versioned_router(mock_router_instance, 2)._score_and_classify(
+            "Draft the launch announcement and also prepare the rollback checklist for the release."
+        )
+        assert any(s.startswith("deliverables") for s in deliverable_signals)
+
+    def test_v2_task_type_never_moves_the_tier(self, mock_router_instance):
+        """taskType is descriptive context: it may be the only signal and the score stays 0.0, so
+        the request still defaults instead of short-circuiting on a category label."""
+        tier, score, signals, cause = _versioned_router(mock_router_instance, 2)._score_and_classify(
+            "the pipeline is emitting duplicates"
+        )
+        assert score == 0.0
+        assert (tier, cause) == (ComplexityTier.MEDIUM, "insufficient_evidence")
+
+    def test_v2_weights_overridable_by_v2_name_and_default_sum_is_one(self, mock_router_instance):
+        from litellm.router_strategy.complexity_router.config import DEFAULT_DIMENSION_WEIGHTS_V2
+
+        assert sum(DEFAULT_DIMENSION_WEIGHTS_V2.values()) == pytest.approx(1.0)
+        baseline, _, _, _ = _versioned_router(mock_router_instance, 2)._score_and_classify(
+            "Prove that there are infinitely many primes p such that p is congruent to 3 mod 4."
+        )
+        zeroed = _versioned_router(
+            mock_router_instance, 2, dimension_weights={"reasoningDemand": 0.0, "domainDepth": 0.0}
+        )
+        _, zeroed_score, _, zeroed_cause = zeroed._score_and_classify(
+            "Prove that there are infinitely many primes p such that p is congruent to 3 mod 4."
+        )
+        assert baseline == ComplexityTier.MEDIUM
+        assert zeroed_score == 0.0
+        assert zeroed_cause == "insufficient_evidence"
+
+    def test_v2_domain_keywords_override_replaces_one_domain(self, mock_router_instance):
+        router = _versioned_router(
+            mock_router_instance, 2, domain_keywords={"gastronomy": ["sourdough starter", "lamination"]}
+        )
+        _, _, signals, _ = router._score_and_classify(
+            "My sourdough starter collapses during lamination; walk me through why."
+        )
+        assert any(s.startswith("domain (gastronomy") for s in signals)
+
+    def test_domain_keywords_rejected_under_v1(self):
+        with pytest.raises(ValidationError, match="domain_keywords is set but scorer_version is 1"):
+            ComplexityRouterConfig(domain_keywords={"math": ["theorem"]})
+
+    @pytest.mark.asyncio
+    async def test_v2_medium_default_resolves_like_v1_when_medium_tier_unconfigured(self, mock_router_instance):
+        """A tier set without MEDIUM serves the v2 insufficient-evidence default through
+        default_model, exactly as a v1 mid-band MEDIUM score does (get_model_for_tier owns both),
+        and the deployment path guarantees default_model at registration (router.py derives it
+        from fallback_tier, MEDIUM, then SIMPLE, and raises without one)."""
+        v2 = ComplexityRouter(
+            model_name="t",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "scorer_version": 2,
+                "tiers": {"SIMPLE": "cheap-model", "REASONING": "big-model"},
+            },
+            default_model="cheap-model",
+        )
+        response = await v2.async_pre_routing_hook(
+            model="t", request_kwargs={}, messages=[{"role": "user", "content": V2_NO_EVIDENCE_PROMPT}]
+        )
+        assert response is not None
+        assert response.model == "cheap-model"
+        assert response.routing_decision is not None
+        assert response.routing_decision["tier"] == "MEDIUM"
+        assert response.routing_decision["cause"] == "insufficient_evidence"
+
+        v1 = ComplexityRouter(
+            model_name="t",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={"tiers": {"SIMPLE": "cheap-model", "REASONING": "big-model"}},
+            default_model="cheap-model",
+        )
+        v1_response = await v1.async_pre_routing_hook(
+            model="t",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Write a python function that returns the max of a list."}],
+        )
+        assert v1_response is not None
+        assert v1_response.model == "cheap-model"
+        assert v1_response.routing_decision is not None
+        assert v1_response.routing_decision["tier"] == "MEDIUM"
+
+    @pytest.mark.parametrize("bad_version", [0, 3])
+    def test_rejects_unknown_scorer_version(self, bad_version):
+        with pytest.raises(ValidationError):
+            ComplexityRouterConfig(scorer_version=bad_version)
+
+    @pytest.mark.asyncio
+    async def test_v2_decision_record_carries_insufficient_evidence_cause(self, mock_router_instance):
+        """PreRoutingHookResponse validates routing_decision against RoutingDecisionCause, so
+        this pins that the new cause survives the per-request path end to end."""
+        router = _versioned_router(mock_router_instance, 2)
+        response = await router.async_pre_routing_hook(
+            model="test-complexity-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": V2_NO_EVIDENCE_PROMPT}],
+        )
+        assert response is not None
+        decision = response.routing_decision
+        assert decision is not None
+        assert decision["cause"] == "insufficient_evidence"
+        assert decision["tier"] == "MEDIUM"
+        assert decision["routed_model"] == response.model == "gpt-4o"
+        assert decision["score"] == 0.0
+        assert "signals" not in decision
+
+    @pytest.mark.asyncio
+    async def test_v2_heuristic_first_no_signal_still_abstains_to_classifier(self, mock_router_instance):
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "REASONING"}'))
+        router = _heuristic_first_router(mock_router_instance, scorer_version=2)
+        outcome = await router.aclassify(V2_NO_EVIDENCE_PROMPT)
+        assert outcome.cause == "llm_classifier"
+        assert outcome.tier == ComplexityTier.REASONING
+
+    @pytest.mark.asyncio
+    async def test_v2_heuristic_first_trivial_prompt_still_short_circuits(self, mock_router_instance):
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "REASONING"}'))
+        router = _heuristic_first_router(mock_router_instance, scorer_version=2)
+        outcome = await router.aclassify("thanks!")
+        assert outcome.cause == "heuristic_first_short_circuit"
+        assert outcome.tier == ComplexityTier.SIMPLE
+        mock_router_instance.acompletion.assert_not_called()
+
+
+TERMINAL_DUMP = (
+    "total 64\ndrwxr-xr-x 2 root root 4096 Sep 2 01:01 .\n-rw-r--r-- 1 root root 812 main.go\n"
+    "go: downloading github.com/hashicorp/raft v1.3.0\ngo build ./...\nall checks green"
+)
+FAILING_DUMP = "go build ./...\nmain.go:14:2: undefined: raft.Config\nmake: *** [build] Error 2"
+EVIDENCE_TASK = (
+    "Diagnose why the raft consensus service loses linearizability during partitions and prove "
+    "the fix preserves it. Reconcile the quorum math with the deployment topology and justify "
+    "each step."
+)
+MEDIUM_EVIDENCE_TASK = (
+    "A patient presents with tachycardia and hypotension; describe the differential diagnosis and the immediate workup."
+)
+
+
+def _continuation_router(mock_router_instance):
+    return ComplexityRouter(
+        model_name="smart",
+        litellm_router_instance=mock_router_instance,
+        complexity_router_config={
+            "scorer_version": 2,
+            "tiers": {"SIMPLE": "haiku", "MEDIUM": "sonnet", "COMPLEX": "opus", "REASONING": "opus-high"},
+        },
+    )
+
+
+async def _turn(router, messages):
+    response = await router.async_pre_routing_hook(model="smart", request_kwargs={}, messages=messages)
+    assert response is not None
+    assert response.routing_decision is not None
+    return response
+
+
+class TestInsufficientEvidenceInheritance:
+    """A v2 abstention on a continuation turn inherits the conversation's tier instead of the
+    MEDIUM default, derived statelessly from the request's own history (no session id, no cache,
+    no opt-in, unlike session_affinity). A consecutive-failure streak in recent turns raises the
+    inherited tier one step."""
+
+    @pytest.mark.asyncio
+    async def test_low_information_continuation_inherits_the_conversation_tier(self, mock_router_instance):
+        router = _continuation_router(mock_router_instance)
+        follow_up = await _turn(
+            router,
+            [
+                {"role": "user", "content": EVIDENCE_TASK},
+                {"role": "assistant", "content": "Running the build to see the failure."},
+                {"role": "user", "content": TERMINAL_DUMP},
+            ],
+        )
+        assert follow_up.model == "opus-high"
+        assert follow_up.routing_decision["tier"] == "REASONING"
+        assert follow_up.routing_decision["cause"] == "insufficient_evidence_inherit"
+        assert "inherited-tier" in follow_up.routing_decision["signals"]
+
+    @pytest.mark.asyncio
+    async def test_trivial_interjections_do_not_reset_the_working_tier(self, mock_router_instance):
+        """The walk skips prior asks whose only evidence is triviality, so a mid-session
+        "thanks!" cannot down-route the continuation that follows it."""
+        router = _continuation_router(mock_router_instance)
+        follow_up = await _turn(
+            router,
+            [
+                {"role": "user", "content": EVIDENCE_TASK},
+                {"role": "assistant", "content": "done"},
+                {"role": "user", "content": "thanks!"},
+                {"role": "assistant", "content": "anything else?"},
+                {"role": "user", "content": TERMINAL_DUMP},
+            ],
+        )
+        assert follow_up.model == "opus-high"
+        assert follow_up.routing_decision["cause"] == "insufficient_evidence_inherit"
+
+    @pytest.mark.asyncio
+    async def test_triviality_word_in_continuation_output_still_inherits(self, mock_router_instance):
+        """A continuation that scores SIMPLE only because its output contains a triviality word
+        (terminal noise like "okay") is still a low-information turn, so it inherits rather than
+        dropping to the cheapest model mid-task."""
+        router = _continuation_router(mock_router_instance)
+        follow_up = await _turn(
+            router,
+            [
+                {"role": "user", "content": EVIDENCE_TASK},
+                {"role": "assistant", "content": "building"},
+                {"role": "user", "content": "okay"},
+            ],
+        )
+        assert follow_up.model == "opus-high"
+        assert follow_up.routing_decision["tier"] == "REASONING"
+        assert follow_up.routing_decision["cause"] == "insufficient_evidence_inherit"
+
+    @pytest.mark.asyncio
+    async def test_v1_router_never_inherits(self, mock_router_instance):
+        """Inheritance is a v2-only behavior: a v1 router that lands SIMPLE on a continuation
+        keeps SIMPLE, so opting nobody in leaves v1 routing and spend exactly as before."""
+        v1 = ComplexityRouter(
+            model_name="smart",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {"SIMPLE": "haiku", "MEDIUM": "sonnet", "COMPLEX": "opus", "REASONING": "opus-high"}
+            },
+        )
+        follow_up = await _turn(
+            v1,
+            [
+                {"role": "user", "content": EVIDENCE_TASK},
+                {"role": "assistant", "content": "building"},
+                {"role": "user", "content": "okay"},
+            ],
+        )
+        assert follow_up.model == "haiku"
+        assert follow_up.routing_decision["tier"] == "SIMPLE"
+        assert follow_up.routing_decision["cause"] == "heuristic_scorer"
+
+    @pytest.mark.asyncio
+    async def test_housekeeping_placement_is_never_overridden_by_inheritance(self, mock_router_instance):
+        """A housekeeping title turn after real work is a deliberate cheap placement, so
+        inheritance must leave it on the cheapest tier rather than billing the prior tier."""
+        router = ComplexityRouter(
+            model_name="smart",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "scorer_version": 2,
+                "route_housekeeping_to_cheapest_tier": True,
+                "tiers": {"SIMPLE": "haiku", "MEDIUM": "sonnet", "COMPLEX": "opus", "REASONING": "opus-high"},
+            },
+        )
+        follow_up = await _turn(
+            router,
+            [
+                {"role": "user", "content": EVIDENCE_TASK},
+                {"role": "assistant", "content": "done"},
+                {"role": "user", "content": "Write the title in the predominant language of the session"},
+            ],
+        )
+        assert follow_up.model == "haiku"
+        assert follow_up.routing_decision["cause"] == "housekeeping"
+
+    def test_two_anchor_patterns_are_bounded_against_adversarial_input(self, mock_router_instance):
+        """The if/first..then patterns cap the gap so a long prompt with no closing anchor cannot
+        force a quadratic scan."""
+        import time
+
+        router = _continuation_router(mock_router_instance)
+        adversarial = "if " + "x " * 60000 + "banana"
+        start = time.monotonic()
+        router._score_and_classify(adversarial)
+        assert time.monotonic() - start < 2.0
+        # the bound still matches a real short clause
+        _, _, signals, _ = router._score_and_classify("compute the latency and if it exceeds budget then size the pool")
+        assert any(s.startswith("multi-hop") for s in signals)
+
+    @pytest.mark.asyncio
+    async def test_standalone_greeting_still_routes_simple(self, mock_router_instance):
+        """Inheritance needs a prior informative ask, so a genuine one-off greeting or bounded
+        transformation with no history still routes SIMPLE rather than inheriting anything."""
+        router = _continuation_router(mock_router_instance)
+        greeting = await _turn(router, [{"role": "user", "content": "hi there"}])
+        assert greeting.model == "haiku"
+        assert greeting.routing_decision["cause"] == "heuristic_scorer"
+
+    @pytest.mark.asyncio
+    async def test_conversation_with_no_informative_ask_keeps_the_medium_default(self, mock_router_instance):
+        router = _continuation_router(mock_router_instance)
+        first = await _turn(router, [{"role": "user", "content": TERMINAL_DUMP}])
+        assert first.model == "sonnet"
+        assert first.routing_decision["cause"] == "insufficient_evidence"
+        second = await _turn(
+            router,
+            [
+                {"role": "user", "content": TERMINAL_DUMP},
+                {"role": "assistant", "content": "ok"},
+                {"role": "user", "content": "drwxr-xr-x 2 root root 4096 Sep 2 lib"},
+            ],
+        )
+        assert second.model == "sonnet"
+        assert second.routing_decision["cause"] == "insufficient_evidence"
+
+    @pytest.mark.asyncio
+    async def test_failure_streak_escalates_the_inherited_tier_one_step(self, mock_router_instance):
+        router = _continuation_router(mock_router_instance)
+        history = [{"role": "user", "content": MEDIUM_EVIDENCE_TASK}]
+        for _ in range(3):
+            history = [
+                *history,
+                {"role": "assistant", "content": "retrying"},
+                {"role": "user", "content": FAILING_DUMP},
+            ]
+        stalled = await _turn(router, history)
+        assert stalled.model == "opus"
+        assert stalled.routing_decision["tier"] == "COMPLEX"
+        assert stalled.routing_decision["cause"] == "insufficient_evidence_inherit"
+        assert any(s.startswith("progress-stall") for s in stalled.routing_decision["signals"])
+
+    @pytest.mark.asyncio
+    async def test_short_failure_streak_inherits_without_escalating(self, mock_router_instance):
+        router = _continuation_router(mock_router_instance)
+        two_failures = [
+            {"role": "user", "content": MEDIUM_EVIDENCE_TASK},
+            {"role": "assistant", "content": "retrying"},
+            {"role": "user", "content": FAILING_DUMP},
+            {"role": "assistant", "content": "retrying"},
+            {"role": "user", "content": FAILING_DUMP},
+        ]
+        inherited = await _turn(router, two_failures)
+        assert inherited.model == "sonnet"
+        assert inherited.routing_decision["tier"] == "MEDIUM"
+        assert inherited.routing_decision["cause"] == "insufficient_evidence_inherit"
+        assert not any(s.startswith("progress-stall") for s in inherited.routing_decision["signals"])
+
+    @pytest.mark.asyncio
+    async def test_successful_output_breaks_the_failure_streak(self, mock_router_instance):
+        """A clean run between failures resets the count: escalation needs CONSECUTIVE failures,
+        so flaky-but-progressing sessions stay on the inherited tier."""
+        router = _continuation_router(mock_router_instance)
+        history = [
+            {"role": "user", "content": MEDIUM_EVIDENCE_TASK},
+            {"role": "assistant", "content": "retrying"},
+            {"role": "user", "content": FAILING_DUMP},
+            {"role": "assistant", "content": "retrying"},
+            {"role": "user", "content": FAILING_DUMP},
+            {"role": "assistant", "content": "fixed the import"},
+            {"role": "user", "content": TERMINAL_DUMP},
+            {"role": "assistant", "content": "one more check"},
+            {"role": "user", "content": FAILING_DUMP},
+        ]
+        response = await _turn(router, history)
+        assert response.routing_decision["tier"] == "MEDIUM"
+        assert not any(s.startswith("progress-stall") for s in response.routing_decision["signals"])
+
+    @pytest.mark.asyncio
+    async def test_informative_continuation_still_decides_for_itself(self, mock_router_instance):
+        """Inheritance only replaces the abstention default: a continuation carrying real
+        evidence classifies normally."""
+        router = _continuation_router(mock_router_instance)
+        response = await _turn(
+            router,
+            [
+                {"role": "user", "content": MEDIUM_EVIDENCE_TASK},
+                {"role": "assistant", "content": "ok"},
+                {"role": "user", "content": EVIDENCE_TASK},
+            ],
+        )
+        assert response.model == "opus-high"
+        assert response.routing_decision["cause"] == "reasoning_override"
+
+
 class TestCustomTechnicalKeywords:
     """Test the custom_technical_keywords config option."""
 
@@ -2410,9 +2940,7 @@ class TestRouterPreRoutingAliasOverrides:
         import time
 
         monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
-        (tmp_path / "api-key.json").write_text(
-            json.dumps({"token": "tid=test", "expires_at": int(time.time()) + 3600})
-        )
+        (tmp_path / "api-key.json").write_text(json.dumps({"token": "tid=test", "expires_at": int(time.time()) + 3600}))
         router = Router(
             model_list=[
                 {
@@ -2437,7 +2965,9 @@ class TestRouterPreRoutingAliasOverrides:
         copilot_resolutions: List = []
 
         def _guarded(*args, **kwargs):
-            target = str(kwargs.get("model") or (args[0] if args else "")) + str(kwargs.get("custom_llm_provider") or "")
+            target = str(kwargs.get("model") or (args[0] if args else "")) + str(
+                kwargs.get("custom_llm_provider") or ""
+            )
             if "github_copilot" in target:
                 copilot_resolutions.append(target)
                 raise RuntimeError("routing must not resolve an authenticating provider")
@@ -7467,7 +7997,6 @@ class TestClientHousekeepingCalls:
         assert result is not None
         assert result.model == "claude-sonnet-4-20250514"
 
-
     @pytest.mark.asyncio
     async def test_a_classifier_plugin_still_decides_its_own_routers(self, mock_router_instance):
         """A plugin is where an operator encodes policy the tier ladder cannot express.
@@ -7502,9 +8031,7 @@ class TestClientHousekeepingCalls:
         assert result.model == "o1-preview"
         assert result.routing_decision["cause"] == "classifier_plugin"
 
-    def _adaptive_router(
-        self, tier_distance_penalty: float, plan_mode_min_tier: str | None = None
-    ) -> ComplexityRouter:
+    def _adaptive_router(self, tier_distance_penalty: float, plan_mode_min_tier: str | None = None) -> ComplexityRouter:
         adaptive_instance = MagicMock()
         adaptive_instance.model_list = [
             {
@@ -7541,9 +8068,7 @@ class TestClientHousekeepingCalls:
         return router
 
     @pytest.mark.asyncio
-    async def test_the_bandit_cannot_route_a_housekeeping_call_above_the_cheapest_tier(
-        self, mock_router_instance
-    ):
+    async def test_the_bandit_cannot_route_a_housekeeping_call_above_the_cheapest_tier(self, mock_router_instance):
         """The tier here is what the request IS, not how hard it is, so the bandit has nothing to win.
 
         Without a ceiling the tier distance penalty is the only thing holding the tier, so a
@@ -7575,7 +8100,6 @@ class TestClientHousekeepingCalls:
 
         assert result is not None
         assert result.model == "premium"
-
 
     @pytest.mark.asyncio
     async def test_a_housekeeping_call_never_becomes_the_session_pin(self, mock_router_instance):
@@ -7618,9 +8142,7 @@ class TestClientHousekeepingCalls:
         assert work_turn.routing_decision["cause"] == "llm_classifier"
 
     @pytest.mark.asyncio
-    async def test_the_decision_records_which_sentinel_matched(
-        self, mock_router_instance, llm_classifier_config
-    ):
+    async def test_the_decision_records_which_sentinel_matched(self, mock_router_instance, llm_classifier_config):
         """The cause's contract says the sentinel rides in matched_keyword, so it has to be there.
 
         Without it an operator reading the logs can see that a call was treated as housekeeping but
@@ -7640,7 +8162,6 @@ class TestClientHousekeepingCalls:
         assert result.routing_decision["matched_keyword"] == (
             "Write the title in the predominant language of the session"
         )
-
 
     @pytest.mark.asyncio
     async def test_the_plan_mode_floor_raises_a_housekeeping_call_under_adaptive(self, mock_router_instance):
@@ -10367,7 +10888,9 @@ class TestContextWindowEscalation:
         copilot_resolutions: List = []
 
         def _guarded(*args, **kwargs):
-            target = str(kwargs.get("model") or (args[0] if args else "")) + str(kwargs.get("custom_llm_provider") or "")
+            target = str(kwargs.get("model") or (args[0] if args else "")) + str(
+                kwargs.get("custom_llm_provider") or ""
+            )
             if "github_copilot" in target:
                 copilot_resolutions.append(target)
                 raise RuntimeError("the gate must not resolve an authenticating provider")

@@ -11,7 +11,9 @@ import os
 import sys
 
 # ruff: noqa: T201
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
@@ -31,7 +33,7 @@ class EvalCase:
     description: str
     system_prompt: str | None = None
     # Allow some flexibility - if actual tier is in acceptable_tiers, still passes
-    acceptable_tiers: list[ComplexityTier] | None = None
+    acceptable_tiers: Sequence[ComplexityTier] | None = None
 
 
 # ─── Evaluation Dataset ───
@@ -230,31 +232,150 @@ EVAL_CASES: Final[list[EvalCase]] = [
     ),
 ]
 
+# scorer_version 2 cases: hard prompts with no software vocabulary must not land SIMPLE,
+# triviality evidence still does, and the pruned keywords no longer fire.
+V2_ROUTER_CONFIG: Final[Mapping[str, object]] = MappingProxyType({"scorer_version": 2})
 
-def run_eval() -> tuple[int, int, list[dict]]:
+V2_EVAL_CASES: Final[tuple[EvalCase, ...]] = (
+    EvalCase(
+        prompt="hi",
+        expected_tier=ComplexityTier.SIMPLE,
+        description="Greeting stays SIMPLE on triviality evidence",
+    ),
+    EvalCase(
+        prompt="Thanks, that fixed it!",
+        expected_tier=ComplexityTier.SIMPLE,
+        description="Acknowledgement stays SIMPLE on triviality evidence",
+    ),
+    EvalCase(
+        prompt="A reaction of a liquid organic compound, which molecules consist of carbon and "
+        "hydrogen atoms, is performed at 80 centigrade and 20 bar for 24 hours. In the proton "
+        "nuclear magnetic resonance spectrum, the signals with the highest chemical shift of the "
+        "reactant are replaced by a signal of the product that is observed about three to four "
+        "units downfield. Compounds from which position in the periodic system of the elements "
+        "have most likely been initially added in small amounts?",
+        expected_tier=ComplexityTier.MEDIUM,
+        description="Graduate chemistry (no SWE vocabulary) must not default SIMPLE",
+        acceptable_tiers=(ComplexityTier.COMPLEX, ComplexityTier.REASONING),
+    ),
+    EvalCase(
+        prompt="Prove that there are infinitely many primes p such that p is congruent to 3 mod 4.",
+        expected_tier=ComplexityTier.MEDIUM,
+        description="Number-theory proof must not default SIMPLE",
+        acceptable_tiers=(ComplexityTier.COMPLEX, ComplexityTier.REASONING),
+    ),
+    EvalCase(
+        prompt="Our landlord entered the apartment without notice three times last month and "
+        "changed the locks once. We are in California. Walk me through every remedy available "
+        "to us, the statutory notice requirements the landlord violated, and whether we can "
+        "terminate the lease early without penalty.",
+        expected_tier=ComplexityTier.MEDIUM,
+        description="Legal analysis must not default SIMPLE",
+        acceptable_tiers=(ComplexityTier.COMPLEX, ComplexityTier.REASONING),
+    ),
+    EvalCase(
+        prompt="A 54 year old man presents with crushing substernal chest pain radiating to the "
+        "left arm, diaphoresis, and nausea for 45 minutes. Blood pressure 88/60, heart rate 118. "
+        "Describe the differential diagnosis, the immediate workup, and the treatment pathway if "
+        "the ECG shows ST elevation in leads II, III and aVF.",
+        expected_tier=ComplexityTier.MEDIUM,
+        description="Clinical case must not default SIMPLE",
+        acceptable_tiers=(ComplexityTier.COMPLEX, ComplexityTier.REASONING),
+    ),
+    EvalCase(
+        prompt="Compose a 1500 word persuasive essay arguing that urban car bans improve public "
+        "health, addressing at least three counterarguments and citing the strongest empirical "
+        "evidence on each side.",
+        expected_tier=ComplexityTier.MEDIUM,
+        description="Long-form constrained writing must not default SIMPLE",
+        acceptable_tiers=(ComplexityTier.COMPLEX, ComplexityTier.REASONING),
+    ),
+    EvalCase(
+        prompt="Compose a Shakespearean sonnet about the ocean in iambic pentameter where the "
+        "first letters of each line spell OCEANWAVESRIDE, and the volta lands exactly at line 9.",
+        expected_tier=ComplexityTier.MEDIUM,
+        description="Constrained verse must not default SIMPLE",
+        acceptable_tiers=(ComplexityTier.COMPLEX, ComplexityTier.REASONING),
+    ),
+    EvalCase(
+        prompt="Five houses in a row are painted different colors, and their owners have "
+        "different pets, drinks, and jobs. Given these twelve clues, determine who owns the fish.",
+        expected_tier=ComplexityTier.MEDIUM,
+        description="Logic puzzle must not default SIMPLE",
+        acceptable_tiers=(ComplexityTier.COMPLEX, ComplexityTier.REASONING),
+    ),
+    EvalCase(
+        prompt="Here is a table of monthly revenue by region for the last three years. Identify "
+        "which regions are decelerating, whether seasonality explains the Q4 spikes, and "
+        "forecast next quarter with your reasoning.",
+        expected_tier=ComplexityTier.MEDIUM,
+        description="Data analysis must not default SIMPLE",
+        acceptable_tiers=(ComplexityTier.COMPLEX, ComplexityTier.REASONING),
+    ),
+    EvalCase(
+        prompt="Natalia sold clips to 48 of her friends in April, and then she sold half as many "
+        "clips in May. How many clips did Natalia sell altogether in April and May?",
+        expected_tier=ComplexityTier.MEDIUM,
+        description="Math word problem: pruned 'how many' no longer marks it trivial",
+    ),
+    EvalCase(
+        prompt="Let f(x) = x^3 - 3x + 1. Find all real roots.",
+        expected_tier=ComplexityTier.MEDIUM,
+        description="Pruned 'let' no longer reads math as code",
+    ),
+    EvalCase(
+        prompt="Our payment service loses events when the broker partitions; design an "
+        "exactly-once delivery approach across three regions given we cannot use distributed "
+        "transactions.",
+        expected_tier=ComplexityTier.MEDIUM,
+        description="Hard distributed-systems prompt must not default SIMPLE",
+        acceptable_tiers=(ComplexityTier.COMPLEX, ComplexityTier.REASONING),
+    ),
+    EvalCase(
+        prompt="Write a python function that returns the max of a list.",
+        expected_tier=ComplexityTier.MEDIUM,
+        description="Code detection still works after the prune",
+    ),
+    EvalCase(
+        prompt="Step by step, explain your reasoning as you evaluate whether we should use "
+        "PostgreSQL or MongoDB for our new project. Consider our requirements: complex queries, "
+        "high write volume, and eventual consistency is acceptable.",
+        expected_tier=ComplexityTier.REASONING,
+        description="Reasoning override still fires under v2",
+    ),
+)
+
+
+def run_eval(
+    cases: Sequence[EvalCase] | None = None,
+    complexity_router_config: Mapping[str, object] | None = None,
+    title: str = "COMPLEXITY ROUTER EVALUATION",
+) -> tuple[int, int, list[dict]]:
     """
     Run the evaluation suite.
 
     Returns:
         Tuple of (passed, total, failures)
     """
+    eval_cases: Final = cases if cases is not None else EVAL_CASES
     # Create router with default config
     mock_router: Final = MagicMock()
     router: Final = ComplexityRouter(
         model_name="eval-router",
         litellm_router_instance=mock_router,
+        complexity_router_config=complexity_router_config,
     )
 
     passed = 0
-    total: Final = len(EVAL_CASES)
+    total: Final = len(eval_cases)
     failures: Final = []
 
     print("=" * 70)
-    print("COMPLEXITY ROUTER EVALUATION")
+    print(title)
     print("=" * 70)
     print()
 
-    for i, case in enumerate(EVAL_CASES, 1):
+    for i, case in enumerate(eval_cases, 1):
         tier, score, signals = router.classify(case.prompt, case.system_prompt)
 
         # Check if pass
@@ -308,21 +429,29 @@ def run_eval() -> tuple[int, int, list[dict]]:
     return passed, total, failures
 
 
+def _gate(pass_rate: float, name: str) -> bool:
+    """Report one suite's verdict; True when it is a hard failure."""
+    if pass_rate < 0.80:
+        print(f"\n{name} FAILED: Pass rate {pass_rate:.1%} is below 80% threshold")
+        return True
+    if pass_rate < 0.90:
+        print(f"\n{name} WARNING: Pass rate {pass_rate:.1%} is below 90%")
+        return False
+    print(f"\n{name} PASSED: Pass rate {pass_rate:.1%}")
+    return False
+
+
 def main():
     """Main entry point."""
-    passed, total, failures = run_eval()
+    v1_passed, v1_total, _ = run_eval(title="COMPLEXITY ROUTER EVALUATION (scorer_version 1, default)")
+    v2_passed, v2_total, _ = run_eval(
+        cases=V2_EVAL_CASES,
+        complexity_router_config=V2_ROUTER_CONFIG,
+        title="COMPLEXITY ROUTER EVALUATION (scorer_version 2)",
+    )
 
-    # Exit with error code if too many failures
-    pass_rate: Final = passed / total
-    if pass_rate < 0.80:
-        print(f"\n❌ EVAL FAILED: Pass rate {pass_rate:.1%} is below 80% threshold")
-        sys.exit(1)
-    elif pass_rate < 0.90:
-        print(f"\n⚠️  EVAL WARNING: Pass rate {pass_rate:.1%} is below 90%")
-        sys.exit(0)
-    else:
-        print(f"\n✅ EVAL PASSED: Pass rate {pass_rate:.1%}")
-        sys.exit(0)
+    failed: Final = _gate(v1_passed / v1_total, "V1 EVAL") | _gate(v2_passed / v2_total, "V2 EVAL")
+    sys.exit(1 if failed else 0)
 
 
 if __name__ == "__main__":

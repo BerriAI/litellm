@@ -383,6 +383,281 @@ DEFAULT_SIMPLE_KEYWORDS: Final[list[str]] = [
     # Note: "ok" removed due to false positives (matches "token", "book", etc.)
 ]
 
+# scorer_version 2 drops keywords that fire on plain English outside their intended meaning:
+# "let"/"class"/"return" match math and everyday prose. Under v2 the code list only feeds the
+# zero-weight taskType category, never a tier.
+V2_PRUNED_CODE_KEYWORDS: Final[frozenset[str]] = frozenset(
+    ("let", "class", "return", "request", "query", "error", "git", "var")
+)
+DEFAULT_CODE_KEYWORDS_V2: Final[tuple[str, ...]] = tuple(
+    k for k in DEFAULT_CODE_KEYWORDS if k not in V2_PRUNED_CODE_KEYWORDS
+)
+
+# trivialityEvidence, the only v2 dimension that can produce SIMPLE: greetings, acknowledgements,
+# and bounded transformations. Question openers ("what is", "how many") mark phrasing, not task
+# difficulty (GSM8K word problems open with them), so none of them survive from the v1 list.
+DEFAULT_SIMPLE_KEYWORDS_V2: Final[tuple[str, ...]] = (
+    "hello",
+    "hi",
+    "hey",
+    "thanks",
+    "thank you",
+    "goodbye",
+    "bye",
+    "okay",
+    "translate",
+    "rewrite",
+    "reword",
+    "rephrase",
+    "reformat",
+    "proofread",
+    "fix the typo",
+    "fix this typo",
+    "fix the grammar",
+    "convert this to",
+    "uppercase",
+    "lowercase",
+)
+
+# reasoningDemand: the operations a request requires (derivation, proof, diagnosis, optimization,
+# causal inference), not just chain-of-thought stock phrases. Extends the v1 phrasebook.
+DEFAULT_REASONING_DEMAND_KEYWORDS: Final[tuple[str, ...]] = (
+    *DEFAULT_REASONING_KEYWORDS,
+    "prove",
+    "derive",
+    "diagnose",
+    "justify",
+    "reconcile",
+    "show that",
+    "walk me through",
+    "explain why",
+    "determine whether",
+    "what follows from",
+)
+
+# domainDepth: terminology per knowledge domain, widened past software. Supporting evidence only:
+# the score comes from the single best-matching domain and needs multiple hits to fire.
+DEFAULT_DOMAIN_KEYWORDS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        "math": (
+            "theorem",
+            "lemma",
+            "proof",
+            "prime",
+            "integer",
+            "congruent",
+            "modulo",
+            "mod",
+            "polynomial",
+            "derivative",
+            "integral",
+            "matrix",
+            "eigenvalue",
+            "probability",
+            "geometry",
+            "algebra",
+            "calculus",
+            "equation",
+            "inequality",
+            "real roots",
+        ),
+        "physical_science": (
+            "molecule",
+            "atom",
+            "electron",
+            "reaction",
+            "compound",
+            "chemical",
+            "thermodynamics",
+            "entropy",
+            "quantum",
+            "velocity",
+            "acceleration",
+            "magnetic",
+            "spectrum",
+            "resonance",
+            "isotope",
+            "catalyst",
+            "oxidation",
+            "chemical shift",
+            "periodic system",
+            "periodic table",
+        ),
+        "medicine": (
+            "diagnosis",
+            "differential",
+            "symptom",
+            "patient",
+            "dosage",
+            "contraindication",
+            "prognosis",
+            "pathology",
+            "syndrome",
+            "lesion",
+            "tachycardia",
+            "hypotension",
+            "infarction",
+            "etiology",
+            "clinical",
+            "workup",
+            "presents with",
+            "treatment pathway",
+        ),
+        "law": (
+            "statute",
+            "statutory",
+            "plaintiff",
+            "defendant",
+            "liability",
+            "tort",
+            "remedy",
+            "remedies",
+            "jurisdiction",
+            "precedent",
+            "negligence",
+            "damages",
+            "lease",
+            "landlord",
+            "tenant",
+            "injunction",
+            "indemnify",
+        ),
+        "finance": (
+            "portfolio",
+            "equity",
+            "liquidity",
+            "amortization",
+            "arbitrage",
+            "hedge",
+            "valuation",
+            "discounted cash flow",
+            "balance sheet",
+            "ebitda",
+            "yield curve",
+            "volatility",
+        ),
+        "data": (
+            "dataset",
+            "regression",
+            "correlation",
+            "seasonality",
+            "forecast",
+            "variance",
+            "median",
+            "percentile",
+            "cohort",
+            "time series",
+            "distribution",
+            "outlier",
+            "sample size",
+            "confidence interval",
+            "decelerating",
+        ),
+        "engineering": tuple(DEFAULT_TECHNICAL_KEYWORDS),
+    }
+)
+
+# constraintDensity: markers of independent requirements. Raw counts are a provisional detector
+# per the design doc; the two-hit floor keeps casual "must"/"ensure" prose from firing.
+DEFAULT_CONSTRAINT_KEYWORDS: Final[tuple[str, ...]] = (
+    "must",
+    "at least",
+    "at most",
+    "exactly",
+    "no more than",
+    "no fewer than",
+    "without using",
+    "ensure",
+    "requirement",
+    "requirements",
+    "constraint",
+    "adhering to",
+    "within the limit",
+    "addressing at least",
+    "spell",
+    "lands exactly",
+)
+
+# outputScope: artifacts the caller names for delivery. Only counted next to an authoring verb.
+V2_AUTHORING_VERBS: Final[tuple[str, ...]] = (
+    "write",
+    "compose",
+    "draft",
+    "create",
+    "generate",
+    "produce",
+    "build",
+    "prepare",
+)
+V2_ARTIFACT_NOUNS: Final[tuple[str, ...]] = (
+    "essay",
+    "report",
+    "table",
+    "poem",
+    "sonnet",
+    "plan",
+    "outline",
+    "presentation",
+    "slide",
+    "email",
+    "letter",
+    "memo",
+    "script",
+    "function",
+    "module",
+    "test suite",
+    "diagram",
+    "schema",
+    "spec",
+    "article",
+    "blog post",
+)
+
+# contextOperation: what must be done WITH supplied material. The context marker alone scores
+# nothing; copy/extract/translate/summarize score nothing either, so bounded transformations of
+# big inputs stay SIMPLE-eligible per the design doc.
+V2_CONTEXT_MARKERS: Final[tuple[str, ...]] = (
+    "here is",
+    "here's",
+    "the following",
+    "below",
+    "given the",
+    "this table",
+    "this data",
+    "attached",
+    "```",
+)
+V2_CONTEXT_OPS_HIGH: Final[tuple[str, ...]] = (
+    "reconcile",
+    "synthesize",
+    "diagnose",
+    "forecast",
+    "identify which",
+    "compare",
+)
+V2_CONTEXT_OPS_MEDIUM: Final[tuple[str, ...]] = (
+    "analyze",
+    "interpret",
+    "explain",
+)
+
+# Provisional hand-set weights for the v2 dimension basis; fitting them against public
+# model-outcome data is the staged follow-up. taskType deliberately carries no weight: task
+# type is descriptive context, never a tier prior.
+DEFAULT_DIMENSION_WEIGHTS_V2: Final[Mapping[str, float]] = MappingProxyType(
+    {
+        "reasoningDemand": 0.22,
+        "domainDepth": 0.18,
+        "contextOperation": 0.15,
+        "constraintDensity": 0.13,
+        "multiHop": 0.10,
+        "deliverableCount": 0.08,
+        "outputScope": 0.07,
+        "trivialityEvidence": 0.07,
+        "taskType": 0.0,
+    }
+)
+
 
 # ─── Default Dimension Weights ───
 
@@ -607,7 +882,20 @@ class ComplexityRouterConfig(BaseModel):
     )
     simple_keywords: list[str] | None = Field(
         default=None,
-        description="Keywords indicating simple/basic queries",
+        description=(
+            "Keywords indicating simple/basic queries. Under scorer_version 2 this list feeds "
+            "trivialityEvidence, the only dimension that can produce SIMPLE"
+        ),
+    )
+
+    domain_keywords: Mapping[str, tuple[str, ...]] | None = Field(
+        default=None,
+        description=(
+            "Per-domain terminology for scorer_version 2's domainDepth dimension, replacing or "
+            "extending the shipped domains (math, physical_science, medicine, law, finance, data, "
+            "engineering). A domain named here replaces the shipped list for that domain; other "
+            "shipped domains stay active. Requires scorer_version 2, rejected otherwise"
+        ),
     )
 
     # Default model if scoring fails
@@ -621,6 +909,23 @@ class ComplexityRouterConfig(BaseModel):
         description=(
             "Return the resolved raw model name in the response model field instead of "
             "the client-requested complexity-router alias"
+        ),
+    )
+
+    scorer_version: Literal[1, 2] = Field(
+        default=1,
+        description=(
+            "Heuristic scorer semantics, wherever the scorer runs (classifier_type 'heuristic', the "
+            "local half of 'heuristic_first', and the heuristic classifier_fallback). Version 1 maps "
+            "any score below simple_medium to SIMPLE, so a prompt matching no keyword scores 0.0 and "
+            "routes to the cheapest tier by default. Version 2 scores a different dimension basis "
+            "(reasoningDemand, domainDepth, constraintDensity, deliverableCount, outputScope, "
+            "contextOperation, multiHop, trivialityEvidence, plus a zero-weight taskType category), "
+            "requires positive evidence of triviality for SIMPLE, and defaults no-evidence and "
+            "below-boundary traffic to MEDIUM (cause 'insufficient_evidence'). v2 weights are "
+            "provisional hand-set defaults pending calibration; override them by v2 dimension name "
+            "in dimension_weights. Opt-in: existing routers stay on version 1, so routing and spend "
+            "do not change on upgrade"
         ),
     )
 
@@ -1091,6 +1396,15 @@ class ComplexityRouterConfig(BaseModel):
         if isinstance(value, str):
             return value.strip()
         return value
+
+    @model_validator(mode="after")
+    def _validate_domain_keywords_need_v2(self) -> "ComplexityRouterConfig":
+        if self.domain_keywords is not None and self.scorer_version != 2:
+            raise ValueError(
+                "domain_keywords is set but scorer_version is 1; the v1 scorer has no domainDepth "
+                "dimension so the lists would never be read. Set scorer_version 2 or remove domain_keywords"
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_heuristic_first_max_tier(self) -> "ComplexityRouterConfig":
