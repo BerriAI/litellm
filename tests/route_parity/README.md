@@ -1,4 +1,4 @@
-# Python/Python parity testing in Python SDK interface
+# Python/Rust parity testing in the Python SDK interface
 
 > Given the same SDK call and identical provider behavior, does the PyO3 implementation behave same as Python?
 
@@ -11,6 +11,8 @@
 - The harness compares the values returned through the Python SDK interface
 - Non-streaming responses are compared directly, including their concrete return type and public model fields
 - Streaming responses are consumed and compared chunk by chunk, including wrapper type, chunk type and order, termination, and public exception behavior
+- Failed SDK calls are compared by exception class, stable message, status, code, model, provider, and parameter fields
+- Traceback paths and line numbers are excluded because they are runtime-specific
 - Route-specific comparators and chunk normalizers handle differences in each public SDK contract
 
 ## Process isolation
@@ -47,6 +49,12 @@ Vertex DeepSeek, Reducto v3, and Reducto legacy. Provider credentials and endpoi
 a machine records the boundaries it has configured and skips the rest. Reducto fixtures record both upload and parse
 responses, but Reducto remains outside Python/Rust parity until the Rust OCR bridge supports it.
 Azure-hosted Mistral discovery also requires `AZURE_AI_OCR_MODEL`, the deployment name or full `azure_ai/...` model.
+
+Invalid OCR inputs do not use recorded provider responses. The parity suite checks unsupported providers and models,
+malformed documents, invalid request formats, invalid Azure Document Intelligence parameters, and invalid headers in
+both sync and async SDK calls. These cases must return the same public exception fields without sending a provider
+request. A malformed Azure Document Intelligence document reaches the Rust bridge so its native validation error is
+also compared against Python
 
 ## References
 

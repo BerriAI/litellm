@@ -6,7 +6,7 @@ import pytest
 from pydantic import BaseModel, JsonValue, PrivateAttr
 
 from tests.route_parity.compare import assert_model_parity, assert_parity
-from tests.route_parity.models import CapturedRequest, Execution, SDKReport
+from tests.route_parity.models import CapturedRequest, Execution, SDKError, SDKSuccess, sdk_error_report
 
 SENTINEL: Final = "python-parity-fallback"
 
@@ -23,6 +23,10 @@ class _DifferentResponse(BaseModel):
     value: str
 
 
+class _PublicError(ValueError):
+    status_code: Final = 400
+
+
 def _execution(*, body: JsonValue = None, markdown: str = "same", user_agent: str | None = None) -> Execution:
     return Execution(
         requests=(
@@ -34,7 +38,7 @@ def _execution(*, body: JsonValue = None, markdown: str = "same", user_agent: st
                 user_agent=user_agent,
             ),
         ),
-        report=SDKReport(response={"items": [{"text": markdown}], "model": "test-model"}),
+        report=SDKSuccess(response={"items": [{"text": markdown}], "model": "test-model"}),
     )
 
 
@@ -52,6 +56,36 @@ def test_parity_rejects_response_difference() -> None:
 
     with pytest.raises(AssertionError):
         assert_parity(python, rust, SENTINEL)
+
+
+def test_parity_rejects_error_difference() -> None:
+    python: Final = Execution(
+        requests=(),
+        report=SDKError(
+            exception_type="litellm.exceptions.BadRequestError",
+            message="bad request",
+            status_code=400,
+            code=None,
+            error_type=None,
+            param=None,
+            model="test-model",
+            llm_provider="mistral",
+        ),
+    )
+    rust: Final = python.model_copy(update={"report": python.report.model_copy(update={"status_code": 500})})
+
+    with pytest.raises(AssertionError):
+        assert_parity(python, rust, SENTINEL)
+
+
+def test_sdk_error_report_removes_traceback_but_keeps_public_fields() -> None:
+    error: Final = _PublicError("invalid input\nTraceback (most recent call last):\n  unstable")
+
+    report: Final = sdk_error_report(error)
+
+    assert report.exception_type.endswith("._PublicError")
+    assert report.message == "invalid input"
+    assert report.status_code == 400
 
 
 def test_parity_rejects_rust_fallback() -> None:

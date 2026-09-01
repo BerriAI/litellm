@@ -60,6 +60,9 @@ fn chat_completions_response_to_py(
 
 fn core_error_to_pyerr(err: CoreError) -> PyErr {
     match err {
+        CoreError::MissingField("document_url") => {
+            PyValueError::new_err("Document URL is required")
+        }
         CoreError::Auth(message) => PyValueError::new_err(message),
         CoreError::InvalidProvider(_)
         | CoreError::InvalidRequest(_)

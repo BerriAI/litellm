@@ -25,9 +25,7 @@ def _request_after_transformation(request: CapturedRequest) -> CapturedRequest:
     return request.model_copy(update={"user_agent": None})
 
 
-def assert_request_parity(
-    python: tuple[CapturedRequest, ...], accelerated: tuple[CapturedRequest, ...]
-) -> None:
+def assert_request_parity(python: tuple[CapturedRequest, ...], accelerated: tuple[CapturedRequest, ...]) -> None:
     python_requests: Final = tuple(_request_after_transformation(request) for request in python)
     accelerated_requests: Final = tuple(_request_after_transformation(request) for request in accelerated)
     assert python_requests == accelerated_requests
@@ -47,4 +45,4 @@ def assert_model_parity(python: BaseModel, accelerated: BaseModel) -> None:
 def assert_parity(python: Execution, accelerated: Execution, python_user_agent: str) -> None:
     validate_harness(python, accelerated, python_user_agent)
     assert_request_parity(python.requests, accelerated.requests)
-    assert python.report.response == accelerated.report.response
+    assert python.report == accelerated.report

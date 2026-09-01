@@ -816,6 +816,27 @@ def test_ocr_falls_back_to_python_when_bridge_unavailable(monkeypatch):
     assert isinstance(response, OCRResponse)
 
 
+def test_ocr_non_string_header_uses_python_path(monkeypatch):
+    bridge = RecordingBridge()
+    litellm.use_litellm_rust(True, ocr=bridge)
+
+    def fake_handler_ocr(**kwargs):
+        assert kwargs["headers"] == {"x-invalid": 1}
+        return OCRResponse(pages=[], model="mistral-ocr-latest", object="ocr")
+
+    monkeypatch.setattr(ocr_main.base_llm_http_handler, "ocr", fake_handler_ocr)
+
+    response = litellm.ocr(
+        model=MODEL,
+        document=DOCUMENT,
+        api_key="sk-test",
+        extra_headers={"x-invalid": 1},
+    )
+
+    assert isinstance(response, OCRResponse)
+    assert bridge.calls == []
+
+
 def test_ocr_provider_configs_expose_api_key_env_vars():
     from litellm.llms.azure_ai.ocr.document_intelligence.transformation import (
         AzureDocumentIntelligenceOCRConfig,

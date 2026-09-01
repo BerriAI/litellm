@@ -50,9 +50,7 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
         return {  # mutable-ok: base contract
             **optional_params,
             **{  # mutable-ok: base contract
-                key: value
-                for key, value in non_default_params.items()
-                if key in self.get_supported_ocr_params(model)
+                key: value for key, value in non_default_params.items() if key in self.get_supported_ocr_params(model)
             },
         }
 

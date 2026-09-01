@@ -6,6 +6,7 @@ import sys
 import traceback
 from collections.abc import Awaitable, Callable, Coroutine, Generator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Final, cast
@@ -19,7 +20,16 @@ from litellm.rust_bridge.ocr import RustAocr, RustOcr
 from tests.route_parity.compare import assert_model_parity, assert_parity, assert_request_parity
 from tests.route_parity.fixture_recorder import recorded_fixtures
 from tests.route_parity.inprocess import run_in_process
-from tests.route_parity.models import SDKCommand, SDKReport, WorkerFailure, WorkerResult, WorkerSuccess
+from tests.route_parity.models import (
+    SDKCommand,
+    SDKError,
+    SDKReport,
+    SDKSuccess,
+    WorkerFailure,
+    WorkerResult,
+    WorkerSuccess,
+    sdk_error_report,
+)
 from tests.route_parity.replay import replay_server
 from tests.route_parity.runner import (
     PythonScriptRunner,
@@ -40,6 +50,115 @@ class SDKRoute(str, Enum):
     AOCR = "aocr"
 
 
+@dataclass(frozen=True, slots=True)
+class InvalidOcrCase:
+    name: str
+    model: str
+    document: object
+    expected_exception_type: str
+    expected_status_code: int
+    expected_message: str
+    extra_kwargs: tuple[tuple[str, object], ...] = ()
+    expected_rust_calls: int = 0
+
+
+INVALID_OCR_CASES: Final = (
+    InvalidOcrCase(
+        name="unsupported_provider",
+        model="openai/gpt-4o",
+        document={"type": "document_url", "document_url": "data:application/pdf;base64,AA=="},
+        expected_exception_type="litellm.exceptions.APIConnectionError",
+        expected_status_code=500,
+        expected_message="OCR is not supported for provider: openai",
+    ),
+    InvalidOcrCase(
+        name="unsupported_reducto_model",
+        model="reducto/parse-v4",
+        document={"type": "document_url", "document_url": "data:application/pdf;base64,AA=="},
+        expected_exception_type="litellm.exceptions.APIConnectionError",
+        expected_status_code=500,
+        expected_message="OCR is not supported for provider: reducto",
+    ),
+    InvalidOcrCase(
+        name="unknown_provider_prefix",
+        model="not_a_provider/model",
+        document={"type": "document_url", "document_url": "data:application/pdf;base64,AA=="},
+        expected_exception_type="litellm.exceptions.BadRequestError",
+        expected_status_code=400,
+        expected_message="LLM Provider NOT provided",
+    ),
+    InvalidOcrCase(
+        name="non_object_document",
+        model="mistral/mistral-ocr-latest",
+        document=[],
+        expected_exception_type="litellm.exceptions.APIConnectionError",
+        expected_status_code=500,
+        expected_message="document must be a dict",
+    ),
+    InvalidOcrCase(
+        name="missing_document_type",
+        model="mistral/mistral-ocr-latest",
+        document={},
+        expected_exception_type="litellm.exceptions.APIConnectionError",
+        expected_status_code=500,
+        expected_message="Invalid document type: None",
+    ),
+    InvalidOcrCase(
+        name="unsupported_document_type",
+        model="mistral/mistral-ocr-latest",
+        document={"type": "text", "text": "not a document"},
+        expected_exception_type="litellm.exceptions.APIConnectionError",
+        expected_status_code=500,
+        expected_message="Invalid document type: text",
+    ),
+    InvalidOcrCase(
+        name="missing_document_url",
+        model="azure_ai/doc-intelligence/prebuilt-read",
+        document={"type": "document_url"},
+        expected_exception_type="litellm.exceptions.APIConnectionError",
+        expected_status_code=500,
+        expected_message="Document URL is required",
+        expected_rust_calls=1,
+    ),
+    InvalidOcrCase(
+        name="invalid_request_format",
+        model="mistral/mistral-ocr-latest",
+        document={"type": "document_url", "document_url": "data:application/pdf;base64,AA=="},
+        expected_exception_type="litellm.exceptions.UnsupportedParamsError",
+        expected_status_code=400,
+        expected_message="Invalid `req_format`: 'bogus'",
+        extra_kwargs=(("req_format", "bogus"),),
+    ),
+    InvalidOcrCase(
+        name="invalid_document_intelligence_pages",
+        model="azure_ai/doc-intelligence/prebuilt-read",
+        document={"type": "document_url", "document_url": "data:application/pdf;base64,AA=="},
+        expected_exception_type="litellm.exceptions.APIConnectionError",
+        expected_status_code=500,
+        expected_message="`pages` integers must be >= 0",
+        extra_kwargs=(("pages", [-1]),),
+    ),
+    InvalidOcrCase(
+        name="invalid_document_intelligence_features",
+        model="azure_ai/doc-intelligence/prebuilt-read",
+        document={"type": "document_url", "document_url": "data:application/pdf;base64,AA=="},
+        expected_exception_type="litellm.exceptions.APIConnectionError",
+        expected_status_code=500,
+        expected_message="Invalid `features` for Azure Document Intelligence",
+        extra_kwargs=(("features", [1]),),
+    ),
+    InvalidOcrCase(
+        name="invalid_header_value",
+        model="mistral/mistral-ocr-latest",
+        document={"type": "document_url", "document_url": "data:application/pdf;base64,AA=="},
+        expected_exception_type="litellm.exceptions.InternalServerError",
+        expected_status_code=500,
+        expected_message="Header value must be str or bytes",
+        extra_kwargs=(("extra_headers", {"x-invalid": 1}),),
+    ),
+)
+
+
 def _call_kwargs(sdk_input: OcrSdkInput, mock_url: str, route: SDKRoute) -> dict[str, object]:
     return {
         **sdk_input.as_sdk_kwargs(),
@@ -49,22 +168,50 @@ def _call_kwargs(sdk_input: OcrSdkInput, mock_url: str, route: SDKRoute) -> dict
     }
 
 
+def _execute_sdk_call(
+    call_kwargs: dict[str, object],
+    route: SDKRoute,
+    event_loop: asyncio.AbstractEventLoop,
+) -> SDKReport:
+    import litellm
+
+    try:
+        if route is SDKRoute.OCR:
+            sync_route: Final = cast(Callable[..., OCRResponse], litellm.ocr)
+            response: Final = sync_route(**call_kwargs)
+            return SDKSuccess(response=response.model_dump(mode="json"))
+        async_route: Final = cast(Callable[..., Coroutine[object, object, OCRResponse]], litellm.aocr)
+        async_response: Final = event_loop.run_until_complete(async_route(**call_kwargs))
+        return SDKSuccess(response=async_response.model_dump(mode="json"))
+    except Exception as error:
+        return sdk_error_report(error)
+
+
 def _execute_sdk_case(
     sdk_input: OcrSdkInput,
     route: SDKRoute,
     mock_url: str,
     event_loop: asyncio.AbstractEventLoop,
 ) -> SDKReport:
-    import litellm
-
     call_kwargs: Final = _call_kwargs(sdk_input, mock_url, route)
-    if route is SDKRoute.OCR:
-        sync_route: Final = cast(Callable[..., OCRResponse], litellm.ocr)
-        response: Final = sync_route(**call_kwargs)
-        return SDKReport(response=response.model_dump(mode="json"))
-    async_route: Final = cast(Callable[..., Coroutine[object, object, OCRResponse]], litellm.aocr)
-    async_response: Final = event_loop.run_until_complete(async_route(**call_kwargs))
-    return SDKReport(response=async_response.model_dump(mode="json"))
+    return _execute_sdk_call(call_kwargs, route, event_loop)
+
+
+def _execute_invalid_sdk_case(
+    case: InvalidOcrCase,
+    route: SDKRoute,
+    mock_url: str,
+    event_loop: asyncio.AbstractEventLoop,
+) -> SDKReport:
+    call_kwargs: Final = {
+        "model": case.model,
+        "document": case.document,
+        "api_base": mock_url,
+        "api_key": API_KEY,
+        "extra_headers": {"x-litellm-parity-route": route.value},
+        **dict(case.extra_kwargs),
+    }
+    return _execute_sdk_call(call_kwargs, route, event_loop)
 
 
 def _call_sdk_case(sdk_input: OcrSdkInput, route: SDKRoute, mock_url: str) -> OCRResponse:
@@ -209,6 +356,42 @@ def test_recorded_ocr_sdk_parity(
     assert async_spy.calls == (1 if route is SDKRoute.AOCR else 0)
     assert_request_parity(python.requests, rust.requests)
     assert_model_parity(python.response, rust.response)
+
+
+@pytest.mark.parametrize("case", INVALID_OCR_CASES, ids=tuple(case.name for case in INVALID_OCR_CASES))
+@pytest.mark.parametrize("route", tuple(SDKRoute), ids=tuple(route.value for route in SDKRoute))
+def test_invalid_ocr_sdk_parity(case: InvalidOcrCase, route: SDKRoute) -> None:
+    sync_spy, async_spy = _native_spies()
+    event_loop: Final = asyncio.new_event_loop()
+    try:
+        with _restore_rust_ocr_state(), replay_server() as provider:
+            rust_ocr_bridge.use_litellm_rust(False, ocr=sync_spy, aocr=async_spy)
+            python: Final = run_in_process(
+                provider,
+                (),
+                lambda mock_url: _execute_invalid_sdk_case(case, route, mock_url, event_loop),
+            )
+            assert sync_spy.calls == 0
+            assert async_spy.calls == 0
+
+            rust_ocr_bridge.use_litellm_rust(True, ocr=sync_spy, aocr=async_spy)
+            rust: Final = run_in_process(
+                provider,
+                (),
+                lambda mock_url: _execute_invalid_sdk_case(case, route, mock_url, event_loop),
+            )
+    finally:
+        event_loop.close()
+
+    assert sync_spy.calls == (case.expected_rust_calls if route is SDKRoute.OCR else 0)
+    assert async_spy.calls == (case.expected_rust_calls if route is SDKRoute.AOCR else 0)
+    assert python.requests == ()
+    assert rust.requests == ()
+    assert python.response == rust.response
+    assert isinstance(python.response, SDKError)
+    assert python.response.exception_type == case.expected_exception_type
+    assert python.response.status_code == case.expected_status_code
+    assert case.expected_message in python.response.message
 
 
 def test_ocr_subprocess_startup_smoke(
