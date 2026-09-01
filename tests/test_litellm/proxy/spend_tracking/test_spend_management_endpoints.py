@@ -2567,36 +2567,34 @@ async def test_ui_view_request_response_rejects_foreign_row_inserted_after_owner
 
 
 @pytest.mark.asyncio
-async def test_ui_view_request_response_custom_logger_rechecks_after_fetch(client, monkeypatch):
-    """The custom-logger payload branch re-verifies ownership after fetching. A row
-    that appears between the pre-check and the payload read (so the pre-check saw only
-    owned rows) is caught on the post-fetch check, so the foreign payload is not served."""
-    owner_states = iter(
-        [
-            [{"user": "user_1", "team_id": None}],
-            [{"user": "user_1", "team_id": None}, {"user": "victim_user", "team_id": None}],
-        ]
-    )
+async def test_ui_view_request_response_custom_logger_denies_foreign_payload_owner(client, monkeypatch):
+    """The custom-logger payload comes straight from cold storage, written independently
+    of the spend-log table and able to outlive its row. When an id lookup matches no row,
+    the DB owner pre-check has nothing to verify, so the payload is authorized against the
+    owner recorded inside it. A foreign tenant's stored payload is denied even though no
+    spend-log row exists for the pre-check to catch."""
 
     class MockDB:
         async def query_raw(self, sql_query, *params):
-            if 'SELECT DISTINCT "user", team_id' in sql_query:
-                return next(owner_states)
             return []
 
     class MockPrisma:
         def __init__(self):
             self.db = MockDB()
 
-    class LeakyLogger:
+    class ColdStorageLogger:
         async def get_request_response_payload(self, request_id, start_time_utc, end_time_utc):
-            return {"messages": [{"role": "user", "content": "victim prompt"}], "response": {"id": "r"}}
+            return {
+                "messages": [{"role": "user", "content": "victim prompt"}],
+                "response": {"id": "r"},
+                "metadata": {"user_api_key_user_id": "victim_user", "user_api_key_team_id": None},
+            }
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrisma())
     monkeypatch.setattr(
         litellm.logging_callback_manager,
         "get_active_additional_logging_utils_from_custom_logger",
-        lambda: [LeakyLogger()],
+        lambda: [ColdStorageLogger()],
     )
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1"
@@ -2609,6 +2607,49 @@ async def test_ui_view_request_response_custom_logger_rechecks_after_fetch(clien
         )
         assert response.status_code == 403
         assert "victim prompt" not in response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_request_response_custom_logger_allows_own_payload_without_db_row(client, monkeypatch):
+    """The payload-owner authorization must not false-deny a legitimate owner whose
+    spend-log row is already gone from the DB. An empty owner lookup with a cold-storage
+    payload the caller owns still serves the payload."""
+
+    class MockDB:
+        async def query_raw(self, sql_query, *params):
+            return []
+
+    class MockPrisma:
+        def __init__(self):
+            self.db = MockDB()
+
+    class ColdStorageLogger:
+        async def get_request_response_payload(self, request_id, start_time_utc, end_time_utc):
+            return {
+                "messages": [{"role": "user", "content": "my own prompt"}],
+                "response": {"id": "r"},
+                "metadata": {"user_api_key_user_id": "user_1", "user_api_key_team_id": None},
+            }
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrisma())
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_active_additional_logging_utils_from_custom_logger",
+        lambda: [ColdStorageLogger()],
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1"
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui/shared-id",
+            params={"start_date": "2026-01-01 00:00:00"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        assert "my own prompt" in response.text
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
