@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from botocore.credentials import Credentials
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.rust_bridge import chat_completions as bridge
@@ -487,3 +488,76 @@ def test_post_call_is_not_logged_twice_when_the_sync_rust_call_declines():
     assert response.choices[0].message.content == "hi"
     assert len(calls["post_call"]) == 1
     assert "hi" in calls["post_call"][0]["original_response"]
+
+
+@pytest.fixture
+def bearer_token_only(monkeypatch, tmp_path):
+    """Only a Bedrock API key is configured, so boto3 resolves no SigV4 credentials."""
+    for name in (
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_PROFILE",
+        "AWS_DEFAULT_PROFILE",
+        "AWS_PROFILE_NAME",
+        "AWS_ROLE_NAME",
+        "AWS_ROLE_ARN",
+        "AWS_WEB_IDENTITY_TOKEN",
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+        "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(tmp_path / "no-credentials"))
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "no-config"))
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-api-key")
+    BaseAWSLLM._shared_iam_cache.flush_cache()
+    assert BedrockConverseLLM().get_credentials(aws_region_name="us-east-1") is None
+    yield
+    BaseAWSLLM._shared_iam_cache.flush_cache()
+
+
+def _recording_sync_client(posted: list[dict]):
+    client = MagicMock()
+
+    def post(**kwargs):
+        posted.append(kwargs)
+        return httpx.Response(
+            200,
+            json=CONVERSE_RESPONSE,
+            request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com"),
+        )
+
+    client.post = post
+    client.__class__ = HTTPHandler
+    return client
+
+
+@pytest.mark.parametrize(
+    "api_key, expected_token",
+    [(None, "bedrock-api-key"), ("key-from-the-deployment", "key-from-the-deployment")],
+)
+def test_bearer_token_auth_without_sigv4_credentials_sends_a_bearer_request(bearer_token_only, api_key, expected_token):
+    """Regression: an API-key deployment resolves no SigV4 credentials, and the
+    handler dereferenced them while preparing the Rust hand-off, so every Converse
+    call crashed with an AttributeError before the request was even built."""
+    posted: list[dict] = []
+    response = BedrockConverseLLM().completion(
+        **_completion_kwargs(litellm_params={}, api_key=api_key, client=_recording_sync_client(posted))
+    )
+
+    assert response.choices[0].message.content == "hi"
+    assert posted[0]["headers"]["Authorization"] == f"Bearer {expected_token}"
+
+
+def test_bearer_token_auth_without_sigv4_credentials_hands_the_core_no_aws_keys(bearer_token_only):
+    """The core reads the bearer token itself, so it must get the region and none
+    of the SigV4 keys this handler could not resolve."""
+    seen = _inject()
+    response = BedrockConverseLLM().completion(**_completion_kwargs())
+
+    assert response.choices[0].message.content == "hello from rust"
+    params = seen["call"][0]["optional_params"]
+    assert params["aws_region_name"] == "us-east-1"
+    assert params.keys().isdisjoint({"aws_access_key_id", "aws_secret_access_key", "aws_session_token"})

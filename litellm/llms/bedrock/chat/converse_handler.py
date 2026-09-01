@@ -95,7 +95,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         stream,
         optional_params: dict,
         litellm_params: dict,
-        credentials: Credentials,
+        credentials: Credentials | None,
         logger_fn=None,
         headers={},
         client: AsyncHTTPHandler | None = None,
@@ -167,7 +167,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         stream,
         optional_params: dict,
         litellm_params: dict,
-        credentials: Credentials,
+        credentials: Credentials | None,
         logger_fn=None,
         headers: dict = {},
         client: AsyncHTTPHandler | None = None,
@@ -331,7 +331,7 @@ class BedrockConverseLLM(BaseAWSLLM):
 
         litellm_params["aws_region_name"] = aws_region_name  # [DO NOT DELETE] important for async calls
 
-        credentials: Final[Credentials] = self.get_credentials(
+        credentials: Final[Credentials | None] = self.get_credentials(
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
             aws_session_token=aws_session_token,
@@ -368,15 +368,23 @@ class BedrockConverseLLM(BaseAWSLLM):
         # The Rust core owns the whole call for the subset it accepts. Ask
         # before transforming so whichever path runs emits pre_call once, and
         # hand down the credentials, region and endpoint this handler already
-        # resolved so both paths sign as the same principal.
+        # resolved so both paths sign as the same principal. Bearer-token
+        # deployments resolve no SigV4 credentials; the core then reads the
+        # token from api_key or AWS_BEARER_TOKEN_BEDROCK, as the Python path does.
         rust_optional_params: Final = {  # mutable-ok: json.dumps in the bridge rejects a mappingproxy
             **optional_params,
             **{  # mutable-ok: merged into its mutable parent above
                 key: value
                 for key, value in (
-                    ("aws_access_key_id", credentials.access_key),
-                    ("aws_secret_access_key", credentials.secret_key),
-                    ("aws_session_token", credentials.token),
+                    *(
+                        ()
+                        if credentials is None
+                        else (
+                            ("aws_access_key_id", credentials.access_key),
+                            ("aws_secret_access_key", credentials.secret_key),
+                            ("aws_session_token", credentials.token),
+                        )
+                    ),
                     ("aws_region_name", aws_region_name),
                 )
                 if value is not None
