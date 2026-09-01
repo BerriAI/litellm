@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 from collections.abc import Awaitable
 from dataclasses import dataclass
+from functools import cache
 from types import MappingProxyType
 from typing import Final, NamedTuple, NoReturn
 
@@ -61,6 +62,18 @@ _FAILED_LOGIN_SOURCE_CACHE: Final = _bounded_store(_MAX_TRACKED_LOGIN_SOURCES)
 _NO_SETTINGS: Final = MappingProxyType({})
 
 _DELAYS_IN_FLIGHT: Final[dict[str, int]] = {}  # mutable-ok: per-source slots taken and released around each held delay
+
+
+@cache
+def warn_login_counters_are_per_worker(num_workers: str) -> None:
+    """Warn once per process that failed sign-in counters are not shared across workers."""
+    verbose_proxy_logger.warning(
+        "Running %s workers but Redis is not configured for LiteLLM caching. "
+        "Failed Admin UI sign-in attempts are counted per worker, so an attacker "
+        "gets max_failed_login_attempts guesses per worker instead of overall. "
+        "Configure Redis via the 'cache' section in your proxy config.",
+        num_workers,
+    )
 
 
 async def _sleep(seconds: float) -> None:

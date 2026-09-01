@@ -299,7 +299,7 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
-from litellm.proxy.auth.login_throttle import LoginThrottle
+from litellm.proxy.auth.login_throttle import LoginThrottle, warn_login_counters_are_per_worker
 from litellm.proxy.auth.model_checks import (
     expand_wildcard_deployments_for_model_info,
     get_all_fallbacks,
@@ -2288,7 +2288,6 @@ user_custom_key_generate = None
 # Tests that need to reset it can patch 'litellm.proxy.proxy_server._pkce_no_redis_warning_emitted'.
 _pkce_no_redis_warning_emitted: bool = False
 _cp_no_redis_warning_emitted: bool = False
-_login_throttle_no_redis_warning_emitted: bool = False
 user_custom_key_update = None
 user_custom_sso = None
 user_custom_ui_sso_sign_in_handler = None
@@ -5512,16 +5511,7 @@ class ProxyConfig:
             # Failed Admin UI sign-in counters live in redis_usage_cache when available so a
             # brute-force run is counted once across workers instead of once per worker.
             if os.getenv("NUM_WORKERS", "1") != "1" and redis_usage_cache is None:
-                global _login_throttle_no_redis_warning_emitted
-                if not _login_throttle_no_redis_warning_emitted:
-                    _login_throttle_no_redis_warning_emitted = True
-                    verbose_proxy_logger.warning(
-                        "Running %s workers but Redis is not configured for LiteLLM caching. "
-                        "Failed Admin UI sign-in attempts are counted per worker, so an attacker "
-                        "gets max_failed_login_attempts guesses per worker instead of overall. "
-                        "Configure Redis via the 'cache' section in your proxy config.",
-                        os.getenv("NUM_WORKERS", "1"),
-                    )
+                warn_login_counters_are_per_worker(os.getenv("NUM_WORKERS", "1"))
 
             ### STORE MODEL IN DB ### feature flag for `/model/new`
             store_model_in_db = general_settings.get("store_model_in_db", False)
