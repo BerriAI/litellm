@@ -1427,6 +1427,12 @@ DEFAULT_SOFT_BUDGET: Final = float(
 )  # by default all litellm proxy keys have a soft budget of 50.0
 # makes it clear this is a rate limit error for a litellm virtual key
 RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY: Final = "LiteLLM Virtual Key user_api_key_hash"
+# Prefix of the 401 raised when a submitted virtual key is not shaped like one.
+INVALID_VIRTUAL_KEY_ERROR_MESSAGE: Final = "LiteLLM Virtual Key expected"
+# Attribute stamped on that 401 at its raise site so log routing recognises it by
+# provenance. Message text is caller-influenceable on other 401s, so it must not
+# be used to classify.
+INVALID_VIRTUAL_KEY_ERROR_MARKER: Final = "_litellm_invalid_virtual_key_error"
 
 # Python garbage collection threshold configuration
 # Format: "gen0,gen1,gen2" e.g., "1000,50,50"
