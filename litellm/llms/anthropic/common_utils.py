@@ -498,7 +498,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     @staticmethod
     def translate_legacy_thinking_for_adaptive_model(
         model: str,
-        optional_params: MutableMapping[str, object],  # mutable-ok: in-place out-param, as in maybe_drop_disabled_thinking
+        optional_params: MutableMapping[str, object],  # mutable-ok: in-place out-param like the sibling helpers
         custom_llm_provider: str,
     ) -> None:
         """Translate legacy ``thinking.type=enabled`` to adaptive for the
