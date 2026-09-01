@@ -290,6 +290,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     """
 
     custom_llm_provider: str | None = None
+    rust: bool | None = None
     tpm: int | None = None
     rpm: int | None = None
     itpm: int | None = None
