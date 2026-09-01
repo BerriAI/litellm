@@ -228,24 +228,37 @@ def test_mlflow_stream_handler_pops_span_when_end_raises():
         assert "leak123" not in mlflow_logger._stream_id_to_span
 
 
-def test_mlflow_end_span_or_trace_passes_request_id_positionally():
+class _Mlflow2StyleClient:
+    """Mimics the mlflow 2.x client signatures, which have no trace_id kwarg."""
+
+    def __init__(self):
+        self.ended_traces = []
+        self.ended_spans = []
+
+    def end_trace(self, request_id, outputs=None, attributes=None, status="OK", end_time_ns=None):
+        self.ended_traces.append(request_id)
+
+    def end_span(self, request_id, span_id, outputs=None, attributes=None, status="OK", end_time_ns=None):
+        self.ended_spans.append((request_id, span_id))
+
+
+def test_mlflow_end_span_or_trace_works_with_mlflow_2x_client():
     modules = _mock_mlflow_modules()
     with patch.dict("sys.modules", modules):
         from litellm.integrations.mlflow import MlflowLogger
 
         mlflow_logger = MlflowLogger()
-        mlflow_logger._client = MagicMock()
+        client = _Mlflow2StyleClient()
+        mlflow_logger._client = client
 
         root_span = MagicMock(parent_id=None, request_id="req-1")
         mlflow_logger._end_span_or_trace(
             span=root_span, outputs="out", end_time_ns=1, status="OK"
         )
-        assert mlflow_logger._client.end_trace.call_args.args == ("req-1",)
-        assert "trace_id" not in mlflow_logger._client.end_trace.call_args.kwargs
+        assert client.ended_traces == ["req-1"]
 
         child_span = MagicMock(parent_id="parent-1", request_id="req-2", span_id="span-2")
         mlflow_logger._end_span_or_trace(
             span=child_span, outputs="out", end_time_ns=1, status="OK"
         )
-        assert mlflow_logger._client.end_span.call_args.args == ("req-2", "span-2")
-        assert "trace_id" not in mlflow_logger._client.end_span.call_args.kwargs
+        assert client.ended_spans == [("req-2", "span-2")]
