@@ -137,9 +137,6 @@ def main() -> int:
         + tuple(f"| {label} | Yes | {'O' if passed else 'X'} |" for label, passed in validations)
         + ("",)
     )
-    report_path: Final = os.environ.get("RELEASE_WHEEL_REPORT")
-    if report_path is not None:
-        Path(report_path).write_text(verified_report)
     if summary_path is not None:
         Path(summary_path).write_text(verified_report)
 
