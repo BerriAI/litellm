@@ -9,11 +9,14 @@ on: # zizmor: ignore[dangerous-triggers] reporter executes no PR code and consum
 
 permissions: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}
+  cancel-in-progress: false
+
 jobs:
   report-release-wheel:
     name: report release wheel
     if: >-
-      github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.path == '.github/workflows/test-rust.yml' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
@@ -21,7 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      issues: write
+      issues: write # PR comments use the issues API
+      pull-requests: read # Current-head validation rejects stale workflow runs
 
     steps:
       - name: Link release wheel report on PR
@@ -32,8 +36,19 @@ jobs:
           script: |
             const marker = process.env.COMMENT_MARKER;
             const workflowRun = context.payload.workflow_run;
+            const allowedConclusions = new Set([
+              "action_required",
+              "cancelled",
+              "failure",
+              "neutral",
+              "skipped",
+              "stale",
+              "startup_failure",
+              "success",
+              "timed_out",
+            ]);
             if (
-              workflowRun.conclusion !== "success" ||
+              !allowedConclusions.has(workflowRun.conclusion) ||
               workflowRun.event !== "pull_request" ||
               workflowRun.path !== ".github/workflows/test-rust.yml" ||
               workflowRun.head_repository?.full_name !==
@@ -59,11 +74,15 @@ jobs:
             const runUrl =
               `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}` +
               `/actions/runs/${runId}`;
+            const result =
+              workflowRun.conclusion === "success"
+                ? "successfully"
+                : `with \`${workflowRun.conclusion}\``;
             const body = [
               marker,
               "## LiteLLM Rust workflow",
               "",
-              `Workflow completed successfully for \`${headSha}\``,
+              `Workflow completed ${result} for \`${headSha}\``,
               "",
               `[View workflow run](${runUrl})`,
             ].join("\n");
@@ -78,6 +97,22 @@ jobs:
                 comment.user?.login === "github-actions[bot]" &&
                 comment.body?.startsWith(marker),
             );
+            const currentPullRequest = (
+              await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pullRequestNumber,
+              })
+            ).data;
+            if (
+              currentPullRequest.state !== "open" ||
+              currentPullRequest.head.repo?.full_name !==
+                `${context.repo.owner}/${context.repo.repo}` ||
+              currentPullRequest.head.sha !== headSha
+            ) {
+              core.info("source workflow no longer matches the current pull request head");
+              return;
+            }
             if (existing) {
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,
