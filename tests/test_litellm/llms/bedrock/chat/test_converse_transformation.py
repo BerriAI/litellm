@@ -375,6 +375,82 @@ def test_reasoning_with_forced_tool_choice_switches_to_auto():
     assert optional_params["tool_choice"] == {"auto": {}}
 
 
+def test_tool_choice_any_maps_to_any_block():
+    """`tool_choice="any"` should map to Bedrock's ToolChoiceValuesBlock(any={}), same as "required".
+
+    Regression test for https://github.com/BerriAI/litellm/issues/37980: "any" previously
+    fell through to the UnsupportedParamsError branch even though Bedrock's Converse API
+    natively supports the any block.
+    """
+    config = AmazonConverseConfig()
+
+    non_default_params = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "get_current_weather", "parameters": {}},
+            }
+        ],
+        "tool_choice": "any",
+    }
+
+    optional_params = config.map_openai_params(
+        model="bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        non_default_params=non_default_params,
+        optional_params={},
+        drop_params=False,
+    )
+
+    assert optional_params["tool_choice"] == {"any": {}}
+
+
+def test_tool_choice_required_maps_to_any_block():
+    """`tool_choice="required"` (and now "any") both map to Bedrock's native {any:{}} block."""
+    config = AmazonConverseConfig()
+
+    non_default_params = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "get_current_weather", "parameters": {}},
+            }
+        ],
+        "tool_choice": "required",
+    }
+
+    optional_params = config.map_openai_params(
+        model="bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        non_default_params=non_default_params,
+        optional_params={},
+        drop_params=False,
+    )
+
+    assert optional_params["tool_choice"] == {"any": {}}
+
+
+def test_tool_choice_none_still_raises():
+    """Values outside auto/required/any/json-object must still raise UnsupportedParamsError."""
+    config = AmazonConverseConfig()
+
+    non_default_params = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "get_current_weather", "parameters": {}},
+            }
+        ],
+        "tool_choice": "none",
+    }
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        config.map_openai_params(
+            model="bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            non_default_params=non_default_params,
+            optional_params={},
+            drop_params=False,
+        )
+
+
 @pytest.mark.parametrize(
     "model",
     [
