@@ -8169,16 +8169,23 @@ class Router:
         backend_model: str,
         custom_llm_provider: str | None,
     ) -> None:
-        """Fill missing base token rates on a deployment entry that only sets
+        """Fill missing pricing fields on a deployment entry that only sets
         ``off_peak_pricing``, from the backend model's built-in cost map entry.
 
         Cost lookup selects the deployment-scoped entry over the shared backend
         entry only when the deployment entry carries a base pricing field, and
         ``off_peak_pricing`` is deliberately kept off the shared entry, so a
         deployment spelling out only its off-peak schedule would otherwise
-        never receive the discount. User-specified rates always win; no-op when
-        any base pricing field is already set or the backend model has no
-        canonical entry.
+        never receive the discount. Every price-bearing backend field is
+        copied, not just the flat token rates: threshold, tiered, service-tier,
+        cache, character, and per-second rates all carry over, so peak-hour
+        billing through the deployment entry matches the shared backend entry
+        exactly. Values are deep-copied to keep the builtin entry isolated, and
+        a flat token rate ``get_model_info`` synthesized as zero for a backend
+        without one is rejected, like ``_inherit_builtin_tiered_output_rate``
+        does, so a tiered-only backend is never marked explicitly priced free.
+        User-specified rates always win; no-op when any base pricing field is
+        already set or the backend model has no canonical entry.
         """
         if not model_info.get("off_peak_pricing"):
             return
@@ -8191,11 +8198,14 @@ class Router:
             backend_info: Final = litellm.get_model_info(model=backend_model, custom_llm_provider=custom_llm_provider)
         except Exception:  # noqa: BLE001  # get_model_info raises plain Exception for an unmapped backend model
             return
-        for field in ("input_cost_per_token", "output_cost_per_token"):
-            if model_info.get(field) is None:
-                backend_value = backend_info.get(field)
-                if backend_value is not None:
-                    model_info[field] = backend_value
+        for field, backend_value in backend_info.items():
+            if "cost" not in field and field != "tiered_pricing":
+                continue
+            if model_info.get(field) is not None or backend_value is None:
+                continue
+            if field in ("input_cost_per_token", "output_cost_per_token") and not backend_value:
+                continue
+            model_info[field] = copy.deepcopy(backend_value)
 
     @staticmethod
     def _inherit_builtin_tiered_output_rate(
