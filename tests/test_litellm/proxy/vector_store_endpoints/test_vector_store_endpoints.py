@@ -514,7 +514,7 @@ async def test_update_request_data_resolves_embedding_config_at_use_time():
         "vector_store_id": "test_store",
         "custom_llm_provider": "azure_ai",
         "litellm_params": {
-            "litellm_embedding_model": "azure/text-embedding-3-large",
+            "litellm_embedding_model": "multilingual-e5-large",
             # Note: no litellm_embedding_config persisted
         },
     }
@@ -534,24 +534,22 @@ async def test_update_request_data_resolves_embedding_config_at_use_time():
         patch.object(litellm, "vector_store_registry", mock_registry),
         patch(
             "litellm.proxy.vector_store_endpoints.endpoints._resolve_embedding_config",
-            new=AsyncMock(return_value=resolved),
+            new=AsyncMock(return_value=("azure/multilingual-e5-large", resolved)),
         ),
     ):
         result = await _update_request_data_with_litellm_managed_vector_store_registry(
             data={}, vector_store_id="test_store"
         )
 
-    assert result["litellm_embedding_model"] == "azure/text-embedding-3-large"
+    assert result["litellm_embedding_model"] == "azure/multilingual-e5-large"
     assert result["litellm_embedding_config"] == resolved
 
 
 @pytest.mark.asyncio
-async def test_update_request_data_passes_through_legacy_embedding_config():
+async def test_update_request_data_preserves_legacy_embedding_config_when_model_not_resolved():
     """A vector store row created by an older proxy version may already
     carry a fully-resolved ``litellm_embedding_config`` in its persisted
-    ``litellm_params`` (the very leak this PR closes). Those legacy rows
-    must still work — the use-time resolver skips re-resolution when
-    the config is already present so the embed call keeps succeeding."""
+    ``litellm_params``. Preserve it when the model cannot be resolved."""
     legacy_config = {
         "api_key": "legacy-cleartext-key",
         "api_base": "https://legacy-azure.example",
@@ -571,7 +569,7 @@ async def test_update_request_data_passes_through_legacy_embedding_config():
         mock_vector_store
     )
 
-    resolve_mock = AsyncMock()
+    resolve_mock = AsyncMock(return_value=None)
 
     with (
         patch.object(litellm, "vector_store_registry", mock_registry),
@@ -585,7 +583,7 @@ async def test_update_request_data_passes_through_legacy_embedding_config():
         )
 
     assert result["litellm_embedding_config"] == legacy_config
-    resolve_mock.assert_not_awaited()
+    resolve_mock.assert_awaited_once()
 
 
 class TestCheckVectorStorePermission:
@@ -2010,6 +2008,7 @@ async def test_resolve_embedding_config_from_db():
     # Mock database model with litellm_params
     mock_db_model = MagicMock()
     mock_db_model.litellm_params = {
+        "model": "openai/text-embedding-3-small",
         "api_key": "test-api-key",
         "api_base": "https://api.openai.com",
         "api_version": "2024-01-01",
@@ -2028,9 +2027,11 @@ async def test_resolve_embedding_config_from_db():
         )
 
     assert result is not None
-    assert result["api_key"] == "test-api-key"
-    assert result["api_base"] == "https://api.openai.com"
-    assert result["api_version"] == "2024-01-01"
+    resolved_model, resolved_config = result
+    assert resolved_model == "openai/text-embedding-3-small"
+    assert resolved_config["api_key"] == "test-api-key"
+    assert resolved_config["api_base"] == "https://api.openai.com"
+    assert resolved_config["api_version"] == "2024-01-01"
     mock_prisma_client.db.litellm_proxymodeltable.find_first.assert_called_once_with(
         where={"model_name": "text-embedding-ada-002"}
     )
@@ -2164,6 +2165,8 @@ def test_resolve_embedding_config_from_router():
     mock_litellm_params.api_key = "config-api-key"
     mock_litellm_params.api_base = "https://config-api-base.com"
     mock_litellm_params.api_version = "2024-02-01"
+    mock_litellm_params.model = "text-embedding-3-small"
+    mock_litellm_params.custom_llm_provider = "openai"
 
     mock_deployment = MagicMock(spec=Deployment)
     mock_deployment.litellm_params = mock_litellm_params
@@ -2176,9 +2179,11 @@ def test_resolve_embedding_config_from_router():
     )
 
     assert result is not None
-    assert result["api_key"] == "config-api-key"
-    assert result["api_base"] == "https://config-api-base.com"
-    assert result["api_version"] == "2024-02-01"
+    resolved_model, resolved_config = result
+    assert resolved_model == "openai/text-embedding-3-small"
+    assert resolved_config["api_key"] == "config-api-key"
+    assert resolved_config["api_base"] == "https://config-api-base.com"
+    assert resolved_config["api_version"] == "2024-02-01"
 
     mock_router.get_deployment_by_model_group_name.assert_called_once_with(
         model_group_name="text-embedding-ada-002"
@@ -2197,6 +2202,8 @@ def test_resolve_embedding_config_from_router_with_provider_prefix():
     mock_litellm_params.api_key = "azure-api-key"
     mock_litellm_params.api_base = "https://azure-endpoint.openai.azure.com"
     mock_litellm_params.api_version = "2024-02-15"
+    mock_litellm_params.model = "text-embedding-3-large"
+    mock_litellm_params.custom_llm_provider = "azure"
 
     mock_deployment = MagicMock(spec=Deployment)
     mock_deployment.litellm_params = mock_litellm_params
@@ -2209,9 +2216,11 @@ def test_resolve_embedding_config_from_router_with_provider_prefix():
     )
 
     assert result is not None
-    assert result["api_key"] == "azure-api-key"
-    assert result["api_base"] == "https://azure-endpoint.openai.azure.com"
-    assert result["api_version"] == "2024-02-15"
+    resolved_model, resolved_config = result
+    assert resolved_model == "azure/text-embedding-3-large"
+    assert resolved_config["api_key"] == "azure-api-key"
+    assert resolved_config["api_base"] == "https://azure-endpoint.openai.azure.com"
+    assert resolved_config["api_version"] == "2024-02-15"
 
     # Should have tried both the full name and stripped name
     assert mock_router.get_deployment_by_model_group_name.call_count == 2
@@ -2239,6 +2248,8 @@ def test_resolve_embedding_config_from_router_handles_os_environ():
     mock_litellm_params.api_key = "os.environ/OPENAI_API_KEY"
     mock_litellm_params.api_base = "https://direct-url.com"
     mock_litellm_params.api_version = None
+    mock_litellm_params.model = "text-embedding-3-small"
+    mock_litellm_params.custom_llm_provider = "openai"
 
     mock_deployment = MagicMock(spec=Deployment)
     mock_deployment.litellm_params = mock_litellm_params
@@ -2254,9 +2265,11 @@ def test_resolve_embedding_config_from_router_handles_os_environ():
         )
 
     assert result is not None
-    assert result["api_key"] == "resolved-from-env"
-    assert result["api_base"] == "https://direct-url.com"
-    assert "api_version" not in result
+    resolved_model, resolved_config = result
+    assert resolved_model == "openai/text-embedding-3-small"
+    assert resolved_config["api_key"] == "resolved-from-env"
+    assert resolved_config["api_base"] == "https://direct-url.com"
+    assert "api_version" not in resolved_config
 
     mock_get_secret.assert_called_once_with("os.environ/OPENAI_API_KEY")
 
@@ -2274,6 +2287,8 @@ async def test_resolve_embedding_config_tries_router_then_db():
     mock_litellm_params.api_key = "router-api-key"
     mock_litellm_params.api_base = "https://router-api-base.com"
     mock_litellm_params.api_version = None
+    mock_litellm_params.model = "text-embedding-3-small"
+    mock_litellm_params.custom_llm_provider = "openai"
 
     mock_deployment = MagicMock(spec=Deployment)
     mock_deployment.litellm_params = mock_litellm_params
@@ -2290,7 +2305,9 @@ async def test_resolve_embedding_config_tries_router_then_db():
     )
 
     assert result is not None
-    assert result["api_key"] == "router-api-key"
+    resolved_model, resolved_config = result
+    assert resolved_model == "openai/text-embedding-3-small"
+    assert resolved_config["api_key"] == "router-api-key"
 
     # DB should NOT have been called since router found the model
     mock_prisma_client.db.litellm_proxymodeltable.find_first.assert_not_called()
@@ -2345,6 +2362,7 @@ async def test_resolve_embedding_config_falls_back_to_db():
     # DB has the model
     mock_db_model = MagicMock()
     mock_db_model.litellm_params = {
+        "model": "openai/text-embedding-3-small",
         "api_key": "db-api-key",
         "api_base": "https://db-api-base.com",
     }
@@ -2363,7 +2381,9 @@ async def test_resolve_embedding_config_falls_back_to_db():
         )
 
     assert result is not None
-    assert result["api_key"] == "db-api-key"
+    resolved_model, resolved_config = result
+    assert resolved_model == "openai/text-embedding-3-small"
+    assert resolved_config["api_key"] == "db-api-key"
 
     # DB should have been called since router didn't find the model
     mock_prisma_client.db.litellm_proxymodeltable.find_first.assert_called()
