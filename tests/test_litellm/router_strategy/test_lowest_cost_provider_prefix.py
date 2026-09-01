@@ -1,12 +1,15 @@
+from typing import Final
+
 import pytest
+
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
+from litellm.types.utils import ModelInfo
 
 
 @pytest.fixture(autouse=True)
 def _cleanup_model_cost():
-    """Snapshot litellm.model_cost before each test and restore it afterwards."""
     keys_before = set(litellm.model_cost.keys())
     yield
     keys_after = set(litellm.model_cost.keys())
@@ -16,11 +19,6 @@ def _cleanup_model_cost():
 
 @pytest.mark.asyncio
 async def test_lowest_cost_routing_resolves_provider_prefixed_model():
-    """
-    When model_cost only has the bare model name (e.g. 'test-gpt-luna'),
-    the router should still resolve 'openai/test-gpt-luna' via get_model_info
-    fallback and pick the cheapest deployment.
-    """
     litellm.model_cost["test-gpt-luna"] = {
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 2e-07,
@@ -58,49 +56,55 @@ async def test_lowest_cost_routing_resolves_provider_prefixed_model():
 
 
 @pytest.mark.asyncio
-async def test_lowest_cost_routing_caches_resolved_model():
-    """
-    After the first routing call resolves a provider-prefixed model via
-    get_model_info, the result should be cached in litellm.model_cost
-    so subsequent calls do not re-invoke get_model_info.
-    """
-    litellm.model_cost["test-gpt-cached"] = {
-        "input_cost_per_token": 1e-07,
-        "output_cost_per_token": 1e-07,
-        "litellm_provider": "openai",
-        "mode": "chat",
-    }
+async def test_lowest_cost_routing_keeps_provider_pricing_isolated(monkeypatch: pytest.MonkeyPatch):
+    shared_model: Final = "shared-provider-model"
+
+    def provider_model_info(model: str, custom_llm_provider: str | None = None) -> ModelInfo:
+        assert model == shared_model
+        assert custom_llm_provider is not None
+        cost: Final = 1.0 if custom_llm_provider == "expensive-provider" else 1e-07
+        return {
+            "input_cost_per_token": cost,
+            "output_cost_per_token": cost,
+            "litellm_provider": custom_llm_provider,
+            "mode": "chat",
+            "supported_openai_params": None,
+        }
+
+    monkeypatch.setattr(litellm, "get_model_info", provider_model_info)
 
     deployments = [
         {
-            "model_name": "test-cache-group",
-            "litellm_params": {"model": "openai/test-gpt-cached"},
-            "model_info": {"id": "cached-1"},
+            "model_name": "test-provider-group",
+            "litellm_params": {
+                "model": shared_model,
+                "custom_llm_provider": "expensive-provider",
+            },
+            "model_info": {"id": "expensive"},
+        },
+        {
+            "model_name": "test-provider-group",
+            "litellm_params": {
+                "model": shared_model,
+                "custom_llm_provider": "cheap-provider",
+            },
+            "model_info": {"id": "cheap"},
         },
     ]
 
     handler = LowestCostLoggingHandler(router_cache=DualCache())
-
-    # Before routing, the prefixed key should not exist in model_cost
-    assert "openai/test-gpt-cached" not in litellm.model_cost
-
-    await handler.async_get_available_deployments(
-        model_group="test-cache-group",
+    selected = await handler.async_get_available_deployments(
+        model_group="test-provider-group",
         healthy_deployments=deployments,
     )
 
-    # After routing, the prefixed key should now be cached in model_cost
-    assert "openai/test-gpt-cached" in litellm.model_cost
-    cached = litellm.model_cost["openai/test-gpt-cached"]
-    assert cached["input_cost_per_token"] == 1e-07
+    assert selected is not None
+    assert selected["model_info"]["id"] == "cheap"
+    assert shared_model not in litellm.model_cost
 
 
 @pytest.mark.asyncio
-async def test_lowest_cost_routing_direct_match_no_fallback():
-    """
-    When the full model name (including provider prefix) already exists
-    in model_cost, routing should use it directly without needing fallback.
-    """
+async def test_lowest_cost_routing_uses_direct_match():
     litellm.model_cost["openai/test-direct-match"] = {
         "input_cost_per_token": 1e-07,
         "output_cost_per_token": 1e-07,
@@ -128,10 +132,6 @@ async def test_lowest_cost_routing_direct_match_no_fallback():
 
 @pytest.mark.asyncio
 async def test_lowest_cost_routing_fallback_for_unmapped_model():
-    """
-    When a model cannot be resolved in model_cost or get_model_info,
-    it should gracefully fall back to default 5.0 cost without crashing.
-    """
     deployments = [
         {
             "model_name": "test-group-unmapped",
@@ -152,10 +152,6 @@ async def test_lowest_cost_routing_fallback_for_unmapped_model():
 
 @pytest.mark.asyncio
 async def test_lowest_cost_routing_explicit_params_override():
-    """
-    Explicit input_cost_per_token and output_cost_per_token in litellm_params
-    should override whatever is in model_cost.
-    """
     litellm.model_cost["test-expensive-base"] = {
         "input_cost_per_token": 1.0,
         "output_cost_per_token": 1.0,

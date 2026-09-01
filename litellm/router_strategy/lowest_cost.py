@@ -8,6 +8,24 @@ from litellm import ModelResponse, token_counter, verbose_logger
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.utils import ModelInfo
+
+
+def _resolve_model_cost(model: str | None, custom_llm_provider: str | None) -> ModelInfo | None:
+    if model is None:
+        return None
+    try:
+        return litellm.get_model_info(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+    except Exception as e:  # noqa: BLE001  # unavailable pricing uses the existing default cost
+        verbose_router_logger.debug(
+            "Failed to resolve model info for %s: %s",
+            model,
+            e,
+        )
+        return None
 
 
 class LowestCostLoggingHandler(CustomLogger):
@@ -244,29 +262,12 @@ class LowestCostLoggingHandler(CustomLogger):
                 or _deployment.get("model_info", {}).get("rpm", None)
                 or float("inf")
             )
-            item_litellm_model_name = _deployment.get("litellm_params", {}).get("model")
-            item_litellm_model_cost_map = litellm.model_cost.get(item_litellm_model_name, {})
-            if not item_litellm_model_cost_map and item_litellm_model_name:
-                try:
-                    custom_llm_provider = _deployment.get("litellm_params", {}).get(
-                        "custom_llm_provider"
-                    )
-                    _resolved_info = litellm.get_model_info(
-                        model=item_litellm_model_name,
-                        custom_llm_provider=custom_llm_provider,
-                    )
-                    item_litellm_model_cost_map = dict(_resolved_info)
-                    # Cache so subsequent routing calls skip get_model_info
-                    litellm.model_cost[item_litellm_model_name] = (
-                        item_litellm_model_cost_map
-                    )
-                except Exception as e:
-                    verbose_router_logger.debug(
-                        "Failed to resolve model info for %s: %s",
-                        item_litellm_model_name,
-                        e,
-                    )
-                    item_litellm_model_cost_map = {}
+            item_litellm_model_name: Final = _deployment.get("litellm_params", {}).get("model")
+            custom_llm_provider: Final = _deployment.get("litellm_params", {}).get("custom_llm_provider")
+            item_litellm_model_cost_map: Final = _resolve_model_cost(
+                model=item_litellm_model_name,
+                custom_llm_provider=custom_llm_provider,
+            )
 
             # check if user provided input_cost_per_token and output_cost_per_token in litellm_params
             item_input_cost = None
@@ -278,10 +279,18 @@ class LowestCostLoggingHandler(CustomLogger):
                 item_output_cost = _deployment.get("litellm_params", {}).get("output_cost_per_token")
 
             if item_input_cost is None:
-                item_input_cost = item_litellm_model_cost_map.get("input_cost_per_token", 5.0)
+                item_input_cost = (
+                    item_litellm_model_cost_map.get("input_cost_per_token", 5.0)
+                    if item_litellm_model_cost_map is not None
+                    else 5.0
+                )
 
             if item_output_cost is None:
-                item_output_cost = item_litellm_model_cost_map.get("output_cost_per_token", 5.0)
+                item_output_cost = (
+                    item_litellm_model_cost_map.get("output_cost_per_token", 5.0)
+                    if item_litellm_model_cost_map is not None
+                    else 5.0
+                )
 
             # if litellm["model"] is not in model_cost map -> use item_cost = $10
 
