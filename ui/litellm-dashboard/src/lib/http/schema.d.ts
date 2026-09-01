@@ -25542,6 +25542,11 @@ export interface components {
              */
             maximum_autorouter_session_retention_period?: string | null;
             /**
+             * Maximum Daily Tag Spend Retention Period
+             * @description Maximum retention period for LiteLLM_DailyTagSpend rows (e.g., '90d'). Rows whose date is older than this are deleted by the spend log cleanup job, on that job's schedule. The table only feeds usage analytics (tag usage dashboards, /spend/tags), so deleting old rows truncates historical tag usage charts but does not affect budget enforcement. Unset means rows are never deleted.
+             */
+            maximum_daily_tag_spend_retention_period?: string | null;
+            /**
              * Maximum Health Check Retention Period
              * @description Maximum retention period for health-check rows (e.g., '30d'). Rows whose checked_at is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rows are never deleted. Set this well above health_check_interval because /health and the UI read the latest row per model.
              */
