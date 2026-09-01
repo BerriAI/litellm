@@ -1229,3 +1229,102 @@ class TestOpenAIResponsesHandlerToolInjection:
         names = [t.get("name") for t in result["tools"]]
         assert "get_weather" in names
         assert "injected_tool" in names
+
+
+class ToolDroppingGuardrail(CustomGuardrail):
+    """Guardrail that removes one flattened function tool by name."""
+
+    def __init__(self, drop: str, **kwargs):
+        super().__init__(**kwargs)
+        self.drop = drop
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        inputs["tools"] = [t for t in inputs.get("tools") or [] if t["function"]["name"] != self.drop]
+        return inputs
+
+
+CODEX_NAMESPACE_TOOL = {
+    "type": "namespace",
+    "name": "mcp__confluence",
+    "description": "Tools from the confluence MCP server",
+    "tools": [
+        {
+            "type": "function",
+            "name": "confluence_get_page",
+            "description": "Get a page",
+            "parameters": {"type": "object", "properties": {"page_id": {"type": "string"}}},
+        },
+        {
+            "type": "function",
+            "name": "confluence_search",
+            "description": "Search",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}},
+        },
+    ],
+}
+
+
+class TestOpenAIResponsesHandlerNamespaceTools:
+    """Regression for #39183: a guardrail on /v1/responses must not rewrite Codex
+    namespace MCP tools into flat ``namespace__tool`` functions."""
+
+    @pytest.mark.asyncio
+    async def test_namespace_tool_survives_tool_appending_guardrail(self):
+        handler = OpenAIResponsesHandler()
+        data = {
+            "input": [{"role": "user", "content": "fetch page 1", "type": "message"}],
+            "tools": [
+                {"type": "function", "name": "shell", "parameters": {"type": "object", "properties": {}}},
+                CODEX_NAMESPACE_TOOL,
+            ],
+            "model": "gpt-5.3-codex",
+        }
+
+        result = await handler.process_input_messages(data, ToolAppendingGuardrail(guardrail_name="test"))
+
+        assert [t["type"] for t in result["tools"]] == ["function", "namespace", "function"]
+        assert result["tools"][0]["name"] == "shell"
+        assert result["tools"][1] == CODEX_NAMESPACE_TOOL
+        assert result["tools"][2]["name"] == "injected_tool"
+        assert not any(t["name"].startswith("mcp__confluence__") for t in result["tools"])
+
+    @pytest.mark.asyncio
+    async def test_guardrail_can_still_drop_a_single_namespace_member(self):
+        handler = OpenAIResponsesHandler()
+        data = {
+            "input": [{"role": "user", "content": "fetch page 1", "type": "message"}],
+            "tools": [CODEX_NAMESPACE_TOOL],
+            "model": "gpt-5.3-codex",
+        }
+
+        result = await handler.process_input_messages(
+            data, ToolDroppingGuardrail(drop="mcp__confluence__confluence_search", guardrail_name="test")
+        )
+
+        assert len(result["tools"]) == 1
+        namespace_tool = result["tools"][0]
+        assert namespace_tool["type"] == "namespace"
+        assert namespace_tool["name"] == "mcp__confluence"
+        assert [t["name"] for t in namespace_tool["tools"]] == ["confluence_get_page"]
+
+    @pytest.mark.asyncio
+    async def test_namespace_tool_removed_when_guardrail_drops_every_member(self):
+        handler = OpenAIResponsesHandler()
+        single_member = {**CODEX_NAMESPACE_TOOL, "tools": CODEX_NAMESPACE_TOOL["tools"][:1]}
+        data = {
+            "input": [{"role": "user", "content": "fetch page 1", "type": "message"}],
+            "tools": [{"type": "web_search_preview"}, single_member],
+            "model": "gpt-5.3-codex",
+        }
+
+        result = await handler.process_input_messages(
+            data, ToolDroppingGuardrail(drop="mcp__confluence__confluence_get_page", guardrail_name="test")
+        )
+
+        assert result["tools"] == [{"type": "web_search_preview"}]
