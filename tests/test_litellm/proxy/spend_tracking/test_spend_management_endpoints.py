@@ -413,8 +413,8 @@ async def test_assert_user_can_view_request_id_rejects_both_users_none():
         team_id = None
 
     class MockSpendLogs:
-        async def find_first(self, where=None, include=None):
-            return MockRow()
+        async def find_many(self, where=None, include=None):
+            return [MockRow()]
 
     class MockDB:
         def __init__(self):
@@ -428,6 +428,44 @@ async def test_assert_user_can_view_request_id_rejects_both_users_none():
     with pytest.raises(HTTPException) as exc_info:
         await spend_management_endpoints._assert_user_can_view_request_id(
             MockPrisma(), auth, "req-none-user"
+        )
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_assert_user_can_view_request_id_denies_cross_tenant_call_id_collision():
+    """
+    Regression: ``litellm_call_id`` is client-supplied (``x-litellm-call-id``) and
+    not unique, so a caller can seed their own row with a ``litellm_call_id``
+    that collides with another tenant's ``request_id``. The auth check must
+    inspect every matching row rather than just the first one, otherwise it
+    would pass on the caller's owned row and the follow-up list/detail query
+    could return the unowned sibling.
+    """
+
+    class Row:
+        def __init__(self, user, team_id=None):
+            self.user = user
+            self.team_id = team_id
+
+    class MockSpendLogs:
+        async def find_many(self, where=None, include=None):
+            return [Row("caller_user"), Row("victim_user")]
+
+    class MockDB:
+        def __init__(self):
+            self.litellm_spendlogs = MockSpendLogs()
+
+    class MockPrisma:
+        def __init__(self):
+            self.db = MockDB()
+
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="caller_user"
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await spend_management_endpoints._assert_user_can_view_request_id(
+            MockPrisma(), auth, "colliding-id"
         )
     assert exc_info.value.status_code == 403
 
@@ -2334,8 +2372,8 @@ async def test_ui_view_spend_logs_request_id_blocks_non_owner(client, monkeypatc
         team_id = None
 
     class _SpendLogs:
-        async def find_first(self, where=None, include=None):
-            return _ForeignRow()
+        async def find_many(self, where=None, include=None):
+            return [_ForeignRow()]
 
     class _DB:
         def __init__(self):
@@ -2400,10 +2438,10 @@ async def test_ui_view_spend_logs_request_id_owner_scoped_by_id_only(
         user = "user_1"
         team_id = "team1"
 
-    async def _find_first(where=None, include=None):
-        return _OwnedRow()
+    async def _find_many(where=None, include=None):
+        return [_OwnedRow()]
 
-    mock_prisma.db.find_first = _find_first
+    mock_prisma.db.find_many = _find_many
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
     # A 5-day window that EXCLUDES the 90-day-old log, as the dashboard sends.

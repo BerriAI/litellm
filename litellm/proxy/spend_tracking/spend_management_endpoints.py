@@ -243,9 +243,14 @@ def _request_id_or_call_id_clause(request_id: str) -> tuple[_RequestIdEquals, _L
     return (request_id_clause, call_id_clause)
 
 
-async def _find_spend_log_row(prisma_client: PrismaClient, request_id: str) -> _SpendLogOwnershipRow | None:
-    """Read the single spend log row identified by ``request_id`` or ``litellm_call_id``."""
-    return await _spend_logs_table(prisma_client).find_first(
+async def _find_spend_log_rows(prisma_client: PrismaClient, request_id: str) -> Sequence[_SpendLogOwnershipRow]:
+    """Read every spend log row matching ``request_id`` or ``litellm_call_id``.
+
+    ``litellm_call_id`` is client-supplied (``x-litellm-call-id``) and not unique,
+    so a single id can address more than one row across tenants. Callers that
+    need to authorize the id must inspect every matching row, not just one.
+    """
+    return await _spend_logs_table(prisma_client).find_many(
         where={"OR": _request_id_or_call_id_clause(request_id)},
         include=None,
     )
@@ -4301,31 +4306,29 @@ async def _assert_user_can_view_request_id(
     request_id: str,
 ) -> None:
     """
-    Verify the requesting non-admin user is allowed to view this spend-log row.
-    Allowed when the log belongs to the user directly, or to one of their
-    permitted teams (admin or ``/spend/logs`` permission).
+    Verify the requesting non-admin user is allowed to view every spend log row
+    the ``request_id`` lookup can resolve to. Allowed per row when the log
+    belongs to the user directly, or to one of their permitted teams (admin or
+    ``/spend/logs`` permission). Because ``litellm_call_id`` is client-supplied
+    and non-unique, one id can address rows across tenants, so authorization
+    must hold for every matching row: any unowned match denies the request.
     Raises HTTP 403 if not.
     """
-    row: Final = await _find_spend_log_row(prisma_client, request_id)
-    if row is None:
-        return
-
-    if row.user is not None and row.user == user_api_key_dict.user_id:
-        return
-
-    if row.team_id:
-        can_view: Final = await _can_team_member_view_log(
+    rows: Final = await _find_spend_log_rows(prisma_client, request_id)
+    caller_user_id: Final = user_api_key_dict.user_id
+    for row in rows:
+        if caller_user_id is not None and row.user == caller_user_id:
+            continue
+        if row.team_id and await _can_team_member_view_log(
             prisma_client=prisma_client,
             user_api_key_dict=user_api_key_dict,
             team_id=row.team_id,
+        ):
+            continue
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": f"Not authorized to view spend log for request_id={request_id}"},
         )
-        if can_view:
-            return
-
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail={"error": f"Not authorized to view spend log for request_id={request_id}"},
-    )
 
 
 async def _get_permitted_team_ids_for_spend_logs(
