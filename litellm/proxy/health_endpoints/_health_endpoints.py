@@ -22,6 +22,7 @@ from litellm.integrations.SlackAlerting.ms_teams import (
     build_ms_teams_payload,
     get_ms_teams_webhook_url,
 )
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
@@ -54,6 +55,7 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.router_utils.clientside_credential_handler import (
     _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the router path
     clientside_credential_keys,
@@ -61,6 +63,39 @@ from litellm.router_utils.clientside_credential_handler import (
 from litellm.secret_managers.main import get_secret_bool
 
 #### Health ENDPOINTS ####
+
+
+def _requested_credential_name(litellm_params: Mapping[str, object]) -> str | None:
+    credential_name: Final = litellm_params.get("litellm_credential_name")
+    return credential_name if isinstance(credential_name, str) else None
+
+
+async def _load_stored_credential_into_memory(
+    credential_name: str | None,
+    credentials_repository: CredentialsRepository,
+) -> None:
+    """Read one stored credential from the database into this pod's credential list.
+
+    Credential resolution is memory-only, and the pod serving this probe is not necessarily the
+    pod that served the write. Peers learn of a credential through the config-sync resync, which
+    lands seconds later, so without this a probe issued right after the write reports missing
+    credentials for a credential that is already committed.
+    """
+    if credential_name is None:
+        return
+
+    from litellm.proxy.proxy_server import proxy_config
+
+    try:
+        stored_credential: Final = await credentials_repository.find_by_name(credential_name)
+    except Exception as e:  # noqa: BLE001  # best-effort read; a probe answerable from memory must survive a database error
+        verbose_proxy_logger.warning("could not read credential %s from the database: %s", credential_name, e)
+        return
+    if stored_credential is None:
+        return
+    CredentialAccessor.upsert_credentials(
+        (proxy_config.decrypt_credentials(stored_credential),)  # pyright: ignore[reportUnknownMemberType]  # ProxyConfig.decrypt_credentials takes a bare dict
+    )
 
 
 def _reject_os_environ_references(params: dict) -> None:
@@ -2055,6 +2090,13 @@ async def test_model_connection(
             prisma_client=prisma_client,
             premium_user=premium_user,
         )
+        await _load_stored_credential_into_memory(
+            _requested_credential_name(
+                litellm_params  # pyright: ignore[reportUnknownArgumentType]  # this handler's merged params are a bare dict
+            ),
+            CredentialsRepository(prisma_client),
+        )
+
         mode = mode or litellm_params.pop("mode", None)
 
         result: Final = await run_with_timeout(

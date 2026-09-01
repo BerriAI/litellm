@@ -17,6 +17,7 @@ import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_mod
 from litellm.litellm_core_utils.health_check_helpers import TEST_IMAGE_BASE64
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
     _show_no_redis_warning,
@@ -27,6 +28,7 @@ from litellm.proxy.health_endpoints._health_endpoints import (
 from litellm.proxy.health_endpoints._health_endpoints import (
     test_model_connection as health_test_model_connection,
 )
+from litellm.types.utils import CredentialItem
 
 # Import shared proxy test helpers from conftest
 from tests.test_litellm.proxy.conftest import create_proxy_test_client
@@ -2928,3 +2930,217 @@ def test_test_model_connection_accepts_image_edit_mode(monkeypatch):
 
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "success"
+
+
+def _stored_credential_row(credential_name: str, credential_values: dict) -> MagicMock:
+    row = MagicMock()
+    row.model_dump.return_value = {
+        "credential_name": credential_name,
+        "credential_values": {key: encrypt_value_helper(value) for key, value in credential_values.items()},
+        "credential_info": {"custom_llm_provider": "openai"},
+    }
+    return row
+
+
+def test_test_model_connection_resolves_a_credential_this_pod_has_not_synced(monkeypatch):
+    """Regression: on a multi-instance deployment the pod serving /health/test_connection is
+    not the pod that served POST /credentials. Credential resolution was memory-only, so until
+    the config-sync resync landed this pod answered "Missing credentials" for a credential that
+    was already committed to the database. The Add Model wizard's Test Connection button hits
+    exactly that window."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-for-this-test")
+    monkeypatch.setattr(litellm, "credential_list", [])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_credentialstable.find_unique = AsyncMock(
+        return_value=_stored_credential_row("unsynced-cred", {"api_key": "sk-key-only-in-the-db"})
+    )
+
+    app = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    client = TestClient(app)
+
+    with (
+        patch(  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", prisma_client
+        ),
+        respx.mock(assert_all_called=True) as respx_mock,
+    ):
+        route = respx_mock.post(host="api.openai.com", path="/v1/chat/completions").respond(
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "gpt-4o",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+        )
+        response = client.post(
+            "/health/test_connection",
+            json={
+                "mode": "chat",
+                "litellm_params": {"model": "openai/gpt-4o", "litellm_credential_name": "unsynced-cred"},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "success", response.text
+    assert route.call_count == 1
+    assert route.calls[0].request.headers["authorization"] == "Bearer sk-key-only-in-the-db"
+
+
+def _chat_completion_response() -> dict:
+    return {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4o",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+
+def _test_connection_client() -> TestClient:
+    app = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    return TestClient(app)
+
+
+def test_test_model_connection_still_uses_a_credential_already_in_memory(monkeypatch):
+    """The database read must not displace the credential this pod already holds."""
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="synced-cred",
+                credential_values={"api_key": "sk-key-from-memory"},
+                credential_info={},
+            )
+        ],
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_credentialstable.find_unique = AsyncMock(return_value=None)
+
+    with (
+        patch(  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", prisma_client
+        ),
+        respx.mock(assert_all_called=True) as respx_mock,
+    ):
+        route = respx_mock.post(host="api.openai.com", path="/v1/chat/completions").respond(
+            json=_chat_completion_response()
+        )
+        response = _test_connection_client().post(
+            "/health/test_connection",
+            json={
+                "mode": "chat",
+                "litellm_params": {"model": "openai/gpt-4o", "litellm_credential_name": "synced-cred"},
+            },
+        )
+
+    assert response.json()["status"] == "success", response.text
+    assert route.calls[0].request.headers["authorization"] == "Bearer sk-key-from-memory"
+
+
+def test_test_model_connection_reports_the_provider_error_for_a_credential_that_exists_nowhere(monkeypatch):
+    """A name that is in neither memory nor the database keeps today's behaviour: the probe runs
+    without credential values and reports what the provider says."""
+    monkeypatch.setattr(litellm, "credential_list", [])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_credentialstable.find_unique = AsyncMock(return_value=None)
+
+    with patch(  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+        "litellm.proxy.proxy_server.prisma_client", prisma_client
+    ):
+        response = _test_connection_client().post(
+            "/health/test_connection",
+            json={
+                "mode": "chat",
+                "litellm_params": {"model": "openai/gpt-4o", "litellm_credential_name": "nowhere-cred"},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "error"
+    assert "Missing credentials" in response.json()["result"]["error"]
+
+
+def test_test_model_connection_survives_a_failing_credential_read(monkeypatch):
+    """The database read is best effort: a database error must not turn a probe this pod could
+    still answer from memory into a failed Test Connection."""
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="synced-cred",
+                credential_values={"api_key": "sk-key-from-memory"},
+                credential_info={},
+            )
+        ],
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_credentialstable.find_unique = AsyncMock(side_effect=PrismaError("database is down"))
+
+    with (
+        patch(  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", prisma_client
+        ),
+        respx.mock(assert_all_called=True) as respx_mock,
+    ):
+        route = respx_mock.post(host="api.openai.com", path="/v1/chat/completions").respond(
+            json=_chat_completion_response()
+        )
+        response = _test_connection_client().post(
+            "/health/test_connection",
+            json={
+                "mode": "chat",
+                "litellm_params": {"model": "openai/gpt-4o", "litellm_credential_name": "synced-cred"},
+            },
+        )
+
+    assert response.json()["status"] == "success", response.text
+    assert route.calls[0].request.headers["authorization"] == "Bearer sk-key-from-memory"
+
+
+def test_test_model_connection_reads_no_credential_when_the_request_names_none(monkeypatch):
+    """A request that carries its own key must not pay for a credential lookup."""
+    monkeypatch.setattr(litellm, "credential_list", [])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_credentialstable.find_unique = AsyncMock(return_value=None)
+
+    with (
+        patch(  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", prisma_client
+        ),
+        respx.mock(assert_all_called=True) as respx_mock,
+    ):
+        route = respx_mock.post(host="api.openai.com", path="/v1/chat/completions").respond(
+            json=_chat_completion_response()
+        )
+        response = _test_connection_client().post(
+            "/health/test_connection",
+            json={"mode": "chat", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-from-the-request"}},
+        )
+
+    assert response.json()["status"] == "success", response.text
+    assert route.calls[0].request.headers["authorization"] == "Bearer sk-from-the-request"
+    prisma_client.db.litellm_credentialstable.find_unique.assert_not_awaited()

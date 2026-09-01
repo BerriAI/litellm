@@ -1,5 +1,6 @@
 """Utils for accessing credentials."""
 
+from collections.abc import Sequence
 from typing import Final
 
 import litellm
@@ -19,7 +20,7 @@ class CredentialAccessor:
         return {}
 
     @staticmethod
-    def upsert_credentials(credentials: list[CredentialItem]):
+    def upsert_credentials(credentials: Sequence[CredentialItem]):
         """Add a credential to the list of credentials."""
 
         credential_names: Final = [cred.credential_name for cred in litellm.credential_list]
