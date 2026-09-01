@@ -2896,6 +2896,12 @@ async def ui_view_request_response_for_request_id(
             end_time_utc=end_date_obj,
         )
         if payload is not None:
+            if not caller_is_admin and prisma_client is not None:
+                await _assert_user_can_view_request_id(
+                    prisma_client=prisma_client,
+                    user_api_key_dict=user_api_key_dict,
+                    request_id=request_id,
+                )
             return payload
 
     # Fallback: the list endpoint omits the heavy columns for performance, so
