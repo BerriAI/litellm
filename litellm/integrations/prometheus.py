@@ -169,10 +169,11 @@ def _get_proxy_llm_router() -> Router | None:
 def _bounded_requested_model_label(requested_model: str | None) -> str | None:
     """
     Bound ``requested_model`` label cardinality: names the router recognizes
-    (model names, deployment ids, aliases, routing groups) or matches via a
-    wildcard/pattern route keep their own label value; any other
-    client-supplied string collapses into the single ``other`` bucket. With no
-    router to vouch for the string, it also collapses to ``other``.
+    (model names, deployment ids, aliases, routing groups, team public model
+    names) or matches via a global or team wildcard/pattern route keep their
+    own label value; any other client-supplied string collapses into the
+    single ``other`` bucket. With no router to vouch for the string, it also
+    collapses to ``other``.
     """
     if not requested_model:
         return requested_model
@@ -181,7 +182,14 @@ def _bounded_requested_model_label(requested_model: str | None) -> str | None:
         return UNRECOGNIZED_REQUESTED_MODEL_LABEL
     if llm_router.is_recognized_model(requested_model):
         return requested_model
+    if requested_model in llm_router.team_public_model_names:
+        return requested_model
     if llm_router.pattern_router.route(requested_model) is not None:
+        return requested_model
+    if any(
+        team_pattern_router.route(requested_model) is not None
+        for team_pattern_router in llm_router.team_pattern_routers.values()
+    ):
         return requested_model
     return UNRECOGNIZED_REQUESTED_MODEL_LABEL
 
