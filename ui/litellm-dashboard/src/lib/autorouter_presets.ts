@@ -292,6 +292,7 @@ export const buildPresetPrefill = (
       classification_mode: config.classification_mode ?? DEFAULT_CLASSIFICATION_MODE,
       session_affinity: config.session_affinity ?? DEFAULT_SESSION_AFFINITY,
       deployment_affinity: config.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY,
+      modality_routing: config.modality_routing ?? false,
       adaptive: config.adaptive,
       adaptive_weights: config.adaptive_weights,
       tier_distance_penalty: config.tier_distance_penalty,
