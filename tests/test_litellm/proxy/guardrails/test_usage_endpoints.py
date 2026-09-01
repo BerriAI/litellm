@@ -85,6 +85,7 @@ def _units_row(
     api_key: str = "",
     usage_unit: str = "contentPolicyUnits",
     units: int = 1,
+    cost: float | None = None,
 ) -> Any:
     r = MagicMock()
     r.guardrail_id = guardrail_id
@@ -93,6 +94,7 @@ def _units_row(
     r.api_key = api_key
     r.usage_unit = usage_unit
     r.units = units
+    r.cost = cost
     return r
 
 
@@ -279,8 +281,8 @@ async def test_detail_breaks_units_down_by_day_team_and_key():
         )
     assert resp.usage_units == {"contentPolicyUnits": 3, "topicPolicyUnits": 1}
     assert [p.model_dump() for p in resp.usage_units_daily] == [
-        {"date": "2026-04-24", "units": {"topicPolicyUnits": 1}},
-        {"date": "2026-04-25", "units": {"contentPolicyUnits": 3}},
+        {"date": "2026-04-24", "units": {"topicPolicyUnits": 1}, "cost": None},
+        {"date": "2026-04-25", "units": {"contentPolicyUnits": 3}, "cost": None},
     ]
     assert resp.usage_units_by_team == {
         "team-a": {"contentPolicyUnits": 2, "topicPolicyUnits": 1},
@@ -311,6 +313,73 @@ async def test_overview_degrades_units_to_empty_when_units_table_is_missing():
     row = next(r for r in resp.rows if r.id == "yaml-uuid")
     assert (row.requestsEvaluated, row.usageUnits) == (4, {})
     assert (resp.totalRequests, resp.totalBlocked, resp.totalUsageUnits) == (4, 1, {})
+    assert (row.cost, resp.totalCost) == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_overview_reports_cost_per_row_and_total_summing_only_tracked_days():
+    """LIT-5652: cost rides the units rollup. Rows written before the cost column
+    (or by an unpriced hook) carry NULL and must drop out of the sum rather than
+    read as $0, and a guardrail with only NULL rows reports None, not 0.0."""
+    prisma = _prisma(
+        find_many=[],
+        metrics=[_metric("yaml-pii", requests=4, passed=3, blocked=1)],
+        units=[
+            _units_row("yaml-pii", usage_unit="contentPolicyUnits", units=1000, cost=0.15),
+            _units_row("yaml-pii", team_id="team-a", usage_unit="contentPolicyUnits", units=2000, cost=0.3),
+            _units_row("yaml-pii", date="2026-04-24", usage_unit="contentPolicyUnits", units=5000, cost=None),
+            _units_row("legacy-guard", usage_unit="topicPolicyUnits", units=7, cost=None),
+        ],
+    )
+    handler = _config_handler(
+        _yaml_guardrail(guardrail_id="yaml-uuid", name="yaml-pii"),
+        _yaml_guardrail(guardrail_id="legacy-uuid", name="legacy-guard"),
+    )
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2:
+        resp = await guardrails_usage_overview(start_date=START, end_date=END, user_api_key_dict=ADMIN)
+    by_id = {r.id: r for r in resp.rows}
+    assert by_id["yaml-uuid"].cost == pytest.approx(0.45)
+    assert by_id["legacy-uuid"].cost is None
+    assert resp.totalCost == pytest.approx(0.45)
+
+
+@pytest.mark.asyncio
+async def test_detail_breaks_cost_down_by_unit_day_team_and_key():
+    """Every cost breakdown keeps the same keys as its units twin so the UI can
+    render them side by side, with None where that group has no tracked cost."""
+    prisma = _prisma(
+        find_unique=None,
+        units=[
+            _units_row("yaml-pii", date="2026-04-25", team_id="team-a", api_key="hash-1", units=1000, cost=0.15),
+            _units_row("yaml-pii", date="2026-04-25", team_id="", api_key="hash-2", units=200, cost=0.03),
+            _units_row(
+                "yaml-pii",
+                date="2026-04-24",
+                team_id="team-a",
+                api_key="hash-1",
+                usage_unit="topicPolicyUnits",
+                units=10,
+                cost=None,
+            ),
+        ],
+    )
+    handler = _config_handler(_yaml_guardrail())
+    p1, p2 = _patches(prisma, handler)
+    with p1, p2:
+        resp = await guardrails_usage_detail(
+            guardrail_id="yaml-1", start_date=START, end_date=END, user_api_key_dict=ADMIN
+        )
+    assert resp.cost == pytest.approx(0.18)
+    assert resp.cost_by_unit == {"contentPolicyUnits": pytest.approx(0.18), "topicPolicyUnits": None}
+    assert [p.model_dump() for p in resp.usage_units_daily] == [
+        {"date": "2026-04-24", "units": {"topicPolicyUnits": 10}, "cost": None},
+        {"date": "2026-04-25", "units": {"contentPolicyUnits": 1200}, "cost": pytest.approx(0.18)},
+    ]
+    assert resp.cost_by_team == {"team-a": pytest.approx(0.15), "": pytest.approx(0.03)}
+    assert resp.cost_by_key == {"hash-1": pytest.approx(0.15), "hash-2": pytest.approx(0.03)}
+    assert resp.cost_by_team.keys() == resp.usage_units_by_team.keys()
+    assert resp.cost_by_key.keys() == resp.usage_units_by_key.keys()
 
 
 @pytest.mark.asyncio
@@ -330,6 +399,7 @@ async def test_detail_degrades_units_to_empty_when_units_table_is_missing():
         {},
         {},
     )
+    assert (resp.cost, resp.cost_by_unit, resp.cost_by_team, resp.cost_by_key) == (None, {}, {}, {})
 
 
 # ---- logs -------------------------------------------------------------------

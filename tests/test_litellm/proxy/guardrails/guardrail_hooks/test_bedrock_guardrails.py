@@ -2961,9 +2961,7 @@ async def test_streaming_hook_reraises_guardrail_service_failures():
     guardrail = _sse_guardrail()
 
     with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
-        mock_api.side_effect = HTTPException(
-            status_code=500, detail="Bedrock guardrail throttle retries exhausted"
-        )
+        mock_api.side_effect = HTTPException(status_code=500, detail="Bedrock guardrail throttle retries exhausted")
         with pytest.raises(HTTPException) as exc:
             await _drain_streaming_hook(guardrail)
 
@@ -5104,6 +5102,26 @@ def test_build_tracing_detail_surfaces_usage_counters_and_cost(monkeypatch):
 
     assert detail["guardrail_usage"] == {"topicPolicyUnits": 1, "contentPolicyUnits": 2, "wordPolicyUnits": 0}
     assert detail["guardrail_cost"] == pytest.approx(0.00045)
+    by_unit = detail["guardrail_cost_by_unit"]
+    assert by_unit is not None and by_unit.keys() == detail["guardrail_usage"].keys()
+    assert by_unit["topicPolicyUnits"] == pytest.approx(0.00015)
+    assert by_unit["contentPolicyUnits"] == pytest.approx(0.0003)
+    assert by_unit["wordPolicyUnits"] == 0.0
+
+
+def test_build_tracing_detail_omits_cost_by_unit_when_unpriced_but_keeps_scalar_zero(monkeypatch):
+    """LIT-5652: without a cost-map entry the spend path still bills 0.0, but the
+    per-counter stamp must be absent so the rollup records NULL, not $0."""
+    monkeypatch.setattr(litellm, "model_cost", {})
+    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
+
+    detail = guardrail._build_tracing_detail(
+        {"action": "NONE", "usage": {"contentPolicyUnits": 5}}, aws_region_name="us-east-1"
+    )
+
+    assert detail["guardrail_usage"] == {"contentPolicyUnits": 5}
+    assert detail["guardrail_cost"] == 0.0
+    assert "guardrail_cost_by_unit" not in detail
 
 
 def test_build_tracing_detail_omits_guardrail_usage_when_bedrock_reports_none():
@@ -5115,6 +5133,7 @@ def test_build_tracing_detail_omits_guardrail_usage_when_bedrock_reports_none():
     ):
         assert "guardrail_usage" not in detail
         assert "guardrail_cost" not in detail
+        assert "guardrail_cost_by_unit" not in detail
 
 
 @pytest.mark.asyncio
@@ -5478,7 +5497,7 @@ async def test_unbuffered_end_of_stream_hook_yields_chunks_before_scan():
     scan_index = events.index("scan")
     chunk_events = [e for e in events if e != "scan"]
     assert events.count("scan") == 1
-    assert [e for e in events[:scan_index] if e != "scan"] == chunk_events[: scan_index]
+    assert [e for e in events[:scan_index] if e != "scan"] == chunk_events[:scan_index]
     assert ("chunk", "Hello") in events[:scan_index]
     assert ("chunk", " world") in events[:scan_index]
     assert len(chunk_events) == 3

@@ -5,6 +5,8 @@ import pytest
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     bedrock_guardrail_cost,
+    bedrock_guardrail_cost_by_unit,
+    billed_guardrail_cost_by_unit,
     cost_breakdown_with_guardrail,
     guardrail_information_cost,
 )
@@ -54,6 +56,58 @@ def test_bedrock_guardrail_cost_malformed_regional_entry_falls_back(synthetic_co
 def test_bedrock_guardrail_cost_no_pricing_entry(monkeypatch):
     monkeypatch.setattr(litellm, "model_cost", {})
     assert bedrock_guardrail_cost(usage_units={"contentPolicyUnits": 1}, aws_region_name="us-east-1") == 0.0
+
+
+def test_bedrock_guardrail_cost_by_unit_prices_every_counter_it_was_given(synthetic_cost_map):
+    """LIT-5652: the daily rollup stores one row per counter, so pricing must come
+    back at that grain, keyed exactly like the usage (free and unknown counters
+    included at 0.0) and summing to the scalar the spend path bills."""
+    usage = {"contentPolicyUnits": 2, "topicPolicyUnits": 1, "wordPolicyUnits": 5, "someFutureCounter": 3}
+    by_unit = bedrock_guardrail_cost_by_unit(usage_units=usage, aws_region_name="us-east-1")
+    assert by_unit is not None
+    assert by_unit.keys() == usage.keys()
+    assert by_unit["contentPolicyUnits"] == pytest.approx(0.0003)
+    assert by_unit["topicPolicyUnits"] == pytest.approx(0.00015)
+    assert (by_unit["wordPolicyUnits"], by_unit["someFutureCounter"]) == (0.0, 0.0)
+    assert sum(by_unit.values()) == pytest.approx(
+        bedrock_guardrail_cost(usage_units=usage, aws_region_name="us-east-1")
+    )
+
+
+def test_bedrock_guardrail_cost_by_unit_is_none_without_pricing_so_unpriced_is_not_free(monkeypatch):
+    """The scalar keeps returning 0.0 for the spend path; the per-unit view must
+    say "unknown" instead so the rollup stores NULL rather than a $0 that would
+    hide the exact silent-spend problem this feature exists to surface."""
+    monkeypatch.setattr(litellm, "model_cost", {})
+    assert bedrock_guardrail_cost_by_unit(usage_units={"contentPolicyUnits": 1}, aws_region_name="us-east-1") is None
+
+
+def test_billed_guardrail_cost_by_unit_reads_the_hook_stamp():
+    entry = {"guardrail_name": "bedrock", "guardrail_cost_by_unit": {"contentPolicyUnits": 0.15, "wordPolicyUnits": 0}}
+    assert billed_guardrail_cost_by_unit(entry) == {"contentPolicyUnits": 0.15, "wordPolicyUnits": 0.0}
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"guardrail_name": "no-pricing", "guardrail_usage": {"contentPolicyUnits": 1}},
+        {"guardrail_cost_by_unit": {"text_records": 0.5}, "guardrail_cost_in_spend": False},
+        {"guardrail_cost_by_unit": {"contentPolicyUnits": -0.5}},
+        {"guardrail_cost_by_unit": {"contentPolicyUnits": float("nan")}},
+        {"guardrail_cost_by_unit": {"contentPolicyUnits": float("inf")}},
+        {"guardrail_cost_by_unit": {"contentPolicyUnits": "bad"}},
+        {"guardrail_cost_by_unit": "not-a-map"},
+        {"guardrail_cost_by_unit": {"contentPolicyUnits": 0.1}, "guardrail_cost_in_spend": "maybe"},
+        "not-an-entry",
+    ],
+)
+def test_billed_guardrail_cost_by_unit_is_none_when_unpriced_report_only_or_forged(entry):
+    assert billed_guardrail_cost_by_unit(entry) is None
+
+
+def test_billed_guardrail_cost_by_unit_treats_none_in_spend_as_billed():
+    entry = {"guardrail_cost_by_unit": {"contentPolicyUnits": 0.15}, "guardrail_cost_in_spend": None}
+    assert billed_guardrail_cost_by_unit(entry) == {"contentPolicyUnits": 0.15}
 
 
 def test_shipped_bedrock_guardrail_prices_match_aws_pricing_page(monkeypatch):

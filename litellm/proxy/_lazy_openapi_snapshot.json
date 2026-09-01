@@ -13039,6 +13039,59 @@
               ],
               "title": "Avgscore"
             },
+            "cost": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cost"
+            },
+            "cost_by_key": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "title": "Cost By Key",
+              "type": "object"
+            },
+            "cost_by_team": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "title": "Cost By Team",
+              "type": "object"
+            },
+            "cost_by_unit": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "title": "Cost By Unit",
+              "type": "object"
+            },
             "description": {
               "anyOf": [
                 {
@@ -13140,7 +13193,11 @@
             "usage_units",
             "usage_units_daily",
             "usage_units_by_team",
-            "usage_units_by_key"
+            "usage_units_by_key",
+            "cost",
+            "cost_by_unit",
+            "cost_by_team",
+            "cost_by_key"
           ],
           "title": "UsageDetailResponse",
           "type": "object"
@@ -13295,6 +13352,17 @@
               "title": "Totalblocked",
               "type": "integer"
             },
+            "totalCost": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Totalcost"
+            },
             "totalRequests": {
               "title": "Totalrequests",
               "type": "integer"
@@ -13313,7 +13381,8 @@
             "totalRequests",
             "totalBlocked",
             "passRate",
-            "totalUsageUnits"
+            "totalUsageUnits",
+            "totalCost"
           ],
           "title": "UsageOverviewResponse",
           "type": "object"
@@ -13341,6 +13410,17 @@
                 }
               ],
               "title": "Avgscore"
+            },
+            "cost": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cost"
             },
             "failRate": {
               "title": "Failrate",
@@ -13393,13 +13473,25 @@
             "avgLatency",
             "status",
             "trend",
-            "usageUnits"
+            "usageUnits",
+            "cost"
           ],
           "title": "UsageOverviewRow",
           "type": "object"
         },
         "UsageUnitsDailyPoint": {
           "properties": {
+            "cost": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cost"
+            },
             "date": {
               "title": "Date",
               "type": "string"
@@ -13414,7 +13506,8 @@
           },
           "required": [
             "date",
-            "units"
+            "units",
+            "cost"
           ],
           "title": "UsageUnitsDailyPoint",
           "type": "object"
@@ -28773,6 +28866,17 @@
               "title": "Totalblocked",
               "type": "integer"
             },
+            "totalCost": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Totalcost"
+            },
             "totalRequests": {
               "title": "Totalrequests",
               "type": "integer"
@@ -28791,7 +28895,8 @@
             "totalRequests",
             "totalBlocked",
             "passRate",
-            "totalUsageUnits"
+            "totalUsageUnits",
+            "totalCost"
           ],
           "title": "UsageOverviewResponse",
           "type": "object"
@@ -28819,6 +28924,17 @@
                 }
               ],
               "title": "Avgscore"
+            },
+            "cost": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cost"
             },
             "failRate": {
               "title": "Failrate",
@@ -28871,7 +28987,8 @@
             "avgLatency",
             "status",
             "trend",
-            "usageUnits"
+            "usageUnits",
+            "cost"
           ],
           "title": "UsageOverviewRow",
           "type": "object"

@@ -169,6 +169,20 @@ def _units_by(
     return MappingProxyType({key: _sum_counter_units(group) for key, group in groupby(ordered, key=key_of)})
 
 
+def _sum_tracked_cost(rows: "Iterable[prisma_models.LiteLLM_DailyGuardrailUsageUnits]") -> float | None:
+    """Sum over rows with a tracked cost; None when no row has one (pre-migration or unpriced)."""
+    tracked: Final = tuple(r.cost for r in rows if r.cost is not None)
+    return sum(tracked) if tracked else None
+
+
+def _cost_by(
+    rows: "Sequence[prisma_models.LiteLLM_DailyGuardrailUsageUnits]",
+    key_of: "Callable[[prisma_models.LiteLLM_DailyGuardrailUsageUnits], str]",
+) -> Mapping[str, float | None]:
+    ordered: Final = sorted(rows, key=key_of)
+    return MappingProxyType({key: _sum_tracked_cost(group) for key, group in groupby(ordered, key=key_of)})
+
+
 # --- Response models ---
 
 
@@ -218,6 +232,8 @@ class UsageOverviewRow(BaseModel):
     status: str  # healthy | warning | critical
     trend: str  # up | down | stable
     usageUnits: Mapping[str, int]
+    cost: float | None
+    """USD billed for usageUnits over the window, summed over days with tracked cost; null when none have it."""
 
 
 class UsageOverviewResponse(BaseModel):
@@ -227,11 +243,18 @@ class UsageOverviewResponse(BaseModel):
     totalBlocked: int
     passRate: float
     totalUsageUnits: Mapping[str, int]
+    totalCost: float | None
+
+
+_EMPTY_OVERVIEW: Final = UsageOverviewResponse(
+    rows=[], chart=[], totalRequests=0, totalBlocked=0, passRate=100.0, totalUsageUnits=_EMPTY_UNITS, totalCost=None
+)
 
 
 class UsageUnitsDailyPoint(BaseModel):
     date: str
     units: Mapping[str, int]
+    cost: float | None
 
 
 class UsageDetailResponse(BaseModel):
@@ -251,6 +274,10 @@ class UsageDetailResponse(BaseModel):
     usage_units_daily: Sequence[UsageUnitsDailyPoint]
     usage_units_by_team: Mapping[str, Mapping[str, int]]
     usage_units_by_key: Mapping[str, Mapping[str, int]]
+    cost: float | None
+    cost_by_unit: Mapping[str, float | None]
+    cost_by_team: Mapping[str, float | None]
+    cost_by_key: Mapping[str, float | None]
 
 
 class UsageLogEntry(BaseModel):
@@ -367,6 +394,7 @@ def _guardrail_overview_rows(
     agg: Mapping[str, _MetricTotals],
     prev_agg: Mapping[str, float],
     units_agg: Mapping[str, Mapping[str, int]],
+    cost_agg: Mapping[str, float | None],
 ) -> list[UsageOverviewRow]:
     rows: Final[list[UsageOverviewRow]] = []
     covered_keys: Final[set[str]] = set()
@@ -393,6 +421,7 @@ def _guardrail_overview_rows(
                 break
         trend = _trend_from_comparison(fail_rate, prev_fail)
         row_units: Mapping[str, int] = next((units_agg[k] for k in lookup_keys if k in units_agg), _EMPTY_UNITS)
+        row_cost: float | None = next((cost_agg[k] for k in lookup_keys if k in cost_agg), None)
         rows.append(
             UsageOverviewRow(
                 id=gid,
@@ -406,6 +435,7 @@ def _guardrail_overview_rows(
                 status=_status_from_fail_rate(fail_rate),
                 trend=trend,
                 usageUnits=row_units,
+                cost=row_cost,
             )
         )
     # Add rows for guardrails with metrics but not in guardrails table (e.g. MCP, config)
@@ -429,6 +459,7 @@ def _guardrail_overview_rows(
                 status=_status_from_fail_rate(fail_rate),
                 trend=trend,
                 usageUnits=units_agg.get(agg_key, _EMPTY_UNITS),
+                cost=cost_agg.get(agg_key),
             )
         )
     return rows
@@ -459,6 +490,7 @@ def _policy_overview_rows(
                 status=_status_from_fail_rate(fail_rate),
                 trend=trend,
                 usageUnits=_EMPTY_UNITS,
+                cost=None,
             )
         )
     return rows
@@ -479,9 +511,7 @@ async def guardrails_usage_overview(
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        return UsageOverviewResponse(
-            rows=[], chart=[], totalRequests=0, totalBlocked=0, passRate=100.0, totalUsageUnits=_EMPTY_UNITS
-        )
+        return _EMPTY_OVERVIEW
 
     start, end = _resolve_usage_window(start_date, end_date)
 
@@ -516,11 +546,12 @@ async def guardrails_usage_overview(
         agg: Final = _aggregate_daily_metrics(metrics, "guardrail_id")
         prev_agg: Final = _prev_fail_rates(metrics_prev, "guardrail_id")
         units_agg: Final = _units_by(units_rows, lambda r: r.guardrail_id)
+        cost_agg: Final = _cost_by(units_rows, lambda r: r.guardrail_id)
         chart: Final = _chart_from_metrics(metrics)
         total_requests: Final = sum(a["requests"] for a in agg.values())
         total_blocked: Final = sum(a["blocked"] for a in agg.values())
         pass_rate: Final = (100.0 * (total_requests - total_blocked) / total_requests) if total_requests else 100.0
-        rows: Final = _guardrail_overview_rows(guardrails, agg, prev_agg, units_agg)
+        rows: Final = _guardrail_overview_rows(guardrails, agg, prev_agg, units_agg, cost_agg)
         return UsageOverviewResponse(
             rows=rows,
             chart=chart,
@@ -528,6 +559,7 @@ async def guardrails_usage_overview(
             totalBlocked=total_blocked,
             passRate=round(pass_rate, 1),
             totalUsageUnits=_sum_counter_units(units_rows),
+            totalCost=_sum_tracked_cost(units_rows),
         )
     except Exception as e:
         from litellm.proxy.utils import handle_exception_on_proxy
@@ -619,7 +651,10 @@ async def guardrails_usage_detail(
     guardrail_info: Final = _to_dict(_get_guardrail_field(guardrail, "guardrail_info"))
     _guardrail_name: Final = _get_guardrail_field(guardrail, "guardrail_name")
     daily_unit_sums: Final = sorted(_units_by(units_rows, lambda r: r.date).items())
-    units_daily: Final = tuple(UsageUnitsDailyPoint(date=d, units=units) for d, units in daily_unit_sums)
+    daily_cost: Final = _cost_by(units_rows, lambda r: r.date)
+    units_daily: Final = tuple(
+        UsageUnitsDailyPoint(date=d, units=units, cost=daily_cost.get(d)) for d, units in daily_unit_sums
+    )
 
     return UsageDetailResponse(
         guardrail_id=guardrail_id,
@@ -638,6 +673,10 @@ async def guardrails_usage_detail(
         usage_units_daily=units_daily,
         usage_units_by_team=_units_by(units_rows, lambda r: r.team_id),
         usage_units_by_key=_units_by(units_rows, lambda r: r.api_key),
+        cost=_sum_tracked_cost(units_rows),
+        cost_by_unit=_cost_by(units_rows, _counter_name),
+        cost_by_team=_cost_by(units_rows, lambda r: r.team_id),
+        cost_by_key=_cost_by(units_rows, lambda r: r.api_key),
     )
 
 
@@ -857,9 +896,7 @@ async def policies_usage_overview(
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        return UsageOverviewResponse(
-            rows=[], chart=[], totalRequests=0, totalBlocked=0, passRate=100.0, totalUsageUnits=_EMPTY_UNITS
-        )
+        return _EMPTY_OVERVIEW
 
     start, end = _resolve_usage_window(start_date, end_date)
 
@@ -891,6 +928,7 @@ async def policies_usage_overview(
             totalBlocked=total_blocked,
             passRate=round(pass_rate, 1),
             totalUsageUnits=_EMPTY_UNITS,
+            totalCost=None,
         )
     except Exception as e:
         from litellm.proxy.utils import handle_exception_on_proxy
