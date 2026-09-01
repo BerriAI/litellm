@@ -14205,13 +14205,7 @@ async def test_info_key_fn_reports_budget_limits_usage(monkeypatch):
     )
 
     assert result["info"]["budget_limits"] == budget_limits
-    assert result["info"]["budget_limits_usage"] == {
-        "1h": {
-            "current_spend": 0.73,
-            "budget_limit": 2.0,
-            "reset_at": "2026-08-15T18:00:00+00:00",
-        }
-    }
+    assert result["info"]["budget_limits_usage"] == {"1h": {"current_spend": 0.73}}
 
     mock_get_current_spend.assert_awaited_once()
     call_kwargs = mock_get_current_spend.await_args.kwargs
@@ -14342,16 +14336,8 @@ async def test_info_key_fn_v2_reports_budget_limits_usage(monkeypatch):
     assert len(result["info"]) == 1
     assert result["info"][0]["budget_limits"] == budget_limits
     assert result["info"][0]["budget_limits_usage"] == {
-        "1h": {
-            "current_spend": 1.25,
-            "budget_limit": 2.0,
-            "reset_at": "2026-08-15T18:00:00+00:00",
-        },
-        "1d": {
-            "current_spend": 1.25,
-            "budget_limit": 20.0,
-            "reset_at": "2026-08-16T00:00:00+00:00",
-        },
+        "1h": {"current_spend": 1.25},
+        "1d": {"current_spend": 1.25},
     }
     assert mock_get_current_spend.await_count == 2
     counter_keys = {
@@ -14386,7 +14372,7 @@ async def test_build_budget_limits_usage_json_string_input(monkeypatch):
     )
     result = await _build_budget_limits_usage(budget_limits=raw, api_key_hash="hash-1")
 
-    assert result == {"1h": {"current_spend": 0.5, "budget_limit": 2.0, "reset_at": None}}
+    assert result == {"1h": {"current_spend": 0.5}}
     mock_get_current_spend.assert_awaited_once()
 
 
@@ -14427,7 +14413,7 @@ async def test_build_budget_limits_usage_window_without_max_budget(monkeypatch):
         budget_limits=[{"budget_duration": "2d"}], api_key_hash="hash-no-max"
     )
 
-    assert result == {"2d": {"current_spend": 0.75, "budget_limit": None, "reset_at": None}}
+    assert result == {"2d": {"current_spend": 0.75}}
     call_kwargs = mock_get_current_spend.await_args.kwargs
     assert call_kwargs["counter_key"] == "spend:key:hash-no-max:window:2d"
     assert call_kwargs["window_duration"] == "2d"
@@ -14454,7 +14440,7 @@ async def test_build_budget_limits_usage_pydantic_windows(monkeypatch):
         api_key_hash="hash-2",
     )
 
-    assert result == {"7d": {"current_spend": 1.0, "budget_limit": 10.0, "reset_at": None}}
+    assert result == {"7d": {"current_spend": 1.0}}
     call_kwargs = mock_get_current_spend.await_args.kwargs
     assert call_kwargs["counter_key"] == "spend:key:hash-2:window:7d"
     assert call_kwargs["window_duration"] == "7d"
