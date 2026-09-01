@@ -221,7 +221,7 @@ make test
 
 ### Contributing
 
-Contributions are welcome! Please read our [contributing guidelines](CONTRIBUTING.md) first.
+Contributions are welcome! Please read our [contributing guidelines](../../CONTRIBUTING.md) first.
 
 ## License
 
