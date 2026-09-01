@@ -67,17 +67,17 @@ class RouterConfig(BaseModel):
     redis_password: str | None = None
 
     cache_responses: bool | None = False
-    cache_kwargs: dict | None = Field(default_factory=dict)
+    cache_kwargs: dict | None = {}
     caching_groups: list[tuple[str, list[str]]] | None = None
     client_ttl: int | None = 3600
     num_retries: int | None = 0
     timeout: float | None = None
-    default_litellm_params: dict[str, str] | None = Field(default_factory=dict)
+    default_litellm_params: dict[str, str] | None = {}
     set_verbose: bool | None = False
-    fallbacks: list | None = Field(default_factory=list)
+    fallbacks: list | None = []
     allowed_fails: int | None = None
-    context_window_fallbacks: list | None = Field(default_factory=list)
-    model_group_alias: dict[str, list[str]] | None = Field(default_factory=dict)
+    context_window_fallbacks: list | None = []
+    model_group_alias: dict[str, list[str]] | None = {}
     retry_after: int | None = 0
     routing_strategy: Literal[
         "simple-shuffle",
@@ -125,7 +125,7 @@ class UpdateRouterConfig(BaseModel):
     retry_after: float | None = None
     fallbacks: list[dict] | None = None
     context_window_fallbacks: list[dict] | None = None
-    model_group_alias: dict[str, str | dict] | None = Field(default_factory=dict)
+    model_group_alias: dict[str, str | dict] | None = {}
     enable_tag_filtering: bool | None = None
     tag_routing_prefix: str | None = None
 
