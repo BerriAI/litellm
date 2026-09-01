@@ -1659,29 +1659,29 @@ class TestCommonRequestProcessingHelpers:
     async def test_serialize_http_exception_detail_helper(self):
         """Direct unit coverage for the L1 helper across all branches."""
         from litellm.proxy.common_request_processing import (
-            _serialize_http_exception_detail,
+            serialize_http_exception_detail,
         )
         import json as _json
 
-        assert _serialize_http_exception_detail("plain") == ("plain", None)
+        assert serialize_http_exception_detail("plain") == ("plain", None)
 
-        msg, fields = _serialize_http_exception_detail({"error": "Violated", "extra": "x"})
+        msg, fields = serialize_http_exception_detail({"error": "Violated", "extra": "x"})
         assert msg == "Violated"
         assert fields == {"error": "Violated", "extra": "x"}
 
-        msg, fields = _serialize_http_exception_detail({"error": {"message": "blocked", "code": "x"}})
+        msg, fields = serialize_http_exception_detail({"error": {"message": "blocked", "code": "x"}})
         assert msg == "blocked"
         assert fields == {"error": {"message": "blocked", "code": "x"}}
 
-        msg, fields = _serialize_http_exception_detail({"message": "top-level"})
+        msg, fields = serialize_http_exception_detail({"message": "top-level"})
         assert msg == "top-level"
         assert fields == {"message": "top-level"}
 
-        msg, fields = _serialize_http_exception_detail({"weird": ["a", "b"]})
+        msg, fields = serialize_http_exception_detail({"weird": ["a", "b"]})
         assert msg == _json.dumps({"weird": ["a", "b"]})
         assert fields == {"weird": ["a", "b"]}
 
-        assert _serialize_http_exception_detail(42) == ("42", None)
+        assert serialize_http_exception_detail(42) == ("42", None)
 
     async def test_proxy_exception_from_http_exception_helper(self):
         """The shared HTTPException -> ProxyException conversion keeps a clean
@@ -2548,6 +2548,152 @@ class TestStreamingOverheadHeader:
 
         assert "x-litellm-overhead-duration-ms" in headers
         assert headers["x-litellm-overhead-duration-ms"] == "42.5"
+
+    @staticmethod
+    def _timing_logging_obj(timing_metrics):
+        from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+        logging_obj = LiteLLMLoggingObj(
+            model="openai/gpt-4o-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="anthropic_messages",
+            start_time=None,
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        )
+        logging_obj.set_response_timing_metrics(timing_metrics)
+        return logging_obj
+
+    def test_get_custom_headers_reads_timing_from_logging_obj_when_response_has_no_hidden_params(self):
+        """
+        LIT-5466: /v1/messages results and the bridge stream wrappers carry no
+        _hidden_params, so the timing headers come from the logging object.
+        """
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+        mock_user_api_key_dict.allowed_model_region = None
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id",
+            hidden_params={},
+            litellm_logging_obj=self._timing_logging_obj(
+                {"_response_ms": 500.0, "litellm_overhead_time_ms": 42.5}
+            ),
+        )
+
+        assert headers["x-litellm-response-duration-ms"] == "500.0"
+        assert headers["x-litellm-overhead-duration-ms"] == "42.5"
+
+    def test_get_custom_headers_skips_logging_obj_timing_on_the_failure_path(self):
+        """LIT-5466: a failed request reports no timing, the same as /v1/chat/completions."""
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+        mock_user_api_key_dict.allowed_model_region = None
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id",
+            hidden_params={},
+            litellm_logging_obj=self._timing_logging_obj(
+                {"_response_ms": 500.0, "litellm_overhead_time_ms": 42.5}
+            ),
+            read_timing_from_logging_obj=False,
+        )
+
+        assert "x-litellm-response-duration-ms" not in headers
+        assert "x-litellm-overhead-duration-ms" not in headers
+
+    def test_get_custom_headers_takes_both_timing_values_from_one_source(self):
+        """A response that timed itself but has no overhead (lazy provider streams) does not pick
+        up the logging object's overhead, which was measured over a different window."""
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+        mock_user_api_key_dict.allowed_model_region = None
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id",
+            hidden_params={"_response_ms": 300.0},
+            litellm_logging_obj=self._timing_logging_obj(
+                {"_response_ms": 500.0, "litellm_overhead_time_ms": 42.5}
+            ),
+        )
+
+        assert headers["x-litellm-response-duration-ms"] == "300.0"
+        assert "x-litellm-overhead-duration-ms" not in headers
+
+    def test_get_custom_headers_survives_a_logging_object_without_timing_metrics(self):
+        """Duck-typed logging objects (older custom code, test doubles) must not break headers."""
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+        mock_user_api_key_dict.allowed_model_region = None
+
+        class _NoTimingLoggingObj:
+            litellm_call_id = "test-call-id"
+            litellm_params = {}
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id",
+            hidden_params={},
+            litellm_logging_obj=_NoTimingLoggingObj(),
+        )
+
+        assert "x-litellm-overhead-duration-ms" not in headers
+
+    def test_get_custom_headers_prefers_response_hidden_params_over_logging_obj_timing(self):
+        """A response that carries its own timing (chat completions) is not overridden."""
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+        mock_user_api_key_dict.allowed_model_region = None
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id",
+            hidden_params={"_response_ms": 300.0, "litellm_overhead_time_ms": 7.5},
+            litellm_logging_obj=self._timing_logging_obj(
+                {"_response_ms": 500.0, "litellm_overhead_time_ms": 42.5}
+            ),
+        )
+
+        assert headers["x-litellm-response-duration-ms"] == "300.0"
+        assert headers["x-litellm-overhead-duration-ms"] == "7.5"
+
+    def test_get_custom_headers_omits_timing_when_no_source_has_it(self):
+        """No timing on the response and none on the logging object leaves both headers out."""
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.0
+        mock_user_api_key_dict.allowed_model_region = None
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id",
+            hidden_params={},
+            litellm_logging_obj=self._timing_logging_obj({}),
+        )
+
+        assert "x-litellm-response-duration-ms" not in headers
+        assert "x-litellm-overhead-duration-ms" not in headers
 
     def test_get_custom_headers_omits_overhead_when_none(self):
         """
@@ -4548,7 +4694,7 @@ class TestAllmPassthroughStreamingProviderGate:
         }
         return ProxyBaseLLMRequestProcessing(data=data)
 
-    async def _run(self, processing_obj, monkeypatch, chunks):
+    async def _run(self, processing_obj, monkeypatch, chunks, stream=None):
         import litellm.proxy.common_request_processing as crp
         from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
 
@@ -4556,9 +4702,11 @@ class TestAllmPassthroughStreamingProviderGate:
             for chunk in chunks:
                 yield chunk
 
+        upstream_stream = stream if stream is not None else streaming_response()
+
         async def fake_route_request(**kwargs):
             async def _llm_call():
-                return streaming_response()
+                return upstream_stream
 
             return _llm_call()
 
@@ -4582,6 +4730,40 @@ class TestAllmPassthroughStreamingProviderGate:
             llm_router=None,
             skip_pre_call_logic=True,
         )
+
+    @pytest.mark.asyncio
+    async def test_client_disconnect_closes_unbuffered_passthrough_stream(self, monkeypatch):
+        """Starlette abandons the body iterator when the client disconnects, so the
+        unbuffered passthrough branch must return _UpstreamClosingStreamingResponse,
+        whose shielded cleanup closes the upstream stream; that close is what flushes
+        buffered passthrough usage into spend logs."""
+        processing_obj = self._build_processing_obj("gigachat")
+        monkeypatch.setattr(litellm, "callbacks", [])
+        upstream_closed = asyncio.Event()
+
+        async def hanging_stream():
+            try:
+                yield b"chunk-1"
+                await asyncio.Event().wait()
+            finally:
+                upstream_closed.set()
+
+        result = await self._run(processing_obj, monkeypatch, [], stream=hanging_stream())
+
+        assert isinstance(result, _UpstreamClosingStreamingResponse)
+
+        first_chunk_sent = asyncio.Event()
+
+        async def receive():
+            await first_chunk_sent.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            if message["type"] == "http.response.body" and message.get("body"):
+                first_chunk_sent.set()
+
+        await result({"type": "http"}, receive, send)
+        await asyncio.wait_for(upstream_closed.wait(), timeout=5)
 
     @pytest.mark.asyncio
     async def test_non_bedrock_stream_is_not_buffered(self, monkeypatch):
