@@ -558,6 +558,11 @@ RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(
 )
 
 
+def _without_target_order(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    """Drop the router-internal order-fallback target so it never reaches a provider call."""
+    return MappingProxyType({k: v for k, v in kwargs.items() if k != "_target_order"})
+
+
 class Router:
     model_names: set = set()
     cache_responses: bool | None = False
@@ -2172,9 +2177,8 @@ class Router:
                 "messages": messages,
                 "caching": self.cache_responses,
                 "client": model_client,
-                **kwargs,
+                **_without_target_order(kwargs),
             }
-            input_kwargs.pop("_target_order", None)
             response: Final = litellm.completion(**input_kwargs)
             verbose_router_logger.info("litellm.completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
 
@@ -3194,9 +3198,8 @@ class Router:
                 "messages": messages,
                 "caching": self.cache_responses,
                 "client": model_client,
-                **kwargs,
+                **_without_target_order(kwargs),
             }
-            input_kwargs.pop("_target_order", None)
             input_kwargs.pop("silent_model", None)
             input_kwargs.pop("include_fallback_errors", None)
 
@@ -4072,7 +4075,7 @@ class Router:
                     "prompt": prompt,
                     "caching": self.cache_responses,
                     "client": model_client,
-                    **kwargs,
+                    **_without_target_order(kwargs),
                 }
             )
             self.success_calls[model_name] += 1
@@ -4132,7 +4135,7 @@ class Router:
                     "prompt": prompt,
                     "caching": self.cache_responses,
                     "client": model_client,
-                    **kwargs,
+                    **_without_target_order(kwargs),
                 }
             )
 
@@ -4236,7 +4239,7 @@ class Router:
                     "file": file,
                     "caching": self.cache_responses,
                     "client": model_client,
-                    **kwargs,
+                    **_without_target_order(kwargs),
                 }
             )
 
@@ -4889,7 +4892,7 @@ class Router:
             response_kwargs: Final = {
                 **data,
                 "caching": self.cache_responses,
-                **kwargs,
+                **_without_target_order(kwargs),
                 "model": model_name,
             }
             # Only set custom_llm_provider if it's not None
@@ -5339,7 +5342,7 @@ class Router:
                     **data,
                     "custom_llm_provider": custom_llm_provider,
                     "caching": self.cache_responses,
-                    **kwargs,
+                    **_without_target_order(kwargs),
                 }
             )
 
@@ -5405,7 +5408,7 @@ class Router:
                     "input": input,
                     "caching": self.cache_responses,
                     "client": model_client,
-                    **kwargs,
+                    **_without_target_order(kwargs),
                 }
             )
             self.success_calls[model_name] += 1
@@ -5468,7 +5471,7 @@ class Router:
                     "input": input,
                     "caching": self.cache_responses,
                     "client": model_client,
-                    **kwargs,
+                    **_without_target_order(kwargs),
                 }
             )
 
