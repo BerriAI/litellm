@@ -681,3 +681,25 @@ class TestSpendLogsPartitionDetectionSchemaScope:
     def test_only_partitioned_relations_match(self, monkeypatch):
         query, _ = self._detect(monkeypatch, "postgresql://u:p@localhost:5432/db")
         assert "pg_partitioned_table" in query
+
+
+class TestSpendLogsPartitionDetectionMissingPsycopg:
+    """psycopg ships in the `extra_proxy` install, but a stripped-down image
+    can still lack it. When it does, detection must fail closed to False
+    (never crash the migration path) and say so loudly, because a silent
+    False here is what let a genuinely partitioned LiteLLM_SpendLogs hit the
+    unfiltered primary-key rewrite in production."""
+
+    def test_missing_psycopg_returns_false(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "psycopg", None)
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:5432/db")
+        assert ProxyExtrasDBManager.spend_logs_is_partitioned() is False
+
+    def test_missing_psycopg_logs_a_warning(self, monkeypatch, caplog):
+        monkeypatch.setitem(sys.modules, "psycopg", None)
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:5432/db")
+        with caplog.at_level("WARNING", logger="litellm_proxy_extras"):
+            ProxyExtrasDBManager.spend_logs_is_partitioned()
+        assert any(
+            "psycopg is not installed" in record.message for record in caplog.records
+        )

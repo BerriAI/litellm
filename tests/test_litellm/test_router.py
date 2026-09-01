@@ -8155,6 +8155,71 @@ class TestUpsertDeploymentRollback:
         assert len(router.model_list) == 1
 
 
+class TestUpsertDeploymentRename:
+    """
+    Issue #38360: renaming a model wrote the new `model_name` to the db, but the reload's
+    `upsert_deployment` compared only `litellm_params` and `model_info`. A rename with no
+    other edit therefore compared equal and the router kept the old name until a restart,
+    so `/model/info` and `/v1/models` served the stale name and the new one was unroutable.
+    """
+
+    @staticmethod
+    def _router() -> "litellm.Router":
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "old-name",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"},
+                    "model_info": {"id": "rename-1", "db_model": True},
+                }
+            ]
+        )
+
+    @staticmethod
+    def _deployment(model_name: str, tpm: int | None = None):
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        return Deployment(
+            model_name=model_name,
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o", api_key="sk-test", tpm=tpm),
+            model_info=ModelInfo(id="rename-1", db_model=True),
+        )
+
+    def test_rename_only_updates_the_router(self):
+        router = self._router()
+
+        assert router.upsert_deployment(deployment=self._deployment("new-name")) is not None
+
+        assert [model["model_name"] for model in router.model_list] == ["new-name"]
+        renamed = router.get_deployment(model_id="rename-1")
+        assert renamed is not None
+        assert renamed.model_name == "new-name"
+
+    def test_rename_only_makes_the_new_name_routable(self):
+        router = self._router()
+
+        router.upsert_deployment(deployment=self._deployment("new-name"))
+
+        assert router.get_model_ids(model_name="new-name") == ["rename-1"]
+        assert router.get_model_ids(model_name="old-name") == []
+
+    def test_rename_alongside_another_edit_still_updates(self):
+        router = self._router()
+
+        router.upsert_deployment(deployment=self._deployment("new-name", tpm=1234))
+
+        assert router.get_model_ids(model_name="new-name") == ["rename-1"]
+        renamed = router.get_deployment(model_id="rename-1")
+        assert renamed is not None
+        assert renamed.litellm_params.tpm == 1234
+
+    def test_unchanged_deployment_is_still_a_no_op(self):
+        router = self._router()
+
+        assert router.upsert_deployment(deployment=self._deployment("old-name")) is None
+        assert [model["model_name"] for model in router.model_list] == ["old-name"]
+
+
 class TestConsumedRequestTagsStamp:
     """Issue #36621: when a request's tags select a tagged pre-routing strategy, those
     tags are consumed by the selection; the hook must stamp the rewritten model group so

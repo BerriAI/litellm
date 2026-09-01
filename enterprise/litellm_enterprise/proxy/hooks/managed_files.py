@@ -182,6 +182,10 @@ class _ManagedObjectTableActions(Protocol):
     async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
 
 
+class _SchedulerWithJobLookup(Protocol):
+    def get_job(self, job_id: str) -> object: ...
+
+
 class _CursorPageArgs(TypedDict, total=False):
     cursor: Mapping[str, str]
     skip: int
@@ -853,7 +857,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                                 file_ids.append(file_id)
         return file_ids
 
-    def get_file_ids_from_responses_input(self, input: Union[str, List[Dict[str, Any]]]) -> List[str]:
+    def get_file_ids_from_responses_input(self, input: Union[str, List[Dict[str, object]]]) -> List[str]:
         """
         Gets file ids from responses API input.
 
@@ -878,7 +882,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             # Check for direct input_file type
             if item.get("type") == "input_file":
                 file_id = item.get("file_id")
-                if file_id:
+                if isinstance(file_id, str) and file_id:
                     file_ids.append(file_id)
 
             # Check for input_file in content array
@@ -887,7 +891,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 for content_item in content:
                     if isinstance(content_item, dict) and content_item.get("type") == "input_file":
                         file_id = content_item.get("file_id")
-                        if file_id:
+                        if isinstance(file_id, str) and file_id:
                             file_ids.append(file_id)
 
         return file_ids
@@ -1227,7 +1231,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
                 # Handle both output_file_id and error_file_id
                 for file_attr in ["output_file_id", "error_file_id"]:
-                    file_id_value = getattr(response, file_attr, None)
+                    file_id_value: str | None = getattr(response, file_attr, None)
                     if file_id_value and model_id:
                         decoded_output_file_id = _is_base64_encoded_unified_file_id(file_id_value)
                         if decoded_output_file_id and "llm_output_file_id," in decoded_output_file_id:
@@ -1496,7 +1500,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             import litellm.proxy.proxy_server as proxy_server_module
 
             # Check if the scheduler has the batch cost checking job registered
-            scheduler = getattr(proxy_server_module, "scheduler", None)
+            scheduler: Final[_SchedulerWithJobLookup | None] = getattr(proxy_server_module, "scheduler", None)
             if scheduler is None:
                 return False
 
@@ -1542,7 +1546,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )
         MAX_MATCHES_TO_RETURN = 10
 
-        batches = await self.prisma_client.db.litellm_managedobjecttable.find_many(
+        batches = await _managed_object_table(self.prisma_client).find_many(
             where={
                 "file_purpose": "batch",
                 "batch_processed": False,
@@ -1552,11 +1556,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             order={"created_at": "desc"},
         )
 
-        referencing_batches = []
+        referencing_batches: Final[list[dict[str, object]]] = []
         for batch in batches:
             try:
                 # Parse the batch file_object to check for file references
-                batch_data = json.loads(batch.file_object) if isinstance(batch.file_object, str) else batch.file_object
+                decoded_file_object = _decode_json_blob(batch.file_object)
+                batch_data: Mapping[str, object] = (
+                    decoded_file_object if isinstance(decoded_file_object, Mapping) else {}
+                )
 
                 # Extract file IDs from batch
                 # Batches typically reference the unified file ID in input_file_id

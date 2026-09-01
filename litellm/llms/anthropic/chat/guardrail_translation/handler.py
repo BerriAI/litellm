@@ -100,16 +100,6 @@ InputWriteBackTarget = (
 )
 
 
-class _SSEDelta(TypedDict, total=False):
-    type: ReadOnly[str]
-    text: ReadOnly[str]
-    stop_reason: ReadOnly[str | None]
-
-
-class _SSEEventData(TypedDict, total=False):
-    delta: ReadOnly[_SSEDelta]
-
-
 def _as_str_mapping(value: Mapping[str, object]) -> Mapping[str, object]:
     return value
 
@@ -155,6 +145,16 @@ class ExtractedInput:
 
 
 EMPTY_EXTRACTED_INPUT: Final = ExtractedInput(scanned=(), images=())
+
+
+class _AnthropicSSEDelta(TypedDict, total=False):
+    type: ReadOnly[str]
+    text: ReadOnly[str]
+    stop_reason: ReadOnly[str | None]
+
+
+class _AnthropicSSEEvent(TypedDict, total=False):
+    delta: ReadOnly[_AnthropicSSEDelta]
 
 
 class AnthropicMessagesHandler(BaseTranslation):
@@ -859,12 +859,28 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @staticmethod
     def _image_sources(block: Mapping[str, object]) -> tuple[str, ...]:
+        """Normalize an Anthropic image block into strings a guardrail can read.
+
+        base64 becomes a data URI so the format travels with the payload, which is what
+        the OpenAI path already puts in this field. A file source yields nothing: those
+        bytes live behind the Files API and this extractor has no client to fetch them.
+        """
         source: Final = block.get("source")
         if not isinstance(source, Mapping):
             return ()
-        # Could be base64 or url
+
+        source_type: Final = source.get("type")
+        if source_type == "url":
+            url: Final = source.get("url")
+            return (url,) if isinstance(url, str) and url else ()
+
         data: Final = source.get("data")
-        return (data,) if data else ()
+        if not isinstance(data, str) or not data:
+            return ()
+        media_type: Final = source.get("media_type")
+        if isinstance(media_type, str) and media_type:
+            return (f"data:{media_type};base64,{data}",)
+        return (data,)
 
     async def _apply_guardrail_responses_to_input(
         self,
@@ -1231,8 +1247,8 @@ class AnthropicMessagesHandler(BaseTranslation):
                 # Only process content_block_delta events
                 if event_type == "content_block_delta" and data_line:
                     try:
-                        data: _SSEEventData = json.loads(data_line)
-                        delta = data.get("delta", {})
+                        data: _AnthropicSSEEvent = json.loads(data_line)
+                        delta: _AnthropicSSEDelta = data.get("delta", {})
                         if delta.get("type") == "text_delta":
                             text += delta.get("text", "")
                     except json.JSONDecodeError:
@@ -1294,9 +1310,9 @@ class AnthropicMessagesHandler(BaseTranslation):
                         # Check for message_delta event with stop_reason
                         if event_type == "message_delta" and data_line:
                             try:
-                                data: _SSEEventData = json.loads(data_line)
-                                delta = data.get("delta", {})
-                                stop_reason = delta.get("stop_reason")
+                                data: _AnthropicSSEEvent = json.loads(data_line)
+                                delta: _AnthropicSSEDelta = data.get("delta", {})
+                                stop_reason: str | None = delta.get("stop_reason")
                                 if stop_reason is not None:
                                     return True
                             except json.JSONDecodeError:
