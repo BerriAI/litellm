@@ -20,8 +20,10 @@ from mcp.types import (
     JSONRPCError,
     JSONRPCMessage,
     JSONRPCResponse,
+    ListToolsResult,
     ServerCapabilities,
 )
+from mcp.types import Tool as MCPTool
 
 # Add the parent directory to the path so we can import litellm
 
@@ -740,8 +742,14 @@ class _ScriptedUpstream:
     error, the shape an upstream application uses to report its own failure.
     """
 
-    def __init__(self, tools_list_error: ErrorData | None = None):
+    def __init__(
+        self,
+        tools_list_error: ErrorData | None = None,
+        tool_pages: tuple[tuple[MCPTool, ...], ...] = (),
+    ):
         self._tools_list_error = tools_list_error
+        self._tool_pages = tool_pages
+        self.tools_list_cursors: list[str | None] = []
         self._to_client_tx, self._to_client_rx = anyio.create_memory_object_stream(10)
         self._from_client_tx, self._from_client_rx = anyio.create_memory_object_stream(10)
         self._task_group = None
@@ -778,15 +786,37 @@ class _ScriptedUpstream:
                 )
             elif method == "tools/list" and self._tools_list_error is not None:
                 await self._send(JSONRPCError(jsonrpc="2.0", id=request.id, error=self._tools_list_error))
+            elif method == "tools/list" and self._tool_pages:
+                cursor = (request.params or {}).get("cursor")
+                self.tools_list_cursors.append(cursor)
+                page_index = int(cursor) if cursor else 0
+                has_more = page_index + 1 < len(self._tool_pages)
+                page = ListToolsResult(
+                    tools=list(self._tool_pages[page_index]),
+                    nextCursor=str(page_index + 1) if has_more else None,
+                )
+                await self._send(
+                    JSONRPCResponse(
+                        jsonrpc="2.0",
+                        id=request.id,
+                        result=page.model_dump(by_alias=True, mode="json", exclude_none=True),
+                    )
+                )
 
 
 class _ScriptedClient(MCPClient):
     """An MCPClient whose transport is a scripted in-memory upstream instead of a real connection,
     so the real ``ClientSession`` and its real timeout machinery are what run."""
 
-    def __init__(self, *, timeout: float, tools_list_error: ErrorData | None = None):
+    def __init__(
+        self,
+        *,
+        timeout: float,
+        tools_list_error: ErrorData | None = None,
+        tool_pages: tuple[tuple[MCPTool, ...], ...] = (),
+    ):
         super().__init__(server_url="http://upstream.local/mcp", timeout=timeout)
-        self._upstream = _ScriptedUpstream(tools_list_error=tools_list_error)
+        self._upstream = _ScriptedUpstream(tools_list_error=tools_list_error, tool_pages=tool_pages)
 
     def _create_transport_context(self):
         return self._upstream, None
@@ -819,6 +849,22 @@ async def test_list_tools_fails_on_its_own_timeout_when_the_upstream_never_answe
     fault = classify_list_exception(exc_info.value)
     assert fault.tag == "timeout", "an upstream that stopped answering must not be classified as the gateway's fault"
     assert list_fault_http_status(fault) == 504
+
+
+@pytest.mark.asyncio
+async def test_list_tools_follows_tools_list_pagination_across_the_whole_catalog():
+    """An upstream that pages tools/list (72 tools, 30 per page) must have every page read within the
+    one session, each request carrying the cursor the previous page returned. Reading only the first
+    page made 42 tools invisible to the proxy and every call to them fail as unknown."""
+    tools = tuple(
+        MCPTool(name=f"tool_{i:02d}", inputSchema={"type": "object", "properties": {}}) for i in range(72)
+    )
+    client = _ScriptedClient(timeout=30, tool_pages=(tools[:30], tools[30:60], tools[60:]))
+
+    listed = await asyncio.wait_for(client.list_tools(raise_on_error=True), timeout=10)
+
+    assert [tool.name for tool in listed] == [tool.name for tool in tools]
+    assert client._upstream.tools_list_cursors == [None, "1", "2"]
 
 
 @pytest.mark.asyncio
