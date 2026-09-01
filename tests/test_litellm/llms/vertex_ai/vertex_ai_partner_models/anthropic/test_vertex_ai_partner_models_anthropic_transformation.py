@@ -727,3 +727,28 @@ def test_sanitize_strips_effort_for_haiku_45():
     data = {"output_config": {"effort": "high"}}
     sanitize_vertex_anthropic_output_params(data, "vertex_ai/claude-opus-4-6")
     assert data["output_config"] == {"effort": "high"}
+
+
+def test_vertex_ai_fable_5_1_response_format_uses_native_output_format(local_model_cost_map):
+    """Regression: Fable 5.1 rejects forced tool use, so the vertex map entry
+    advertises native structured output and ``response_format`` must map to
+    ``output_format`` instead of the tool-based path's forced tool_choice."""
+    config = VertexAIAnthropicConfig()
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "test_schema",
+            "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
+        },
+    }
+
+    result_params = config.map_openai_params(
+        non_default_params={"response_format": response_format},
+        optional_params={},
+        model="claude-fable-5-1",
+        drop_params=False,
+    )
+
+    assert "output_format" in result_params
+    assert "tool_choice" not in result_params
+    assert "tools" not in result_params
