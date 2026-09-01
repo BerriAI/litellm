@@ -7,6 +7,8 @@ pattern matches) into the single ``other`` label bucket, while recognized
 names, aliases, and wildcard-matched names keep their own label values.
 """
 
+import sys
+import types
 from unittest.mock import patch
 
 import pytest
@@ -167,6 +169,49 @@ async def test_unknown_models_collapse_to_other_when_router_is_unavailable():
     assert _requested_model_values(logger.litellm_proxy_failed_requests_metric) == {
         UNRECOGNIZED_REQUESTED_MODEL_LABEL
     }
+
+
+@pytest.mark.asyncio
+async def test_sdk_router_originated_metrics_keep_labels_without_proxy_router():
+    logger = PrometheusLogger()
+
+    with patch("litellm.proxy.proxy_server.llm_router", None, create=True):  # test-quality-ok: production reads proxy_server.llm_router lazily, no injection seam
+        logger.set_llm_deployment_failure_metrics(
+            request_kwargs={
+                "model": "sdk-deployment-group",
+                "litellm_params": {"metadata": {}},
+                "standard_logging_object": {},
+                "exception": _ClientSideError("model does not exist"),
+            }
+        )
+        await logger.log_failure_fallback_event(
+            original_model_group="sdk-fallback-group",
+            kwargs={"model": "sdk-fallback-group", "metadata": {}},
+            original_exception=_ClientSideError("upstream unavailable"),
+        )
+
+    assert _requested_model_values(logger.litellm_deployment_failure_responses) == {"sdk-deployment-group"}
+    assert _requested_model_values(logger.litellm_deployment_failed_fallbacks) == {"sdk-fallback-group"}
+
+
+@pytest.mark.asyncio
+async def test_sdk_fallback_labels_survive_non_import_errors_from_proxy_module(monkeypatch):
+    logger = PrometheusLogger()
+    broken_proxy_module = types.ModuleType("litellm.proxy.proxy_server")
+
+    def _raise_value_error(_name: str):
+        raise ValueError("bad proxy env var")
+
+    broken_proxy_module.__getattr__ = _raise_value_error  # test-quality-ok: reproduces a proxy_server import raising non-ImportError, no injection seam
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", broken_proxy_module)  # test-quality-ok: reproduces a proxy_server import raising non-ImportError, no injection seam
+
+    await logger.log_failure_fallback_event(
+        original_model_group="sdk-fallback-group",
+        kwargs={"model": "sdk-fallback-group", "metadata": {}},
+        original_exception=_ClientSideError("upstream unavailable"),
+    )
+
+    assert _requested_model_values(logger.litellm_deployment_failed_fallbacks) == {"sdk-fallback-group"}
 
 
 def test_unknown_models_collapse_to_one_series_on_deployment_metrics(router):
