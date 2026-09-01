@@ -53,6 +53,8 @@ ALTER INDEX IF EXISTS "LiteLLM_SpendLogs_end_user_idx"
     RENAME TO "LiteLLM_SpendLogs_legacy_end_user_idx";
 ALTER INDEX IF EXISTS "LiteLLM_SpendLogs_session_id_idx"
     RENAME TO "LiteLLM_SpendLogs_legacy_session_id_idx";
+ALTER INDEX IF EXISTS "LiteLLM_SpendLogs_api_key_startTime_idx"
+    RENAME TO "LiteLLM_SpendLogs_legacy_api_key_startTime_idx";
 
 CREATE TABLE "LiteLLM_SpendLogs" (
     LIKE "LiteLLM_SpendLogs_legacy" INCLUDING DEFAULTS INCLUDING GENERATED
@@ -77,6 +79,9 @@ CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_end_user_idx"
 
 CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_session_id_idx"
     ON "LiteLLM_SpendLogs" ("session_id");
+
+CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_api_key_startTime_idx"
+    ON "LiteLLM_SpendLogs" ("api_key", "startTime");
 
 -- Safety net: any row whose startTime has no explicit partition lands here so
 -- writes never fail. The cleanup job never drops the DEFAULT partition.
