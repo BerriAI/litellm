@@ -5,7 +5,7 @@ These tests validate the WandbInferenceConfig class which extends OpenAIGPTConfi
 Nebius AI Studio is an OpenAI-compatible provider with minor customizations.
 """
 
-
+import json
 
 import pytest
 
@@ -16,6 +16,20 @@ from litellm.llms.wandb.chat.transformation import WandbConfig
 
 class TestWandbConfig:
     """Test class for WandB Inference functionality"""
+
+    def test_map_openai_params_preserves_reasoning_effort(self):
+        supported_params = litellm.get_supported_openai_params(model="wandb/openai/gpt-oss-20b")
+        assert supported_params is not None
+        assert "reasoning_effort" in supported_params
+
+        result = WandbConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "medium"},
+            optional_params={},
+            model="openai/gpt-oss-20b",
+            drop_params=True,
+        )
+
+        assert result == {"reasoning_effort": "medium"}
 
     def test_default_api_base(self):
         """Test that default API base is used when none is provided"""
@@ -139,3 +153,42 @@ class TestWandbConfig:
             # Check for specific content in the response
             assert "```python" in content
             assert "Hey from LiteLLM" in content
+
+    @pytest.mark.respx()
+    def test_wandb_completion_preserves_reasoning_effort_with_drop_params(self, respx_mock, monkeypatch):
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+        api_base = "https://api.inference.wandb.ai/v1"
+        request_mock = respx_mock.post(f"{api_base}/chat/completions").respond(
+            json={
+                "id": "chatcmpl-123",
+                "object": "chat.completion",
+                "created": 1677652288,
+                "model": "gpt-oss-20b",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Done"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+            },
+            status_code=200,
+        )
+
+        completion(
+            model="wandb/openai/gpt-oss-20b",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="fake-wandb-key",
+            api_base=api_base,
+            reasoning_effort="medium",
+            drop_params=True,
+        )
+
+        request_body = json.loads(request_mock.calls[0].request.content)
+        assert request_body["reasoning_effort"] == "medium"
