@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-from collections.abc import AsyncGenerator, AsyncIterator, Coroutine, Generator, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Coroutine, Generator, Iterator
 from functools import partial
 from types import TracebackType
 from typing import Any, Final, cast
@@ -27,19 +27,19 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 from .utils import BasePassthroughUtils
 
 
-async def _as_async_generator(iterable: AsyncIterator[bytes]) -> AsyncGenerator[bytes, Any]:
+async def _as_async_generator(iterable: AsyncIterator[bytes]) -> AsyncGenerator[bytes, bytes]:
     async for chunk in iterable:
         yield chunk
 
 
-def _as_generator(iterable: Iterator[bytes]) -> Generator[bytes, Any, Any]:
+def _as_generator(iterable: Iterator[bytes]) -> Generator[bytes, bytes, None]:
     yield from iterable
 
 
-class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
+class AsyncPassthroughStreamingResponse(AsyncGenerator[bytes, bytes]):
     def __init__(
         self,
-        response: Coroutine[Any, Any, httpx.Response],
+        response: Awaitable[httpx.Response],
         litellm_logging_obj: LiteLLMLoggingObj,
         provider_config: BasePassthroughConfig,
     ) -> None:
@@ -48,7 +48,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
         self._headers = httpx.Headers()
         self._response_coro = response
         self._response: httpx.Response
-        self._iterator: AsyncGenerator[bytes, Any]
+        self._iterator: AsyncGenerator[bytes, bytes]
         self._litellm_logging_obj = litellm_logging_obj
         self._provider_config = provider_config
         self._raw_bytes: list[bytes] = []  # mutable-ok: instance buffer for streaming chunks
@@ -170,7 +170,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
             pass
 
 
-class PassthroughStreamingResponse(Generator[Any, Any, Any]):
+class PassthroughStreamingResponse(Generator[bytes, bytes, None]):
     def __init__(
         self,
         response: httpx.Response,
@@ -182,7 +182,7 @@ class PassthroughStreamingResponse(Generator[Any, Any, Any]):
         self.status_code = response.status_code
         self._litellm_logging_obj = litellm_logging_obj
         self._provider_config = provider_config
-        self._iterator: Generator[bytes, Any, Any] = _as_generator(response.iter_bytes())
+        self._iterator: Generator[bytes, bytes, None] = _as_generator(response.iter_bytes())
         self._raw_bytes: list[bytes] = []  # mutable-ok: instance buffer for streaming chunks
         self._flush_scheduled = False
 
@@ -261,7 +261,7 @@ async def allm_passthrough_route(
     cookies: CookieTypes | None = None,
     client: HTTPHandler | AsyncHTTPHandler | None = None,
     **kwargs,
-) -> httpx.Response | AsyncGenerator[Any, Any]:
+) -> httpx.Response | AsyncGenerator[bytes, bytes]:
     """
     Async: Reranks a list of documents based on their relevance to the query
     """
@@ -388,10 +388,10 @@ def llm_passthrough_route(
     **kwargs,
 ) -> (
     httpx.Response
-    | Coroutine[Any, Any, httpx.Response]
-    | Coroutine[Any, Any, httpx.Response | AsyncGenerator[Any, Any]]
-    | Generator[Any, Any, Any]
-    | AsyncGenerator[Any, Any]
+    | Coroutine[object, object, httpx.Response]
+    | Coroutine[object, object, httpx.Response | AsyncGenerator[bytes, bytes]]
+    | Generator[bytes, bytes, None]
+    | AsyncGenerator[bytes, bytes]
 ):
     """
     Pass through requests to the LLM APIs.
@@ -589,7 +589,7 @@ async def _async_passthrough_request(
     is_streaming_request: bool,
     litellm_logging_obj: LiteLLMLoggingObj,
     provider_config: BasePassthroughConfig,
-) -> httpx.Response | AsyncGenerator[Any, Any]:
+) -> httpx.Response | AsyncGenerator[bytes, bytes]:
     """
     Handle async passthrough requests.
     Uses async client to send request and properly handles streaming.
