@@ -59,6 +59,7 @@ class UserAPIKeyAuthExceptionHandler:
         parent_otel_span: Span | None,
         api_key: str,
         resolved_identity: UserAPIKeyAuth | None = None,
+        is_custom_auth_error: bool = False,
     ) -> UserAPIKeyAuth:
         """
         Handles Connection Errors when reading a Virtual Key from LiteLLM DB
@@ -81,6 +82,7 @@ class UserAPIKeyAuthExceptionHandler:
 
         if (
             PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+            and not is_custom_auth_error
             and PrismaDBExceptionHandler.is_database_connection_error(e)
         ):
             # log this as a DB failure on prometheus

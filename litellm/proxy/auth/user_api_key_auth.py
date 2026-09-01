@@ -1231,6 +1231,7 @@ async def _user_api_key_auth_builder(
     route: Final[str] = get_request_route(request=request)
     valid_token: UserAPIKeyAuth | None = None
     custom_auth_api_key: bool = False
+    custom_auth_error: bool = False
 
     try:
         with tracer.trace("litellm.proxy.auth.pre_db_read_auth_checks"):
@@ -1269,10 +1270,14 @@ async def _user_api_key_auth_builder(
 
         ### USER-DEFINED AUTH FUNCTION ###
         if enterprise_custom_auth is not None:
-            with tracer.trace("litellm.proxy.auth.enterprise_custom_auth"):
-                response = await enterprise_custom_auth(
-                    request=request, api_key=api_key, user_custom_auth=user_custom_auth
-                )
+            try:
+                with tracer.trace("litellm.proxy.auth.enterprise_custom_auth"):
+                    response = await enterprise_custom_auth(
+                        request=request, api_key=api_key, user_custom_auth=user_custom_auth
+                    )
+            except Exception:
+                custom_auth_error = True
+                raise
             if response is not None and isinstance(response, UserAPIKeyAuth):
                 validated = UserAPIKeyAuth.model_validate(response)
                 if getattr(litellm, "enable_post_custom_auth_checks", False):
@@ -1288,7 +1293,11 @@ async def _user_api_key_auth_builder(
                 api_key = response
                 custom_auth_api_key = True
         elif user_custom_auth is not None:
-            response = await user_custom_auth(request=request, api_key=api_key)
+            try:
+                response = await user_custom_auth(request=request, api_key=api_key)
+            except Exception:
+                custom_auth_error = True
+                raise
             validated = UserAPIKeyAuth.model_validate(response)
             if getattr(litellm, "enable_post_custom_auth_checks", False):
                 validated = await _run_post_custom_auth_checks(
@@ -2281,6 +2290,7 @@ async def _user_api_key_auth_builder(
             parent_otel_span=parent_otel_span,
             api_key=api_key,
             resolved_identity=valid_token,
+            is_custom_auth_error=custom_auth_error,
         )
 
 
