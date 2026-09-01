@@ -185,6 +185,32 @@ def tag_registry_cache_key() -> str:
     return "tag_registry"
 
 
+#: Cached under ``model_access_group_registry_cache_key`` when the table exceeds
+#: ``MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE``: registry unusable, fall back to the per-group lookup.
+MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL: Final = "__model_access_group_registry_overflow__"
+
+
+def model_access_group_cache_key(access_group_name: str) -> str:
+    """Cache key one model access group budget row is stored under; shared so auth, spend tracking and the management endpoints cannot drift."""
+    return f"model_access_group:{access_group_name}"
+
+
+def model_access_group_registry_cache_key() -> str:
+    """Cache key for the set of model access group names that have a budget row."""
+    return "model_access_group_registry"
+
+
+def model_access_group_spend_counter_key(access_group_name: str) -> str:
+    """Spend counter key for one model access group; shared so its four owners cannot drift.
+
+    The reservation path writes it up front, the cost callback writes it after the call, auth
+    reads it to enforce ``max_budget``, and the reset job clears it on rollover. A copy that
+    drifts in any one of them silently resets or reads a counter nobody else touches, which shows
+    up as a budget that never trips or never resets.
+    """
+    return f"spend:model_access_group:{access_group_name}"
+
+
 #: Cached under ``end_user_restricted_registry_cache_key`` when the restricted set exceeds
 #: ``END_USER_RESTRICTED_REGISTRY_MAX_SIZE``: registry unusable, fall back to the per-id fetch.
 END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL: Final = "__end_user_restricted_registry_overflow__"
@@ -198,6 +224,21 @@ def end_user_cache_key(end_user_id: str) -> str:
 def end_user_restricted_registry_cache_key() -> str:
     """Cache key for the set of end-user ids whose row carries a restriction auth enforces."""
     return "end_user_restricted_registry"
+
+
+def team_membership_auth_cache_key(team_id: str, user_id: str) -> str:
+    """Cache key one team member's ``LiteLLM_TeamMembership`` row is stored under for the admission check."""
+    return f"{team_id}_{user_id}"
+
+
+def team_membership_reservation_cache_key(user_id: str, team_id: str) -> str:
+    """Cache key the pre-call budget reservation stores the same ``LiteLLM_TeamMembership`` row under.
+
+    Deliberately not unified with ``team_membership_auth_cache_key``: the two readers wrote independent
+    keys before this file existed, so a fix that invalidates one must invalidate both explicitly rather
+    than assume a single write is visible to both.
+    """
+    return f"team_membership:{user_id}:{team_id}"
 
 
 def get_management_object_ttl(cache: DualCache) -> float:
