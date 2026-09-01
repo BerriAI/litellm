@@ -4560,26 +4560,6 @@ def test_get_deployment_credentials_with_provider_fails_closed_for_missing_named
     assert credentials is None
 
 
-def test_get_deployment_credentials_with_provider_preserves_project_id():
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "embedding-model",
-                "litellm_params": {
-                    "model": "watsonx/ibm/slate-125m-english-rtrvr",
-                    "api_key": "test-key",
-                    "project_id": "embedding-project",
-                },
-            }
-        ]
-    )
-
-    credentials = router.get_deployment_credentials_with_provider(model_id="embedding-model")
-
-    assert credentials is not None
-    assert credentials["project_id"] == "embedding-project"
-
-
 def test_get_deployment_credentials_with_provider_bedrock_batch_fields():
     """
     Test that get_deployment_credentials_with_provider returns the deployment's

@@ -241,7 +241,6 @@ class CredentialLiteLLMParams(BaseModel):
     api_key: str | None = None
     api_base: str | None = None
     api_version: str | None = None
-    project_id: str | None = None
     ## AZURE OAUTH ##
     # Without this field, ``get_deployment_credentials_with_provider``
     # round-trips ``litellm_params`` through a strict Pydantic dump and
