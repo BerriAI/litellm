@@ -2481,6 +2481,92 @@ async def test_ui_view_spend_logs_request_id_blocks_non_owner(client, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_ui_view_spend_logs_request_id_rejects_foreign_row_inserted_after_owner_check(client, monkeypatch):
+    """A foreign row that lands between the owner pre-check and the page query must
+    not be returned. The rows actually fetched are ownership-checked again, so the
+    lookup answers 403 instead of serving the just-inserted tenant's row (TOCTOU)."""
+    now_iso = datetime.datetime.now(timezone.utc).isoformat()
+    owned_row = {
+        "id": "log_owned",
+        "request_id": "attacker-req",
+        "litellm_call_id": "shared-id",
+        "api_key": "sk-test-key",
+        "user": "user_1",
+        "team_id": None,
+        "spend": 0.05,
+        "startTime": now_iso,
+        "model": "gpt-4",
+    }
+    foreign_row = {
+        "id": "log_foreign",
+        "request_id": "shared-id",
+        "litellm_call_id": None,
+        "api_key": "sk-victim-key",
+        "user": "victim_user",
+        "team_id": None,
+        "spend": 0.07,
+        "startTime": now_iso,
+        "model": "gpt-4",
+    }
+
+    mock_prisma = make_ui_spend_logs_mock_prisma([owned_row], lambda where: [owned_row, foreign_row])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1"
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={"request_id": "shared-id"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 403
+        assert "victim_user" not in response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_request_response_rejects_foreign_row_inserted_after_owner_check(client, monkeypatch):
+    """Same TOCTOU on the detail endpoint: the payload row fetched by id is itself
+    ownership-checked, so a foreign row inserted after the pre-check passes cannot
+    have its request/response payload served."""
+
+    class MockDB:
+        async def query_raw(self, sql_query, *params):
+            if 'SELECT DISTINCT "user", team_id' in sql_query:
+                return [{"user": "user_1", "team_id": None}]
+            return [
+                {
+                    "messages": [{"role": "user", "content": "victim prompt"}],
+                    "response": {"id": "resp-1"},
+                    "proxy_server_request": None,
+                    "metadata": None,
+                    "user": "victim_user",
+                    "team_id": None,
+                }
+            ]
+
+    class MockPrisma:
+        def __init__(self):
+            self.db = MockDB()
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrisma())
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1"
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui/shared-id",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 403
+        assert "victim prompt" not in response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
 async def test_ui_view_spend_logs_request_id_owner_scoped_by_id_only(
     client, monkeypatch
 ):
