@@ -937,6 +937,14 @@ async def test_pre_request_hook_modifies_request_body():
 
     print("✅ WebSearchInterceptionLogger initialized")
 
+    mock_router = MagicMock()
+    mock_router.search_tools = [
+        {
+            "search_tool_name": "test-search-tool",
+            "litellm_params": {"search_provider": "tavily"},
+        }
+    ]
+
     # Track what actually gets sent to the API
     captured_request = {}
 
@@ -987,7 +995,7 @@ async def test_pre_request_hook_modifies_request_body():
     with patch(
         "litellm.llms.anthropic.experimental_pass_through.messages.handler.anthropic_messages_handler",
         side_effect=mock_anthropic_messages_handler,
-    ):
+    ), patch("litellm.proxy.proxy_server.llm_router", mock_router):
 
         print(
             "\n📝 Making request with native web_search_20250305 tool (stream=True)..."
