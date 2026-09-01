@@ -12,10 +12,7 @@ interface StoredBudget {
   budget_duration: string | null;
 }
 
-/**
- * Reads /budget/list, which is a different route from the /management/v1/budgets the table renders
- * from — so a row that only exists in the table's own cache fails here.
- */
+/** A different route from the one the table renders from, so a row that only lives in its cache fails here. */
 async function findBudget(page: PlaywrightPage, budgetId: string): Promise<StoredBudget | undefined> {
   const res = await page.request.get("/budget/list", {
     headers: { Authorization: `Bearer ${masterKey()}` },
@@ -32,7 +29,6 @@ async function createBudgetViaApi(page: PlaywrightPage, budget: Partial<StoredBu
   expect(res.ok(), `POST /budget/new failed (${res.status()}): ${await res.text()}`).toBe(true);
 }
 
-/** The table pages at 50 rows and every run leaves budgets behind, so scope it to the one under test. */
 async function searchForBudget(page: PlaywrightPage, budgetId: string): Promise<void> {
   await page.getByPlaceholder("Search by budget ID").fill(budgetId);
 }
@@ -55,7 +51,6 @@ test.describe("Budgets", () => {
     await modal.getByRole("spinbutton", { name: "Max Tokens per minute" }).fill("5000");
     await modal.getByRole("spinbutton", { name: "Max Requests per minute" }).fill("60");
 
-    // max_budget and budget_duration are only sent while Optional Settings is expanded.
     await modal.getByRole("button", { name: "Optional Settings" }).click();
     await modal.getByRole("spinbutton", { name: "Max Budget (USD)" }).fill("25.5");
     await modal.getByRole("combobox", { name: "Reset Budget" }).click();
@@ -69,7 +64,6 @@ test.describe("Budgets", () => {
     await expect(row).toBeVisible({ timeout: 10_000 });
     await expect(row).toContainText("$25.50");
 
-    // The row renders from the create response the UI already holds, so read the budget back.
     const stored = await findBudget(page, budgetId);
     expect(stored, `budget ${budgetId} readable from /budget/list`).toBeTruthy();
     expect(stored?.max_budget, "spend cap persisted").toBe(25.5);
