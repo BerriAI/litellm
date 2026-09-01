@@ -64,11 +64,28 @@ if TYPE_CHECKING:
 
 
 def _cache_token_value(*values: object) -> int | None:
-    parsed: Final[tuple[int | None, ...]] = tuple(as_int(value) for value in values)
-    return next(
-        (value for value in parsed if value),
-        next((value for value in parsed if value is not None), None),
-    )
+    explicit_zero = False
+    invalid_before_zero = False
+    for raw_value in values:
+        if raw_value is None:
+            continue
+        if isinstance(raw_value, bool):
+            parsed = None
+        else:
+            try:
+                parsed = as_int(raw_value)
+            except (OverflowError, ValueError):
+                parsed = None
+        if parsed is None:
+            if not explicit_zero:
+                invalid_before_zero = True
+        elif parsed > 0:
+            return parsed
+        elif parsed == 0:
+            explicit_zero = True
+        elif not explicit_zero:
+            invalid_before_zero = True
+    return 0 if explicit_zero and not invalid_before_zero else None
 
 
 @dataclass(frozen=True)
@@ -117,27 +134,20 @@ class LLMUsage:
         prompt_details: Final[Mapping[str, object]] = (
             raw_details if isinstance(raw_details, Mapping) else MappingProxyType({})
         )
-        cache_creation_top_level: Final = as_int(usage_object.get("cache_creation_input_tokens"))
-        cache_creation_write: Final = as_int(prompt_details.get("cache_write_tokens"))
-        cache_creation_alias: Final = as_int(prompt_details.get("cache_creation_tokens"))
-        cache_creation_provider: Final = as_int(prompt_details.get("cache_creation_input_tokens"))
-        cache_read_top_level: Final = as_int(usage_object.get("cache_read_input_tokens"))
-        cache_read_details: Final = as_int(prompt_details.get("cached_tokens"))
-        cache_read_provider: Final = as_int(usage_object.get("prompt_cache_hit_tokens"))
         return cls(
             input_tokens=as_int(payload.get("prompt_tokens")),
             output_tokens=as_int(payload.get("completion_tokens")),
             total_tokens=as_int(payload.get("total_tokens")),
             cache_creation_input_tokens=_cache_token_value(
-                cache_creation_top_level,
-                cache_creation_write,
-                cache_creation_alias,
-                cache_creation_provider,
+                usage_object.get("cache_creation_input_tokens"),
+                prompt_details.get("cache_write_tokens"),
+                prompt_details.get("cache_creation_tokens"),
+                prompt_details.get("cache_creation_input_tokens"),
             ),
             cache_read_input_tokens=_cache_token_value(
-                cache_read_top_level,
-                cache_read_details,
-                cache_read_provider,
+                usage_object.get("cache_read_input_tokens"),
+                prompt_details.get("cached_tokens"),
+                usage_object.get("prompt_cache_hit_tokens"),
             ),
         )
 

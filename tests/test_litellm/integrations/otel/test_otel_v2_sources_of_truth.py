@@ -571,6 +571,33 @@ def test_llm_call_adapter_prefers_nested_count_over_zero_top_level():
     assert data.usage.cache_creation_input_tokens == 7
 
 
+def test_llm_call_adapter_ignores_invalid_cache_values_before_valid_fallbacks():
+    payload = _sample_payload(
+        metadata={
+            "usage_object": {
+                "cache_read_input_tokens": -1,
+                "cache_creation_input_tokens": "5.0",
+                "prompt_tokens_details": {"cached_tokens": 5, "cache_write_tokens": 7},
+            }
+        }
+    )
+    data = LLMCallSpanData.from_standard_logging_payload(payload)
+    assert data.usage.cache_read_input_tokens == 5
+    assert data.usage.cache_creation_input_tokens == 7
+
+
+def test_llm_call_adapter_ignores_non_finite_cache_values():
+    payload = _sample_payload(
+        metadata={
+            "usage_object": {
+                "prompt_tokens_details": {"cached_tokens": float("nan")},
+            }
+        }
+    )
+    data = LLMCallSpanData.from_standard_logging_payload(payload)
+    assert data.usage.cache_read_input_tokens is None
+
+
 def test_llm_call_adapter_preserves_explicit_zero_and_omits_missing_cache_tokens():
     for usage_object, expected_read, expected_creation in (
         ({"prompt_tokens_details": {"cached_tokens": 0}}, 0, None),
