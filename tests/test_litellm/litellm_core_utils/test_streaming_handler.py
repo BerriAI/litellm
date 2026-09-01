@@ -4692,3 +4692,84 @@ async def test_async_stream_assembled_response_keeps_vertex_traffic_type(logging
     assembled = litellm.stream_chunk_builder(chunks=received, messages=[{"role": "user", "content": "hi"}])
     assert assembled is not None
     assert assembled._hidden_params["provider_specific_fields"]["traffic_type"] == "ON_DEMAND_FLEX"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("continuous_usage", [False, True])
+async def test_include_usage_preserves_tool_argument_deltas(
+    logging_obj: Logging,
+    continuous_usage: bool,
+):
+    fragment_count = 128
+
+    async def upstream():
+        for index in range(fragment_count):
+            function = {"arguments": f"fragment-{index:03d}"}
+            tool_call = {
+                "index": 0,
+                "type": "function",
+                "function": function,
+            }
+            if index == 0:
+                function["name"] = "submit_document"
+                tool_call["id"] = "call_1"
+            usage = None
+            if continuous_usage:
+                usage = Usage(
+                    prompt_tokens=50,
+                    completion_tokens=index + 1,
+                    total_tokens=51 + index,
+                )
+            yield ModelResponseStream(
+                id="chatcmpl-tool-stream",
+                created=1,
+                model="test-model",
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        finish_reason=None,
+                        delta=Delta(tool_calls=[tool_call]),
+                    )
+                ],
+                usage=usage,
+            )
+        yield ModelResponseStream(
+            id="chatcmpl-tool-stream",
+            created=1,
+            model="test-model",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    finish_reason="tool_calls",
+                    delta=Delta(),
+                )
+            ],
+        )
+        yield ModelResponseStream(
+            id="chatcmpl-tool-stream",
+            created=1,
+            model="test-model",
+            choices=[],
+            usage=Usage(
+                prompt_tokens=50,
+                completion_tokens=fragment_count,
+                total_tokens=50 + fragment_count,
+            ),
+        )
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=upstream(),
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        stream_options={"include_usage": True},
+    )
+
+    seen = []
+    async for chunk in wrapper:
+        for choice in chunk.choices:
+            for tool_call in choice.delta.tool_calls or []:
+                if tool_call.function.arguments:
+                    seen.append(tool_call.function.arguments)
+
+    assert seen == [f"fragment-{index:03d}" for index in range(fragment_count)]

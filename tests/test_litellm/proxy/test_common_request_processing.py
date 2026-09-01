@@ -7665,3 +7665,59 @@ def test_log_llm_api_exception_traceback_only_for_unexpected_errors(exc, expect_
     records = [r for r in caplog.records if "_handle_llm_api_exception(): Exception occured" in r.getMessage()]
     assert len(records) == 1
     assert (records[0].exc_info is not None) is expect_traceback
+
+
+class TestIncludeUsageToolArgumentStreaming:
+    @staticmethod
+    async def _aiter(items):
+        for item in items:
+            yield item
+
+    @pytest.mark.asyncio
+    async def test_fast_path_preserves_tool_argument_delta_granularity(self, monkeypatch):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        monkeypatch.setattr(litellm, "callbacks", [])
+        ProxyLogging._callback_capabilities_cache.clear()
+        fragment_count = 128
+        chunks = [
+            ModelResponseStream(
+                id="chatcmpl-tool-stream",
+                created=1,
+                model="test-model",
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        finish_reason=None,
+                        delta=Delta(
+                            tool_calls=[
+                                {
+                                    "index": 0,
+                                    "function": {"arguments": f"fragment-{index:03d}"},
+                                }
+                            ]
+                        ),
+                    )
+                ],
+            )
+            for index in range(fragment_count)
+        ]
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        out = [
+            chunk
+            async for chunk in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+                response=self._aiter(chunks),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                request_data={"model": "test-model"},
+                proxy_logging_obj=proxy_logging_obj,
+                serialize_chunk=lambda chunk: chunk,
+                serialize_error=lambda error: error,
+            )
+        ]
+
+        arguments = [
+            chunk.choices[0].delta.tool_calls[0].function.arguments
+            for chunk in out
+        ]
+        assert arguments == [f"fragment-{index:03d}" for index in range(fragment_count)]
