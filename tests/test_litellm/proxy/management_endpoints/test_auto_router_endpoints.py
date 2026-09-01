@@ -881,6 +881,7 @@ def _leg_record(**overrides: object) -> MagicMock:
         "target_type": "key",
         "target_id": "key-hash",
         "router_name": "my-router",
+        "router_names": (),
         "direction": "forward",
         "baseline_model": None,
         "judge_model": "anthropic/claude-sonnet-5",
@@ -931,6 +932,7 @@ def _shadow_prisma(
     legs=(),
     agg_rows=None,
     by_leg_rows=None,
+    by_router_rows=None,
     known_keys=("key-hash", "key-hash-2"),
     key_teams=None,
     known_teams=None,
@@ -1030,6 +1032,7 @@ def _shadow_prisma(
             "target_type",
             "target_id",
             "router_name",
+            "router_names",
             "direction",
             "baseline_model",
             "judge_model",
@@ -1065,6 +1068,8 @@ def _shadow_prisma(
             return [{"judged_count": 10, "error_count": 2, "judge_spend": 0.031}]
         if "SELECT job_id AS grp" in sql:
             return by_leg_rows if by_leg_rows is not None else []
+        if "COALESCE(a.router_name" in sql:
+            return by_router_rows if by_router_rows is not None else []
         if 'FROM "LiteLLM_ShadowEvalFunnel"' in sql:
             return prisma.funnel_rows
         return agg_rows if agg_rows is not None else []
@@ -1121,7 +1126,15 @@ async def test_start_shadow_eval_writes_one_leg_per_key_in_one_statement(monkeyp
     prisma.db.litellm_shadowevaljob.create_many.assert_awaited_once()
     rows = prisma.db.litellm_shadowevaljob.create_many.call_args.kwargs["data"]
     assert [(row["target_type"], row["target_id"]) for row in rows] == [("key", "key-hash"), ("key", "key-hash-2")]
-    assert len({frozenset((k, v) for k, v in row.items() if k not in ("target_id", "id")) for row in rows}) == 1
+    assert (
+        len(
+            {
+                frozenset((k, tuple(v) if isinstance(v, list) else v) for k, v in row.items() if k not in ("target_id", "id"))
+                for row in rows
+            }
+        )
+        == 1
+    )
     assert len({row["id"] for row in rows}) == len(rows)
     assert len({row["group_id"] for row in rows}) == 1
     assert all(row["max_turns"] == SHADOW_EVAL_TURN_VALVE and row["created_by"] == "admin" for row in rows)
@@ -1136,6 +1149,63 @@ async def test_start_shadow_eval_writes_one_leg_per_key_in_one_statement(monkeyp
     ]
     assert all(target.target_type == "key" for target in response.targets)
     assert all(target.max_turns == SHADOW_EVAL_TURN_VALVE for target in response.targets)
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_multi_router_writes_the_set_on_every_leg(monkeypatch: pytest.MonkeyPatch):
+    """A multi-router job stores the full set in router_names and the first router in
+    router_name, so a rolling-deploy pod that predates router_names still runs a valid
+    single-arm eval and its unstamped attempt rows attribute to that first router."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    _configure_anthropic_sdk_judge(monkeypatch)
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    response = await start_shadow_eval(
+        _start_request(router_name=None, router_names=("my-router", "classifier-router")), ADMIN
+    )
+
+    rows = prisma.db.litellm_shadowevaljob.create_many.call_args.kwargs["data"]
+    assert all(row["router_name"] == "my-router" for row in rows)
+    assert all(row["router_names"] == ["my-router", "classifier-router"] for row in rows)
+    assert response.router_names == ("my-router", "classifier-router")
+    assert response.router_name == "my-router"
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_rejects_an_unconfigured_router_in_the_set(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    _configure_anthropic_sdk_judge(monkeypatch)
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    with pytest.raises(HTTPException, match="not-a-router") as exc:
+        await start_shadow_eval(_start_request(router_name=None, router_names=("my-router", "not-a-router")), ADMIN)
+
+    assert exc.value.status_code == 400
+    prisma.db.litellm_shadowevaljob.create_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_judge_collision_is_found_on_every_router_of_the_set(monkeypatch: pytest.MonkeyPatch):
+    """The judge-as-candidate guard walks every candidate router: a judge that serves an
+    arm of the SECOND router still poisons the whole job's win rates."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    _configure_anthropic_sdk_judge(monkeypatch)
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    with pytest.raises(HTTPException, match="also an arm") as exc:
+        await start_shadow_eval(_start_request(router_name=None, router_names=("my-router", "sonnet-router")), ADMIN)
+
+    assert exc.value.status_code == 400
+    prisma.db.litellm_shadowevaljob.create_many.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1796,6 +1866,63 @@ async def test_get_shadow_eval_job_pools_counts_and_slices_results_per_key(monke
     assert totals_args == [(totals_args[0][0], ["leg-1", "leg-2"])]
     error_where = prisma.db.litellm_shadowevalattempt.find_first.call_args.kwargs["where"]
     assert error_where == {"job_id": {"in": ["leg-1", "leg-2"]}, "outcome": "error"}
+
+
+@pytest.mark.asyncio
+async def test_get_shadow_eval_job_slices_results_per_router(monkeypatch: pytest.MonkeyPatch):
+    """A multi-router job's detail carries one slice per arm, aggregated by the arm
+    stamped on each attempt row, with unstamped legacy rows attributed to the job's own
+    router by the read (the COALESCE against the leg's router_name)."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    def agg(grp: str, wins: int) -> dict[str, object]:
+        return {
+            "grp": grp,
+            "turn_count": 4,
+            "real_wins": 4 - wins,
+            "shadow_wins": wins,
+            "ties": 0,
+            "avg_confidence": 0.8,
+            "real_spend": 0.08,
+            "shadow_spend": 0.02,
+            "cache_hit_turns": 0,
+        }
+
+    prisma = _shadow_prisma(
+        legs=[_leg_record(router_names=("my-router", "alt-router"))],
+        agg_rows=[agg("SIMPLE", 3)],
+        by_router_rows=[agg("my-router", 1), agg("alt-router", 3)],
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    response = await get_shadow_eval_job("job-1", VIEWER)
+
+    assert response.router_names == ("my-router", "alt-router")
+    assert response.router_name == "my-router"
+    assert [(s.group, s.shadow_win_rate_pct) for s in response.results.by_router] == [
+        ("my-router", 25.0),
+        ("alt-router", 75.0),
+    ]
+    router_sql = next(
+        call.args[0] for call in prisma.db.query_raw.await_args_list if "COALESCE(a.router_name" in call.args[0]
+    )
+    assert "COALESCE(a.router_name, j.router_name)" in router_sql
+    assert 'JOIN "LiteLLM_ShadowEvalJob" j ON j.id = a.job_id' in router_sql
+    assert "a.job_id = ANY($1::text[])" in router_sql
+
+
+@pytest.mark.asyncio
+async def test_job_responses_resolve_router_names_with_legacy_fallback(monkeypatch: pytest.MonkeyPatch):
+    """Rows from before router_names existed carry their whole set in router_name."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    prisma = _shadow_prisma(legs=[_leg_record(router_names=())])
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+    response = await get_shadow_eval_job("job-1", VIEWER)
+
+    assert response.router_names == ("my-router",)
+    assert response.router_name == "my-router"
 
 
 @pytest.mark.asyncio
