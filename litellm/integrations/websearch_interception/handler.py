@@ -1633,16 +1633,18 @@ class WebSearchInterceptionLogger(CustomLogger):
     def _select_search_tool_from_router(self, llm_router: object) -> "_SearchToolConfig | None":
         if llm_router is None or not hasattr(llm_router, "search_tools"):
             return None
-        search_tools: Final = list(getattr(llm_router, "search_tools", None) or [])
+        search_tools: Final = tuple(getattr(llm_router, "search_tools", None) or ())
         return self._select_search_tool_from_list(search_tools=search_tools, source="router")
 
     def _select_search_tool_from_list(
         self,
-        search_tools: list[_SearchToolConfig],
+        search_tools: Sequence[_SearchToolConfig],
         source: str,
     ) -> "_SearchToolConfig | None":
         if self.search_tool_name:
-            matching_tools = [tool for tool in search_tools if tool.get("search_tool_name") == self.search_tool_name]
+            matching_tools: Final = tuple(
+                tool for tool in search_tools if tool.get("search_tool_name") == self.search_tool_name
+            )
             if matching_tools:
                 search_provider = (matching_tools[0].get("litellm_params", {}) or {}).get("search_provider")
                 verbose_logger.debug(
