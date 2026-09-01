@@ -151,6 +151,11 @@ class ReductoHybridVpcSettings(FixtureModel):
 
 
 ReductoPageSelection = ReductoPageRange | list[ReductoPageRange] | list[int] | list[str]
+ReductoV3Model = Literal["reducto/parse-v3", "parse-v3"]
+ReductoLegacyModel = Literal["reducto/parse-legacy", "parse-legacy"]
+
+REDUCTO_V3_MODELS: Final[tuple[Literal["reducto/parse-v3"], ...]] = ("reducto/parse-v3",)
+REDUCTO_LEGACY_MODELS: Final[tuple[Literal["reducto/parse-legacy"], ...]] = ("reducto/parse-legacy",)
 
 
 class ReductoSettings(FixtureModel):
@@ -181,7 +186,7 @@ class ReductoSettings(FixtureModel):
 
 class ReductoParseV3SdkInput(OcrSdkInputBase):
     boundary: str = Field(default="reducto_v3", pattern=r"^reducto_v3$")
-    model: Literal["reducto/parse-v3", "parse-v3"]
+    model: ReductoV3Model
     document: ReductoDocument
     custom_llm_provider: Literal["reducto"] | None = None
     formatting: ReductoFormatting = Field(default_factory=ReductoFormatting)
@@ -197,7 +202,7 @@ class ReductoParseV3SdkInput(OcrSdkInputBase):
 
 class ReductoParseLegacySdkInput(OcrSdkInputBase):
     boundary: str = Field(default="reducto_legacy", pattern=r"^reducto_legacy$")
-    model: Literal["reducto/parse-legacy", "parse-legacy"]
+    model: ReductoLegacyModel
     document: ReductoDocument
     custom_llm_provider: Literal["reducto"] | None = None
     enhance: JsonObject | None = None

@@ -1,17 +1,25 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import date
+from pathlib import Path
 from typing import Final, cast
 
 import pytest
 from hypothesis import given, settings
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 
+from litellm.llms.azure_ai.ocr.document_intelligence.transformation import AzureDocumentIntelligenceOCRConfig
+from litellm.llms.azure_ai.ocr.transformation import AzureAIOCRConfig
 from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
 from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.llms.reducto.ocr.transformation import ReductoParseLegacyConfig, ReductoParseV3Config
 from litellm.llms.vertex_ai.ocr.deepseek_transformation import VertexAIDeepSeekOCRConfig
+from litellm.llms.vertex_ai.ocr.transformation import VertexAIOCRConfig
+from tests.test_litellm.ocr.conftest import ocr_fixture_marks
 from tests.test_litellm.ocr.fixtures.azure import (
+    AZURE_DOCUMENT_INTELLIGENCE_MODELS,
+    AZURE_MISTRAL_MODELS,
     AzureDocumentIntelligenceOcrSdkInput,
     AzureMistralOcrSdkInput,
     azure_document_intelligence_input_strategy,
@@ -24,8 +32,11 @@ from tests.test_litellm.ocr.fixtures.base import (
     JsonSchemaResponseFormat,
     OcrSdkInputBase,
 )
-from tests.test_litellm.ocr.fixtures.mistral import MistralOcrSdkInput, mistral_input_strategy
+from tests.test_litellm.ocr.fixtures.mistral import MISTRAL_MODELS, MistralOcrSdkInput, mistral_input_strategy
+from tests.test_litellm.ocr.fixtures.models import OcrParityCase
 from tests.test_litellm.ocr.fixtures.reducto import (
+    REDUCTO_LEGACY_MODELS,
+    REDUCTO_V3_MODELS,
     ReductoChunking,
     ReductoDocumentUrlDocument,
     ReductoFormatting,
@@ -38,6 +49,8 @@ from tests.test_litellm.ocr.fixtures.reducto import (
     reducto_v3_input_strategy,
 )
 from tests.test_litellm.ocr.fixtures.vertex import (
+    VERTEX_DEEPSEEK_MODELS,
+    VERTEX_MISTRAL_MODELS,
     VertexDeepSeekOcrSdkInput,
     VertexMistralOcrSdkInput,
     vertex_deepseek_input_strategy,
@@ -46,6 +59,29 @@ from tests.test_litellm.ocr.fixtures.vertex import (
 COMMON_FIELDS: Final = frozenset(
     {"boundary", "model", "document", "custom_llm_provider", "vertex_project", "vertex_location"}
 )
+SUPPORTED_OCR_PROVIDERS: Final = frozenset({"mistral", "azure_ai", "reducto", "vertex_ai"})
+ACTIVE_OCR_MODELS: Final = frozenset(
+    (
+        *MISTRAL_MODELS,
+        *AZURE_MISTRAL_MODELS,
+        *AZURE_DOCUMENT_INTELLIGENCE_MODELS,
+        *VERTEX_MISTRAL_MODELS,
+        *VERTEX_DEEPSEEK_MODELS,
+        *REDUCTO_V3_MODELS,
+        *REDUCTO_LEGACY_MODELS,
+    )
+)
+
+
+class _ModelRegistryEntry(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    mode: str | None = None
+    litellm_provider: str | None = None
+    deprecation_date: date | None = None
+
+
+MODEL_REGISTRY: Final = TypeAdapter(dict[str, dict[str, JsonValue]])
 
 
 def _provider_fields(model: type[OcrSdkInputBase]) -> set[str]:
@@ -74,26 +110,47 @@ def _reducto_document() -> ReductoDocumentUrlDocument:
     )
 
 
-def test_mistral_fixture_fields_match_provider_config() -> None:
-    assert _provider_fields(MistralOcrSdkInput) == _supported_params(MistralOCRConfig(), "mistral-ocr-latest")
-
-
-def test_reducto_fixture_fields_match_provider_configs() -> None:
-    assert _provider_fields(ReductoParseV3SdkInput) == _supported_params(ReductoParseV3Config(), "parse-v3")
-    assert _provider_fields(ReductoParseLegacySdkInput) == _supported_params(ReductoParseLegacyConfig(), "parse-legacy")
-
-
-def test_deepseek_fixture_fields_match_provider_config() -> None:
-    assert _provider_fields(VertexDeepSeekOcrSdkInput) == _supported_params(
-        VertexAIDeepSeekOCRConfig(), "deepseek-ocr-maas"
+def test_fixture_catalogs_match_active_registered_ocr_models() -> None:
+    registry_path: Final = Path(__file__).resolve().parents[3] / "model_prices_and_context_window.json"
+    registry: Final = MODEL_REGISTRY.validate_json(registry_path.read_text(encoding="utf-8"))
+    active_registered: Final = frozenset(
+        model
+        for model, raw_metadata in registry.items()
+        if raw_metadata.get("mode") == "ocr" and raw_metadata.get("litellm_provider") in SUPPORTED_OCR_PROVIDERS
+        for metadata in (_ModelRegistryEntry.model_validate(raw_metadata),)
+        if metadata.deprecation_date is None or metadata.deprecation_date > date.today()
     )
+
+    assert ACTIVE_OCR_MODELS == active_registered
+
+
+@pytest.mark.parametrize(
+    ("fixture_model", "provider_config", "model"),
+    (
+        (MistralOcrSdkInput, MistralOCRConfig(), "mistral-ocr-latest"),
+        (AzureMistralOcrSdkInput, AzureAIOCRConfig(), "mistral-document-ai-2512"),
+        (
+            AzureDocumentIntelligenceOcrSdkInput,
+            AzureDocumentIntelligenceOCRConfig(),
+            "doc-intelligence/prebuilt-layout",
+        ),
+        (VertexMistralOcrSdkInput, VertexAIOCRConfig(), "mistral-ocr-2505"),
+        (VertexDeepSeekOcrSdkInput, VertexAIDeepSeekOCRConfig(), "deepseek-ai/deepseek-ocr-maas"),
+        (ReductoParseV3SdkInput, ReductoParseV3Config(), "parse-v3"),
+        (ReductoParseLegacySdkInput, ReductoParseLegacyConfig(), "parse-legacy"),
+    ),
+)
+def test_fixture_fields_match_provider_config(
+    fixture_model: type[OcrSdkInputBase], provider_config: BaseOCRConfig, model: str
+) -> None:
+    assert _provider_fields(fixture_model) == _supported_params(provider_config, model)
 
 
 @pytest.mark.parametrize(
     "sdk_input",
     (
         AzureMistralOcrSdkInput(
-            model="azure_ai/mistral-ocr-deployment",
+            model="azure_ai/mistral-document-ai-2512",
             document=ImageUrlDocument(type="image_url", image_url="data:image/png;base64,AA=="),
         ),
         VertexMistralOcrSdkInput(
@@ -196,6 +253,69 @@ def test_unqualified_models_require_explicit_provider() -> None:
         )
     with pytest.raises(ValidationError, match="custom_llm_provider='reducto'"):
         ReductoParseV3SdkInput(model="parse-v3", document=_reducto_document())
+
+
+@pytest.mark.parametrize("model", tuple(model.removeprefix("mistral/") for model in MISTRAL_MODELS))
+def test_unqualified_mistral_models_accept_explicit_provider(model: str) -> None:
+    sdk_input: Final = MistralOcrSdkInput.model_validate(
+        {
+            "model": model,
+            "custom_llm_provider": "mistral",
+            "document": ImageUrlDocument(type="image_url", image_url="https://example.com/image.png"),
+        }
+    )
+
+    assert sdk_input.model == model
+
+
+@pytest.mark.parametrize(
+    ("model", "model_type"),
+    (("parse-v3", ReductoParseV3SdkInput), ("parse-legacy", ReductoParseLegacySdkInput)),
+)
+def test_unqualified_reducto_models_accept_explicit_provider(
+    model: str, model_type: type[ReductoParseV3SdkInput] | type[ReductoParseLegacySdkInput]
+) -> None:
+    sdk_input: Final = model_type.model_validate(
+        {"model": model, "custom_llm_provider": "reducto", "document": _reducto_document()}
+    )
+
+    assert sdk_input.model == model
+
+
+@pytest.mark.parametrize("model", ("deepseek-ocr-maas", "deepseek-ai/deepseek-ocr-maas"))
+def test_vertex_deepseek_request_uses_single_provider_namespace(model: str) -> None:
+    request: Final = VertexAIDeepSeekOCRConfig().transform_ocr_request(  # pyright: ignore[reportUnknownMemberType]
+        model=model,
+        document={"type": "image_url", "image_url": "data:image/png;base64,AA=="},
+        optional_params={},
+        headers={},
+    )
+
+    data: Final = cast(dict[str, object], request.data)
+    assert data["model"] == "deepseek-ai/deepseek-ocr-maas"
+
+
+@pytest.mark.parametrize(
+    "sdk_input",
+    (
+        ReductoParseV3SdkInput(model="reducto/parse-v3", document=_reducto_document()),
+        ReductoParseLegacySdkInput(model="reducto/parse-legacy", document=_reducto_document()),
+    ),
+)
+def test_reducto_parity_cases_are_non_strict_xfails(
+    sdk_input: ReductoParseV3SdkInput | ReductoParseLegacySdkInput,
+) -> None:
+    marks: Final = ocr_fixture_marks(OcrParityCase(litellm_input=sdk_input, provider_responses=()))
+
+    assert len(marks) == 1
+    assert marks[0].mark.name == "xfail"
+    assert marks[0].mark.kwargs["strict"] is False
+
+
+def test_supported_parity_cases_have_no_marks() -> None:
+    sdk_input: Final = _mistral_input()
+
+    assert ocr_fixture_marks(OcrParityCase(litellm_input=sdk_input, provider_responses=())) == ()
 
 
 def test_reducto_v3_preserves_nested_provider_params() -> None:

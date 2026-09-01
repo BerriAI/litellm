@@ -332,8 +332,6 @@ def test_recorded_ocr_sdk_parity(
     ocr_fixture: OcrParityCase,
     route: SDKRoute,
 ) -> None:
-    if ocr_fixture.litellm_input.boundary in {"reducto_v3", "reducto_legacy"}:
-        pytest.skip("Reducto does not have a Rust OCR boundary")
     sync_spy, async_spy = _native_spies()
     with _restore_rust_ocr_state(), replay_server() as provider:
         rust_ocr_bridge.use_litellm_rust(False, ocr=sync_spy, aocr=async_spy)

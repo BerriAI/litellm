@@ -24,17 +24,31 @@ from tests.test_litellm.ocr.fixtures.common import (
 )
 
 MistralModel = Literal[
+    "mistral/mistral-ocr-3",
+    "mistral/mistral-ocr-3-0",
     "mistral/mistral-ocr-2512",
     "mistral/mistral-ocr-4-0",
     "mistral/mistral-ocr-4-1",
     "mistral/mistral-ocr-4",
     "mistral/mistral-ocr-latest",
+    "mistral-ocr-3",
+    "mistral-ocr-3-0",
     "mistral-ocr-2512",
     "mistral-ocr-4-0",
     "mistral-ocr-4-1",
     "mistral-ocr-4",
     "mistral-ocr-latest",
 ]
+
+MISTRAL_MODELS: Final[tuple[MistralModel, ...]] = (
+    "mistral/mistral-ocr-3",
+    "mistral/mistral-ocr-3-0",
+    "mistral/mistral-ocr-2512",
+    "mistral/mistral-ocr-4",
+    "mistral/mistral-ocr-4-0",
+    "mistral/mistral-ocr-4-1",
+    "mistral/mistral-ocr-latest",
+)
 
 
 class MistralCompatibleOcrSdkInput(OcrSdkInputBase):
@@ -72,7 +86,7 @@ class MistralOcrSdkInput(MistralCompatibleOcrSdkInput):
         return self
 
 
-MISTRAL_MODEL: Final = "mistral/mistral-ocr-latest"
+MISTRAL_MODEL: Final[MistralModel] = "mistral/mistral-ocr-latest"
 _VALUE_TEXT: Final = st.just("case-1")
 
 
@@ -145,8 +159,14 @@ def mistral_recording_targets(environ: Mapping[str, str], client: OcrFixtureClie
         OcrRecordingTarget(
             name="mistral-ocr",
             provider_spec=ProviderSpec(upstream_base=upstream_base),
-            strategy=cast(SearchStrategy[OcrSdkInputBase], mistral_input_strategy(MISTRAL_MODEL)),
+            strategy=cast(
+                SearchStrategy[OcrSdkInputBase],
+                st.sampled_from(MISTRAL_MODELS).flatmap(mistral_input_strategy),
+            ),
             invocation=invoke_with_api_key(client, api_key),
-            required_inputs=cast(tuple[OcrSdkInputBase, ...], required_mistral_inputs(MISTRAL_MODEL)),
+            required_inputs=cast(
+                tuple[OcrSdkInputBase, ...],
+                tuple(case_input for model in MISTRAL_MODELS for case_input in required_mistral_inputs(model)),
+            ),
         ),
     )

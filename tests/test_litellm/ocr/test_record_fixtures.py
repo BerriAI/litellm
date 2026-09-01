@@ -9,11 +9,18 @@ import pytest
 
 from tests.route_parity.fixtures.inputs import generate_case_inputs
 from tests.route_parity.fixtures.pipeline import parse_recording_args
+from tests.test_litellm.ocr.fixtures.azure import (
+    AZURE_DOCUMENT_INTELLIGENCE_MODELS,
+    AZURE_MISTRAL_MODELS,
+)
 from tests.test_litellm.ocr.fixtures.base import OcrSdkInputBase
+from tests.test_litellm.ocr.fixtures.mistral import MISTRAL_MODELS
 from tests.test_litellm.ocr.fixtures.record import (
     discover_targets,
     require_targets,
 )
+from tests.test_litellm.ocr.fixtures.reducto import REDUCTO_LEGACY_MODELS, REDUCTO_V3_MODELS
+from tests.test_litellm.ocr.fixtures.vertex import VERTEX_DEEPSEEK_MODELS, VERTEX_MISTRAL_MODELS
 
 
 class _UnusedOcrClient:
@@ -30,6 +37,29 @@ class _RecordingOcrClient:
 
 
 _UNUSED_OCR_CLIENT: Final = _UnusedOcrClient()
+_MISTRAL_PARAMS: Final = frozenset(
+    {
+        "pages",
+        "include_image_base64",
+        "image_limit",
+        "image_min_size",
+        "bbox_annotation_format",
+        "document_annotation_format",
+        "document_annotation_prompt",
+        "extract_header",
+        "extract_footer",
+        "table_format",
+        "confidence_scores_granularity",
+        "include_blocks",
+        "id",
+    }
+)
+
+
+def _model(case_input: OcrSdkInputBase) -> str:
+    model: Final = case_input.canonical_input().get("model")
+    assert isinstance(model, str)
+    return model
 
 
 def test_parse_args_has_no_model_selection() -> None:
@@ -66,7 +96,6 @@ def test_discovery_is_explicit_per_available_provider_boundary() -> None:
             "REDUCTO_API_KEY": "reducto-secret",
             "AZURE_AI_API_KEY": "azure-secret",
             "AZURE_AI_API_BASE": "https://azure.example",
-            "AZURE_AI_OCR_MODEL": "mistral-ocr-deployment",
             "AZURE_DOCUMENT_INTELLIGENCE_API_KEY": "document-secret",
             "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT": "https://document.example",
             "VERTEX_AI_API_KEY": "vertex-secret",
@@ -87,17 +116,14 @@ def test_discovery_is_explicit_per_available_provider_boundary() -> None:
     assert all("secret" not in repr(target) for target in targets)
 
 
-def test_azure_mistral_discovery_requires_and_normalizes_deployment_model() -> None:
-    incomplete: Final = {
+def test_azure_mistral_discovery_enumerates_registered_models() -> None:
+    environ: Final = {
         "AZURE_AI_API_KEY": "azure-secret",
         "AZURE_AI_API_BASE": "https://azure.example",
     }
-    assert discover_targets(incomplete, _UNUSED_OCR_CLIENT) == ()
+    target: Final = discover_targets(environ, _UNUSED_OCR_CLIENT)[0]
 
-    target: Final = discover_targets(
-        {**incomplete, "AZURE_AI_OCR_MODEL": "mistral-ocr-deployment"}, _UNUSED_OCR_CLIENT
-    )[0]
-    assert target.required_inputs[0].canonical_input()["model"] == "azure_ai/mistral-ocr-deployment"
+    assert {_model(case_input) for case_input in target.required_inputs} == set(AZURE_MISTRAL_MODELS)
 
 
 @pytest.mark.parametrize(
@@ -125,29 +151,15 @@ def test_mistral_target_uses_canonical_model_and_normalized_base(
     assert "mistral-secret" not in repr(target)
     case_inputs: Final = generate_case_inputs(target.strategy, examples=1)
     assert len(case_inputs) == 1
-    assert case_inputs[0].canonical_input()["model"] == "mistral/mistral-ocr-latest"
-    assert len(target.required_inputs) == 14
+    assert case_inputs[0].canonical_input()["model"] in MISTRAL_MODELS
+    assert len(target.required_inputs) == 14 * len(MISTRAL_MODELS)
     covered_params: Final = {
         key
         for case_input in target.required_inputs
         for key in case_input.as_sdk_kwargs()
         if key not in {"model", "document", "custom_llm_provider"}
     }
-    assert covered_params == {
-        "pages",
-        "include_image_base64",
-        "image_limit",
-        "image_min_size",
-        "bbox_annotation_format",
-        "document_annotation_format",
-        "document_annotation_prompt",
-        "extract_header",
-        "extract_footer",
-        "table_format",
-        "confidence_scores_granularity",
-        "include_blocks",
-        "id",
-    }
+    assert covered_params == _MISTRAL_PARAMS
 
 
 def test_mistral_target_invocation_forwards_discovered_credentials() -> None:
@@ -162,4 +174,45 @@ def test_mistral_target_invocation_forwards_discovered_credentials() -> None:
     kwargs: Final = calls.get_nowait()
     assert kwargs["api_base"] == "http://127.0.0.1:1234"
     assert kwargs["api_key"] == "mistral-secret"
-    assert kwargs["model"] == "mistral/mistral-ocr-latest"
+    assert kwargs["model"] in MISTRAL_MODELS
+
+
+def test_every_target_covers_every_supported_param_for_every_model() -> None:
+    targets: Final = discover_targets(
+        {
+            "MISTRAL_API_KEY": "mistral-secret",
+            "REDUCTO_API_KEY": "reducto-secret",
+            "AZURE_AI_API_KEY": "azure-secret",
+            "AZURE_AI_API_BASE": "https://azure.example",
+            "AZURE_DOCUMENT_INTELLIGENCE_API_KEY": "document-secret",
+            "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT": "https://document.example",
+            "VERTEX_AI_API_KEY": "vertex-secret",
+            "VERTEXAI_PROJECT": "project-1",
+        },
+        _UNUSED_OCR_CLIENT,
+    )
+    expected: Final[dict[str, tuple[tuple[str, ...], frozenset[str]]]] = {
+        "mistral-ocr": (MISTRAL_MODELS, _MISTRAL_PARAMS),
+        "azure-mistral": (AZURE_MISTRAL_MODELS, _MISTRAL_PARAMS),
+        "azure-document-intelligence": (
+            AZURE_DOCUMENT_INTELLIGENCE_MODELS,
+            frozenset({"pages", "features", "req_format"}),
+        ),
+        "vertex-mistral": (VERTEX_MISTRAL_MODELS, _MISTRAL_PARAMS),
+        "vertex-deepseek": (VERTEX_DEEPSEEK_MODELS, frozenset[str]()),
+        "reducto-v3": (REDUCTO_V3_MODELS, frozenset({"formatting", "retrieval", "settings"})),
+        "reducto-legacy": (REDUCTO_LEGACY_MODELS, frozenset({"enhance"})),
+    }
+
+    for target in targets:
+        expected_models, expected_params = expected[target.name]
+        assert {_model(case_input) for case_input in target.required_inputs} == set(expected_models)
+        for model in expected_models:
+            covered = frozenset(
+                key
+                for case_input in target.required_inputs
+                if _model(case_input) == model
+                for key in case_input.as_sdk_kwargs()
+                if key not in {"model", "document", "custom_llm_provider", "vertex_project", "vertex_location"}
+            )
+            assert covered == expected_params

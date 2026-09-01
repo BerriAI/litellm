@@ -110,6 +110,7 @@ def parametrize_recorded_fixtures(
     default_directory: Path,
     regeneration_command: str,
     id_builder: Callable[[CaseT], str],
+    marks_builder: Callable[[CaseT], tuple[pytest.MarkDecorator, ...]] | None = None,
 ) -> None:
     if fixture_name not in metafunc.fixturenames:
         return
@@ -127,7 +128,17 @@ def parametrize_recorded_fixtures(
             f"Validation details: {error}"
         ) from error
     if fixtures:
-        metafunc.parametrize(fixture_name, fixtures, ids=tuple(id_builder(fixture) for fixture in fixtures))
+        metafunc.parametrize(
+            fixture_name,
+            tuple(
+                pytest.param(
+                    fixture,
+                    id=id_builder(fixture),
+                    marks=marks_builder(fixture) if marks_builder is not None else (),
+                )
+                for fixture in fixtures
+            ),
+        )
         return
     if configured is not None:
         raise pytest.UsageError(f"no recorded fixtures in {directory}")

@@ -24,10 +24,16 @@ from tests.test_litellm.ocr.fixtures.mistral import (
     required_mistral_inputs,
 )
 
+VertexMistralModel = Literal["vertex_ai/mistral-ocr-2505"]
+VertexDeepSeekModel = Literal["vertex_ai/deepseek-ai/deepseek-ocr-maas"]
+
+VERTEX_MISTRAL_MODELS: Final[tuple[VertexMistralModel, ...]] = ("vertex_ai/mistral-ocr-2505",)
+VERTEX_DEEPSEEK_MODELS: Final[tuple[VertexDeepSeekModel, ...]] = ("vertex_ai/deepseek-ai/deepseek-ocr-maas",)
+
 
 class VertexMistralOcrSdkInput(MistralCompatibleOcrSdkInput):
     boundary: str = Field(default="vertex_mistral", pattern=r"^vertex_mistral$")
-    model: Literal["vertex_ai/mistral-ocr-2505"] = "vertex_ai/mistral-ocr-2505"
+    model: VertexMistralModel = "vertex_ai/mistral-ocr-2505"
     custom_llm_provider: Literal["vertex_ai"] | None = None
     vertex_project: str
     vertex_location: str = "us-central1"
@@ -35,26 +41,36 @@ class VertexMistralOcrSdkInput(MistralCompatibleOcrSdkInput):
 
 class VertexDeepSeekOcrSdkInput(OcrSdkInputBase):
     boundary: str = Field(default="vertex_deepseek", pattern=r"^vertex_deepseek$")
-    model: Literal["vertex_ai/deepseek-ocr-maas"] = "vertex_ai/deepseek-ocr-maas"
+    model: VertexDeepSeekModel = "vertex_ai/deepseek-ai/deepseek-ocr-maas"
     document: OcrDocument
     custom_llm_provider: Literal["vertex_ai"] | None = None
     vertex_project: str
     vertex_location: str = "us-central1"
 
 
-def _as_vertex_mistral(case_input: MistralOcrSdkInput, project: str, location: str) -> VertexMistralOcrSdkInput:
+def _as_vertex_mistral(
+    case_input: MistralOcrSdkInput,
+    project: str,
+    location: str,
+    model: VertexMistralModel,
+) -> VertexMistralOcrSdkInput:
     values: Final = case_input.model_dump(mode="python", exclude={"boundary", "model", "custom_llm_provider"})
-    return VertexMistralOcrSdkInput.model_validate({**values, "vertex_project": project, "vertex_location": location})
+    return VertexMistralOcrSdkInput.model_validate(
+        {**values, "model": model, "vertex_project": project, "vertex_location": location}
+    )
 
 
 def _required_deepseek_inputs(project: str, location: str) -> tuple[VertexDeepSeekOcrSdkInput, ...]:
-    return (
+    cases: Final = (
         VertexDeepSeekOcrSdkInput(
+            model=model,
             document=image_document("invoice 123", 24),
             vertex_project=project,
             vertex_location=location,
-        ),
+        )
+        for model in VERTEX_DEEPSEEK_MODELS
     )
+    return tuple(cases)
 
 
 @st.composite
@@ -84,16 +100,18 @@ def vertex_recording_targets(environ: Mapping[str, str], client: OcrFixtureClien
                 SearchStrategy[OcrSdkInputBase],
                 st.builds(
                     _as_vertex_mistral,
-                    case_input=mistral_input_strategy(MISTRAL_MODEL),
                     project=st.just(project),
                     location=st.just(location),
+                    model=st.sampled_from(VERTEX_MISTRAL_MODELS),
+                    case_input=mistral_input_strategy(MISTRAL_MODEL),
                 ),
             ),
             invocation=invocation,
             required_inputs=cast(
                 tuple[OcrSdkInputBase, ...],
                 tuple(
-                    _as_vertex_mistral(case_input, project, location)
+                    _as_vertex_mistral(case_input, project, location, model)
+                    for model in VERTEX_MISTRAL_MODELS
                     for case_input in required_mistral_inputs(MISTRAL_MODEL)
                 ),
             ),

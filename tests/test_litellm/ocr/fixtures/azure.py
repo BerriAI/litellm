@@ -24,10 +24,24 @@ from tests.test_litellm.ocr.fixtures.mistral import (
     required_mistral_inputs,
 )
 
+AzureMistralModel = Literal["azure_ai/mistral-document-ai-2512",]
+AzureDocumentIntelligenceModel = Literal[
+    "azure_ai/doc-intelligence/prebuilt-read",
+    "azure_ai/doc-intelligence/prebuilt-layout",
+    "azure_ai/doc-intelligence/prebuilt-document",
+]
+
+AZURE_MISTRAL_MODELS: Final[tuple[AzureMistralModel, ...]] = ("azure_ai/mistral-document-ai-2512",)
+AZURE_DOCUMENT_INTELLIGENCE_MODELS: Final[tuple[AzureDocumentIntelligenceModel, ...]] = (
+    "azure_ai/doc-intelligence/prebuilt-read",
+    "azure_ai/doc-intelligence/prebuilt-layout",
+    "azure_ai/doc-intelligence/prebuilt-document",
+)
+
 
 class AzureMistralOcrSdkInput(MistralCompatibleOcrSdkInput):
     boundary: str = Field(default="azure_mistral", pattern=r"^azure_mistral$")
-    model: str
+    model: AzureMistralModel
     custom_llm_provider: Literal["azure_ai"] | None = None
 
     @field_validator("model")
@@ -40,11 +54,7 @@ class AzureMistralOcrSdkInput(MistralCompatibleOcrSdkInput):
 
 class AzureDocumentIntelligenceOcrSdkInput(OcrSdkInputBase):
     boundary: str = Field(default="azure_document_intelligence", pattern=r"^azure_document_intelligence$")
-    model: Literal[
-        "azure_ai/doc-intelligence/prebuilt-read",
-        "azure_ai/doc-intelligence/prebuilt-layout",
-        "azure_ai/doc-intelligence/prebuilt-document",
-    ]
+    model: AzureDocumentIntelligenceModel
     document: OcrDocument
     custom_llm_provider: Literal["azure_ai"] | None = None
     pages: str | list[int] | None = None
@@ -52,19 +62,23 @@ class AzureDocumentIntelligenceOcrSdkInput(OcrSdkInputBase):
     req_format: Literal["litellm"] = "litellm"
 
 
-def _as_azure_mistral(case_input: MistralOcrSdkInput, model: str) -> AzureMistralOcrSdkInput:
+def _as_azure_mistral(case_input: MistralOcrSdkInput, model: AzureMistralModel) -> AzureMistralOcrSdkInput:
     values: Final = case_input.model_dump(mode="python", exclude={"boundary", "model", "custom_llm_provider"})
     return AzureMistralOcrSdkInput.model_validate({**values, "model": model})
 
 
 def _required_document_intelligence_inputs() -> tuple[AzureDocumentIntelligenceOcrSdkInput, ...]:
     document: Final = pdf_document()
-    model: Final = "azure_ai/doc-intelligence/prebuilt-layout"
-    return (
-        AzureDocumentIntelligenceOcrSdkInput(model=model, document=document),
-        AzureDocumentIntelligenceOcrSdkInput(model=model, document=document, pages=[0, 1]),
-        AzureDocumentIntelligenceOcrSdkInput(model=model, document=document, features=["languages"]),
-        AzureDocumentIntelligenceOcrSdkInput(model=model, document=document, req_format="litellm"),
+    cases: Final[tuple[dict[str, object], ...]] = (
+        {},
+        {"pages": [0, 1]},
+        {"features": ["languages"]},
+        {"req_format": "litellm"},
+    )
+    return tuple(
+        AzureDocumentIntelligenceOcrSdkInput.model_validate({"model": model, "document": document, **case})
+        for model in AZURE_DOCUMENT_INTELLIGENCE_MODELS
+        for case in cases
     )
 
 
@@ -81,15 +95,7 @@ def azure_document_intelligence_input_strategy(draw: DrawFn) -> AzureDocumentInt
     )
     return AzureDocumentIntelligenceOcrSdkInput.model_validate(
         {
-            "model": draw(
-                st.sampled_from(
-                    (
-                        "azure_ai/doc-intelligence/prebuilt-read",
-                        "azure_ai/doc-intelligence/prebuilt-layout",
-                        "azure_ai/doc-intelligence/prebuilt-document",
-                    )
-                )
-            ),
+            "model": draw(st.sampled_from(AZURE_DOCUMENT_INTELLIGENCE_MODELS)),
             "document": draw(public_document_strategy()),
             **optional_params,
         }
@@ -101,22 +107,28 @@ def azure_mistral_recording_targets(
 ) -> tuple[OcrRecordingTarget, ...]:
     api_key: Final = environ.get("AZURE_AI_API_KEY")
     upstream_base: Final = environ.get("AZURE_AI_API_BASE")
-    configured_model: Final = environ.get("AZURE_AI_OCR_MODEL")
-    if not api_key or not upstream_base or not configured_model:
+    if not api_key or not upstream_base:
         return ()
-    model: Final = configured_model if configured_model.startswith("azure_ai/") else f"azure_ai/{configured_model}"
     return (
         OcrRecordingTarget(
             name="azure-mistral",
             provider_spec=ProviderSpec(upstream_base=upstream_base.rstrip("/")),
             strategy=cast(
                 SearchStrategy[OcrSdkInputBase],
-                mistral_input_strategy(MISTRAL_MODEL).map(lambda case_input: _as_azure_mistral(case_input, model)),
+                st.sampled_from(AZURE_MISTRAL_MODELS).flatmap(
+                    lambda model: mistral_input_strategy(MISTRAL_MODEL).map(
+                        lambda case_input: _as_azure_mistral(case_input, model)
+                    )
+                ),
             ),
             invocation=invoke_with_api_key(client, api_key),
             required_inputs=cast(
                 tuple[OcrSdkInputBase, ...],
-                tuple(_as_azure_mistral(case_input, model) for case_input in required_mistral_inputs(MISTRAL_MODEL)),
+                tuple(
+                    _as_azure_mistral(case_input, model)
+                    for model in AZURE_MISTRAL_MODELS
+                    for case_input in required_mistral_inputs(MISTRAL_MODEL)
+                ),
             ),
         ),
     )

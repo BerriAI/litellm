@@ -61,13 +61,20 @@ OCR strategies generate only public `litellm.ocr()` and `litellm.aocr()` inputs.
 provider wire payloads.
 
 Each boundary has a required corpus containing a baseline and one case for every supported top-level LiteLLM OCR
-parameter. `--examples` controls additional Hypothesis-generated cases; it does not replace the required corpus.
+parameter for every active registered model that uses that transformation. Models whose registry deprecation date has
+passed are excluded. `--examples` controls additional Hypothesis-generated cases; it does not replace the required
+corpus.
 
 The explicit boundaries are Mistral, Azure-hosted Mistral, Vertex-hosted Mistral, Azure Document Intelligence,
 Vertex DeepSeek, Reducto v3, and Reducto legacy. Provider credentials and endpoints only control target discovery, so
-a machine records the boundaries it has configured and skips the rest. Reducto fixtures record both upload and parse
-responses, but Reducto remains outside Python/Rust parity until the Rust OCR bridge supports it.
-Azure-hosted Mistral discovery also requires `AZURE_AI_OCR_MODEL`, the deployment name or full `azure_ai/...` model.
+a machine records the boundaries it has configured and skips the rest. Azure-hosted Mistral enumerates its active
+registered models rather than requiring a separately configured deployment model. Reducto fixtures record both upload
+and parse responses. Their parity cases are non-strict expected failures until the Rust OCR bridge supports Reducto, so
+both expected failures and unexpected passes keep CI green during the rollout.
+
+The committed corpus does not need to contain live recordings for every configured target. In particular, Azure and
+Vertex generation paths are covered by unit tests without requiring their credentials in CI. Recordings can be added
+later without changing the fixture schema or runner.
 
 Invalid OCR inputs do not use recorded provider responses. The parity suite checks unsupported providers and models,
 malformed documents, invalid request formats, invalid Azure Document Intelligence parameters, and invalid headers in
