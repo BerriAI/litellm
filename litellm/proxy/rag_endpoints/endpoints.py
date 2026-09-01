@@ -42,6 +42,7 @@ from litellm.proxy.rag_endpoints.upload_security import (
 )
 from litellm.proxy.vector_store_endpoints.endpoints import (
     build_request_data_from_managed_vector_store,
+    reject_caller_embedding_selection_params,
 )
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
@@ -716,6 +717,7 @@ async def rag_query(
                 status_code=400,
                 detail={"error": "retrieval_config must contain 'vector_store_id'"},
             )
+        reject_caller_embedding_selection_params(payload=retrieval_config, source="retrieval_config")
         resolved_stores: Final = await _authorize_nested_vector_store_ids(
             payload=retrieval_config,
             user_api_key_dict=user_api_key_dict,
