@@ -99,7 +99,7 @@ def build_entry(model_key: str, input_dbu: float, output_dbu: float) -> dict:
             "notes": (
                 f"Pricing derived from Databricks Foundation Model Serving DBU rates "
                 f"({input_dbu:g} in / {output_dbu:g} out DBU per 1M tokens × ${DBU_TO_USD:.2f}/DBU "
-                f"= ${input_dbu*DBU_TO_USD:.2f}/${output_dbu*DBU_TO_USD:.2f} per 1M). "
+                f"= ${input_dbu * DBU_TO_USD:.2f}/${output_dbu * DBU_TO_USD:.2f} per 1M). "
                 f"Auto-refreshed daily by monitor_databricks_pricing workflow."
             )
         },
@@ -131,10 +131,12 @@ def main() -> int:
             main_data[model_key] = entry
             backup_data[model_key] = entry
             changed = True
-            print(f"CHANGED {model_key}: {old and old.get('input_cost_per_token')} -> {entry['input_cost_per_token']}")
+            sys.stdout.write(
+                f"CHANGED {model_key}: {old and old.get('input_cost_per_token')} -> {entry['input_cost_per_token']}\n"
+            )
 
     if not changed:
-        print("NO_CHANGE")
+        sys.stdout.write("NO_CHANGE\n")
         return 0
 
     with MAIN_MAP.open("w") as f:
@@ -143,7 +145,7 @@ def main() -> int:
     with BACKUP_MAP.open("w") as f:
         json.dump(backup_data, f, indent=4)
         f.write("\n")
-    print("WROTE updated model map and backup")
+    sys.stdout.write("WROTE updated model map and backup\n")
     return 0
 
 
