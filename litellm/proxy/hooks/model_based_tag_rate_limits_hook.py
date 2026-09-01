@@ -743,24 +743,37 @@ def _decode_reservations(raw: object) -> tuple[tuple[str, "_PartitionKey"], ...]
 # admission actually checked, letting a burst of calls admitted against one
 # (still-under-limit) window get charged entirely into the next window's
 # fresh, unrelated counter -- silently bypassing the limit right around each
-# rollover. Overwritten by each hop's own admission (last-write-wins), which
-# is correct: success only ever fires for whichever hop actually served the
-# request, so its own most recent admission timestamp is the right one.
+# rollover.
+#
+# Keyed by model_group, not a single scalar: `Router.abatch_completion`'s
+# comma-separated branches share this identical model_call_details object
+# (see `_PENDING_CONCURRENCY_KEYS_FIELD`'s docstring), each addressing its own
+# model_group concurrently, so a single last-write-wins value would have one
+# branch's admission timestamp overwritten by whichever sibling's admission
+# happened to run second -- letting success accounting classify a bucket
+# against a completely different branch's timing. A hop's own model_group is
+# reliably per-hop even though the surrounding dict is shared (see
+# `_resolve_hop_context`'s own docstring), so keying by it lets concurrent
+# siblings addressing different model_groups each own a distinct slot; two
+# siblings addressing the identical model_group (a literal `"grp,grp"` dial)
+# still race on that one slot, same residual as the single-branch case this
+# field originally handled.
 _ADMISSION_TIME_FIELD: Final[str] = "_model_based_tag_rate_limits_admission_time"
 
 # The routing-group membership (candidate_model_names) admission actually
-# resolved against, stashed the same way _ADMISSION_TIME_FIELD is. resolve_any
-# dedupes divergent per-deployment entries by picking the alphabetically first
-# member model_name sharing a signature (resolved_group) -- a pure function of
-# this exact candidate set. Router's live routing-group membership can change
-# between admission and success (a deployment added or removed mid-request via
-# /model/new or a config hot-reload), and success independently re-deriving
-# candidate_model_names from *live* membership at that later point can pick a
-# different resolved_group than admission did, hashing to a different Redis
-# key -- so success accounting silently misses the bucket admission actually
-# checked, letting real usage escape the enforced cap. Reusing admission's own
-# snapshot keeps resolve_any's output identical at both points regardless of
-# what changed in between.
+# resolved against, stashed the same way _ADMISSION_TIME_FIELD is (also keyed
+# by model_group, for the identical `abatch_completion` cross-branch reason).
+# resolve_any dedupes divergent per-deployment entries by picking the
+# alphabetically first member model_name sharing a signature (resolved_group)
+# -- a pure function of this exact candidate set. Router's live routing-group
+# membership can change between admission and success (a deployment added or
+# removed mid-request via /model/new or a config hot-reload), and success
+# independently re-deriving candidate_model_names from *live* membership at
+# that later point can pick a different resolved_group than admission did,
+# hashing to a different Redis key -- so success accounting silently misses
+# the bucket admission actually checked, letting real usage escape the
+# enforced cap. Reusing admission's own snapshot keeps resolve_any's output
+# identical at both points regardless of what changed in between.
 _ROUTING_GROUP_CANDIDATES_FIELD: Final[str] = "_model_based_tag_rate_limits_routing_group_candidates"
 
 
@@ -1043,38 +1056,56 @@ def _queue_pending_reservations(
     )  # mutable-ok: see comment above
 
 
-def _record_admission_time(request_kwargs: Mapping[str, object], now: float) -> None:
-    """Stash this hop's admission timestamp -- see `_ADMISSION_TIME_FIELD`'s
-    docstring for why. Silently a no-op without a real logging object
-    (defensive only; every real request has one): success accounting falls
-    back to its own fresh timestamp, same as before this fix existed."""
+def _record_admission_time(request_kwargs: Mapping[str, object], model_group: str, now: float) -> None:
+    """Stash this hop's admission timestamp under its own model_group -- see
+    `_ADMISSION_TIME_FIELD`'s docstring for why keyed, not scalar. Silently a
+    no-op without a real logging object (defensive only; every real request
+    has one): success accounting falls back to its own fresh timestamp, same
+    as before this fix existed."""
     logging_obj: Final = request_kwargs.get("litellm_logging_obj")
     model_call_details: Final = getattr(logging_obj, "model_call_details", None)
-    if isinstance(model_call_details, dict):
-        model_call_details[_ADMISSION_TIME_FIELD] = now
+    if not isinstance(model_call_details, dict):
+        return
+    by_model_group = model_call_details.get(_ADMISSION_TIME_FIELD)  # rebind-ok: lazily initialized below when absent
+    if not isinstance(by_model_group, dict):
+        by_model_group = {}  # mutable-ok: shared, request-scoped accumulator; see field's own docstring  # rebind-ok: lazily initialized only when absent
+        model_call_details[_ADMISSION_TIME_FIELD] = by_model_group
+    by_model_group[model_group] = now  # mutable-ok: see comment above
 
 
-def _admission_time_or(kwargs: Mapping[str, object], fallback: float) -> float:
-    recorded: Final = kwargs.get(_ADMISSION_TIME_FIELD)
+def _admission_time_or(kwargs: Mapping[str, object], model_group: str, fallback: float) -> float:
+    by_model_group: Final = kwargs.get(_ADMISSION_TIME_FIELD)
+    recorded: Final = by_model_group.get(model_group) if isinstance(by_model_group, dict) else None
     return recorded if isinstance(recorded, float) else fallback
 
 
 def _record_routing_group_candidates(
-    request_kwargs: Mapping[str, object], candidate_model_names: tuple[str, ...]
+    request_kwargs: Mapping[str, object], model_group: str, candidate_model_names: tuple[str, ...]
 ) -> None:
-    """Stash the routing-group membership admission resolved against -- see
-    `_ROUTING_GROUP_CANDIDATES_FIELD`'s docstring for why. Silently a no-op
-    without a real logging object (defensive only; every real request has
-    one): success accounting falls back to its own live reconstruction, same
-    as before this fix existed."""
+    """Stash the routing-group membership admission resolved against, under
+    this hop's own model_group -- see `_ROUTING_GROUP_CANDIDATES_FIELD`'s
+    docstring for why keyed, not scalar. Silently a no-op without a real
+    logging object (defensive only; every real request has one): success
+    accounting falls back to its own live reconstruction, same as before this
+    fix existed."""
     logging_obj: Final = request_kwargs.get("litellm_logging_obj")
     model_call_details: Final = getattr(logging_obj, "model_call_details", None)
-    if isinstance(model_call_details, dict):
-        model_call_details[_ROUTING_GROUP_CANDIDATES_FIELD] = candidate_model_names
+    if not isinstance(model_call_details, dict):
+        return
+    by_model_group = model_call_details.get(  # rebind-ok: lazily initialized below when absent
+        _ROUTING_GROUP_CANDIDATES_FIELD
+    )
+    if not isinstance(by_model_group, dict):
+        by_model_group = {}  # mutable-ok: shared, request-scoped accumulator; see field's own docstring  # rebind-ok: lazily initialized only when absent
+        model_call_details[_ROUTING_GROUP_CANDIDATES_FIELD] = by_model_group
+    by_model_group[model_group] = candidate_model_names  # mutable-ok: see comment above
 
 
-def _routing_group_candidates_or(kwargs: Mapping[str, object], fallback: tuple[str, ...]) -> tuple[str, ...]:
-    recorded: Final = kwargs.get(_ROUTING_GROUP_CANDIDATES_FIELD)
+def _routing_group_candidates_or(
+    kwargs: Mapping[str, object], model_group: str, fallback: tuple[str, ...]
+) -> tuple[str, ...]:
+    by_model_group: Final = kwargs.get(_ROUTING_GROUP_CANDIDATES_FIELD)
+    recorded: Final = by_model_group.get(model_group) if isinstance(by_model_group, dict) else None
     return recorded if isinstance(recorded, tuple) else fallback
 
 
@@ -1326,7 +1357,7 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
             if routing_group_deployments is not None
             else tuple(name for d in healthy_deployments if isinstance(name := d.get("model_name"), str))
         )
-        _record_routing_group_candidates(resolved_request_kwargs, candidate_model_names)
+        _record_routing_group_candidates(resolved_request_kwargs, model, candidate_model_names)
         configured: Final = self._index.get(self.llm_router).resolve_any(model, team_id, candidate_model_names)
         if not configured:
             return healthy_deployments
@@ -1343,7 +1374,7 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
 
         key_alias: Final = _extract_key_alias(resolved_request_kwargs, metadata_variable_name)
         now: Final = self._time_provider().timestamp()
-        _record_admission_time(resolved_request_kwargs, now)
+        _record_admission_time(resolved_request_kwargs, model, now)
         classified: Final = tuple(
             check
             for configured_limit in configured
@@ -1683,7 +1714,7 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         kwargs: Mapping[str, object],
         *,
         only_own_lineage: bool = False,
-        only_keys: frozenset[str] = frozenset(),
+        only_keys: frozenset[str] | None = None,
     ) -> tuple[tuple[str, _PartitionKey], ...]:
         # Snapshot then remove only those exact entries, never a blanket
         # clear: a sibling branch sharing this same request's
@@ -1692,9 +1723,11 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         # would silently strand that branch's reservation instead of
         # releasing it later.
         #
-        # `only_keys`, when non-empty, takes priority: at most one entry per
-        # requested key, since reservations sharing a key are fungible (any
-        # one of them represents the same +1 to the same counter) -- see
+        # `only_keys`, when passed (even an empty frozenset -- a hop that
+        # itself reserved no concurrency slot must release nothing, not fall
+        # through to every pending entry), takes priority: at most one entry
+        # per requested key, since reservations sharing a key are fungible
+        # (any one of them represents the same +1 to the same counter) -- see
         # `_release_own_concurrency_keys`'s own docstring for why this is the
         # terminal (success/failure) release paths' own filter, not
         # `only_own_lineage`.
@@ -1708,12 +1741,12 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
             return ()
         matched_indices: Final = tuple(
             idx
-            for key in only_keys
+            for key in (only_keys or frozenset())
             if (idx := next((i for i, entry in enumerate(pending) if entry[0] == key), None)) is not None
         )
         snapshot: Final = (
             tuple(pending[idx] for idx in matched_indices)
-            if only_keys
+            if only_keys is not None
             else tuple(entry for entry in pending if entry[2] is _current_admission_token())
             if only_own_lineage
             else tuple(pending)
@@ -1932,7 +1965,9 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
             if routing_group_deployments is not None
             else ((serving_deployment.model_name,) if serving_deployment is not None else ())
         )
-        candidate_model_names: Final = _routing_group_candidates_or(kwargs, fallback=live_candidate_model_names)
+        candidate_model_names: Final = _routing_group_candidates_or(
+            kwargs, model_group, fallback=live_candidate_model_names
+        )
         configured: Final = self._index.get(self.llm_router).resolve_any(model_group, team_id, candidate_model_names)
         if not configured:
             return None
@@ -1970,22 +2005,28 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         is no way to tell a sibling's reservation apart from this hop's own
         anyway, so this only ever matters for the single-branch case that
         release already handled correctly before `abatch_completion` existed.
+
+        A resolved `context` whose own hop reserved *no* concurrency slot at
+        all (no concurrency-unit limit matches its model/tags/deployment --
+        e.g. only a token or dollar limit is configured for this tag) must
+        release nothing, not fall through to the unconditional path: on
+        `abatch_completion` that shared pending list can still hold a
+        genuinely live sibling branch's own reservation (a different
+        deployment/model_group whose admission did reserve one), and this
+        hop reserving zero keys is not the same signal as `context` failing
+        to resolve at all.
         """
-        own_concurrency_keys: Final = (
-            _own_concurrency_keys_for_hop(
-                context.configured,
-                context.model_group,
-                context.tags,
-                context.deployment_id,
-                context.key_hash,
-                context.key_alias,
-            )
-            if context is not None
-            else frozenset()
+        if context is None:
+            return await self._pop_pending_concurrency_keys(kwargs)
+        own_concurrency_keys: Final = _own_concurrency_keys_for_hop(
+            context.configured,
+            context.model_group,
+            context.tags,
+            context.deployment_id,
+            context.key_hash,
+            context.key_alias,
         )
-        if own_concurrency_keys:
-            return await self._pop_pending_concurrency_keys(kwargs, only_keys=own_concurrency_keys)
-        return await self._pop_pending_concurrency_keys(kwargs)
+        return await self._pop_pending_concurrency_keys(kwargs, only_keys=own_concurrency_keys)
 
     async def async_log_failure_event(
         self,
@@ -2024,7 +2065,7 @@ class _PROXY_ModelBasedTagRateLimitsHook(  # pyright: ignore[reportUnusedClass] 
         if context is None:
             return
 
-        now: Final = _admission_time_or(kwargs, fallback=self._time_provider().timestamp())
+        now: Final = _admission_time_or(kwargs, context.model_group, fallback=self._time_provider().timestamp())
         increment_by_unit: Final[Mapping[_LimitUnit, float]] = MappingProxyType(
             {
                 "tokens": float(context.standard_logging_object.get("total_tokens") or 0),
