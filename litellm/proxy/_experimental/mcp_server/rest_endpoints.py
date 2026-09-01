@@ -4,10 +4,12 @@ from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal
 
+import anyio
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from litellm._logging import verbose_logger
+from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_TOOL_LISTING_TIMEOUT
 from litellm.exceptions import (
     BlockedPiiEntityError,
     GuardrailRaisedException,
@@ -86,8 +88,6 @@ def _connection_error_message(exc: BaseException) -> str:
 
 
 if MCP_AVAILABLE:
-    from mcp.types import Tool as MCPTool
-
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
         global_mcp_server_manager,
@@ -1402,7 +1402,24 @@ if MCP_AVAILABLE:
             oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers)
 
         async def _list_tools_operation(client):
-            list_tools_result: Final[list[MCPTool]] = await client.list_tools(raise_on_error=True)
+            # Bound the whole pagination walk: without this the preview is limited only by the
+            # per-request timeout times the page cap. max() keeps the pre-pagination guarantee
+            # that a single slow page within the client timeout still succeeds.
+            listing_deadline: Final = max(MCP_CLIENT_TIMEOUT, MCP_TOOL_LISTING_TIMEOUT)
+            list_tools_result = None  # rebind-ok: set inside the timeout scope below
+            with anyio.move_on_after(listing_deadline):
+                list_tools_result = await client.list_tools(raise_on_error=True)
+            if list_tools_result is None:
+                verbose_logger.warning(
+                    "MCP tools/list preview timed out after %s seconds while paginating upstream tools",
+                    listing_deadline,
+                )
+                return {  # mutable-ok: error response payload
+                    "status": "error",
+                    "error": True,
+                    "message": f"Timed out listing tools after {listing_deadline} seconds. "
+                    "The MCP server may be responding slowly or paginating excessively.",
+                }
             model_dumped_tools: Final[list[dict]] = [tool.model_dump() for tool in list_tools_result]
             return {
                 "tools": model_dumped_tools,

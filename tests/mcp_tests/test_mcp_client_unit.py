@@ -238,7 +238,7 @@ class TestMCPClientUnitTests:
         monkeypatch,
     ):
         """Test listing tools returns accumulated tools if an upstream keeps returning new cursors."""
-        monkeypatch.setattr(mcp_client_module, "MCP_TOOL_LISTING_MAX_PAGES", 2, raising=False)
+        monkeypatch.setattr("litellm.experimental_mcp_client.tools.MCP_TOOL_LISTING_MAX_PAGES", 2)
 
         mock_transport_ctx = AsyncMock()
         mock_transport.return_value = mock_transport_ctx
@@ -273,12 +273,12 @@ class TestMCPClientUnitTests:
     @pytest.mark.asyncio
     @patch.object(mcp_client_module, "streamable_http_client")
     @patch.object(mcp_client_module, "ClientSession")
-    async def test_list_tools_raises_on_repeated_next_cursor(
+    async def test_list_tools_stops_on_repeated_next_cursor(
         self,
         mock_session_class,
         mock_transport,
     ):
-        """Test listing tools fails if an upstream repeats a cursor."""
+        """Test listing tools returns collected tools when an upstream repeats a cursor."""
         mock_transport_ctx = AsyncMock()
         mock_transport.return_value = mock_transport_ctx
         mock_transport_instance = MagicMock()
@@ -290,14 +290,85 @@ class TestMCPClientUnitTests:
         mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session_instance)
 
         mock_session_instance.list_tools.side_effect = [
-            ListToolsResult(tools=[], nextCursor="same-cursor"),
-            ListToolsResult(tools=[], nextCursor="same-cursor"),
+            ListToolsResult(
+                tools=[MCPTool(name="tool_0", description="Tool 0", inputSchema={})],
+                nextCursor="same-cursor",
+            ),
+            ListToolsResult(
+                tools=[MCPTool(name="tool_1", description="Tool 1", inputSchema={})],
+                nextCursor="same-cursor",
+            ),
         ]
 
         client = MCPClient("http://example.com")
-        with pytest.raises(RuntimeError, match="repeated tools/list cursor"):
-            await client.list_tools(raise_on_error=True)
+        result = await client.list_tools(raise_on_error=True)
 
+        assert [tool.name for tool in result] == ["tool_0", "tool_1"]
+        assert mock_session_instance.list_tools.call_count == 2
+
+    @pytest.mark.asyncio
+    @patch.object(mcp_client_module, "streamable_http_client")
+    @patch.object(mcp_client_module, "ClientSession")
+    async def test_list_tools_treats_empty_cursor_as_terminal(
+        self,
+        mock_session_class,
+        mock_transport,
+    ):
+        """Test listing tools stops when an upstream returns an empty-string cursor."""
+        mock_transport_ctx = AsyncMock()
+        mock_transport.return_value = mock_transport_ctx
+        mock_transport_instance = MagicMock()
+        mock_transport_ctx.__aenter__ = AsyncMock(return_value=mock_transport_instance)
+
+        mock_session_ctx = AsyncMock()
+        mock_session_class.return_value = mock_session_ctx
+        mock_session_instance = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session_instance)
+
+        mock_session_instance.list_tools.side_effect = [
+            ListToolsResult(
+                tools=[MCPTool(name="tool_0", description="Tool 0", inputSchema={})],
+                nextCursor="",
+            ),
+        ]
+
+        client = MCPClient("http://example.com")
+        result = await client.list_tools()
+
+        assert [tool.name for tool in result] == ["tool_0"]
+        mock_session_instance.list_tools.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch.object(mcp_client_module, "streamable_http_client")
+    @patch.object(mcp_client_module, "ClientSession")
+    async def test_list_tools_swallows_mid_walk_error_without_raise_on_error(
+        self,
+        mock_session_class,
+        mock_transport,
+    ):
+        """Test a mid-walk failure returns [] when raise_on_error is False."""
+        mock_transport_ctx = AsyncMock()
+        mock_transport.return_value = mock_transport_ctx
+        mock_transport_instance = MagicMock()
+        mock_transport_ctx.__aenter__ = AsyncMock(return_value=mock_transport_instance)
+
+        mock_session_ctx = AsyncMock()
+        mock_session_class.return_value = mock_session_ctx
+        mock_session_instance = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session_instance)
+
+        mock_session_instance.list_tools.side_effect = [
+            ListToolsResult(
+                tools=[MCPTool(name="tool_0", description="Tool 0", inputSchema={})],
+                nextCursor="page-2",
+            ),
+            RuntimeError("transient upstream failure"),
+        ]
+
+        client = MCPClient("http://example.com")
+        result = await client.list_tools()
+
+        assert result == []
         assert mock_session_instance.list_tools.call_count == 2
 
     @pytest.mark.asyncio

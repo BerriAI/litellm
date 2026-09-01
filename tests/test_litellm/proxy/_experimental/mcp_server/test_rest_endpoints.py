@@ -524,6 +524,87 @@ class TestTestToolsList:
         assert captured["oauth2_headers"] is None
         assert oauth_call_counter["count"] == 0
 
+    async def test_preview_tools_list_times_out_on_slow_pagination(self, monkeypatch):
+        """A preview whose upstream paginates past the listing deadline returns a
+        timeout error instead of holding the request open."""
+        monkeypatch.setattr(rest_endpoints, "MCP_CLIENT_TIMEOUT", 0.05, raising=False)
+        monkeypatch.setattr(rest_endpoints, "MCP_TOOL_LISTING_TIMEOUT", 0.05, raising=False)
+
+        class SlowClient:
+            async def list_tools(self, raise_on_error=False):
+                await asyncio.sleep(1)
+                return []
+
+        async def fake_execute(
+            request,
+            operation,
+            mcp_auth_header=None,
+            oauth2_headers=None,
+            raw_headers=None,
+        ):
+            return await operation(SlowClient())
+
+        monkeypatch.setattr(rest_endpoints, "_execute_with_mcp_client", fake_execute, raising=False)
+
+        from litellm.proxy._types import LitellmUserRoles
+
+        request = _build_request()
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://example.com",
+            auth_type=MCPAuth.api_key,
+            credentials={"auth_value": "secret-key"},
+        )
+
+        result = await rest_endpoints.test_tools_list(
+            request,
+            payload,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result["status"] == "error"
+        assert result["error"] is True
+        assert "Timed out listing tools" in result["message"]
+
+    async def test_preview_tools_list_succeeds_within_deadline(self, monkeypatch):
+        """The preview timeout scope passes a fast listing through untouched."""
+        from mcp.types import Tool as MCPTool
+
+        class QuickClient:
+            async def list_tools(self, raise_on_error=False):
+                return [MCPTool(name="quick_tool", description="q", inputSchema={})]
+
+        async def fake_execute(
+            request,
+            operation,
+            mcp_auth_header=None,
+            oauth2_headers=None,
+            raw_headers=None,
+        ):
+            return await operation(QuickClient())
+
+        monkeypatch.setattr(rest_endpoints, "_execute_with_mcp_client", fake_execute, raising=False)
+
+        from litellm.proxy._types import LitellmUserRoles
+
+        request = _build_request()
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://example.com",
+            auth_type=MCPAuth.api_key,
+            credentials={"auth_value": "secret-key"},
+        )
+
+        result = await rest_endpoints.test_tools_list(
+            request,
+            payload,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result["error"] is None
+        assert result["message"] == "Successfully retrieved tools"
+        assert [tool["name"] for tool in result["tools"]] == ["quick_tool"]
+
     async def test_extracts_oauth2_headers(self, monkeypatch):
         """Ensure oauth2 auth type pulls oauth headers and omits MCP auth header."""
 
