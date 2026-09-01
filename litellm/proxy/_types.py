@@ -422,6 +422,9 @@ class LiteLLMRoutes(enum.Enum):
         "/responses/{response_id}/cancel",
         "/v1/responses/{response_id}/cancel",
         "/openai/v1/responses/{response_id}/cancel",
+        "/responses/input_tokens",
+        "/v1/responses/input_tokens",
+        "/openai/v1/responses/input_tokens",
         # vector stores
         "/vector_stores",
         "/v1/vector_stores",
@@ -471,6 +474,7 @@ class LiteLLMRoutes(enum.Enum):
         "/vllm",
         "/mistral",
         "/milvus",
+        "/gigachat",
         "/watsonx",
     ]
 
