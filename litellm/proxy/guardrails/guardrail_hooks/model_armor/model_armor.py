@@ -45,6 +45,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolCallChunk,
     ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
 )
 from litellm.types.utils import (
     CallTypes,
@@ -62,15 +63,10 @@ GUARDRAIL_NAME: Final = "model_armor"
 # Only these carry the finished output; response.created carries an empty body
 _RESPONSES_TERMINAL_EVENT_TYPES: Final = frozenset({"response.completed", "response.incomplete", "response.failed"})
 
-# Every event whose ``delta`` is model output already on its way to the client
+# Every event whose ``delta`` is model output already on its way to the client. Read off the event
+# enum rather than listed, so an event added there cannot quietly fall out of the scan
 _RESPONSES_DELTA_EVENT_TYPES: Final = frozenset(
-    {
-        "response.output_text.delta",
-        "response.refusal.delta",
-        "response.function_call_arguments.delta",
-        "response.custom_tool_call_input.delta",
-        "response.reasoning_summary_text.delta",
-    }
+    event.value for event in ResponsesAPIStreamEvents if event.value.endswith(".delta")
 )
 
 

@@ -4615,3 +4615,68 @@ async def test_streaming_responses_terminal_event_without_a_body_still_scans_the
     rendered = "".join(str(item) for item in delivered)
     assert "4111-1111-1111-1111" not in rendered
     assert "Streaming response blocked by Model Armor" in rendered
+
+
+@pytest.mark.asyncio
+async def test_streaming_responses_mcp_argument_deltas_are_scanned_when_the_body_is_empty():
+    """A turn that only streamed MCP tool arguments still handed the client a payload.
+
+    The delta fallback is read off the event enum rather than listed by hand, so an argument event
+    that carries no `output_text` cannot fall out of the scan.
+    """
+    from litellm.types.llms.openai import (
+        MCPCallArgumentsDeltaEvent,
+        ResponseIncompleteEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    chunks = (
+        MCPCallArgumentsDeltaEvent(
+            type=ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA,
+            output_index=0,
+            item_id="mcp_1",
+            delta='{"note": "my card is 4111-1111-1111-1111"}',
+            sequence_number=0,
+        ),
+        ResponseIncompleteEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+            response=ResponsesAPIResponse(
+                id="resp_1",
+                created_at=0,
+                model="gpt-4o-mini",
+                object="response",
+                output=[],
+                parallel_tool_calls=False,
+                tool_choice="auto",
+                tools=[],
+            ),
+        ),
+    )
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_BLOCK)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, chunks)
+
+    post.assert_called_once()
+    assert "4111-1111-1111-1111" in post.call_args.kwargs["json"]["modelResponseData"]["text"]
+    rendered = "".join(str(item) for item in delivered)
+    assert "4111-1111-1111-1111" not in rendered
+    assert "Streaming response blocked by Model Armor" in rendered
+
+
+def test_every_responses_delta_event_is_in_the_scanned_set():
+    """Every ``.delta`` the Responses event enum defines is model output on its way to the client."""
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor.model_armor import (
+        _RESPONSES_DELTA_EVENT_TYPES,
+    )
+    from litellm.types.llms.openai import ResponsesAPIStreamEvents
+
+    missing = {
+        event.value
+        for event in ResponsesAPIStreamEvents
+        if event.value.endswith(".delta") and event.value not in _RESPONSES_DELTA_EVENT_TYPES
+    }
+    assert not missing
+    assert "response.mcp_call_arguments.delta" in _RESPONSES_DELTA_EVENT_TYPES
