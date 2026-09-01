@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Final
+from typing import Final, Protocol
 from urllib.parse import quote
 
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
 
-from tests.route_parity.fixture_generator import FixtureSdkCall, FixtureTarget
+from tests.route_parity.fixture_generator import FixtureTarget
 from tests.test_litellm.ocr.fixtures.models import (
     JsonSchemaDefinition,
     JsonSchemaResponseFormat,
@@ -19,6 +19,23 @@ from tests.test_litellm.ocr.fixtures.models import (
 )
 
 OcrFixtureTarget = FixtureTarget[OcrSdkInputBase]
+
+
+class OcrFixtureClient(Protocol):
+    def execute(self, api_base: str, api_key: str, case_input: OcrSdkInputBase) -> None: ...
+
+
+class OcrSdkCall(Protocol):
+    def __call__(self, **kwargs: object) -> object: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ApiKeyOcrInvocation:
+    client: OcrFixtureClient
+    api_key: str = field(repr=False)
+
+    def execute(self, provider_url: str, case_input: OcrSdkInputBase) -> None:
+        self.client.execute(provider_url, self.api_key, case_input)
 
 
 def image_document(text: str, font_size: int) -> MistralImageUrlDocument:
@@ -57,8 +74,5 @@ def annotation_format(name: str) -> JsonSchemaResponseFormat:
     )
 
 
-def invoke_with_api_key(sdk_call: FixtureSdkCall, api_key: str) -> Callable[[str, OcrSdkInputBase], object]:
-    def invoke(api_base: str, case_input: OcrSdkInputBase) -> object:
-        return sdk_call(api_base=api_base, api_key=api_key, **case_input.as_sdk_kwargs())
-
-    return invoke
+def invoke_with_api_key(client: OcrFixtureClient, api_key: str) -> ApiKeyOcrInvocation:
+    return ApiKeyOcrInvocation(client=client, api_key=api_key)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Generic, Protocol, TypeVar, cast
@@ -15,6 +15,8 @@ from tests.route_parity.fixture_recorder import ProviderSpec, generate_case_inpu
 
 LOGGER: Final = logging.getLogger(__name__)
 InputT = TypeVar("InputT", bound=SdkInputBase)
+InputT_contra = TypeVar("InputT_contra", bound=SdkInputBase, contravariant=True)
+DependencyT_contra = TypeVar("DependencyT_contra", contravariant=True)
 CaseT = TypeVar("CaseT", bound=BaseModel)
 
 
@@ -30,28 +32,29 @@ class FixtureTarget(Generic[InputT]):
     name: str
     provider_spec: ProviderSpec
     strategy: SearchStrategy[InputT]
-    invoke: Callable[[str, InputT], object]
+    invocation: FixtureInvocation[InputT]
     required_inputs: tuple[InputT, ...] = ()
 
 
-class FixtureSdkCall(Protocol):
-    def __call__(self, **kwargs: object) -> object: ...
+class FixtureInvocation(Protocol[InputT_contra]):
+    def execute(self, provider_url: str, case_input: InputT_contra) -> None: ...
 
 
-class FixtureProvider(Protocol[InputT]):
+class FixtureSource(Protocol[InputT, DependencyT_contra]):
     def targets(
         self,
         environ: Mapping[str, str],
-        sdk_call: FixtureSdkCall,
+        dependency: DependencyT_contra,
+        /,
     ) -> tuple[FixtureTarget[InputT], ...]: ...
 
 
 def discover_fixture_targets(
-    providers: tuple[FixtureProvider[InputT], ...],
+    sources: tuple[FixtureSource[InputT, DependencyT_contra], ...],
     environ: Mapping[str, str],
-    sdk_call: FixtureSdkCall,
+    dependency: DependencyT_contra,
 ) -> tuple[FixtureTarget[InputT], ...]:
-    return tuple(target for provider in providers for target in provider.targets(environ, sdk_call))
+    return tuple(target for source in sources for target in source.targets(environ, dependency))
 
 
 def generate_target_fixtures(
@@ -67,7 +70,7 @@ def generate_target_fixtures(
         target.provider_spec,
         root / target.name,
         case_inputs,
-        target.invoke,
+        target.invocation.execute,
         case_type,
         concurrency,
     )

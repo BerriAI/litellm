@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+import queue
 from collections.abc import AsyncIterator, Iterator
 from typing import Final
 
 import pytest
 from pydantic import BaseModel, PrivateAttr
 
+from tests.route_parity.models import SDKBytesChunk, SDKJsonChunk, SDKStreamFailed, SDKStreamReport
 from tests.route_parity.stream import (
     StreamFailed,
     assert_stream_parity,
+    capture_async_stream,
+    capture_sync_stream,
     consume_async_stream,
     consume_sync_stream,
+    drain_async_stream,
+    drain_sync_stream,
 )
 
 
@@ -23,7 +29,7 @@ class _Chunk(BaseModel):
 
 
 class _SyncStream:
-    def __init__(self, chunks: tuple[_Chunk, ...], error: BaseException | None = None) -> None:
+    def __init__(self, chunks: tuple[object, ...], error: BaseException | None = None) -> None:
         self.chunks: Final = chunks
         self.error: Final = error
 
@@ -34,7 +40,7 @@ class _SyncStream:
 
 
 class _AsyncStream:
-    def __init__(self, chunks: tuple[_Chunk, ...], error: BaseException | None = None) -> None:
+    def __init__(self, chunks: tuple[object, ...], error: BaseException | None = None) -> None:
         self.chunks: Final = chunks
         self.error: Final = error
 
@@ -59,7 +65,7 @@ def _creation_error() -> _SyncStream:
     raise _PublicStreamError(status_code=429, llm_provider="test", model="test-model")
 
 
-async def _async_stream(chunks: tuple[_Chunk, ...], error: BaseException | None = None) -> _AsyncStream:
+async def _async_stream(chunks: tuple[object, ...], error: BaseException | None = None) -> _AsyncStream:
     return _AsyncStream(chunks, error)
 
 
@@ -132,3 +138,56 @@ def test_stream_parity_accepts_route_specific_chunk_normalizer() -> None:
     accelerated: Final = consume_sync_stream(lambda: _SyncStream((_Chunk(value="rust-generated-id"),)))
 
     assert_stream_parity(python, accelerated, normalize=lambda chunk: type(chunk))
+
+
+def test_drain_sync_stream_exhausts_lazy_iterator() -> None:
+    consumed: Final[queue.SimpleQueue[str]] = queue.SimpleQueue()
+
+    def chunks() -> Iterator[object]:
+        yield _Chunk(value="one")
+        consumed.put("complete")
+
+    drain_sync_stream(chunks())
+
+    assert consumed.get_nowait() == "complete"
+
+
+@pytest.mark.asyncio
+async def test_drain_async_stream_exhausts_lazy_iterator() -> None:
+    consumed: Final[queue.SimpleQueue[str]] = queue.SimpleQueue()
+
+    async def chunks() -> AsyncIterator[object]:
+        yield b"one"
+        consumed.put("complete")
+
+    await drain_async_stream(chunks())
+
+    assert consumed.get_nowait() == "complete"
+
+
+def test_capture_sync_stream_serializes_model_chunks_and_partial_failure() -> None:
+    report: Final = capture_sync_stream(
+        lambda: _SyncStream(
+            (_Chunk(value="before-error"),),
+            _PublicStreamError(status_code=429, llm_provider="test", model="test-model"),
+        )
+    )
+
+    assert isinstance(report, SDKStreamReport)
+    assert len(report.chunks) == 1
+    chunk: Final = report.chunks[0]
+    assert isinstance(chunk, SDKJsonChunk)
+    assert chunk.value == {"value": "before-error"}
+    assert isinstance(report.terminal, SDKStreamFailed)
+    assert report.terminal.error.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_capture_async_stream_serializes_message_bytes_in_order() -> None:
+    report: Final = await capture_async_stream(lambda: _async_stream((b"first", b"second")))
+
+    assert isinstance(report, SDKStreamReport)
+    assert tuple(chunk.data_bytes() for chunk in report.chunks if isinstance(chunk, SDKBytesChunk)) == (
+        b"first",
+        b"second",
+    )

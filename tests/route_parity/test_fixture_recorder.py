@@ -97,8 +97,6 @@ class _ControlledUpstreamHandler(BaseHTTPRequestHandler):
             self._send_json(200, b'{"result":{"chunks":[]}}')
             return
         if self.path == "/analyze":
-            upstream: Final = self.server
-            assert isinstance(upstream, _ControlledUpstream)
             self.send_response(202)
             self.send_header("operation-location", f"{upstream.url}/results/1")
             self.send_header("content-length", "0")
@@ -118,6 +116,9 @@ class _ControlledUpstreamHandler(BaseHTTPRequestHandler):
                 self.wfile.flush()
             self.wfile.write(b"0\r\n\r\n")
             self.wfile.flush()
+            return
+        if self.path == "/error":
+            self._send_json(429, b'{"error":{"message":"rate limited"}}')
             return
         upstream.start_request()
         try:
@@ -170,6 +171,12 @@ def _sdk_call(api_base: str, case_input: _FixtureInput) -> object:
 
 def _stream_sdk_call(api_base: str, case_input: _FixtureInput) -> object:
     return httpx.post(f"{api_base}/v1/chat/completions", content=b"{}", timeout=5)
+
+
+def _error_sdk_call(api_base: str, case_input: _FixtureInput) -> object:
+    response: Final = httpx.post(f"{api_base}/error", content=b"{}", timeout=5)
+    response.raise_for_status()
+    return response
 
 
 def _multi_sdk_call(api_base: str, case_input: _FixtureInput) -> object:
@@ -238,6 +245,7 @@ def test_streaming_response_records_and_replays_chunks(tmp_path: Path) -> None:
     response: Final = result.case.provider_responses[0]
     assert isinstance(response, RecordedHttpStreamResponse)
     assert tuple(chunk.data_bytes() for chunk in response.chunks) == _SSE_CHUNKS
+    assert isinstance(response.model_dump(mode="json")["chunks"], list)
 
     with replay_server() as provider:
         provider.enqueue_response(response)
@@ -246,6 +254,20 @@ def test_streaming_response_records_and_replays_chunks(tmp_path: Path) -> None:
         provider.take_requests(1)
 
     assert replayed_chunks == _SSE_CHUNKS
+
+
+def test_non_successful_provider_response_is_recorded(tmp_path: Path) -> None:
+    with _controlled_upstream() as upstream:
+        result: Final = record_case(
+            ProviderSpec(upstream_base=upstream.url),
+            tmp_path,
+            _case("provider-error"),
+            _error_sdk_call,
+            _ParityCase,
+        )
+
+    response: Final = result.case.provider_responses[0]
+    assert response.status_code == 429
 
 
 def test_stream_response_model_rejects_buffered_body() -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -12,10 +13,23 @@ from tests.test_litellm.ocr.fixtures.generate import (
     parse_generator_args,
     require_targets,
 )
+from tests.test_litellm.ocr.fixtures.models import OcrSdkInputBase
 
 
-def _unused_sdk_call(**kwargs: object) -> object:
-    raise AssertionError(f"unexpected SDK call with {tuple(kwargs)}")
+class _UnusedOcrClient:
+    def execute(self, api_base: str, api_key: str, case_input: OcrSdkInputBase) -> None:
+        raise AssertionError(f"unexpected SDK call to {api_base} with {api_key!r} and {case_input!r}")
+
+
+@dataclass(frozen=True, slots=True)
+class _RecordingOcrClient:
+    calls: queue.SimpleQueue[dict[str, object]]
+
+    def execute(self, api_base: str, api_key: str, case_input: OcrSdkInputBase) -> None:
+        self.calls.put({"api_base": api_base, "api_key": api_key, **case_input.as_sdk_kwargs()})
+
+
+_UNUSED_OCR_CLIENT: Final = _UnusedOcrClient()
 
 
 def test_parse_args_has_no_model_selection() -> None:
@@ -37,7 +51,7 @@ def test_parse_args_has_no_model_selection() -> None:
     ),
 )
 def test_discovery_requires_provider_specific_key(environ: dict[str, str]) -> None:
-    assert discover_targets(environ, _unused_sdk_call) == ()
+    assert discover_targets(environ, _UNUSED_OCR_CLIENT) == ()
 
 
 def test_no_discovered_targets_has_actionable_error() -> None:
@@ -58,7 +72,7 @@ def test_discovery_is_explicit_per_available_provider_boundary() -> None:
             "VERTEX_AI_API_KEY": "vertex-secret",
             "VERTEXAI_PROJECT": "project-1",
         },
-        _unused_sdk_call,
+        _UNUSED_OCR_CLIENT,
     )
 
     assert tuple(target.name for target in targets) == (
@@ -78,12 +92,12 @@ def test_azure_mistral_discovery_requires_and_normalizes_deployment_model() -> N
         "AZURE_AI_API_KEY": "azure-secret",
         "AZURE_AI_API_BASE": "https://azure.example",
     }
-    assert discover_targets(incomplete, _unused_sdk_call) == ()
+    assert discover_targets(incomplete, _UNUSED_OCR_CLIENT) == ()
 
-    target: Final = discover_targets({**incomplete, "AZURE_AI_OCR_MODEL": "mistral-ocr-deployment"}, _unused_sdk_call)[
+    target: Final = discover_targets({**incomplete, "AZURE_AI_OCR_MODEL": "mistral-ocr-deployment"}, _UNUSED_OCR_CLIENT)[
         0
     ]
-    assert target.required_inputs[0].model == "azure_ai/mistral-ocr-deployment"
+    assert target.required_inputs[0].canonical_input()["model"] == "azure_ai/mistral-ocr-deployment"
 
 
 @pytest.mark.parametrize(
@@ -102,7 +116,7 @@ def test_mistral_target_uses_canonical_model_and_normalized_base(
         "MISTRAL_API_KEY": "mistral-secret",
         **({"MISTRAL_API_BASE": configured} if configured is not None else {}),
     }
-    targets: Final = discover_targets(environ, _unused_sdk_call)
+    targets: Final = discover_targets(environ, _UNUSED_OCR_CLIENT)
 
     assert len(targets) == 1
     target: Final = targets[0]
@@ -139,14 +153,11 @@ def test_mistral_target_uses_canonical_model_and_normalized_base(
 def test_mistral_target_invocation_forwards_discovered_credentials() -> None:
     calls: Final[queue.SimpleQueue[dict[str, object]]] = queue.SimpleQueue()
 
-    def sdk_call(**kwargs: object) -> object:
-        calls.put(kwargs)
-        return object()
-
-    target: Final = discover_targets({"MISTRAL_API_KEY": "mistral-secret"}, sdk_call)[0]
+    client: Final = _RecordingOcrClient(calls)
+    target: Final = discover_targets({"MISTRAL_API_KEY": "mistral-secret"}, client)[0]
     case_input: Final = generate_case_inputs(target.strategy, examples=1)[0]
 
-    target.invoke("http://127.0.0.1:1234", case_input)
+    target.invocation.execute("http://127.0.0.1:1234", case_input)
 
     kwargs: Final = calls.get_nowait()
     assert kwargs["api_base"] == "http://127.0.0.1:1234"

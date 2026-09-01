@@ -163,8 +163,7 @@ class _RecordingHandler(BaseHTTPRequestHandler):
             self._send_response(502, (), str(error).encode("utf-8"))
             return
 
-        if 200 <= recorded_response.status_code < 300:
-            provider.responses.put(recorded_response)
+        provider.responses.put(recorded_response)
         if isinstance(recorded_response, RecordedHttpResponse):
             self._send_response(
                 recorded_response.status_code, recorded_response.headers, recorded_response.body_bytes()
@@ -191,9 +190,9 @@ class _RecordingHandler(BaseHTTPRequestHandler):
         headers: tuple[HttpHeader, ...],
     ) -> RecordedHttpStreamResponse:
         self.send_response_only(upstream.status_code)
+        provider: Final = self.server
+        assert isinstance(provider, _RecordingProvider)
         for header in headers:
-            provider: Final = self.server
-            assert isinstance(provider, _RecordingProvider)
             self.send_header(header.name, _local_response_header(header.name, header.value, provider.url))
         self.send_header("transfer-encoding", "chunked")
         self.end_headers()
@@ -217,9 +216,9 @@ class _RecordingHandler(BaseHTTPRequestHandler):
 
     def _send_response(self, status_code: int, headers: tuple[HttpHeader, ...], body: bytes) -> None:
         self.send_response_only(status_code)
+        provider: Final = self.server
+        assert isinstance(provider, _RecordingProvider)
         for header in headers:
-            provider: Final = self.server
-            assert isinstance(provider, _RecordingProvider)
             self.send_header(header.name, _local_response_header(header.name, header.value, provider.url))
         self.send_header("content-length", str(len(body)))
         self.end_headers()
@@ -259,6 +258,21 @@ def fixture_cache_key(case_input: FixtureInput) -> dict[str, object]:
     return case_input.canonical_input()
 
 
+def _invoke_and_take_responses(
+    recorder: _RecordingProvider,
+    case_input: InputT,
+    sdk_call: Callable[[str, InputT], object],
+) -> tuple[RecordedResponse, ...]:
+    try:
+        sdk_call(recorder.url, case_input)
+    except Exception as invocation_error:
+        try:
+            return recorder.take_responses()
+        except RuntimeError:
+            raise invocation_error
+    return recorder.take_responses()
+
+
 def _load_fixture(raw_fixture: dict[str, object], path: Path, case_type: type[CaseT]) -> CaseT:
     schema_version: Final = raw_fixture.get("schema_version")
     if schema_version != FIXTURE_SCHEMA_VERSION:
@@ -287,8 +301,7 @@ def record_case(
         return RecorderResult(case=_load_fixture(cached, cache.path_for(cache_key), case_type), cache_hit=True)
 
     with _recording_provider(spec) as recorder:
-        sdk_call(recorder.url, case_input)
-        upstream_responses: Final = recorder.take_responses()
+        upstream_responses: Final = _invoke_and_take_responses(recorder, case_input, sdk_call)
 
     case: Final = case_type.model_validate({"litellm_input": case_input, "provider_responses": upstream_responses})
     envelope: Final = FixtureEnvelope(

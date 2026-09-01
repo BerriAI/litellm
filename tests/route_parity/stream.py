@@ -7,6 +7,15 @@ from typing import Final, Literal, TypeAlias
 from pydantic import BaseModel
 
 from tests.route_parity.compare import public_model_copy
+from tests.route_parity.models import (
+    SDKChunk,
+    SDKReport,
+    SDKStreamCompleted,
+    SDKStreamFailed,
+    SDKStreamReport,
+    sdk_chunk,
+    sdk_error_report,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +47,46 @@ class StreamOutcome:
 
 
 ChunkNormalizer: TypeAlias = Callable[[object], object]
+
+
+def drain_sync_stream(stream: Iterable[object]) -> None:
+    for _ in stream:
+        pass
+
+
+async def drain_async_stream(stream: AsyncIterable[object]) -> None:
+    async for _ in stream:
+        pass
+
+
+def capture_sync_stream(create: Callable[[], Iterable[object]]) -> SDKReport:
+    try:
+        stream: Final = create()
+    except Exception as error:
+        return sdk_error_report(error)
+
+    chunks: list[SDKChunk] = []  # mutable-ok: partial chunks must survive an iteration failure
+    try:
+        for chunk in stream:
+            chunks.append(sdk_chunk(chunk))
+    except Exception as error:
+        return SDKStreamReport(chunks=tuple(chunks), terminal=SDKStreamFailed(error=sdk_error_report(error)))
+    return SDKStreamReport(chunks=tuple(chunks), terminal=SDKStreamCompleted())
+
+
+async def capture_async_stream(create: Callable[[], Awaitable[AsyncIterable[object]]]) -> SDKReport:
+    try:
+        stream: Final = await create()
+    except Exception as error:
+        return sdk_error_report(error)
+
+    chunks: list[SDKChunk] = []  # mutable-ok: partial chunks must survive an iteration failure
+    try:
+        async for chunk in stream:
+            chunks.append(sdk_chunk(chunk))
+    except Exception as error:
+        return SDKStreamReport(chunks=tuple(chunks), terminal=SDKStreamFailed(error=sdk_error_report(error)))
+    return SDKStreamReport(chunks=tuple(chunks), terminal=SDKStreamCompleted())
 
 
 def _failed(phase: Literal["creation", "iteration"], error: BaseException) -> StreamFailed:

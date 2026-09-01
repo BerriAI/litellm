@@ -6,9 +6,9 @@ from typing import Final, cast
 from hypothesis import strategies as st
 from hypothesis.strategies import DrawFn, SearchStrategy
 
-from tests.route_parity.fixture_generator import FixtureSdkCall
 from tests.route_parity.fixture_recorder import ProviderSpec
 from tests.test_litellm.ocr.fixtures.common import (
+    OcrFixtureClient,
     OcrFixtureTarget,
     invoke_with_api_key,
     pdf_document,
@@ -71,8 +71,8 @@ def azure_document_intelligence_input_strategy(draw: DrawFn) -> AzureDocumentInt
     )
 
 
-class AzureMistralFixtureProvider:
-    def targets(self, environ: Mapping[str, str], sdk_call: FixtureSdkCall) -> tuple[OcrFixtureTarget, ...]:
+class AzureMistralFixtureSource:
+    def targets(self, environ: Mapping[str, str], client: OcrFixtureClient) -> tuple[OcrFixtureTarget, ...]:
         api_key: Final = environ.get("AZURE_AI_API_KEY")
         upstream_base: Final = environ.get("AZURE_AI_API_BASE")
         configured_model: Final = environ.get("AZURE_AI_OCR_MODEL")
@@ -87,7 +87,7 @@ class AzureMistralFixtureProvider:
                     SearchStrategy[OcrSdkInputBase],
                     mistral_input_strategy(MISTRAL_MODEL).map(lambda case_input: _as_azure_mistral(case_input, model)),
                 ),
-                invoke=invoke_with_api_key(sdk_call, api_key),
+                invocation=invoke_with_api_key(client, api_key),
                 required_inputs=cast(
                     tuple[OcrSdkInputBase, ...],
                     tuple(
@@ -98,8 +98,8 @@ class AzureMistralFixtureProvider:
         )
 
 
-class AzureDocumentIntelligenceFixtureProvider:
-    def targets(self, environ: Mapping[str, str], sdk_call: FixtureSdkCall) -> tuple[OcrFixtureTarget, ...]:
+class AzureDocumentIntelligenceFixtureSource:
+    def targets(self, environ: Mapping[str, str], client: OcrFixtureClient) -> tuple[OcrFixtureTarget, ...]:
         api_key: Final = environ.get("AZURE_DOCUMENT_INTELLIGENCE_API_KEY")
         upstream_base: Final = environ.get("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT")
         if not api_key or not upstream_base:
@@ -109,7 +109,7 @@ class AzureDocumentIntelligenceFixtureProvider:
                 name="azure-document-intelligence",
                 provider_spec=ProviderSpec(upstream_base=upstream_base.rstrip("/")),
                 strategy=cast(SearchStrategy[OcrSdkInputBase], azure_document_intelligence_input_strategy()),
-                invoke=invoke_with_api_key(sdk_call, api_key),
+                invocation=invoke_with_api_key(client, api_key),
                 required_inputs=cast(tuple[OcrSdkInputBase, ...], _required_document_intelligence_inputs()),
             ),
         )

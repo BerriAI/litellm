@@ -11,8 +11,7 @@ from dotenv import load_dotenv
 import litellm
 from litellm.rust_bridge.ocr import use_litellm_rust
 from tests.route_parity.fixture_generator import (
-    FixtureProvider,
-    FixtureSdkCall,
+    FixtureSource,
     discover_fixture_targets,
     generate_target_fixtures,
     parse_generator_args,
@@ -20,23 +19,23 @@ from tests.route_parity.fixture_generator import (
 from tests.route_parity.fixture_generator import require_targets as require_fixture_targets
 from tests.route_parity.fixture_recorder import fixture_directory
 from tests.test_litellm.ocr.fixtures.azure import (
-    AzureDocumentIntelligenceFixtureProvider,
-    AzureMistralFixtureProvider,
+    AzureDocumentIntelligenceFixtureSource,
+    AzureMistralFixtureSource,
     azure_document_intelligence_input_strategy,
 )
-from tests.test_litellm.ocr.fixtures.common import OcrFixtureTarget
+from tests.test_litellm.ocr.fixtures.common import OcrFixtureClient, OcrFixtureTarget, OcrSdkCall
 from tests.test_litellm.ocr.fixtures.mistral import (
-    MistralFixtureProvider,
+    MistralFixtureSource,
     mistral_input_strategy,
 )
 from tests.test_litellm.ocr.fixtures.models import OcrParityCase, OcrSdkInputBase
 from tests.test_litellm.ocr.fixtures.reducto import (
-    ReductoFixtureProvider,
+    ReductoFixtureSource,
     reducto_legacy_input_strategy,
     reducto_v3_input_strategy,
 )
 from tests.test_litellm.ocr.fixtures.vertex import (
-    VertexFixtureProvider,
+    VertexFixtureSource,
     vertex_deepseek_input_strategy,
 )
 
@@ -49,20 +48,28 @@ __all__ = (
 )
 
 FIXTURE_DIR_ENV: Final = "LITELLM_OCR_FIXTURE_DIR"
-OCR_FIXTURE_PROVIDERS: Final[tuple[FixtureProvider[OcrSdkInputBase], ...]] = (
-    MistralFixtureProvider(),
-    AzureMistralFixtureProvider(),
-    AzureDocumentIntelligenceFixtureProvider(),
-    VertexFixtureProvider(),
-    ReductoFixtureProvider(),
+OCR_FIXTURE_SOURCES: Final[tuple[FixtureSource[OcrSdkInputBase, OcrFixtureClient], ...]] = (
+    MistralFixtureSource(),
+    AzureMistralFixtureSource(),
+    AzureDocumentIntelligenceFixtureSource(),
+    VertexFixtureSource(),
+    ReductoFixtureSource(),
 )
+
+
+class LiteLLMOcrFixtureClient:
+    def __init__(self, sdk_call: OcrSdkCall) -> None:
+        self.sdk_call: Final = sdk_call
+
+    def execute(self, api_base: str, api_key: str, case_input: OcrSdkInputBase) -> None:
+        self.sdk_call(api_base=api_base, api_key=api_key, **case_input.as_sdk_kwargs())
 
 
 def discover_targets(
     environ: Mapping[str, str],
-    sdk_call: FixtureSdkCall,
+    client: OcrFixtureClient,
 ) -> tuple[OcrFixtureTarget, ...]:
-    return discover_fixture_targets(OCR_FIXTURE_PROVIDERS, environ, sdk_call)
+    return discover_fixture_targets(OCR_FIXTURE_SOURCES, environ, client)
 
 
 def require_targets(targets: tuple[OcrFixtureTarget, ...]) -> tuple[OcrFixtureTarget, ...]:
@@ -76,8 +83,8 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     load_dotenv()
     args: Final = parse_generator_args()
-    sdk_call: Final = cast(FixtureSdkCall, litellm.ocr)
-    targets: Final = require_targets(discover_targets(os.environ, sdk_call))
+    client: Final = LiteLLMOcrFixtureClient(cast(OcrSdkCall, litellm.ocr))
+    targets: Final = require_targets(discover_targets(os.environ, client))
     root: Final = fixture_directory(
         args.fixture_dir,
         os.environ.get(FIXTURE_DIR_ENV),

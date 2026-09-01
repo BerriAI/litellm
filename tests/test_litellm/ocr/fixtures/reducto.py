@@ -6,9 +6,9 @@ from typing import Final, cast
 from hypothesis import strategies as st
 from hypothesis.strategies import DrawFn, SearchStrategy
 
-from tests.route_parity.fixture_generator import FixtureSdkCall
 from tests.route_parity.fixture_recorder import ProviderSpec
 from tests.test_litellm.ocr.fixtures.common import (
+    OcrFixtureClient,
     OcrFixtureTarget,
     fixture_pdf_data_uri,
     invoke_with_api_key,
@@ -155,27 +155,27 @@ def _required_v3_inputs(document: ReductoDocumentUrlDocument) -> tuple[ReductoPa
     )
 
 
-class ReductoFixtureProvider:
-    def targets(self, environ: Mapping[str, str], sdk_call: FixtureSdkCall) -> tuple[OcrFixtureTarget, ...]:
+class ReductoFixtureSource:
+    def targets(self, environ: Mapping[str, str], client: OcrFixtureClient) -> tuple[OcrFixtureTarget, ...]:
         api_key: Final = environ.get("REDUCTO_API_KEY")
         if not api_key:
             return ()
         upstream_base: Final = environ.get("REDUCTO_API_BASE", _REDUCTO_API_BASE).rstrip("/")
         document: Final = ReductoDocumentUrlDocument(type="document_url", document_url=fixture_pdf_data_uri())
-        invoke: Final = invoke_with_api_key(sdk_call, api_key)
+        invocation: Final = invoke_with_api_key(client, api_key)
         return (
             OcrFixtureTarget(
                 name="reducto-v3",
                 provider_spec=ProviderSpec(upstream_base=upstream_base),
                 strategy=cast(SearchStrategy[OcrSdkInputBase], reducto_v3_input_strategy(document)),
-                invoke=invoke,
+                invocation=invocation,
                 required_inputs=cast(tuple[OcrSdkInputBase, ...], _required_v3_inputs(document)),
             ),
             OcrFixtureTarget(
                 name="reducto-legacy",
                 provider_spec=ProviderSpec(upstream_base=upstream_base),
                 strategy=cast(SearchStrategy[OcrSdkInputBase], reducto_legacy_input_strategy(document)),
-                invoke=invoke,
+                invocation=invocation,
                 required_inputs=cast(
                     tuple[OcrSdkInputBase, ...],
                     (

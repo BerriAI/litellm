@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import base64
 from typing import Annotated, Final, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
 
 class CapturedRequest(BaseModel):
@@ -36,7 +37,60 @@ class SDKError(BaseModel):
     llm_provider: str | None
 
 
-SDKReport = Annotated[SDKSuccess | SDKError, Field(discriminator="status")]
+class SDKJsonChunk(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["json"] = "json"
+    value: JsonValue
+
+
+class SDKBytesChunk(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["bytes"] = "bytes"
+    data_b64: str
+
+    def data_bytes(self) -> bytes:
+        return base64.b64decode(self.data_b64, validate=True)
+
+
+SDKChunk = Annotated[SDKJsonChunk | SDKBytesChunk, Field(discriminator="kind")]
+
+
+class SDKStreamCompleted(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["completed"] = "completed"
+
+
+class SDKStreamFailed(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["failed"] = "failed"
+    error: SDKError
+
+
+SDKStreamTerminal = Annotated[SDKStreamCompleted | SDKStreamFailed, Field(discriminator="kind")]
+
+
+class SDKStreamReport(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["stream"] = "stream"
+    chunks: tuple[SDKChunk, ...]
+    terminal: SDKStreamTerminal
+
+
+SDKReport = Annotated[SDKSuccess | SDKError | SDKStreamReport, Field(discriminator="status")]
+JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+
+
+def sdk_chunk(value: object) -> SDKChunk:
+    if isinstance(value, bytes):
+        return SDKBytesChunk(data_b64=base64.b64encode(value).decode("ascii"))
+    if isinstance(value, BaseModel):
+        return SDKJsonChunk(value=JSON_VALUE_ADAPTER.validate_python(value.model_dump(mode="json")))
+    return SDKJsonChunk(value=JSON_VALUE_ADAPTER.validate_python(value))
 
 
 def _string_attribute(error: Exception, name: str) -> str | None:

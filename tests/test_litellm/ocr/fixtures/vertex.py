@@ -6,9 +6,9 @@ from typing import Final, cast
 from hypothesis import strategies as st
 from hypothesis.strategies import DrawFn, SearchStrategy
 
-from tests.route_parity.fixture_generator import FixtureSdkCall
 from tests.route_parity.fixture_recorder import ProviderSpec
 from tests.test_litellm.ocr.fixtures.common import (
+    OcrFixtureClient,
     OcrFixtureTarget,
     image_document,
     invoke_with_api_key,
@@ -72,15 +72,15 @@ def vertex_deepseek_input_strategy(draw: DrawFn, project: str, location: str) ->
     )
 
 
-class VertexFixtureProvider:
-    def targets(self, environ: Mapping[str, str], sdk_call: FixtureSdkCall) -> tuple[OcrFixtureTarget, ...]:
+class VertexFixtureSource:
+    def targets(self, environ: Mapping[str, str], client: OcrFixtureClient) -> tuple[OcrFixtureTarget, ...]:
         api_key: Final = environ.get("VERTEX_AI_API_KEY")
         project: Final = environ.get("VERTEXAI_PROJECT") or environ.get("VERTEX_PROJECT")
         location: Final = environ.get("VERTEXAI_LOCATION") or environ.get("VERTEX_LOCATION") or "us-central1"
         if not api_key or not project:
             return ()
         upstream_base: Final = environ.get("VERTEX_AI_API_BASE") or f"https://{location}-aiplatform.googleapis.com"
-        invoke: Final = invoke_with_api_key(sdk_call, api_key)
+        invocation: Final = invoke_with_api_key(client, api_key)
         return (
             OcrFixtureTarget(
                 name="vertex-mistral",
@@ -94,7 +94,7 @@ class VertexFixtureProvider:
                         location=st.just(location),
                     ),
                 ),
-                invoke=invoke,
+                invocation=invocation,
                 required_inputs=cast(
                     tuple[OcrSdkInputBase, ...],
                     tuple(
@@ -107,7 +107,7 @@ class VertexFixtureProvider:
                 name="vertex-deepseek",
                 provider_spec=ProviderSpec(upstream_base=upstream_base.rstrip("/")),
                 strategy=cast(SearchStrategy[OcrSdkInputBase], vertex_deepseek_input_strategy(project, location)),
-                invoke=invoke,
+                invocation=invocation,
                 required_inputs=cast(tuple[OcrSdkInputBase, ...], _required_deepseek_inputs(project, location)),
             ),
         )

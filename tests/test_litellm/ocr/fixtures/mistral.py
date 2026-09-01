@@ -6,9 +6,9 @@ from typing import Final, cast
 from hypothesis import strategies as st
 from hypothesis.strategies import DrawFn, SearchStrategy
 
-from tests.route_parity.fixture_generator import FixtureSdkCall
 from tests.route_parity.fixture_recorder import ProviderSpec
 from tests.test_litellm.ocr.fixtures.common import (
+    OcrFixtureClient,
     OcrFixtureTarget,
     annotation_format,
     image_document,
@@ -80,8 +80,8 @@ def required_mistral_inputs(model: str) -> tuple[MistralOcrSdkInput, ...]:
     return tuple(MistralOcrSdkInput.model_validate({"model": model, "document": document, **case}) for case in cases)
 
 
-class MistralFixtureProvider:
-    def targets(self, environ: Mapping[str, str], sdk_call: FixtureSdkCall) -> tuple[OcrFixtureTarget, ...]:
+class MistralFixtureSource:
+    def targets(self, environ: Mapping[str, str], client: OcrFixtureClient) -> tuple[OcrFixtureTarget, ...]:
         api_key: Final = environ.get("MISTRAL_API_KEY")
         if not api_key:
             return ()
@@ -92,7 +92,7 @@ class MistralFixtureProvider:
                 name="mistral-ocr",
                 provider_spec=ProviderSpec(upstream_base=upstream_base),
                 strategy=cast(SearchStrategy[OcrSdkInputBase], mistral_input_strategy(MISTRAL_MODEL)),
-                invoke=invoke_with_api_key(sdk_call, api_key),
+                invocation=invoke_with_api_key(client, api_key),
                 required_inputs=cast(tuple[OcrSdkInputBase, ...], required_mistral_inputs(MISTRAL_MODEL)),
             ),
         )
