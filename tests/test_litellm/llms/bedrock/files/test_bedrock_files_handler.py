@@ -204,3 +204,71 @@ def test_should_forward_trusted_model_credentials_to_retrieve_provider_config():
     assert response is mock_response
     litellm_params = mock_retrieve_file.call_args.kwargs["litellm_params"]
     assert litellm_params["_litellm_internal_model_credentials"] is trusted_credentials
+
+
+@pytest.mark.asyncio
+async def test_afile_content_assumes_role_with_external_id(monkeypatch):
+    """A trust policy requiring sts:ExternalId must be satisfied by the deployment's aws_external_id."""
+    import datetime
+
+    import boto3
+    from botocore.exceptions import ClientError
+
+    monkeypatch.delenv("AWS_EXTERNAL_ID", raising=False)
+
+    class FakeSTSClient:
+        def get_caller_identity(self):
+            return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+
+        def assume_role(self, **params):
+            if params.get("ExternalId") != "external-id-files-download":
+                raise ClientError(
+                    {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:AssumeRole"}},
+                    "AssumeRole",
+                )
+            return {
+                "Credentials": {
+                    "AccessKeyId": "ASIAFILESDOWNLOADROLE",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-session-token",
+                    "Expiration": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=30),
+                }
+            }
+
+    class FakeS3Body:
+        def read(self):
+            return b'{"custom_id": "req-1"}'
+
+    class FakeS3Client:
+        def get_object(self, Bucket, Key):
+            return {"Body": FakeS3Body()}
+
+    s3_client_kwargs = {}
+
+    def fake_boto3_client(service_name, **kwargs):
+        if service_name == "sts":
+            return FakeSTSClient()
+        s3_client_kwargs.update(kwargs)
+        return FakeS3Client()
+
+    optional_params = {
+        "_litellm_internal_model_credentials": MappingProxyType({"s3_bucket_name": "safe-bucket"}),
+        "aws_region_name": "us-east-1",
+        "aws_access_key_id": "AKIAFILESDOWNLOADCALLER",
+        "aws_secret_access_key": "pod-caller-secret",
+        "aws_role_name": "arn:aws:iam::999999999999:role/litellm-files-download-role",
+        "aws_session_name": "litellm-files-download-session",
+        "aws_external_id": "external-id-files-download",
+    }
+
+    with patch.object(boto3, "client", side_effect=fake_boto3_client):
+        response = await BedrockFilesHandler().afile_content(
+            file_content_request={"file_id": "s3://safe-bucket/litellm-bedrock-files-model-id-abc.jsonl"},
+            optional_params=optional_params,
+            timeout=10.0,
+            max_retries=None,
+        )
+
+    assert s3_client_kwargs["aws_access_key_id"] == "ASIAFILESDOWNLOADROLE"
+    assert s3_client_kwargs["aws_session_token"] == "assumed-session-token"
+    assert response.content == b'{"custom_id": "req-1"}'
