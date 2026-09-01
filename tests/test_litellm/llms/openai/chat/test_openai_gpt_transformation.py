@@ -871,6 +871,134 @@ class TestCacheControlPreservationForCustomEndpoint:
         assert all("cache_control" not in m for m in body["messages"])
 
 
+class TestToolChoiceWithoutToolsDropped:
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    @staticmethod
+    def _pi_compact_summarization_messages():
+        return [
+            {
+                "role": "system",
+                "content": "You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.",
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "<conversation>\n[User]: Reply with exactly: ok-1\n\n[Assistant]: ok-1\n</conversation>\n\nThe messages above are a conversation to summarize.",
+                    }
+                ],
+            },
+        ]
+
+    def _transform(self, optional_params, config=None, model="gpt-5.6-sol"):
+        return (config or self.config).transform_request(
+            model=model,
+            messages=self._pi_compact_summarization_messages(),
+            optional_params=optional_params,
+            litellm_params={"custom_llm_provider": "openai", "api_base": None},
+            headers={},
+        )
+
+    def test_pi_compact_shape_drops_tool_choice_none_without_tools(self):
+        body = self._transform(
+            {
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                "store": False,
+                "max_completion_tokens": 13107,
+                "tool_choice": "none",
+            }
+        )
+        assert "tool_choice" not in body
+        assert "tools" not in body
+        assert body["model"] == "gpt-5.6-sol"
+        assert body["stream"] is True
+        assert body["stream_options"] == {"include_usage": True}
+        assert body["store"] is False
+        assert body["max_completion_tokens"] == 13107
+
+    def test_drops_tool_choice_auto_without_tools(self):
+        body = self._transform({"tool_choice": "auto"})
+        assert "tool_choice" not in body
+
+    def test_drops_named_function_tool_choice_without_tools(self):
+        body = self._transform(
+            {"tool_choice": {"type": "function", "function": {"name": "get_weather"}}}
+        )
+        assert "tool_choice" not in body
+
+    def test_drops_tool_choice_but_keeps_empty_tools_array(self):
+        body = self._transform({"tools": [], "tool_choice": "none"})
+        assert "tool_choice" not in body
+        assert body["tools"] == []
+
+    def test_gpt5_config_drops_tool_choice_without_tools(self):
+        body = self._transform({"tool_choice": "none"}, config=OpenAIGPT5Config())
+        assert "tool_choice" not in body
+
+    @pytest.mark.parametrize(
+        "tool_choice",
+        [
+            "none",
+            "auto",
+            "required",
+            {"type": "function", "function": {"name": "get_weather"}},
+        ],
+    )
+    def test_preserves_tool_choice_when_tools_present(self, tool_choice):
+        tools = [
+            {
+                "type": "function",
+                "function": {"name": "get_weather", "parameters": {}},
+            }
+        ]
+        body = self._transform({"tools": tools, "tool_choice": tool_choice})
+        assert body["tool_choice"] == tool_choice
+        assert body["tools"] == tools
+
+    def test_preserves_tool_choice_with_legacy_functions(self):
+        functions = [{"name": "get_weather", "parameters": {}}]
+        body = self._transform({"functions": functions, "tool_choice": "auto"})
+        assert body["tool_choice"] == "auto"
+        assert body["functions"] == functions
+
+    def test_preserves_function_call_without_functions(self):
+        body = self._transform({"function_call": "none"})
+        assert body["function_call"] == "none"
+
+    @pytest.mark.asyncio
+    async def test_async_transform_drops_tool_choice_without_tools(self):
+        body = await self.config.async_transform_request(
+            model="gpt-5.6-sol",
+            messages=self._pi_compact_summarization_messages(),
+            optional_params={"stream": True, "tool_choice": "none"},
+            litellm_params={"custom_llm_provider": "openai", "api_base": None},
+            headers={},
+        )
+        assert "tool_choice" not in body
+
+    @pytest.mark.asyncio
+    async def test_async_transform_preserves_tool_choice_when_tools_present(self):
+        tools = [
+            {
+                "type": "function",
+                "function": {"name": "get_weather", "parameters": {}},
+            }
+        ]
+        body = await self.config.async_transform_request(
+            model="gpt-5.6-sol",
+            messages=self._pi_compact_summarization_messages(),
+            optional_params={"tools": tools, "tool_choice": "auto"},
+            litellm_params={"custom_llm_provider": "openai", "api_base": None},
+            headers={},
+        )
+        assert body["tool_choice"] == "auto"
+        assert body["tools"] == tools
+
+
 class TestToolMessageImageHoisting:
     """transform_request moves tool-message images into a following user message
     (OpenAI-compatible APIs only accept text in role:"tool" messages)."""
