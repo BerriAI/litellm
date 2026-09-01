@@ -8373,6 +8373,43 @@ def speech(
             client=client,
             _is_async=aspeech or False,
         )
+    elif custom_llm_provider == "slng":
+        from litellm.llms.slng.text_to_speech.transformation import (
+            SlngTextToSpeechConfig,
+        )
+
+        # SLNG Text-to-Speech
+        if text_to_speech_provider_config is None:
+            text_to_speech_provider_config = SlngTextToSpeechConfig()
+
+        slng_config: Final = cast(SlngTextToSpeechConfig, text_to_speech_provider_config)
+
+        if voice is None or not (isinstance(voice, str) or isinstance(voice, dict)):
+            raise litellm.BadRequestError(
+                message="'voice' is required for SLNG TTS (voice model ID)",
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+        if api_key is not None:
+            litellm_params_dict["api_key"] = api_key
+
+        response = base_llm_http_handler.text_to_speech_handler(
+            model=model,
+            input=input,
+            voice=voice,
+            text_to_speech_provider_config=slng_config,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            client=client,
+            _is_async=aspeech or False,
+        )
     elif custom_llm_provider == "aws_polly":
         from litellm.llms.aws_polly.text_to_speech.transformation import (
             AWSPollyTextToSpeechConfig,
