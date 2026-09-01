@@ -53,8 +53,59 @@ _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
 )
 
 
-def validate_dict(data: dict, model) -> dict:
+def validate_dict(
+    data: dict, model
+) -> dict:  # mutable-ok: pydantic validation boundary; both input and output are untyped wire dicts
     return model(**data).model_dump(by_alias=True, exclude_unset=True)
+
+
+def _validate_tool(
+    tool: dict,  # mutable-ok: untyped tool dict from litellm boundary
+) -> dict:  # mutable-ok: wire serialization helper; dict is the required output shape for JSON encoding
+    """Validate a tool definition against ChatCompletionTool and preserve cache_control.
+
+    cache_control is an Anthropic prompt-caching extension that sits on the tool
+    object itself (not inside `function`).  ChatCompletionTool does not declare it
+    as a field because its model_dump forces exclude_unset=False for FunctionTool
+    defaults -- adding cache_control there would emit `cache_control: null` for every
+    tool that omits it, which the API rejects.  We therefore validate the known schema
+    and re-attach the extension field explicitly.
+    """
+    result = validate_dict(tool, ChatCompletionTool)
+    if "cache_control" in tool and tool["cache_control"] is not None:
+        result["cache_control"] = tool["cache_control"]
+    return result
+
+
+def _fold_message_cache_control(message: dict) -> dict:  # mutable-ok: message dicts are untyped at the litellm boundary
+    """Fold a message-level cache_control onto the content block.
+
+    litellm's cache_control_injection_points hook places cache_control on the
+    message dict itself when content is a plain string.  SAPMessage has no such
+    field, so it would be silently dropped.  Convert to a single-element content
+    list so the marker reaches the wire payload.
+    """
+    cc = message.get("cache_control")
+    if cc is None:
+        return message
+    content = message.get("content")
+    if isinstance(content, str):
+        return {  # mutable-ok: ephemeral wire dict; built once and immediately returned to caller
+            **{
+                k: v for k, v in message.items() if k != "cache_control"
+            },  # mutable-ok: dict comprehension filters one key; returned immediately
+            "content": [  # mutable-ok: list literal builds the wire content block in one shot
+                {
+                    "type": "text",
+                    "text": content,
+                    "cache_control": cc,
+                },  # mutable-ok: inner dict literal is the wire content block
+            ],
+        }
+    # content already a list -- marker is redundant; drop it to avoid duplication
+    return {
+        k: v for k, v in message.items() if k != "cache_control"
+    }  # mutable-ok: dict comprehension filters one key; returned immediately
 
 
 def _messages_to_sap_template(messages: list[dict[str, str]]) -> list:
@@ -67,34 +118,8 @@ def _messages_to_sap_template(messages: list[dict[str, str]]) -> list:
         elif message["role"] == "tool":
             template.append(validate_dict(message, SAPToolChatMessage))
         else:
-            template.append(validate_dict(message, SAPMessage))
+            template.append(validate_dict(_fold_message_cache_control(message), SAPMessage))
     return template
-
-
-def _tools_response_format_and_stream(optional_params: dict, model_params: dict) -> tuple[dict, dict, dict]:
-    tools_ = optional_params.pop("tools", [])
-    tools_ = [validate_dict(tool, ChatCompletionTool) for tool in tools_]
-    tools: Final[dict] = {"tools": tools_} if tools_ else {}
-
-    response_format = model_params.pop("response_format", {})
-    resp_type: Final = response_format.get("type", None)
-    if resp_type:
-        if resp_type == "json_schema":
-            response_format = validate_dict(response_format, ResponseFormatJSONSchema)
-        else:
-            response_format = validate_dict(response_format, ResponseFormat)
-        response_format = {"response_format": response_format}
-
-    model_params.pop("stream", False)
-    stream_config: Final[dict] = {}
-    if "stream_options" in optional_params:
-        stream_options: Final = optional_params.pop("stream_options", {})
-        if "chunk_size" in stream_options:
-            stream_config["chunk_size"] = stream_options.get("chunk_size")
-        if "delimiters" in stream_options:
-            stream_config["delimiters"] = stream_options.get("delimiters")
-
-    return tools, response_format, stream_config
 
 
 class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
@@ -268,7 +293,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         model_version: Final = params.pop("model_version", "latest")
 
         tools_ = params.pop("tools", [])
-        tools_ = [validate_dict(tool, ChatCompletionTool) for tool in tools_]
+        tools_ = [_validate_tool(tool) for tool in tools_]
         tools: Final = {"tools": tools_} if tools_ else {}
 
         response_format = params.pop("response_format", {})

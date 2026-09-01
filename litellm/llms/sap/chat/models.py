@@ -2,7 +2,15 @@ import warnings
 from enum import Enum
 from typing import Final, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    SerializationInfo,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 
 def validate_different_content(v: str | dict | list) -> str:
@@ -24,9 +32,30 @@ def validate_different_content(v: str | dict | list) -> str:
     raise ValueError("Content must be a string")
 
 
+class CacheControl(BaseModel):
+    type: Literal["ephemeral"]
+
+
 class TextContent(BaseModel):
     type_: Literal["text"] = Field(default="text", alias="type")
     text: str
+    cache_control: CacheControl | None = None
+
+    def model_dump(
+        self,
+        **kwargs: object,  # kwargs-ok: pydantic model_dump passthrough
+    ) -> dict:  # mutable-ok: pydantic override; wire serialization output
+        kwargs["exclude_none"] = True
+        return super().model_dump(**kwargs)  # pyright: ignore[reportArgumentType]  # kwargs forwarded verbatim to pydantic model_dump
+
+    @model_serializer(mode="wrap")
+    def _serialize(
+        self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
+    ) -> dict:  # mutable-ok: pydantic serializer contract requires bare dict return
+        result = handler(self)
+        if result.get("cache_control") is None:
+            result.pop("cache_control", None)
+        return result
 
 
 class ImageURLContent(BaseModel):
@@ -50,9 +79,9 @@ class FunctionTool(BaseModel):
     parameters: dict = {"type": "object", "properties": {}}
     strict: bool = False
 
-    def model_dump(self, **kwargs) -> dict:
+    def model_dump(self, **kwargs: object) -> dict:
         kwargs["exclude_unset"] = False
-        return super().model_dump(**kwargs)
+        return super().model_dump(**kwargs)  # pyright: ignore[reportArgumentType]  # kwargs forwarded verbatim to pydantic model_dump
 
     @field_validator("parameters", mode="before")
     @classmethod
@@ -71,9 +100,9 @@ class ChatCompletionTool(BaseModel):
     type_: Literal["function"] = Field(default="function", alias="type")
     function: FunctionTool
 
-    def model_dump(self, **kwargs) -> dict:
+    def model_dump(self, **kwargs: object) -> dict:
         kwargs["exclude_unset"] = False
-        return super().model_dump(**kwargs)
+        return super().model_dump(**kwargs)  # pyright: ignore[reportArgumentType]  # kwargs forwarded verbatim to pydantic model_dump
 
 
 class MessageToolCall(BaseModel):
@@ -88,9 +117,7 @@ class SAPMessage(BaseModel):
     """
 
     role: Literal["system", "developer"] = "system"
-    content: str
-
-    _content_validator = field_validator("content", mode="before")(validate_different_content)
+    content: list[TextContent] | str  # mutable-ok: pydantic field; list[TextContent] carries cache_control natively
 
 
 class SAPUserMessage(BaseModel):
@@ -184,7 +211,9 @@ class Template(BaseModel):
     template: list[ChatMessage]
     defaults: dict[str, str] | None = None
     response_format: ResponseFormat | ResponseFormatJSONSchema | None = None
-    tools: list[ChatCompletionTool] | None = None
+    tools: list[dict] | None = (
+        None  # mutable-ok: already-validated dicts passed to wire; list preserves insertion order, dict preserves extension fields like cache_control
+    )
 
 
 class LLMModelDetails(BaseModel):
