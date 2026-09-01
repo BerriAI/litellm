@@ -1402,11 +1402,7 @@ if MCP_AVAILABLE:
             oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers)
 
         async def _list_tools_operation(client):
-            async def _list_tools_session_operation(session):
-                return await session.list_tools()
-
-            list_tools_response: Final = await client.run_with_session(_list_tools_session_operation)
-            list_tools_result: Final[list[MCPTool]] = list_tools_response.tools
+            list_tools_result: Final[list[MCPTool]] = await client.list_tools(raise_on_error=True)
             model_dumped_tools: Final[list[dict]] = [tool.model_dump() for tool in list_tools_result]
             return {
                 "tools": model_dumped_tools,

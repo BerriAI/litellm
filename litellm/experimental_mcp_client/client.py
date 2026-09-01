@@ -48,6 +48,12 @@ from pydantic import AnyUrl
 
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR
+from litellm.experimental_mcp_client.pagination import (
+    list_all_prompts,
+    list_all_resource_templates,
+    list_all_resources,
+    list_all_tools,
+)
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.types.llms.custom_http import VerifyTypes
 from litellm.types.mcp import (
@@ -603,17 +609,17 @@ class MCPClient:
         """
         verbose_logger.debug("MCP client listing tools from %s", self.server_url or "stdio")
 
-        async def _list_tools_operation(session: ClientSession):
-            return await session.list_tools()
+        async def _list_tools_operation(session: ClientSession) -> tuple[MCPTool, ...]:
+            return await list_all_tools(session, self.server_url or "stdio")
 
         try:
-            result: Final = await self.run_with_session(_list_tools_operation, quiet_on_error=raise_on_error)
-            tool_count: Final = len(result.tools)
-            tool_names: Final = [tool.name for tool in result.tools]
+            tools: Final = await self.run_with_session(_list_tools_operation, quiet_on_error=raise_on_error)
+            tool_count: Final = len(tools)
+            tool_names: Final = [tool.name for tool in tools]
             verbose_logger.info(
                 "MCP client listed %s tools from %s: %s", tool_count, self.server_url or "stdio", tool_names
             )
-            return result.tools
+            return list(tools)
         except asyncio.CancelledError:
             verbose_logger.warning("MCP client list_tools was cancelled")
             raise
@@ -734,17 +740,17 @@ class MCPClient:
         """List available prompts from the server."""
         verbose_logger.debug("MCP client listing tools from %s", self.server_url or "stdio")
 
-        async def _list_prompts_operation(session: ClientSession):
-            return await session.list_prompts()
+        async def _list_prompts_operation(session: ClientSession) -> tuple[Prompt, ...]:
+            return await list_all_prompts(session, self.server_url or "stdio")
 
         try:
-            result: Final = await self.run_with_session(_list_prompts_operation)
-            prompt_count: Final = len(result.prompts)
-            prompt_names: Final = [prompt.name for prompt in result.prompts]
+            prompts: Final = await self.run_with_session(_list_prompts_operation)
+            prompt_count: Final = len(prompts)
+            prompt_names: Final = [prompt.name for prompt in prompts]
             verbose_logger.info(
-                "MCP client listed %s tools from %s: %s", prompt_count, self.server_url or "stdio", prompt_names
+                "MCP client listed %s prompts from %s: %s", prompt_count, self.server_url or "stdio", prompt_names
             )
-            return result.prompts
+            return list(prompts)
         except asyncio.CancelledError:
             verbose_logger.warning("MCP client list_prompts was cancelled")
             raise
@@ -811,17 +817,17 @@ class MCPClient:
         """List available resources from the server."""
         verbose_logger.debug("MCP client listing resources from %s", self.server_url or "stdio")
 
-        async def _list_resources_operation(session: ClientSession):
-            return await session.list_resources()
+        async def _list_resources_operation(session: ClientSession) -> tuple[Resource, ...]:
+            return await list_all_resources(session, self.server_url or "stdio")
 
         try:
-            result: Final = await self.run_with_session(_list_resources_operation)
-            resource_count: Final = len(result.resources)
-            resource_names: Final = [resource.name for resource in result.resources]
+            resources: Final = await self.run_with_session(_list_resources_operation)
+            resource_count: Final = len(resources)
+            resource_names: Final = [resource.name for resource in resources]
             verbose_logger.info(
                 "MCP client listed %s resources from %s: %s", resource_count, self.server_url or "stdio", resource_names
             )
-            return result.resources
+            return list(resources)
         except asyncio.CancelledError:
             verbose_logger.warning("MCP client list_resources was cancelled")
             raise
@@ -847,20 +853,20 @@ class MCPClient:
         """List available resource templates from the server."""
         verbose_logger.debug("MCP client listing resource templates from %s", self.server_url or "stdio")
 
-        async def _list_resource_templates_operation(session: ClientSession):
-            return await session.list_resource_templates()
+        async def _list_resource_templates_operation(session: ClientSession) -> tuple[ResourceTemplate, ...]:
+            return await list_all_resource_templates(session, self.server_url or "stdio")
 
         try:
-            result: Final = await self.run_with_session(_list_resource_templates_operation)
-            resource_template_count: Final = len(result.resourceTemplates)
-            resource_template_names: Final = [resourceTemplate.name for resourceTemplate in result.resourceTemplates]
+            resource_templates: Final = await self.run_with_session(_list_resource_templates_operation)
+            resource_template_count: Final = len(resource_templates)
+            resource_template_names: Final = [resource_template.name for resource_template in resource_templates]
             verbose_logger.info(
                 "MCP client listed %s resource templates from %s: %s",
                 resource_template_count,
                 self.server_url or "stdio",
                 resource_template_names,
             )
-            return result.resourceTemplates
+            return list(resource_templates)
         except asyncio.CancelledError:
             verbose_logger.warning("MCP client list_resource_templates was cancelled")
             raise

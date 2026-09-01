@@ -9,6 +9,7 @@ from openai.types.chat import ChatCompletionToolParam
 from openai.types.responses.function_tool_param import FunctionToolParam
 from openai.types.shared_params.function_definition import FunctionDefinition
 
+from litellm.experimental_mcp_client.pagination import list_all_tools
 from litellm.types.llms.anthropic import AnthropicMessagesTool
 from litellm.types.utils import ChatCompletionMessageToolCall
 
@@ -103,10 +104,10 @@ async def load_mcp_tools(
 
     If format is set to "openai", the tools are converted to OpenAI API compatible tools.
     """
-    tools: Final = await session.list_tools()
+    tools: Final = await list_all_tools(session, "upstream")
     if format == "openai":
-        return [transform_mcp_tool_to_openai_tool(mcp_tool=tool) for tool in tools.tools]
-    return tools.tools
+        return [transform_mcp_tool_to_openai_tool(mcp_tool=tool) for tool in tools]
+    return list(tools)
 
 
 ########################################################
