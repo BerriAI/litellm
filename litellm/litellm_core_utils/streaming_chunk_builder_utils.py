@@ -148,8 +148,8 @@ class _UsageBearingChunk(TypedDict, total=False):
 
 
 class _UsageSummary(TypedDict):
-    prompt_tokens: int | None
-    completion_tokens: int | None
+    prompt_tokens: int
+    completion_tokens: int
     cache_creation_input_tokens: int | None
     cache_read_input_tokens: int | None
     completion_tokens_details: CompletionTokensDetails | None
@@ -211,6 +211,7 @@ class ChunkProcessor:
         self.chunks = self._sort_chunks(chunks)
         self.messages = messages
         self.first_chunk = chunks[0]
+        self._usage_fields_provided: tuple[bool, bool] = (False, False)
 
     def _sort_chunks(self, chunks: list) -> list:
         if not chunks:
@@ -808,6 +809,43 @@ class ChunkProcessor:
             return Usage(**usage_chunk)
         return usage_chunk
 
+    @staticmethod
+    def _update_usage_token_counts(
+        usage_chunk: Usage,
+        usage_chunk_dict: "_UsageSummary",
+        prompt_tokens: int,
+        completion_tokens: int,
+        completion_usage_updates: int,
+    ) -> tuple[int, int, bool, bool, int]:
+        prompt_tokens_provided = "prompt_tokens" in usage_chunk
+        completion_tokens_provided = "completion_tokens" in usage_chunk
+
+        updated_prompt_tokens = (
+            usage_chunk_dict["prompt_tokens"]
+            if prompt_tokens_provided and (usage_chunk_dict["prompt_tokens"] > 0 or prompt_tokens == 0)
+            else prompt_tokens
+        )
+        updated_completion_tokens = (
+            usage_chunk_dict["completion_tokens"]
+            if completion_tokens_provided and (usage_chunk_dict["completion_tokens"] > 0 or completion_tokens == 0)
+            else completion_tokens
+        )
+        updated_completion_usage_updates = (
+            completion_usage_updates + 1
+            if completion_tokens_provided
+            and (usage_chunk_dict["completion_tokens"] > 0 or completion_tokens == 0)
+            and updated_completion_tokens > 0
+            else completion_usage_updates
+        )
+
+        return (
+            updated_prompt_tokens,
+            updated_completion_tokens,
+            prompt_tokens_provided,
+            completion_tokens_provided,
+            updated_completion_usage_updates,
+        )
+
     def _calculate_usage_per_chunk(
         self,
         chunks: Sequence["_UsageBearingChunk | ModelResponse"],
@@ -819,6 +857,8 @@ class ChunkProcessor:
         # # Update usage information if needed
         prompt_tokens = 0
         completion_tokens = 0
+        prompt_tokens_provided = False
+        completion_tokens_provided = False
         # Anthropic's `message_start` SSE event carries usage.output_tokens=1 as a
         # cursor/placeholder; the real value only arrives in `message_delta`.
         # If a stream is cancelled before `message_delta` lands, the last-wins
@@ -852,11 +892,19 @@ class ChunkProcessor:
 
             if usage_chunk is not None:
                 usage_chunk_dict = self._usage_chunk_calculation_helper(usage_chunk)
-                if usage_chunk_dict["prompt_tokens"] is not None and usage_chunk_dict["prompt_tokens"] > 0:
-                    prompt_tokens = usage_chunk_dict["prompt_tokens"]
-                if usage_chunk_dict["completion_tokens"] is not None and usage_chunk_dict["completion_tokens"] > 0:
-                    completion_tokens = usage_chunk_dict["completion_tokens"]
-                    completion_usage_updates += 1
+                (
+                    prompt_tokens,
+                    completion_tokens,
+                    prompt_tokens_provided,
+                    completion_tokens_provided,
+                    completion_usage_updates,
+                ) = self._update_usage_token_counts(
+                    usage_chunk=usage_chunk,
+                    usage_chunk_dict=usage_chunk_dict,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    completion_usage_updates=completion_usage_updates,
+                )
                 if usage_chunk_dict["cache_creation_input_tokens"] is not None and (
                     usage_chunk_dict["cache_creation_input_tokens"] > 0 or cache_creation_input_tokens is None
                 ):
@@ -905,11 +953,16 @@ class ChunkProcessor:
 
         prompt_tokens_details = attach_cache_creation_token_details(prompt_tokens_details, cache_creation_token_details)
 
+        was_anthropic_cursor = completion_tokens == 1
         completion_tokens = self._reset_anthropic_cursor_completion_tokens(
             chunks=chunks,
-            completion_tokens=completion_tokens,
+            completion_tokens=completion_tokens or 0,
             completion_usage_updates=completion_usage_updates,
         )
+        if was_anthropic_cursor and completion_tokens == 0:
+            completion_tokens_provided = False
+
+        self._usage_fields_provided = (prompt_tokens_provided, completion_tokens_provided)
 
         return UsagePerChunk(
             prompt_tokens=prompt_tokens,
@@ -1012,15 +1065,19 @@ class ChunkProcessor:
         ]
         prompt_tokens_details: PromptTokensDetailsWrapper | None = calculated_usage_per_chunk["prompt_tokens_details"]
         cost: Final[float | None] = calculated_usage_per_chunk["cost"]
+        prompt_tokens_provided, completion_tokens_provided = self._usage_fields_provided
 
         try:
-            returned_usage.prompt_tokens = prompt_tokens or token_counter(model=model, messages=messages)
+            returned_usage.prompt_tokens = (
+                prompt_tokens if prompt_tokens_provided else token_counter(model=model, messages=messages)
+            )
         except Exception:  # don't allow this failing to block a complete streaming response from being returned
             print_verbose("token_counter failed, assuming prompt tokens is 0")
             returned_usage.prompt_tokens = 0
         returned_usage.completion_tokens = (
             completion_tokens
-            or token_counter(
+            if completion_tokens_provided
+            else token_counter(
                 model=model,
                 text=completion_output,
                 count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages

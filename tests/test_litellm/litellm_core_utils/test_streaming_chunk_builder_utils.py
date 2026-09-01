@@ -592,6 +592,34 @@ def test_stream_chunk_builder_litellm_usage_chunks():
     assert usage.total_tokens == 77
 
 
+def test_stream_chunk_builder_preserves_explicit_zero_usage():
+    chunk = ModelResponseStream(
+        id="chatcmpl-explicit-zero-usage",
+        created=1745513206,
+        model="gpt-5.5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="partial output"),
+            )
+        ],
+        usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+    )
+
+    usage = ChunkProcessor(chunks=[chunk]).calculate_usage(
+        chunks=[chunk],
+        model="gpt-5.5",
+        messages=[{"role": "user", "content": "a non-empty prompt"}],
+        completion_output="partial output",
+    )
+
+    assert usage.prompt_tokens == 0
+    assert usage.completion_tokens == 0
+    assert usage.total_tokens == 0
+
+
 def test_get_model_from_chunks_azure_model_router():
     """
     Test that _get_model_from_chunks finds the actual model from Azure Model Router chunks.
