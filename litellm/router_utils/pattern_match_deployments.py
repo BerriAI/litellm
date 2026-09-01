@@ -204,7 +204,7 @@ class PatternMatchRouter:
 
         return litellm_deployment_litellm_model
 
-    def get_pattern(self, model: str, custom_llm_provider: str | None = None) -> list[dict] | None:
+    def get_pattern(self, model: str | None, custom_llm_provider: str | None = None) -> list[dict] | None:
         """
         Check if a pattern exists for the given model and custom llm provider
 
@@ -221,9 +221,9 @@ class PatternMatchRouter:
         return self.route(model) or self.route(f"{provider}/{model}")
 
     @staticmethod
-    def _resolved_provider(model: str) -> str | None:
+    def _resolved_provider(model: str | None) -> str | None:
         try:
-            return get_llm_provider(model=model)[1]
+            return get_llm_provider(model=model)[1] if model else None
         except Exception:  # noqa: BLE001  # get_llm_provider raises when the provider is unknown; the name then routes as-is
             return None
 
