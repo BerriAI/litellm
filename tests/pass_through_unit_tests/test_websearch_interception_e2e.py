@@ -995,7 +995,10 @@ async def test_pre_request_hook_modifies_request_body():
     with patch(
         "litellm.llms.anthropic.experimental_pass_through.messages.handler.anthropic_messages_handler",
         side_effect=mock_anthropic_messages_handler,
-    ), patch("litellm.proxy.proxy_server.llm_router", mock_router):
+    ), patch(  # test-quality-ok: the hook imports this process-global router at call time; no injection seam exists to register search_tools
+        "litellm.proxy.proxy_server.llm_router",
+        mock_router,
+    ):
 
         print(
             "\n📝 Making request with native web_search_20250305 tool (stream=True)..."
