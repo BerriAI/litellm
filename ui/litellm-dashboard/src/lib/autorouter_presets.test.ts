@@ -573,6 +573,22 @@ describe("autorouter_presets", () => {
       expect(prefill.escalationKeywords).toEqual([]);
     });
 
+    it("carries a preset's context-window escalation opt-out and buffer through the prefill", () => {
+      const prefill = buildPresetPrefill(
+        {
+          tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+          classifier_type: "heuristic",
+          session_affinity: false,
+          deployment_affinity: true,
+          enable_context_window_escalation: false,
+          context_window_escalation_buffer: 0.9,
+        },
+        groupsOnly(["gpt-5-nano"]),
+      );
+      expect(prefill.complexityRouterConfig.enable_context_window_escalation).toBe(false);
+      expect(prefill.complexityRouterConfig.context_window_escalation_buffer).toBe(0.9);
+    });
+
     it("falls back to the defaults when a preset omits match_threshold and escalation_keywords", () => {
       const prefill = buildPresetPrefill(
         {

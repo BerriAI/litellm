@@ -215,11 +215,7 @@ class DBSpendUpdateWriter:
         start_time: datetime | None,
         end_time: datetime | None,
         response_cost: float | None,
-    ) -> str | None:
-        """Returns the LiteLLM_SpendLogs request_id this call was recorded
-        under, so the caller can tell the budget-window writer which log rows
-        its increments already cover. None when the payload could not be built.
-        """
+    ) -> None:
         from litellm.proxy.proxy_server import (
             disable_spend_logs,
             litellm_proxy_budget_name,
@@ -236,7 +232,7 @@ class DBSpendUpdateWriter:
                 team_id,
             )
             if ProxyUpdateSpend.disable_spend_updates() is True:
-                return None
+                return
             if token is not None and isinstance(token, str) and token.startswith("sk-"):
                 hashed_token = hash_token(token=token)
             else:
@@ -310,7 +306,6 @@ class DBSpendUpdateWriter:
             )
 
             verbose_proxy_logger.debug("Runs spend update on all tables")
-            return payload.get("request_id")
         except Exception:
             spend_log_error(
                 "Spend tracking - update_database failed. Spend log insertion or daily transaction enqueue "
@@ -323,7 +318,7 @@ class DBSpendUpdateWriter:
                 org_id,
                 end_user_id,
             )
-            return None
+            return
 
     async def _enqueue_tool_usage_transaction(
         self,

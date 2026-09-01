@@ -123,6 +123,8 @@ export interface BuildComplexityRouterConfigParams {
   dimensionWeights?: DimensionWeights;
   reasoningOverrideMinScore?: number;
   tierModelParams?: TierModelParamsByTier;
+  enableContextWindowEscalation?: boolean;
+  contextWindowEscalationBuffer?: number;
 }
 
 /**
@@ -174,6 +176,8 @@ export interface ComplexityRouterConfigPayload {
   token_thresholds?: TokenThresholds;
   dimension_weights?: DimensionWeights;
   reasoning_override_min_score?: number;
+  enable_context_window_escalation?: boolean;
+  context_window_escalation_buffer?: number;
   tier_model_configs?: Record<string, { model_name: string; litellm_params: TierModelParams }[]>;
 }
 
@@ -407,6 +411,8 @@ export const buildComplexityRouterConfig = ({
   dimensionWeights,
   reasoningOverrideMinScore,
   tierModelParams,
+  enableContextWindowEscalation,
+  contextWindowEscalationBuffer,
 }: BuildComplexityRouterConfigParams): ComplexityRouterConfigPayload => {
   const serializedTierModelConfigs = customTierSet
     ? serializeTierModelConfigs(
@@ -463,6 +469,12 @@ export const buildComplexityRouterConfig = ({
       adaptive_eligible: adaptiveEligible,
     }),
     ...(returnRawModelName && { return_raw_model_name: true }),
+    ...(enableContextWindowEscalation !== undefined && {
+      enable_context_window_escalation: enableContextWindowEscalation,
+    }),
+    ...(contextWindowEscalationBuffer !== undefined && {
+      context_window_escalation_buffer: contextWindowEscalationBuffer,
+    }),
     ...scorerKnobs,
   };
   if (!customTierSet) return payload;

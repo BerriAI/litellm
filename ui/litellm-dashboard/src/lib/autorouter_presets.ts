@@ -295,6 +295,8 @@ export const buildPresetPrefill = (
       tier_distance_penalty: config.tier_distance_penalty,
       adaptive_eligible: config.adaptive_eligible,
       return_raw_model_name: config.return_raw_model_name,
+      enable_context_window_escalation: config.enable_context_window_escalation,
+      context_window_escalation_buffer: config.context_window_escalation_buffer,
     },
     customTechnicalKeywords: config.custom_technical_keywords ?? [],
     keywordTierRules: hydrateKeywordTierRules(config.keyword_tier_rules ?? []),

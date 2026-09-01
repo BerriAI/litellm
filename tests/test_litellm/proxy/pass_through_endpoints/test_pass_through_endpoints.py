@@ -5462,3 +5462,164 @@ def test_the_marker_check_distinguishes_the_two_route_kinds():
     builtin = MagicMock(spec=Request)
     builtin.scope = {"endpoint": llm_passthrough_endpoints.anthropic_proxy_route}
     assert request_dispatched_to_pass_through_endpoint(builtin) is False
+
+
+async def _drive_passthrough_request_and_capture_logging(user_api_key_dict: UserAPIKeyAuth) -> tuple[int, object]:
+    import litellm
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.llms.custom_http import httpxSpecialProvider
+
+    def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True})
+
+    real_handler = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.PassThroughEndpoint,
+        params={"timeout": resolve_pass_through_request_timeout(None)},
+    )
+    cache_dict = litellm.in_memory_llm_clients_cache.cache_dict
+    cache_key = next((key for key, cached in cache_dict.items() if cached is real_handler), None)
+    assert cache_key is not None
+    cache_dict[cache_key] = SimpleNamespace(client=httpx.AsyncClient(transport=httpx.MockTransport(transport_handler)))
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.headers = Headers({})
+    mock_request.query_params = QueryParams({})
+    mock_request.body = AsyncMock(return_value=b'{"model": "gemini-2.0-flash"}')
+
+    captured_data: dict = {}
+
+    async def capture_pre_call_hook(user_api_key_dict, data, call_type):
+        captured_data.update(data)
+        return data
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=capture_pre_call_hook)
+    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
+    mock_proxy_logging.get_proxy_hook = MagicMock(return_value=None)
+
+    try:
+        with patch(  # test-quality-ok: proxy_logging_obj is a proxy_server module global read inside pass_through_request; there is no injection seam
+            "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging
+        ):
+            response = await pass_through_request(
+                request=mock_request,
+                target="https://upstream.example.test/v1/generate",
+                custom_headers={},
+                user_api_key_dict=user_api_key_dict,
+            )
+    finally:
+        cache_dict[cache_key] = real_handler
+
+    return response.status_code, captured_data.get("litellm_logging_obj")
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_wires_team_callbacks():
+    """LIT-5152 regression: pass_through_request must resolve team-level logging
+    callbacks from key/team metadata and wire them into the Logging object, the
+    same way add_litellm_data_to_request does for normal LLM routes."""
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_id="test-team",
+        team_metadata={
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_type": "success_and_failure",
+                    "callback_vars": {
+                        "langfuse_public_key": "pk_test",
+                        "langfuse_secret_key": "sk_test",
+                        "langfuse_host": "https://langfuse.example.test",
+                    },
+                }
+            ]
+        },
+    )
+
+    status_code, logging_obj = await _drive_passthrough_request_and_capture_logging(user_api_key_dict)
+
+    assert status_code == 200
+    assert logging_obj is not None
+    assert logging_obj.dynamic_success_callbacks, "team success callbacks not wired into Logging"
+    assert logging_obj.dynamic_failure_callbacks, "team failure callbacks not wired into Logging"
+    assert logging_obj.standard_callback_dynamic_params.get("langfuse_public_key") == "pk_test"
+    assert logging_obj.standard_callback_dynamic_params.get("langfuse_secret_key") == "sk_test"
+    assert logging_obj.standard_callback_dynamic_params.get("langfuse_host") == "https://langfuse.example.test"
+    assert ("langfuse_public_key", "pk_test") in logging_obj._trusted_callback_vars
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_survives_malformed_team_logging_metadata():
+    """LIT-5152 fail-open: a malformed team ``logging`` value (here a non-iterable)
+    raises inside callback resolution; the passthrough request must still succeed,
+    just without dynamic callbacks."""
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_id="test-team",
+        team_metadata={"logging": 5},
+    )
+
+    status_code, logging_obj = await _drive_passthrough_request_and_capture_logging(user_api_key_dict)
+
+    assert status_code == 200
+    assert logging_obj is not None
+    assert not logging_obj.dynamic_success_callbacks
+    assert not logging_obj.dynamic_failure_callbacks
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_survives_env_reference_in_deprecated_callback_settings():
+    """LIT-5152 fail-open: the deprecated ``callback_settings`` team metadata skips
+    AddTeamCallback validation, so an ``os.environ/`` callback var would otherwise
+    blow up inside ``Logging.__init__`` and fail the request; the passthrough must
+    instead succeed without dynamic callbacks."""
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_id="test-team",
+        team_metadata={
+            "callback_settings": {
+                "success_callback": ["langfuse"],
+                "failure_callback": ["langfuse"],
+                "callback_vars": {
+                    "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY",
+                    "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY",
+                    "langfuse_host": "https://langfuse.example.test",
+                },
+            }
+        },
+    )
+
+    status_code, logging_obj = await _drive_passthrough_request_and_capture_logging(user_api_key_dict)
+
+    assert status_code == 200
+    assert logging_obj is not None
+    assert not logging_obj.dynamic_success_callbacks
+    assert not logging_obj.dynamic_failure_callbacks
+    assert not logging_obj.standard_callback_dynamic_params.get("langfuse_public_key")
+
+
+@pytest.mark.asyncio
+async def test_resolve_team_callback_wiring_fails_open_on_operational_error():
+    """LIT-5152 fail-open: an operational error while resolving callback metadata
+    (e.g. team config lookup hitting a dead secret manager) must not raise; the
+    request proceeds without dynamic callbacks and the error is logged."""
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _resolve_team_callback_wiring,
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    class RaisingTeamConfig(ProxyConfig):
+        def load_team_config(self, team_id: str) -> dict:
+            raise RuntimeError("secret manager unavailable")
+
+    wiring = _resolve_team_callback_wiring(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", team_id="test-team"),
+        proxy_config=RaisingTeamConfig(),
+        route_description="pass_through_endpoint",
+    )
+
+    assert wiring.success_callbacks is None
+    assert wiring.failure_callbacks is None
+    assert wiring.logging_kwargs is None

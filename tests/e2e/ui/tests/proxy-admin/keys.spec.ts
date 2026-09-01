@@ -43,7 +43,7 @@ test.describe("Proxy Admin - Keys", () => {
     const teamSelect = page.getByTestId("team-dropdown").getByRole("combobox");
     await teamSelect.click();
     await page.keyboard.type(E2E_TEAM_CRUD_ALIAS);
-    await page.locator('[data-slot="combobox-content"]:visible').getByText(E2E_TEAM_CRUD_ALIAS).first().click();
+    await page.getByRole("option", { name: E2E_TEAM_CRUD_ALIAS }).first().click();
 
     // Select models — the popup is portaled to the body, so scope options to the page.
     await page.getByRole("combobox", { name: "Select models" }).click();
@@ -74,10 +74,9 @@ test.describe("Proxy Admin - Keys", () => {
     const before = await findKeyByAlias(page, E2E_REGENERATE_KEY_ALIAS);
     expect(before?.token, `seeded key ${E2E_REGENERATE_KEY_ALIAS} has a token`).toBeTruthy();
 
-    // Key IDs are rendered as buttons in the table
-    const keyRow = page.locator("tr", { hasText: E2E_REGENERATE_KEY_ALIAS });
+    const keyRow = page.getByRole("row").filter({ hasText: E2E_REGENERATE_KEY_ALIAS });
     await expect(keyRow).toBeVisible({ timeout: 10_000 });
-    await keyRow.locator("button").first().click();
+    await keyRow.getByRole("button", { name: E2E_REGENERATE_KEY_ALIAS }).click();
 
     await expect(page.getByText("Back to Keys")).toBeVisible({ timeout: 10_000 });
 
@@ -109,9 +108,9 @@ test.describe("Proxy Admin - Keys", () => {
     const before = await findKeyByAlias(page, E2E_UPDATE_LIMITS_KEY_ALIAS);
     expect(before, `seeded key ${E2E_UPDATE_LIMITS_KEY_ALIAS} exists`).toBeTruthy();
 
-    const keyRow = page.locator("tr", { hasText: E2E_UPDATE_LIMITS_KEY_ALIAS });
+    const keyRow = page.getByRole("row").filter({ hasText: E2E_UPDATE_LIMITS_KEY_ALIAS });
     await expect(keyRow).toBeVisible({ timeout: 10_000 });
-    await keyRow.locator("button").first().click();
+    await keyRow.getByRole("button", { name: E2E_UPDATE_LIMITS_KEY_ALIAS }).click();
 
     await expect(page.getByText("Back to Keys")).toBeVisible({ timeout: 10_000 });
 
@@ -147,9 +146,9 @@ test.describe("Proxy Admin - Keys", () => {
     await navigateToPage(page, Page.ApiKeys);
     await dismissFeedbackPopup(page);
 
-    const keyRow = page.locator("tr", { hasText: E2E_DELETE_KEY_ALIAS });
+    const keyRow = page.getByRole("row").filter({ hasText: E2E_DELETE_KEY_ALIAS });
     await expect(keyRow).toBeVisible({ timeout: 10_000 });
-    await keyRow.locator("button").first().click();
+    await keyRow.getByRole("button", { name: E2E_DELETE_KEY_ALIAS }).click();
 
     await expect(page.getByText("Back to Keys")).toBeVisible({ timeout: 10_000 });
 
