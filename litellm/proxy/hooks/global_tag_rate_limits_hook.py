@@ -446,14 +446,17 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
                 )
 
     @staticmethod
-    def _record_admitted_model(stash: _GlobalTagRateLimitStash, model: str | None, renewal_allowed: bool) -> None:
+    def _admitted_models_after(
+        admitted_models: frozenset[str], model: str | None, renewal_allowed: bool
+    ) -> frozenset[str]:
         """Only called once this admission attempt has cleared every check
         without raising -- a rejected attempt's model must never join
         admitted_models, or a later successful attempt's accounting could
         wrongly credit an apply_to_models entry that never actually admitted
         this request under that model."""
         if renewal_allowed and model is not None:
-            stash.admitted_models = stash.admitted_models | frozenset((model,))
+            return admitted_models | frozenset((model,))
+        return admitted_models
 
     @staticmethod
     def _ttl_for(unit: _LimitUnit, entry: TagRateLimitEntry) -> int:
@@ -617,7 +620,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
         stash.admission_time = now
         classified: Final = self._classify(config, tags, key_alias, key_hash, now, model)
         if not classified:
-            self._record_admitted_model(stash, model, renewal_allowed)
+            stash.admitted_models = self._admitted_models_after(stash.admitted_models, model, renewal_allowed)
             return data
 
         read_only_checks: Final = tuple(c for c in classified if not c.is_atomic)
@@ -697,7 +700,7 @@ class _PROXY_GlobalTagRateLimitsHook(  # pyright: ignore[reportUnusedClass]  # o
             if request_keys:
                 stash.charged_request_keys.extend(request_keys)  # mutable-ok: see field's own docstring
 
-        self._record_admitted_model(stash, model, renewal_allowed)
+        stash.admitted_models = self._admitted_models_after(stash.admitted_models, model, renewal_allowed)
         return data
 
     async def _release_pending_for_call_id(self, request_kwargs: Mapping[str, object]) -> None:
