@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from litellm.proxy._experimental.mcp_server import openapi_to_mcp_generator as gen
 from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
     _request_auth_header,
     _request_extra_headers,
@@ -33,6 +34,38 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
 )
 
 GET_ASYNC_CLIENT_TARGET = "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.get_async_httpx_client"
+
+
+def test_load_openapi_spec_supports_yaml_http_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    url = "http://example.local/openapi.yaml"
+    response = SimpleNamespace(
+        text="""
+openapi: 3.0.0
+info:
+  title: YAML API
+  version: 1.0.0
+paths: {}
+""",
+        status_code=200,
+        headers={},
+        raise_for_status=lambda: None,
+    )
+    client = AsyncMock()
+    client.get = AsyncMock(return_value=response)
+
+    monkeypatch.setattr(gen, "get_async_httpx_client", lambda **kwargs: client)
+    monkeypatch.setattr(gen, "async_safe_get", lambda client, url, **kwargs: client.get(url))
+
+    assert gen.load_openapi_spec(url) == {
+        "openapi": "3.0.0",
+        "info": {"title": "YAML API", "version": "1.0.0"},
+        "paths": {},
+    }
+
+
+def test_parse_openapi_spec_rejects_non_object_document() -> None:
+    with pytest.raises(TypeError, match="OpenAPI spec must be a JSON or YAML object"):
+        gen._parse_openapi_spec("- not an OpenAPI object\n")
 
 
 def _create_mock_client(method: str, response_text: str, status_code: int = 200) -> AsyncMock:
