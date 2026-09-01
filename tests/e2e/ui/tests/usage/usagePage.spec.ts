@@ -91,27 +91,39 @@ test.describe("Usage page", () => {
     if (names.length === 0) return;
     const auth = { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" };
 
-    const idIn = async (path: string, label: string, name: string): Promise<string | undefined> => {
+    type Lookup =
+      | { readonly listed: true; readonly id: string | undefined }
+      | { readonly listed: false; readonly status: number };
+
+    const idIn = async (path: string, name: string): Promise<Lookup> => {
       const listed = await request.get(path, { headers: auth });
-      expect(listed.ok(), `GET ${label} (${listed.status()})`).toBe(true);
+      if (!listed.ok()) return { listed: false, status: listed.status() };
       const deployments = ((await listed.json()).data ?? []) as {
         model_name?: string;
         model_info?: { id?: string };
       }[];
-      return deployments.find((d) => d.model_name === name)?.model_info?.id;
+      return { listed: true, id: deployments.find((d) => d.model_name === name)?.model_info?.id };
+    };
+
+    const remove = async (name: string, id: string) => {
+      const deleted = await request.post(`${rootPath()}/model/delete`, { headers: auth, data: { id } });
+      expect(deleted.ok(), `POST /model/delete for ${name} (${deleted.status()})`).toBe(true);
     };
 
     for (const name of names) {
+      const fromRouter = await idIn(`${rootPath()}/model/info`, name);
+      if (fromRouter.listed && fromRouter.id !== undefined) {
+        await remove(name, fromRouter.id);
+        continue;
+      }
       const search = encodeURIComponent(name);
-      const id =
-        (await idIn(`${rootPath()}/model/info`, "/model/info", name)) ??
-        (await idIn(`${rootPath()}/v2/model/info?search=${search}`, "/v2/model/info", name));
-      if (id === undefined) continue;
-      const deleted = await request.post(`${rootPath()}/model/delete`, {
-        headers: auth,
-        data: { id },
-      });
-      expect(deleted.ok(), `POST /model/delete for ${name} (${deleted.status()})`).toBe(true);
+      const fromDb = await idIn(`${rootPath()}/v2/model/info?search=${search}`, name);
+      expect(
+        fromDb.listed,
+        `GET /v2/model/info?search=${search} (${fromDb.listed ? 200 : fromDb.status}), so ${name} could not be checked`,
+      ).toBe(true);
+      if (!fromDb.listed || fromDb.id === undefined) continue;
+      await remove(name, fromDb.id);
     }
   });
 
