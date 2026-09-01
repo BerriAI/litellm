@@ -4327,3 +4327,67 @@ async def test_streaming_hook_refuses_a_content_stream_that_ends_with_an_error_f
     body = b"".join(delivered)
     assert b"4111-1111-1111-1111" not in body
     assert b"could not be assembled for scanning" in body
+
+
+@pytest.mark.parametrize(
+    "chunks, expected, case",
+    [
+        (anthropic_sse_error_frames("blocked upstream"), True, "anthropic-error-frames-only"),
+        ((f"data: {json.dumps({'error': {'message': 'blocked'}})}\n\n",), True, "chat-error-payload-only"),
+        ((), False, "empty-stream"),
+        (
+            (b'event: message_delta\ndata: {"type":"message_delta","error":null}\n\n',),
+            False,
+            "content-event-carrying-a-null-error-field",
+        ),
+        (
+            (
+                litellm.types.utils.ModelResponseStream(
+                    choices=[
+                        litellm.types.utils.StreamingChoices(
+                            index=0,
+                            delta=litellm.types.utils.Delta(content="my card is 4111-1111-1111-1111"),
+                        )
+                    ]
+                ),
+                *anthropic_sse_error_frames("upstream gave up"),
+            ),
+            False,
+            "typed-content-chunks-plus-a-trailing-error-frame",
+        ),
+    ],
+)
+def test_is_sse_error_stream_only_matches_a_stream_that_is_nothing_but_refusals(chunks, expected, case):
+    """The chain-aware passthrough turns on this predicate, so anything it calls error-only is
+    forwarded to the client untouched. A stream that still carries content must not qualify: the
+    frames-only join drops typed chunks, and a content event may carry an empty ``error`` field."""
+    from litellm.proxy.guardrails.anthropic_sse import is_sse_error_stream
+
+    assert is_sse_error_stream(chunks) is expected, case
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_does_not_forward_typed_chunks_that_end_with_an_error_frame():
+    """A stream mixing buffered content with a trailing refusal is not the bare refusal the chain
+    passthrough exists for. Forwarding it would release the content no scanner ever saw."""
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+    chunks = (
+        litellm.types.utils.ModelResponseStream(
+            choices=[
+                litellm.types.utils.StreamingChoices(
+                    index=0,
+                    delta=litellm.types.utils.Delta(content="my card is 4111-1111-1111-1111"),
+                )
+            ]
+        ),
+        *anthropic_sse_error_frames("upstream gave up"),
+    )
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, chunks)
+
+    post.assert_not_called()
+    body = b"".join(item if isinstance(item, bytes) else str(item).encode() for item in delivered)
+    assert b"4111-1111-1111-1111" not in body
+    assert b"could not be assembled for scanning" in body
