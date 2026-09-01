@@ -752,6 +752,23 @@ def _is_safe_preset_route_transition(
     )
 
 
+def _enforce_allowed_routes_update_permission(
+    data: UpdateKeyRequest,
+    existing_key_row: LiteLLM_VerificationToken,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    if _is_safe_preset_route_transition(
+        incoming_allowed_routes=data.allowed_routes,
+        existing_allowed_routes=existing_key_row.allowed_routes,
+    ):
+        return
+    _check_allowed_routes_caller_permission(
+        allowed_routes=data.allowed_routes,
+        user_api_key_dict=user_api_key_dict,
+        allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
+    )
+
+
 def _check_permissions_caller_permission(
     data: GenerateRequestBase,
     user_api_key_dict: UserAPIKeyAuth,
@@ -2552,15 +2569,11 @@ async def _validate_update_key_data(
 
     _is_proxy_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
 
-    if not _is_safe_preset_route_transition(
-        incoming_allowed_routes=data.allowed_routes,
-        existing_allowed_routes=existing_key_row.allowed_routes,
-    ):
-        _check_allowed_routes_caller_permission(
-            allowed_routes=data.allowed_routes,
-            user_api_key_dict=user_api_key_dict,
-            allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
-        )
+    _enforce_allowed_routes_update_permission(
+        data=data,
+        existing_key_row=existing_key_row,
+        user_api_key_dict=user_api_key_dict,
+    )
     _check_passthrough_routes_caller_permission(
         data=data,
         user_api_key_dict=user_api_key_dict,
