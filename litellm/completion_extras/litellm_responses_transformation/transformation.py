@@ -1368,6 +1368,21 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     )
                 ]
             )
+        elif event_type in (ResponsesAPIStreamEvents.RESPONSE_FAILED, ResponsesAPIStreamEvents.ERROR):
+            from litellm.responses.streaming_iterator import _error_event_fields, _status_code_for_error_fields
+
+            error_payload: Final = (
+                parsed_chunk.get("response", {}).get("error")
+                if event_type == ResponsesAPIStreamEvents.RESPONSE_FAILED
+                else parsed_chunk.get("error")
+            )
+            error_message, error_type, error_code = _error_event_fields(error_payload)
+            raise litellm.APIError(
+                status_code=_status_code_for_error_fields(error_type, error_code),
+                message=error_message,
+                llm_provider="openai",
+                model="responses",
+            )
         elif event_type == "response.output_item.added":
             # New output item added
             output_item = parsed_chunk.get("item", {})
@@ -1498,6 +1513,29 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 )
             else:
                 raise ValueError(f"Chat provider: Invalid text delta {parsed_chunk}")
+        elif event_type == ResponsesAPIStreamEvents.REFUSAL_DELTA:
+            refusal: Final = parsed_chunk.get("delta")
+            if isinstance(refusal, str):
+                return ModelResponseStream(
+                    choices=[
+                        StreamingChoices(
+                            index=0,
+                            delta=Delta(refusal=refusal),
+                            finish_reason=None,
+                        )
+                    ]
+                )
+            raise ValueError(f"Chat provider: Invalid refusal delta {parsed_chunk}")
+        elif event_type == ResponsesAPIStreamEvents.REFUSAL_DONE:
+            return ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(),
+                        finish_reason=None,
+                    )
+                ]
+            )
         elif event_type == "response.reasoning_summary_text.delta":
             content_part = parsed_chunk.get("delta", None)
             if content_part:

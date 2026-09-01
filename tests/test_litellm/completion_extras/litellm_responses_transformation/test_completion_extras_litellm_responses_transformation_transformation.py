@@ -3796,6 +3796,73 @@ def test_response_incomplete_stream_event_without_details_defaults_to_length():
     assert result.choices[0].finish_reason == "length"
 
 
+@pytest.mark.parametrize(
+    ("event", "expected_status"),
+    [
+        (
+            {
+                "type": "response.failed",
+                "response": {
+                    "error": {
+                        "type": "server_error",
+                        "code": "server_error",
+                        "message": "generation failed",
+                    }
+                },
+            },
+            500,
+        ),
+        (
+            {
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "code": "invalid_prompt",
+                    "message": "prompt was rejected",
+                },
+            },
+            400,
+        ),
+    ],
+)
+def test_response_stream_errors_raise_litellm_api_errors(event, expected_status):
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=iter([f"data: {json.dumps(event)}"]), sync_stream=True
+    )
+
+    with pytest.raises(litellm.APIError) as exc_info:
+        next(iterator)
+
+    assert exc_info.value.status_code == expected_status
+    assert event.get("error", event.get("response", {}).get("error"))["message"] in str(exc_info.value)
+
+
+def test_response_refusal_stream_events_preserve_refusal_delta_without_duplication():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=iter(
+            [
+                'data: {"type":"response.refusal.delta","delta":"I cannot help with that."}',
+                'data: {"type":"response.refusal.done","refusal":"I cannot help with that."}',
+            ]
+        ),
+        sync_stream=True,
+    )
+
+    delta = next(iterator)
+    done = next(iterator)
+
+    assert delta.choices[0].delta.get("refusal") == "I cannot help with that."
+    assert done.choices[0].delta.get("refusal") is None
+
+
 def test_assistant_message_with_tool_calls_keeps_its_content():
     """Regression for https://github.com/BerriAI/litellm/issues/24985.
 
