@@ -5854,6 +5854,7 @@ def _get_model_info_helper(
                 cache_read_input_token_cost_above_512k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_512k_tokens", None
                 ),
+                cache_read_input_token_cost_thinking=_model_info.get("cache_read_input_token_cost_thinking", None),
                 cache_read_input_token_cost_flex=_model_info.get("cache_read_input_token_cost_flex", None),
                 cache_read_input_token_cost_priority=_model_info.get("cache_read_input_token_cost_priority", None),
                 cache_read_input_token_cost_ultrafast=_model_info.get("cache_read_input_token_cost_ultrafast", None),
@@ -5874,6 +5875,7 @@ def _get_model_info_helper(
                     "input_cost_per_token_above_272k_tokens_flex", None
                 ),
                 input_cost_per_token_above_512k_tokens=_model_info.get("input_cost_per_token_above_512k_tokens", None),
+                input_cost_per_token_thinking=_model_info.get("input_cost_per_token_thinking", None),
                 input_cost_per_query=_model_info.get("input_cost_per_query", None),
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
                 input_cost_per_audio_token=_model_info.get("input_cost_per_audio_token", None),
@@ -5899,6 +5901,7 @@ def _get_model_info_helper(
                 output_cost_per_character=_model_info.get("output_cost_per_character", None),
                 output_cost_per_reasoning_token=_model_info.get("output_cost_per_reasoning_token", None),
                 output_cost_per_reasoning_token_flex=_model_info.get("output_cost_per_reasoning_token_flex", None),
+                output_cost_per_token_thinking=_model_info.get("output_cost_per_token_thinking", None),
                 output_cost_per_reasoning_token_priority=_model_info.get(
                     "output_cost_per_reasoning_token_priority", None
                 ),

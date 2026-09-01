@@ -14,7 +14,6 @@ import os
 import pytest
 
 # Add the project root to Python path
-
 import litellm
 from litellm.llms.dashscope.cost_calculator import (
     cost_per_token as dashscope_cost_per_token,
@@ -522,6 +521,84 @@ class TestDashscopeCostCalculator:
         usage = Usage(prompt_tokens=0, completion_tokens=500)
         prompt_cost, completion_cost = dashscope_cost_per_token(
             model="qwen-zero-input-test", usage=usage
+        )
+
+        assert prompt_cost == 0.0
+        assert math.isclose(completion_cost, 500 * 1.6e-06, rel_tol=1e-10)
+
+    def test_dashscope_thinking_mode_bills_thinking_rates(self):
+        """
+        deepseek-v4-pro-0813 prices thinking-mode requests at their own input, cache-hit,
+        and output rates. A request whose usage carries reasoning tokens must bill every
+        token at those rates, not the cheaper non-thinking ones.
+        """
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=500,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=200),
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=300),
+        )
+
+        prompt_cost, completion_cost = dashscope_cost_per_token(
+            model="deepseek-v4-pro-0813", usage=usage
+        )
+
+        model_info = litellm.get_model_info("dashscope/deepseek-v4-pro-0813")
+        expected_prompt_cost = (
+            800 * model_info["input_cost_per_token_thinking"]
+            + 200 * model_info["cache_read_input_token_cost_thinking"]
+        )
+        expected_completion_cost = 500 * model_info["output_cost_per_token_thinking"]
+
+        assert model_info["input_cost_per_token_thinking"] > model_info["input_cost_per_token"]
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+
+    def test_dashscope_non_thinking_request_bills_base_rates(self):
+        """
+        The same dual-mode model without reasoning tokens in the usage stays on the
+        non-thinking rates.
+        """
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=500,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=200),
+        )
+
+        prompt_cost, completion_cost = dashscope_cost_per_token(
+            model="deepseek-v4-pro-0813", usage=usage
+        )
+
+        model_info = litellm.get_model_info("dashscope/deepseek-v4-pro-0813")
+        expected_prompt_cost = (
+            800 * model_info["input_cost_per_token"]
+            + 200 * model_info["cache_read_input_token_cost"]
+        )
+        expected_completion_cost = 500 * model_info["output_cost_per_token"]
+
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+
+    def test_dashscope_zero_thinking_rate_bills_thinking_input_free(self):
+        """
+        An explicit zero thinking rate is a price, not a missing value: it must override
+        the base rate rather than fall through to it.
+        """
+        litellm.model_cost["dashscope/qwen-zero-thinking-test"] = {
+            "litellm_provider": "dashscope",
+            "mode": "chat",
+            "input_cost_per_token": 4e-07,
+            "input_cost_per_token_thinking": 0,
+            "output_cost_per_token": 1.6e-06,
+        }
+
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=500,
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=150),
+        )
+        prompt_cost, completion_cost = dashscope_cost_per_token(
+            model="qwen-zero-thinking-test", usage=usage
         )
 
         assert prompt_cost == 0.0
