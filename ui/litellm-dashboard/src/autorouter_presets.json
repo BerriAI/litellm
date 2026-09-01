@@ -14,6 +14,7 @@
       },
       "classifier_type": "heuristic",
       "escalation_keywords": ["LITELLM ESCALATE"],
+      "classification_mode": "every_request",
       "session_affinity": false,
       "deployment_affinity": true
     }
@@ -30,6 +31,7 @@
       },
       "classifier_type": "heuristic",
       "escalation_keywords": ["LITELLM ESCALATE"],
+      "classification_mode": "every_request",
       "session_affinity": false,
       "deployment_affinity": true
     }
@@ -56,6 +58,7 @@
       },
       "classifier_context_window_size": 0,
       "escalation_keywords": ["LITELLM ESCALATE"],
+      "classification_mode": "every_request",
       "session_affinity": false,
       "deployment_affinity": true
     }
@@ -72,6 +75,7 @@
       },
       "classifier_type": "heuristic",
       "escalation_keywords": ["LITELLM ESCALATE"],
+      "classification_mode": "every_request",
       "session_affinity": false,
       "deployment_affinity": true
     }
