@@ -104,6 +104,7 @@ describe("roles", () => {
           created_at: "2024-01-01",
           keys: [],
           members_with_roles: [{ user_id: "user-1", user_email: "user1@test.com", role: "user" }],
+          spend: 0,
         },
         {
           team_id: "team-2",
@@ -117,6 +118,7 @@ describe("roles", () => {
           created_at: "2024-01-01",
           keys: [],
           members_with_roles: [{ user_id: "user-1", user_email: "user1@test.com", role: "admin" }],
+          spend: 0,
         },
       ];
       expect(isUserTeamAdminForAnyTeam(teams, "user-1")).toBe(true);
@@ -136,6 +138,7 @@ describe("roles", () => {
           created_at: "2024-01-01",
           keys: [],
           members_with_roles: [{ user_id: "user-1", user_email: "user1@test.com", role: "user" }],
+          spend: 0,
         },
         {
           team_id: "team-2",
@@ -149,6 +152,7 @@ describe("roles", () => {
           created_at: "2024-01-01",
           keys: [],
           members_with_roles: [{ user_id: "user-2", user_email: "user2@test.com", role: "admin" }],
+          spend: 0,
         },
       ];
       expect(isUserTeamAdminForAnyTeam(teams, "user-1")).toBe(false);

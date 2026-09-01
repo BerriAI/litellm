@@ -31,7 +31,7 @@ describe("createApiClient", () => {
 
     expect(result).toEqual({ ok: true });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchImpl.mock.calls[0];
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://proxy.example/models?team=t1&page=2");
     expect(init).toMatchObject({ method: "GET" });
     expect(init.headers).toEqual({
@@ -47,7 +47,7 @@ describe("createApiClient", () => {
 
     await client.post("/model/new", { accessToken: "sk", body: { model_name: "gpt" } });
 
-    const [, init] = fetchImpl.mock.calls[0];
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
     expect(init.method).toBe("POST");
     expect(init.body).toBe(JSON.stringify({ model_name: "gpt" }));
   });
@@ -100,7 +100,7 @@ describe("createApiClient", () => {
 
     await client.get("/public/info");
 
-    const [, init] = fetchImpl.mock.calls[0];
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
     expect(init.headers).toEqual({ "Content-Type": "application/json" });
   });
 

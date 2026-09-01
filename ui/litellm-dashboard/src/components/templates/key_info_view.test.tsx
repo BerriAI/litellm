@@ -162,9 +162,13 @@ describe("KeyInfoView", () => {
 
   // Base mock for useAuthorized hook
   const baseUseAuthorizedMock = {
+    isLoading: false,
+    isAuthorized: true,
     accessToken: "test-token",
     userId: "test-user",
     userRole: "admin",
+    userRoleLabel: "Admin",
+    isViewOnly: false,
     premiumUser: true,
     token: "test-token",
     userEmail: null,
