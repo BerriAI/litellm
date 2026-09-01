@@ -23,6 +23,14 @@ MGMT_MODULE = "litellm.proxy.management_endpoints.mcp_management_endpoints"
 @contextlib.contextmanager
 def _env_and_reload(**env):
     saved = {key: os.environ.get(key) for key in env}
+    utils_module = importlib.import_module(UTILS_MODULE)
+    mgmt_module = importlib.import_module(MGMT_MODULE)
+    # Restore the pre-reload module attributes afterwards instead of reloading
+    # a third time: a reload re-creates every class in the module, so modules
+    # that imported names like MCPMissingUserEnvVarsError before this test
+    # would keep raising the old class while pytest.raises in later tests
+    # matches the new one
+    snapshots = {module: dict(vars(module)) for module in (utils_module, mgmt_module)}
 
     def _apply_env(values):
         for key, value in values.items():
@@ -32,8 +40,8 @@ def _env_and_reload(**env):
                 os.environ[key] = value
 
     def _reload():
-        utils = importlib.reload(importlib.import_module(UTILS_MODULE))
-        mgmt = importlib.reload(importlib.import_module(MGMT_MODULE))
+        utils = importlib.reload(utils_module)
+        mgmt = importlib.reload(mgmt_module)
         return utils, mgmt
 
     try:
@@ -41,7 +49,10 @@ def _env_and_reload(**env):
         yield _reload()
     finally:
         _apply_env(saved)
-        _reload()
+        for module, snapshot in snapshots.items():
+            for key in [key for key in vars(module) if key not in snapshot]:
+                delattr(module, key)
+            vars(module).update(snapshot)
 
 
 def test_defaults_used_when_env_unset():
