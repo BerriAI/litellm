@@ -20,6 +20,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import get_model_info, supports_reasoning
 
 from ...openai.chat.o_series_transformation import OpenAIOSeriesConfig
+from .gpt_transformation import flattened_tools_update
 
 
 class AzureOpenAIO1Config(OpenAIOSeriesConfig):
@@ -108,4 +109,8 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         headers: dict,
     ) -> dict:
         model = model.replace("o_series/", "")  # handle o_series/my-random-deployment-name
-        return super().transform_request(model, messages, optional_params, litellm_params, headers)
+        flattened_params: Final = {  # mutable-ok: transform_request's contract takes a plain JSON params dict
+            **optional_params,
+            **flattened_tools_update(optional_params),
+        }
+        return super().transform_request(model, messages, flattened_params, litellm_params, headers)
