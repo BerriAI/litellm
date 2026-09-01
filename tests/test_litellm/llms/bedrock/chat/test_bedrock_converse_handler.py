@@ -96,10 +96,8 @@ def _completion_kwargs(**overrides):
     return kwargs
 
 
-def _run(**overrides):
-    with patch.object(
-        BedrockConverseLLM, "get_credentials", return_value=RESOLVED_CREDENTIALS
-    ):
+def _run(*, credentials: Credentials | None = RESOLVED_CREDENTIALS, **overrides):
+    with patch.object(BedrockConverseLLM, "get_credentials", return_value=credentials):
         return BedrockConverseLLM().completion(**_completion_kwargs(**overrides))
 
 
@@ -358,14 +356,27 @@ async def test_async_completion_logs_pre_call_by_default():
     assert logging_obj.pre_call.call_count == 1
 
 
-def _sync_client_returning_converse_response():
+def _recording_sync_client():
+    """A sync transport that answers with a Converse response and keeps every
+    `post` payload, so a test can assert which headers were sent."""
+    posted: list[dict] = []
     client = MagicMock()
-    client.post = lambda **_kwargs: httpx.Response(
-        200,
-        json=CONVERSE_RESPONSE,
-        request=httpx.Request("POST", "https://bedrock-runtime.us-west-2.amazonaws.com"),
-    )
+
+    def post(**kwargs):
+        posted.append(kwargs)
+        return httpx.Response(
+            200,
+            json=CONVERSE_RESPONSE,
+            request=httpx.Request("POST", "https://bedrock-runtime.us-west-2.amazonaws.com"),
+        )
+
+    client.post = post
     client.__class__ = HTTPHandler
+    return client, posted
+
+
+def _sync_client_returning_converse_response():
+    client, _ = _recording_sync_client()
     return client
 
 
@@ -487,3 +498,30 @@ def test_post_call_is_not_logged_twice_when_the_sync_rust_call_declines():
     assert response.choices[0].message.content == "hi"
     assert len(calls["post_call"]) == 1
     assert "hi" in calls["post_call"][0]["original_response"]
+
+
+def test_bearer_token_auth_serves_when_boto3_resolves_no_sigv4_credentials(monkeypatch):
+    """With only `AWS_BEARER_TOKEN_BEDROCK` configured boto3 resolves no
+    credentials at all. Preparing the Rust handoff must not dereference that
+    None: the bearer token signs the request on its own."""
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-bearer-token")
+    client, posted = _recording_sync_client()
+
+    response = _run(credentials=None, litellm_params={}, client=client)
+
+    assert response.choices[0].message.content == "hi"
+    assert posted[0]["headers"]["Authorization"] == "Bearer bedrock-bearer-token"
+
+
+def test_the_rust_opt_in_needs_no_sigv4_principal():
+    """The core resolves the bearer token itself, so a bearer-only deployment
+    keeps its opt-in and the gate sees no aws_* credential keys to sign with."""
+    seen = _inject()
+
+    response = _run(credentials=None, api_key="bedrock-bearer-token")
+
+    assert response.choices[0].message.content == "hello from rust"
+    params = seen["call"][0]["optional_params"]
+    assert not {"aws_access_key_id", "aws_secret_access_key", "aws_session_token"} & params.keys()
+    assert params["aws_region_name"] == "us-east-1"
+    assert seen["call"][0]["api_key"] == "bedrock-bearer-token"
