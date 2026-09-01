@@ -191,7 +191,7 @@ class _ImageFetchBudget:
 
     def __init__(self, total: int = _MAX_TOTAL_IMAGE_FETCH_BYTES) -> None:
         self._remaining = total
-        self._gate = asyncio.Semaphore(_MAX_CONCURRENT_IMAGE_FETCHES)
+        self.gate = asyncio.Semaphore(_MAX_CONCURRENT_IMAGE_FETCHES)
 
     def claim(self) -> int:
         """Reserve one image's worth of budget. 0 means exhausted.
@@ -210,9 +210,6 @@ class _ImageFetchBudget:
 
     def give_back(self, unused: int) -> None:
         self._remaining += unused
-
-    def gate(self) -> "asyncio.Semaphore":
-        return self._gate
 
 
 def _retained_image_bytes(item: "BedrockContentItem | None") -> int:
@@ -514,8 +511,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     @staticmethod
     def _get_image_url(item: Mapping[str, object]) -> str | None:
-        if item.get("type") != "image_url":
-            return None
+        """Pull the url out of an image_url part. The caller owns the type dispatch."""
         image_url: Final = item.get("image_url")
         if isinstance(image_url, str):
             return image_url
@@ -663,7 +659,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 reason="remote image skipped: this request already used its image download budget"
             )
             return None
-        async with request_budget.gate():
+        async with request_budget.gate:
             item: Final = await self._decode_image_content_item(image_url=image_url, max_bytes=granted)
 
         # Refund only what a usable image did not take. Returning the whole

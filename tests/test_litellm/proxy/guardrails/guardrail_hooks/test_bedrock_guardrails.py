@@ -5781,12 +5781,10 @@ class TestBedrockGuardrailImageInput:
         assert request["content"] == [{"text": {"text": "look"}}]
 
     def test_the_url_and_budget_helpers_guard_their_own_inputs(self):
-        """Both are reached only through callers that already checked the shape.
-
-        Exercised directly so the guards are not silently dropped in a refactor that
-        gives either one a second caller.
-        """
-        assert BedrockGuardrail._get_image_url(item={"type": "text", "text": "hi"}) is None
+        """Exercised directly so the guards are not dropped in a later refactor."""
+        assert BedrockGuardrail._get_image_url(item={"type": "image_url"}) is None
+        assert BedrockGuardrail._get_image_url(item={"type": "image_url", "image_url": {"url": 7}}) is None
+        assert BedrockGuardrail._get_image_url(item={"type": "image_url", "image_url": 7}) is None
 
         assert _retained_image_bytes(None) == 0
         assert _retained_image_bytes({"text": {"text": "not an image"}}) == 0
