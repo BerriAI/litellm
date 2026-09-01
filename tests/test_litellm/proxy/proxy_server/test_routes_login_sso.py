@@ -574,7 +574,7 @@ def test_the_configured_admin_password_still_signs_in_while_refused(client, monk
     assert [_json_login(client, "/v2/login") for _ in range(2)] == [401, 401]
     assert _json_login(client, "/v2/login") == 429
 
-    with patch("litellm.proxy.auth.login_utils.user_update", new=AsyncMock()), patch(
+    with patch("litellm.proxy.auth.login_utils.user_update", new=AsyncMock()), patch(  # test-quality-ok: success mints a UI key and persists the user; faked so no DB is needed
         "litellm.proxy.auth.login_utils.generate_key_helper_fn", new=AsyncMock(return_value={"token": "sk-ui"})
     ):
         assert _json_login(client, "/v2/login", password="right-password") == 200
