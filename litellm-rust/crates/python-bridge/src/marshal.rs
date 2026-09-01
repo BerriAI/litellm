@@ -18,3 +18,17 @@ where
         .map(Bound::unbind)
         .map_err(|error| PyValueError::new_err(error.to_string()))
 }
+
+pub fn from_json_str<T>(json: &str) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    serde_json::from_str(json).map_err(|error| error.to_string())
+}
+
+pub fn to_json_string<T>(value: &T) -> Result<String, String>
+where
+    T: Serialize + ?Sized,
+{
+    serde_json::to_string(value).map_err(|error| error.to_string())
+}

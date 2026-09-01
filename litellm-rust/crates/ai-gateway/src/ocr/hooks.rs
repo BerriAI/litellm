@@ -327,5 +327,6 @@ fn core_error_kind(error: &CoreError) -> &'static str {
         CoreError::Connect(_) => "ConnectError",
         CoreError::Routing(_) => "RoutingError",
         CoreError::Unsupported(_) => "UnsupportedRequest",
+        CoreError::Timeout(_) => "TimeoutError",
     }
 }

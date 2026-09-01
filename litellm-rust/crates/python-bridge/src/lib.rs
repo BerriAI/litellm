@@ -21,7 +21,7 @@ use serde_json::{Map, Value};
 mod gil;
 mod marshal;
 
-use marshal::{from_py, to_py};
+use marshal::{from_json_str, from_py, to_json_string, to_py};
 
 pyo3::create_exception!(
     _native,
@@ -86,7 +86,8 @@ fn chat_completions_error_to_pyerr(err: CoreError) -> PyErr {
         | CoreError::Routing(_)
         // Nothing reached the provider, so serving it on Python cannot double
         // bill and is the only way the caller gets an answer at all.
-        | CoreError::Connect(_) => RustBridgeDeclined::new_err(err.to_string()),
+        | CoreError::Connect(_)
+        | CoreError::Timeout(_) => RustBridgeDeclined::new_err(err.to_string()),
         CoreError::Http { status, body } => {
             RustUpstreamError::new_err((status, format!("{status}: {body}")))
         }
@@ -608,6 +609,208 @@ fn achat_completions(
 }
 
 #[pyfunction]
+#[pyo3(signature = (model, text=None, messages=None, tools=None, tool_choice=None, count_response_tokens=false, default_token_count=None))]
+#[allow(clippy::too_many_arguments)]
+fn token_counter(
+    py: Python<'_>,
+    model: String,
+    text: Option<String>,
+    messages: Option<Py<PyAny>>,
+    tools: Option<Py<PyAny>>,
+    tool_choice: Option<Py<PyAny>>,
+    count_response_tokens: bool,
+    default_token_count: Option<usize>,
+) -> PyResult<usize> {
+    let messages_vec: Option<Vec<Map<String, Value>>> = match messages {
+        Some(msgs) => {
+            let value = from_py::<Value>(msgs.bind(py))?;
+            match value {
+                Value::Array(arr) => {
+                    let mut vec = Vec::with_capacity(arr.len());
+                    for item in arr {
+                        match item {
+                            Value::Object(map) => vec.push(map),
+                            _ => return Err(PyValueError::new_err("each message must be a dict")),
+                        }
+                    }
+                    Some(vec)
+                }
+                _ => return Err(PyValueError::new_err("messages must be a list")),
+            }
+        }
+        None => None,
+    };
+
+    let tools_vec: Option<Vec<Map<String, Value>>> = match tools {
+        Some(t) => {
+            let value = from_py::<Value>(t.bind(py))?;
+            match value {
+                Value::Array(arr) => {
+                    let mut vec = Vec::with_capacity(arr.len());
+                    for item in arr {
+                        match item {
+                            Value::Object(map) => vec.push(map),
+                            _ => return Err(PyValueError::new_err("each tool must be a dict")),
+                        }
+                    }
+                    Some(vec)
+                }
+                _ => return Err(PyValueError::new_err("tools must be a list")),
+            }
+        }
+        None => None,
+    };
+
+    let tool_choice_value: Option<Value> = match tool_choice {
+        Some(tc) => Some(from_py::<Value>(tc.bind(py))?),
+        None => None,
+    };
+
+    let request = litellm_core::token_counter::types::TokenCounterRequest {
+        model: &model,
+        text: text.as_deref(),
+        messages: messages_vec.as_deref(),
+        tools: tools_vec.as_deref(),
+        tool_choice: tool_choice_value.as_ref(),
+        count_response_tokens,
+        default_token_count,
+    };
+
+    let result = gil::release_gil(py, || litellm_core::token_counter::token_counter(&request));
+
+    result.map_err(core_error_to_pyerr)
+}
+
+#[pyfunction]
+#[pyo3(signature = (model, prompt_tokens, completion_tokens, custom_llm_provider=None, service_tier=None, cache_hit_tokens=None, cache_creation_tokens=None, audio_input_tokens=None, audio_output_tokens=None, reasoning_tokens=None))]
+#[allow(clippy::too_many_arguments)]
+fn completion_cost(
+    py: Python<'_>,
+    model: String,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    custom_llm_provider: Option<String>,
+    service_tier: Option<String>,
+    cache_hit_tokens: Option<u64>,
+    cache_creation_tokens: Option<u64>,
+    audio_input_tokens: Option<u64>,
+    audio_output_tokens: Option<u64>,
+    reasoning_tokens: Option<u64>,
+) -> PyResult<f64> {
+    let prompt_details = if cache_hit_tokens.is_some()
+        || cache_creation_tokens.is_some()
+        || audio_input_tokens.is_some()
+    {
+        Some(litellm_core::cost_calculator::types::PromptTokensDetails {
+            cached_tokens: 0,
+            cache_hit_tokens: cache_hit_tokens.unwrap_or(0),
+            cache_creation_tokens: cache_creation_tokens.unwrap_or(0),
+            text_tokens: 0,
+            audio_tokens: audio_input_tokens.unwrap_or(0),
+            image_tokens: 0,
+        })
+    } else {
+        None
+    };
+
+    let completion_details = if reasoning_tokens.is_some() || audio_output_tokens.is_some() {
+        Some(
+            litellm_core::cost_calculator::types::CompletionTokensDetails {
+                text_tokens: 0,
+                audio_tokens: audio_output_tokens.unwrap_or(0),
+                reasoning_tokens: reasoning_tokens.unwrap_or(0),
+            },
+        )
+    } else {
+        None
+    };
+
+    let request = litellm_core::cost_calculator::types::CostRequest {
+        model: &model,
+        usage: litellm_core::cost_calculator::types::Usage {
+            prompt_tokens,
+            completion_tokens,
+            total_tokens: prompt_tokens + completion_tokens,
+            prompt_tokens_details: prompt_details,
+            completion_tokens_details: completion_details,
+        },
+        custom_llm_provider: custom_llm_provider.as_deref(),
+        service_tier: service_tier.as_deref(),
+    };
+
+    let result = gil::release_gil(py, || {
+        litellm_core::cost_calculator::calculate_cost(&request)
+    });
+
+    match result {
+        Ok(response) => Ok(response.total_cost_usd()),
+        Err(err) => Err(core_error_to_pyerr(err)),
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (token))]
+fn hash_token(py: Python<'_>, token: String) -> String {
+    gil::release_gil(py, || litellm_core::auth::hash_token(&token))
+}
+
+#[pyfunction]
+#[pyo3(signature = (route, request_json))]
+fn process_request(py: Python<'_>, route: String, request_json: String) -> PyResult<String> {
+    let request_value: Value = from_json_str(&request_json)
+        .map_err(|err| PyValueError::new_err(format!("invalid request JSON: {err}")))?;
+
+    let result = gil::release_gil(py, || {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async {
+            match route.as_str() {
+                "/v1/chat/completions" => {
+                    let model = request_value
+                        .get("model")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            CoreError::InvalidRequest("missing model field".to_string())
+                        })?;
+                    let messages = request_value.get("messages").cloned().ok_or_else(|| {
+                        CoreError::InvalidRequest("missing messages field".to_string())
+                    })?;
+                    let optional_params: Map<String, Value> = request_value
+                        .as_object()
+                        .map(|obj| {
+                            obj.iter()
+                                .filter(|(k, _)| k.as_str() != "model" && k.as_str() != "messages")
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                    let request = ChatCompletionsRequest {
+                        model,
+                        messages,
+                        optional_params,
+                        api_key: None,
+                        api_base: None,
+                        custom_llm_provider: None,
+                        extra_headers: None,
+                        timeout: None,
+                    };
+
+                    let response = run_chat_completions(request).await?;
+                    to_json_string(&response).map_err(|err| {
+                        CoreError::InvalidResponse(format!("failed to serialize response: {err}"))
+                    })
+                }
+                _ => Err(CoreError::Unsupported("unknown route")),
+            }
+        })
+    });
+
+    match result {
+        Ok(response_json) => Ok(response_json),
+        Err(err) => Err(core_error_to_pyerr(err)),
+    }
+}
+
+#[pyfunction]
 fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
     let stats = PyDict::new(py);
     stats.set_item("releases", gil::release_count())?;
@@ -628,6 +831,10 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(chat_completions_decline, module)?)?;
     module.add_function(wrap_pyfunction!(chat_completions, module)?)?;
     module.add_function(wrap_pyfunction!(achat_completions, module)?)?;
+    module.add_function(wrap_pyfunction!(token_counter, module)?)?;
+    module.add_function(wrap_pyfunction!(completion_cost, module)?)?;
+    module.add_function(wrap_pyfunction!(hash_token, module)?)?;
+    module.add_function(wrap_pyfunction!(process_request, module)?)?;
     module.add_class::<ResponsesWebSocketConnection>()?;
     module.add_function(wrap_pyfunction!(gil_stats, module)?)?;
     Ok(())

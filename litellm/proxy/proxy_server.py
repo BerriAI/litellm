@@ -916,6 +916,14 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
 async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = None) -> None:
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
+    
+    # Shutdown Rust gateway if running
+    try:
+        from litellm.proxy.rust_gateway_integration import shutdown_rust_gateway
+        shutdown_rust_gateway()
+    except Exception as e:
+        verbose_proxy_logger.debug(f"Error shutting down Rust gateway: {e}")
+    
     if worker_heartbeat is not None and prisma_client:
         await worker_heartbeat.deregister()
     if prisma_client:
@@ -1104,6 +1112,18 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             proxy_logging_obj=proxy_logging_obj,
             user_api_key_cache=user_api_key_cache,
         )
+
+    # Initialize Rust gateway if enabled
+    try:
+        from litellm.proxy.rust_gateway_integration import init_rust_gateway
+        rust_gateway = init_rust_gateway(
+            master_key=master_key,
+            config_path=env_config_yaml or worker_config if isinstance(worker_config, str) else None,
+        )
+        if rust_gateway:
+            verbose_proxy_logger.info("Rust gateway integration enabled")
+    except Exception as e:
+        verbose_proxy_logger.debug(f"Rust gateway initialization skipped: {e}")
 
     if prisma_client is not None:
 
@@ -10426,6 +10446,50 @@ async def chat_completion(
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     data: Final = await _read_request_body(request=request)
+
+    has_rate_limits = (
+        user_api_key_dict is not None
+        and (
+            getattr(user_api_key_dict, "tpm_limit", None) is not None
+            or getattr(user_api_key_dict, "rpm_limit", None) is not None
+            or getattr(user_api_key_dict, "user_tpm_limit", None) is not None
+            or getattr(user_api_key_dict, "user_rpm_limit", None) is not None
+            or getattr(user_api_key_dict, "team_tpm_limit", None) is not None
+            or getattr(user_api_key_dict, "team_rpm_limit", None) is not None
+        )
+    )
+
+    if has_rate_limits:
+        verbose_proxy_logger.debug(
+            "Skipping Rust dispatch: rate limits configured on API key"
+        )
+
+    # Try sidecar Rust gateway first (skip when guardrails or rate limits are configured,
+    # since the Rust sidecar does not run Python-side guardrails or rate limits)
+    if not has_rate_limits and not getattr(litellm, "guardrail_name_config_map", {}):
+        try:
+            from litellm.proxy.rust_gateway_integration import route_to_rust
+            rust_headers = {
+                "Authorization": request.headers.get("Authorization", ""),
+                "Content-Type": "application/json",
+            }
+            rust_response = await asyncio.to_thread(
+                route_to_rust, "POST", "/v1/chat/completions", rust_headers, data
+            )
+            if rust_response is not None:
+                return rust_response
+        except Exception as e:
+            verbose_proxy_logger.debug(f"Sidecar Rust gateway routing failed: {e}")
+
+    # Try PyO3 Rust bridge (skip when guardrails or rate limits are configured,
+    # since the PyO3 bridge does not run Python-side guardrails or rate limits)
+    if not has_rate_limits and not getattr(litellm, "guardrail_name_config_map", {}):
+        from litellm.rust_bridge.pipeline import process_request as rust_process_request
+
+        rust_response = rust_process_request("/v1/chat/completions", data)
+        if rust_response is not None:
+            return rust_response
+
     if user_api_key_dict is not None:
         if not isinstance(data.get("metadata"), dict):
             # Covers both missing and JSON-string metadata (multipart /

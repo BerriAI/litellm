@@ -203,12 +203,12 @@ fn declines_an_unsupported_request_before_resolving_credentials() {
 fn rejects_an_unknown_provider() {
     assert_eq!(
         decline(request(
-            "openai/gpt-4o",
+            "unknown_provider/some-model",
             None,
             json!([{"role": "user", "content": "hi"}]),
             json!({}),
         )),
-        CoreError::InvalidProvider("openai".to_string())
+        CoreError::InvalidProvider("unknown_provider".to_string())
     );
 }
 
@@ -515,7 +515,7 @@ fn the_gate_declines_without_resolving_credentials_or_calling_out() {
     );
     assert_eq!(
         decline_reason(
-            "openai/gpt-4o",
+            "unknown_provider/some-model",
             None,
             json!([{"role": "user", "content": "hi"}]),
             json!({}),

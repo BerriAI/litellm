@@ -36,6 +36,19 @@ pub enum CoreError {
     /// keep a reference implementation treat this as "fall back", not "fail".
     #[error("unsupported by the rust path: {0}")]
     Unsupported(&'static str),
+    /// The request or stream exceeded the configured timeout duration.
+    #[error("timeout: {0}")]
+    Timeout(String),
+}
+
+impl CoreError {
+    pub fn is_upstream_failure(&self) -> bool {
+        match self {
+            CoreError::Http { status, .. } => *status >= 500,
+            CoreError::Network(_) | CoreError::Connect(_) | CoreError::Timeout(_) => true,
+            _ => false,
+        }
+    }
 }
 
 pub fn json_type_name(value: &serde_json::Value) -> &'static str {

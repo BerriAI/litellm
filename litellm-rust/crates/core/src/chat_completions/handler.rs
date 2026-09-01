@@ -1,4 +1,6 @@
+use futures::Stream;
 use serde_json::Value;
+use std::pin::Pin;
 
 use crate::error::{CoreError, CoreResult};
 use crate::http_utils::truncate_error_body;
@@ -28,9 +30,6 @@ pub(super) async fn execute_chat_completions_provider_call(
     }
 
     let response = request_builder.send().await.map_err(|err| {
-        // Failing to establish the connection means the request never went out,
-        // so the host can still serve it. Everything else here, a timeout
-        // above all, may have reached the provider and been answered.
         if err.is_connect() || err.is_builder() {
             CoreError::Connect(err.to_string())
         } else {
@@ -58,6 +57,100 @@ pub(super) async fn execute_chat_completions_provider_call(
         .config
         .transform_response(&request.model, ProviderChatResponseData { body })
         .map_err(as_response_error)
+}
+
+/// Streaming response chunk - either a data chunk or the end of stream
+pub type StreamingChunk = Result<Option<Value>, CoreError>;
+
+/// Execute a streaming chat completions call, returning a stream of chunks
+pub(super) fn execute_chat_completions_streaming_call(
+    request: ProviderChatCompletionsRequest,
+) -> Pin<Box<dyn Stream<Item = StreamingChunk> + Send>> {
+    Box::pin(async_stream::stream! {
+        let body = match serde_json::to_vec(&request.body) {
+            Ok(b) => b,
+            Err(err) => {
+                yield Err(CoreError::InvalidRequest(format!(
+                    "failed to serialize chat completions request: {err}"
+                )));
+                return;
+            }
+        };
+
+        let headers = match signed_headers(&request, &body).await {
+            Ok(h) => h,
+            Err(err) => {
+                yield Err(err);
+                return;
+            }
+        };
+
+        let mut request_builder = http_client().post(&request.url).body(body);
+        for (key, value) in &headers {
+            request_builder = request_builder.header(key, value);
+        }
+        if let Some(duration) = request.timeout {
+            request_builder = request_builder.timeout(duration);
+        }
+
+        let response = match request_builder.send().await {
+            Ok(r) => r,
+            Err(err) => {
+                yield Err(if err.is_connect() || err.is_builder() {
+                    CoreError::Connect(err.to_string())
+                } else {
+                    CoreError::Network(err.to_string())
+                });
+                return;
+            }
+        };
+
+        let status = response.status();
+        if !status.is_success() {
+            let text = response.text().await.unwrap_or_default();
+            yield Err(CoreError::Http {
+                status: status.as_u16(),
+                body: truncate_error_body(&text),
+            });
+            return;
+        }
+
+        // Parse SSE stream
+        use futures::StreamExt;
+        let mut stream = response.bytes_stream();
+
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = match chunk_result {
+                Ok(c) => c,
+                Err(err) => {
+                    yield Err(CoreError::Network(err.to_string()));
+                    return;
+                }
+            };
+
+            // Parse SSE data lines
+            let text = String::from_utf8_lossy(&chunk);
+            for line in text.lines() {
+                if let Some(data) = line.strip_prefix("data: ") {
+                    if data == "[DONE]" {
+                        yield Ok(None);
+                        return;
+                    }
+                    match serde_json::from_str::<Value>(data) {
+                        Ok(value) => yield Ok(Some(value)),
+                        Err(err) => {
+                            yield Err(CoreError::InvalidResponse(format!(
+                                "invalid streaming chunk: {err}"
+                            )));
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        yield Ok(None);
+    })
 }
 
 /// Re-tag an error raised while normalizing a response the provider already

@@ -312,12 +312,35 @@ mod tests {
         );
     }
 
+    use litellm_core::auth::KeyCache;
+    use std::time::Duration;
+
     fn state() -> AppState {
         AppState {
             router: Arc::new(ModelRouter::default()),
             master_key: Some(Arc::from("master-key")),
             loggers: Arc::new(Vec::new()),
             realtime_pool: RealtimePool::disabled(),
+            key_cache: Arc::new(KeyCache::new(Duration::from_secs(600), 10_000)),
+            redis: None,
+            postgres: None,
+            spend_worker: None,
+            http_client: Arc::new(reqwest::Client::new()),
+            circuit_breakers: Arc::new(crate::auth::circuit_breaker::CircuitBreakerRegistry::new(
+                crate::auth::circuit_breaker::CircuitBreakerConfig::default(),
+            )),
+            metrics: Arc::new(crate::metrics::GatewayMetrics::new()),
+            config: crate::state::GatewayConfig::from_env(),
+            global_rate_limiter: Arc::new(crate::hardening::GlobalRateLimiter::new(10_000, 60)),
+            secret_rotator: None,
+            audit_log_shipper: None,
+            csrf_state: Arc::new(crate::middleware::csrf::CsrfState::new(3600)),
+            alerting_state: Arc::new(crate::middleware::alerting::AlertingState::new(
+                crate::alerting::AlertingConfig::default(),
+            )),
+            guardrail_runner: Arc::new(
+                crate::integrations::custom_guardrail::CustomGuardrailRunner::new(Vec::new()),
+            ),
         }
     }
 

@@ -15,12 +15,12 @@ repository = "https://github.com/BerriAI/litellm"
 [workspace.dependencies]
 litellm-core = { path = "crates/core" }
 litellm-ai-gateway = { path = "crates/ai-gateway", default-features = false }
-axum = "0.7"
+axum = { version = "0.7", features = ["ws", "macros"] }
 pyo3 = "0.29.0"
 pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"] }
 pythonize = "0.29.0"
 rand = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "http2", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "http2", "stream", "multipart"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
@@ -30,3 +30,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"]
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+tiktoken = "4.1"
+tokenizers = "0.21"
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "json", "chrono"] }
+parking_lot = "0.12"
+smallvec = "1.13"

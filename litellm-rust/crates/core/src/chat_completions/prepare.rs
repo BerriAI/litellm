@@ -60,33 +60,15 @@ pub(super) fn prepare_chat_completions_call(
     )?;
     match &auth {
         ChatCompletionsAuth::Header { name, value } => {
-            // The deployment's credential replaces whatever the caller forwarded
-            // under the same name, mirroring Python's
-            // `{**headers, **anthropic_headers}`: letting a request header win
-            // would let its sender choose the principal the call bills to.
-            //
-            // The exception is a scheme the provider hands off to entirely, such
-            // as an Anthropic OAuth bearer, where Python drops `x-api-key`
-            // instead of resolving one. Re-adding it there would put the
-            // credential into a header the host removed on purpose.
             if !config.defers_to_forwarded_auth(&headers) {
                 headers.retain(|(header, _)| !header.eq_ignore_ascii_case(name));
                 headers.push(((*name).to_string(), value.clone()));
             }
         }
         ChatCompletionsAuth::Bearer { token } => {
-            // Bedrock's `get_request_headers` assigns `headers["Authorization"]`
-            // unconditionally once a bearer token resolves, so the deployment's
-            // identity outranks whatever the caller forwarded. Keeping the
-            // caller's would bill and authorize the call as a different
-            // principal than the same deployment uses on Python.
-            //
-            // The `Header` arm below keeps the opposite precedence on purpose:
-            // Anthropic's transform honours a forwarded OAuth bearer.
             headers.retain(|(name, _)| !name.eq_ignore_ascii_case("authorization"));
             headers.push(("authorization".to_string(), format!("Bearer {token}")));
         }
-        // SigV4 signs the serialized body, so the handler adds its headers.
         ChatCompletionsAuth::AwsSigV4 { .. } => {}
     }
 

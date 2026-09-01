@@ -1,0 +1,9 @@
+model_list:
+  - model_name: qwen-0.5b
+    litellm_params:
+      model: openai/qwen-0.5b
+      api_base: http://localhost:8080/v1
+      api_key: mock-key
+
+general_settings:
+  master_key: sk-test-key

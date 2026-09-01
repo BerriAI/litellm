@@ -23,11 +23,8 @@ fn now_unix_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// Record that the GIL was just acquired. Call immediately before taking the GIL.
-///
-/// Only invoked under the `python-config` feature; without it the gateway never
-/// touches Python, so the recorder is unused (and the endpoint reports zero).
-#[cfg_attr(not(feature = "python-config"), allow(dead_code))]
+/// Record that the GIL was just acquired.
+#[allow(dead_code)]
 pub fn record_acquisition() {
     GIL_ACQUISITIONS.fetch_add(1, Ordering::Relaxed);
     LAST_GIL_UNIX_SECS.store(now_unix_secs(), Ordering::Relaxed);
