@@ -28,10 +28,15 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_OAUTH_TOKEN_PREFIX,
     AllAnthropicToolsValues,
     AnthropicMcpServerTool,
+    AnthropicMessagesToolChoice,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.model_listing import ModelInfoResponse
 
+DROP_FORCED_TOOL_CHOICE_WARNING: Final = (
+    "Downgrading forced tool_choice to 'auto' for model=%s (drop_params=True): this model rejects tool_choice type "
+    "'any'/'tool' with a 400 because thinking is always on and a forced call would skip it."
+)
 DROP_DISABLED_THINKING_WARNING: Final = (
     "Dropping `thinking={'type': 'disabled'}` for model=%s: thinking is always on for this model and cannot be "
     "disabled (the alternative is a provider 400). The model will still think adaptively, its response can contain "
@@ -319,6 +324,41 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 ),
                 status_code=400,
             )
+
+    @staticmethod
+    def forced_tool_use_downgraded(model: str, drop_params: bool) -> bool:
+        """True when the model map flags the model with
+        ``supports_forced_tool_use: false`` (Fable 5.1 / Mythos 5.1 400 on
+        ``any``/``tool``) and ``drop_params`` asks for the ``auto`` downgrade;
+        raises a clean client-side 400 for such models without ``drop_params``."""
+        if AnthropicModelInfo._get_model_capability(model, "supports_forced_tool_use") is not False:
+            return False
+        if not (litellm.drop_params or drop_params):
+            raise litellm.utils.UnsupportedParamsError(
+                message=(
+                    f"{model} does not support forced tool use (tool_choice='required' or a named tool). "
+                    "Use tool_choice='auto' and tell the model in the prompt when to call the tool, or set "
+                    "`litellm.drop_params = True` to downgrade to 'auto' automatically."
+                ),
+                status_code=400,
+            )
+        litellm.verbose_logger.warning(DROP_FORCED_TOOL_CHOICE_WARNING, model)
+        return True
+
+    @staticmethod
+    def _apply_forced_tool_choice(
+        model: str,
+        tool_choice: AnthropicMessagesToolChoice,
+        drop_params: bool,
+    ) -> AnthropicMessagesToolChoice:
+        if tool_choice["type"] not in ("any", "tool"):
+            return tool_choice
+        if not AnthropicModelInfo.forced_tool_use_downgraded(model, drop_params):
+            return tool_choice
+        disable_parallel: Final = tool_choice.get("disable_parallel_tool_use")
+        if disable_parallel is None:
+            return AnthropicMessagesToolChoice(type="auto")
+        return AnthropicMessagesToolChoice(type="auto", disable_parallel_tool_use=disable_parallel)
 
     @staticmethod
     def _strip_version_suffix(model: str) -> str:
@@ -865,13 +905,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 f"Failed to fetch models from Anthropic. Status code: {response.status_code}, Response: {response.text}"
             )
 
-        models: Final = response.json()["data"]
+        models: Final[Sequence[Mapping[str, str]]] = response.json()["data"]
 
-        litellm_model_names: Final = []
-        for model in models:
-            stripped_model_name = model["id"]
-            litellm_model_name = "anthropic/" + stripped_model_name
-            litellm_model_names.append(litellm_model_name)
+        litellm_model_names: Final = ["anthropic/" + model["id"] for model in models]
         return litellm_model_names
 
     def get_token_counter(self) -> BaseTokenCounter | None:
@@ -1077,7 +1113,7 @@ def strip_empty_content_blocks_from_anthropic_messages(
     return out
 
 
-def _is_empty_text_block(block: Any) -> bool:
+def _is_empty_text_block(block: object) -> bool:
     if not isinstance(block, dict) or block.get("type") != "text":
         return False
     text: Final = block.get("text")
@@ -1131,7 +1167,7 @@ def normalize_anthropic_tool_use_id(raw_id: str) -> str:
     return sanitized or "tool_use_id"
 
 
-def _sanitize_tool_use_id_content_block(block: Any) -> Any:
+def _sanitize_tool_use_id_content_block(block: object) -> object:
     if not isinstance(block, dict):
         return block
     block_type: Final = block.get("type")

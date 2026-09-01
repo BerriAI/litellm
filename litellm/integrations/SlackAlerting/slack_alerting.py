@@ -545,7 +545,6 @@ class SlackAlerting(CustomBatchLogger):
         # Get the appropriate budget alert type handler
         budget_alert_class: Final = get_budget_alert_type(type)
         _id: Final = budget_alert_class.get_id(user_info)
-        user_info_json: Final = user_info.model_dump(exclude_none=True)
         user_info_str: Final = self._get_user_info_str(user_info)
         event_message = budget_alert_class.get_event_message()
 
@@ -575,7 +574,22 @@ class SlackAlerting(CustomBatchLogger):
                 webhook_event = WebhookEvent(
                     event=event,
                     event_message=event_message,
-                    **user_info_json,
+                    spend=user_info.spend,
+                    max_budget=user_info.max_budget,
+                    soft_budget=user_info.soft_budget,
+                    token=user_info.token,
+                    customer_id=user_info.customer_id,
+                    user_id=user_info.user_id,
+                    team_id=user_info.team_id,
+                    team_alias=user_info.team_alias,
+                    organization_id=user_info.organization_id,
+                    user_email=user_info.user_email,
+                    key_alias=user_info.key_alias,
+                    projected_exceeded_date=user_info.projected_exceeded_date,
+                    projected_spend=user_info.projected_spend,
+                    event_group=user_info.event_group,
+                    alert_emails=user_info.alert_emails,
+                    max_budget_alert_emails=user_info.max_budget_alert_emails,
                 )
                 await self.send_alert(
                     message=event_message + "\n\n" + user_info_str,
@@ -657,7 +671,7 @@ class SlackAlerting(CustomBatchLogger):
         """
         Create a standard message for a budget alert
         """
-        _all_fields_as_dict: Final = user_info.model_dump(exclude_none=True)
+        _all_fields_as_dict: Final[dict[str, object]] = user_info.model_dump(exclude_none=True)
         _all_fields_as_dict.pop("token")
         msg = ""
         for k, v in _all_fields_as_dict.items():
@@ -1006,7 +1020,7 @@ class SlackAlerting(CustomBatchLogger):
         except Exception:
             pass
 
-    async def model_added_alert(self, model_name: str, litellm_model_name: str, passed_model_info: Any):
+    async def model_added_alert(self, model_name: str, litellm_model_name: str, passed_model_info: object):
         base_model_from_user: Final = getattr(passed_model_info, "base_model", None)
         model_info = {}
         base_model = ""
@@ -1485,9 +1499,9 @@ Model Info:
             elif self.default_webhook_url is not None:
                 _digest_webhook = self.default_webhook_url
             else:
-                _digest_webhook = os.getenv("SLACK_WEBHOOK_URL", None)
+                _digest_webhook = os.getenv("SLACK_WEBHOOK_URL") or os.getenv("ALERTING_WEBHOOK_URL")
             if _digest_webhook is None:
-                raise ValueError("Missing SLACK_WEBHOOK_URL from environment")
+                raise ValueError("Missing SLACK_WEBHOOK_URL / ALERTING_WEBHOOK_URL from environment")
 
             digest_key: Final = f"{alert_type_name_str}:{request_model or ''}:{api_base or ''}"
 
@@ -1516,10 +1530,10 @@ Model Info:
         elif self.default_webhook_url is not None:
             slack_webhook_url = self.default_webhook_url
         else:
-            slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL", None)
+            slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL") or os.getenv("ALERTING_WEBHOOK_URL")
 
         if slack_webhook_url is None:
-            raise ValueError("Missing SLACK_WEBHOOK_URL from environment")
+            raise ValueError("Missing SLACK_WEBHOOK_URL / ALERTING_WEBHOOK_URL from environment")
         payload: Final = {"text": formatted_message}
         headers: Final = {"Content-type": "application/json"}
 
@@ -1973,7 +1987,7 @@ Model Info:
         try:
             message = f"`{event_name}`\n"
 
-            key_event_dict: Final = key_event.model_dump()
+            key_event_dict: Final[dict[str, object]] = key_event.model_dump()
 
             # Add Created by information first
             message += "*Action Done by:*\n"

@@ -7,10 +7,14 @@ Reference: https://cloud.google.com/text-to-speech/docs/reference/rest/v1/text/s
 
 import base64
 from collections.abc import Coroutine
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
 
+from litellm.litellm_core_utils.audio_utils.utils import (
+    speech_media_type_from_audio_bytes,
+)
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
@@ -457,12 +461,11 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         if not response_content:
             raise ValueError("No audioContent in Vertex AI TTS response")
 
-        # Decode base64 to get binary content
         binary_data: Final = base64.b64decode(response_content)
-
-        # Create an httpx.Response object with the binary data
+        media_type: Final = speech_media_type_from_audio_bytes(binary_data)
         response: Final = httpx.Response(
             status_code=200,
+            headers=None if media_type is None else MappingProxyType({"content-type": media_type}),
             content=binary_data,
         )
 

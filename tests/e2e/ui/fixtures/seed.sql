@@ -29,7 +29,7 @@ INSERT INTO "LiteLLM_UserTable" ("user_id", "user_email", "user_role", "teams", 
 VALUES
   ('e2e-proxy-admin',      'admin@test.local',       'proxy_admin',           '{"e2e-team-crud"}',                  'scrypt:MU5CcTAi6rVK1HfY1rVPEWq6r4sxg837eq9dG4n5Q6BhDJ44442+seC6LAhLEAYr'),
   ('e2e-admin-viewer',     'adminviewer@test.local',  'proxy_admin_viewer',   '{}',                                 'scrypt:MU5CcTAi6rVK1HfY1rVPEWq6r4sxg837eq9dG4n5Q6BhDJ44442+seC6LAhLEAYr'),
-  ('e2e-internal-user',    'internal@test.local',     'internal_user',        '{"e2e-team-crud","e2e-team-org"}',   'scrypt:MU5CcTAi6rVK1HfY1rVPEWq6r4sxg837eq9dG4n5Q6BhDJ44442+seC6LAhLEAYr'),
+  ('e2e-internal-user',    'internal@test.local',     'internal_user',        '{"e2e-team-crud","e2e-team-org","e2e-team-keygen"}', 'scrypt:MU5CcTAi6rVK1HfY1rVPEWq6r4sxg837eq9dG4n5Q6BhDJ44442+seC6LAhLEAYr'),
   ('e2e-internal-viewer',  'viewer@test.local',       'internal_user_viewer', '{"e2e-team-crud"}',                  'scrypt:MU5CcTAi6rVK1HfY1rVPEWq6r4sxg837eq9dG4n5Q6BhDJ44442+seC6LAhLEAYr'),
   ('e2e-team-admin',       'teamadmin@test.local',    'internal_user',        '{"e2e-team-crud","e2e-team-delete"}', 'scrypt:MU5CcTAi6rVK1HfY1rVPEWq6r4sxg837eq9dG4n5Q6BhDJ44442+seC6LAhLEAYr'),
   ('e2e-invitable-user',   'invitable@test.local',    'internal_user',        '{}',                                 'scrypt:MU5CcTAi6rVK1HfY1rVPEWq6r4sxg837eq9dG4n5Q6BhDJ44442+seC6LAhLEAYr'),
@@ -63,6 +63,17 @@ INSERT INTO "LiteLLM_TeamTable" (
    '[{"role":"user","user_id":"e2e-invitable-user"}]'::jsonb,
    '{}'::jsonb, '{"fake-openai-gpt-4"}', 0.0, '{}'::jsonb, '{}'::jsonb, false);
 
+INSERT INTO "LiteLLM_TeamTable" (
+  "team_id", "team_alias", "organization_id", "admins", "members",
+  "members_with_roles", "metadata", "models", "spend", "model_spend", "model_max_budget", "blocked",
+  "team_member_permissions"
+) VALUES
+  ('e2e-team-keygen', 'E2E Team Keygen', NULL,
+   '{}', '{"e2e-internal-user"}',
+   '[{"role":"user","user_id":"e2e-internal-user"}]'::jsonb,
+   '{}'::jsonb, '{"fake-openai-gpt-4"}', 0.0, '{}'::jsonb, '{}'::jsonb, false,
+   '{"/key/generate"}');
+
 -- 6. Team Memberships (only user_id, team_id, spend — no created_at/updated_at)
 INSERT INTO "LiteLLM_TeamMembership" ("user_id", "team_id", "spend")
 VALUES
@@ -72,6 +83,7 @@ VALUES
   ('e2e-removable-member', 'e2e-team-crud',     0.0),
   ('e2e-team-admin',       'e2e-team-delete',   0.0),
   ('e2e-internal-user',    'e2e-team-org',      0.0),
+  ('e2e-internal-user',    'e2e-team-keygen',   0.0),
   ('e2e-invitable-user',   'e2e-team-no-admin', 0.0);
 
 -- 7. Verification Tokens (API Keys)
