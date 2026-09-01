@@ -86,6 +86,7 @@ from litellm.utils import (
 from ..common_utils import (
     BedrockError,
     BedrockModelInfo,
+    bedrock_arn_hides_model_family,
     bedrock_converse_supports_parallel_tool_use_config,
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
@@ -1325,7 +1326,8 @@ class AmazonConverseConfig(BaseConfig):
 
         additional_request_params.pop("parallel_tool_calls", None)
 
-        if base_model.startswith("anthropic") and additional_request_params.pop("client_metadata", None) is not None:
+        drops_client_metadata: Final = base_model.startswith("anthropic") or bedrock_arn_hides_model_family(model)
+        if drops_client_metadata and additional_request_params.pop("client_metadata", None) is not None:
             litellm.verbose_logger.debug(
                 "Bedrock Converse: dropping `client_metadata` for model=%s, Anthropic rejects it with "
                 "'client_metadata: Extra inputs are not permitted'",

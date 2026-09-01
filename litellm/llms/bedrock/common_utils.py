@@ -720,6 +720,15 @@ def get_bedrock_base_model(model: str) -> str:
     return model
 
 
+def bedrock_arn_hides_model_family(model: str) -> bool:
+    """
+    True for an ARN-addressed model whose base name carries no ``provider.model``
+    id, such as an application inference profile or a provisioned throughput ARN.
+    Callers that gate behavior on the model family cannot resolve one here.
+    """
+    return "arn:" in model.lower() and "." not in get_bedrock_base_model(model)
+
+
 def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
     return any(
         (litellm.model_cost.get(candidate) or {}).get("supports_parallel_tool_use_config") is True
