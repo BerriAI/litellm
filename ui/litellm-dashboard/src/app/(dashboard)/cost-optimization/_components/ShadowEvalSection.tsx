@@ -3,10 +3,13 @@
 import React, { useMemo, useState } from "react";
 
 import { useInfiniteKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useAutoRouters, usePlainModelGroups } from "@/app/(dashboard)/hooks/models/useModels";
 import { PaginatedMultiSelect } from "@/components/shared/PaginatedMultiSelect";
+import TeamMultiSelect from "@/components/common_components/team_multi_select";
+import { userOptionLabel } from "@/components/common_components/UserDropdown";
 import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,7 +30,7 @@ import {
   useStartShadowEval,
   useStopShadowEval,
   type ShadowEvalJob,
-  type ShadowEvalJobKey,
+  type ShadowEvalJobTarget,
   type ShadowEvalSlice,
 } from "./useShadowEval";
 
@@ -66,29 +69,31 @@ const routerMatchedOrBeatPct = (
     ? 100 - results.overall_shadow_win_rate_pct
     : results.overall_shadow_win_rate_pct + results.overall_tie_rate_pct;
 
-export const shadowedKeyLabel = (key: ShadowEvalJobKey): string =>
-  key.key_alias || key.key_name || `${key.api_key_id.slice(0, 10)}…`;
+export const shadowedTargetLabel = (target: ShadowEvalJobTarget): string =>
+  target.target_alias ||
+  target.key_name ||
+  (target.target_type === "key" ? `${target.target_id.slice(0, 10)}…` : target.target_id);
 
-const shadowedKeysLabel = (job: ShadowEvalJob): string =>
-  job.keys.length === 1 ? shadowedKeyLabel(job.keys[0]) : `${job.keys.length} keys`;
+const shadowedTargetsLabel = (job: ShadowEvalJob): string =>
+  job.targets.length === 1 ? shadowedTargetLabel(job.targets[0]) : `${job.targets.length} targets`;
 
 const totalBudget = (job: ShadowEvalJob): number | null =>
-  job.keys.reduce<number | null>(
-    (sum, key) => (sum === null || key.max_budget == null ? null : sum + key.max_budget),
+  job.targets.reduce<number | null>(
+    (sum, target) => (sum === null || target.max_budget == null ? null : sum + target.max_budget),
     0,
   );
 
-const totalSpend = (job: ShadowEvalJob): number => job.keys.reduce((sum, key) => sum + (key.spend ?? 0), 0);
+const totalSpend = (job: ShadowEvalJob): number => job.targets.reduce((sum, target) => sum + (target.spend ?? 0), 0);
 
-const keySpent = (key: ShadowEvalJobKey): boolean => {
-  const spendBudgetReached = key.max_budget != null && key.spend != null && key.spend >= key.max_budget;
-  const turnValveReached = key.attempt_count != null && key.attempt_count >= key.max_turns;
+const targetSpent = (target: ShadowEvalJobTarget): boolean => {
+  const spendBudgetReached = target.max_budget != null && target.spend != null && target.spend >= target.max_budget;
+  const turnValveReached = target.attempt_count != null && target.attempt_count >= target.max_turns;
   return spendBudgetReached || turnValveReached;
 };
 
-const keyStatus = (job: ShadowEvalJob, key: ShadowEvalJobKey): string => {
-  if (job.status === "completed" || (key.stopped_at == null && keySpent(key))) return "completed";
-  return key.stopped_at != null ? "stopped" : "running";
+const targetStatus = (job: ShadowEvalJob, target: ShadowEvalJobTarget): string => {
+  if (job.status === "completed" || (target.stopped_at == null && targetSpent(target))) return "completed";
+  return target.stopped_at != null ? "stopped" : "running";
 };
 
 const jobHeadline = (job: ShadowEvalJob): React.ReactNode =>
@@ -96,12 +101,12 @@ const jobHeadline = (job: ShadowEvalJob): React.ReactNode =>
     <>
       Comparing <span className="font-mono text-xs">{job.router_name}</span> to{" "}
       <span className="font-mono text-xs">{job.baseline_model}</span> on {job.shadow_percentage}% of{" "}
-      <span className="font-mono text-xs">{shadowedKeysLabel(job)}</span> traffic
+      <span className="font-mono text-xs">{shadowedTargetsLabel(job)}</span> traffic
     </>
   ) : (
     <>
-      Shadowing {job.shadow_percentage}% of <span className="font-mono text-xs">{shadowedKeysLabel(job)}</span> traffic
-      via <span className="font-mono text-xs">{job.router_name}</span>
+      Shadowing {job.shadow_percentage}% of <span className="font-mono text-xs">{shadowedTargetsLabel(job)}</span>{" "}
+      traffic via <span className="font-mono text-xs">{job.router_name}</span>
     </>
   );
 
@@ -255,13 +260,12 @@ const VerdictBar: React.FC<{ direction: ShadowEvalDirection; results: NonNullabl
   );
 };
 
-const KeyTable: React.FC<{ job: ShadowEvalJob }> = ({ job }) => {
-  const slices = new Map((job.results?.by_key ?? []).map((slice) => [slice.group, slice]));
+const TargetTable: React.FC<{ job: ShadowEvalJob }> = ({ job }) => {
   return (
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead>Key</TableHead>
+          <TableHead>Target</TableHead>
           <TableHead>Status</TableHead>
           {["Budget used", "Router wins", `${otherArmLabel(job.direction)} wins`].map((label) => (
             <TableHead key={label} className="text-right">
@@ -271,18 +275,23 @@ const KeyTable: React.FC<{ job: ShadowEvalJob }> = ({ job }) => {
         </TableRow>
       </TableHeader>
       <TableBody>
-        {job.keys.map((key) => {
-          const slice = slices.get(key.api_key_id);
+        {job.targets.map((target) => {
+          const slice = target.verdicts;
           return (
-            <TableRow key={key.api_key_id}>
-              <TableCell className="font-medium text-foreground">{shadowedKeyLabel(key)}</TableCell>
+            <TableRow key={`${target.target_type}:${target.target_id}`}>
+              <TableCell className="font-medium text-foreground">
+                {shadowedTargetLabel(target)}
+                {target.target_type !== "key" && (
+                  <span className="ml-2 text-xs font-normal text-muted-foreground">{target.target_type}</span>
+                )}
+              </TableCell>
               <TableCell>
-                <StatusBadge status={keyStatus(job, key)} />
+                <StatusBadge status={targetStatus(job, target)} />
               </TableCell>
               <TableCell className="text-right tabular-nums">
-                {key.max_budget != null
-                  ? `${usd(key.spend ?? 0)} / ${usd(key.max_budget)}`
-                  : `${(key.attempt_count ?? slice?.turn_count ?? 0).toLocaleString()} / ${key.max_turns.toLocaleString()} turns`}
+                {target.max_budget != null
+                  ? `${usd(target.spend ?? 0)} / ${usd(target.max_budget)}`
+                  : `${(target.attempt_count ?? slice?.turn_count ?? 0).toLocaleString()} / ${target.max_turns.toLocaleString()} turns`}
               </TableCell>
               {slice ? (
                 <>
@@ -318,9 +327,9 @@ const ResultsBody: React.FC<{ job: ShadowEvalJob; resultsError?: boolean }> = ({
   const hasVerdicts = results != null && (results.by_tier.length > 0 || results.by_current_model.length > 0);
   return (
     <>
-      {job.keys.length > 1 && (
+      {job.targets.length > 1 && (
         <div className="border-b">
-          <KeyTable job={job} />
+          <TargetTable job={job} />
         </div>
       )}
       {/* results == null re-stated for TS narrowing; hasVerdicts alone cannot narrow it */}
@@ -454,9 +463,9 @@ const DIRECTION_OPTIONS: readonly { value: ShadowEvalDirection; label: string }[
 
 const START_FORM_DESCRIPTION: Record<ShadowEvalDirection, string> = {
   forward:
-    "Duplicates a sampled slice of the selected keys' traffic through the auto-router and has an LLM judge compare both answers blind. Each key gets its own spend budget. The router's answers are never served to users; judge calls bill to the shadowed key.",
+    "Duplicates a sampled slice of the selected targets' traffic (keys, teams, or users) through the auto-router and has an LLM judge compare both answers blind. Each target gets its own spend budget. The router's answers are never served to users; judge calls bill to the sampled traffic's own identity.",
   reverse:
-    "Duplicates a sampled slice of the traffic the auto-router already serves against a fixed baseline model and has an LLM judge compare both answers blind. Each key gets its own spend budget. The baseline's answers are never served to users; judge calls bill to the shadowed key.",
+    "Duplicates a sampled slice of the traffic the auto-router already serves against a fixed baseline model and has an LLM judge compare both answers blind. Each target gets its own spend budget. The baseline's answers are never served to users; judge calls bill to the sampled traffic's own identity.",
 };
 
 const DURATION_OPTIONS = [
@@ -515,9 +524,46 @@ const KeySelect: React.FC<{ value: string[]; onChange: (tokens: string[]) => voi
   );
 };
 
+const UserSelect: React.FC<{ value: string[]; onChange: (ids: string[]) => void }> = ({ value, onChange }) => {
+  const [search, setSearch] = useState("");
+  const { data, isPending, isError, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteUsers(
+    50,
+    search || undefined,
+  );
+  const options = useMemo<SearchSelectOption[]>(
+    () =>
+      Array.from(
+        new Map(
+          (data?.pages ?? [])
+            .flatMap((page) => page.users)
+            .map((user) => [user.user_id, { label: userOptionLabel(user), value: user.user_id }] as const),
+        ).values(),
+      ),
+    [data],
+  );
+  return (
+    <PaginatedMultiSelect
+      inputId="shadow-eval-user"
+      options={options}
+      value={value}
+      onValueChange={onChange}
+      onSearchChange={setSearch}
+      onLoadMore={() => void fetchNextPage()}
+      hasNextPage={hasNextPage}
+      isFetchingNextPage={isFetchingNextPage}
+      isLoading={isPending}
+      placeholder="Search users by email"
+      emptyText="No matching users"
+      errorText={isError ? "Users could not be loaded. Refresh the page to retry." : undefined}
+    />
+  );
+};
+
 const StartForm: React.FC = () => {
   const { accessToken } = useAuthorized();
   const [apiKeyIds, setApiKeyIds] = useState<string[]>([]);
+  const [teamIds, setTeamIds] = useState<string[]>([]);
+  const [userIds, setUserIds] = useState<string[]>([]);
   const [routerName, setRouterName] = useState("");
   const [direction, setDirection] = useState<ShadowEvalDirection>("forward");
   const [baselineModel, setBaselineModel] = useState("");
@@ -542,12 +588,15 @@ const StartForm: React.FC = () => {
   const parsedMaxBudget = Number.parseFloat(maxBudget);
   const maxBudgetValid = parsedMaxBudget >= 0.01 && parsedMaxBudget <= 10000;
   const baselinePicked = direction === "forward" || baselineModel !== "";
-  const filled = apiKeyIds.length > 0 && [routerName, judgeModel].every((field) => field !== "") && baselinePicked;
+  const targetsPicked = apiKeyIds.length + teamIds.length + userIds.length > 0;
+  const filled = targetsPicked && [routerName, judgeModel].every((field) => field !== "") && baselinePicked;
   const boundsValid = percentageValid && maxBudgetValid;
   const valid = Boolean(accessToken) && filled && boundsValid;
   const handleStart = () => {
     const startBody = {
       api_key_ids: apiKeyIds,
+      team_ids: teamIds,
+      user_ids: userIds,
       router_name: routerName,
       direction,
       ...(direction === "reverse" ? { baseline_model: baselineModel } : {}),
@@ -586,6 +635,12 @@ const StartForm: React.FC = () => {
           </Field>
           <Field label="Keys to shadow" htmlFor="shadow-eval-key">
             <KeySelect value={apiKeyIds} onChange={setApiKeyIds} />
+          </Field>
+          <Field label="Teams to shadow">
+            <TeamMultiSelect value={teamIds} onChange={setTeamIds} placeholder="Search teams by alias" />
+          </Field>
+          <Field label="Users to shadow" htmlFor="shadow-eval-user">
+            <UserSelect value={userIds} onChange={setUserIds} />
           </Field>
           <Field label="Auto-router">
             <SearchSelect
@@ -642,7 +697,7 @@ const StartForm: React.FC = () => {
                 value={maxBudget}
                 onChange={(e) => setMaxBudget(e.target.value)}
               />
-              <span className="text-sm text-muted-foreground">max shadow + judge spend, per key</span>
+              <span className="text-sm text-muted-foreground">max shadow + judge spend, per target</span>
             </div>
             {maxBudget.trim() !== "" && !maxBudgetValid && (
               <p className="text-xs text-destructive">Enter a value from 0.01 to 10000</p>
@@ -774,8 +829,9 @@ const ShadowEvalSection: React.FC = () => {
       <div className="flex flex-wrap items-baseline gap-2">
         <h2 className="text-xl font-semibold text-foreground">Shadow eval</h2>
         <p className="text-sm text-muted-foreground">
-          Blind-judge the auto-router on your real traffic: against the models a key uses today before switching, or
-          against a fixed baseline after it has switched.
+          Blind-judge the auto-router on the real traffic of a key, team, or user (teams and users cover
+          JWT-authenticated traffic): against the models they use today before switching, or against a fixed baseline
+          after they have switched.
         </p>
       </div>
 

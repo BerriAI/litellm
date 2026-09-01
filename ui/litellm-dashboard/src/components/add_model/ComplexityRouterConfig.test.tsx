@@ -80,6 +80,15 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.getByText(/Score > 0.60/)).toBeInTheDocument();
   });
 
+  it("leaves the score threshold list color to the theme instead of an inline style", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    const list = screen.getByText(/Score < 0.15/).closest<HTMLUListElement>("ul");
+    expect(list).toBeInTheDocument();
+    expect(list).toHaveClass("text-muted-foreground");
+    expect(list?.style.color).toBe("");
+  });
+
   it("should default to heuristic and hide classifier model/timeout fields", () => {
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
     expect(screen.getByText("Advanced: Classification Method")).toBeInTheDocument();
