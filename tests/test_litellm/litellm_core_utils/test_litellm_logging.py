@@ -5548,6 +5548,28 @@ async def test_streaming_success_callbacks_survive_standard_logging_payload_fail
     releasing.async_log_success_event.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_streaming_success_callbacks_survive_guardrail_logging_hook_failure():
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+
+    skipping = CustomGuardrail(guardrail_name="skipping-guardrail")
+    skipping.should_run_guardrail = MagicMock(return_value=False)
+    skipping.async_logging_hook = AsyncMock()
+    raising = CustomGuardrail(guardrail_name="raising-guardrail")
+    raising.should_run_guardrail = MagicMock(return_value=True)
+    raising.async_logging_hook = AsyncMock(side_effect=RuntimeError("guardrail hook failed"))
+    releasing = CustomLogger()
+    releasing.async_log_success_event = AsyncMock()
+
+    patcher, logging_obj = _streaming_logging_obj_with_callbacks([skipping, raising, releasing])
+    with patcher:
+        await logging_obj.async_success_handler(result=_assembled_stream_result())
+
+    skipping.async_logging_hook.assert_not_awaited()
+    raising.async_logging_hook.assert_awaited_once()
+    releasing.async_log_success_event.assert_awaited_once()
+
+
 def _resolve(custom_llm_provider, litellm_params, optional_params, model):
     from litellm.litellm_core_utils.litellm_logging import (
         _resolve_vertex_location_for_cost,
