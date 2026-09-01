@@ -1285,10 +1285,32 @@ class TestBuildBlockSseChunks:
         )
         types = [payload["type"] for payload in payloads]
         assert "response.created" not in types
-        assert types[0] == "response.output_item.added"
-        assert payloads[0]["output_index"] == 3
+        assert types[0] == "response.output_item.done"
+        assert payloads[0]["output_index"] == 2
+        assert payloads[0]["item"]["id"] == "msg_orig"
+        assert payloads[0]["item"]["status"] == "completed"
+        assert types[1] == "response.output_item.added"
+        assert payloads[1]["output_index"] == 3
         completed = payloads[-1]["response"]
         assert completed["id"] == "resp_live"
         assert completed["model"] == "gpt-5.4-mini-2026-01-01"
         assert completed["output"][0]["content"][0]["text"] == "Blocked by policy."
         assert completed["usage"] == {"input_tokens": 7, "output_tokens": 21, "total_tokens": 28}
+
+    def test_continuation_without_open_item_emits_no_closing_events(self):
+        handler = OpenAIResponsesHandler()
+        yielded = [
+            {"type": "response.created", "response": {"id": "resp_live", "model": "gpt-5.4-mini"}},
+            {"type": "response.in_progress", "response": {"id": "resp_live"}},
+        ]
+        payloads = self._payloads(
+            handler.build_block_sse_chunks(
+                self._exc(original_response=yielded), stream_started=True, responses_so_far=yielded
+            )
+        )
+        types = [payload["type"] for payload in payloads]
+        assert types[0] == "response.output_item.added"
+        assert types[-1] == "response.completed"
+        dones = [payload for payload in payloads if payload["type"] == "response.output_item.done"]
+        assert len(dones) == 1
+        assert dones[0]["item"]["content"][0]["text"] == "Blocked by policy."

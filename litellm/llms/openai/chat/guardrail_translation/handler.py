@@ -1015,6 +1015,21 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                                     # Subsequent chunks - clear the text
                                     content_item["text"] = ""
 
+    def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:
+        """
+        True once any relayed chunk carries a non-null ``finish_reason``.
+
+        The unified guardrail's ``end_of_stream_only`` streaming path probes
+        this via ``hasattr`` to withhold the terminal chunks until
+        end-of-stream moderation runs, so a block can replace the finish
+        instead of trailing after a ``finish_reason`` the client already saw.
+        """
+        return any(
+            stream_item_field(choice, "finish_reason") is not None
+            for item in responses_so_far
+            for choice in _stream_chunk_choices(item)
+        )
+
     def build_block_sse_chunks(
         self,
         exc: "ModifyResponseException",
@@ -1095,6 +1110,13 @@ class _BlockedChunk(TypedDict):
 
 def _chat_sse_chunk(payload: _BlockedChunk) -> bytes:
     return f"data: {json.dumps(payload)}\n\n".encode()
+
+
+def _stream_chunk_choices(item: object) -> Sequence[object]:
+    choices: Final = stream_item_field(item, "choices")
+    if isinstance(choices, Sequence) and not isinstance(choices, (str, bytes)):
+        return choices
+    return ()
 
 
 def _blocked_stream_identity(
