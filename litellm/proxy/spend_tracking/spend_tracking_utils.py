@@ -397,6 +397,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         usage = _combined_usage.model_dump()
 
     id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs)
+    raw_response_id: Final = response_obj_dict.get("id")
     standard_logging_payload: Final = cast(StandardLoggingPayload | None, kwargs.get("standard_logging_object", None))
 
     end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
@@ -522,7 +523,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             standard_logging_payload.get("autorouter_savings", None) if standard_logging_payload is not None else None
         ),
         litellm_call_id=litellm_call_id,
-        response_id=cast(str | None, response_obj_dict.get("id")),
+        response_id=raw_response_id if isinstance(raw_response_id, str) else None,
         router_metadata=_get_router_metadata_for_spend_log(
             metadata=metadata,
             requested_model=_model_group,
