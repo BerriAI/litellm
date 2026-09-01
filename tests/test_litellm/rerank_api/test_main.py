@@ -111,6 +111,67 @@ def test_together_rerank_honors_api_base(respx_mock: respx.MockRouter):
     assert mock_route.calls[0].request.headers["authorization"] == "Bearer fake-together-key"
 
 
+DASHSCOPE_404_BODY = {
+    "error": {
+        "message": "The model `does-not-exist` does not exist or you do not have access to it.",
+        "type": "invalid_request_error",
+        "param": None,
+        "code": "model_not_found",
+    },
+    "request_id": "mock-request-id",
+}
+
+
+def test_rerank_error_names_provider_and_keeps_body(respx_mock: respx.MockRouter, monkeypatch):
+    """Regression for the rerank error path mapping with the unresolved provider param:
+    a provider 404 surfaced as 'None - ' instead of naming the provider and its error body."""
+    monkeypatch.delenv("DASHSCOPE_API_BASE", raising=False)
+    monkeypatch.delenv("DASHSCOPE_API_BASE_RERANK", raising=False)
+
+    mock_route = respx_mock.post("https://dashscope.example/v1/reranks")
+    mock_route.return_value = httpx.Response(404, json=DASHSCOPE_404_BODY)
+
+    with pytest.raises(litellm.NotFoundError) as exc_info:
+        litellm.rerank(
+            model="dashscope/does-not-exist",
+            query=MARKER_QUERY,
+            documents=[MARKER_DOC],
+            api_key="fake-dashscope-key",
+            api_base="https://dashscope.example/v1",
+        )
+
+    assert mock_route.called
+    assert "DashscopeException" in str(exc_info.value)
+    assert "does not exist or you do not have access to it" in str(exc_info.value)
+    assert "None - " not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_arerank_error_is_mapped_to_litellm_exception(respx_mock: respx.MockRouter, monkeypatch):
+    """Regression for arerank's bare re-raise: provider errors escaped as raw
+    provider exception classes instead of the mapped litellm exception contract."""
+    monkeypatch.delenv("DASHSCOPE_API_BASE", raising=False)
+    monkeypatch.delenv("DASHSCOPE_API_BASE_RERANK", raising=False)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+
+    mock_route = respx_mock.post("https://dashscope.example/v1/reranks")
+    mock_route.return_value = httpx.Response(404, json=DASHSCOPE_404_BODY)
+
+    with pytest.raises(litellm.NotFoundError) as exc_info:
+        await litellm.arerank(
+            model="dashscope/does-not-exist",
+            query=MARKER_QUERY,
+            documents=[MARKER_DOC],
+            api_key="fake-dashscope-key",
+            api_base="https://dashscope.example/v1",
+        )
+
+    assert mock_route.called
+    assert "DashscopeException" in str(exc_info.value)
+    assert "does not exist or you do not have access to it" in str(exc_info.value)
+    assert "None - " not in str(exc_info.value)
+
+
 @pytest.mark.asyncio
 async def test_together_rerank_async_honors_env_api_base(respx_mock: respx.MockRouter, monkeypatch):
     """Regression: TOGETHER_AI_API_BASE was honored by chat but ignored by rerank."""
