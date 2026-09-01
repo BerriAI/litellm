@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Final, Protocol
+from typing import Final, Protocol, TypeVar
 from urllib.parse import quote
 
 from hypothesis import strategies as st
@@ -19,6 +19,7 @@ from tests.test_litellm.ocr.fixtures.base import (
 )
 
 OcrRecordingTarget = RecordingTarget[OcrSdkInputBase]
+ValueT = TypeVar("ValueT")
 
 
 class OcrFixtureClient(Protocol):
@@ -55,6 +56,27 @@ def pdf_document() -> DocumentUrlDocument:
 
 def public_document_strategy() -> SearchStrategy[ImageUrlDocument | DocumentUrlDocument]:
     return st.sampled_from((image_document("invoice 123", 24), pdf_document()))
+
+
+def sampled_scalar_strategy(values: tuple[ValueT, ...]) -> SearchStrategy[ValueT]:
+    return st.sampled_from(values)
+
+
+def sampled_list_strategy(values: tuple[tuple[ValueT, ...], ...]) -> SearchStrategy[list[ValueT]]:
+    return st.sampled_from(values).map(list)
+
+
+def sampled_parameter_group_strategy(
+    values: tuple[tuple[tuple[str, object], ...], ...],
+) -> SearchStrategy[dict[str, object]]:
+    return st.sampled_from(values).map(dict)
+
+
+def parameter_strategy(name: str, values: SearchStrategy[ValueT]) -> SearchStrategy[dict[str, object]]:
+    def as_parameter(value: ValueT) -> dict[str, object]:
+        return {name: value}
+
+    return values.map(as_parameter)
 
 
 def annotation_format(name: str) -> JsonSchemaResponseFormat:

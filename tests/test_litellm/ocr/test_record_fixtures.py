@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import queue
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
 import pytest
+from hypothesis import find, settings
+from hypothesis.strategies import SearchStrategy
 
 from tests.route_parity.fixtures.inputs import generate_case_inputs
 from tests.route_parity.fixtures.pipeline import parse_recording_args
@@ -54,12 +57,22 @@ _MISTRAL_PARAMS: Final = frozenset(
         "id",
     }
 )
+_MISTRAL_2512_PARAMS: Final = _MISTRAL_PARAMS - {"include_blocks"}
+_MISTRAL_2505_PARAMS: Final = _MISTRAL_2512_PARAMS - {"extract_header", "extract_footer", "table_format"}
+_FIND_SETTINGS: Final = settings(max_examples=2_000, deadline=None, derandomize=True, database=None)
 
 
 def _model(case_input: OcrSdkInputBase) -> str:
     model: Final = case_input.canonical_input().get("model")
     assert isinstance(model, str)
     return model
+
+
+def _find_input(
+    strategy: SearchStrategy[OcrSdkInputBase],
+    predicate: Callable[[OcrSdkInputBase], bool],
+) -> OcrSdkInputBase:
+    return find(strategy, predicate, settings=_FIND_SETTINGS)
 
 
 def test_parse_args_has_no_model_selection() -> None:
@@ -123,7 +136,16 @@ def test_azure_mistral_discovery_enumerates_registered_models() -> None:
     }
     target: Final = discover_targets(environ, _UNUSED_OCR_CLIENT)[0]
 
-    assert {_model(case_input) for case_input in target.required_inputs} == set(AZURE_MISTRAL_MODELS)
+    for model in AZURE_MISTRAL_MODELS:
+        assert (
+            _model(
+                _find_input(
+                    target.strategy,
+                    lambda case_input, expected_model=model: _model(case_input) == expected_model,
+                )
+            )
+            == model
+        )
 
 
 @pytest.mark.parametrize(
@@ -152,14 +174,6 @@ def test_mistral_target_uses_canonical_model_and_normalized_base(
     case_inputs: Final = generate_case_inputs(target.strategy, examples=1)
     assert len(case_inputs) == 1
     assert case_inputs[0].canonical_input()["model"] in MISTRAL_MODELS
-    assert len(target.required_inputs) == 14 * len(MISTRAL_MODELS)
-    covered_params: Final = {
-        key
-        for case_input in target.required_inputs
-        for key in case_input.as_sdk_kwargs()
-        if key not in {"model", "document", "custom_llm_provider"}
-    }
-    assert covered_params == _MISTRAL_PARAMS
 
 
 def test_mistral_target_invocation_forwards_discovered_credentials() -> None:
@@ -177,7 +191,7 @@ def test_mistral_target_invocation_forwards_discovered_credentials() -> None:
     assert kwargs["model"] in MISTRAL_MODELS
 
 
-def test_every_target_covers_every_supported_param_for_every_model() -> None:
+def test_every_target_strategy_reaches_every_model_and_coverage_param() -> None:
     targets: Final = discover_targets(
         {
             "MISTRAL_API_KEY": "mistral-secret",
@@ -193,12 +207,12 @@ def test_every_target_covers_every_supported_param_for_every_model() -> None:
     )
     expected: Final[dict[str, tuple[tuple[str, ...], frozenset[str]]]] = {
         "mistral-ocr": (MISTRAL_MODELS, _MISTRAL_PARAMS),
-        "azure-mistral": (AZURE_MISTRAL_MODELS, _MISTRAL_PARAMS),
+        "azure-mistral": (AZURE_MISTRAL_MODELS, _MISTRAL_2512_PARAMS),
         "azure-document-intelligence": (
             AZURE_DOCUMENT_INTELLIGENCE_MODELS,
             frozenset({"pages", "features", "req_format"}),
         ),
-        "vertex-mistral": (VERTEX_MISTRAL_MODELS, _MISTRAL_PARAMS),
+        "vertex-mistral": (VERTEX_MISTRAL_MODELS, _MISTRAL_2505_PARAMS),
         "vertex-deepseek": (VERTEX_DEEPSEEK_MODELS, frozenset[str]()),
         "reducto-v3": (REDUCTO_V3_MODELS, frozenset({"formatting", "retrieval", "settings"})),
         "reducto-legacy": (REDUCTO_LEGACY_MODELS, frozenset({"enhance"})),
@@ -206,13 +220,60 @@ def test_every_target_covers_every_supported_param_for_every_model() -> None:
 
     for target in targets:
         expected_models, expected_params = expected[target.name]
-        assert {_model(case_input) for case_input in target.required_inputs} == set(expected_models)
         for model in expected_models:
-            covered = frozenset(
-                key
-                for case_input in target.required_inputs
-                if _model(case_input) == model
-                for key in case_input.as_sdk_kwargs()
-                if key not in {"model", "document", "custom_llm_provider", "vertex_project", "vertex_location"}
+            assert (
+                _model(
+                    _find_input(
+                        target.strategy,
+                        lambda case_input, expected_model=model: _model(case_input) == expected_model,
+                    )
+                )
+                == model
             )
-            assert covered == expected_params
+        for param in expected_params:
+            assert (
+                param
+                in _find_input(
+                    target.strategy,
+                    lambda case_input, expected_param=param: expected_param in case_input.as_sdk_kwargs(),
+                ).as_sdk_kwargs()
+            )
+
+
+def test_ocr_targets_have_no_hardcoded_required_inputs() -> None:
+    targets: Final = discover_targets(
+        {
+            "MISTRAL_API_KEY": "mistral-secret",
+            "REDUCTO_API_KEY": "reducto-secret",
+            "AZURE_AI_API_KEY": "azure-secret",
+            "AZURE_AI_API_BASE": "https://azure.example",
+            "AZURE_DOCUMENT_INTELLIGENCE_API_KEY": "document-secret",
+            "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT": "https://document.example",
+            "VERTEX_AI_API_KEY": "vertex-secret",
+            "VERTEXAI_PROJECT": "project-1",
+        },
+        _UNUSED_OCR_CLIENT,
+    )
+
+    assert all(target.required_inputs == () for target in targets)
+
+
+def test_mistral_adapters_preserve_omitted_optional_params() -> None:
+    targets: Final = discover_targets(
+        {
+            "AZURE_AI_API_KEY": "azure-secret",
+            "AZURE_AI_API_BASE": "https://azure.example",
+            "VERTEX_AI_API_KEY": "vertex-secret",
+            "VERTEXAI_PROJECT": "project-1",
+        },
+        _UNUSED_OCR_CLIENT,
+    )
+
+    baselines: Final = tuple(
+        _find_input(
+            target.strategy,
+            lambda case_input: _MISTRAL_PARAMS.isdisjoint(case_input.as_sdk_kwargs()),
+        )
+        for target in targets
+    )
+    assert all(_MISTRAL_PARAMS.isdisjoint(baseline.as_sdk_kwargs()) for baseline in baselines)

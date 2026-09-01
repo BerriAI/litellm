@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from typing import Annotated, Final, Literal, cast
 
 from hypothesis import strategies as st
-from hypothesis.strategies import DrawFn, SearchStrategy
+from hypothesis.strategies import SearchStrategy
 from pydantic import Field, field_validator, model_validator
 from typing_extensions import Self
 
@@ -18,6 +18,9 @@ from tests.test_litellm.ocr.fixtures.common import (
     OcrRecordingTarget,
     fixture_pdf_data_uri,
     invoke_with_api_key,
+    parameter_strategy,
+    sampled_list_strategy,
+    sampled_scalar_strategy,
 )
 
 
@@ -65,6 +68,7 @@ ReductoDocument = Annotated[
 ]
 
 ReductoTableOutputFormat = Literal["html", "json", "md", "jsonbbox", "dynamic", "csv"]
+ReductoReturnImage = Literal["figure", "table", "page"]
 ReductoFormattingInclude = Literal[
     "change_tracking",
     "highlight",
@@ -87,6 +91,19 @@ ReductoBlockType = Literal[
     "Comment",
     "Signature",
 ]
+_REDUCTO_FILTER_BLOCK_GROUPS: Final[tuple[tuple[ReductoBlockType, ...], ...]] = (
+    (),
+    ("Header",),
+    ("Header", "Footer", "Page Number"),
+    ("Figure", "Table", "Key Value"),
+)
+_REDUCTO_RETURN_IMAGE_GROUPS: Final[tuple[tuple[ReductoReturnImage, ...], ...]] = (
+    (),
+    ("figure",),
+    ("table",),
+    ("page",),
+    ("figure", "table", "page"),
+)
 
 
 class ReductoFormatting(FixtureModel):
@@ -164,7 +181,7 @@ class ReductoSettings(FixtureModel):
     force_url_result: bool = False
     force_file_extension: str | None = None
     return_ocr_data: bool = False
-    return_images: list[Literal["figure", "table", "page"]] = Field(default_factory=list)
+    return_images: list[ReductoReturnImage] = Field(default_factory=list)
     embed_pdf_metadata: bool = False
     embed_pdf_metadata_dpi: int = Field(default=100, ge=50, le=250)
     persist_results: bool = False
@@ -176,9 +193,7 @@ class ReductoSettings(FixtureModel):
 
     @field_validator("return_images")
     @classmethod
-    def validate_unique_images(
-        cls, value: list[Literal["figure", "table", "page"]]
-    ) -> list[Literal["figure", "table", "page"]]:
+    def validate_unique_images(cls, value: list[ReductoReturnImage]) -> list[ReductoReturnImage]:
         if len(value) != len(set(value)):
             raise ValueError("settings.return_images entries must be unique")
         return value
@@ -218,94 +233,121 @@ _REDUCTO_API_BASE: Final = "https://platform.reducto.ai"
 
 
 def _formatting_strategy() -> SearchStrategy[ReductoFormatting]:
-    return st.builds(
-        ReductoFormatting,
-        add_page_markers=st.booleans(),
-        table_output_format=st.sampled_from(("html", "json", "md", "jsonbbox", "dynamic", "csv")),
-        merge_tables=st.booleans(),
-        include=st.sampled_from(
-            (
-                [],
-                ["hyperlinks"],
-                ["change_tracking", "highlight", "comments"],
-                ["signatures", "ignore_watermarks"],
-            )
+    values: Final = st.one_of(
+        parameter_strategy(
+            "table_output_format",
+            sampled_scalar_strategy(("dynamic", "html", "md", "json", "csv", "jsonbbox")),
+        ),
+        parameter_strategy("add_page_markers", sampled_scalar_strategy((False, True))),
+        parameter_strategy("merge_tables", sampled_scalar_strategy((False, True))),
+        parameter_strategy(
+            "include",
+            sampled_list_strategy(
+                (
+                    (),
+                    ("hyperlinks",),
+                    ("change_tracking", "highlight", "comments"),
+                    ("signatures", "ignore_watermarks"),
+                )
+            ),
         ),
     )
+    return values.map(ReductoFormatting.model_validate)
 
 
 def _chunking_strategy() -> SearchStrategy[ReductoChunking]:
     return st.one_of(
-        st.builds(
-            ReductoChunking,
-            chunk_mode=st.sampled_from(("section", "page", "disabled", "block", "page_sections")),
-            chunk_size=st.just(None),
-            chunk_overlap=st.just(0),
+        st.sampled_from(("disabled", "section", "page", "block", "page_sections")).map(
+            lambda mode: ReductoChunking(chunk_mode=mode)
         ),
-        st.builds(
-            ReductoChunking,
-            chunk_mode=st.just("variable"),
-            chunk_size=st.sampled_from((250, 1000, 1500)),
-            chunk_overlap=st.sampled_from((0, 32, 128)),
+        st.just(ReductoChunking(chunk_mode="variable")),
+        sampled_scalar_strategy((250, 1000, 1500)).map(
+            lambda size: ReductoChunking(chunk_mode="variable", chunk_size=size)
+        ),
+        sampled_scalar_strategy((32, 128)).map(
+            lambda overlap: ReductoChunking(chunk_mode="variable", chunk_size=1000, chunk_overlap=overlap)
         ),
     )
 
 
 def _retrieval_strategy() -> SearchStrategy[ReductoRetrieval]:
-    return st.builds(
-        ReductoRetrieval,
-        chunking=_chunking_strategy(),
-        filter_blocks=st.sampled_from(
-            (
-                [],
-                ["Header"],
-                ["Header", "Footer", "Page Number"],
-                ["Figure", "Table", "Key Value"],
+    filter_blocks: Final[SearchStrategy[list[ReductoBlockType]]] = sampled_list_strategy(_REDUCTO_FILTER_BLOCK_GROUPS)
+    return st.one_of(
+        _chunking_strategy().map(lambda chunking: ReductoRetrieval(chunking=chunking)),
+        filter_blocks.map(lambda selected_blocks: ReductoRetrieval(filter_blocks=selected_blocks)),
+        sampled_scalar_strategy((False, True)).map(
+            lambda optimized: ReductoRetrieval(
+                chunking=ReductoChunking(chunk_mode="variable"),
+                embedding_optimized=optimized,
             )
         ),
-        embedding_optimized=st.booleans(),
     )
 
 
 def _settings_strategy() -> SearchStrategy[ReductoSettings]:
-    return st.builds(
-        ReductoSettings,
-        ocr_system=st.sampled_from(("standard", "legacy")),
-        extraction_mode=st.sampled_from(("ocr", "hybrid")),
-        force_url_result=st.just(False),
-        return_ocr_data=st.booleans(),
-        return_images=st.sampled_from(([], ["figure"], ["table"], ["page"], ["figure", "table", "page"])),
-        embed_pdf_metadata=st.booleans(),
-        embed_pdf_metadata_dpi=st.sampled_from((50, 100, 250)),
-        persist_results=st.just(False),
-        timeout=st.sampled_from((None, 300.0, 900.0)),
-        page_range=st.sampled_from((None, [1], [1, 2], ["Sheet1"])),
+    return_images: Final[SearchStrategy[list[ReductoReturnImage]]] = sampled_list_strategy(_REDUCTO_RETURN_IMAGE_GROUPS)
+    page_ranges: Final = st.one_of(
+        st.just(ReductoPageRange(start=1, end=1)),
+        st.just(ReductoPageRange(start=1, end=3)),
+        sampled_list_strategy(
+            (
+                (
+                    ReductoPageRange(start=1, end=2),
+                    ReductoPageRange(start=4, end=5),
+                ),
+            )
+        ),
+    )
+    return st.one_of(
+        st.sampled_from(("standard", "legacy")).map(lambda value: ReductoSettings(ocr_system=value)),
+        st.sampled_from(("hybrid", "ocr")).map(lambda value: ReductoSettings(extraction_mode=value)),
+        st.just(ReductoSettings(force_url_result=True)),
+        st.just(ReductoSettings(return_ocr_data=True)),
+        return_images.map(lambda selected_images: ReductoSettings(return_images=selected_images)),
+        sampled_scalar_strategy((50, 100, 250)).map(
+            lambda dpi: ReductoSettings(embed_pdf_metadata=True, embed_pdf_metadata_dpi=dpi)
+        ),
+        sampled_scalar_strategy((300.0, 900.0)).map(lambda timeout: ReductoSettings(timeout=timeout)),
+        page_ranges.map(lambda page_range: ReductoSettings(page_range=page_range)),
     )
 
 
-@st.composite
 def reducto_v3_input_strategy(
-    draw: DrawFn, document: ReductoDocumentUrlDocument | None = None
-) -> ReductoParseV3SdkInput:
-    model, custom_llm_provider = draw(st.sampled_from((("reducto/parse-v3", None), ("parse-v3", "reducto"))))
-    options: Final = draw(
-        st.fixed_dictionaries(
-            {},
-            optional={
-                "formatting": _formatting_strategy(),
-                "retrieval": _retrieval_strategy(),
-                "settings": _settings_strategy(),
-            },
-        )
+    document: ReductoDocumentUrlDocument | None = None,
+) -> SearchStrategy[ReductoParseV3SdkInput]:
+    selected_document: Final = document or ReductoDocumentUrlDocument(
+        type="document_url", document_url="reducto://fixture-document.pdf"
     )
-    return ReductoParseV3SdkInput.model_validate(
-        {
-            "model": model,
-            "custom_llm_provider": custom_llm_provider,
-            "document": document
-            or ReductoDocumentUrlDocument(type="document_url", document_url="reducto://fixture-document.pdf"),
-            **options,
-        }
+    return st.one_of(
+        st.just(ReductoParseV3SdkInput(model="reducto/parse-v3", document=selected_document)),
+        st.just(
+            ReductoParseV3SdkInput(
+                model="parse-v3",
+                custom_llm_provider="reducto",
+                document=selected_document,
+            )
+        ),
+        _formatting_strategy().map(
+            lambda formatting: ReductoParseV3SdkInput(
+                model="reducto/parse-v3",
+                document=selected_document,
+                formatting=formatting,
+            )
+        ),
+        _retrieval_strategy().map(
+            lambda retrieval: ReductoParseV3SdkInput(
+                model="reducto/parse-v3",
+                document=selected_document,
+                retrieval=retrieval,
+            )
+        ),
+        _settings_strategy().map(
+            lambda settings: ReductoParseV3SdkInput(
+                model="reducto/parse-v3",
+                document=selected_document,
+                settings=settings,
+            )
+        ),
     )
 
 
@@ -324,27 +366,6 @@ def reducto_legacy_input_strategy(
     )
 
 
-def _required_v3_inputs(document: ReductoDocumentUrlDocument) -> tuple[ReductoParseV3SdkInput, ...]:
-    return (
-        ReductoParseV3SdkInput(model="reducto/parse-v3", document=document),
-        ReductoParseV3SdkInput(
-            model="reducto/parse-v3",
-            document=document,
-            formatting=ReductoFormatting(table_output_format="md"),
-        ),
-        ReductoParseV3SdkInput(
-            model="reducto/parse-v3",
-            document=document,
-            retrieval=ReductoRetrieval(chunking=ReductoChunking(chunk_mode="page")),
-        ),
-        ReductoParseV3SdkInput(
-            model="reducto/parse-v3",
-            document=document,
-            settings=ReductoSettings(return_ocr_data=True),
-        ),
-    )
-
-
 def reducto_recording_targets(environ: Mapping[str, str], client: OcrFixtureClient) -> tuple[OcrRecordingTarget, ...]:
     api_key: Final = environ.get("REDUCTO_API_KEY")
     if not api_key:
@@ -358,19 +379,11 @@ def reducto_recording_targets(environ: Mapping[str, str], client: OcrFixtureClie
             provider_spec=ProviderSpec(upstream_base=upstream_base),
             strategy=cast(SearchStrategy[OcrSdkInputBase], reducto_v3_input_strategy(document)),
             invocation=invocation,
-            required_inputs=cast(tuple[OcrSdkInputBase, ...], _required_v3_inputs(document)),
         ),
         OcrRecordingTarget(
             name="reducto-legacy",
             provider_spec=ProviderSpec(upstream_base=upstream_base),
             strategy=cast(SearchStrategy[OcrSdkInputBase], reducto_legacy_input_strategy(document)),
             invocation=invocation,
-            required_inputs=cast(
-                tuple[OcrSdkInputBase, ...],
-                (
-                    ReductoParseLegacySdkInput(model="reducto/parse-legacy", document=document),
-                    ReductoParseLegacySdkInput(model="reducto/parse-legacy", document=document, enhance={}),
-                ),
-            ),
         ),
     )

@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from typing import Final, Literal, cast
 
 from hypothesis import strategies as st
-from hypothesis.strategies import DrawFn, SearchStrategy
+from hypothesis.strategies import SearchStrategy
 from pydantic import Field, field_validator
 
 from tests.route_parity.fixtures.recording import ProviderSpec
@@ -13,15 +13,17 @@ from tests.test_litellm.ocr.fixtures.common import (
     OcrFixtureClient,
     OcrRecordingTarget,
     invoke_with_api_key,
+    parameter_strategy,
     pdf_document,
     public_document_strategy,
+    sampled_list_strategy,
+    sampled_scalar_strategy,
 )
 from tests.test_litellm.ocr.fixtures.mistral import (
     MISTRAL_MODEL,
     MistralCompatibleOcrSdkInput,
     MistralOcrSdkInput,
     mistral_input_strategy,
-    required_mistral_inputs,
 )
 
 AzureMistralModel = Literal["azure_ai/mistral-document-ai-2512",]
@@ -63,42 +65,80 @@ class AzureDocumentIntelligenceOcrSdkInput(OcrSdkInputBase):
 
 
 def _as_azure_mistral(case_input: MistralOcrSdkInput, model: AzureMistralModel) -> AzureMistralOcrSdkInput:
-    values: Final = case_input.model_dump(mode="python", exclude={"boundary", "model", "custom_llm_provider"})
+    values: Final = case_input.model_dump(
+        mode="python",
+        exclude={"boundary", "model", "custom_llm_provider"},
+        exclude_unset=True,
+    )
     return AzureMistralOcrSdkInput.model_validate({**values, "model": model})
 
 
-def _required_document_intelligence_inputs() -> tuple[AzureDocumentIntelligenceOcrSdkInput, ...]:
-    document: Final = pdf_document()
-    cases: Final[tuple[dict[str, object], ...]] = (
-        {},
-        {"pages": [0, 1]},
-        {"features": ["languages"]},
-        {"req_format": "litellm"},
-    )
-    return tuple(
-        AzureDocumentIntelligenceOcrSdkInput.model_validate({"model": model, "document": document, **case})
-        for model in AZURE_DOCUMENT_INTELLIGENCE_MODELS
-        for case in cases
-    )
+_AZURE_DOCUMENT_INTELLIGENCE_CANONICAL_MODEL: Final[AzureDocumentIntelligenceModel] = (
+    "azure_ai/doc-intelligence/prebuilt-layout"
+)
+_AZURE_DOCUMENT_INTELLIGENCE_DOCUMENT_MODEL: Final[AzureDocumentIntelligenceModel] = (
+    "azure_ai/doc-intelligence/prebuilt-document"
+)
 
 
-@st.composite
-def azure_document_intelligence_input_strategy(draw: DrawFn) -> AzureDocumentIntelligenceOcrSdkInput:
-    optional_params: Final = draw(
-        st.fixed_dictionaries(
-            {},
-            optional={
-                "pages": st.sampled_from(([0], [0, 1], "1-2")),
-                "features": st.sampled_from((["languages"], ["keyValuePairs"], "languages,keyValuePairs")),
-            },
-        )
-    )
+def _document_intelligence_input(
+    model: AzureDocumentIntelligenceModel,
+    document: OcrDocument,
+    optional_params: dict[str, object] | None = None,
+) -> AzureDocumentIntelligenceOcrSdkInput:
     return AzureDocumentIntelligenceOcrSdkInput.model_validate(
-        {
-            "model": draw(st.sampled_from(AZURE_DOCUMENT_INTELLIGENCE_MODELS)),
-            "document": draw(public_document_strategy()),
-            **optional_params,
-        }
+        {"model": model, "document": document, **(optional_params or {})}
+    )
+
+
+def azure_document_intelligence_input_strategy() -> SearchStrategy[AzureDocumentIntelligenceOcrSdkInput]:
+    document: Final = pdf_document()
+    pages: Final = st.one_of(
+        parameter_strategy("pages", sampled_list_strategy(((0,), (0, 1)))),
+        parameter_strategy("pages", sampled_scalar_strategy(("1", "1,2", "1-2"))),
+    )
+    common_features: Final = parameter_strategy(
+        "features",
+        st.one_of(
+            sampled_list_strategy(
+                (("languages",), ("ocrHighResolution",), ("barcodes",), ("formulas",), ("styleFont",))
+            ),
+            sampled_scalar_strategy(("languages,styleFont",)),
+        ),
+    )
+    return st.one_of(
+        st.sampled_from(AZURE_DOCUMENT_INTELLIGENCE_MODELS).map(
+            lambda model: _document_intelligence_input(model, document)
+        ),
+        public_document_strategy().map(
+            lambda selected_document: _document_intelligence_input(
+                _AZURE_DOCUMENT_INTELLIGENCE_CANONICAL_MODEL, selected_document
+            )
+        ),
+        pages.map(
+            lambda optional_params: _document_intelligence_input(
+                _AZURE_DOCUMENT_INTELLIGENCE_CANONICAL_MODEL, document, optional_params
+            )
+        ),
+        common_features.map(
+            lambda optional_params: _document_intelligence_input(
+                _AZURE_DOCUMENT_INTELLIGENCE_CANONICAL_MODEL, document, optional_params
+            )
+        ),
+        st.just(
+            _document_intelligence_input(
+                _AZURE_DOCUMENT_INTELLIGENCE_DOCUMENT_MODEL,
+                document,
+                {"features": ["keyValuePairs"]},
+            )
+        ),
+        st.just(
+            _document_intelligence_input(
+                _AZURE_DOCUMENT_INTELLIGENCE_CANONICAL_MODEL,
+                document,
+                {"req_format": "litellm"},
+            )
+        ),
     )
 
 
@@ -116,20 +156,12 @@ def azure_mistral_recording_targets(
             strategy=cast(
                 SearchStrategy[OcrSdkInputBase],
                 st.sampled_from(AZURE_MISTRAL_MODELS).flatmap(
-                    lambda model: mistral_input_strategy(MISTRAL_MODEL).map(
+                    lambda model: mistral_input_strategy(MISTRAL_MODEL, feature_level="2512").map(
                         lambda case_input: _as_azure_mistral(case_input, model)
                     )
                 ),
             ),
             invocation=invoke_with_api_key(client, api_key),
-            required_inputs=cast(
-                tuple[OcrSdkInputBase, ...],
-                tuple(
-                    _as_azure_mistral(case_input, model)
-                    for model in AZURE_MISTRAL_MODELS
-                    for case_input in required_mistral_inputs(MISTRAL_MODEL)
-                ),
-            ),
         ),
     )
 
@@ -147,6 +179,5 @@ def azure_document_intelligence_recording_targets(
             provider_spec=ProviderSpec(upstream_base=upstream_base.rstrip("/")),
             strategy=cast(SearchStrategy[OcrSdkInputBase], azure_document_intelligence_input_strategy()),
             invocation=invoke_with_api_key(client, api_key),
-            required_inputs=cast(tuple[OcrSdkInputBase, ...], _required_document_intelligence_inputs()),
         ),
     )

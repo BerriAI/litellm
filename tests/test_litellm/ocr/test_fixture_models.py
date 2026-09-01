@@ -3,10 +3,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
-from typing import Final, cast
+from typing import Final, TypeVar, cast
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import find, given, settings
+from hypothesis import strategies as st
+from hypothesis.strategies import DataObject, SearchStrategy
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 from litellm.llms.azure_ai.ocr.document_intelligence.transformation import AzureDocumentIntelligenceOCRConfig
@@ -71,6 +73,58 @@ ACTIVE_OCR_MODELS: Final = frozenset(
         *REDUCTO_LEGACY_MODELS,
     )
 )
+_MISTRAL_2512_OR_NEWER: Final = frozenset(
+    {
+        "mistral/mistral-ocr-2512",
+        "mistral/mistral-ocr-3",
+        "mistral/mistral-ocr-3-0",
+        "mistral/mistral-ocr-4",
+        "mistral/mistral-ocr-4-0",
+        "mistral/mistral-ocr-4-1",
+        "mistral/mistral-ocr-latest",
+    }
+)
+_MISTRAL_4_OR_NEWER: Final = frozenset(
+    {
+        "mistral/mistral-ocr-4",
+        "mistral/mistral-ocr-4-0",
+        "mistral/mistral-ocr-4-1",
+        "mistral/mistral-ocr-latest",
+    }
+)
+_MISTRAL_OPTION_GROUPS: Final = frozenset(
+    {
+        frozenset[str](),
+        *(
+            frozenset({field})
+            for field in (
+                "pages",
+                "include_image_base64",
+                "image_limit",
+                "image_min_size",
+                "bbox_annotation_format",
+                "document_annotation_format",
+                "extract_header",
+                "extract_footer",
+                "table_format",
+                "confidence_scores_granularity",
+                "include_blocks",
+                "id",
+            )
+        ),
+        frozenset({"document_annotation_format", "document_annotation_prompt"}),
+        frozenset({"include_blocks", "confidence_scores_granularity"}),
+    }
+)
+_FIND_SETTINGS: Final = settings(max_examples=2_000, deadline=None, derandomize=True, database=None)
+_FixtureInputT = TypeVar("_FixtureInputT")
+
+
+def _find_fixture(
+    strategy: SearchStrategy[_FixtureInputT],
+    predicate: Callable[[_FixtureInputT], bool],
+) -> _FixtureInputT:
+    return find(strategy, predicate, settings=_FIND_SETTINGS)
 
 
 class _ModelRegistryEntry(BaseModel):
@@ -377,16 +431,190 @@ def test_reducto_nested_constraints() -> None:
         ReductoFormatting(include=["hyperlinks", "hyperlinks"])
 
 
-@settings(max_examples=50, deadline=None)
-@given(sdk_input=mistral_input_strategy("mistral/mistral-ocr-4-1"))
-def test_mistral_strategy_only_generates_valid_sdk_inputs(sdk_input: MistralOcrSdkInput) -> None:
+@settings(max_examples=100, deadline=None)
+@given(model=st.sampled_from(MISTRAL_MODELS), data=st.data())
+def test_mistral_strategy_only_generates_bounded_valid_sdk_inputs(model: str, data: DataObject) -> None:
+    sdk_input: Final = data.draw(mistral_input_strategy(model))
     assert MistralOcrSdkInput.model_validate(sdk_input.canonical_input()) == sdk_input
+    optional_fields: Final = frozenset(sdk_input.model_fields_set) - {"model", "document"}
+    assert optional_fields in _MISTRAL_OPTION_GROUPS
+    if sdk_input.pages is not None:
+        assert sdk_input.pages in ([0], [0, 1])
+    if sdk_input.image_limit is not None:
+        assert sdk_input.image_limit == 1
+    if sdk_input.image_min_size is not None:
+        assert sdk_input.image_min_size == 300
+    if sdk_input.table_format is not None:
+        assert sdk_input.table_format in {"markdown", "html"}
+    if sdk_input.confidence_scores_granularity is not None:
+        assert sdk_input.confidence_scores_granularity in {"page", "word", "block"}
+    if sdk_input.confidence_scores_granularity == "block":
+        assert sdk_input.include_blocks is True
+    if model not in _MISTRAL_2512_OR_NEWER:
+        assert optional_fields.isdisjoint({"extract_header", "extract_footer", "table_format"})
+    if model not in _MISTRAL_4_OR_NEWER:
+        assert "include_blocks" not in optional_fields
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("pages", [0]),
+        ("pages", [0, 1]),
+        ("include_image_base64", False),
+        ("include_image_base64", True),
+        ("image_limit", 1),
+        ("image_min_size", 300),
+        ("extract_header", False),
+        ("extract_header", True),
+        ("extract_footer", False),
+        ("extract_footer", True),
+        ("table_format", "markdown"),
+        ("table_format", "html"),
+        ("confidence_scores_granularity", "page"),
+        ("confidence_scores_granularity", "word"),
+        ("confidence_scores_granularity", "block"),
+        ("include_blocks", False),
+        ("include_blocks", True),
+        ("id", "case-1"),
+    ),
+)
+def test_mistral_strategy_reaches_every_finite_scalar_value(field: str, value: object) -> None:
+    sdk_input: Final = _find_fixture(
+        mistral_input_strategy("mistral/mistral-ocr-4-1"),
+        lambda candidate: field in candidate.model_fields_set and getattr(candidate, field) == value,
+    )
+
+    assert getattr(sdk_input, field) == value
 
 
 @settings(max_examples=50, deadline=None)
 @given(sdk_input=reducto_v3_input_strategy())
-def test_reducto_v3_strategy_only_generates_valid_sdk_inputs(sdk_input: ReductoParseV3SdkInput) -> None:
+def test_reducto_v3_strategy_only_generates_bounded_valid_sdk_inputs(sdk_input: ReductoParseV3SdkInput) -> None:
     assert ReductoParseV3SdkInput.model_validate(sdk_input.canonical_input()) == sdk_input
+    option_groups: Final = frozenset(sdk_input.model_fields_set) & {"formatting", "retrieval", "settings"}
+    assert len(option_groups) <= 1
+    if "formatting" in option_groups:
+        assert len(sdk_input.formatting.model_fields_set) == 1
+        assert sdk_input.formatting.table_output_format in {"dynamic", "html", "md", "json", "csv", "jsonbbox"}
+        assert tuple(sdk_input.formatting.include) in {
+            (),
+            ("hyperlinks",),
+            ("change_tracking", "highlight", "comments"),
+            ("signatures", "ignore_watermarks"),
+        }
+    if "retrieval" in option_groups:
+        retrieval_fields: Final = frozenset(sdk_input.retrieval.model_fields_set)
+        assert retrieval_fields in {
+            frozenset({"chunking"}),
+            frozenset({"filter_blocks"}),
+            frozenset({"chunking", "embedding_optimized"}),
+        }
+        chunking: Final = sdk_input.retrieval.chunking
+        if chunking.chunk_size is not None or chunking.chunk_overlap != 0:
+            assert chunking.chunk_mode == "variable"
+        if "embedding_optimized" in retrieval_fields:
+            assert chunking.chunk_mode == "variable"
+    if "settings" in option_groups:
+        settings_fields: Final = frozenset(sdk_input.settings.model_fields_set)
+        assert settings_fields in {
+            frozenset({"ocr_system"}),
+            frozenset({"extraction_mode"}),
+            frozenset({"force_url_result"}),
+            frozenset({"return_ocr_data"}),
+            frozenset({"return_images"}),
+            frozenset({"embed_pdf_metadata", "embed_pdf_metadata_dpi"}),
+            frozenset({"timeout"}),
+            frozenset({"page_range"}),
+        }
+        assert "persist_results" not in settings_fields
+        if "embed_pdf_metadata_dpi" in settings_fields:
+            assert sdk_input.settings.embed_pdf_metadata is True
+            assert sdk_input.settings.embed_pdf_metadata_dpi in {50, 100, 250}
+        if sdk_input.settings.page_range is not None:
+            ranges: Final = (
+                sdk_input.settings.page_range
+                if isinstance(sdk_input.settings.page_range, list)
+                else [sdk_input.settings.page_range]
+            )
+            assert all(isinstance(page_range, ReductoPageRange) for page_range in ranges)
+
+
+@pytest.mark.parametrize("table_format", ("dynamic", "html", "md", "json", "csv", "jsonbbox"))
+def test_reducto_v3_strategy_reaches_every_table_format(table_format: str) -> None:
+    sdk_input: Final = _find_fixture(
+        reducto_v3_input_strategy(),
+        lambda candidate: (
+            "formatting" in candidate.model_fields_set
+            and "table_output_format" in candidate.formatting.model_fields_set
+            and candidate.formatting.table_output_format == table_format
+        ),
+    )
+
+    assert sdk_input.formatting.table_output_format == table_format
+
+
+@pytest.mark.parametrize("chunk_mode", ("variable", "section", "page", "disabled", "block", "page_sections"))
+def test_reducto_v3_strategy_reaches_every_chunk_mode(chunk_mode: str) -> None:
+    sdk_input: Final = _find_fixture(
+        reducto_v3_input_strategy(),
+        lambda candidate: (
+            "retrieval" in candidate.model_fields_set
+            and "chunking" in candidate.retrieval.model_fields_set
+            and candidate.retrieval.chunking.chunk_mode == chunk_mode
+        ),
+    )
+
+    assert sdk_input.retrieval.chunking.chunk_mode == chunk_mode
+
+
+@pytest.mark.parametrize("chunk_size", (250, 1000, 1500))
+def test_reducto_v3_strategy_reaches_every_chunk_size(chunk_size: int) -> None:
+    sdk_input: Final = _find_fixture(
+        reducto_v3_input_strategy(),
+        lambda candidate: candidate.retrieval.chunking.chunk_size == chunk_size,
+    )
+
+    assert sdk_input.retrieval.chunking.chunk_mode == "variable"
+    assert sdk_input.retrieval.chunking.chunk_size == chunk_size
+
+
+@pytest.mark.parametrize("dpi", (50, 100, 250))
+def test_reducto_v3_strategy_reaches_every_metadata_dpi(dpi: int) -> None:
+    sdk_input: Final = _find_fixture(
+        reducto_v3_input_strategy(),
+        lambda candidate: (
+            "settings" in candidate.model_fields_set
+            and "embed_pdf_metadata_dpi" in candidate.settings.model_fields_set
+            and candidate.settings.embed_pdf_metadata_dpi == dpi
+        ),
+    )
+
+    assert sdk_input.settings.embed_pdf_metadata is True
+    assert sdk_input.settings.embed_pdf_metadata_dpi == dpi
+
+
+@pytest.mark.parametrize(
+    "page_range",
+    (
+        {"start": 1, "end": 1},
+        {"start": 1, "end": 3},
+        [{"start": 1, "end": 2}, {"start": 4, "end": 5}],
+    ),
+)
+def test_reducto_v3_strategy_reaches_every_page_range_shape(page_range: object) -> None:
+    sdk_input: Final = _find_fixture(
+        reducto_v3_input_strategy(),
+        lambda candidate: (
+            cast(
+                dict[str, object],
+                candidate.settings.model_dump(mode="json", exclude_unset=True),
+            ).get("page_range")
+            == page_range
+        ),
+    )
+
+    assert sdk_input.settings.model_dump(mode="json", exclude_unset=True)["page_range"] == page_range
 
 
 @settings(max_examples=10, deadline=None)
@@ -402,6 +630,53 @@ def test_azure_document_intelligence_strategy_only_generates_litellm_inputs(
 ) -> None:
     assert sdk_input.req_format == "litellm"
     assert "boundary" not in sdk_input.as_sdk_kwargs()
+    optional_fields: Final = frozenset(sdk_input.model_fields_set) - {"model", "document"}
+    assert optional_fields in {
+        frozenset[str](),
+        frozenset({"pages"}),
+        frozenset({"features"}),
+        frozenset({"req_format"}),
+    }
+    if sdk_input.pages is not None:
+        assert sdk_input.pages in ([0], [0, 1], "1", "1,2", "1-2")
+    if isinstance(sdk_input.features, list):
+        assert tuple(sdk_input.features) in {
+            ("languages",),
+            ("ocrHighResolution",),
+            ("barcodes",),
+            ("formulas",),
+            ("styleFont",),
+            ("keyValuePairs",),
+        }
+    if isinstance(sdk_input.features, str):
+        assert sdk_input.features == "languages,styleFont"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("pages", [0]),
+        ("pages", [0, 1]),
+        ("pages", "1"),
+        ("pages", "1,2"),
+        ("pages", "1-2"),
+        ("features", ["languages"]),
+        ("features", ["ocrHighResolution"]),
+        ("features", ["barcodes"]),
+        ("features", ["formulas"]),
+        ("features", ["styleFont"]),
+        ("features", ["keyValuePairs"]),
+        ("features", "languages,styleFont"),
+        ("req_format", "litellm"),
+    ),
+)
+def test_azure_document_intelligence_strategy_reaches_every_finite_value(field: str, value: object) -> None:
+    sdk_input: Final = _find_fixture(
+        azure_document_intelligence_input_strategy(),
+        lambda candidate: field in candidate.model_fields_set and getattr(candidate, field) == value,
+    )
+
+    assert getattr(sdk_input, field) == value
 
 
 @settings(max_examples=30, deadline=None)
