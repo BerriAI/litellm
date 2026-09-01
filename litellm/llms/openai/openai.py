@@ -43,6 +43,7 @@ from litellm.utils import (
 from ...types.llms.openai import *
 from ..base import BaseLLM
 from .chat.gpt_5_transformation import OpenAIGPT5Config
+from .chat.gpt_transformation import OpenAIGPTConfig, OpenAIUnknownModelConfig
 from .chat.o_series_transformation import OpenAIOSeriesConfig
 from .common_utils import (
     BaseOpenAILLM,
@@ -189,7 +190,12 @@ class OpenAIConfig(BaseConfig):
         elif litellm.openAIGPTAudioConfig.is_model_gpt_audio_model(model=model):
             return litellm.openAIGPTAudioConfig.get_supported_openai_params(model=model)
         else:
-            return litellm.openAIGPTConfig.get_supported_openai_params(model=model)
+            return self._gpt_config_for_model(model).get_supported_openai_params(model=model)
+
+    def _gpt_config_for_model(self, model: str) -> OpenAIGPTConfig:
+        if type(self) is OpenAIConfig and not OpenAIGPTConfig.is_openai_catalog_model(model):
+            return OpenAIUnknownModelConfig()
+        return litellm.openAIGPTConfig
 
     def _map_openai_params(self, non_default_params: dict, optional_params: dict, model: str) -> dict:
         supported_openai_params: Final = self.get_supported_openai_params(model)
@@ -231,7 +237,7 @@ class OpenAIConfig(BaseConfig):
                 drop_params=drop_params,
             )
 
-        return litellm.openAIGPTConfig.map_openai_params(
+        return self._gpt_config_for_model(model).map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,

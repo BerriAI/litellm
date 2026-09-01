@@ -129,6 +129,18 @@ describe("autorouter_presets", () => {
     }
   });
 
+  it("carries a preset's modality_routing into the prefilled form state", () => {
+    const preset = getPresetByKey("anthropic_family")!;
+    const withFlag = { ...preset.complexity_router_config, modality_routing: true };
+    const prefill = buildPresetPrefill(withFlag, groupsOnly(getRequiredModelsInPreset(preset)));
+    expect(prefill.complexityRouterConfig.modality_routing).toBe(true);
+    const withoutFlag = buildPresetPrefill(
+      preset.complexity_router_config,
+      groupsOnly(getRequiredModelsInPreset(preset)),
+    );
+    expect(withoutFlag.complexityRouterConfig.modality_routing).toBe(false);
+  });
+
   it("prefills the anthropic preset's effort through to tier_model_params", () => {
     const preset = getPresetByKey("anthropic_family")!;
     const prefill = buildPresetPrefill(preset.complexity_router_config, groupsOnly(getRequiredModelsInPreset(preset)));
