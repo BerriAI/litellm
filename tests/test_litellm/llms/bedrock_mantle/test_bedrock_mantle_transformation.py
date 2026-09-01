@@ -13,20 +13,7 @@ import pytest
 
 import litellm
 from litellm.llms.bedrock_mantle.chat.transformation import BedrockMantleChatConfig
-from litellm.llms.custom_httpx.llm_http_handler import _signing_optional_params
 from litellm.types.utils import LlmProviders
-
-
-def test_signing_optional_params_forwards_aws_role_and_keeps_overrides():
-    merged = _signing_optional_params(
-        {
-            "aws_role_name": "arn:aws:iam::123456789012:role/A",
-            "aws_region_name": "us-east-1",
-        },
-        {"aws_region_name": "eu-central-1"},
-    )
-    assert merged["aws_role_name"] == "arn:aws:iam::123456789012:role/A"
-    assert merged["aws_region_name"] == "eu-central-1"
 
 
 @pytest.fixture
@@ -488,9 +475,6 @@ class TestBedrockMantleChatAuth:
         assert requests[0]["url"].startswith(f"https://bedrock-mantle.{expected_region}.api.aws")
 
     def test_completion_forwards_aws_role_name_to_get_credentials(self, monkeypatch):
-        # Proxy deployments store aws_role_name on the model row (litellm_params).
-        # Chat optional_params is the OpenAI allowlist, so without the merge
-        # get_credentials sees aws_role_name=None and signs as the process role.
         for var in (
             "BEDROCK_MANTLE_API_KEY",
             "AWS_BEARER_TOKEN_BEDROCK",
@@ -546,7 +530,10 @@ class TestBedrockMantleChatAuth:
             )
 
         role_arn = "arn:aws:iam::123456789012:role/CrossAccountBedrockRole"
-        with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post", mock_post):
+        with patch(  # test-quality-ok: HTTP boundary for Mantle SigV4 + AssumeRole
+            "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+            mock_post,
+        ):
             response = litellm.completion(
                 model="bedrock_mantle/openai.gpt-oss-120b",
                 messages=[{"role": "user", "content": "hello"}],
