@@ -405,23 +405,7 @@ class BaseResponsesAPIStreamingIterator:
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
                 ):
                     self.completed_response = openai_responses_api_chunk
-                    # Add cost to usage object if include_cost_in_streaming_usage is True
-                    if litellm.include_cost_in_streaming_usage and self.logging_obj is not None:
-                        response_obj: Final[ResponsesAPIResponse | None] = getattr(
-                            openai_responses_api_chunk, "response", None
-                        )
-                        if response_obj:
-                            usage_obj: Final[ResponseAPIUsage | None] = getattr(response_obj, "usage", None)
-                            if usage_obj is not None:
-                                try:
-                                    cost: Final[float | None] = self.logging_obj._response_cost_calculator(
-                                        result=response_obj
-                                    )
-                                    if cost is not None:
-                                        setattr(usage_obj, "cost", cost)
-                                except Exception:
-                                    # Best-effort usage cost annotation should not break stream replay.
-                                    pass
+                    _stamp_responses_usage_cost(getattr(openai_responses_api_chunk, "response", None), self.logging_obj)
 
                     if _chunk_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED:
                         self._handle_logging_failed_response()
@@ -1272,6 +1256,24 @@ def _add_text_like_part_events(
         )
 
 
+def _stamp_responses_usage_cost(
+    response_obj: ResponsesAPIResponse | None, logging_obj: LiteLLMLoggingObj | None
+) -> None:
+    if response_obj is None or logging_obj is None:
+        return
+    usage_obj: Final[ResponseAPIUsage | None] = getattr(response_obj, "usage", None)
+    if usage_obj is None:
+        return
+    if isinstance(getattr(usage_obj, "cost", None), (int, float)):
+        return
+    try:
+        cost: Final[float | None] = logging_obj._response_cost_calculator(result=response_obj)
+    except Exception:
+        return
+    if isinstance(cost, (int, float)) and cost > 0:
+        setattr(usage_obj, "cost", cost)
+
+
 def _build_synthetic_response_events(
     *,
     transformed: ResponsesAPIResponse,
@@ -1279,15 +1281,7 @@ def _build_synthetic_response_events(
     chunk_size: int,
 ) -> list[ResponsesAPIStreamingResponse]:
     openai_types: Final = _get_openai_response_types()
-    if litellm.include_cost_in_streaming_usage and logging_obj is not None:
-        usage_obj: Final = transformed.usage if hasattr(transformed, "usage") else None
-        if usage_obj is not None:
-            try:
-                cost: Final[float | None] = logging_obj._response_cost_calculator(result=transformed)
-                if cost is not None:
-                    setattr(usage_obj, "cost", cost)
-            except Exception:
-                pass
+    _stamp_responses_usage_cost(transformed, logging_obj)
 
     events: Final[list[ResponsesAPIStreamingResponse]] = [
         _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED, transformed),
