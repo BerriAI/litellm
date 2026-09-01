@@ -174,7 +174,9 @@ class SpeechToCompletionBridgeTransformationHandler:
             if self._is_gemini_tts_model(model)
             else (decoded_audio, "audio/mpeg")
         )
-        response: Final = httpx.Response(status_code=200, content=content, headers={"Content-Type": content_type})
+        response: Final = httpx.Response(
+            status_code=200, content=content, headers=MappingProxyType({"Content-Type": content_type})
+        )
         binary_response: Final = HttpxBinaryResponseContent(response)
         binary_response.set_response_cost(_completion_response_cost(model_response))
         return binary_response
