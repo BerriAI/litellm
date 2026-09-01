@@ -1021,6 +1021,49 @@ def test_client_metadata_kept_for_non_anthropic_converse_request():
     assert data["additionalModelRequestFields"]["client_metadata"] == {"originator": "codex_cli_rs"}
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abcdef123456",
+        "arn:aws:bedrock:us-east-1:123456789012:provisioned-model/abcdef123456",
+    ],
+)
+def test_client_metadata_stripped_for_arn_models_converse(model):
+    """An ARN hides which family serves the request, and pointing one at Claude is how
+    teams route codex traffic, so the field has to go there too or the 400 comes back."""
+    config = AmazonConverseConfig()
+
+    data = config._transform_request_helper(
+        model=model,
+        system_content_blocks=[],
+        optional_params={
+            "maxTokens": 16,
+            "client_metadata": {"originator": "codex_cli_rs"},
+        },
+        messages=None,
+    )
+
+    assert "client_metadata" not in data.get("additionalModelRequestFields", {})
+
+
+def test_client_metadata_kept_for_arn_naming_a_non_anthropic_family():
+    """An inference profile ARN that still spells out the family is resolvable, so a
+    non-Anthropic one keeps its passthrough."""
+    config = AmazonConverseConfig()
+
+    data = config._transform_request_helper(
+        model="arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.amazon.nova-pro-v1:0",
+        system_content_blocks=[],
+        optional_params={
+            "maxTokens": 16,
+            "client_metadata": {"originator": "codex_cli_rs"},
+        },
+        messages=None,
+    )
+
+    assert data["additionalModelRequestFields"]["client_metadata"] == {"originator": "codex_cli_rs"}
+
+
 def test_parallel_tool_calls_config_kept_for_sonnet_5(monkeypatch):
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
