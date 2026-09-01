@@ -128,6 +128,15 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
         return "unknown"
 
 
+def _log_redis_write_failure(operation: str, error: Exception) -> None:
+    """Log Redis write failures without serializing cache keys or values."""
+    verbose_logger.error(
+        "LiteLLM Redis Caching: %s - Got exception from REDIS %s",
+        operation,
+        str(error),
+    )
+
+
 class RedisCircuitBreaker:
     """
     Tracks Redis health for a RedisCache instance.
@@ -729,11 +738,7 @@ class RedisCache(BaseCache):
             ## LOGGING ##
             end_time = time.time()
             _duration = end_time - start_time
-            verbose_logger.error(
-                "LiteLLM Redis Caching: increment_cache() - Got exception from REDIS %s, Writing value=%s",
-                str(e),
-                value,
-            )
+            _log_redis_write_failure("increment_cache()", e)
             raise e
 
     @_redis_circuit_breaker_guard
@@ -901,12 +906,7 @@ class RedisCache(BaseCache):
                     call_type=f"async_set_cache <- {_get_call_stack_info()}",
                 )
             )
-            verbose_logger.error(
-                "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, key=%r, value=%r",
-                str(e),
-                key,
-                value,
-            )
+            _log_redis_write_failure("async_set_cache()", e)
             raise e
 
         key = self.check_and_fix_namespace(key=key)
@@ -950,14 +950,9 @@ class RedisCache(BaseCache):
                     start_time=start_time,
                     end_time=end_time,
                     parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
-                    event_metadata={"key": key},
                 )
             )
-            verbose_logger.error(
-                "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, Writing value=%s",
-                str(e),
-                value,
-            )
+            _log_redis_write_failure("async_set_cache()", e)
             _record_swallowed_redis_failure(self._circuit_breaker, e)
 
     async def _pipeline_helper(
@@ -1003,7 +998,6 @@ class RedisCache(BaseCache):
         start_time: Final = time.time()
 
         print_verbose(f"Set Async Redis Cache: key list: {cache_list}\nttl={ttl}, redis_version={self.redis_version}")
-        cache_value: Final = None
         try:
             async with _redis_client.pipeline(transaction=False) as pipe:
                 results: Final = await self._pipeline_helper(pipe, cache_list, ttl)
@@ -1040,11 +1034,7 @@ class RedisCache(BaseCache):
                 )
             )
 
-            verbose_logger.error(
-                "LiteLLM Redis Caching: async set_cache_pipeline() - Got exception from REDIS %s, Writing value=%s",
-                str(e),
-                cache_value,
-            )
+            _log_redis_write_failure("async_set_cache_pipeline()", e)
             _record_swallowed_redis_failure(self._circuit_breaker, e)
 
     async def _set_cache_sadd_helper(
@@ -1086,11 +1076,7 @@ class RedisCache(BaseCache):
                 )
             )
             # NON blocking - notify users Redis is throwing an exception
-            verbose_logger.error(
-                "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, Writing value=%s",
-                str(e),
-                value,
-            )
+            _log_redis_write_failure("async_set_cache_sadd()", e)
             raise e
 
         key = self.check_and_fix_namespace(key=key)
@@ -1125,11 +1111,7 @@ class RedisCache(BaseCache):
                 )
             )
             # NON blocking - notify users Redis is throwing an exception
-            verbose_logger.error(
-                "LiteLLM Redis Caching: async set_cache_sadd() - Got exception from REDIS %s, Writing value=%s",
-                str(e),
-                value,
-            )
+            _log_redis_write_failure("async_set_cache_sadd()", e)
             _record_swallowed_redis_failure(self._circuit_breaker, e)
 
     @_redis_circuit_breaker_guard
@@ -1197,11 +1179,7 @@ class RedisCache(BaseCache):
                     parent_otel_span=parent_otel_span,
                 )
             )
-            verbose_logger.error(
-                "LiteLLM Redis Caching: async async_increment() - Got exception from REDIS %s, Writing value=%s",
-                str(e),
-                value,
-            )
+            _log_redis_write_failure("async_increment()", e)
             raise e
 
     @_redis_circuit_breaker_guard

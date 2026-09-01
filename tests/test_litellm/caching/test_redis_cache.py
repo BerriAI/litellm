@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -707,6 +708,52 @@ async def test_circuit_breaker_success_still_resets_the_failure_streak():
         await cache.async_get_cache("lit4930")
 
     assert cache._circuit_breaker.is_open() is False, "one success must clear the streak"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_stage", ["client_init", "set"])
+async def test_async_set_cache_failure_does_not_log_key_or_value(
+    failure_stage, monkeypatch, redis_no_ping, caplog
+):
+    """Redis failures must remain diagnosable without logging cached prompts or responses."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    redis_cache.service_logger_obj.async_service_failure_hook = AsyncMock()
+    sensitive_key = "customer-secret-cache-key"
+    sensitive_value = {
+        "response": {"choices": [{"message": {"content": "private customer message"}}]}
+    }
+    redis_error = TimeoutError("synthetic redis timeout")
+    redis_client = AsyncMock()
+    redis_client.set.side_effect = redis_error
+    init_side_effect = redis_error if failure_stage == "client_init" else None
+
+    with (
+        caplog.at_level(logging.ERROR, logger="LiteLLM"),
+        patch.object(
+            redis_cache,
+            "init_async_client",
+            return_value=redis_client,
+            side_effect=init_side_effect,
+        ),
+    ):
+        if failure_stage == "client_init":
+            with pytest.raises(TimeoutError, match="synthetic redis timeout"):
+                await redis_cache.async_set_cache(sensitive_key, sensitive_value)
+        else:
+            await redis_cache.async_set_cache(sensitive_key, sensitive_value)
+
+        await asyncio.sleep(0)
+
+    logged_arguments = caplog.text
+    telemetry_arguments = repr(
+        redis_cache.service_logger_obj.async_service_failure_hook.call_args_list
+    )
+    assert "synthetic redis timeout" in logged_arguments
+    assert sensitive_key not in logged_arguments
+    assert "private customer message" not in logged_arguments
+    assert sensitive_key not in telemetry_arguments
+    assert "private customer message" not in telemetry_arguments
 
 
 @pytest.mark.asyncio
