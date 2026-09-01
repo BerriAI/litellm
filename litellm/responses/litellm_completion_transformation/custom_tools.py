@@ -16,8 +16,8 @@ logic.
 """
 
 import json
-from collections.abc import Mapping
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Final
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -29,7 +29,7 @@ from litellm.types.llms.openai import (
 _MAX_ARGUMENTS_LEN: Final = 1_000_000
 
 
-def extract_custom_tool_names(tools: list[Any] | None) -> set[str]:
+def extract_custom_tool_names(tools: Sequence[object] | None) -> set[str]:
     """Extract names of tools originally defined as ``type: "custom"``."""
     if not tools:
         return set()
@@ -43,6 +43,21 @@ def extract_custom_tool_names(tools: list[Any] | None) -> set[str]:
 def is_custom_tool_call(tool_name: str, custom_tool_names: set[str]) -> bool:
     """Check if a tool call name corresponds to a custom tool."""
     return tool_name in custom_tool_names
+
+
+def serialize_tool_call_arguments(raw_arguments: object, default: str = "") -> str:
+    """Render tool call arguments as the JSON string tool-call schemas require.
+
+    Arguments normally arrive already JSON-encoded, but clients and providers
+    also send the decoded object. ``str()`` on a dict yields a Python repr with
+    single quotes, which every downstream JSON parser rejects with errors like
+    "Expecting ',' delimiter".
+    """
+    if isinstance(raw_arguments, str):
+        return raw_arguments or default
+    if raw_arguments is None:
+        return default
+    return json.dumps(raw_arguments, default=str)
 
 
 def unwrap_custom_tool_arguments(arguments: str) -> str:
@@ -73,7 +88,7 @@ def build_tool_call_item_kwargs(
     arguments_or_input: str,
     status: str,
     custom_tool_names: set[str],
-) -> dict[str, Any]:
+) -> dict[str, str]:
     """Build kwargs for an output item dict that is either a ``function_call``
     or a ``custom_tool_call`` depending on whether *name* is in
     *custom_tool_names*.
@@ -86,7 +101,7 @@ def build_tool_call_item_kwargs(
     """
     custom: Final = is_custom_tool_call(name, custom_tool_names)
     item_type: Final = "custom_tool_call" if custom else "function_call"
-    kwargs: Final[dict[str, Any]] = {
+    kwargs: Final[dict[str, str]] = {
         "type": item_type,
         "id": call_id,
         "call_id": call_id,

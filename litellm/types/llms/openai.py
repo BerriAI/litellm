@@ -1,7 +1,7 @@
 from collections.abc import Iterable, Mapping
 from enum import Enum
 from os import PathLike
-from typing import IO, Any, Final, Literal, Optional, Union
+from typing import IO, Any, Final, Literal, Optional, TypeAlias, Union
 
 import httpx
 from openai import Omit
@@ -107,7 +107,17 @@ EmbeddingInput = str | list[str]
 
 
 class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
-    _hidden_params: dict = {}
+    _hidden_params: dict
+
+    def __init__(self, response: httpx.Response) -> None:
+        super().__init__(response)
+        self._hidden_params = {}  # mutable-ok: mutable-dict contract shared with ModelResponse logging consumers
+
+    def set_response_cost(self, response_cost: float | None) -> None:
+        if response_cost is None:
+            self._hidden_params.pop("response_cost", None)
+            return
+        self._hidden_params["response_cost"] = response_cost
 
 
 class NotGiven:
@@ -810,9 +820,21 @@ class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total
     reasoning_items: list[ChatCompletionReasoningItem] | None
 
 
+class ChatCompletionToolReferenceObject(TypedDict):
+    """Anthropic tool-search result block, carried through untouched so it survives a round trip."""
+
+    type: Literal["tool_reference"]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    tool_name: str  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+
+
+ToolMessageContentPart: TypeAlias = (
+    ChatCompletionTextObject | ChatCompletionImageObject | ChatCompletionToolReferenceObject
+)
+
+
 class ChatCompletionToolMessage(TypedDict):
     role: Literal["tool"]
-    content: str | Iterable[ChatCompletionTextObject | ChatCompletionImageObject]
+    content: str | Iterable[ToolMessageContentPart]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     tool_call_id: str
 
 
@@ -1248,6 +1270,8 @@ class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
 
 
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
+    audio_tokens: int | None = None
+
     reasoning_tokens: int | None = None
 
     text_tokens: int | None = None
@@ -1840,7 +1864,7 @@ ResponsesAPIStreamingResponse = Annotated[
 ]
 
 
-REASONING_EFFORT = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+REASONING_EFFORT = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 
 
 class OpenAIRealtimeStreamSession(TypedDict, total=False):
@@ -2138,6 +2162,42 @@ class OpenAIRealtimeDoneEvent(TypedDict):
     type: Literal["response.done"]
 
 
+class OpenAIRealtimeInputAudioBufferSpeechEvent(TypedDict):
+    type: ReadOnly[Literal["input_audio_buffer.speech_started", "input_audio_buffer.speech_stopped"]]
+    event_id: ReadOnly[str]
+    item_id: ReadOnly[str]
+
+
+class OpenAIRealtimeInputAudioTranscriptionDelta(TypedDict):
+    type: ReadOnly[Literal["conversation.item.input_audio_transcription.delta"]]
+    event_id: ReadOnly[str]
+    item_id: ReadOnly[str]
+    content_index: ReadOnly[int]
+    delta: ReadOnly[str]
+
+
+class OpenAIRealtimeInputAudioTranscriptionCompleted(TypedDict):
+    type: ReadOnly[Literal["conversation.item.input_audio_transcription.completed"]]
+    event_id: ReadOnly[str]
+    item_id: ReadOnly[str]
+    content_index: ReadOnly[int]
+    transcript: ReadOnly[str]
+
+
+class OpenAIRealtimeUsageTokenDetails(TypedDict):
+    audio_tokens: ReadOnly[int]
+    text_tokens: ReadOnly[int]
+    cached_tokens: NotRequired[ReadOnly[int]]
+
+
+class OpenAIRealtimeResponseUsage(TypedDict):
+    input_tokens: ReadOnly[int]
+    output_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+    input_token_details: NotRequired[ReadOnly[OpenAIRealtimeUsageTokenDetails]]
+    output_token_details: NotRequired[ReadOnly[OpenAIRealtimeUsageTokenDetails]]
+
+
 class OpenAIRealtimeEventTypes(Enum):
     SESSION_CREATED = "session.created"
     # Beta delta event names
@@ -2175,6 +2235,9 @@ OpenAIRealtimeEvents = (
     | OpenAIRealtimeOutputItemDone
     | OpenAIRealtimeFunctionCallArgumentsDone
     | OpenAIRealtimeDoneEvent
+    | OpenAIRealtimeInputAudioBufferSpeechEvent
+    | OpenAIRealtimeInputAudioTranscriptionDelta
+    | OpenAIRealtimeInputAudioTranscriptionCompleted
 )
 
 OpenAIRealtimeStreamList = list[OpenAIRealtimeEvents]

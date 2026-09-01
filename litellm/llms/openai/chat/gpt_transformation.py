@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    drop_tool_reference_parts_from_tool_messages,
     get_tool_call_names,
     hoist_images_from_tool_messages,
 )
@@ -53,6 +54,8 @@ from litellm.utils import convert_to_model_response_object
 from ..common_utils import OpenAIError
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.llms.base_llm.base_utils import BaseTokenCounter
     from litellm.types.llms.openai import ChatCompletionToolParam
@@ -167,15 +170,19 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         if model != "gpt-3.5-turbo-16k" and model != "gpt-4":  # gpt-4 does not support 'response_format'
             model_specific_params.append("response_format")
 
-        # Normalize model name for responses API (e.g., "responses/gpt-4.1" -> "gpt-4.1")
-        model_for_check: Final = model.split("responses/", 1)[1] if "responses/" in model else model
-        if (
-            model_for_check in litellm.open_ai_chat_completion_models
-        ) or model_for_check in litellm.open_ai_text_completion_models:
+        if OpenAIGPTConfig.is_openai_catalog_model(model):
             model_specific_params.append(
                 "user"
             )  # user is not a param supported by all openai-compatible endpoints - e.g. azure ai
         return base_params + model_specific_params
+
+    @staticmethod
+    def is_openai_catalog_model(model: str) -> bool:
+        model_for_check: Final = model.split("responses/", 1)[1] if "responses/" in model else model
+        return (
+            model_for_check in litellm.open_ai_chat_completion_models
+            or model_for_check in litellm.open_ai_text_completion_models
+        )
 
     def _map_openai_params(
         self,
@@ -336,7 +343,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
     ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
         """OpenAI no longer supports image_url as a string, so we need to convert it to a dict"""
-        hoisted_messages: Final = hoist_images_from_tool_messages(messages)
+        stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(messages)
+        hoisted_messages: Final = hoist_images_from_tool_messages(stripped_messages)
 
         async def _async_transform():
             for message in hoisted_messages:
@@ -593,7 +601,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -749,6 +757,14 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             sync_stream=sync_stream,
             json_mode=json_mode,
         )
+
+
+class OpenAIUnknownModelConfig(OpenAIGPTConfig):
+    """A model the openai provider does not recognize is typically a LiteLLM proxy alias, so
+    forward reasoning_effort and let the server decide whether it is supported."""
+
+    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: inherited contract
+        return super().get_supported_openai_params(model) + ["reasoning_effort"]  # mutable-ok: inherited contract
 
 
 class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):

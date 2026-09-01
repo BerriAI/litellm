@@ -39,6 +39,35 @@ vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
   })),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useInfiniteTeams: vi.fn(() => ({
+    data: { pages: [{ teams: [{ team_id: "team-eng", team_alias: "engineering" }], page: 1, total_pages: 1 }] },
+    isLoading: false,
+    fetchNextPage: vi.fn(),
+    hasNextPage: false,
+    isFetchingNextPage: false,
+  })),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
+  useInfiniteUsers: vi.fn(() => ({
+    data: {
+      pages: [
+        {
+          users: [{ user_id: "dev-alice", user_alias: null, user_email: "alice@example.com" }],
+          page: 1,
+          total_pages: 1,
+        },
+      ],
+    },
+    isPending: false,
+    isError: false,
+    fetchNextPage: vi.fn(),
+    hasNextPage: false,
+    isFetchingNextPage: false,
+  })),
+}));
+
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   useAutoRouters: vi.fn(() => ({
     data: [
@@ -60,7 +89,7 @@ vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
   })),
 }));
 
-import ShadowEvalSection, { shadowedKeyLabel } from "./ShadowEvalSection";
+import ShadowEvalSection, { shadowedTargetLabel } from "./ShadowEvalSection";
 import {
   useShadowEvalJob,
   useShadowEvalJobs,
@@ -73,18 +102,20 @@ const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
   job_id: "job-1",
   status: "running",
   router_name: "claude-auto",
+  router_names: ["claude-auto"],
   direction: "forward",
   baseline_model: null,
   judge_model: "anthropic/claude-sonnet-5",
   shadow_percentage: 10,
-  keys: [
+  targets: [
     {
-      api_key_id: "hashed-key-abc",
+      target_type: "key",
+      target_id: "hashed-key-abc",
       max_turns: 10000,
       max_budget: 10,
       spend: 3.21,
       stopped_at: null,
-      key_alias: "prod-alpha",
+      target_alias: "prod-alpha",
       key_name: "sk-...alpha",
     },
   ],
@@ -100,6 +131,9 @@ const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
         shadow_win_rate_pct: 55.0,
         tie_rate_pct: 25.0,
         avg_judge_confidence: 0.81,
+        real_spend: 0.4,
+        shadow_spend: 0.1,
+        cache_hit_turns: 2,
       },
       {
         group: "REASONING",
@@ -108,6 +142,9 @@ const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
         shadow_win_rate_pct: 33.3,
         tie_rate_pct: 16.7,
         avg_judge_confidence: 0.74,
+        real_spend: 0.2,
+        shadow_spend: 0.2,
+        cache_hit_turns: 0,
       },
     ],
     by_current_model: [
@@ -118,11 +155,18 @@ const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
         shadow_win_rate_pct: 45.0,
         tie_rate_pct: 25.0,
         avg_judge_confidence: 0.8,
+        real_spend: 0.6,
+        shadow_spend: 0.3,
+        cache_hit_turns: 2,
       },
     ],
-    by_key: [],
     overall_shadow_win_rate_pct: 48.0,
     overall_tie_rate_pct: 22.0,
+    sampled_real_spend: 0.6,
+    sampled_shadow_spend: 0.3,
+    not_sampled_count: 378,
+    unjudgeable_count: 10,
+    shed_count: 2,
   },
   created_at: "2026-08-07T00:00:00Z",
   ends_at: "2026-09-07T00:00:00Z",
@@ -130,17 +174,18 @@ const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
   ...overrides,
 });
 
-const keyEntry = (
-  api_key_id: string,
-  overrides: Partial<ShadowEvalJob["keys"][number]> = {},
-): ShadowEvalJob["keys"][number] => ({
-  api_key_id,
+const targetEntry = (
+  target_id: string,
+  overrides: Partial<ShadowEvalJob["targets"][number]> = {},
+): ShadowEvalJob["targets"][number] => ({
+  target_type: "key",
+  target_id,
   max_turns: 10000,
   max_budget: 10,
   spend: 0,
   stopped_at: null,
   attempt_count: null,
-  key_alias: null,
+  target_alias: null,
   key_name: null,
   ...overrides,
 });
@@ -221,8 +266,8 @@ describe("ShadowEvalSection", () => {
   it("gives every active job its own card with a stop button, with the form still offered", () => {
     mockHooks({
       jobs: [
-        job({ job_id: "job-a", status: "running", keys: [keyEntry("key-a")] }),
-        job({ job_id: "job-b", status: "running", keys: [keyEntry("key-b")] }),
+        job({ job_id: "job-a", status: "running", targets: [targetEntry("key-a")] }),
+        job({ job_id: "job-b", status: "running", targets: [targetEntry("key-b")] }),
       ],
     });
     render(<ShadowEvalSection />);
@@ -333,7 +378,7 @@ describe("ShadowEvalSection", () => {
   });
 
   it("shows spend without a budget cap for a job from before spend budgets existed", () => {
-    const j = job({ keys: [keyEntry("hashed-key-abc", { max_budget: null, spend: 3.21 })] });
+    const j = job({ targets: [targetEntry("hashed-key-abc", { max_budget: null, spend: 3.21 })] });
     mockHooks({ jobs: [j], detailsById: { "job-1": j } });
     render(<ShadowEvalSection />);
     expect(screen.getByText(/\$3\.21 eval spend/)).toBeInTheDocument();
@@ -392,7 +437,7 @@ describe("ShadowEvalSection", () => {
     await user.click(within(keyList).getByText("prod-alpha"));
     await user.click(keyInput);
     await user.click(within(keyList).getByText("staging-beta"));
-    await user.click(screen.getByPlaceholderText("Select an auto-router"));
+    await user.click(screen.getByPlaceholderText("Select up to 4 auto-routers"));
     await user.click(await screen.findByText("gpt-auto"));
 
     expect(screen.getByText("Start shadow eval")).toBeDisabled();
@@ -403,7 +448,39 @@ describe("ShadowEvalSection", () => {
 
     const expectedBody = {
       api_key_ids: ["hash-alpha", "hash-beta"],
-      router_name: "gpt-auto",
+      team_ids: [],
+      user_ids: [],
+      router_names: ["gpt-auto"],
+      direction: "forward",
+      shadow_percentage: 10,
+      duration_days: 7,
+      max_budget: 10,
+      judge_model: "anthropic/claude-sonnet-5",
+    };
+    expect(start.mutate).toHaveBeenCalledWith(expectedBody);
+  });
+
+  it("submits a team-only job with team_ids and no keys", async () => {
+    const user = userEvent.setup();
+    const { start } = mockHooks({});
+    render(<ShadowEvalSection />);
+
+    expect(screen.getByText("Start shadow eval")).toBeDisabled();
+
+    await user.click(screen.getByPlaceholderText("Search teams by alias"));
+    const teamList = await screen.findByTestId("paginated-multi-select-list");
+    await user.click(within(teamList).getByText("engineering"));
+    await user.click(screen.getByPlaceholderText("Select up to 4 auto-routers"));
+    await user.click(await screen.findByText("gpt-auto"));
+    await user.click(screen.getByPlaceholderText("Select a judge model"));
+    await user.click(await screen.findByRole("option", { name: /anthropic\/claude-sonnet-5/ }));
+    await user.click(screen.getByText("Start shadow eval"));
+
+    const expectedBody = {
+      api_key_ids: [],
+      team_ids: ["team-eng"],
+      user_ids: [],
+      router_names: ["gpt-auto"],
       direction: "forward",
       shadow_percentage: 10,
       duration_days: 7,
@@ -425,7 +502,7 @@ describe("ShadowEvalSection", () => {
     await user.click(screen.getByPlaceholderText("Search keys by alias"));
     const keyList = await screen.findByTestId("paginated-multi-select-list");
     await user.click(within(keyList).getByText("prod-alpha"));
-    await user.click(screen.getByPlaceholderText("Select an auto-router"));
+    await user.click(screen.getByPlaceholderText("Select up to 4 auto-routers"));
     await user.click(await screen.findByText("gpt-auto"));
     await user.click(screen.getByPlaceholderText("Select a judge model"));
     await user.click(await screen.findByRole("option", { name: /anthropic\/claude-sonnet-5/ }));
@@ -439,7 +516,9 @@ describe("ShadowEvalSection", () => {
 
     const expectedBody = {
       api_key_ids: ["hash-alpha"],
-      router_name: "gpt-auto",
+      team_ids: [],
+      user_ids: [],
+      router_names: ["gpt-auto"],
       direction: "reverse",
       baseline_model: "prod-claude",
       shadow_percentage: 10,
@@ -448,6 +527,119 @@ describe("ShadowEvalSection", () => {
       judge_model: "anthropic/claude-sonnet-5",
     };
     expect(start.mutate).toHaveBeenCalledWith(expectedBody);
+  });
+
+  it("submits every picked auto-router so one job compares them on the same traffic", async () => {
+    const user = userEvent.setup();
+    const { start } = mockHooks({});
+    render(<ShadowEvalSection />);
+
+    await user.click(screen.getByPlaceholderText("Search keys by alias"));
+    const keyList = await screen.findByTestId("paginated-multi-select-list");
+    await user.click(within(keyList).getByText("prod-alpha"));
+    const routerInput = screen.getByPlaceholderText("Select up to 4 auto-routers");
+    await user.click(routerInput);
+    await user.click(await screen.findByText("gpt-auto"));
+    await user.click(routerInput);
+    await user.click(await screen.findByText("claude-auto"));
+    expect(
+      screen.getByText("Every router sees the same sampled requests, judged against the same live responses"),
+    ).toBeInTheDocument();
+    await user.click(screen.getByPlaceholderText("Select a judge model"));
+    await user.click(await screen.findByRole("option", { name: /anthropic\/claude-sonnet-5/ }));
+    await user.click(screen.getByText("Start shadow eval"));
+
+    const expectedBody = {
+      api_key_ids: ["hash-alpha"],
+      team_ids: [],
+      user_ids: [],
+      router_names: ["gpt-auto", "claude-auto"],
+      direction: "forward",
+      shadow_percentage: 10,
+      duration_days: 7,
+      max_budget: 10,
+      judge_model: "anthropic/claude-sonnet-5",
+    };
+    expect(start.mutate).toHaveBeenCalledWith(expectedBody);
+  });
+
+  it("blocks starting a reverse job with more than one router and says why", async () => {
+    const user = userEvent.setup();
+    mockHooks({});
+    render(<ShadowEvalSection />);
+
+    await user.click(screen.getByPlaceholderText("Search keys by alias"));
+    const keyList = await screen.findByTestId("paginated-multi-select-list");
+    await user.click(within(keyList).getByText("prod-alpha"));
+    const routerInput = screen.getByPlaceholderText("Select up to 4 auto-routers");
+    await user.click(routerInput);
+    await user.click(await screen.findByText("gpt-auto"));
+    await user.click(routerInput);
+    await user.click(await screen.findByText("claude-auto"));
+    await user.click(screen.getByText("Adoption check: key's traffic vs the router"));
+    await user.click(await screen.findByText("Regression check: router's picks vs a baseline"));
+    await user.click(screen.getByPlaceholderText("Select a judge model"));
+    await user.click(await screen.findByRole("option", { name: /anthropic\/claude-sonnet-5/ }));
+    await user.click(screen.getByPlaceholderText("Select a baseline model"));
+    await user.click(screen.getByRole("option", { name: /prod-claude/ }));
+
+    expect(screen.getByText("A regression check compares one router to its baseline")).toBeInTheDocument();
+    expect(screen.getByText("Start shadow eval")).toBeDisabled();
+  });
+
+  it("renders a per-router comparison table only when the job ran several routers", () => {
+    const routerSlice = (group: string, wins: number) => ({
+      group,
+      turn_count: 20,
+      real_win_rate_pct: 100 - wins - 10,
+      shadow_win_rate_pct: wins,
+      tie_rate_pct: 10,
+      avg_judge_confidence: 0.8,
+      real_spend: 0.4,
+      shadow_spend: 0.2,
+      cache_hit_turns: 0,
+    });
+    const base = job();
+    const multi = job({
+      router_names: ["claude-auto", "gpt-auto"],
+      results: { ...base.results!, by_router: [routerSlice("claude-auto", 40), routerSlice("gpt-auto", 70)] },
+    });
+    mockHooks({ jobs: [multi], detailsById: { "job-1": multi } });
+    render(<ShadowEvalSection />);
+
+    expect(screen.getByText("Router")).toBeInTheDocument();
+    const rows = screen.getAllByRole("row").map((row) => row.textContent ?? "");
+    expect(rows.some((text) => text.includes("claude-auto") && text.includes("40.0%"))).toBe(true);
+    expect(rows.some((text) => text.includes("gpt-auto") && text.includes("70.0%"))).toBe(true);
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.textContent === "Shadowing 10% of prod-alpha traffic via claude-auto, gpt-auto" &&
+          element.tagName === "P",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("renders a job from an older proxy that predates router_names", () => {
+    const legacy = { ...job(), router_names: undefined } as unknown as ShadowEvalJob;
+    mockHooks({ jobs: [legacy], detailsById: { "job-1": legacy } });
+    render(<ShadowEvalSection />);
+
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.textContent === "Shadowing 10% of prod-alpha traffic via claude-auto" && element.tagName === "P",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the per-router table hidden for a single-router job", () => {
+    const base = job();
+    const single = job({ results: { ...base.results!, by_router: [] } });
+    mockHooks({ jobs: [single], detailsById: { "job-1": single } });
+    render(<ShadowEvalSection />);
+
+    expect(screen.queryByText("Router")).not.toBeInTheDocument();
   });
 
   it("flips the arm labels and headline for a reverse job's results", () => {
@@ -471,9 +663,13 @@ describe("ShadowEvalSection", () => {
   });
 
   it("labels the shadowed key by alias, then masked name, then truncated hash", () => {
-    expect(shadowedKeyLabel(job().keys[0])).toBe("prod-alpha");
-    expect(shadowedKeyLabel(keyEntry("hashed-key-abc", { key_name: "sk-...alpha" }))).toBe("sk-...alpha");
-    expect(shadowedKeyLabel(keyEntry("hashed-key-abc"))).toBe("hashed-key…");
+    expect(shadowedTargetLabel(job().targets[0])).toBe("prod-alpha");
+    expect(shadowedTargetLabel(targetEntry("hashed-key-abc", { key_name: "sk-...alpha" }))).toBe("sk-...alpha");
+    expect(shadowedTargetLabel(targetEntry("hashed-key-abc"))).toBe("hashed-key…");
+    expect(shadowedTargetLabel(targetEntry("team-eng", { target_type: "team" }))).toBe("team-eng");
+    expect(shadowedTargetLabel(targetEntry("team-eng", { target_type: "team", target_alias: "engineering" }))).toBe(
+      "engineering",
+    );
   });
 
   it("breaks results down per key, so one key exhausting its own budget is visible while a sibling runs on", () => {
@@ -481,25 +677,32 @@ describe("ShadowEvalSection", () => {
       jobs: [
         job({
           judged_count: 205,
-          keys: [
-            keyEntry("hash-spent", { max_budget: 2, spend: 1.5, stopped_at: "2026-08-08T00:00:00Z" }),
-            keyEntry("hash-hungry", { max_budget: 5, spend: 0.2 }),
-          ],
-          results: {
-            by_tier: [],
-            by_current_model: [],
-            by_key: [
-              {
+          targets: [
+            targetEntry("hash-spent", {
+              max_budget: 2,
+              spend: 1.5,
+              stopped_at: "2026-08-08T00:00:00Z",
+              verdicts: {
                 group: "hash-spent",
                 turn_count: 200,
                 real_win_rate_pct: 20.0,
                 shadow_win_rate_pct: 60.0,
                 tie_rate_pct: 20.0,
                 avg_judge_confidence: 0.9,
+                real_spend: 0.9,
+                shadow_spend: 0.5,
+                cache_hit_turns: 0,
               },
-            ],
+            }),
+            targetEntry("hash-hungry", { max_budget: 5, spend: 0.2 }),
+          ],
+          results: {
+            by_tier: [],
+            by_current_model: [],
             overall_shadow_win_rate_pct: 60.0,
             overall_tie_rate_pct: 20.0,
+            sampled_real_spend: 0.9,
+            sampled_shadow_spend: 0.5,
           },
         }),
       ],
@@ -520,7 +723,7 @@ describe("ShadowEvalSection", () => {
 
     expect(screen.getByText(/205 turns judged/)).toBeInTheDocument();
     expect(screen.getByText(/Shadowing 10% of/)).toBeInTheDocument();
-    expect(screen.getByText("2 keys")).toBeInTheDocument();
+    expect(screen.getByText("2 targets")).toBeInTheDocument();
   });
 
   it("reads a key that spent its budget as completed even before the sweep stamps it", () => {
@@ -528,9 +731,9 @@ describe("ShadowEvalSection", () => {
     mockHooks({
       jobs: [
         job({
-          keys: [
-            keyEntry("hash-spent", { max_budget: 2, spend: 2, attempt_count: 40 }),
-            keyEntry("hash-hungry", legacyTurnBudgetLeg),
+          targets: [
+            targetEntry("hash-spent", { max_budget: 2, spend: 2, attempt_count: 40 }),
+            targetEntry("hash-hungry", legacyTurnBudgetLeg),
           ],
         }),
       ],
@@ -552,9 +755,9 @@ describe("ShadowEvalSection", () => {
         job({
           judged_count: 0,
           results: null,
-          keys: [
-            keyEntry("hash-spent", { max_budget: 0.5, spend: 0.5, attempt_count: 2 }),
-            keyEntry("hash-hungry", { max_budget: 5, spend: 0.01, attempt_count: 1 }),
+          targets: [
+            targetEntry("hash-spent", { max_budget: 0.5, spend: 0.5, attempt_count: 2 }),
+            targetEntry("hash-hungry", { max_budget: 5, spend: 0.01, attempt_count: 1 }),
           ],
         }),
       ],
@@ -575,9 +778,9 @@ describe("ShadowEvalSection", () => {
       jobs: [
         job({
           status: "completed",
-          keys: [
-            keyEntry("hash-spent", { max_turns: 200, stopped_at: "2026-08-08T00:00:00Z" }),
-            keyEntry("hash-hungry", { max_turns: 500 }),
+          targets: [
+            targetEntry("hash-spent", { max_turns: 200, stopped_at: "2026-08-08T00:00:00Z" }),
+            targetEntry("hash-hungry", { max_turns: 500 }),
           ],
         }),
       ],
@@ -588,6 +791,41 @@ describe("ShadowEvalSection", () => {
     if (!hungry) throw new Error("expected a table row per scoped key");
     expect(within(hungry).getByText("completed")).toBeInTheDocument();
     expect(within(hungry).queryByText("running")).not.toBeInTheDocument();
+  });
+
+  it("shows the measured cost comparison with savings and both arm totals", () => {
+    const j = job({});
+    mockHooks({ jobs: [j], detailsById: { "job-1": j } });
+    render(<ShadowEvalSection />);
+    expect(screen.getByText("Router cost vs your current model")).toBeInTheDocument();
+    expect(screen.getByText("-50.0%")).toBeInTheDocument();
+    expect(
+      screen.getByText("$0.3000 vs $0.6000 on the same judged turns; 2 cache-served turns excluded"),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("Router cost").length).toBeGreaterThan(0);
+  });
+
+  it("hides the cost tile when either arm has no measured spend, so a pre-measurement job never reads as a free incumbent", () => {
+    const legacy = job({});
+    legacy.results = {
+      ...legacy.results!,
+      by_tier: legacy.results!.by_tier.map((s) => ({ ...s, real_spend: 0 })),
+      sampled_real_spend: 0,
+      sampled_shadow_spend: 0.3,
+    };
+    mockHooks({ jobs: [legacy], detailsById: { "job-1": legacy } });
+    render(<ShadowEvalSection />);
+    expect(screen.queryByText(/Router cost vs/)).not.toBeInTheDocument();
+    expect(screen.getByText("Router matched or beat your current model")).toBeInTheDocument();
+  });
+
+  it("flips the cost comparison arms for a reverse job", () => {
+    const reverse = job({ direction: "reverse", baseline_model: "gpt-4o-mini" });
+    mockHooks({ jobs: [reverse], detailsById: { "job-1": reverse } });
+    render(<ShadowEvalSection />);
+    expect(screen.getByText("Router cost vs the baseline")).toBeInTheDocument();
+    expect(screen.getByText(/\$0\.6000 vs \$0\.3000 on the same judged turns/)).toBeInTheDocument();
+    expect(screen.getByText("+100.0%")).toBeInTheDocument();
   });
 
   it("keeps an older job's verdicts reachable through the previous evaluations list", async () => {

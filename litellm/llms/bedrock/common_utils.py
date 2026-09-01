@@ -21,6 +21,7 @@ import httpx
 
 import litellm
 from litellm import verbose_logger
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -434,15 +435,15 @@ def init_bedrock_client(
     ssl_verify: Final = _get_bedrock_client_ssl_verify()
 
     ### SET REGION NAME
-    if region_name:
-        pass
-    elif aws_region_name:
-        region_name = aws_region_name
-    elif litellm_aws_region_name:
-        region_name = litellm_aws_region_name
-    elif standard_aws_region_name:
-        region_name = standard_aws_region_name
-    else:
+    resolved_region_name: Final = next(
+        (
+            candidate
+            for candidate in (region_name, aws_region_name, litellm_aws_region_name, standard_aws_region_name)
+            if isinstance(candidate, str) and candidate
+        ),
+        None,
+    )
+    if resolved_region_name is None:
         raise BedrockError(
             message="AWS region not set: set AWS_REGION_NAME or AWS_REGION env variable or in .env file",
             status_code=401,
@@ -455,7 +456,7 @@ def init_bedrock_client(
     elif env_aws_bedrock_runtime_endpoint:
         endpoint_url = env_aws_bedrock_runtime_endpoint
     else:
-        endpoint_url = f"https://bedrock-runtime.{region_name}.amazonaws.com"
+        endpoint_url = f"https://bedrock-runtime.{resolved_region_name}.{get_aws_dns_suffix(resolved_region_name)}"
 
     import boto3
 
@@ -492,7 +493,7 @@ def init_bedrock_client(
             aws_access_key_id=sts_response["Credentials"]["AccessKeyId"],
             aws_secret_access_key=sts_response["Credentials"]["SecretAccessKey"],
             aws_session_token=sts_response["Credentials"]["SessionToken"],
-            region_name=region_name,
+            region_name=resolved_region_name,
             endpoint_url=endpoint_url,
             config=config,
             verify=ssl_verify,
@@ -513,7 +514,7 @@ def init_bedrock_client(
             aws_access_key_id=sts_response["Credentials"]["AccessKeyId"],
             aws_secret_access_key=sts_response["Credentials"]["SecretAccessKey"],
             aws_session_token=sts_response["Credentials"]["SessionToken"],
-            region_name=region_name,
+            region_name=resolved_region_name,
             endpoint_url=endpoint_url,
             config=config,
             verify=ssl_verify,
@@ -526,7 +527,7 @@ def init_bedrock_client(
             service_name="bedrock-runtime",
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
-            region_name=region_name,
+            region_name=resolved_region_name,
             endpoint_url=endpoint_url,
             config=config,
             verify=ssl_verify,
@@ -536,7 +537,7 @@ def init_bedrock_client(
 
         client = boto3.Session(profile_name=aws_profile_name).client(
             service_name="bedrock-runtime",
-            region_name=region_name,
+            region_name=resolved_region_name,
             endpoint_url=endpoint_url,
             config=config,
             verify=ssl_verify,
@@ -547,7 +548,7 @@ def init_bedrock_client(
 
         client = boto3.client(
             service_name="bedrock-runtime",
-            region_name=region_name,
+            region_name=resolved_region_name,
             endpoint_url=endpoint_url,
             config=config,
             verify=ssl_verify,
@@ -1486,6 +1487,7 @@ class CommonBatchFilesUtils:
             aws_role_name=optional_params.get("aws_role_name"),
             aws_web_identity_token=optional_params.get("aws_web_identity_token"),
             aws_sts_endpoint=optional_params.get("aws_sts_endpoint"),
+            aws_external_id=optional_params.get("aws_external_id"),
         )
 
         # Prepare the request data
