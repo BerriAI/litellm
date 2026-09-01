@@ -329,6 +329,38 @@ class OpenAIChatCompletionResponseIterator(BaseModelResponseIterator):
             raise e
 
 
+def _get_openai_exception_status_code(e: Exception) -> int:
+    """
+    Determine the status code to attach to an ``OpenAIError`` raised from a
+    caught exception.
+
+    The OpenAI SDK raises ``openai.OpenAIError`` (e.g. "Missing credentials")
+    at *client construction*, before any HTTP request is made. Such exceptions
+    carry no ``status_code``. Defaulting these to 500 asserts that a server
+    responded with a server error, so the failure is treated as transient and
+    retried even though it is a permanent, client-side configuration problem.
+
+    For these pre-request client errors we return 401 so they surface as a
+    non-retryable ``AuthenticationError``. Any exception that already carries a
+    ``status_code`` (i.e. a real HTTP response happened) keeps that code.
+    """
+    status_code = getattr(e, "status_code", None)
+    if status_code is not None:
+        return status_code
+    # Match the *bare* ``openai.OpenAIError`` base class exactly. The
+    # missing-credentials error is raised as the base class at client
+    # construction (before any HTTP request), so it has no ``status_code`` and
+    # should surface as a non-retryable 401 ``AuthenticationError``.
+    #
+    # Do NOT use ``isinstance`` here: ``openai.APIConnectionError`` and
+    # ``openai.APITimeoutError`` subclass ``OpenAIError`` and also carry no
+    # ``status_code``, but they are genuinely transient and must stay retryable
+    # (keep the 500 default).
+    if type(e) is openai.OpenAIError:
+        return 401
+    return 500
+
+
 class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     def __init__(self) -> None:
         super().__init__()
@@ -844,7 +876,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         except OpenAIError as e:
             raise e
         except Exception as e:
-            status_code: Final = getattr(e, "status_code", 500)
+            status_code: Final = _get_openai_exception_status_code(e)
             error_headers = getattr(e, "headers", None)
             error_text: Final = getattr(e, "text", str(e))
             error_response: Final = getattr(e, "response", None)
@@ -967,7 +999,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 # e.message
             except Exception as e:
                 exception_response = getattr(e, "response", None)
-                status_code = getattr(e, "status_code", 500)
+                status_code = _get_openai_exception_status_code(e)
                 exception_body = getattr(e, "body", None)
                 error_headers = getattr(e, "headers", None)
                 if error_headers is None and exception_response:
@@ -1122,7 +1154,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     raise e
 
                 error_headers = getattr(e, "headers", None)
-                status_code = getattr(e, "status_code", 500)
+                status_code = _get_openai_exception_status_code(e)
                 error_response = getattr(e, "response", None)
                 exception_body = getattr(e, "body", None)
                 if error_headers is None and error_response:
