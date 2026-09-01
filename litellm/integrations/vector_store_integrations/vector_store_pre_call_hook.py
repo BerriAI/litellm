@@ -5,6 +5,7 @@ This hook is called before making an LLM request when a vector store is configur
 It searches the vector store for relevant context and appends it to the messages.
 """
 
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
@@ -84,6 +85,8 @@ class VectorStorePreCallHook(CustomLogger):
             try:
                 from litellm.proxy.proxy_server import (
                     llm_router as _llm_router,
+                )
+                from litellm.proxy.proxy_server import (
                     prisma_client as _prisma_client,
                 )
 
@@ -119,17 +122,20 @@ class VectorStorePreCallHook(CustomLogger):
                 vector_store_id = vector_store_to_run.get("vector_store_id", "")
                 custom_llm_provider = vector_store_to_run.get("custom_llm_provider")
                 litellm_params_for_vector_store = vector_store_to_run.get("litellm_params", {}) or {}
-                request_litellm_params: Final = (
-                    litellm_logging_obj.model_call_details.get("litellm_params", {})
-                    if litellm_logging_obj is not None
-                    else {}
-                )
-                request_metadata: Final = (
+                request_litellm_params = litellm_logging_obj.model_call_details.get("litellm_params", {})
+                request_metadata = (
                     request_litellm_params.get("metadata", {}) if isinstance(request_litellm_params, dict) else {}
                 )
-                search_function: Final = (
-                    llm_router.avector_store_search if llm_router is not None else litellm.vector_stores.asearch
-                )
+                if llm_router is not None:
+                    search_function = cast(  # cast-ok: normalize router search callable
+                        Callable[..., Awaitable[VectorStoreSearchResponse]],
+                        llm_router.avector_store_search,
+                    )
+                else:
+                    search_function = cast(  # cast-ok: normalize SDK search callable
+                        Callable[..., Awaitable[VectorStoreSearchResponse]],
+                        litellm.vector_stores.asearch,
+                    )
                 search_response = await search_function(
                     **{
                         "vector_store_id": vector_store_id,
