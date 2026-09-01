@@ -251,6 +251,7 @@ def test_fable_5_1_model_pricing_and_capabilities():
         assert "output_cost_per_token_above_200k_tokens" not in info
 
         assert info["supports_assistant_prefill"] is False
+        assert info["supports_forced_tool_use"] is False
         assert info["supports_function_calling"] is True
         assert info["supports_prompt_caching"] is True
         assert info["supports_reasoning"] is True
