@@ -212,6 +212,87 @@ test.describe("Add Model", () => {
       .toBe(true);
   });
 
+  test("Add a model with a stored credential, pass Test Connect, and serve traffic", async ({ page, request }) => {
+    const masterKey = users[Role.ProxyAdmin].password;
+    const auth = { Authorization: `Bearer ${masterKey}` };
+    const credentialName = `e2e-cred-reuse-${Date.now()}`;
+    const createCred = await page.request.post("/credentials", {
+      headers: auth,
+      data: {
+        credential_name: credentialName,
+        credential_values: { api_key: "fake-key", api_base: MOCK_LLM_BASE },
+        credential_info: { custom_llm_provider: "openai" },
+      },
+    });
+    expect(createCred.ok(), `POST /credentials failed (${createCred.status()}): ${await createCred.text()}`).toBe(true);
+
+    try {
+      await navigateToPage(page, Page.Models);
+      await page.getByRole("tab", { name: "Add Model" }).click();
+
+      await selectProvider(page, "OpenAI-Compatible Endpoints (Together AI, etc.)");
+
+      const publicName = `e2e-cred-model-${Date.now()}`;
+      uiAddedModelName = publicName;
+
+      await page.getByRole("combobox", { name: "Select models" }).click();
+      await page.getByRole("option", { name: "Custom Model Name (Enter below)" }).click();
+      await page.keyboard.press("Escape");
+      await page.getByPlaceholder("Enter custom model name").fill(publicName);
+
+      const credentialSelect = page.getByRole("combobox", { name: "Existing Credentials" });
+      await credentialSelect.click();
+      await credentialSelect.fill(credentialName);
+      await page.getByRole("option", { name: credentialName, exact: true }).click();
+
+      await expect(page.locator("#api_key")).toHaveCount(0);
+      await expect(page.locator("#api_base")).toHaveCount(0);
+
+      await page.getByRole("button", { name: "Test Connect" }).click();
+      await expect(page.getByText("Connection Test Results")).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByTestId("connection-success-msg")).toBeVisible({ timeout: 30_000 });
+
+      const resultsModal = page.getByRole("dialog", { name: "Connection Test Results" });
+      await resultsModal.locator('[data-slot="dialog-footer"]').getByRole("button", { name: "Close" }).click();
+      await expect(resultsModal).toBeHidden({ timeout: 5_000 });
+
+      const created = await captureRequestBody(page, { method: "POST", urlIncludes: "/model/new" }, async () => {
+        await page.getByRole("button", { name: "Add Model" }).last().click();
+      });
+      expect(created.litellm_params?.litellm_credential_name, "the picked credential goes on the wire").toBe(
+        credentialName,
+      );
+      expect(created.litellm_params?.api_key, "no raw api key goes on the wire").toBeUndefined();
+
+      await expect(page.getByText("created successfully")).toBeVisible({ timeout: 15_000 });
+
+      await expect
+        .poll(
+          async () => {
+            try {
+              await sendChatCompletion(request, { model: publicName, prompt: `hello via ${credentialName}` });
+              return true;
+            } catch {
+              return false;
+            }
+          },
+          {
+            message: `model ${publicName} added with a stored credential never served a request`,
+            timeout: 30_000,
+          },
+        )
+        .toBe(true);
+    } finally {
+      const stored = uiAddedModelName ? await findDeploymentByName(page, uiAddedModelName) : undefined;
+      const id = stored?.model_info?.id;
+      if (id) {
+        await page.request.post("/model/delete", { headers: auth, data: { id } });
+        uiAddedModelName = "";
+      }
+      await page.request.delete(`/credentials/${credentialName}`, { headers: auth });
+    }
+  });
+
   test("Test connection with bad credentials shows failure", async ({ page }) => {
     await navigateToPage(page, Page.Models);
     await page.getByRole("tab", { name: "Add Model" }).click();
