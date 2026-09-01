@@ -263,6 +263,7 @@ from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.audio_utils.utils import resolve_speech_media_type
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
@@ -1363,7 +1364,7 @@ _OPENAPI_HTTP_METHODS: Final = {
 # the UI. Kept here at module scope to match the analogous descriptor
 # `is_secret` flags in litellm.proxy.config_resolvers and the
 # `_CACHE_SENSITIVE_FIELDS` constant in the cache endpoint file.
-_ALERTING_SENSITIVE_VARS: Final[set[str]] = {"SLACK_WEBHOOK_URL", "SMTP_PASSWORD"}
+_ALERTING_SENSITIVE_VARS: Final[set[str]] = {"ALERTING_WEBHOOK_URL", "SLACK_WEBHOOK_URL", "SMTP_PASSWORD"}
 
 
 def _strip_operation_id_method_suffix(operation_id: str) -> str:
@@ -2658,7 +2659,6 @@ async def increment_spend_counters(
     budget_reservation: dict | None = None,
     end_user_id: str | None = None,
     tags: list[str] | None = None,
-    request_id: str | None = None,
     request_started_at: datetime | None = None,
     model_access_groups: Sequence[str] | None = None,
 ):
@@ -2733,7 +2733,6 @@ async def increment_spend_counters(
                 window_duration=duration,
                 window_start=key_window_start,
                 increment=cost,
-                request_id=request_id,
                 request_started_at=request_started_at,
             )
 
@@ -2777,7 +2776,6 @@ async def increment_spend_counters(
                 window_duration=duration,
                 window_start=team_window_start,
                 increment=cost,
-                request_id=request_id,
                 request_started_at=request_started_at,
             )
 
@@ -3005,16 +3003,15 @@ async def _enqueue_window_spend_row_update(
     window_duration: str,
     window_start: datetime | None,
     increment: float,
-    request_id: str | None,
     request_started_at: datetime | None,
 ) -> None:
     """Queue this request's cost against the LiteLLM_BudgetWindowSpend row for
     the window, so enforcement can read a maintained total instead of
     aggregating LiteLLM_SpendLogs.
 
-    request_id is the LiteLLM_SpendLogs id this cost was recorded under and
-    request_started_at its startTime; the flush uses them to keep the one-time
-    seed from counting a request that its increment already covers.
+    request_started_at is this request's LiteLLM_SpendLogs startTime; the flush
+    stops the one-time seed there so a request its increment already covers is
+    not counted twice.
 
     Enqueued even when the cache increment was skipped for a reserved counter:
     the reservation only pre-charged the counter, and the row still owes the
@@ -3035,7 +3032,6 @@ async def _enqueue_window_spend_row_update(
                 window_duration=window_duration,
                 window_start=window_start,
                 spend=increment,
-                request_id=request_id,
                 started_at=request_started_at,
             )
         )
@@ -11066,15 +11062,14 @@ async def audio_speech(
         if callback_headers:
             custom_headers.update(callback_headers)
 
-        # Determine media type based on model type
-        media_type = "audio/mpeg"  # Default for OpenAI TTS
-        request_model: Final = data.get("model", "")
-        if request_model:
-            request_model_lower: Final = request_model.lower()
-            if "gemini" in request_model_lower and (
-                "tts" in request_model_lower or "preview-tts" in request_model_lower
-            ):
-                media_type = "audio/wav"  # Gemini TTS returns WAV format after conversion
+        requested_format: Final = data.get("response_format")
+        upstream_content_type: Final = (
+            response.response.headers.get("content-type") if isinstance(response, HttpxBinaryResponseContent) else None
+        )
+        media_type: Final = resolve_speech_media_type(
+            upstream_content_type=upstream_content_type,
+            response_format=requested_format if isinstance(requested_format, str) else None,
+        )
 
         return StreamingResponse(
             _audio_speech_chunk_generator(response),
@@ -11090,7 +11085,15 @@ async def audio_speech(
         )
         verbose_proxy_logger.error("litellm.proxy.proxy_server.audio_speech(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
-        raise e
+        if isinstance(e, (ProxyException, HTTPException)):
+            raise e
+        raise ProxyException(
+            message=getattr(e, "message", f"{e}"),
+            type=getattr(e, "type", "None"),
+            param=getattr(e, "param", "None"),
+            openai_code=getattr(e, "code", None),
+            code=getattr(e, "status_code", 500),
+        )
 
 
 @router.post(
@@ -16566,6 +16569,7 @@ async def create_config_audit_log(
 
 _EXTRA_SECRET_CALLBACK_ENV_VARS: Final = frozenset(
     {
+        "ALERTING_WEBHOOK_URL",
         "GALILEO_USERNAME",
         "GENERIC_LOGGER_HEADERS",
         "OTEL_HEADERS",

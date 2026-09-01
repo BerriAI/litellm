@@ -1910,12 +1910,15 @@ def ocr_cost(
     if credits is not None and cost_per_credit is not None:
         return cost_per_credit * credits, 0.0
 
-    ocr_cost_per_page: float | None = None
-    if model_info is not None:
-        ocr_cost_per_page = model_info.get("ocr_cost_per_page")
+    ocr_cost_per_page: Final = model_info.get("ocr_cost_per_page") if model_info is not None else None
+    annotation_cost_per_page: Final = model_info.get("annotation_cost_per_page") if model_info is not None else None
+    annotation_rate: Final = annotation_cost_per_page if annotation_cost_per_page is not None else ocr_cost_per_page
 
     pages_processed: Final = response.usage_info.pages_processed
-    if pages_processed is None:
+    annotation_pages: Final = response.usage_info.pages_processed_annotation or 0
+    has_billable_annotation_pages: Final = annotation_rate is not None and annotation_pages > 0
+
+    if pages_processed is None and not has_billable_annotation_pages:
         if cost_per_credit is not None or ocr_cost_per_page is None:
             # Surface missing usage data instead of silently under-reporting
             # cost. The previous behavior raised ValueError; we now return 0.0
@@ -1931,7 +1934,7 @@ def ocr_cost(
             return 0.0, 0.0
         raise ValueError("OCR response pages_processed is None")
 
-    if ocr_cost_per_page is None:
+    if ocr_cost_per_page is None and not has_billable_annotation_pages:
         # No per-page pricing configured. Either the model is on credit-based
         # pricing (and credits weren't returned, so the credit branch above did
         # not match) or the model has no OCR pricing entry at all. Surface a
@@ -1947,8 +1950,9 @@ def ocr_cost(
         )
         return 0.0, 0.0
 
-    total_ocr_processing_cost: Final[float] = ocr_cost_per_page * pages_processed
-    return total_ocr_processing_cost, 0.0
+    ocr_pages_cost: Final = (ocr_cost_per_page or 0.0) * (pages_processed or 0)
+    annotation_pages_cost: Final = (annotation_rate or 0.0) * annotation_pages
+    return ocr_pages_cost + annotation_pages_cost, 0.0
 
 
 def vector_store_search_cost(
@@ -2268,6 +2272,10 @@ def batch_cost_calculator(
     return total_prompt_cost, total_completion_cost
 
 
+def _attribute_value(obj: object, name: str) -> object:
+    return getattr(obj, name)
+
+
 def _summable_prompt_token_fields(prompt_tokens_details: BaseModel) -> list[str]:
     field_names: Final = list(type(prompt_tokens_details).model_fields)
     if getattr(prompt_tokens_details, "cache_write_tokens", None) is None:
@@ -2293,7 +2301,7 @@ class BaseTokenUsageProcessor:
         for usage in usage_objects:
             # Handle direct attributes by checking what exists in the model
             for attr in dir(usage):
-                if not attr.startswith("_") and not callable(getattr(usage, attr)):
+                if not attr.startswith("_") and not callable(_attribute_value(usage, attr)):
                     current_val = getattr(combined, attr, 0)
                     new_val = getattr(usage, attr, 0)
                     if (
@@ -2313,7 +2321,7 @@ class BaseTokenUsageProcessor:
                     if (
                         hasattr(usage.prompt_tokens_details, attr)
                         and not attr.startswith("_")
-                        and not callable(getattr(usage.prompt_tokens_details, attr))
+                        and not callable(_attribute_value(usage.prompt_tokens_details, attr))
                     ):
                         current_val = getattr(combined.prompt_tokens_details, attr, 0) or 0
                         new_val = getattr(usage.prompt_tokens_details, attr, 0) or 0
@@ -2332,7 +2340,9 @@ class BaseTokenUsageProcessor:
                 # Check what keys exist in the model's completion_tokens_details
                 # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
                 for attr in type(usage.completion_tokens_details).model_fields:
-                    if not attr.startswith("_") and not callable(getattr(usage.completion_tokens_details, attr)):
+                    if not attr.startswith("_") and not callable(
+                        _attribute_value(usage.completion_tokens_details, attr)
+                    ):
                         current_val = getattr(combined.completion_tokens_details, attr, 0) or 0
                         new_val = getattr(usage.completion_tokens_details, attr, 0) or 0
                         if isinstance(new_val, (int, float)):

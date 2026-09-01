@@ -189,6 +189,11 @@ class ModelInfo(MirroredPricingParams):
     # router-wide default.
     enable_tag_filtering: bool | None = None
 
+    # when True, calls routed to this deployment persist a router_metadata block
+    # (requested model group, selected model + provider, router correlation id)
+    # in the spend log row's metadata. Set it on every deployment of the group.
+    internal_router_model: bool | None = None
+
     def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
             id = str(uuid.uuid4())  # Generate a UUID if id is None or not provided
