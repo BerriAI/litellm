@@ -10,7 +10,8 @@ name = "_native"
 crate-type = ["cdylib"]
 
 [features]
-default = ["extension-module"]
+default = ["abi3"]
+abi3 = ["pyo3/abi3-py310"]
 extension-module = ["pyo3/extension-module"]
 
 [dependencies]

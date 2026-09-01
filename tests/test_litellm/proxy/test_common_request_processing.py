@@ -1659,29 +1659,29 @@ class TestCommonRequestProcessingHelpers:
     async def test_serialize_http_exception_detail_helper(self):
         """Direct unit coverage for the L1 helper across all branches."""
         from litellm.proxy.common_request_processing import (
-            _serialize_http_exception_detail,
+            serialize_http_exception_detail,
         )
         import json as _json
 
-        assert _serialize_http_exception_detail("plain") == ("plain", None)
+        assert serialize_http_exception_detail("plain") == ("plain", None)
 
-        msg, fields = _serialize_http_exception_detail({"error": "Violated", "extra": "x"})
+        msg, fields = serialize_http_exception_detail({"error": "Violated", "extra": "x"})
         assert msg == "Violated"
         assert fields == {"error": "Violated", "extra": "x"}
 
-        msg, fields = _serialize_http_exception_detail({"error": {"message": "blocked", "code": "x"}})
+        msg, fields = serialize_http_exception_detail({"error": {"message": "blocked", "code": "x"}})
         assert msg == "blocked"
         assert fields == {"error": {"message": "blocked", "code": "x"}}
 
-        msg, fields = _serialize_http_exception_detail({"message": "top-level"})
+        msg, fields = serialize_http_exception_detail({"message": "top-level"})
         assert msg == "top-level"
         assert fields == {"message": "top-level"}
 
-        msg, fields = _serialize_http_exception_detail({"weird": ["a", "b"]})
+        msg, fields = serialize_http_exception_detail({"weird": ["a", "b"]})
         assert msg == _json.dumps({"weird": ["a", "b"]})
         assert fields == {"weird": ["a", "b"]}
 
-        assert _serialize_http_exception_detail(42) == ("42", None)
+        assert serialize_http_exception_detail(42) == ("42", None)
 
     async def test_proxy_exception_from_http_exception_helper(self):
         """The shared HTTPException -> ProxyException conversion keeps a clean
@@ -4694,7 +4694,7 @@ class TestAllmPassthroughStreamingProviderGate:
         }
         return ProxyBaseLLMRequestProcessing(data=data)
 
-    async def _run(self, processing_obj, monkeypatch, chunks):
+    async def _run(self, processing_obj, monkeypatch, chunks, stream=None):
         import litellm.proxy.common_request_processing as crp
         from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
 
@@ -4702,9 +4702,11 @@ class TestAllmPassthroughStreamingProviderGate:
             for chunk in chunks:
                 yield chunk
 
+        upstream_stream = stream if stream is not None else streaming_response()
+
         async def fake_route_request(**kwargs):
             async def _llm_call():
-                return streaming_response()
+                return upstream_stream
 
             return _llm_call()
 
@@ -4728,6 +4730,40 @@ class TestAllmPassthroughStreamingProviderGate:
             llm_router=None,
             skip_pre_call_logic=True,
         )
+
+    @pytest.mark.asyncio
+    async def test_client_disconnect_closes_unbuffered_passthrough_stream(self, monkeypatch):
+        """Starlette abandons the body iterator when the client disconnects, so the
+        unbuffered passthrough branch must return _UpstreamClosingStreamingResponse,
+        whose shielded cleanup closes the upstream stream; that close is what flushes
+        buffered passthrough usage into spend logs."""
+        processing_obj = self._build_processing_obj("gigachat")
+        monkeypatch.setattr(litellm, "callbacks", [])
+        upstream_closed = asyncio.Event()
+
+        async def hanging_stream():
+            try:
+                yield b"chunk-1"
+                await asyncio.Event().wait()
+            finally:
+                upstream_closed.set()
+
+        result = await self._run(processing_obj, monkeypatch, [], stream=hanging_stream())
+
+        assert isinstance(result, _UpstreamClosingStreamingResponse)
+
+        first_chunk_sent = asyncio.Event()
+
+        async def receive():
+            await first_chunk_sent.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            if message["type"] == "http.response.body" and message.get("body"):
+                first_chunk_sent.set()
+
+        await result({"type": "http"}, receive, send)
+        await asyncio.wait_for(upstream_closed.wait(), timeout=5)
 
     @pytest.mark.asyncio
     async def test_non_bedrock_stream_is_not_buffered(self, monkeypatch):
