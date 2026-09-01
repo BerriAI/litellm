@@ -7,6 +7,7 @@ import base64
 import os
 from collections.abc import Awaitable, Callable, Generator
 from datetime import timedelta
+from functools import partial
 from importlib import metadata
 from typing import Any, Final, TypeVar
 
@@ -47,7 +48,7 @@ from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl
 
 from litellm._logging import verbose_logger
-from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR
+from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR, MCP_TOOL_LISTING_TIMEOUT
 from litellm.experimental_mcp_client.tools import list_tools_with_pagination
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.types.llms.custom_http import VerifyTypes
@@ -605,7 +606,12 @@ class MCPClient:
         verbose_logger.debug("MCP client listing tools from %s", self.server_url or "stdio")
 
         try:
-            tools: Final = await self.run_with_session(list_tools_with_pagination, quiet_on_error=raise_on_error)
+            # A per-server timeout above the global default extends the whole-walk deadline
+            listing_deadline: Final = max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)
+            tools: Final = await self.run_with_session(
+                partial(list_tools_with_pagination, listing_deadline=listing_deadline),
+                quiet_on_error=raise_on_error,
+            )
             tool_count: Final = len(tools)
             tool_names: Final = tuple(tool.name for tool in tools)
             verbose_logger.info(

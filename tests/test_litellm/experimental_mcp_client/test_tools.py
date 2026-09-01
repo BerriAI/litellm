@@ -151,6 +151,29 @@ async def test_pagination_walk_stops_at_whole_walk_deadline(mock_session, monkey
 
 
 @pytest.mark.asyncio()
+async def test_pagination_walk_honors_explicit_deadline_over_globals(mock_session, monkeypatch):
+    import anyio
+
+    from litellm.experimental_mcp_client.tools import list_tools_with_pagination
+
+    monkeypatch.setattr("litellm.experimental_mcp_client.tools.MCP_CLIENT_TIMEOUT", 0.1)
+    monkeypatch.setattr("litellm.experimental_mcp_client.tools.MCP_TOOL_LISTING_TIMEOUT", 0.1)
+
+    async def slow_page(params=None):
+        await anyio.sleep(0.15)
+        idx = int(params.cursor) if params is not None else 0
+        tools = [MCPTool(name=f"tool_{idx}", description=str(idx), inputSchema={})]
+        if idx == 0:
+            return ListToolsResult(tools=tools, nextCursor="1")
+        return ListToolsResult(tools=tools)
+
+    mock_session.list_tools = slow_page
+    result = await list_tools_with_pagination(mock_session, listing_deadline=2.0)
+
+    assert [tool.name for tool in result] == ["tool_0", "tool_1"]
+
+
+@pytest.mark.asyncio()
 async def test_load_mcp_tools_openai_format_spans_pages(mock_session):
     mock_session.list_tools.side_effect = [
         ListToolsResult(
