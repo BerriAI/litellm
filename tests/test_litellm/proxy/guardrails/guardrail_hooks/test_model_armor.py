@@ -15,9 +15,7 @@ import litellm.types.utils
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
-from litellm.llms.openai.responses.guardrail_translation.handler import (
-    OpenAIResponsesHandler,
-)
+from litellm.proxy.guardrails.anthropic_sse import anthropic_sse_error_frames
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.model_armor import ModelArmorGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.model_armor.model_armor import (
@@ -3892,7 +3890,7 @@ def _responses_api_events():
     )
 
 
-async def _drain_surface_hook(guardrail, chunks):
+async def _drain_surface_hook(guardrail, chunks, request_data=None):
     async def _stream():
         for chunk in chunks:
             yield chunk
@@ -3902,7 +3900,9 @@ async def _drain_surface_hook(guardrail, chunks):
         async for item in guardrail.async_post_call_streaming_iterator_hook(
             user_api_key_dict=UserAPIKeyAuth(),
             response=_stream(),
-            request_data={
+            request_data=request_data
+            if request_data is not None
+            else {
                 "model": "claude-haiku",
                 "messages": [{"role": "user", "content": "show me a card"}],
                 "metadata": {"guardrails": ["model-armor-test"]},
@@ -4059,6 +4059,7 @@ async def test_streaming_api_failure_frames_error_per_surface(surface):
             id="anthropic-sse-without-message-start",
         ),
         pytest.param(None, id="responses-stream-without-completed-event"),
+        pytest.param("created", id="responses-stream-cut-off-after-response-created"),
     ],
 )
 async def test_streaming_hook_fails_closed_when_a_surface_stream_cannot_be_assembled(chunks):
@@ -4070,16 +4071,17 @@ async def test_streaming_hook_fails_closed_when_a_surface_stream_cannot_be_assem
         ResponsesAPIStreamEvents,
     )
 
-    if chunks is None:
-        chunks = (
-            OutputTextDeltaEvent(
-                type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
-                item_id="msg_1",
-                output_index=0,
-                content_index=0,
-                delta="hi",
-            ),
+    if chunks is None or chunks == "created":
+        delta = OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            delta="my card is 4111-1111-1111-1111",
         )
+        # response.created carries a ResponsesAPIResponse too, but an empty one: reading the body
+        # off it would scan "" and release every buffered delta unscanned
+        chunks = (delta,) if chunks is None else (_responses_created_event(), delta)
     guardrail = _surface_guardrail()
     post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
 
@@ -4145,8 +4147,6 @@ async def test_streaming_hook_forwards_a_preceding_guardrails_error_item():
 async def test_streaming_hook_forwards_a_preceding_guardrails_error_frame(chunks):
     """Chained post_call guardrails hand each other their output. An earlier guardrail's error
     frame carries no message to assemble, and replacing it would hide the real refusal."""
-    from litellm.proxy.guardrails.anthropic_sse import anthropic_sse_error_frames
-
     if chunks is None:
         chunks = anthropic_sse_error_frames("Streaming response blocked by the first guardrail")
     guardrail = _surface_guardrail()
@@ -4163,17 +4163,167 @@ async def test_streaming_hook_forwards_a_preceding_guardrails_error_frame(chunks
 async def test_streaming_responses_error_falls_back_to_sse_when_the_handler_declines():
     """build_stream_error_items may return None, which must not swallow the block into a clean
     200: the refusal falls back to the chat-completions SSE form that still carries the status."""
-    guardrail = _surface_guardrail()
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor.model_armor import (
+        _StreamSurface,
+    )
+
+    class _DecliningGuardrail(ModelArmorGuardrail):
+        @staticmethod
+        def _build_responses_error_items(exc):
+            return None
+
+    guardrail = _DecliningGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+    )
     exc = HTTPException(status_code=400, detail={"message": "blocked"})
 
-    with patch.object(OpenAIResponsesHandler, "build_stream_error_items", return_value=None):
-        items = guardrail._stream_error_items(
-            exc,
-            {"message": "blocked", "code": "400"},
-            raw_sse=False,
-            responses_stream=True,
-        )
+    items = guardrail._stream_error_items(exc, surface=_StreamSurface.RESPONSES)
 
     assert len(items) == 1
     assert '"code": "400"' in items[0]
     assert "blocked" in items[0]
+
+
+def _responses_created_event():
+    from litellm.types.llms.openai import (
+        ResponseCreatedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    return ResponseCreatedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_CREATED,
+        response=ResponsesAPIResponse(
+            id="resp_1",
+            created_at=0,
+            model="gpt-4o-mini",
+            object="response",
+            output=[],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_refuses_an_opaque_sse_stream_without_anthropic_framing():
+    """/v1/messages is not the only endpoint that streams raw SSE: the Google generateContent
+    route marks its own stream raw too. Its frames carry no Anthropic event types, so refusing
+    them in Anthropic's format would hand a Google client a body it cannot parse."""
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+    chunks = (b'data: {"candidates":[{"content":{"parts":[{"text":"my card is 4111"}]}}]}\n\n',)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, chunks)
+
+    post.assert_not_called()
+    assert tuple(delivered) != chunks
+    body = "".join(item.decode() if isinstance(item, bytes) else item for item in delivered)
+    assert "could not be assembled for scanning" in body
+    assert "event: error" not in body
+    assert '"code": "500"' in body
+
+
+@pytest.mark.asyncio
+async def test_streaming_unassemblable_stream_is_forwarded_when_fail_on_error_is_disabled():
+    """fail_on_error: false is a deliberate choice to degrade open, and it governs every other
+    path in this hook. The fail-closed refusal has to honour it too."""
+    guardrail = _surface_guardrail(fail_on_error=False)
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+    chunks = (
+        b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+        b'"delta":{"type":"text_delta","text":"hi"}}\n\n',
+    )
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, chunks)
+
+    post.assert_not_called()
+    assert tuple(delivered) == chunks
+
+
+@pytest.mark.asyncio
+async def test_streaming_fail_closed_records_the_applied_guardrail():
+    """A refusal that no header or log attributes to the guardrail leaves on-call unable to tell
+    a guardrail block apart from a provider failure."""
+    guardrail = _surface_guardrail()
+    request_data = {
+        "model": "claude-haiku",
+        "messages": [{"role": "user", "content": "show me a card"}],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+    chunks = (
+        b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+        b'"delta":{"type":"text_delta","text":"hi"}}\n\n',
+    )
+
+    with patch.object(guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_CLEAN)):
+        await _drain_surface_hook(guardrail, chunks, request_data=request_data)
+
+    assert request_data["metadata"]["applied_guardrails"] == ["model-armor-test"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_responses_tool_call_output_is_scanned():
+    """An agentic /v1/responses turn can carry its whole payload in tool-call arguments, which
+    is what the chat surface already folds into the scanned text."""
+    from litellm.types.llms.openai import (
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+    completed = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=ResponsesAPIResponse(
+            id="resp_1",
+            created_at=0,
+            model="gpt-4o-mini",
+            object="response",
+            output=[
+                {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "send_email",
+                    "arguments": '{"body": "my card is 4111-1111-1111-1111"}',
+                }
+            ],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+        ),
+    )
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, (completed,))
+
+    post.assert_called_once()
+    scanned = post.call_args.kwargs["json"]["modelResponseData"]["text"]
+    assert "4111-1111-1111-1111" in scanned
+    assert tuple(delivered) == (completed,)
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_refuses_a_content_stream_that_ends_with_an_error_frame():
+    """The chain-aware passthrough must stay narrow. A stream carrying real content plus a
+    trailing error frame is not a bare refusal to forward: the assembler cannot read it, and
+    releasing it would ship the buffered content unscanned."""
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+    chunks = (*_ANTHROPIC_SSE_CHUNKS, *anthropic_sse_error_frames("upstream gave up"))
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, chunks)
+
+    post.assert_not_called()
+    body = b"".join(delivered)
+    assert b"4111-1111-1111-1111" not in body
+    assert b"could not be assembled for scanning" in body
