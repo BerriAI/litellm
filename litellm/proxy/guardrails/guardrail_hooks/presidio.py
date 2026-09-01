@@ -11,10 +11,10 @@
 import asyncio
 import json
 import threading
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypedDict, cast
 
 import aiohttp
 from typing_extensions import NotRequired, ReadOnly
@@ -66,6 +66,14 @@ class _PresidioAnonymizeItem(TypedDict, total=False):
 class _PresidioAnonymizeResponse(TypedDict):
     text: ReadOnly[str]
     items: ReadOnly[NotRequired[list[_PresidioAnonymizeItem]]]
+
+
+class _JsonResponse(Protocol):
+    def json(self) -> Awaitable[object]: ...
+
+
+async def _json_body(response: _JsonResponse) -> object:
+    return await response.json()
 
 
 _LoopSemaphores = dict[asyncio.AbstractEventLoop, asyncio.Semaphore]
@@ -389,7 +397,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             f"expected application/json Content-Type but received '{content_type}'; body: '{error_body[:200]}'"
                         )
 
-                    analyze_results: Final = await response.json()
+                    analyze_results: Final = await _json_body(response)
                     verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
 
                 # Handle error responses from Presidio (e.g., {'error': 'No text provided'})
@@ -997,7 +1005,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         except Exception as e:
             raise e
 
-    def logging_hook(self, kwargs: dict, result: Any, call_type: str) -> tuple[dict, Any]:
+    def logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
         from concurrent.futures import ThreadPoolExecutor
 
         def run_in_new_loop():
@@ -1025,7 +1033,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # No running event loop, we can safely run in this thread
             return run_in_new_loop()
 
-    async def async_logging_hook(self, kwargs: dict, result: Any, call_type: str) -> tuple[dict, Any]:
+    async def async_logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
         """
         Masks the input and output before logging to langfuse, datadog, etc.
         """
@@ -1092,9 +1100,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 and not isinstance(result.choices[0], StreamingChoices)
             ):
                 await self._process_response_for_pii(response=result, request_data=kwargs, mode="mask")
-            elif self._is_anthropic_message_response(result):
+            elif isinstance(result, dict) and self._is_anthropic_message_response(result):
                 await self._process_anthropic_response_for_pii(
-                    response=cast(dict, result),  # cast-ok: _is_anthropic_message_response narrows via isinstance
+                    response=result,
                     request_data=kwargs,
                     mode="mask",
                 )
@@ -1321,7 +1329,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     async def _stream_apply_output_masking(
         self,
-        response: Any,
+        response: AsyncIterable[object],
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream | bytes, None]:
         """Apply Presidio masking to streaming output (apply_to_output=True path)."""
@@ -1425,7 +1433,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         return "\n".join(result_lines).encode("utf-8")
 
-    def _unmask_responses_api_completed_chunk(self, chunk: Any, pii_tokens: dict[str, str]) -> None:
+    def _unmask_responses_api_completed_chunk(self, chunk: object, pii_tokens: dict[str, str]) -> None:
         """
         Unmask PII tokens in-place for a ``response.completed`` Responses API event.
 
@@ -1434,7 +1442,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         blocks; text blocks expose a ``.text`` string attribute.  We walk the tree
         and replace every PII token with its original value.
         """
-        response_obj: Final = getattr(chunk, "response", None)
+        response_obj: Final[object] = getattr(chunk, "response", None)
         if response_obj is None:
             return
 
@@ -1450,7 +1458,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     async def _stream_pii_unmasking(
         self,
-        response: Any,
+        response: AsyncIterable[object],
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream | bytes, None]:
         """Apply PII unmasking to streaming output (output_parse_pii=True path)."""
@@ -1526,7 +1534,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
+        response: AsyncIterable[object],
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream | bytes, None]:
         """

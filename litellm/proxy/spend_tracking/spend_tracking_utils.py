@@ -1,10 +1,10 @@
 import os
 import re
 import secrets
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from datetime import datetime as dt
-from typing import Any, Final, Literal, cast
+from typing import Final, Literal, Protocol, cast, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -222,7 +222,28 @@ def get_spend_logs_id(call_type: str, response_obj: dict, kwargs: dict) -> str |
     return resolved_id
 
 
-def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> dict:
+_MISSING_ATTRIBUTE: Final = object()
+
+
+def _attribute_or_missing(source: object, name: str) -> object:
+    return getattr(source, name, _MISSING_ATTRIBUTE)
+
+
+@runtime_checkable
+class _ModelDumpable(Protocol):
+    def model_dump(self) -> object: ...
+
+
+def _dumped_usage_info(usage_info: object) -> object:
+    if isinstance(usage_info, _ModelDumpable):
+        return usage_info.model_dump()
+    instance_dict: Final = _attribute_or_missing(usage_info, "__dict__")
+    if instance_dict is not _MISSING_ATTRIBUTE:
+        return instance_dict
+    return usage_info
+
+
+def _extract_usage_for_ocr_call(response_obj: object, response_obj_dict: dict) -> dict:
     """
     Extract usage information for OCR/AOCR calls.
 
@@ -243,12 +264,10 @@ def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> d
         usage_info = response_obj_dict.get("usage_info")
 
     # Try to extract usage_info from object attributes if not found in dict
-    if not usage_info and hasattr(response_obj, "usage_info"):
-        usage_info = response_obj.usage_info
-        if hasattr(usage_info, "model_dump"):
-            usage_info = usage_info.model_dump()
-        elif hasattr(usage_info, "__dict__"):
-            usage_info = vars(usage_info)
+    if not usage_info:
+        attribute_usage_info: Final = _attribute_or_missing(response_obj, "usage_info")
+        if attribute_usage_info is not _MISSING_ATTRIBUTE:
+            usage_info = _dumped_usage_info(attribute_usage_info)
 
     # For OCR, we track pages instead of tokens
     if usage_info is not None:
@@ -620,6 +639,14 @@ def _ensure_datetime_utc(timestamp: datetime) -> datetime:
     return timestamp
 
 
+async def _query_raw_rows(
+    prisma_client: PrismaClient,
+    sql_query: str,
+    *args: object,
+) -> Sequence[Mapping[str, object]] | None:
+    return await prisma_client.db.query_raw(sql_query, *args)
+
+
 async def get_spend_by_team(
     start_date: dt,
     end_date: dt,
@@ -681,7 +708,7 @@ async def get_spend_by_team(
             group_by_day;
     """
 
-    db_response: Final = await prisma_client.db.query_raw(sql_query, start_date, end_date, team_id)
+    db_response: Final = await _query_raw_rows(prisma_client, sql_query, start_date, end_date, team_id)
     if db_response is None:
         return []
 
@@ -756,7 +783,7 @@ async def get_spend_by_team_and_customer(
             group_by_day;
     """
 
-    db_response: Final = await prisma_client.db.query_raw(sql_query, start_date, end_date, team_id, customer_id)
+    db_response: Final = await _query_raw_rows(prisma_client, sql_query, start_date, end_date, team_id, customer_id)
     if db_response is None:
         return []
 
@@ -811,7 +838,7 @@ def _sanitize_request_body_for_spend_logs_payload(
         return {}
     visited.add(obj_id)
 
-    def _sanitize_value(value: Any) -> Any:
+    def _sanitize_value(value: object) -> object:
         if isinstance(value, dict):
             return _sanitize_request_body_for_spend_logs_payload(value, visited, max_string_length_prompt_in_db)
         elif isinstance(value, list):
@@ -1106,7 +1133,7 @@ def _sanitize_error_information_for_spend_logs(
     return cast(StandardLoggingPayloadErrorInformation, sanitized)
 
 
-def _convert_to_json_serializable_dict(obj: Any, visited: set | None = None, max_depth: int = 20) -> Any:
+def _convert_to_json_serializable_dict(obj: object, visited: set[int] | None = None, max_depth: int = 20) -> object:
     """
     Convert object to JSON-serializable dict, handling Pydantic models safely.
 
@@ -1160,6 +1187,13 @@ def _convert_to_json_serializable_dict(obj: Any, visited: set | None = None, max
             visited.remove(obj_id)
 
 
+def _convert_mapping_to_json_serializable(obj: Mapping[str, object]) -> dict[str, object]:
+    converted: Final = _convert_to_json_serializable_dict(obj)
+    if isinstance(converted, dict):
+        return converted
+    return dict(obj)
+
+
 def _get_proxy_server_request_for_spend_logs_payload(
     metadata: dict,
     litellm_params: dict,
@@ -1196,7 +1230,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
 
                 # If redaction is enabled, convert to serializable dict before redacting
                 if should_redact_message_logging(model_call_details=model_call_details):
-                    _request_body = _convert_to_json_serializable_dict(_request_body)
+                    _request_body = _convert_mapping_to_json_serializable(_request_body)
                     perform_redaction(model_call_details=_request_body, result=None)
 
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
@@ -1241,7 +1275,7 @@ def _get_response_for_spend_logs_payload(
     if payload is None:
         return "{}"
     if _should_store_prompts_and_responses_in_spend_logs():
-        response_obj: Any = payload.get("response")
+        response_obj: object = payload.get("response")
         if response_obj is None:
             return "{}"
 
