@@ -44,15 +44,6 @@ const pointerBlocked = (element: HTMLElement): boolean => {
   return false;
 };
 
-/**
- * Opens a Base UI popup and picks an entry by its accessible name.
- *
- * Querying the entry by text or by a title attribute matches the moment the node exists, which is
- * one render before the popup finishes entering. Until then the positioner still carries
- * `pointer-events: none` and user-event refuses to click, so that shape is a race a fast machine
- * loses. The role query only matches once the popup is open to the accessibility tree, which is
- * what makes this wait correct rather than lucky.
- */
 export const chooseSelectOption = async (
   user: Pick<ReturnType<typeof userEvent.setup>, "click">,
   trigger: HTMLElement,
