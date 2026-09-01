@@ -836,6 +836,27 @@ describe("ComplexityRouterConfig tier labels", () => {
   });
 });
 
+describe("ComplexityRouterConfig modality panel", () => {
+  it("defaults the image-routing switch off and writes modality_routing through onChange", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Modality Routing"));
+
+    const toggle = screen.getByRole("switch", { name: "Route image requests to vision-capable models" });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+
+    expect(onChange).toHaveBeenCalledWith({ ...defaultValue, modality_routing: true });
+  });
+
+  it("renders a stored modality_routing=true as on", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={{ ...defaultValue, modality_routing: true }} />);
+    fireEvent.click(screen.getByText("Advanced: Modality Routing"));
+
+    expect(screen.getByRole("switch", { name: "Route image requests to vision-capable models" })).toBeChecked();
+  });
+});
+
 describe("ComplexityRouterConfig affinity panel", () => {
   it("holds the deployment switch at its backend default, session pinning having moved to the frequency choice", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);

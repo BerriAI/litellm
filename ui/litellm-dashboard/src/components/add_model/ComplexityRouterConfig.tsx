@@ -4,6 +4,9 @@ import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ChevronRight, Info, Plus, Trash2, X } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
+
+import { AffinityControls } from "./AffinityControls";
+import { ModalityRoutingControls } from "./ModalityRoutingControls";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
@@ -396,6 +399,7 @@ export interface ComplexityRouterConfigValue {
   heuristic_first_max_tier?: string;
   classification_mode?: ClassificationMode;
   session_affinity?: boolean;
+  modality_routing?: boolean;
   deployment_affinity?: boolean;
   /** Plan-mode floor as a tier ROW ID, unset meaning off. The wire carries the row's name. */
   plan_mode_min_tier?: string;
@@ -510,26 +514,6 @@ export const DEFAULT_HEURISTIC_FIRST_MAX_TIER = "SIMPLE";
  * circuit every request and leave the classifier unreachable, which the backend rejects.
  */
 export const HEURISTIC_FIRST_MAX_TIER_KEYS = TIER_KEYS.slice(0, -1);
-
-const AffinityControls: React.FC<{
-  value: ComplexityRouterConfigValue;
-  onChange: (value: ComplexityRouterConfigValue) => void;
-}> = ({ value, onChange }) => (
-  <>
-    <div className="flex items-center gap-2 mb-2">
-      <Switch
-        checked={value.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY}
-        onCheckedChange={(deploymentAffinity) => onChange({ ...value, deployment_affinity: deploymentAffinity })}
-        aria-label="Pin a session to one deployment per model group"
-      />
-      <strong className="font-semibold">Pin a session to one deployment per model group</strong>
-    </div>
-    <span className="block text-xs text-muted-foreground">
-      Keeps a session on the same deployment within a group, so provider prompt caches stay warm. Turn off to
-      load-balance every turn.
-    </span>
-  </>
-);
 
 const PlanModeOverrideControls: React.FC<{
   value: ComplexityRouterConfigValue;
@@ -840,6 +824,11 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             key: "affinity",
             label: <strong className="text-foreground font-semibold">Advanced: Affinity</strong>,
             children: <AffinityControls value={value} onChange={onChange} />,
+          },
+          {
+            key: "modality",
+            label: <strong className="text-foreground font-semibold">Advanced: Modality Routing</strong>,
+            children: <ModalityRoutingControls value={value} onChange={onChange} />,
           },
           {
             key: "plan-mode",

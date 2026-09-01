@@ -16,6 +16,7 @@
       "escalation_keywords": ["LITELLM ESCALATE"],
       "classification_mode": "every_request",
       "session_affinity": false,
+      "modality_routing": false,
       "deployment_affinity": true
     }
   },
@@ -33,6 +34,7 @@
       "escalation_keywords": ["LITELLM ESCALATE"],
       "classification_mode": "every_request",
       "session_affinity": false,
+      "modality_routing": false,
       "deployment_affinity": true
     }
   },
@@ -60,6 +62,7 @@
       "escalation_keywords": ["LITELLM ESCALATE"],
       "classification_mode": "every_request",
       "session_affinity": false,
+      "modality_routing": false,
       "deployment_affinity": true
     }
   },
@@ -77,6 +80,7 @@
       "escalation_keywords": ["LITELLM ESCALATE"],
       "classification_mode": "every_request",
       "session_affinity": false,
+      "modality_routing": false,
       "deployment_affinity": true
     }
   }
