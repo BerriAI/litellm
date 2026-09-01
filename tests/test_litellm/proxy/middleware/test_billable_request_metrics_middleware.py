@@ -20,9 +20,11 @@ from starlette.testclient import TestClient
 
 from litellm.proxy.db.gateway_request_tracking import GatewayRequestAccumulator
 from litellm.proxy.middleware.billable_request_metrics_middleware import (
+    _CLASSIFIER_MODEL_HEADER,
+    _MODEL_ID_HEADER,
     BillableCategory,
     BillableRequestMetricsMiddleware,
-    _extract_model_id,
+    _extract_header,
     classify_billable_request,
 )
 from litellm.proxy.middleware.in_flight_requests_middleware import (
@@ -40,9 +42,21 @@ class FakeRecorder:
         )
 
 
-def _make_app(recorder: Optional[FakeRecorder], status_code: int = 200, model_id: Optional[str] = None) -> Starlette:
+def _make_app(
+    recorder: Optional[FakeRecorder],
+    status_code: int = 200,
+    model_id: Optional[str] = None,
+    classifier_model: Optional[str] = None,
+) -> Starlette:
     async def handler(request: Request) -> Response:
-        headers = {"x-litellm-model-id": model_id} if model_id else {}
+        headers = {
+            key: value
+            for key, value in {
+                "x-litellm-model-id": model_id,
+                "x-litellm-classifier-model": classifier_model,
+            }.items()
+            if value
+        }
         return JSONResponse({}, status_code=status_code, headers=headers)
 
     paths = [
@@ -232,17 +246,17 @@ def test_chat_completions_not_misclassified_as_plain_completions():
 # ── _extract_model_id ─────────────────────────────────────────────────────────
 
 
-def test_extract_model_id_present():
+def test_extract_header_present():
     headers = [(b"content-type", b"application/json"), (b"x-litellm-model-id", b"deploy-123")]
-    assert _extract_model_id(headers) == "deploy-123"
+    assert _extract_header(headers, _MODEL_ID_HEADER) == "deploy-123"
 
 
-def test_extract_model_id_case_insensitive():
-    assert _extract_model_id([(b"X-LiteLLM-Model-Id", b"deploy-9")]) == "deploy-9"
+def test_extract_header_case_insensitive():
+    assert _extract_header([(b"X-LiteLLM-Model-Id", b"deploy-9")], _MODEL_ID_HEADER) == "deploy-9"
 
 
-def test_extract_model_id_absent():
-    assert _extract_model_id([(b"content-type", b"application/json")]) is None
+def test_extract_header_absent():
+    assert _extract_header([(b"content-type", b"application/json")], _CLASSIFIER_MODEL_HEADER) is None
 
 
 # ── Middleware recording behaviour ────────────────────────────────────────────
@@ -478,8 +492,9 @@ def _make_sink_app(
     sink: Optional[FakeSink],
     status_code: int = 200,
     model_id: Optional[str] = None,
+    classifier_model: Optional[str] = None,
 ) -> Starlette:
-    app = _make_app(None, status_code=status_code, model_id=model_id)
+    app = _make_app(None, status_code=status_code, model_id=model_id, classifier_model=classifier_model)
     app.user_middleware.clear()
     app.add_middleware(BillableRequestMetricsMiddleware, recorder=recorder, sink=sink)
     return app
@@ -585,3 +600,45 @@ def test_sink_factory_resolved_once_across_requests():
     client.post("/v1/chat/completions")
     assert calls == [1]
     assert len(sink.calls) == 2
+
+
+# ── LLM classifier double-count ───────────────────────────────────────────────
+
+
+def test_classifier_header_counts_a_second_successful_llm_request():
+    """An auto-routed request whose LLM classifier ran made two billable LLM calls,
+    so both sinks get a second record under the dedicated classifier route."""
+    sink, recorder = FakeSink(), FakeRecorder()
+    TestClient(
+        _make_sink_app(recorder, sink, status_code=200, model_id="deploy-7", classifier_model="gpt-5-mini")
+    ).post("/v1/chat/completions")
+    assert sink.calls == [
+        {"category": BillableCategory.LLM, "route": "/chat/completions", "status_code": 200},
+        {"category": BillableCategory.LLM, "route": "llm_classifier", "status_code": 200},
+    ]
+    assert recorder.calls == [
+        {"category": BillableCategory.LLM, "route": "/chat/completions", "status_code": 200, "model_id": "deploy-7"},
+        {"category": BillableCategory.LLM, "route": "llm_classifier", "status_code": 200, "model_id": None},
+    ]
+
+
+def test_classifier_success_counts_even_when_the_routed_call_fails():
+    """The classifier call succeeded and billed before the upstream failed: SGR keeps
+    both facts, while enterprise billing stays gated on the served response's 2xx."""
+    sink, recorder = FakeSink(), FakeRecorder()
+    TestClient(_make_sink_app(recorder, sink, status_code=503, classifier_model="gpt-5-mini")).post(
+        "/v1/chat/completions"
+    )
+    assert [call["status_code"] for call in sink.calls] == [503, 200]
+    assert recorder.calls == []
+
+
+def test_classifier_request_folds_into_its_own_route_key():
+    accumulator = GatewayRequestAccumulator()
+    TestClient(_make_sink_app(None, accumulator, status_code=200, classifier_model="gpt-5-mini")).post(
+        "/v1/chat/completions"
+    )
+    snapshot = accumulator.drain()
+    assert {key.route for key in snapshot} == {"/chat/completions", "llm_classifier"}
+    assert sum(counts.successful_requests for counts in snapshot.values()) == 2
+    assert sum(counts.failed_requests for counts in snapshot.values()) == 0

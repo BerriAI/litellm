@@ -1124,6 +1124,56 @@ class TestProxyBaseLLMRequestProcessing:
 
         assert "x-litellm-classifier-cost" not in headers
 
+    @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+    def test_get_custom_headers_classifier_model_from_routing_decision(self, metadata_key):
+        """classifier_model is stamped only when an LLM classifier call decided the route,
+        so its header is the edge-visible fact the billable-request middleware counts the
+        second gateway request off. It must surface even when the classifier model is
+        unpriced (classifier_cost absent)."""
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            request_data={
+                metadata_key: {
+                    "routing_decision": {"cause": "llm_classifier", "classifier_model": "gpt-5-mini"},
+                }
+            },
+        )
+
+        assert headers["x-litellm-classifier-model"] == "gpt-5-mini"
+        assert "x-litellm-classifier-cost" not in headers
+
+    @pytest.mark.parametrize(
+        "request_data",
+        [
+            None,
+            {},
+            {"metadata": {"routing_decision": {"cause": "heuristic_scorer"}}},
+            {"metadata": {"routing_decision": {"cause": "llm_classifier", "classifier_model": ""}}},
+            {"metadata": {"routing_decision": {"cause": "llm_classifier", "classifier_model": 7}}},
+        ],
+    )
+    def test_get_custom_headers_omits_classifier_model_without_a_classifier_call(self, request_data):
+        """A heuristic decision, a malformed value, or no decision at all must omit the
+        header entirely: its presence is what makes the request count twice."""
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            request_data=request_data,
+        )
+
+        assert "x-litellm-classifier-model" not in headers
+
     def test_get_cost_breakdown_from_logging_obj_helper(self):
         """
         Test the helper function that extracts cost breakdown information.

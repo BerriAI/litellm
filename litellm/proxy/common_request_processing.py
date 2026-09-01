@@ -1370,28 +1370,45 @@ def _get_cost_breakdown_from_logging_obj(
     )
 
 
-def _classifier_cost_from_request_data(request_data: Mapping[str, object] | None) -> float | None:
-    """Cost of the auto-router's LLM classifier call, read from the request's routing_decision.
+def _routing_decision_from_request_data(request_data: Mapping[str, object] | None) -> Mapping[str, object] | None:
+    """The auto-router's routing_decision recorded on the request, or None when no
+    pre-routing strategy ran.
 
     The pre-routing hook records the decision in `litellm_metadata` on messages/batch-style
     routes and in `metadata` on chat-style routes, so both buckets are consulted, in the same
     precedence `get_or_create_metadata_bucket` writes them.
     """
+    return next(
+        (
+            decision
+            for metadata_key in ("litellm_metadata", "metadata")
+            if request_data is not None
+            and isinstance(metadata := request_data.get(metadata_key), dict)
+            and isinstance(decision := metadata.get("routing_decision"), dict)
+        ),
+        None,
+    )
+
+
+def _classifier_cost_from_request_data(request_data: Mapping[str, object] | None) -> float | None:
+    """Cost of the auto-router's LLM classifier call, read from the request's routing_decision."""
     from litellm.proxy.spend_tracking.savings import classifier_cost_from_decision
 
-    data: Final = request_data or {}
-    for metadata_key in ("litellm_metadata", "metadata"):
-        metadata = data.get(metadata_key)
-        if not isinstance(metadata, dict):
-            continue
-        decision = metadata.get("routing_decision")
-        if not isinstance(decision, dict):
-            continue
-        cost = classifier_cost_from_decision(decision)
-        if cost is None:
-            continue
-        return cost
-    return None
+    return classifier_cost_from_decision(_routing_decision_from_request_data(request_data))
+
+
+def _classifier_model_from_request_data(request_data: Mapping[str, object] | None) -> str | None:
+    """The model the auto-router's LLM classifier call used, or None when no classifier ran.
+
+    `classifier_model` is stamped on the routing decision only when an LLM classifier call
+    decided the route, so presence is the fact that a second billable LLM call happened;
+    `classifier_cost` cannot carry that fact because it is also None for an unpriced
+    classifier model. The billable-request middleware counts the extra gateway request
+    off the header this feeds.
+    """
+    decision: Final = _routing_decision_from_request_data(request_data)
+    model: Final = decision.get("classifier_model") if decision is not None else None
+    return model if isinstance(model, str) and model else None
 
 
 def _has_attribute_error_in_chain(exc: Exception) -> bool:
@@ -1570,6 +1587,7 @@ class ProxyBaseLLMRequestProcessing:
 
         model_name: Final = ProxyBaseLLMRequestProcessing._get_deployment_model_name(litellm_logging_obj)
         classifier_cost: Final = _classifier_cost_from_request_data(request_data)
+        classifier_model: Final = _classifier_model_from_request_data(request_data)
 
         headers: Final = {
             "x-litellm-call-id": call_id,
@@ -1613,6 +1631,7 @@ class ProxyBaseLLMRequestProcessing:
                 str(cost_breakdown.tool_usage_cost) if cost_breakdown.tool_usage_cost is not None else None
             ),
             "x-litellm-classifier-cost": (str(classifier_cost) if classifier_cost is not None else None),
+            "x-litellm-classifier-model": classifier_model,
             "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
             "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
             "x-litellm-key-max-budget": str(user_api_key_dict.max_budget),

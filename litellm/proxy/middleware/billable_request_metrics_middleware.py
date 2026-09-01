@@ -55,6 +55,15 @@ class GatewayRequestSink(Protocol):
 
 _MODEL_ID_HEADER: Final = b"x-litellm-model-id"
 
+# An auto-routed request whose LLM classifier ran made two billable LLM calls behind
+# one HTTP request. The classifier-model header is the edge-visible fact that the
+# classifier call happened, and it is stamped only when that call succeeded, so the
+# extra record is a 200 by construction. Heuristic-routed requests carry no header and
+# keep counting as one. The dedicated route keeps the by-route breakdown explainable
+# instead of silently inflating the serving route's count.
+_CLASSIFIER_MODEL_HEADER: Final = b"x-litellm-classifier-model"
+_LLM_CLASSIFIER_ROUTE: Final = "llm_classifier"
+
 # Ordered: a longer suffix that shares an ending with a shorter one must come
 # first, e.g. "/chat/completions" before "/completions". This is the POST
 # inference surface that writes a SpendLogs row on success, so the exported
@@ -179,9 +188,9 @@ def classify_billable_request(path: str, method: str = "POST") -> tuple[Billable
     return None
 
 
-def _extract_model_id(headers: Sequence[tuple[bytes, bytes]]) -> str | None:
+def _extract_header(headers: Sequence[tuple[bytes, bytes]], header_name: bytes) -> str | None:
     return next(
-        (value.decode("latin-1") for name, value in headers if name.lower() == _MODEL_ID_HEADER and value),
+        (value.decode("latin-1") for name, value in headers if name.lower() == header_name and value),
         None,
     )
 
@@ -261,24 +270,35 @@ class BillableRequestMetricsMiddleware:
         category, route = classification
         status_code = 0
         model_id: str | None = None
+        classifier_model: str | None = None
 
         async def send_wrapper(message: Message) -> None:
-            nonlocal status_code, model_id
+            nonlocal status_code, model_id, classifier_model
             if message["type"] == "http.response.start":
                 status_code = message["status"]
-                model_id = _extract_model_id(message.get("headers", []))
+                headers: Final = message.get("headers", ())
+                model_id = _extract_header(headers, _MODEL_ID_HEADER)
+                classifier_model = _extract_header(headers, _CLASSIFIER_MODEL_HEADER)
             await send(message)
 
         await self.app(scope, receive, send_wrapper)
 
+        classifier_ran: Final = classifier_model is not None
+
         if sink is not None:
             try:
                 sink.record(category=category, route=route, status_code=status_code)
+                if classifier_ran:
+                    sink.record(category=BillableCategory.LLM, route=_LLM_CLASSIFIER_ROUTE, status_code=200)
             except Exception:  # noqa: BLE001 -- metering must never fail a request that was already served
                 verbose_proxy_logger.warning("gateway request metering failed for %s", route, exc_info=True)
 
         if recorder is not None and 200 <= status_code < 300:
             try:
                 recorder.record(category=category, route=route, status_code=status_code, model_id=model_id)
+                if classifier_ran:
+                    recorder.record(
+                        category=BillableCategory.LLM, route=_LLM_CLASSIFIER_ROUTE, status_code=200, model_id=None
+                    )
             except Exception:  # noqa: BLE001 -- metering must never fail a request that was already served
                 verbose_proxy_logger.warning("billable request metering failed for %s", route, exc_info=True)
