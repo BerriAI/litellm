@@ -60,7 +60,7 @@ _FAILED_LOGIN_USERNAME_CACHE: Final = _bounded_store(_MAX_TRACKED_LOGIN_USERNAME
 _FAILED_LOGIN_SOURCE_CACHE: Final = _bounded_store(_MAX_TRACKED_LOGIN_SOURCES)
 _NO_SETTINGS: Final = MappingProxyType({})
 
-_DELAYS_IN_FLIGHT: Final[dict[str, int]] = {}
+_DELAYS_IN_FLIGHT: Final[dict[str, int]] = {}  # mutable-ok: per-source slots taken and released around each held delay
 
 
 async def _sleep(seconds: float) -> None:
@@ -138,7 +138,7 @@ class LoginThrottle:
             username_cache=_FAILED_LOGIN_USERNAME_CACHE,
             source_cache=_FAILED_LOGIN_SOURCE_CACHE,
             redis_cache=redis_usage_cache,
-            enabled=not get_secret_bool("LITELLM_DISABLE_LOGIN_RATE_LIMIT"),
+            enabled=not get_secret_bool("LITELLM_DISABLE_LOGIN_RATE_LIMIT", False),
         )
 
     @staticmethod
