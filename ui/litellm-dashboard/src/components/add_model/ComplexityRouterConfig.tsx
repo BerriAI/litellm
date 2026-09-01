@@ -29,6 +29,7 @@ import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
+import ContextWindowEscalationConfig from "./ContextWindowEscalationConfig";
 import { Restricted, restrictedBy } from "./TierRestrictions";
 import { type TierSetAction, applyTierSetAction, setFallbackTier } from "./tier_set_actions";
 import {
@@ -54,6 +55,16 @@ export const DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS = 8000;
 export const MIN_QUOTED_CONTEXT_TURN_CHARS = 120;
 export const DEFAULT_SESSION_AFFINITY = false;
 export const DEFAULT_DEPLOYMENT_AFFINITY = true;
+
+export type ClassificationMode = "every_request" | "user_turn";
+
+export const DEFAULT_CLASSIFICATION_MODE: ClassificationMode = "every_request";
+
+/**
+ * One operator-facing choice over the two wire fields that share the router's tier-pin machinery:
+ * session affinity pins every turn, user_turn pins every turn except a new human ask.
+ */
+export type ClassificationFrequency = ClassificationMode | "session";
 
 export type ComplexityTiers = {
   SIMPLE: string[];
@@ -383,6 +394,7 @@ export interface ComplexityRouterConfigValue {
   classification_prompt?: string;
   /** Highest tier the scorer may decide alone under heuristic_first. Required by that type, rejected by the others. */
   heuristic_first_max_tier?: string;
+  classification_mode?: ClassificationMode;
   session_affinity?: boolean;
   deployment_affinity?: boolean;
   /** Plan-mode floor as a tier ROW ID, unset meaning off. The wire carries the row's name. */
@@ -392,6 +404,13 @@ export interface ComplexityRouterConfigValue {
   tier_distance_penalty?: number;
   adaptive_eligible?: AdaptiveEligible;
   return_raw_model_name?: boolean;
+  /**
+   * Context-window escalation gate. Undefined means untouched, which keeps both keys out of the
+   * payload so the router tracks the backend defaults (enabled, 0.95 buffer); an explicit false
+   * is a real opt-out and must survive the edit round-trip.
+   */
+  enable_context_window_escalation?: boolean;
+  context_window_escalation_buffer?: number;
   /**
    * Heuristic scorer knobs. Undefined means the operator never touched them, which keeps the key out of the
    * payload so the router tracks the backend defaults rather than freezing today's numbers.
@@ -411,6 +430,21 @@ export interface ComplexityRouterConfigValue {
    */
   tier_model_params?: TierModelParamsByTier;
 }
+
+/** Session affinity wins where a hand-authored config sets both, matching the backend's own `or`. */
+export const classificationFrequency = (value: ComplexityRouterConfigValue): ClassificationFrequency => {
+  if (!value.custom_tier_set && (value.session_affinity ?? DEFAULT_SESSION_AFFINITY)) return "session";
+  return value.classification_mode === "user_turn" ? "user_turn" : "every_request";
+};
+
+export const withClassificationFrequency = (
+  value: ComplexityRouterConfigValue,
+  frequency: ClassificationFrequency,
+): ComplexityRouterConfigValue => ({
+  ...value,
+  classification_mode: frequency === "user_turn" ? "user_turn" : "every_request",
+  session_affinity: frequency === "session",
+});
 
 interface ComplexityRouterConfigProps {
   modelInfo: ModelGroup[];
@@ -490,22 +524,9 @@ const AffinityControls: React.FC<{
       />
       <strong className="font-semibold">Pin a session to one deployment per model group</strong>
     </div>
-    <span className="block text-xs mb-3 text-muted-foreground">
+    <span className="block text-xs text-muted-foreground">
       Keeps a session on the same deployment within a group, so provider prompt caches stay warm. Turn off to
       load-balance every turn.
-    </span>
-    <div className="flex items-center gap-2 mb-2">
-      <Switch
-        checked={value.custom_tier_set ? false : value.session_affinity ?? DEFAULT_SESSION_AFFINITY}
-        disabled={Boolean(value.custom_tier_set)}
-        onCheckedChange={(sessionAffinity) => onChange({ ...value, session_affinity: sessionAffinity })}
-        aria-label="Pin a session to its first model"
-      />
-      <strong className="font-semibold">Pin a session to its first model</strong>
-    </div>
-    <span className="block text-xs text-muted-foreground">
-      {restrictedBy(value, "sessionAffinity")?.reason ??
-        "Keeps a session on its first turn's model instead of re-classifying each turn. Also pins the deployment."}
     </span>
   </>
 );
@@ -826,6 +847,11 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             children: (
               <PlanModeOverrideControls value={value} onChange={onChange} planModeTierOptions={planModeTierOptions} />
             ),
+          },
+          {
+            key: "context-window",
+            label: <strong className="text-foreground font-semibold">Advanced: Context Window Escalation</strong>,
+            children: <ContextWindowEscalationConfig value={value} onChange={onChange} />,
           },
           {
             key: "response",

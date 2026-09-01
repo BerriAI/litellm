@@ -230,6 +230,7 @@ describe("autorouter_presets", () => {
       const config = {
         tiers: { SIMPLE: [presetModel], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
         session_affinity: false,
         deployment_affinity: true,
       };
@@ -273,6 +274,7 @@ describe("autorouter_presets", () => {
       const config = {
         tiers: { SIMPLE: ["claude-opus-5"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
         session_affinity: false,
         deployment_affinity: true,
       };
@@ -287,6 +289,7 @@ describe("autorouter_presets", () => {
       const config = {
         tiers: { SIMPLE: ["claude-opus-5"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
         session_affinity: false,
         deployment_affinity: true,
       };
@@ -320,6 +323,7 @@ describe("autorouter_presets", () => {
     const simpleTierConfig = (presetModel: string) => ({
       tiers: { SIMPLE: [presetModel], MEDIUM: [], COMPLEX: [], REASONING: [] },
       classifier_type: "heuristic" as const,
+      classification_mode: "every_request" as const,
       session_affinity: false,
       deployment_affinity: true,
     });
@@ -563,6 +567,7 @@ describe("autorouter_presets", () => {
       const config = {
         tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
         session_affinity: false,
         deployment_affinity: true,
         match_threshold: 0,
@@ -573,11 +578,46 @@ describe("autorouter_presets", () => {
       expect(prefill.escalationKeywords).toEqual([]);
     });
 
+    it("carries a preset's context-window escalation opt-out and buffer through the prefill", () => {
+      const prefill = buildPresetPrefill(
+        {
+          tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+          classifier_type: "heuristic",
+          classification_mode: "every_request",
+          session_affinity: false,
+          deployment_affinity: true,
+          enable_context_window_escalation: false,
+          context_window_escalation_buffer: 0.9,
+        },
+        groupsOnly(["gpt-5-nano"]),
+      );
+      expect(prefill.complexityRouterConfig.enable_context_window_escalation).toBe(false);
+      expect(prefill.complexityRouterConfig.context_window_escalation_buffer).toBe(0.9);
+    });
+
+    it("carries a preset's classification_mode and defaults it when the preset omits one", () => {
+      const tiers = { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] };
+      const base = {
+        tiers,
+        classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
+        session_affinity: false,
+        deployment_affinity: true,
+      };
+      const availability = groupsOnly(["gpt-5-nano"]);
+      expect(
+        buildPresetPrefill({ ...base, classification_mode: "user_turn" }, availability).complexityRouterConfig
+          .classification_mode,
+      ).toBe("user_turn");
+      expect(buildPresetPrefill(base, availability).complexityRouterConfig.classification_mode).toBe("every_request");
+    });
+
     it("falls back to the defaults when a preset omits match_threshold and escalation_keywords", () => {
       const prefill = buildPresetPrefill(
         {
           tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
           classifier_type: "heuristic",
+          classification_mode: "every_request" as const,
           session_affinity: false,
           deployment_affinity: true,
         },
@@ -594,6 +634,7 @@ describe("autorouter_presets", () => {
       const base = {
         tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
         session_affinity: false,
         deployment_affinity: true,
       };
@@ -609,6 +650,7 @@ describe("autorouter_presets", () => {
       const config = {
         tiers: { SIMPLE: ["claude-sonnet-4-5"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
         session_affinity: false,
         deployment_affinity: true,
       };
@@ -623,6 +665,7 @@ describe("autorouter_presets", () => {
           REASONING: [{ model_name: "o3", litellm_params: { reasoning_effort: "high" } }],
         },
         classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
         session_affinity: false,
         deployment_affinity: true,
       };
@@ -642,6 +685,7 @@ describe("autorouter_presets", () => {
           REASONING: [{ model_name: "claude-sonnet-4-5", litellm_params: { reasoning_effort: "high" } }],
         },
         classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
         session_affinity: false,
         deployment_affinity: true,
       };
@@ -664,6 +708,9 @@ describe("autorouter_presets", () => {
           ],
         },
         classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
+        session_affinity: false,
+        deployment_affinity: true,
       };
       const prefill = buildPresetPrefill(config, groupsOnly(["claude-sonnet-4.5"]));
       // temperature survives from the spelling that would otherwise have been overwritten;
@@ -677,6 +724,7 @@ describe("autorouter_presets", () => {
       const config = {
         tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
         session_affinity: false,
         deployment_affinity: true,
       };

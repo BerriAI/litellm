@@ -342,6 +342,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     planModeMinTier: complexityRouterConfig.plan_mode_min_tier,
     classificationPrompt: complexityRouterConfig.classification_prompt,
     heuristicFirstMaxTier: complexityRouterConfig.heuristic_first_max_tier,
+    classificationMode: complexityRouterConfig.classification_mode,
     tierLabels: complexityRouterConfig.tier_labels,
     classifierType: complexityRouterConfig.classifier_type,
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
@@ -367,6 +368,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     tokenThresholds: complexityRouterConfig.token_thresholds,
     dimensionWeights: complexityRouterConfig.dimension_weights,
     reasoningOverrideMinScore: complexityRouterConfig.reasoning_override_min_score,
+    enableContextWindowEscalation: complexityRouterConfig.enable_context_window_escalation,
+    contextWindowEscalationBuffer: complexityRouterConfig.context_window_escalation_buffer,
   };
 
   const submitRecommendedRouter = async (name: string) => {

@@ -52,11 +52,22 @@ describe("buildComplexityRouterConfig", () => {
     const expected = {
       tiers,
       classifier_type: "heuristic",
+      classification_mode: "every_request",
       session_affinity: false,
       deployment_affinity: true,
       escalation_keywords: ["LITELLM ESCALATE"],
     };
     expect(config).toEqual(expected);
+  });
+
+  it("carries an explicit context-window escalation opt-out and buffer, false included", () => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      enableContextWindowEscalation: false,
+      contextWindowEscalationBuffer: 0.9,
+    });
+    expect(config.enable_context_window_escalation).toBe(false);
+    expect(config.context_window_escalation_buffer).toBe(0.9);
   });
 
   it("trims escalation keywords and drops blank entries", () => {
@@ -780,6 +791,20 @@ describe("heuristic_first", () => {
   });
 });
 
+describe("classification_mode", () => {
+  it("emits user_turn", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, classificationMode: "user_turn" });
+    expect(config.classification_mode).toBe("user_turn");
+  });
+
+  it("writes every_request explicitly, so a saved router never depends on the backend default", () => {
+    expect(
+      buildComplexityRouterConfig({ ...baseParams, classificationMode: "every_request" }).classification_mode,
+    ).toBe("every_request");
+    expect(buildComplexityRouterConfig(baseParams).classification_mode).toBe("every_request");
+  });
+});
+
 describe("buildComplexityRouterConfig with an edited tier set", () => {
   const customTierSet = {
     tiers: [
@@ -890,6 +915,10 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
     const payload = build({ classifierType: "heuristic", classifierContextWindowSize: 5 });
     expect(payload.classifier_context_window_size).toBe(5);
     expect(payload.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000 });
+  });
+
+  it("keeps classification_mode, which the backend accepts beside tier_definitions", () => {
+    expect(build({ classificationMode: "user_turn" }).classification_mode).toBe("user_turn");
   });
 
   it("carries the plan-mode floor as the row's name, not the row id the form holds", () => {
