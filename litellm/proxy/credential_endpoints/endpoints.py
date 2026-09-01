@@ -15,6 +15,10 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.config_sync_pubsub import (
+    coordination_redis_cache,
+    publish_config_change,
+)
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.repositories.credentials_repository import CredentialsRepository
@@ -104,6 +108,7 @@ async def create_credential(
 
         ## ADD TO LITELLM ##
         CredentialAccessor.upsert_credentials([processed_credential])
+        await publish_config_change(redis_cache=coordination_redis_cache(), object_type="litellm_credentialstable")
 
         return {"success": True, "message": "Credential created successfully"}
     except Exception as e:
@@ -243,6 +248,7 @@ async def delete_credential(
 
         ## DELETE FROM LITELLM ##
         litellm.credential_list = [cred for cred in litellm.credential_list if cred.credential_name != credential_name]
+        await publish_config_change(redis_cache=coordination_redis_cache(), object_type="litellm_credentialstable")
         return {"success": True, "message": "Credential deleted successfully"}
     except Exception as e:
         return handle_exception_on_proxy(e)
@@ -351,6 +357,7 @@ async def update_credential(
                 litellm.credential_list = [c for c in litellm.credential_list if c.credential_name != credential_name]
             CredentialAccessor.upsert_credentials([updated_in_memory])
 
+        await publish_config_change(redis_cache=coordination_redis_cache(), object_type="litellm_credentialstable")
         return {"success": True, "message": "Credential updated successfully"}
     except Exception as e:
         raise handle_exception_on_proxy(e)
