@@ -487,6 +487,8 @@ describe("managed keys survive an untouched open-and-save", () => {
     token_thresholds: { simple: 20, complex: 500 },
     dimension_weights: { tokenCount: 0.1 },
     reasoning_override_min_score: 0.3,
+    enable_context_window_escalation: false,
+    context_window_escalation_buffer: 0.9,
   };
 
   // tier_definitions, fallback_tier and classification_prompt cannot sit beside heuristic_first, which
