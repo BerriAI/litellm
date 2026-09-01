@@ -378,6 +378,14 @@ def test_litellm_submodule_fallback():
         _ = litellm.not_a_real_attribute
 
 
+def test_proxy_private_submodule_resolves_in_fresh_process():
+    """litellm.proxy._types resolves without an eager proxy import (used by documentation checks)."""
+    code = "import litellm\nprint(litellm.proxy._types.__name__)\n"
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "litellm.proxy._types"
+
+
 def test_lazy_instances_are_singletons():
     """Lazily created instances are cached, so repeated access returns the same object."""
     assert litellm._key_management_settings is litellm._key_management_settings

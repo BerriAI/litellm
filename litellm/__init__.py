@@ -1269,13 +1269,11 @@ if TYPE_CHECKING:
     from .llms.deprecated_providers.aleph_alpha import AlephAlphaConfig
     from .llms.gemini.common_utils import GeminiModelInfo
 
-
     from .llms.vertex_ai.vertex_embeddings.transformation import (
         VertexAITextEmbeddingConfig,
     )
 
     vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
-
 
     from .llms.bedrock.embed.amazon_titan_v2_transformation import (
         AmazonTitanV2Config,
@@ -1429,15 +1427,12 @@ if TYPE_CHECKING:
     ### ADAPTERS ###
     import litellm.anthropic_interface as anthropic
 
-
     ### Vector Store Registry ###
-
 
     ### RAG ###
     from . import rag
 
     ### CUSTOM LLMs ###
-
 
     ### CLI UTILITIES ###
     from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key

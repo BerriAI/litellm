@@ -411,19 +411,24 @@ class LiteLLMModule(ModuleType):
     search = _shadowable_function_property("search")
 
 
-def lazy_import_litellm_submodule(name: str) -> "ModuleType | None":
-    """Resolve litellm.<name> as a submodule (e.g. litellm.utils) when no other handler matches"""
+def lazy_import_submodule(package: str, name: str) -> "ModuleType | None":
+    """Resolve <package>.<name> as a submodule (e.g. litellm.utils) when no other handler matches"""
     if name.startswith("__") or not name.isidentifier():
         return None
     try:
-        spec: Final = importlib.util.find_spec(f"litellm.{name}")
+        spec: Final = importlib.util.find_spec(f"{package}.{name}")
     except ModuleNotFoundError:
         return None
     if spec is None:
         return None
-    module: Final = importlib.import_module(f"litellm.{name}")
-    get_litellm_globals()[name] = module
+    module: Final = importlib.import_module(f"{package}.{name}")
+    sys.modules[package].__dict__[name] = module  # rebind-ok: caches the resolved submodule on the package
     return module
+
+
+def lazy_import_litellm_submodule(name: str) -> "ModuleType | None":
+    """Resolve litellm.<name> as a submodule (e.g. litellm.utils) when no other handler matches"""
+    return lazy_import_submodule("litellm", name)
 
 
 def _lazy_import_utils_module(name: str) -> object:
