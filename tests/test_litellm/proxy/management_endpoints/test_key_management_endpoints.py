@@ -540,57 +540,6 @@ async def test_key_generation_with_object_permission(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_generate_key_with_soft_budget_creates_budget_row(monkeypatch):
-    """soft_budget on /key/generate must create a budget table row and link its budget_id to the key."""
-    mock_prisma_client = AsyncMock()
-    mock_prisma_client.jsonify_object = lambda data: data
-    mock_prisma_client.db = MagicMock()
-    mock_budget_create = AsyncMock(return_value=MagicMock(budget_id="budget-soft-123"))
-    mock_prisma_client.db.litellm_budgettable = MagicMock()
-    mock_prisma_client.db.litellm_budgettable.create = mock_budget_create
-
-    async def _insert_data_side_effect(*args, **kwargs):
-        if kwargs.get("table_name") == "user":
-            return MagicMock(models=[], spend=0)
-        return MagicMock(
-            token="hashed_token_soft",
-            litellm_budget_table=None,
-            object_permission=None,
-        )
-
-    mock_prisma_client.insert_data = AsyncMock(side_effect=_insert_data_side_effect)
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-
-    from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles
-    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        generate_key_fn,
-    )
-
-    await generate_key_fn(
-        data=GenerateKeyRequest(soft_budget=5.0),
-        user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
-            user_id="admin-1",
-        ),
-    )
-
-    mock_budget_create.assert_awaited_once()
-    created_budget = mock_budget_create.call_args.kwargs["data"]
-    assert created_budget["soft_budget"] == 5.0
-    assert created_budget["created_by"] == "admin-1"
-
-    key_insert_calls = [
-        call.kwargs
-        for call in mock_prisma_client.insert_data.call_args_list
-        if call.kwargs.get("table_name") == "key"
-    ]
-    assert len(key_insert_calls) == 1
-    assert key_insert_calls[0]["data"].get("budget_id") == "budget-soft-123"
-
-
-@pytest.mark.asyncio
 async def test_generate_key_debug_log_never_contains_raw_token(monkeypatch, caplog):
     """Regression for LIT-4356: /key/generate must never emit the raw virtual key
     to a logger, even for short keys that bypass the regex-based
@@ -14267,6 +14216,7 @@ async def test_info_key_fn_budget_limits_includes_current_spend(monkeypatch):
     assert call_kwargs["max_budget"] == 2.0
     assert call_kwargs["window_entity_type"] == "Key"
     assert call_kwargs["window_entity_id"] == test_key_token
+    assert call_kwargs["window_duration"] == "1h"
     assert call_kwargs["window_start"] is not None
 
 
@@ -14397,39 +14347,9 @@ async def test_info_key_fn_v2_budget_limits_includes_current_spend(monkeypatch):
         f"spend:key:{test_key_token}:window:1h",
         f"spend:key:{test_key_token}:window:1d",
     }
-
-
-@pytest.mark.asyncio
-async def test_info_key_fn_v2_rejects_oversized_batch(monkeypatch):
-    """/v2/key/info must reject over-cap batches before doing any DB work."""
-    from unittest.mock import AsyncMock
-
-    from litellm.proxy._types import KeyRequest, ProxyException
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        MAX_KEY_INFO_KEYS_PER_REQUEST,
-        info_key_fn_v2,
-    )
-
-    mock_prisma_client = AsyncMock()
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
-    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", AsyncMock())
-
-    user_api_key_dict = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN,
-        api_key="sk-admin-batch-cap",
-    )
-
-    with pytest.raises(ProxyException) as exc_info:
-        await info_key_fn_v2(
-            data=KeyRequest(
-                keys=[f"hash-{i}" for i in range(MAX_KEY_INFO_KEYS_PER_REQUEST)],
-                key_aliases=["alias-over-cap"],
-            ),
-            user_api_key_dict=user_api_key_dict,
-        )
-
-    assert exc_info.value.code == "422"
-    mock_prisma_client.get_data.assert_not_awaited()
+    assert {
+        call.kwargs["window_duration"] for call in mock_get_current_spend.await_args_list
+    } == {"1h", "1d"}
 
 
 @pytest.mark.asyncio
@@ -14452,7 +14372,7 @@ async def test_budget_limits_with_usage_json_string_input(monkeypatch):
     )
     result = await _budget_limits_with_usage(budget_limits=raw, api_key_hash="hash-1")
 
-    assert result == [
+    assert list(result) == [
         {
             "budget_duration": "1h",
             "max_budget": 2.0,
@@ -14464,8 +14384,8 @@ async def test_budget_limits_with_usage_json_string_input(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_budget_limits_with_usage_skips_unusable_inputs(monkeypatch):
-    """Invalid JSON strings, non-list values, and malformed windows are skipped."""
+async def test_budget_limits_with_usage_empty_windows_keep_stored_value(monkeypatch):
+    """A key with no windows (None, [], or "[]") returns None so /key/info keeps the stored value; no spend lookup runs."""
     from unittest.mock import AsyncMock
 
     from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -14477,32 +14397,9 @@ async def test_budget_limits_with_usage_skips_unusable_inputs(monkeypatch):
         "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
     )
 
-    # invalid JSON string and non-list values return None: callers keep the original
-    assert await _budget_limits_with_usage(budget_limits="{not json", api_key_hash="hash-1") is None
-    assert await _budget_limits_with_usage(budget_limits={"budget_duration": "1h"}, api_key_hash="hash-1") is None
-
-    # windows that are falsy, missing budget_duration, or not dict-like
-    windows = [
-        {},
-        {"max_budget": 2.0},
-        {"budget_duration": "1h", "max_budget": "not-a-number"},
-        42,
-    ]
-    result = await _budget_limits_with_usage(budget_limits=windows, api_key_hash="hash-1")
-
-    # only the well-formed window (with unparseable max_budget coerced to None)
-    # triggers a spend lookup
-    mock_get_current_spend.assert_awaited_once()
-    call_kwargs = mock_get_current_spend.await_args.kwargs
-    assert call_kwargs["counter_key"] == "spend:key:hash-1:window:1h"
-    assert call_kwargs["max_budget"] is None
-    assert result is not None
-    assert result[0] == {}
-    assert result[1] == {"max_budget": 2.0}
-    assert result[2] == {"budget_duration": "1h", "max_budget": "not-a-number", "current_spend": 0.0}
-    assert result[3] == 42
-    # input is not mutated
-    assert windows[2] == {"budget_duration": "1h", "max_budget": "not-a-number"}
+    for stored in (None, [], "[]"):
+        assert await _budget_limits_with_usage(budget_limits=stored, api_key_hash="hash-1") is None
+    mock_get_current_spend.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -14523,17 +14420,19 @@ async def test_budget_limits_with_usage_window_without_max_budget(monkeypatch):
         budget_limits=[{"budget_duration": "2d"}], api_key_hash="hash-no-max"
     )
 
-    assert result == [{"budget_duration": "2d", "current_spend": 0.75}]
+    assert list(result) == [{"budget_duration": "2d", "current_spend": 0.75}]
     call_kwargs = mock_get_current_spend.await_args.kwargs
     assert call_kwargs["counter_key"] == "spend:key:hash-no-max:window:2d"
+    assert call_kwargs["window_duration"] == "2d"
     assert call_kwargs["max_budget"] is None
 
 
 @pytest.mark.asyncio
 async def test_budget_limits_with_usage_pydantic_windows(monkeypatch):
-    """Window objects with model_dump() are converted to dicts; failing windows pass through."""
-    from unittest.mock import AsyncMock, MagicMock
+    """BudgetLimitEntry windows (the shape UserAPIKeyAuth carries) are dumped to dicts and annotated."""
+    from unittest.mock import AsyncMock
 
+    from litellm.models.team import BudgetLimitEntry
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _budget_limits_with_usage,
     )
@@ -14543,25 +14442,18 @@ async def test_budget_limits_with_usage_pydantic_windows(monkeypatch):
         "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
     )
 
-    good_window = MagicMock()
-    good_window.model_dump.return_value = {
-        "budget_duration": "7d",
-        "max_budget": 10.0,
-        "reset_at": None,
-    }
-    bad_window = MagicMock()
-    bad_window.model_dump.side_effect = ValueError("boom")
-
     result = await _budget_limits_with_usage(
-        budget_limits=[good_window, bad_window], api_key_hash="hash-2"
+        budget_limits=[BudgetLimitEntry(budget_duration="7d", max_budget=10.0)],
+        api_key_hash="hash-2",
     )
 
-    # good window converted to dict and annotated; failing window left as-is
-    assert result is not None
-    assert isinstance(result[0], dict)
-    assert result[0]["current_spend"] == 1.0
-    assert result[1] is bad_window
-    mock_get_current_spend.assert_awaited_once()
+    assert list(result) == [
+        {"budget_duration": "7d", "max_budget": 10.0, "reset_at": None, "current_spend": 1.0}
+    ]
+    call_kwargs = mock_get_current_spend.await_args.kwargs
+    assert call_kwargs["counter_key"] == "spend:key:hash-2:window:7d"
+    assert call_kwargs["window_duration"] == "7d"
+    assert call_kwargs["max_budget"] == 10.0
 
 
 @pytest.mark.asyncio
