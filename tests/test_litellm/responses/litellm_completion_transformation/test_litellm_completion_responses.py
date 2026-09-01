@@ -3409,6 +3409,7 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._pending_tool_events = []
         iterator._tool_output_index_by_call_id = {}
         iterator._tool_args_by_call_id = {}
+        iterator._tool_item_id_by_call_id = {}
         iterator._tool_call_id_by_index = {}
         iterator._ambiguous_tool_call_indexes = set()
         iterator._next_tool_output_index = 1

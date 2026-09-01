@@ -1696,9 +1696,9 @@ def convert_function_to_anthropic_tool_invoke(
 
 def _find_server_tool_result(
     tool_id: str,
-    web_search_results: Sequence[Any] | None,
-    tool_results: Sequence[Any] | None,
-) -> dict[str, Any] | None:
+    web_search_results: Sequence[object] | None,
+    tool_results: Sequence[object] | None,
+) -> dict[str, object] | None:
     candidates: Final = (*(web_search_results or ()), *(tool_results or ()))
     return next(
         (result for result in candidates if isinstance(result, dict) and result.get("tool_use_id") == tool_id),
