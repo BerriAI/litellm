@@ -1053,7 +1053,7 @@ class _OpenItemState:
 
 
 def _open_item_state(responses_so_far: Sequence[object]) -> _OpenItemState | None:
-    typed: Final = tuple((str(stream_item_field(event, "type") or ""), event) for event in responses_so_far)
+    typed: Final = tuple((stream_item_field(event, "type"), event) for event in responses_so_far)
     added: Final = tuple(
         (added_index, stream_item_field(event, "item"))
         for event_type, event in typed
