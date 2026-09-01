@@ -13,6 +13,7 @@ import json
 # s/o [@Frank Colson](https://www.linkedin.com/in/frank-colson-422b9b183/) for this redis implementation
 import os
 from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import Final
 from urllib.parse import urlsplit, urlunsplit
 
@@ -38,9 +39,25 @@ from ._logging import verbose_logger
 AZURE_REDIS_SCOPE: Final = "https://redis.azure.com/.default"
 
 
-def _get_redis_kwargs():
-    arg_spec: Final = inspect.getfullargspec(redis.Redis)
+def _unwrapped_init_args(cls: type) -> frozenset[str]:
+    """Every parameter on a single class's own ``__init__``, decorator-unwrapped.
 
+    Unlike ``_init_arg_names`` below, this does not walk the MRO: ``redis.Redis``
+    and ``redis.RedisCluster`` (sync and async) each declare every real
+    constructor parameter directly on their own ``__init__``, so MRO-walking is
+    unnecessary — and it actively breaks the several tests here that mock the
+    class with ``patch(..., autospec=True)``, since ``inspect.getmro`` needs a
+    real ``__mro__`` that an autospec'd stand-in for a class does not provide.
+
+    Still unwraps first: redis-py >= 7.4 decorates these ``__init__``s with
+    ``@deprecated_args`` too, which the same class of bug as ``_init_arg_names``
+    would otherwise silently empty this allowlist through (see its docstring).
+    """
+    spec: Final = inspect.getfullargspec(inspect.unwrap(cls.__init__))
+    return frozenset(spec.args + spec.kwonlyargs)
+
+
+def _get_redis_kwargs():
     # Only allow primitive arguments
     exclude_args: Final = {
         "self",
@@ -60,7 +77,7 @@ def _get_redis_kwargs():
         "azure_client_secret",
     }
 
-    available_args: Final = {x for x in arg_spec.args if x not in exclude_args} | include_args
+    available_args: Final = {x for x in _unwrapped_init_args(redis.Redis) if x not in exclude_args} | include_args
 
     return available_args
 
@@ -120,15 +137,23 @@ def _get_redis_url_kwargs(client: type | None = None) -> tuple[str, ...]:
     return tuple(x for x in _init_arg_names(connection_cls) if x not in exclude_args) + include_args
 
 
-def _get_redis_cluster_kwargs(client=None):
+def _get_redis_cluster_kwargs(client: type | None = None):
+    """Config kwargs the target cluster client's constructor actually accepts.
+
+    Defaults to the sync ``redis.RedisCluster``, but the async cluster client
+    (``redis.asyncio.cluster.RedisCluster``) declares connection settings such as
+    ``decode_responses`` on its own constructor, where the sync class takes them
+    through ``**kwargs`` and so never names them in its signature. Introspecting
+    only the sync class regardless of which client is actually built silently
+    drops those for every async cluster caller.
+    """
     if client is None:
-        client = redis.Redis.from_url
-    arg_spec: Final = inspect.getfullargspec(redis.RedisCluster)
+        client = redis.RedisCluster
 
     # Only allow primitive arguments
     exclude_args: Final = {"self", "connection_pool", "retry", "host", "port", "startup_nodes"}
 
-    available_args = {x for x in arg_spec.args if x not in exclude_args}
+    available_args = {x for x in _unwrapped_init_args(client) if x not in exclude_args}
     available_args |= {
         "password",
         "username",
@@ -159,6 +184,79 @@ def _get_redis_env_kwarg_mapping():
 
     exclude_from_environment: Final = frozenset({"credential_provider"})
     return {f"{PREFIX}{x.upper()}": x for x in _get_redis_kwargs() if x not in exclude_from_environment}
+
+
+def _str_to_bool(value: str) -> bool:
+    return value.lower() in ("true", "1", "yes")
+
+
+def _coerce_redis_kwargs_types(
+    redis_kwargs: Mapping[str, object],
+    client: type | tuple[type, ...] = redis.Redis,
+) -> dict[str, object]:  # mutable-ok: a caller mutates the returned kwargs before constructing its client
+    """Coerces string values to the numeric/boolean type ``client``'s constructor
+    declares for that parameter. ``client`` may be a tuple of client classes; a
+    parameter's type is taken from the first signature that declares it, which
+    lets cluster callers coerce cluster-only kwargs such as
+    ``cluster_error_retry_attempts`` alongside the shared connection kwargs.
+
+    Environment variables are always strings, and Helm ``--set`` stringifies values
+    too, so a config value like ``health_check_interval`` or ``socket_timeout``
+    can arrive as ``"30"``/``"5.5"`` rather than a real number. redis-py's own
+    connection-health-check arithmetic (``loop.time() + self.health_check_interval``)
+    then raises ``TypeError`` on every Redis operation instead of connecting.
+
+    ``max_connections``, ``socket_timeout``, and ``socket_connect_timeout`` use an
+    explicit target type rather than the parameter's own signature default: redis-py
+    8.x changed the timeout defaults from ``None`` to int ``5``, so inferring the
+    type from the default would make a fractional ``"5.5"`` fail ``int()`` and get
+    silently dropped on 8.x while working on older versions. ``socket_keepalive``
+    is explicit too: its signature default is ``None``, which carries no type to
+    infer from, and leaving it a string makes ``"false"`` truthy.
+    """
+    signatures: Final = tuple(inspect.signature(c) for c in (client if isinstance(client, tuple) else (client,)))
+    explicit_param_types: Final = MappingProxyType(
+        {
+            "max_connections": int,
+            "socket_timeout": float,
+            "socket_connect_timeout": float,
+            "socket_keepalive": bool,
+        }
+    )
+    result: Final = dict(redis_kwargs)  # mutable-ok: per-key try/except coercion below needs to drop individual keys
+    for key, value in redis_kwargs.items():
+        if not isinstance(value, str):
+            continue
+        param = next((sig.parameters[key] for sig in signatures if key in sig.parameters), None)
+        if param is None:
+            continue
+        explicit_type = explicit_param_types.get(key)
+        if explicit_type is bool:
+            result[key] = _str_to_bool(value)
+            continue
+        if explicit_type is not None:
+            try:
+                result[key] = explicit_type(value)
+            except (ValueError, TypeError):
+                del result[key]
+            continue
+        default: object = param.default  # pyright: ignore[reportAny]  # inspect.Parameter.default is stubbed as Any
+        if default is inspect.Parameter.empty:
+            continue
+        # bool must be checked before int, since bool subclasses int
+        if isinstance(default, bool):
+            result[key] = _str_to_bool(value)
+        elif isinstance(default, int):
+            try:
+                result[key] = int(value)
+            except (ValueError, TypeError):
+                del result[key]
+        elif isinstance(default, float):
+            try:
+                result[key] = float(value)
+            except (ValueError, TypeError):
+                del result[key]
+    return result
 
 
 def _redis_kwargs_from_environment():
@@ -505,7 +603,12 @@ def _get_redis_client_logic(**env_overrides):
         raise ValueError("Either 'host' or 'url' must be specified for redis.")
 
     # litellm.print_verbose(f"redis_kwargs: {redis_kwargs}")
-    return redis_kwargs
+    coercion_client: Final = (
+        (redis.Redis, redis.RedisCluster, async_redis.RedisCluster)
+        if redis_kwargs.get("startup_nodes")
+        else redis.Redis
+    )
+    return _coerce_redis_kwargs_types(redis_kwargs, client=coercion_client)
 
 
 def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
@@ -657,7 +760,9 @@ def get_redis_client(**env_overrides):
     if "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
         return _init_redis_sentinel(redis_kwargs)
 
-    return redis.Redis(**redis_kwargs)
+    return redis.Redis(  # pyright: ignore[reportCallIssue]  # object-valued kwargs match no overload statically
+        **redis_kwargs,  # pyright: ignore[reportArgumentType]  # allow-listed and coerced against this signature
+    )
 
 
 def get_redis_async_client(
@@ -669,7 +774,7 @@ def get_redis_async_client(
     if "startup_nodes" in redis_kwargs:
         from redis.cluster import ClusterNode
 
-        args = _get_redis_cluster_kwargs()
+        args = _get_redis_cluster_kwargs(async_redis.RedisCluster)
         cluster_kwargs: Final = {}
         for arg in redis_kwargs:
             if arg in args:
