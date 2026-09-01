@@ -762,13 +762,9 @@ def _build_passthrough_failure_request_payload(
 
 @dataclass(frozen=True, slots=True)
 class _TeamCallbackWiring:
-    success_callbacks: "list[str | Callable | CustomLogger] | None" = (
-        None  # mutable-ok: Logging.__init__ signature constraint
-    )
-    failure_callbacks: "list[str | Callable | CustomLogger] | None" = (
-        None  # mutable-ok: Logging.__init__ signature constraint
-    )
-    logging_kwargs: dict[str, str | dict[str, str]] | None = None  # mutable-ok: Logging.__init__ signature constraint
+    success_callbacks: "list[str | Callable | CustomLogger] | None" = None  # mutable-ok: Logging.__init__ arg
+    failure_callbacks: "list[str | Callable | CustomLogger] | None" = None  # mutable-ok: Logging.__init__ arg
+    logging_kwargs: dict[str, str | dict[str, str]] | None = None  # mutable-ok: Logging.__init__ arg
 
 
 def _resolve_team_callback_wiring(
