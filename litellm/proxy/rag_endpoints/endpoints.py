@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Final
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import ORJSONResponse, StreamingResponse
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -37,12 +38,22 @@ from litellm.proxy.rag_endpoints.upload_security import (
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
 )
+from litellm.rag.main import get_ingestion_class
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
 router: Final = APIRouter()
+
+
+class _RAGIngestErrorDetail(TypedDict):
+    error: ReadOnly[str]
+
+
+def _rag_ingest_bad_request(message: str) -> HTTPException:
+    detail: Final[_RAGIngestErrorDetail] = {"error": message}
+    return HTTPException(status_code=400, detail=detail)
 
 
 def _raise_vector_store_scan_depth_exceeded() -> None:
@@ -427,6 +438,15 @@ async def parse_rag_ingest_request(
                         "Credentials must be configured server-side."
                     },
                 )
+
+        provider: Final = vector_store_opts.get("custom_llm_provider", "openai")
+        if not isinstance(provider, str):
+            raise _rag_ingest_bad_request("custom_llm_provider must be a string")
+
+        try:
+            get_ingestion_class(provider)
+        except ValueError as error:
+            raise _rag_ingest_bad_request(str(error)) from error
 
     return ingest_options, secured_file_data, file_url, file_id
 

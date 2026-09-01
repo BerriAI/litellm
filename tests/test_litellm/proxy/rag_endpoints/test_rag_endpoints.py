@@ -6,11 +6,11 @@ Covers:
 """
 
 import io
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Final
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -45,6 +45,45 @@ def client_internal_user():
         yield TestClient(app)
     finally:
         app.dependency_overrides = original_overrides
+
+
+def test_rag_ingest_rejects_unsupported_provider(
+    client_internal_user: TestClient,
+) -> None:
+    response: Final = client_internal_user.post(
+        "/v1/rag/ingest",
+        json={
+            "file_id": "file-test",
+            "ingest_options": {"vector_store": {"custom_llm_provider": "milvus"}},
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": {
+            "error": "Provider 'milvus' is not supported for RAG ingestion. "
+            "Supported providers: openai, bedrock, gemini, s3_vectors, vertex_ai"
+        }
+    }
+
+
+def test_rag_ingest_rejects_non_string_provider(
+    client_internal_user: TestClient,
+) -> None:
+    response: Final = client_internal_user.post(
+        "/v1/rag/ingest",
+        json={
+            "file_id": "file-test",
+            "ingest_options": {
+                "vector_store": {"custom_llm_provider": {"provider": "milvus"}}
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": {"error": "custom_llm_provider must be a string"}
+    }
 
 
 def test_internal_user_viewer_rag_ingest_without_vector_store_id_rejected(
