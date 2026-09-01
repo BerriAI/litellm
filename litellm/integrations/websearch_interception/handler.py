@@ -1633,7 +1633,7 @@ class WebSearchInterceptionLogger(CustomLogger):
     def _select_search_tool_from_router(self, llm_router: object) -> "_SearchToolConfig | None":
         if llm_router is None or not hasattr(llm_router, "search_tools"):
             return None
-        search_tools: Final = list(getattr(llm_router, "search_tools") or [])
+        search_tools: Final = list(getattr(llm_router, "search_tools", None) or [])
         return self._select_search_tool_from_list(search_tools=search_tools, source="router")
 
     def _select_search_tool_from_list(
