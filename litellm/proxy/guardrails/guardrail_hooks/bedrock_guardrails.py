@@ -32,6 +32,9 @@ from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.exceptions import ModifyResponseException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
+from litellm.litellm_core_utils.litellm_logging import (
+    _get_masked_values,  # pyright: ignore[reportPrivateUsage]  # the shared header-masking helper has no public name
+)
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import bedrock_guardrail_cost
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.utils import (
@@ -1170,11 +1173,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             aws_region_name=aws_region_name,
             api_key=api_key,
         )
+        headers_dict: Final = dict(prepared_request.headers)  # mutable-ok: the masking helper requires a dict
         verbose_proxy_logger.debug(
             "Bedrock AI request body: %s, url %s, headers: %s",
             bedrock_request_data,
             prepared_request.url,
-            prepared_request.headers,
+            _get_masked_values(headers_dict),
         )
 
         httpx_response: Final = await self._sign_and_post(
