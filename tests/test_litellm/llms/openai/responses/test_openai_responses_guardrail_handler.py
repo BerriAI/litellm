@@ -1297,6 +1297,65 @@ class TestBuildBlockSseChunks:
         assert completed["output"][0]["content"][0]["text"] == "Blocked by policy."
         assert completed["usage"] == {"input_tokens": 7, "output_tokens": 21, "total_tokens": 28}
 
+    def test_continuation_closes_open_item_given_pydantic_events_with_enum_types(self):
+        from litellm.types.llms.openai import (
+            BaseLiteLLMOpenAIResponseObject,
+            ContentPartAddedEvent,
+            OutputItemAddedEvent,
+            OutputTextDeltaEvent,
+            ResponsesAPIStreamEvents,
+        )
+
+        handler = OpenAIResponsesHandler()
+        open_item = GenericResponseOutputItem.model_validate(
+            {"type": "message", "id": "msg_live", "status": "in_progress", "role": "assistant", "content": []}
+        )
+        yielded = [
+            OutputItemAddedEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, output_index=0, item=open_item
+            ),
+            ContentPartAddedEvent(
+                type=ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+                item_id="msg_live",
+                output_index=0,
+                content_index=0,
+                part=BaseLiteLLMOpenAIResponseObject.model_validate(
+                    {"type": "output_text", "text": "", "annotations": []}
+                ),
+            ),
+            OutputTextDeltaEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+                item_id="msg_live",
+                output_index=0,
+                content_index=0,
+                delta="partial ",
+            ),
+            OutputTextDeltaEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+                item_id="msg_live",
+                output_index=0,
+                content_index=0,
+                delta="text",
+            ),
+        ]
+        payloads = self._payloads(
+            handler.build_block_sse_chunks(
+                self._exc(original_response=yielded), stream_started=True, responses_so_far=yielded
+            )
+        )
+        types = [payload["type"] for payload in payloads]
+        assert types[:3] == [
+            "response.output_text.done",
+            "response.content_part.done",
+            "response.output_item.done",
+        ]
+        assert payloads[0]["text"] == "partial text"
+        assert payloads[2]["item"]["id"] == "msg_live"
+        assert payloads[2]["item"]["status"] == "completed"
+        assert payloads[2]["item"]["content"][0]["text"] == "partial text"
+        assert types[3] == "response.output_item.added"
+        assert payloads[3]["output_index"] == 1
+
     def test_continuation_without_open_item_emits_no_closing_events(self):
         handler = OpenAIResponsesHandler()
         yielded = [
