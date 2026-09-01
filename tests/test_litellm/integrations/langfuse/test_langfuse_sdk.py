@@ -267,6 +267,10 @@ def test_non_string_observation_id_is_normalized(supplied):
     assert resolved == resolve_observation_id(supplied)
 
 
+def test_hyphen_only_trace_ids_are_deterministic():
+    assert resolve_trace_id("---") == resolve_trace_id("---")
+
+
 def test_trace_id_with_trailing_newline_is_hashed():
     supplied = "a" * 32 + "\n"
 

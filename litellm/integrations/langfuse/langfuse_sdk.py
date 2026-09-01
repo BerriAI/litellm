@@ -56,20 +56,22 @@ def to_unix_nanos(value: datetime | float | None) -> int | None:
 
 def resolve_trace_id(trace_id: object | None) -> str:
     """Map a caller's trace id onto the 32 lowercase hex characters v4 requires."""
-    normalized: Final = "" if trace_id is None else str(trace_id).lower().replace("-", "")
+    serialized: Final = "" if trace_id is None else str(trace_id)
+    normalized: Final = serialized.lower().replace("-", "")
     if _TRACE_ID_PATTERN.fullmatch(normalized):
         return normalized
-    return Langfuse.create_trace_id(seed=str(trace_id)) if normalized else Langfuse.create_trace_id()
+    return Langfuse.create_trace_id(seed=serialized) if serialized else Langfuse.create_trace_id()
 
 
 def resolve_observation_id(observation_id: object | None) -> str | None:
     """Map a caller's parent observation id onto v4's 16 lowercase hex characters."""
-    normalized: Final = "" if observation_id is None else str(observation_id).lower().replace("-", "")
-    if not normalized:
-        return None
+    serialized: Final = "" if observation_id is None else str(observation_id)
+    normalized: Final = serialized.lower().replace("-", "")
     if _OBSERVATION_ID_PATTERN.fullmatch(normalized):
         return normalized
-    return sha256(normalized.encode("utf-8")).digest()[:8].hex()
+    if not serialized:
+        return None
+    return sha256(serialized.encode("utf-8")).digest()[:8].hex()
 
 
 def open_trace_context(
