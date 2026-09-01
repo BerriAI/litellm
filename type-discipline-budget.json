@@ -1,12 +1,12 @@
 {
   "LIT001": {
-    "limit": 22402
+    "limit": 22365
   },
   "LIT002": {
-    "limit": 26780
+    "limit": 26777
   },
   "LIT003": {
-    "limit": 268
+    "limit": 267
   },
   "LIT004": {
     "limit": 40
@@ -27,10 +27,10 @@
     "limit": 0
   },
   "LIT010": {
-    "limit": 16511
+    "limit": 16505
   },
   "LIT011": {
-    "limit": 5535
+    "limit": 5533
   },
   "LIT012": {
     "limit": 4495
