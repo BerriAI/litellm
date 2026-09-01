@@ -316,15 +316,18 @@ async def process_spend_logs_guardrail_usage(
             guardrail_id = entry.get("guardrail_id") or entry.get("guardrail_name") or ""
             if not guardrail_id:
                 continue
-            key = _MetricsKey(guardrail_id, date_key)
-            daily_guardrail[key]["requests_evaluated"] += 1
-            action = _guardrail_status_to_action(entry.get("guardrail_status"))
-            if action == "passed":
-                daily_guardrail[key]["passed_count"] += 1
-            elif action == "blocked":
-                daily_guardrail[key]["blocked_count"] += 1
-            else:
-                daily_guardrail[key]["flagged_count"] += 1
+            status = entry.get("guardrail_status")
+            # not_run means the guardrail never evaluated the request: index it for drill-down, keep it out of counts
+            if status != "not_run":
+                key = _MetricsKey(guardrail_id, date_key)
+                daily_guardrail[key]["requests_evaluated"] += 1
+                action = _guardrail_status_to_action(status)
+                if action == "passed":
+                    daily_guardrail[key]["passed_count"] += 1
+                elif action == "blocked":
+                    daily_guardrail[key]["blocked_count"] += 1
+                else:
+                    daily_guardrail[key]["flagged_count"] += 1
             policy_id = entry.get("policy_id")
             index_rows.append(
                 {
