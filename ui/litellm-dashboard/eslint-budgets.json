@@ -5,7 +5,7 @@
   "max-depth": { "max": 70, "target": 30 },
   "local/no-large-inline-object-arg": { "max": 559, "target": 300 },
   "local/no-long-condition-chain": { "max": 265, "target": 120 },
-  "testing-library/no-container": { "max": 150, "target": 50 },
-  "testing-library/no-node-access": { "max": 760, "target": 500 },
+  "testing-library/no-container": { "max": 133, "target": 50 },
+  "testing-library/no-node-access": { "max": 723, "target": 500 },
   "testing-library/prefer-screen-queries": { "max": 221, "target": 0 }
 }
