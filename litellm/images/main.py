@@ -3,7 +3,7 @@ import contextvars
 import importlib
 from collections.abc import Coroutine
 from functools import partial
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, overload
+from typing import TYPE_CHECKING, Final, Literal, Optional, cast, overload
 
 if TYPE_CHECKING:
     from litellm.images.utils import ImageEditRequestUtils
@@ -151,7 +151,7 @@ def image_generation(
     *,
     aimg_generation: Literal[True],
     **kwargs,
-) -> Coroutine[Any, Any, ImageResponse]: 
+) -> Coroutine[object, object, ImageResponse]:
     ...
 
 
@@ -197,7 +197,7 @@ def image_generation(
     api_version: str | None = None,
     custom_llm_provider=None,
     **kwargs,
-) -> ImageResponse | Coroutine[Any, Any, ImageResponse]:
+) -> ImageResponse | Coroutine[object, object, ImageResponse]:
     """
     Maps the https://api.openai.com/v1/images/generations endpoint.
 
@@ -723,14 +723,14 @@ def image_edit(
     user: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> ImageResponse | Coroutine[Any, Any, ImageResponse]:
+) -> ImageResponse | Coroutine[object, object, ImageResponse]:
     """
     Maps the image edit functionality, similar to OpenAI's images/edits endpoint.
     """
@@ -769,7 +769,7 @@ def image_edit(
         images: Final = image if isinstance(image, list) else ([image] if image is not None else [])
 
         headers_from_kwargs: Final = kwargs.get("headers")
-        merged_extra_headers: Final[dict[str, Any]] = {}
+        merged_extra_headers: Final[dict[str, object]] = {}
         if isinstance(headers_from_kwargs, dict):
             merged_extra_headers.update(headers_from_kwargs)
         if isinstance(extra_headers, dict):
@@ -974,9 +974,9 @@ async def aimage_edit(
     user: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
@@ -1044,7 +1044,7 @@ async def aimage_edit(
         )
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> type["ImageEditRequestUtils"]:
     """Lazy import handler for images.main module"""
     if name == "ImageEditRequestUtils":
         # Lazy load ImageEditRequestUtils to avoid heavy import from images.utils at module load time
