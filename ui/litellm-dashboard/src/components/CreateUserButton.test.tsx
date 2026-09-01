@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { CreateUserButton } from "./CreateUserButton";
 import * as networking from "./networking";
 import { toast } from "@/lib/toast";
+import { expectControlBesideLabel } from "../../tests/fieldOrientation";
 
 vi.mock("./networking", () => ({
   userCreateCall: vi.fn(),
@@ -304,9 +305,8 @@ describe("CreateUserButton", () => {
     await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
 
     const dialog = screen.getByRole("dialog", { name: /invite user/i });
-    const checkbox = within(dialog).getByRole("checkbox");
 
-    expect(checkbox.closest('[data-slot="field"]')).toHaveAttribute("data-orientation", "horizontal");
+    expectControlBesideLabel(within(dialog).getByRole("checkbox"));
   });
 
   describe("organizations", () => {
