@@ -9,6 +9,7 @@ from fastapi import HTTPException
 import importlib
 
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import NotFound
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
@@ -506,6 +507,7 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
         get_allowed_mcp_servers=AsyncMock(return_value=[]),
         get_mcp_servers_from_ids=MagicMock(return_value=[]),
         get_mcp_server_by_name=MagicMock(return_value=None),
+        resolve_single_target=MagicMock(return_value=NotFound(reference="deepwiki")),
     )
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
@@ -559,6 +561,7 @@ async def test_get_mcp_tools_from_manager_forwards_request_tags(monkeypatch):
         get_allowed_mcp_servers=AsyncMock(return_value=[]),
         get_mcp_servers_from_ids=MagicMock(return_value=[]),
         get_mcp_server_by_name=MagicMock(return_value=None),
+        resolve_single_target=MagicMock(return_value=NotFound(reference="deepwiki")),
     )
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",

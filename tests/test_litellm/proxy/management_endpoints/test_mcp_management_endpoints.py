@@ -2183,18 +2183,16 @@ class TestTemporaryMCPSessionEndpoints:
         )
         admin_auth = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
-        with (
-            patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_cached_temporary_mcp_server",
-                return_value=None,
-            ),
-            patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
-                manager,
-            ),
-        ):
-            with pytest.raises(HTTPException) as exc_info:
-                await _get_cached_temporary_mcp_server_or_404("github", admin_auth)
+        async def get_temporary_server(_: str) -> None:
+            return None
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _get_cached_temporary_mcp_server_or_404(
+                "github",
+                admin_auth,
+                mcp_server_manager=manager,
+                temporary_server_getter=get_temporary_server,
+            )
 
         assert exc_info.value.status_code == 409
 

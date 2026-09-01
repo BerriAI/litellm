@@ -1,6 +1,6 @@
 {
   "reportAny": {
-    "limit": 14765
+    "limit": 14759
   },
   "reportArgumentType": {
     "limit": 2216
@@ -24,7 +24,7 @@
     "limit": 19
   },
   "reportExplicitAny": {
-    "limit": 4493
+    "limit": 4492
   },
   "reportFunctionMemberAccess": {
     "limit": 7
@@ -84,7 +84,7 @@
     "limit": 56
   },
   "reportPrivateUsage": {
-    "limit": 1808
+    "limit": 1806
   },
   "reportRedeclaration": {
     "limit": 8
@@ -123,7 +123,7 @@
     "limit": 5
   },
   "reportUnnecessaryIsInstance": {
-    "limit": 828
+    "limit": 827
   },
   "reportUntypedBaseClass": {
     "limit": 0

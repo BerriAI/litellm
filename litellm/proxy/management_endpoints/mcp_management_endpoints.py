@@ -19,10 +19,10 @@ import functools
 import importlib
 import json
 import os
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 from fastapi import (
     APIRouter,
@@ -164,6 +164,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         Ambiguous,
         Forbidden,
+        MCPServerManager,
         NotFound,
         Resolved,
         SingleTargetResolution,
@@ -1926,8 +1927,12 @@ if MCP_AVAILABLE:
         server_id: str,
         user_api_key_dict: UserAPIKeyAuth,
         request: Request | None = None,
+        mcp_server_manager: MCPServerManager | None = None,
+        temporary_server_getter: Callable[[str], Awaitable[MCPServer | None]] | None = None,
     ) -> MCPServer:
-        temporary_server: Final = await get_cached_temporary_mcp_server(server_id)
+        manager: Final = mcp_server_manager or global_mcp_server_manager
+        get_temporary_server: Final = temporary_server_getter or get_cached_temporary_mcp_server
+        temporary_server: Final = await get_temporary_server(server_id)
         is_admin: Final = _user_has_admin_view(user_api_key_dict)
         if temporary_server is not None:
             if is_admin:
@@ -1942,29 +1947,29 @@ if MCP_AVAILABLE:
         client_ip: Final = IPAddressUtils.get_mcp_client_ip(request) if request else None
         auth_contexts: Final = () if is_admin else tuple(await build_effective_auth_contexts(user_api_key_dict))
         allowed_by_context: Final[tuple[list[str], ...]] = tuple(
-            [await global_mcp_server_manager.get_allowed_mcp_servers(auth_context) for auth_context in auth_contexts]
+            [await manager.get_allowed_mcp_servers(auth_context) for auth_context in auth_contexts]
         )
         allowed_server_ids: Final[frozenset[str] | None] = (
             None if is_admin else frozenset(server_id for server_ids in allowed_by_context for server_id in server_ids)
         )
 
-        exact_server: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+        exact_server: Final = manager.get_mcp_server_by_id(server_id)
         if exact_server is not None:
             is_allowed: Final = allowed_server_ids is None or exact_server.server_id in allowed_server_ids
-            if is_allowed and global_mcp_server_manager.is_server_accessible_from_ip(exact_server, client_ip):
+            if is_allowed and manager.is_server_accessible_from_ip(exact_server, client_ip):
                 return exact_server
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"error": f"Access denied to MCP server {server_id}"},
             )
 
-        resolution: Final[SingleTargetResolution] = global_mcp_server_manager.resolve_single_target(
+        resolution: Final[SingleTargetResolution] = manager.resolve_single_target(
             server_id,
             allowed_server_ids=allowed_server_ids,
             client_ip=client_ip,
         )
         if isinstance(resolution, Resolved):
-            return cast(MCPServer, resolution.value)
+            return resolution.value
         if isinstance(resolution, NotFound):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

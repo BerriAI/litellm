@@ -2,7 +2,7 @@ import asyncio
 import importlib
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -92,6 +92,7 @@ if MCP_AVAILABLE:
         _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
         Ambiguous,
         Forbidden,
+        MCPServerManager,
         NotFound,
         Resolved,
         SingleTargetResolution,
@@ -420,9 +421,10 @@ if MCP_AVAILABLE:
         server_id: str,
         candidates: tuple[MCPServer, ...],
         client_ip: str | None,
+        mcp_server_manager: MCPServerManager,
     ) -> NoReturn:
         if client_ip is not None and any(
-            not global_mcp_server_manager.is_server_accessible_from_ip(candidate, client_ip) for candidate in candidates
+            not mcp_server_manager.is_server_accessible_from_ip(candidate, client_ip) for candidate in candidates
         ):
             raise HTTPException(
                 status_code=403,
@@ -448,20 +450,22 @@ if MCP_AVAILABLE:
         server_id: str,
         allowed_server_ids: set[str] | list[str],
         client_ip: str | None = None,
+        mcp_server_manager: MCPServerManager | None = None,
     ) -> MCPServer:
+        manager: Final = mcp_server_manager or global_mcp_server_manager
         allowed: Final = frozenset(allowed_server_ids)
-        exact_match: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+        exact_match: Final = manager.get_mcp_server_by_id(server_id)
         if exact_match is not None:
-            if server_id in allowed and global_mcp_server_manager.is_server_accessible_from_ip(exact_match, client_ip):
+            if server_id in allowed and manager.is_server_accessible_from_ip(exact_match, client_ip):
                 return exact_match
-            _raise_forbidden_rest_server(server_id, (exact_match,), client_ip)
-        resolution: Final[SingleTargetResolution] = global_mcp_server_manager.resolve_single_target(
+            _raise_forbidden_rest_server(server_id, (exact_match,), client_ip, manager)
+        resolution: Final[SingleTargetResolution] = manager.resolve_single_target(
             server_id,
             allowed_server_ids=allowed,
             client_ip=client_ip,
         )
         if isinstance(resolution, Resolved):
-            return cast(MCPServer, resolution.value)
+            return resolution.value
         if isinstance(resolution, Ambiguous):
             raise HTTPException(
                 status_code=409,
@@ -471,13 +475,11 @@ if MCP_AVAILABLE:
                 },
             )
         if isinstance(resolution, NotFound):
-            name_match: Final = global_mcp_server_manager.get_mcp_server_by_name(server_id)
+            name_match: Final = manager.get_mcp_server_by_name(server_id)
             if name_match is not None:
-                if name_match.server_id in allowed and global_mcp_server_manager.is_server_accessible_from_ip(
-                    name_match, client_ip
-                ):
+                if name_match.server_id in allowed and manager.is_server_accessible_from_ip(name_match, client_ip):
                     return name_match
-                _raise_forbidden_rest_server(server_id, (name_match,), client_ip)
+                _raise_forbidden_rest_server(server_id, (name_match,), client_ip, manager)
             raise HTTPException(
                 status_code=404,
                 detail={
@@ -485,8 +487,15 @@ if MCP_AVAILABLE:
                     "message": f"MCP server '{server_id}' was not found",
                 },
             )
-        assert isinstance(resolution, Forbidden)
-        _raise_forbidden_rest_server(server_id, resolution.candidates, client_ip)
+        if isinstance(resolution, Forbidden):
+            _raise_forbidden_rest_server(server_id, resolution.candidates, client_ip, manager)
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "server_not_found",
+                "message": f"MCP server '{server_id}' was not found",
+            },
+        )
 
     async def _resolve_allowed_mcp_servers_with_ip_filter(
         request: Request,
@@ -620,7 +629,16 @@ if MCP_AVAILABLE:
         apply_tool_filters: bool = True,
     ) -> dict:
         """Handle tool listing for a single server_id request."""
-        server: Final = _resolve_single_rest_server(server_id, allowed_server_ids, rest_client_ip)
+        try:
+            server: Final = _resolve_single_rest_server(server_id, allowed_server_ids, rest_client_ip)
+        except HTTPException as e:
+            if e.status_code != 404 or server_id not in allowed_server_ids:
+                raise
+            return {
+                "tools": [],
+                "error": "server_not_found",
+                "message": f"Server with id {server_id} not found",
+            }
 
         server_auth_header: Final = _get_server_auth_header(server, mcp_server_auth_headers, mcp_auth_header)
         user_oauth_extra_headers: Final = await _get_user_oauth_extra_headers(server, user_api_key_dict)

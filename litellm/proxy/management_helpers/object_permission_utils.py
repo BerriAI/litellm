@@ -6,7 +6,7 @@ organizations, teams, and keys.
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Final, Optional
 
 from fastapi import HTTPException, status
 
@@ -205,27 +205,20 @@ async def _set_object_permission(
     return data_json
 
 
-class _MCPServerReference(Protocol):
-    @property
-    def server_id(self) -> str: ...
-
-    @property
-    def alias(self) -> str | None: ...
-
-    @property
-    def server_name(self) -> str | None: ...
-
-    @property
-    def name(self) -> str | None: ...
+@dataclass(frozen=True, slots=True)
+class _MCPServerReference:
+    server_id: str
+    alias: str | None
+    server_name: str | None
+    name: str | None
 
 
-def _resolve_identifier_from_servers(servers: Sequence[object], identifier: str) -> set[str]:
-    references: Final = tuple(cast(_MCPServerReference, server) for server in servers)
+def _resolve_identifier_from_servers(servers: Sequence[_MCPServerReference], identifier: str) -> set[str]:
     matches_by_precedence: Final = (
-        {server.server_id for server in references if server.server_id == identifier},
-        {server.server_id for server in references if server.alias == identifier},
-        {server.server_id for server in references if server.server_name == identifier},
-        {server.server_id for server in references if server.name == identifier},
+        {server.server_id for server in servers if server.server_id == identifier},
+        {server.server_id for server in servers if server.alias == identifier},
+        {server.server_id for server in servers if server.server_name == identifier},
+        {server.server_id for server in servers if server.name == identifier},
     )
     return next((matches for matches in matches_by_precedence if matches), set[str]())
 
@@ -267,14 +260,28 @@ async def _resolve_mcp_server_identifiers_to_ids(
         global_mcp_server_manager,
     )
 
-    db_servers: Final[Sequence[object]] = cast(
-        Sequence[object],
-        await _get_db_mcp_servers_by_identifiers(
+    db_servers: Final = tuple(
+        _MCPServerReference(
+            server_id=server.server_id,
+            alias=server.alias,
+            server_name=server.server_name,
+            name=None,
+        )
+        for server in await _get_db_mcp_servers_by_identifiers(
             identifiers=identifiers,
             prisma_client=prisma_client,
-        ),
+        )
     )
-    all_servers: Final = tuple(db_servers) + tuple(global_mcp_server_manager.get_registry().values())
+    registry_servers: Final = tuple(
+        _MCPServerReference(
+            server_id=server.server_id,
+            alias=server.alias,
+            server_name=server.server_name,
+            name=server.name,
+        )
+        for server in global_mcp_server_manager.get_registry().values()
+    )
+    all_servers: Final = db_servers + registry_servers
     return {identifier: _resolve_identifier_from_servers(all_servers, identifier) for identifier in identifiers}
 
 

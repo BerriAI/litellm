@@ -13,9 +13,9 @@ import time
 import traceback
 import types
 import uuid
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -416,6 +416,9 @@ if MCP_AVAILABLE:
     )
     from mcp.types import Tool as MCPTool
 
+    from litellm.proxy._experimental.mcp_server import (
+        mcp_server_manager as mcp_server_manager_module,
+    )
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
         MCPAuthenticatedUser,
     )
@@ -1386,9 +1389,79 @@ if MCP_AVAILABLE:
     ############ Helper Functions ##########################
     ########################################################
 
+    async def _resolve_allowed_mcp_server_reference(
+        server_or_group: str,
+        allowed_mcp_servers: list[MCPServer],
+        allowed_server_ids: frozenset[str],
+        mcp_server_manager: MCPServerManager,
+        access_group_resolver: Callable[[list[str]], Awaitable[list[str]]],
+    ) -> tuple[MCPServer, ...]:
+        resolution: Final[SingleTargetResolution] = mcp_server_manager.resolve_single_target(
+            server_or_group,
+            allowed_server_ids=allowed_server_ids,
+        )
+        if isinstance(resolution, Resolved):
+            return (resolution.value,)
+        if isinstance(resolution, Ambiguous):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "ambiguous_mcp_server",
+                    "message": f"MCP server reference '{server_or_group}' matches multiple permitted servers",
+                },
+            )
+
+        prefix_matches: Final = tuple(
+            server
+            for server in allowed_mcp_servers
+            if server_or_group.lower()
+            in tuple(prefix.lower() for prefix in iter_known_server_prefixes(server) if prefix)
+        )
+        if len(prefix_matches) > 1:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "ambiguous_mcp_server",
+                    "message": f"MCP server reference '{server_or_group}' matches multiple permitted servers",
+                },
+            )
+        if prefix_matches:
+            return prefix_matches
+
+        try:
+            access_group_server_ids: Final = frozenset(await access_group_resolver([server_or_group]))
+        except Exception as e:
+            verbose_logger.debug("Could not resolve '%s' as access group: %s", server_or_group, e)
+            if isinstance(resolution, Forbidden):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "access_denied",
+                        "message": f"The key is not allowed to access server {server_or_group}",
+                    },
+                )
+            return ()
+
+        access_group_matches: Final = tuple(
+            server for server in allowed_mcp_servers if server.server_id in access_group_server_ids
+        )
+        if access_group_matches:
+            return access_group_matches
+        if isinstance(resolution, Forbidden):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "access_denied",
+                    "message": f"The key is not allowed to access server {server_or_group}",
+                },
+            )
+        return ()
+
     async def _get_allowed_mcp_servers_from_mcp_server_names(
         mcp_servers: list[str] | None,
         allowed_mcp_servers: list[MCPServer],
+        mcp_server_manager: MCPServerManager | None = None,
+        access_group_resolver: Callable[[list[str]], Awaitable[list[str]]] | None = None,
     ) -> list[MCPServer]:
         """
         Get the filtered MCP servers from the MCP server names.
@@ -1401,80 +1474,35 @@ if MCP_AVAILABLE:
         namespacing appear to work when it did not.
         """
 
-        filtered_server: Final[dict[str, MCPServer]] = {}
+        if mcp_servers is None:
+            return allowed_mcp_servers
+
+        manager: Final = mcp_server_manager or mcp_server_manager_module.global_mcp_server_manager
+        resolve_access_group: Final = access_group_resolver or MCPRequestHandler._get_mcp_servers_from_access_groups
         allowed_server_ids: Final = frozenset(server.server_id for server in allowed_mcp_servers)
-        # Filter servers based on mcp_servers parameter if provided
-        if mcp_servers is not None:
-            for server_or_group in mcp_servers:
-                resolution: SingleTargetResolution = global_mcp_server_manager.resolve_single_target(
+        resolved_groups: Final = tuple(
+            [
+                await _resolve_allowed_mcp_server_reference(
                     server_or_group,
-                    allowed_server_ids=allowed_server_ids,
+                    allowed_mcp_servers,
+                    allowed_server_ids,
+                    manager,
+                    resolve_access_group,
                 )
-                if isinstance(resolution, Resolved):
-                    resolved_server: MCPServer = cast(MCPServer, resolution.value)
-                    filtered_server[resolved_server.server_id] = resolved_server
-                    continue
-                elif isinstance(resolution, Ambiguous):
-                    raise HTTPException(
-                        status_code=409,
-                        detail={
-                            "error": "ambiguous_mcp_server",
-                            "message": f"MCP server reference '{server_or_group}' matches multiple permitted servers",
-                        },
-                    )
-                elif isinstance(resolution, Forbidden):
-                    raise HTTPException(
-                        status_code=403,
-                        detail={
-                            "error": "access_denied",
-                            "message": f"The key is not allowed to access server {server_or_group}",
-                        },
-                    )
-                prefix_matches = tuple(
-                    server
-                    for server in allowed_mcp_servers
-                    if server_or_group.lower()
-                    in tuple(prefix.lower() for prefix in iter_known_server_prefixes(server) if prefix)
-                )
-                if len(prefix_matches) > 1:
-                    raise HTTPException(
-                        status_code=409,
-                        detail={
-                            "error": "ambiguous_mcp_server",
-                            "message": f"MCP server reference '{server_or_group}' matches multiple permitted servers",
-                        },
-                    )
-                if prefix_matches:
-                    matched_server = prefix_matches[0]
-                    filtered_server[matched_server.server_id] = matched_server
-                    continue
+                for server_or_group in mcp_servers
+            ]
+        )
+        filtered_servers: Final = {
+            server.server_id: server for resolved_group in resolved_groups for server in resolved_group
+        }
+        if filtered_servers:
+            return list(filtered_servers.values())
 
-                try:
-                    access_group_server_ids = await MCPRequestHandler._get_mcp_servers_from_access_groups(
-                        [server_or_group]
-                    )
-                    # Only include servers that the user has access to
-                    for server_id in access_group_server_ids:
-                        for server in allowed_mcp_servers:
-                            if server_id == server.server_id:
-                                filtered_server[server.server_id] = server
-                except Exception as e:
-                    verbose_logger.debug("Could not resolve '%s' as access group: %s", server_or_group, e)
-
-        if filtered_server:
-            return list(filtered_server.values())
-
-        if mcp_servers is not None:
-            # Caller asked for a specific scope but nothing resolved. Fail
-            # closed so URL/header namespacing cannot silently fall back to
-            # the caller's full allowed-server set.
-            verbose_logger.debug(
-                "MCP scope filter resolved to no servers for requested names %s; returning empty list (fail-closed).",
-                mcp_servers,
-            )
-            return []
-
-        return allowed_mcp_servers
+        verbose_logger.debug(
+            "MCP scope filter resolved to no servers for requested names %s; returning empty list (fail-closed).",
+            mcp_servers,
+        )
+        return []
 
     def _tool_name_matches(tool_name: str, filter_list: list[str], mcp_server: MCPServer) -> bool:
         """

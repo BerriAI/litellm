@@ -7082,6 +7082,33 @@ async def test_get_allowed_mcp_servers_from_mcp_server_names_access_group_resolv
 
 
 @pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_prefers_allowed_access_group_over_forbidden_alias():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.proxy._experimental.mcp_server.server import (
+        _get_allowed_mcp_servers_from_mcp_server_names,
+    )
+
+    allowed = [_make_mcp_server_for_scope_filter("allowed-id", "allowed")]
+    forbidden = _make_mcp_server_for_scope_filter("forbidden-id", "shared-reference")
+    manager = MCPServerManager()
+    manager.registry.update({server.server_id: server for server in (*allowed, forbidden)})
+
+    async def resolve_access_group(_: list[str]) -> list[str]:
+        return ["allowed-id"]
+
+    result = await _get_allowed_mcp_servers_from_mcp_server_names(
+        mcp_servers=["shared-reference"],
+        allowed_mcp_servers=allowed,
+        mcp_server_manager=manager,
+        access_group_resolver=resolve_access_group,
+    )
+
+    assert [server.server_id for server in result] == ["allowed-id"]
+
+
+@pytest.mark.asyncio
 async def test_get_allowed_mcp_servers_from_mcp_server_names_empty_list_fails_closed():
     """
     Edge case: ``mcp_servers=[]`` (explicit empty scope) is still an

@@ -6170,22 +6170,22 @@ class MCPServerManager:
         """
         if not identifiers:
             return []
-        expanded: Final[set[str]] = set()
-        for identifier in identifiers:
-            resolution = self.resolve_permission_reference(identifier)
-            if isinstance(resolution, Resolved):
-                expanded.update(server.server_id for server in resolution.value)
-            else:
-                # %r quotes and escapes control chars so an admin-controlled
-                # identifier with newlines cannot forge log lines.
-                verbose_logger.debug(
-                    "MCP permission entry %r does not resolve to any known "
-                    "server (config + DB union). Passing through — the "
-                    "downstream access check will deny it if it's stale.",
-                    identifier,
-                )
-                expanded.add(identifier)
+        expanded: Final = frozenset(
+            server_id for identifier in identifiers for server_id in self._expand_permission_reference(identifier)
+        )
         return list(expanded)
+
+    def _expand_permission_reference(self, identifier: str) -> tuple[str, ...]:
+        resolution: Final = self.resolve_permission_reference(identifier)
+        if isinstance(resolution, Resolved):
+            return tuple(server.server_id for server in resolution.value)
+        verbose_logger.debug(
+            "MCP permission entry %r does not resolve to any known "
+            "server (config + DB union). Passing through — the "
+            "downstream access check will deny it if it's stale.",
+            identifier,
+        )
+        return (identifier,)
 
     def _resolve_reference_candidates(
         self,
@@ -6198,11 +6198,13 @@ class MCPServerManager:
             exact_id_match: Final = self.get_mcp_server_by_id(reference)
             if exact_id_match is not None:
                 return (exact_id_match,)
-        for attribute in ("alias", "server_name", "name"):
-            matches = tuple(server for server in servers if getattr(server, attribute) == reference)
-            if matches:
-                return matches
-        return ()
+        alias_matches: Final = tuple(server for server in servers if server.alias == reference)
+        if alias_matches:
+            return alias_matches
+        server_name_matches: Final = tuple(server for server in servers if server.server_name == reference)
+        if server_name_matches:
+            return server_name_matches
+        return tuple(server for server in servers if server.name == reference)
 
     def resolve_permission_reference(self, reference: str) -> PermissionResolution:
         candidates: Final = self._resolve_reference_candidates(reference, include_server_id=True)

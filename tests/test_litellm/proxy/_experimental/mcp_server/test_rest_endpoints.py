@@ -1301,7 +1301,10 @@ class TestListToolsRestAPI:
         assert result["tools"] == ["tool-x"]
         assert result["error"] is None
 
-    async def test_duplicate_alias_returns_ambiguous(self, monkeypatch):
+    async def test_duplicate_alias_returns_ambiguous(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
         from litellm.proxy._experimental.mcp_server.server import MCPServer
         from litellm.types.mcp import MCPTransport
 
@@ -1321,36 +1324,13 @@ class TestListToolsRestAPI:
             transport=MCPTransport.sse,
             available_on_public_internet=True,
         )
-
-        async def fake_contexts(user_api_key_auth):
-            return [user_api_key_auth]
-
-        async def fake_get_allowed_mcp_servers(*args, **kwargs):
-            return ["west-id", "central-id"]
-
-        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts)
-        monkeypatch.setattr(
-            rest_endpoints.global_mcp_server_manager,
-            "get_allowed_mcp_servers",
-            fake_get_allowed_mcp_servers,
-        )
-        monkeypatch.setattr(
-            rest_endpoints.global_mcp_server_manager,
-            "get_registry",
-            lambda: {"west-id": west, "central-id": central},
-        )
-        monkeypatch.setattr(
-            rest_endpoints.global_mcp_server_manager,
-            "filter_server_ids_by_ip_with_info",
-            lambda server_ids, client_ip: (server_ids, 0),
-        )
-
-        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        manager = MCPServerManager()
+        manager.registry.update({"west-id": west, "central-id": central})
         with pytest.raises(HTTPException) as exc_info:
-            await rest_endpoints.list_tool_rest_api(
-                request,
-                server_id="github",
-                user_api_key_dict=UserAPIKeyAuth(),
+            rest_endpoints._resolve_single_rest_server(
+                "github",
+                ["west-id", "central-id"],
+                mcp_server_manager=manager,
             )
 
         assert exc_info.value.status_code == 409
