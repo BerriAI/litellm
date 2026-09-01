@@ -6101,3 +6101,64 @@ def test_response_timing_metrics_survive_deepcopy(logging_obj):
     logging_obj.set_response_timing_metrics({"_response_ms": 12.5})
 
     assert copy.deepcopy(logging_obj).response_timing_metrics == {"_response_ms": 12.5}
+
+
+def test_passthrough_embeddings_result_swapped_for_callbacks():
+    """
+    Regression: for gigachat passthrough /embeddings, normalize_logging_result
+    produces an EmbeddingResponse, but the result swap only accepted
+    ModelResponse, so callbacks kept receiving the raw httpx.Response (which
+    crashes attribute readers like OTEL). The swap must cover
+    EmbeddingResponse too.
+    """
+    import datetime as dt
+
+    from litellm.types.utils import EmbeddingResponse
+
+    logging_obj = LitellmLogging(
+        model="EmbeddingsGigaR",
+        messages=[],
+        stream=False,
+        call_type="allm_passthrough_route",
+        start_time=time.time(),
+        litellm_call_id="passthrough-embed-call-id",
+        function_id="passthrough-embed-fn-id",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={},
+        optional_params={},
+        model="EmbeddingsGigaR",
+        custom_llm_provider="gigachat",
+        endpoint="/embeddings",
+        request_data={"model": "EmbeddingsGigaR", "input": ["hello"]},
+        input=["hello"],
+    )
+
+    httpx_response = httpx.Response(
+        200,
+        json={
+            "object": "list",
+            "data": [
+                {
+                    "object": "embedding",
+                    "embedding": [0.1, 0.2, 0.3],
+                    "index": 0,
+                    "usage": {"prompt_tokens": 5},
+                }
+            ],
+            "model": "EmbeddingsGigaR",
+        },
+        request=httpx.Request(
+            "POST", "https://gigachat.devices.sberbank.ru/api/v1/embeddings"
+        ),
+    )
+
+    _, _, swapped_result = logging_obj._success_handler_helper_fn(
+        result=httpx_response,
+        start_time=dt.datetime.now(),
+        end_time=dt.datetime.now(),
+        cache_hit=False,
+    )
+
+    assert isinstance(swapped_result, EmbeddingResponse)
+    assert swapped_result.data[0]["embedding"] == [0.1, 0.2, 0.3]

@@ -662,6 +662,9 @@
         "supports_embedding_image_input": {
           "type": "boolean"
         },
+        "supports_forced_tool_use": {
+          "type": "boolean"
+        },
         "supports_function_calling": {
           "type": "boolean"
         },
