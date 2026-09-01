@@ -117,6 +117,7 @@ from litellm.router_utils.batch_utils import (
     replace_model_in_jsonl,
     should_replace_model_in_jsonl,
 )
+from litellm.team_model_identity import team_model_identity_v2_enabled
 from litellm.router_utils.client_initalization_utils import InitalizeCachedClient
 from litellm.router_utils.clientside_credential_handler import (
     get_dynamic_litellm_params,
@@ -8798,7 +8799,11 @@ class Router:
                 )
 
         verbose_router_logger.debug("\nInitialized Model List %s", self.get_model_names())
-        self.model_names = {m["model_name"] for m in model_list}
+        self.model_names = {
+            m["model_name"]
+            for m in model_list
+            if not (team_model_identity_v2_enabled() and (m.get("model_info") or {}).get("team_id") is not None)
+        }
 
         # Note: model_name_to_deployment_indices is already built incrementally
         # by _create_deployment -> _add_model_to_list_and_index_map
@@ -9020,7 +9025,8 @@ class Router:
 
         # add to model names
         self._add_model_to_list_and_index_map(model=_deployment, model_id=deployment.model_info.id)
-        self.model_names.add(deployment.model_name)
+        if not (team_model_identity_v2_enabled() and deployment.model_info.team_id is not None):
+            self.model_names.add(deployment.model_name)
         self._sync_deployment_budget_config(deployment=deployment)
         return deployment
 
@@ -9101,9 +9107,18 @@ class Router:
         - idx: int - the index in model_list
         """
         team_id: Final = (model.get("model_info") or {}).get("team_id")
-        team_public_model_name: Final = (model.get("model_info") or {}).get("team_public_model_name")
-        if team_id and team_public_model_name:
-            key: Final = (team_id, team_public_model_name)
+        if not team_id:
+            return
+        public_names: Final = {
+            name
+            for name in (
+                (model.get("model_info") or {}).get("team_public_model_name"),
+                model.get("model_name") if team_model_identity_v2_enabled() else None,
+            )
+            if name
+        }
+        for team_public_model_name in public_names:
+            key = (team_id, team_public_model_name)
             self.team_public_model_names = self.team_public_model_names | frozenset({team_public_model_name})
             if key not in self.team_model_to_deployment_indices:
                 self.team_model_to_deployment_indices[key] = []
@@ -9129,9 +9144,13 @@ class Router:
         elif model.get("model_info", {}).get("id") is not None:
             self.model_id_to_deployment_index_map[model["model_info"]["id"]] = idx
 
-        # Update model_name index for O(1) lookup
+        # Update model_name index for O(1) lookup.
+        # Under the v2 identity a team-owned deployment lives only under
+        # (team_id, model_name), so a lookup that forgets the team finds nothing
+        # instead of crossing into another team.
         model_name: Final = model.get("model_name")
-        if model_name:
+        owns_team: Final = (model.get("model_info") or {}).get("team_id") is not None
+        if model_name and not (team_model_identity_v2_enabled() and owns_team):
             if model_name not in self.model_name_to_deployment_indices:
                 self.model_name_to_deployment_indices[model_name] = []
             self.model_name_to_deployment_indices[model_name].append(idx)
@@ -9800,7 +9819,11 @@ class Router:
 
     def get_model_group(self, id: str) -> list | None:
         """
-        Return list of all models in the same model group as that model id
+        Return list of all models in the same model group as that model id.
+
+        A team-owned deployment's group is scoped to its owning team: the group is
+        ``(team_id, model_name)``, not the bare name, so a team model with sibling
+        replicas is not mistaken for a single-deployment group.
         """
 
         model_info: Final = self.get_model_info(id=id)
@@ -9808,6 +9831,10 @@ class Router:
             return None
 
         model_name: Final = model_info["model_name"]
+        owner_team_id: Final = (model_info.get("model_info") or {}).get("team_id")
+        if owner_team_id is not None:
+            public_name: Final = (model_info.get("model_info") or {}).get("team_public_model_name") or model_name
+            return self.get_model_list(model_name=public_name, team_id=owner_team_id)
         return self.get_model_list(model_name=model_name)
 
     def get_deployment_model_info(self, model_id: str, model_name: str) -> ModelInfo | None:
@@ -10541,6 +10568,8 @@ class Router:
             # Fallback: check by internal model_name for non-team deployments
             # or deployments that haven't been migrated to team_public_model_name yet
             model_team_id: Final = (model.get("model_info") or {}).get("team_id")
+            if team_model_identity_v2_enabled():
+                return model_team_id is None or model_team_id == team_id
             if (
                 team_id is None  # requester has no team constraint
                 or model_team_id is None  # global deployment - accessible to all teams
@@ -10640,6 +10669,11 @@ class Router:
                 team_model_name = self._get_team_specific_model(deployment=deployment, team_id=team_id)
                 if team_model_name:
                     model_names.append(team_model_name)
+                elif team_model_identity_v2_enabled() and team_id is None:
+                    # Admin listing: a team deployment still has a real public name.
+                    public = (model_info or {}).get("team_public_model_name") or deployment.get("model_name")
+                    if public:
+                        model_names.append(public)
             else:
                 model_names.append(deployment.get("model_name", ""))
 

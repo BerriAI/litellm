@@ -16,6 +16,7 @@ from litellm.types.llms.base import LiteLLMPydanticObjectBase
 class LiteLLM_ProxyModelTable(LiteLLMPydanticObjectBase):
     model_id: str
     model_name: str
+    team_id: str | None = None
     litellm_params: dict
     model_info: dict | None = None
     blocked: bool = False
@@ -48,7 +49,10 @@ class LiteLLM_ProxyModelTable(LiteLLMPydanticObjectBase):
         return self.blocked
 
     @property
-    def team_id(self) -> str | None:
+    def owner_team_id(self) -> str | None:
+        """Team that owns this deployment: the column, falling back to the legacy JSON blob."""
+        if self.team_id is not None:
+            return self.team_id
         if self.model_info:
             return self.model_info.get("team_id")
         return None

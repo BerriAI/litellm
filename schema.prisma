@@ -50,6 +50,7 @@ model LiteLLM_CredentialsTable {
 model LiteLLM_ProxyModelTable {
   model_id String @id @default(uuid())
   model_name String
+  team_id String?
   litellm_params Json
   model_info Json?
   blocked Boolean @default(false)
@@ -57,6 +58,8 @@ model LiteLLM_ProxyModelTable {
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
   updated_by String
+
+  @@index([team_id])
 }
 
 

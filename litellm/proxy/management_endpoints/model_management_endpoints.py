@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.ptu_pricing import (
     SEARCH_CONTEXT_SIZES,
     ptu_config_error,
 )
+from litellm.team_model_identity import team_model_identity_v2_enabled
 from litellm.proxy._types import (
     BlockModelRequest,
     CommonProxyErrors,
@@ -603,6 +604,7 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
 
     prisma_compatible_model_dict: Final = PrismaCompatibleUpdateDBModel(
         model_name=merged_model_name,
+        team_id=merged_model_info.get("team_id"),
         litellm_params=json.dumps(merged_litellm_params),
         model_info=json.dumps(merged_model_info),
     )
@@ -962,6 +964,7 @@ async def _add_model_to_db(
     _data: Final[dict] = {
         "model_id": model_params.model_info.id,
         "model_name": model_params.model_name,
+        "team_id": model_params.model_info.team_id,
         "litellm_params": model_params.litellm_params.model_dump_json(exclude_none=True),
         "model_info": model_params.model_info.model_dump_json(exclude_none=True),
         "created_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
@@ -1004,8 +1007,9 @@ async def _add_team_model_to_db(
 
     # Generate and assign unique internal model_name LAST
     # (after team_public_model_name is safely stored)
-    unique_model_name: Final = f"model_name_{_team_id}_{uuid.uuid4()}"
-    model_params.model_name = unique_model_name
+    if not team_model_identity_v2_enabled():
+        unique_model_name: Final = f"model_name_{_team_id}_{uuid.uuid4()}"
+        model_params.model_name = unique_model_name
 
     ## CREATE MODEL IN DB ##
     model_response: Final = await _add_model_to_db(
@@ -1069,9 +1073,13 @@ async def _update_team_model_in_db(
         ),
     )
 
-    patch_team_id: Final = patch_data.model_info.team_id if patch_data.model_info else None
+    # Ownership comes from the stored row, never from the caller's payload: a PATCH
+    # that sends only `model_name` used to take the standard-update path and rewrite
+    # a team deployment's routing key while `team_id` stayed behind, orphaning the row.
+    db_team_id_for_guard: Final = db_model.model_info.team_id if db_model.model_info else None
+    patch_team_id: Final = (patch_data.model_info.team_id if patch_data.model_info else None) or db_team_id_for_guard
 
-    # No team_id in patch, proceed with standard update
+    # No team ownership anywhere, proceed with standard update
     if patch_team_id is None:
         return update_db_model(db_model=db_model, updated_patch=patch_data)
 
@@ -1165,8 +1173,11 @@ async def _setup_new_team_model_assignment(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """Set up a new team model with unique name and team membership."""
-    unique_model_name: Final = f"model_name_{team_id}_{uuid.uuid4()}"
-    patch_data.model_name = unique_model_name
+    if not team_model_identity_v2_enabled():
+        unique_model_name: Final = f"model_name_{team_id}_{uuid.uuid4()}"
+        patch_data.model_name = unique_model_name
+    else:
+        patch_data.model_name = public_model_name
 
     await team_model_add(
         data=TeamModelAddRequest(
@@ -1196,17 +1207,25 @@ async def _get_team_deployments(
     """
     prefix: Final = f"model_name_{team_id}_"
     table = table or _proxy_model_table(prisma_client)
+    # The team_id column is the ownership key. The legacy name prefix is still read
+    # so rows written before the column existed (or by a pod that predates it) are
+    # not orphaned; the JSON check then confirms ownership for those.
     response: Final = await table.find_many(
         where={
-            "model_name": {"startswith": prefix},
+            "OR": [
+                {"team_id": team_id},
+                {"model_name": {"startswith": prefix}},
+            ]
         }
     )
     if not response:
         return []
 
-    # Confirm team_id in model_info (defensive check)
     result: Final = []
     for row in response:
+        if getattr(row, "team_id", None) == team_id:
+            result.append(row)
+            continue
         model_info = model_info_as_mapping(row.model_info)
         if model_info is not None and model_info.get("team_id") == team_id:
             result.append(row)
@@ -1383,7 +1402,9 @@ async def _update_existing_team_model_assignment(
     if old_public_name and public_model_name != old_public_name:
         # Clear user-supplied public name from patch before any early return so the
         # caller does not overwrite the internal UUID-based model_name in the DB.
-        patch_data.model_name = None
+        # Under the v2 identity the public name IS the stored name, so a rename must
+        # write it through instead of suppressing it.
+        patch_data.model_name = public_model_name if team_model_identity_v2_enabled() else None
         if prisma_client is None:
             verbose_proxy_logger.warning(
                 "prisma_client not initialized; skipping public name update entirely to avoid orphaned entries"
@@ -1432,8 +1453,9 @@ async def _update_existing_team_model_assignment(
     # No team_model_add/delete calls required; public name is already registered
 
     # Always clear patch_data.model_name to prevent caller from overwriting
-    # the internal UUID-based model_name in the DB with the user-supplied public name
-    patch_data.model_name = None
+    # the internal UUID-based model_name in the DB with the user-supplied public name.
+    # Under v2 there is no internal name: the public name is the stored name.
+    patch_data.model_name = public_model_name if team_model_identity_v2_enabled() else None
 
 
 class ModelManagementAuthChecks:

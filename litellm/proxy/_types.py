@@ -4821,6 +4821,7 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
 
 class PrismaCompatibleUpdateDBModel(TypedDict, total=False):
     model_name: str
+    team_id: str | None
     litellm_params: str
     model_info: str
     blocked: bool
