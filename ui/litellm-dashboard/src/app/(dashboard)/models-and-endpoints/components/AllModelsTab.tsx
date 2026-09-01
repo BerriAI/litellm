@@ -186,6 +186,11 @@ const AllModelsTab = ({
     resetToFirstPage();
   };
 
+  const handleViewModeChange = (nextViewMode: ModelViewMode) => {
+    setModelViewMode(nextViewMode);
+    resetToFirstPage();
+  };
+
   const resetFilters = () => {
     setModelNameSearch("");
     setSelectedModelGroup(ALL_MODEL_GROUPS_VALUE);
@@ -290,7 +295,7 @@ const AllModelsTab = ({
           onTeamChange={handleTeamChange}
           isLoadingTeams={isLoadingTeams}
           viewMode={modelViewMode}
-          onViewModeChange={setModelViewMode}
+          onViewModeChange={handleViewModeChange}
           onOpenModelSettings={handleOpenModelSettings}
           availableModelGroups={availableModelGroups}
           availableModelAccessGroups={availableModelAccessGroups}
