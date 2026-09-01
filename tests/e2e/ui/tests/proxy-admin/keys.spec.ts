@@ -11,6 +11,7 @@ import { Page } from "../../fixtures/pages";
 import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
 import { captureRequestBody, readBack } from "../../helpers/roundTrip";
 import { masterKey } from "../../helpers/traffic";
+import { proxyIsPremium } from "../../helpers/premium";
 
 /**
  * Looks a key up by alias, undefined when none carries it. `return_full_object=true` is what makes
@@ -81,7 +82,7 @@ test.describe("Proxy Admin - Keys", () => {
   test("Regenerate key", async ({ page }) => {
     // The Regenerate Key button renders disabled when the proxy is unlicensed, so without one this
     // fails on a product gate rather than on a regression.
-    test.skip(!process.env.LITELLM_LICENSE, "LITELLM_LICENSE not set in test env — Regenerate Key is premium-gated");
+    test.skip(!proxyIsPremium(), "proxy under test is unlicensed — Regenerate Key is premium-gated");
     await navigateToPage(page, Page.ApiKeys);
     await dismissFeedbackPopup(page);
 

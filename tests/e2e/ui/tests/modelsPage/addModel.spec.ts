@@ -5,6 +5,7 @@ import { navigateToPage } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
 import { captureRequestBody, readBack } from "../../helpers/roundTrip";
 import { sendChatCompletion } from "../../helpers/traffic";
+import { proxyIsPremium } from "../../helpers/premium";
 
 /** The mock LLM as the proxy reaches it: same host locally, a sidecar in the deployed stack. */
 const MOCK_LLM_BASE = `http://127.0.0.1:${process.env.MOCK_LLM_PORT ?? "8090"}/v1`;
@@ -81,9 +82,9 @@ test.describe("Add Model", () => {
   });
 
   test("Edit team model TPM and RPM limits", async ({ page }) => {
-    // /model/new refuses a team-scoped deployment on an unlicensed proxy, so without a license this
-    // fails in setup on a product gate rather than on a regression in the edit it covers.
-    test.skip(!process.env.LITELLM_LICENSE, "LITELLM_LICENSE not set in test env — team-scoped models are premium");
+    // /model/new refuses a team-scoped deployment on an unlicensed proxy, so there this fails in
+    // setup on a product gate rather than on a regression in the edit it covers.
+    test.skip(!proxyIsPremium(), "proxy under test is unlicensed — team-scoped models are premium");
     const masterKey = users[Role.ProxyAdmin].password;
     const modelName = `e2e-team-model-${Date.now()}`;
 
