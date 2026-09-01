@@ -3608,23 +3608,16 @@ async def _budget_window_usage(
     duration: Final = window.get("budget_duration")
     if not isinstance(duration, str) or not duration:
         return None
-    max_budget: Final = _window_max_budget(window)
     spend: Final = await get_current_spend(
         counter_key=f"spend:key:{api_key_hash}:window:{duration}",
         fallback_spend=0.0,
-        max_budget=max_budget,
+        max_budget=_window_max_budget(window),
         window_entity_type="Key",
         window_entity_id=api_key_hash,
         window_duration=duration,
         window_start=get_budget_window_start(window),
     )
-    return duration, MappingProxyType(
-        {
-            "current_spend": round(spend, 4),
-            "budget_limit": max_budget,
-            "reset_at": window.get("reset_at"),
-        }
-    )
+    return duration, MappingProxyType({"current_spend": round(spend, 4)})
 
 
 async def _build_budget_limits_usage(
@@ -3771,9 +3764,9 @@ async def info_key_fn(
         - model_max_budget_usage: dict | None - Current-window spend per model, present only when
           the key has per-model budgets
         - budget_limits: list | None - Concurrent budget windows, exactly as stored
-        - budget_limits_usage: dict | None - Current-window spend per budget window, keyed by
-          budget_duration, present only when the key has budget windows (read from the same
-          cross-pod spend counter the budget enforcement uses)
+        - budget_limits_usage: dict | None - Current-window spend per budget window, e.g.
+          {"1h": {"current_spend": 0.0009}}, present only when the key has budget windows
+          (read from the same cross-pod spend counter the budget enforcement uses)
         - models: list - Model_name's the key is allowed to call
         - tpm_limit / rpm_limit: int | None - Tokens and requests per minute limits
         - metadata: dict - Metadata for the key, e.g. {"team": "core-infra"}
