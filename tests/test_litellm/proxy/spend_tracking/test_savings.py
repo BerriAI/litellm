@@ -1042,6 +1042,7 @@ def test_custom_unmapped_model_compression_savings_use_deployment_id_without_rou
         model="muse-glimmer-30b",
         custom_llm_provider="openai",
         compression_saved_tokens=2642007,
+        gateway_injected_cache=False,
         model_id=deployment_id,
     )
     assert result.compression == pytest.approx(2642007 * 3.5e-07)
@@ -1055,6 +1056,7 @@ def test_custom_unmapped_model_compression_savings_without_model_id_use_unique_d
         model="muse-glimmer-30b",
         custom_llm_provider="openai",
         compression_saved_tokens=100000,
+        gateway_injected_cache=False,
         llm_router=lambda: router,
     )
     assert result.compression == pytest.approx(100000 * 3.5e-07)
@@ -1067,6 +1069,7 @@ def test_custom_unmapped_model_prompt_caching_savings_use_deployment_rate():
         model="muse-glimmer-30b",
         custom_llm_provider="openai",
         compression_saved_tokens=0,
+        gateway_injected_cache=False,
         usage_object={"cache_read_input_tokens": 500000},
         model_id=deployment_id,
     )
@@ -1107,12 +1110,14 @@ def test_two_custom_deployments_at_different_rates_need_model_id():
         model="deepseek-v4-pro",
         custom_llm_provider="openai",
         compression_saved_tokens=100000,
+        gateway_injected_cache=False,
         llm_router=lambda: router,
     )
     with_id = compute_savings_spend(
         model="deepseek/deepseek-v4-pro",
         custom_llm_provider="openrouter",
         compression_saved_tokens=100000,
+        gateway_injected_cache=False,
         model_id=openrouter_id,
     )
     assert without_id.compression == 0.0
@@ -1158,6 +1163,7 @@ def test_same_input_rate_different_cache_rates_still_price_compression():
         model="muse-glimmer-30b",
         custom_llm_provider="openai",
         compression_saved_tokens=100000,
+        gateway_injected_cache=False,
         usage_object={"cache_read_input_tokens": 500000},
         llm_router=lambda: router,
     )
@@ -1199,6 +1205,7 @@ def test_omitted_cache_rate_matches_explicit_mirror_of_input():
         model="muse-glimmer-30b",
         custom_llm_provider="openai",
         compression_saved_tokens=100000,
+        gateway_injected_cache=False,
         llm_router=lambda: router,
     )
     assert result.compression == pytest.approx(100000 * 3.5e-07)
@@ -1235,6 +1242,7 @@ def test_ambiguous_cache_rates_do_not_fall_back_to_public_prompt_caching():
         model="claude-sonnet-5",
         custom_llm_provider="anthropic",
         compression_saved_tokens=100000,
+        gateway_injected_cache=False,
         usage_object={"cache_read_input_tokens": 500000},
         llm_router=lambda: router,
     )
