@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
 )
@@ -11,6 +12,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     convert_url_to_base64,
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
@@ -104,6 +106,16 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         # Restore original model name
         model = original_model
+
+        # The stub model hides the original model from the parent's forced-tool-use backstop
+        response_format_tool_choice: Final = optional_params.get("tool_choice")
+        if (
+            "response_format" in non_default_params
+            and isinstance(response_format_tool_choice, dict)
+            and response_format_tool_choice.get("name") == RESPONSE_FORMAT_TOOL_NAME
+            and AnthropicModelInfo.forced_tool_use_unsupported(original_model)
+        ):
+            optional_params.pop("tool_choice")
 
         return optional_params
 
