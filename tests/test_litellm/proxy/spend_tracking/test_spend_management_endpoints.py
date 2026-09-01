@@ -413,8 +413,8 @@ async def test_assert_user_can_view_request_id_rejects_both_users_none():
         team_id = None
 
     class MockSpendLogs:
-        async def find_first(self, where=None, include=None):
-            return MockRow()
+        async def find_many(self, where=None, take=None):
+            return [MockRow()]
 
     class MockDB:
         def __init__(self):
@@ -430,6 +430,79 @@ async def test_assert_user_can_view_request_id_rejects_both_users_none():
             MockPrisma(), auth, "req-none-user"
         )
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_assert_user_can_view_request_id_rejects_spoofed_call_id_collision():
+    """
+    litellm_call_id comes from the client-settable x-litellm-call-id header, so an
+    id lookup can match a row the caller owns AND a different tenant's row (the
+    caller set their own call id to the victim's request_id). Owning one of the
+    matching rows must not authorize the whole ambiguous id: every match has to
+    belong to the caller, or the whole lookup is rejected. Regression for the
+    cross-tenant spend-log read this OR clause introduced.
+    """
+
+    class _OwnRow:
+        user = "caller"
+        team_id = None
+
+    class _VictimRow:
+        user = "victim"
+        team_id = None
+
+    class MockSpendLogs:
+        async def find_many(self, where=None, take=None):
+            return [_OwnRow(), _VictimRow()]
+
+    class MockDB:
+        def __init__(self):
+            self.litellm_spendlogs = MockSpendLogs()
+
+    class MockPrisma:
+        def __init__(self):
+            self.db = MockDB()
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="caller")
+    with pytest.raises(HTTPException) as exc_info:
+        await spend_management_endpoints._assert_user_can_view_request_id(
+            MockPrisma(), auth, "victim-request-id"
+        )
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_assert_user_can_view_request_id_allows_when_every_match_is_owned():
+    """The same ambiguous id matching more than one row is fine when every match
+    belongs to the caller (e.g. two of the caller's own requests happen to share
+    a request_id/litellm_call_id pairing); only a foreign match should block it."""
+
+    class _OwnRowA:
+        user = "caller"
+        team_id = None
+
+    class _OwnRowB:
+        user = "caller"
+        team_id = None
+
+    class MockSpendLogs:
+        async def find_many(self, where=None, take=None):
+            return [_OwnRowA(), _OwnRowB()]
+
+    class MockDB:
+        def __init__(self):
+            self.litellm_spendlogs = MockSpendLogs()
+
+    class MockPrisma:
+        def __init__(self):
+            self.db = MockDB()
+
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="caller")
+    result = await spend_management_endpoints._assert_user_can_view_request_id(
+        MockPrisma(), auth, "shared-request-id"
+    )
+
+    assert result is None
 
 
 def test_ui_view_request_response_forbids_non_admin_without_db(client, monkeypatch):
@@ -2334,8 +2407,8 @@ async def test_ui_view_spend_logs_request_id_blocks_non_owner(client, monkeypatc
         team_id = None
 
     class _SpendLogs:
-        async def find_first(self, where=None, include=None):
-            return _ForeignRow()
+        async def find_many(self, where=None, take=None):
+            return [_ForeignRow()]
 
     class _DB:
         def __init__(self):
@@ -2400,10 +2473,10 @@ async def test_ui_view_spend_logs_request_id_owner_scoped_by_id_only(
         user = "user_1"
         team_id = "team1"
 
-    async def _find_first(where=None, include=None):
-        return _OwnedRow()
+    async def _find_many(where=None, take=None):
+        return [_OwnedRow()]
 
-    mock_prisma.db.find_first = _find_first
+    mock_prisma.db.find_many = _find_many
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
     # A 5-day window that EXCLUDES the 90-day-old log, as the dashboard sends.
