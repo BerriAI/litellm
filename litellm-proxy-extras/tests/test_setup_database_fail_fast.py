@@ -240,3 +240,144 @@ def test_v2_does_not_call_resolve_all_migrations(monkeypatch, tmp_path):
     ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
     assert ok is True
     assert resolve_called["n"] == 0, "v2 must not invoke the diff-and-force recovery"
+
+
+_DEADLOCK_P3018_STDERR = (
+    "Error: P3018\n"
+    "Migration name: 20260415120000_health_check_latest_per_model_index\n"
+    "Database error code: 40P01\n"
+    "deadlock detected"
+)
+
+
+def _stub_v2_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
+    monkeypatch.setattr(
+        ProxyExtrasDBManager, "_warn_if_db_ahead_of_head", lambda _: None
+    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", lambda: str(tmp_path))
+    (tmp_path / "schema.prisma").write_text("// stub")
+    monkeypatch.setattr("time.sleep", lambda _: None)
+
+
+def _succeed_after(failures: int, stderr: str):
+    calls = {"n": 0}
+
+    class _OkResult:
+        stdout = "Applied migration.\n"
+        stderr = ""
+
+    def _run(*args, **kwargs):
+        if "deploy" not in args[0]:
+            return _OkResult()
+        calls["n"] += 1
+        if calls["n"] <= failures:
+            raise subprocess.CalledProcessError(
+                returncode=1, cmd=args[0], stderr=stderr, output=""
+            )
+        return _OkResult()
+
+    return _run
+
+
+def test_v2_p3018_deadlock_rolls_back_and_retries(monkeypatch, tmp_path):
+    """v2: losing the migrate deploy deadlock race against a concurrent
+    instance rolls the ledger row back and retries instead of dying."""
+    _stub_v2_env(monkeypatch, tmp_path)
+
+    rolled_back = []
+    monkeypatch.setattr(
+        ProxyExtrasDBManager,
+        "_roll_back_migration",
+        lambda name: rolled_back.append(name),
+    )
+    monkeypatch.setattr(
+        ProxyExtrasDBManager,
+        "_resolve_specific_migration",
+        lambda name: pytest.fail("a deadlocked migration must never be marked applied"),
+    )
+    monkeypatch.setattr("subprocess.run", _succeed_after(1, _DEADLOCK_P3018_STDERR))
+
+    ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+    assert ok is True
+    assert rolled_back == ["20260415120000_health_check_latest_per_model_index"]
+
+
+def test_v2_p3018_persistent_deadlock_exhausts_attempts(monkeypatch, tmp_path):
+    """v2: a deadlock on every attempt still fails after the retry budget."""
+    _stub_v2_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(ProxyExtrasDBManager, "_roll_back_migration", lambda name: None)
+
+    with patch(
+        "subprocess.run",
+        side_effect=_fake_migrate_deploy_failure(1, _DEADLOCK_P3018_STDERR),
+    ):
+        with pytest.raises(RuntimeError, match="after 4 attempts"):
+            ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+
+
+def test_v2_p3009_deadlocked_ledger_row_rolls_back_and_retries(monkeypatch, tmp_path):
+    """v2: the surviving instance sees the victim's failed ledger row as P3009.
+    When that row's logs show a deadlock, roll it back and retry."""
+    _stub_v2_env(monkeypatch, tmp_path)
+
+    stderr = (
+        "Error: P3009\n"
+        "migrate found failed migrations in the target database\n"
+        "The `20260415120000_health_check_latest_per_model_index` migration "
+        "started at 2026-09-01 18:46:13 UTC failed"
+    )
+    monkeypatch.setattr(
+        ProxyExtrasDBManager,
+        "_failed_migration_logs",
+        lambda name: "ERROR: deadlock detected\nDETAIL: Process 72 waits for ShareLock",
+    )
+    rolled_back = []
+    monkeypatch.setattr(
+        ProxyExtrasDBManager,
+        "_roll_back_migration",
+        lambda name: rolled_back.append(name),
+    )
+    monkeypatch.setattr(
+        ProxyExtrasDBManager,
+        "_resolve_specific_migration",
+        lambda name: pytest.fail("a deadlocked migration must never be marked applied"),
+    )
+    monkeypatch.setattr("subprocess.run", _succeed_after(1, stderr))
+
+    ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+    assert ok is True
+    assert rolled_back == ["20260415120000_health_check_latest_per_model_index"]
+
+
+def test_v2_p3009_non_deadlock_ledger_row_still_raises(monkeypatch, tmp_path):
+    """v2: a failed ledger row whose logs show a real SQL error stays fatal."""
+    _stub_v2_env(monkeypatch, tmp_path)
+
+    stderr = (
+        "Error: P3009\n"
+        "migrate found failed migrations in the target database\n"
+        "The `20260101000000_genuinely_broken` migration started at "
+        "2026-09-01 18:46:13 UTC failed"
+    )
+    monkeypatch.setattr(
+        ProxyExtrasDBManager,
+        "_failed_migration_logs",
+        lambda name: 'ERROR: syntax error at or near "BRKN"',
+    )
+
+    with patch("subprocess.run", side_effect=_fake_migrate_deploy_failure(1, stderr)):
+        with pytest.raises(RuntimeError, match="cannot be auto-recovered"):
+            ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+
+
+def test_v2_bare_deadlock_stderr_retries(monkeypatch, tmp_path):
+    """v2: a deadlock reported without a Prisma error code (the advisory-lock
+    waiter as victim) is retried, not fatal."""
+    _stub_v2_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "subprocess.run", _succeed_after(1, "Database error: deadlock detected")
+    )
+
+    ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+    assert ok is True
