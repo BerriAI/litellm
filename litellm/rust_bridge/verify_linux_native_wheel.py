@@ -6,16 +6,38 @@ import re
 import subprocess
 import sys
 import zipfile
+from collections.abc import Callable, Mapping, Sequence
 from email import policy
 from email.parser import BytesParser
 from itertools import product
 from pathlib import Path, PurePosixPath
 from types import ModuleType
-from typing import Final, cast
+from typing import Final, Protocol, cast
 
 EXPECTED_PYTHON_TAG: Final = "cp310"
 EXPECTED_ABI_TAG: Final = "abi3"
 EXPECTED_PLATFORM_TAG: Final = "linux_x86_64"
+
+
+class CommandRunner(Protocol):
+    def __call__(
+        self,
+        command: tuple[str, ...],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]: ...
+
+
+def _run_command(
+    command: tuple[str, ...],
+    *,
+    check: bool,
+    capture_output: bool,
+    text: bool,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(command, check=check, capture_output=capture_output, text=text)
 
 
 def _dist_info_directory(member: zipfile.ZipInfo) -> str | None:
@@ -46,12 +68,19 @@ def _load_native_module(native_path: Path) -> ModuleType | None:
     return native_module
 
 
-def main() -> int:
-    if len(sys.argv) != 2:
-        sys.stderr.write(f"usage: {Path(sys.argv[0]).name} WHEEL\n")
+def main(
+    argv: Sequence[str] | None = None,
+    environment: Mapping[str, str] | None = None,
+    load_native_module: Callable[[Path], ModuleType | None] = _load_native_module,
+    run_command: CommandRunner = _run_command,
+) -> int:
+    arguments: Final = tuple(sys.argv if argv is None else argv)
+    resolved_environment: Final = os.environ if environment is None else environment
+    if len(arguments) != 2:
+        sys.stderr.write(f"usage: {Path(arguments[0]).name} WHEEL\n")
         return 2
 
-    wheel: Final = Path(sys.argv[1])
+    wheel: Final = Path(arguments[1])
     wheel_tags: Final = wheel.stem.rsplit("-", maxsplit=3)
     if len(wheel_tags) != 4:
         sys.stderr.write(f"cannot parse wheel tags from {wheel.name}\n")
@@ -110,8 +139,10 @@ def main() -> int:
         len(wheel_metadata_tags) == len(expanded_filename_tags)
         and frozenset(wheel_metadata_tags) == expanded_filename_tags
     )
-    commit_sha: Final = os.environ.get("RELEASE_WHEEL_COMMIT_SHA", os.environ.get("GITHUB_SHA", "unknown"))
-    rustc_version: Final = subprocess.run(
+    commit_sha: Final = resolved_environment.get(
+        "RELEASE_WHEEL_COMMIT_SHA", resolved_environment.get("GITHUB_SHA", "unknown")
+    )
+    rustc_version: Final = run_command(
         ("rustc", "--version"),
         check=True,
         capture_output=True,
@@ -147,14 +178,14 @@ def main() -> int:
             "",
         )
     )
-    summary_path: Final = os.environ.get("GITHUB_STEP_SUMMARY")
+    summary_path: Final = resolved_environment.get("GITHUB_STEP_SUMMARY")
     if summary_path is None:
         sys.stdout.write(size_report)
     else:
         Path(summary_path).write_text(size_report)
 
-    sections: Final = subprocess.run(
-        ("readelf", "--sections", "--wide", native_path),
+    sections: Final = run_command(
+        ("readelf", "--sections", "--wide", str(native_path)),
         check=True,
         capture_output=True,
         text=True,
@@ -163,14 +194,14 @@ def main() -> int:
     debug_sections_absent: Final = not debug_sections
     static_symbol_table_absent: Final = ".symtab" not in sections
 
-    dynamic_symbols: Final = subprocess.run(
-        ("readelf", "--dyn-syms", "--wide", native_path),
+    dynamic_symbols: Final = run_command(
+        ("readelf", "--dyn-syms", "--wide", str(native_path)),
         check=True,
         capture_output=True,
         text=True,
     ).stdout
     extension_entry_point_present: Final = "PyInit__native" in dynamic_symbols
-    native_module: Final = _load_native_module(native_path)
+    native_module: Final = load_native_module(native_path)
     native_module_loads: Final = native_module is not None
     panic_test_hook_absent: Final = native_module is not None and not hasattr(native_module, "_panic_for_test")
     native_size_limit: Final = 20_000_000

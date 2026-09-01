@@ -7,8 +7,8 @@ on:
       - ".cargo/**"
       - "pyproject.toml"
       - "rust-toolchain.toml"
-      - ".github/scripts/smoke_test_native_wheel.py"
-      - ".github/scripts/verify_linux_native_wheel.py"
+      - "litellm/rust_bridge/smoke_test_native_wheel.py"
+      - "litellm/rust_bridge/verify_linux_native_wheel.py"
       - ".github/workflows/test-rust.yml"
   pull_request:
     branches:
@@ -21,8 +21,8 @@ on:
       - ".cargo/**"
       - "pyproject.toml"
       - "rust-toolchain.toml"
-      - ".github/scripts/smoke_test_native_wheel.py"
-      - ".github/scripts/verify_linux_native_wheel.py"
+      - "litellm/rust_bridge/smoke_test_native_wheel.py"
+      - "litellm/rust_bridge/verify_linux_native_wheel.py"
       - ".github/workflows/test-rust.yml"
 
 permissions:
@@ -115,9 +115,9 @@ jobs:
           --config-setting "maturin.build-args=--features panic-test,extension-module"
 
       - name: Smoke-test native panic unwinding
-        run: python .github/scripts/smoke_test_native_wheel.py panic-dist/*.whl
+        run: python litellm/rust_bridge/smoke_test_native_wheel.py panic-dist/*.whl
 
       - name: Verify stripped native extension
         env:
           RELEASE_WHEEL_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: python .github/scripts/verify_linux_native_wheel.py dist/*.whl
+        run: python litellm/rust_bridge/verify_linux_native_wheel.py dist/*.whl
