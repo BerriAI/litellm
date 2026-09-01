@@ -3561,10 +3561,10 @@ def get_optional_params_embeddings(
             non_default_params=non_default_params, optional_params={}, kwargs=kwargs
         )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "gemini":
-        # OpenAI SDKs (and litellm's own client) send encoding_format="float"
-        # by default; float lists are exactly what the vertex API returns, so
-        # the param is a no-op — don't reject the provider default. Other
-        # values (e.g. "base64") stay on the unsupported-param path below.
+        # OpenAI SDKs send encoding_format="float" by default; float lists are
+        # exactly what the vertex API returns, so the param is a no-op and the
+        # provider default is not rejected. Other values (e.g. "base64") stay
+        # on the unsupported-param path below.
         if non_default_params.get("encoding_format") == "float":
             non_default_params.pop("encoding_format")
         supported_params = get_supported_openai_params(
@@ -8278,10 +8278,17 @@ class ProviderConfigManager:
         """
         # Handle OpenAI special cases (O-series and GPT-5 models)
         if provider == LlmProviders.OPENAI:
+            from litellm.llms.openai.chat.gpt_transformation import (
+                OpenAIGPTConfig,
+                OpenAIUnknownModelConfig,
+            )
+
             if litellm.openaiOSeriesConfig.is_model_o_series_model(model=model):
                 return litellm.openaiOSeriesConfig
             if litellm.OpenAIGPT5Config.is_model_gpt_5_model(model=model):
                 return litellm.OpenAIGPT5Config()
+            if not OpenAIGPTConfig.is_openai_catalog_model(model):
+                return OpenAIUnknownModelConfig()
 
         # Handle Azure before the generic map so base_model can be threaded through
         if provider == LlmProviders.AZURE:

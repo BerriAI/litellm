@@ -10,6 +10,7 @@ before response.completed, and that every event of a bridged stream carries the 
 spend tracking stores, so a follow-up previous_response_id still finds the conversation.
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -523,3 +524,36 @@ async def test_streaming_response_id_falls_back_when_upstream_yields_nothing():
     assert response_ids
     assert len(set(response_ids)) == 1
     assert response_ids[0].startswith("resp_")
+
+
+def test_object_tool_call_arguments_stream_as_valid_json():
+    """A provider that sends decoded object arguments must still stream valid JSON.
+
+    `str()` on a dict yields a Python repr with single quotes, which clients
+    parsing function_call_arguments reject with errors like
+    "Expecting ',' delimiter".
+    """
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+    iterator._queue_tool_call_delta_events(
+        [
+            {
+                "index": 0,
+                "id": "call_obj",
+                "type": "function",
+                "function": {"name": "shell", "arguments": {"command": "ls", "flags": ["-l"]}},
+            }
+        ]
+    )
+
+    streamed_arguments = "".join(
+        evt.delta
+        for evt in iterator._pending_tool_events
+        if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
+    )
+
+    assert json.loads(streamed_arguments) == {"command": "ls", "flags": ["-l"]}

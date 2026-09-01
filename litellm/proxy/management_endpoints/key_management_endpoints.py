@@ -738,6 +738,45 @@ def _check_allowed_routes_caller_permission(
     )
 
 
+_READ_ONLY_ALLOWED_ROUTES_PRESET: Final = frozenset(("info_routes",))
+
+
+def _is_safe_preset_route_transition(
+    incoming_allowed_routes: Sequence[str] | None,
+    existing_allowed_routes: Sequence[str] | None,
+) -> bool:
+    """
+    True when every route on BOTH sides is a safe `key_type` preset bucket
+    (empty = full access, which non-admins already get from a default
+    `/key/generate`), with one carve-out: a read-only (`info_routes`) key
+    stays read-only, so widening it needs an admin. Requiring the existing
+    side to be a safe preset keeps an owner from clearing an admin-set
+    custom route restriction (LIT-4139).
+    """
+    incoming: Final = frozenset(incoming_allowed_routes or ())
+    existing: Final = frozenset(existing_allowed_routes or ())
+    if not (incoming | existing) <= _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS:
+        return False
+    return existing != _READ_ONLY_ALLOWED_ROUTES_PRESET or incoming == existing
+
+
+def _enforce_allowed_routes_update_permission(
+    data: UpdateKeyRequest,
+    existing_key_row: LiteLLM_VerificationToken,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    if _is_safe_preset_route_transition(
+        incoming_allowed_routes=data.allowed_routes,
+        existing_allowed_routes=existing_key_row.allowed_routes,
+    ):
+        return
+    _check_allowed_routes_caller_permission(
+        allowed_routes=data.allowed_routes,
+        user_api_key_dict=user_api_key_dict,
+        allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
+    )
+
+
 def _check_permissions_caller_permission(
     data: GenerateRequestBase,
     user_api_key_dict: UserAPIKeyAuth,
@@ -2522,26 +2561,34 @@ async def _validate_mcp_servers_for_key_update(
     return normalized_object_permission
 
 
+def _require_prisma_client(prisma_client: PrismaClient | None) -> PrismaClient:
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "Database not connected"})
+    return prisma_client
+
+
 async def _validate_update_key_data(
     data: UpdateKeyRequest,
     existing_key_row: LiteLLM_VerificationToken,
     user_api_key_dict: UserAPIKeyAuth,
     llm_router: Router | None,
     premium_user: bool,
-    prisma_client: Any,
+    prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
 ) -> None:
     """Validate permissions and constraints for key update."""
+    checked_prisma_client: Final = _require_prisma_client(prisma_client)
+
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
     validate_finite_spend(data.spend)
     validate_budget_duration(data.budget_duration)
 
     _is_proxy_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
 
-    _check_allowed_routes_caller_permission(
-        allowed_routes=data.allowed_routes,
+    _enforce_allowed_routes_update_permission(
+        data=data,
+        existing_key_row=existing_key_row,
         user_api_key_dict=user_api_key_dict,
-        allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
     )
     _check_passthrough_routes_caller_permission(
         data=data,
@@ -2569,7 +2616,7 @@ async def _validate_update_key_data(
     await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
         user_api_key_dict=user_api_key_dict,
         route=KeyManagementRoutes.KEY_UPDATE,
-        prisma_client=prisma_client,
+        prisma_client=checked_prisma_client,
         existing_key_row=existing_key_row,
         user_api_key_cache=user_api_key_cache,
     )
@@ -2650,12 +2697,12 @@ async def _validate_update_key_data(
     # _check_key_admin_access that would otherwise require team/org admin status.
     _key_is_team_key: Final = getattr(existing_key_row, "team_id", None) is not None
     can_skip_admin_check: Final = (caller_is_creator or _key_is_team_key) and not _is_budget_change
-    if (not _is_proxy_admin) and prisma_client is not None and not can_skip_admin_check:
+    if (not _is_proxy_admin) and not can_skip_admin_check:
         hashed_key: Final = existing_key_row.token
         await _check_key_admin_access(
             user_api_key_dict=user_api_key_dict,
             hashed_token=hashed_key,
-            prisma_client=prisma_client,
+            prisma_client=checked_prisma_client,
             user_api_key_cache=user_api_key_cache,
             route=("/key/update (max_budget/spend)" if _is_budget_change else "/key/update"),
         )
@@ -2666,7 +2713,7 @@ async def _validate_update_key_data(
     if _team_id_to_check is not None:
         team_obj = await get_team_object(
             team_id=_team_id_to_check,
-            prisma_client=prisma_client,
+            prisma_client=checked_prisma_client,
             user_api_key_cache=user_api_key_cache,
             check_db_only=True,
         )
@@ -2682,7 +2729,7 @@ async def _validate_update_key_data(
             await _check_team_key_limits(
                 team_table=team_obj,
                 data=data,
-                prisma_client=prisma_client,
+                prisma_client=checked_prisma_client,
             )
 
     TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
@@ -2697,7 +2744,7 @@ async def _validate_update_key_data(
         await _check_project_key_limits(
             project_id=_project_id_to_check,
             data=data,
-            prisma_client=prisma_client,
+            prisma_client=checked_prisma_client,
             user_api_key_cache=user_api_key_cache,
         )
 
@@ -2712,7 +2759,7 @@ async def _validate_update_key_data(
         await _validate_caller_can_assign_key_org(
             user_api_key_dict=user_api_key_dict,
             organization_id=data.organization_id,
-            prisma_client=prisma_client,
+            prisma_client=checked_prisma_client,
         )
 
     # Check org key limits only when throughput-related fields or organization_id change
@@ -2728,7 +2775,7 @@ async def _validate_update_key_data(
         org_table: Final = await get_org_object(
             org_id=_org_id_to_check,
             user_api_key_cache=user_api_key_cache,
-            prisma_client=prisma_client,
+            prisma_client=checked_prisma_client,
         )
         if org_table is None:
             raise HTTPException(
@@ -2738,7 +2785,7 @@ async def _validate_update_key_data(
         await _check_org_key_limits(
             org_table=org_table,
             data=data,
-            prisma_client=prisma_client,
+            prisma_client=checked_prisma_client,
         )
 
     # if team change - check if this is possible
@@ -2768,7 +2815,7 @@ async def _validate_update_key_data(
             data=data,
             team_obj=team_obj,
             existing_key_row=existing_key_row,
-            prisma_client=prisma_client,
+            prisma_client=checked_prisma_client,
             user_api_key_cache=user_api_key_cache,
             is_proxy_admin=_is_proxy_admin,
         )
@@ -3834,7 +3881,7 @@ async def info_key_fn(
         except Exception:
             # if using pydantic v1
             key_info = key_info.dict()  # pyright: ignore[reportDeprecated]  # deliberate pydantic v1 fallback
-        key_token_hash: Final = key_info.pop("token")
+        key_token_hash: Final[str | None] = key_info.pop("token")
 
         model_max_budget = key_info.get("model_max_budget") or {}
         budget_table: Final = key_info.get("litellm_budget_table") or {}
@@ -5296,7 +5343,7 @@ def _validate_reset_spend_value(reset_to: object, key_in_db: LiteLLM_Verificatio
 
     max_budget = key_in_db.max_budget
     if key_in_db.litellm_budget_table is not None:
-        budget_max_budget: Final = getattr(key_in_db.litellm_budget_table, "max_budget", None)
+        budget_max_budget: Final[float | None] = getattr(key_in_db.litellm_budget_table, "max_budget", None)
         if budget_max_budget is not None:
             if max_budget is None or budget_max_budget < max_budget:
                 max_budget = budget_max_budget
