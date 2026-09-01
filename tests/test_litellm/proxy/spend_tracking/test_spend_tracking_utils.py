@@ -1071,6 +1071,33 @@ def test_get_logging_payload_includes_agent_id_from_kwargs():
     ), f"Expected agent_id '{test_agent_id}', got '{payload.get('agent_id')}'"
 
 
+def test_get_logging_payload_populates_litellm_call_id_alongside_provider_request_id():
+    """
+    LIT-6302: request_id stays the provider response id, so clients holding the
+    x-litellm-call-id header value could never find their row. The payload now
+    also carries litellm_call_id as its own column for lookups by either id.
+    """
+    call_id = "b980eea9-5cd9-4099-93cd-8291e46c76fd"
+
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_call_id": call_id,
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        },
+        response_obj=litellm.ModelResponse(
+            id="chatcmpl-provider-id",
+            choices=[],
+            usage=litellm.Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        ),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["request_id"] == "chatcmpl-provider-id"
+    assert payload["litellm_call_id"] == call_id
+
+
 @patch("litellm.proxy.proxy_server.master_key", None)
 @patch("litellm.proxy.proxy_server.general_settings", {})
 def test_get_logging_payload_includes_overhead_in_spend_logs_metadata():

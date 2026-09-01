@@ -98,7 +98,10 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
         sess = re.fullmatch(r"session_id LIKE \$(\d+)", cond)
         status = re.fullmatch(r"status = \$(\d+)", cond)
         api_key_not_in = re.fullmatch(r"api_key NOT IN \(\$(\d+), \$(\d+)\)", cond)
-        if gte:
+        req_or_call = re.fullmatch(r"\(request_id = \$(\d+) OR litellm_call_id = \$\1\)", cond)
+        if req_or_call:
+            where["request_id_or_call_id"] = params[int(req_or_call.group(1)) - 1]
+        elif gte:
             date_bounds["gte"] = _iso(params[int(gte.group(1)) - 1])
         elif lte:
             date_bounds["lte"] = _iso(params[int(lte.group(1)) - 1])
@@ -410,7 +413,7 @@ async def test_assert_user_can_view_request_id_rejects_both_users_none():
         team_id = None
 
     class MockSpendLogs:
-        async def find_unique(self, where, include=None):
+        async def find_first(self, where=None, include=None):
             return MockRow()
 
     class MockDB:
@@ -453,6 +456,7 @@ def test_ui_view_request_response_forbids_non_admin_without_db(client, monkeypat
 
 ignored_keys = [
     "request_id",
+    "litellm_call_id",
     "metadata.litellm_call_id",
     "session_id",
     "startTime",
@@ -2162,7 +2166,10 @@ async def test_ui_view_spend_logs_request_id_lookup_ignores_date_window(
     def filter_fn(where):
         captured["where"] = where
         rows = _filter_logs_by_date_range(mock_spend_logs, where)
-        if where.get("request_id"):
+        rid_either = where.get("request_id_or_call_id")
+        if rid_either:
+            rows = [r for r in rows if rid_either in (r["request_id"], r.get("litellm_call_id"))]
+        elif where.get("request_id"):
             rows = [r for r in rows if r["request_id"] == where["request_id"]]
         return rows
 
@@ -2192,9 +2199,82 @@ async def test_ui_view_spend_logs_request_id_lookup_ignores_date_window(
         data = response.json()
         assert data["total"] == 1
         assert data["data"][0]["request_id"] == "req-old"
-        # Query dropped the time window and scoped solely by the primary key.
+        # Query dropped the time window and scoped solely by the id lookup.
         assert "startTime" not in captured["where"]
-        assert captured["where"]["request_id"] == "req-old"
+        assert captured["where"]["request_id_or_call_id"] == "req-old"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_request_id_lookup_matches_litellm_call_id(
+    client, monkeypatch
+):
+    """
+    LIT-6302: success rows are keyed by the upstream provider response id, so a
+    lookup with the x-litellm-call-id response header value found nothing. The id
+    lookup now matches request_id OR litellm_call_id, resolving the header value.
+    """
+    today = datetime.datetime.now(timezone.utc)
+    mock_spend_logs = [
+        {
+            "id": "log_provider_keyed",
+            "request_id": "chatcmpl-9ZKMURhVYSi9D6r6PJ9vLcayIK0Vm",
+            "litellm_call_id": "b980eea9-5cd9-4099-93cd-8291e46c76fd",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": today.isoformat(),
+            "model": "gpt-4",
+        },
+        {
+            "id": "log_other",
+            "request_id": "chatcmpl-other",
+            "litellm_call_id": "11111111-2222-3333-4444-555555555555",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.01,
+            "startTime": today.isoformat(),
+            "model": "gpt-4",
+        },
+    ]
+
+    def filter_fn(where):
+        rid_either = where.get("request_id_or_call_id")
+        if rid_either:
+            return [
+                r
+                for r in mock_spend_logs
+                if rid_either in (r["request_id"], r.get("litellm_call_id"))
+            ]
+        if where.get("request_id"):
+            return [
+                r for r in mock_spend_logs if r["request_id"] == where["request_id"]
+            ]
+        return list(mock_spend_logs)
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn),
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={"request_id": "b980eea9-5cd9-4099-93cd-8291e46c76fd"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert (
+            data["data"][0]["request_id"] == "chatcmpl-9ZKMURhVYSi9D6r6PJ9vLcayIK0Vm"
+        )
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -2254,7 +2334,7 @@ async def test_ui_view_spend_logs_request_id_blocks_non_owner(client, monkeypatc
         team_id = None
 
     class _SpendLogs:
-        async def find_unique(self, where, include=None):
+        async def find_first(self, where=None, include=None):
             return _ForeignRow()
 
     class _DB:
@@ -2307,7 +2387,10 @@ async def test_ui_view_spend_logs_request_id_owner_scoped_by_id_only(
     def filter_fn(where):
         captured["where"] = where
         rows = _filter_logs_by_date_range(mock_spend_logs, where)
-        if where.get("request_id"):
+        rid_either = where.get("request_id_or_call_id")
+        if rid_either:
+            rows = [r for r in rows if rid_either in (r["request_id"], r.get("litellm_call_id"))]
+        elif where.get("request_id"):
             rows = [r for r in rows if r["request_id"] == where["request_id"]]
         return rows
 
@@ -2317,10 +2400,10 @@ async def test_ui_view_spend_logs_request_id_owner_scoped_by_id_only(
         user = "user_1"
         team_id = "team1"
 
-    async def _find_unique(where, include=None):
+    async def _find_first(where=None, include=None):
         return _OwnedRow()
 
-    mock_prisma.db.find_unique = _find_unique
+    mock_prisma.db.find_first = _find_first
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
     # A 5-day window that EXCLUDES the 90-day-old log, as the dashboard sends.
@@ -2345,7 +2428,7 @@ async def test_ui_view_spend_logs_request_id_owner_scoped_by_id_only(
         assert data["total"] == 1
         assert data["data"][0]["request_id"] == "req-old"
         assert "startTime" not in captured["where"]
-        assert captured["where"]["request_id"] == "req-old"
+        assert captured["where"]["request_id_or_call_id"] == "req-old"
         assert "user" not in captured["where"]
         assert "OR" not in captured["where"]
     finally:
@@ -4435,7 +4518,7 @@ async def test_view_spend_logs_internal_user_combines_user_with_request_id(
         where = mock_client.db.captured_where
         assert where is not None
         assert where["user"] == "internal-user-2"
-        assert where["request_id"] == "req-abc"
+        assert where["OR"] == ({"request_id": "req-abc"}, {"litellm_call_id": "req-abc"})
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -4462,7 +4545,7 @@ async def test_view_spend_logs_non_date_range_combines_user_with_request_id(
         where = mock_client.db.captured_where
         assert where is not None
         assert where["user"] == "internal-user-3"
-        assert where["request_id"] == "req-xyz"
+        assert where["OR"] == ({"request_id": "req-xyz"}, {"litellm_call_id": "req-xyz"})
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
