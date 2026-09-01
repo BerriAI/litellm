@@ -60,7 +60,7 @@ def _make_wrapper(engine_pid: int = 111, iam: bool = False) -> PrismaWrapper:
     prisma = GeneratedPrisma(use_dotenv=False)
     engine = MagicMock()
     engine.process.pid = engine_pid
-    setattr(prisma, "_Prisma__engine", engine)
+    prisma._engine = engine
     return PrismaWrapper(original_prisma=prisma, iam_token_db_auth=iam)
 
 
@@ -158,7 +158,7 @@ def _token_db_url(created: datetime, expires_in: int = 900) -> str:
 def test_wrapper_instruments_generated_prisma_engine() -> None:
     prisma = GeneratedPrisma(use_dotenv=False)
     engine = MagicMock()
-    setattr(prisma, "_Prisma__engine", engine)
+    prisma._engine = engine
 
     wrapper = PrismaWrapper(original_prisma=prisma, iam_token_db_auth=False)
 
