@@ -50,6 +50,13 @@ async function addRemovableMember(page: PlaywrightPage): Promise<string> {
   return userId;
 }
 
+async function deleteUser(page: PlaywrightPage, userId: string): Promise<void> {
+  await page.request.post("/user/delete", {
+    headers: { Authorization: `Bearer ${masterKey()}` },
+    data: { user_ids: [userId] },
+  });
+}
+
 test.describe("Team Admin", () => {
   test.use({ storageState: TEAM_ADMIN_STORAGE_PATH });
 
@@ -148,6 +155,8 @@ test.describe("Team Admin", () => {
         timeout: 15_000,
       })
       .not.toContain(memberId);
+
+    await deleteUser(page, memberId);
   });
 
   test("Team admin can create a team key with All Team Models", async ({ page }) => {

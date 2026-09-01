@@ -31,7 +31,10 @@ async function openUsage(page: PlaywrightPage): Promise<Locator> {
 const MOCK_DEPLOYMENT = "openai/fake-gpt-4";
 
 /** A deployment whose traffic costs real money, so the key that used it outranks the $0 crowd. */
-async function createPricedDeployment(request: APIRequestContext, label: string): Promise<string> {
+async function createPricedDeployment(
+  request: APIRequestContext,
+  label: string,
+): Promise<{ modelName: string; modelId: string }> {
   const modelName = `e2e-usage-priced-${label}`;
   const res = await request.post("/model/new", {
     headers: { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" },
@@ -47,7 +50,7 @@ async function createPricedDeployment(request: APIRequestContext, label: string)
     },
   });
   expect(res.ok(), `POST /model/new failed (${res.status()}): ${await res.text()}`).toBe(true);
-  return modelName;
+  return { modelName, modelId: (await res.json()).model_info?.id as string };
 }
 
 test.describe("Usage page", () => {
@@ -65,10 +68,10 @@ test.describe("Usage page", () => {
     // Top Virtual Keys ranks by spend, and every mock deployment costs $0, so once a run has more
     // keys than the list shows, whether this one makes the cut is down to how ties happen to sort.
     // Give it a priced deployment of its own so it earns its place.
-    const model = await createPricedDeployment(request, alias);
+    const { modelName, modelId } = await createPricedDeployment(request, alias);
 
     const requestId = await sendChatCompletion(request, {
-      model,
+      model: modelName,
       prompt: `usage ping for ${alias}`,
       apiKey: key,
     });
@@ -98,5 +101,10 @@ test.describe("Usage page", () => {
     });
     await expect(page.getByRole("tab", { name: "Settings", exact: true })).toBeVisible();
     await expect(page.getByText("Back to Keys", { exact: false })).toBeVisible();
+
+    await request.post("/model/delete", {
+      headers: { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" },
+      data: { id: modelId },
+    });
   });
 });
