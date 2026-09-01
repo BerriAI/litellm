@@ -737,7 +737,7 @@ async def test_a_correct_admin_password_is_accepted_while_blocked(monkeypatch):
         await _guess(throttle)
     assert still_blocked.value.code == "429", "a wrong password is still refused"
 
-    with patch("litellm.proxy.auth.login_utils.user_update", new=AsyncMock()), patch(
+    with patch("litellm.proxy.auth.login_utils.user_update", new=AsyncMock()), patch(  # test-quality-ok: success mints a UI key and persists the user; faked so no DB is needed
         "litellm.proxy.auth.login_utils.generate_key_helper_fn", new=AsyncMock(return_value={"token": "sk-ui"})
     ):
         result = await _guess(throttle, password="right")
@@ -780,7 +780,7 @@ async def test_a_successful_sign_in_clears_the_bucket(monkeypatch):
         with pytest.raises(ProxyException):
             await _guess(throttle)
 
-    with patch("litellm.proxy.auth.login_utils.user_update", new=AsyncMock()), patch(
+    with patch("litellm.proxy.auth.login_utils.user_update", new=AsyncMock()), patch(  # test-quality-ok: success mints a UI key and persists the user; faked so no DB is needed
         "litellm.proxy.auth.login_utils.generate_key_helper_fn", new=AsyncMock(return_value={"token": "sk-ui"})
     ):
         await _guess(throttle, password="right")
@@ -859,7 +859,7 @@ async def test_both_credential_rejections_are_indistinguishable(monkeypatch):
     fake_user.password = "scrypt:fake"
     repo = MagicMock()
     repo.return_value.table.find_first = AsyncMock(return_value=fake_user)
-    with patch("litellm.proxy.auth.login_utils.UserRepository", repo), patch(
+    with patch("litellm.proxy.auth.login_utils.UserRepository", repo), patch(  # test-quality-ok: reaches the known-DB-user branch without a database
         "litellm.proxy.auth.login_utils.verify_password", return_value=False
     ):
         with pytest.raises(ProxyException) as known:
@@ -893,7 +893,7 @@ async def test_a_user_with_no_password_set_does_not_consume_the_budget(monkeypat
     repo = MagicMock()
     repo.return_value.table.find_first = AsyncMock(return_value=passwordless)
 
-    with patch("litellm.proxy.auth.login_utils.UserRepository", repo):
+    with patch("litellm.proxy.auth.login_utils.UserRepository", repo):  # test-quality-ok: reaches the passwordless-DB-user branch without a database
         for _ in range(5):
             with pytest.raises(ProxyException) as exc:
                 await authenticate_user(
@@ -934,7 +934,7 @@ async def test_a_wrong_password_for_a_known_user_also_counts(monkeypatch):
             throttle=throttle,
         )
 
-    with patch("litellm.proxy.auth.login_utils.UserRepository", repo), patch(
+    with patch("litellm.proxy.auth.login_utils.UserRepository", repo), patch(  # test-quality-ok: reaches the known-DB-user branch without a database
         "litellm.proxy.auth.login_utils.verify_password", return_value=False
     ):
         for _ in range(3):
@@ -1035,7 +1035,7 @@ async def test_a_successful_sign_in_leaves_the_source_counter_alone(monkeypatch)
         with pytest.raises(ProxyException):
             await _guess(throttle)
 
-    with patch("litellm.proxy.auth.login_utils.user_update", new=AsyncMock()), patch(
+    with patch("litellm.proxy.auth.login_utils.user_update", new=AsyncMock()), patch(  # test-quality-ok: success mints a UI key and persists the user; faked so no DB is needed
         "litellm.proxy.auth.login_utils.generate_key_helper_fn", new=AsyncMock(return_value={"token": "sk-ui"})
     ):
         await _guess(throttle, password="right")
@@ -1225,6 +1225,57 @@ async def test_counters_do_not_share_the_key_authentication_cache(monkeypatch):
     assert not [k for k in added if str(k).startswith(_CACHE_KEY_PREFIX)], (
         "sign-in counters must live in their own cache, not the key-authentication cache"
     )
+
+
+def test_settings_that_arrive_as_environment_strings_are_honored(monkeypatch):
+    """An `os.environ/VAR` reference in general_settings resolves to a string, not an int.
+
+    Regression: a digit string fell back to the default with only a log line, so an operator
+    tightening the limits through environment substitution silently kept the stock ceilings.
+    """
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy.auth.login_throttle import LoginThrottle
+
+    monkeypatch.setattr(
+        ps,
+        "general_settings",
+        {
+            "max_failed_login_attempts": "7",
+            "max_failed_login_attempts_per_source": " 70 ",
+            "failed_login_window_seconds": "not-a-number",
+        },
+    )
+    request = MagicMock()
+    request.headers = {}
+    request.client = MagicMock()
+    request.client.host = "1.2.3.4"
+
+    throttle = LoginThrottle.from_request(request)
+
+    assert throttle.max_attempts == 7
+    assert throttle.max_attempts_per_source == 70
+    assert throttle.window_seconds == 900, "garbage still falls back to the default"
+
+
+def test_a_negative_or_boolean_setting_falls_back_to_the_default(monkeypatch):
+    """A limit below one would refuse everyone; a bool is a typo, not a count."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy.auth.login_throttle import LoginThrottle
+
+    monkeypatch.setattr(
+        ps,
+        "general_settings",
+        {"max_failed_login_attempts": "-7", "max_failed_login_attempts_per_source": True},
+    )
+    request = MagicMock()
+    request.headers = {}
+    request.client = MagicMock()
+    request.client.host = "1.2.3.4"
+
+    throttle = LoginThrottle.from_request(request)
+
+    assert throttle.max_attempts == 50
+    assert throttle.max_attempts_per_source == 250
 
 
 @pytest.mark.asyncio
