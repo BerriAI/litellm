@@ -6,21 +6,44 @@ import re
 import subprocess
 import sys
 import zipfile
+from email import policy
+from email.parser import BytesParser
+from itertools import product
 from pathlib import Path, PurePosixPath
-from typing import Final
+from types import ModuleType
+from typing import Final, cast
+
+EXPECTED_PYTHON_TAG: Final = "cp310"
+EXPECTED_ABI_TAG: Final = "abi3"
+EXPECTED_PLATFORM_TAG: Final = "linux_x86_64"
 
 
-def _loads_native_module(native_path: Path) -> bool:
+def _dist_info_directory(member: zipfile.ZipInfo) -> str | None:
+    parts: Final = PurePosixPath(member.filename).parts
+    if not parts or not parts[0].endswith(".dist-info"):
+        return None
+    return parts[0]
+
+
+def _wheel_metadata_tags(archive: zipfile.ZipFile, members: tuple[zipfile.ZipInfo, ...]) -> tuple[str, ...]:
+    if len(members) != 1:
+        return ()
+    metadata: Final = BytesParser(policy=policy.default).parsebytes(archive.read(members[0]))
+    tags: Final = cast(list[str], metadata.get_all("Tag", []))
+    return tuple(tag.strip() for tag in tags)
+
+
+def _load_native_module(native_path: Path) -> ModuleType | None:
     module_spec: Final = importlib.util.spec_from_file_location("litellm.rust_bridge._native", native_path)
     if module_spec is None or module_spec.loader is None:
-        return False
+        return None
     try:
         native_module: Final = importlib.util.module_from_spec(module_spec)
         module_spec.loader.exec_module(native_module)
     except Exception as error:
         sys.stderr.write(f"native module load failed: {error}\n")
-        return False
-    return True
+        return None
+    return native_module
 
 
 def main() -> int:
@@ -29,8 +52,39 @@ def main() -> int:
         return 2
 
     wheel: Final = Path(sys.argv[1])
+    wheel_tags: Final = wheel.stem.rsplit("-", maxsplit=3)
+    if len(wheel_tags) != 4:
+        sys.stderr.write(f"cannot parse wheel tags from {wheel.name}\n")
+        return 1
+
+    wheel_identity: Final = wheel_tags[0].split("-")
+    if len(wheel_identity) != 2 or wheel_identity[0] != "litellm" or not wheel_identity[1]:
+        sys.stderr.write(f"unexpected wheel identity: {wheel_tags[0]}\n")
+        return 1
+
+    expected_dist_info_directory: Final = f"{wheel_tags[0]}.dist-info"
+    expected_dist_info_directories: Final = frozenset((expected_dist_info_directory,))
+    python_tag: Final = wheel_tags[1]
+    abi_tag: Final = wheel_tags[2]
+    platform_tag: Final = wheel_tags[3]
+    expanded_filename_tags: Final = frozenset(
+        "-".join(tag) for tag in product(python_tag.split("."), abi_tag.split("."), platform_tag.split("."))
+    )
+
     with zipfile.ZipFile(wheel) as archive:
         wheel_members: Final = archive.infolist()
+        dist_info_directories: Final = frozenset(
+            directory for member in wheel_members if (directory := _dist_info_directory(member)) is not None
+        )
+        required_dist_info_files: Final = ("METADATA", "RECORD", "WHEEL")
+        dist_info_file_counts: Final = {
+            filename: sum(member.filename == f"{expected_dist_info_directory}/{filename}" for member in wheel_members)
+            for filename in required_dist_info_files
+        }
+        wheel_metadata_members: Final = tuple(
+            member for member in wheel_members if member.filename == f"{expected_dist_info_directory}/WHEEL"
+        )
+        wheel_metadata_tags: Final = _wheel_metadata_tags(archive, wheel_metadata_members)
         native_members: Final = tuple(
             member
             for member in wheel_members
@@ -52,14 +106,10 @@ def main() -> int:
         native_path.parent.mkdir(parents=True, exist_ok=True)
         native_path.write_bytes(archive.read(native_member))
 
-    wheel_tags: Final = wheel.stem.rsplit("-", maxsplit=3)
-    if len(wheel_tags) != 4:
-        sys.stderr.write(f"cannot parse wheel tags from {wheel.name}\n")
-        return 1
-
-    python_tag: Final = wheel_tags[1]
-    abi_tag: Final = wheel_tags[2]
-    platform_tag: Final = wheel_tags[3]
+    wheel_metadata_tags_match: Final = (
+        len(wheel_metadata_tags) == len(expanded_filename_tags)
+        and frozenset(wheel_metadata_tags) == expanded_filename_tags
+    )
     commit_sha: Final = os.environ.get("RELEASE_WHEEL_COMMIT_SHA", os.environ.get("GITHUB_SHA", "unknown"))
     rustc_version: Final = subprocess.run(
         ("rustc", "--version"),
@@ -120,14 +170,26 @@ def main() -> int:
         text=True,
     ).stdout
     extension_entry_point_present: Final = "PyInit__native" in dynamic_symbols
-    native_module_loads: Final = _loads_native_module(native_path)
+    native_module: Final = _load_native_module(native_path)
+    native_module_loads: Final = native_module is not None
+    panic_test_hook_absent: Final = native_module is not None and not hasattr(native_module, "_panic_for_test")
     native_size_limit: Final = 20_000_000
     native_size_within_limit: Final = native_member.file_size <= native_size_limit
     validations: Final = (
+        (f"Python tag is {EXPECTED_PYTHON_TAG}", python_tag == EXPECTED_PYTHON_TAG),
+        (f"ABI tag is {EXPECTED_ABI_TAG}", abi_tag == EXPECTED_ABI_TAG),
+        (f"Platform tag is {EXPECTED_PLATFORM_TAG}", platform_tag == EXPECTED_PLATFORM_TAG),
+        ("Wheel dist-info directory matches the filename", dist_info_directories == expected_dist_info_directories),
+        (
+            "Required dist-info files are present exactly once",
+            all(count == 1 for count in dist_info_file_counts.values()),
+        ),
+        ("Wheel metadata tags match the filename", wheel_metadata_tags_match),
         ("Debug sections are absent", debug_sections_absent),
         ("Static symbol table is absent", static_symbol_table_absent),
         ("Python extension entry point is present", extension_entry_point_present),
         ("Native module loads", native_module_loads),
+        ("Production module omits the panic test hook", panic_test_hook_absent),
         ("Native extension does not exceed 20 MB", native_size_within_limit),
         ("Wheel contents are valid", not unexpected_members),
     )
@@ -146,6 +208,26 @@ def main() -> int:
         sys.stderr.write(f"{native_member.filename} contains a static symbol table\n")
     if not extension_entry_point_present:
         sys.stderr.write("native extension does not export PyInit__native\n")
+    if python_tag != EXPECTED_PYTHON_TAG:
+        sys.stderr.write(f"unexpected Python tag: expected {EXPECTED_PYTHON_TAG}, found {python_tag}\n")
+    if abi_tag != EXPECTED_ABI_TAG:
+        sys.stderr.write(f"unexpected ABI tag: expected {EXPECTED_ABI_TAG}, found {abi_tag}\n")
+    if platform_tag != EXPECTED_PLATFORM_TAG:
+        sys.stderr.write(f"unexpected platform tag: expected {EXPECTED_PLATFORM_TAG}, found {platform_tag}\n")
+    if dist_info_directories != expected_dist_info_directories:
+        sys.stderr.write(
+            f"unexpected dist-info directories: expected {[expected_dist_info_directory]}, "
+            f"found {sorted(dist_info_directories)}\n"
+        )
+    if any(count != 1 for count in dist_info_file_counts.values()):
+        sys.stderr.write(f"required dist-info file counts are invalid: {dist_info_file_counts}\n")
+    elif not wheel_metadata_tags_match:
+        sys.stderr.write(
+            f"WHEEL tags do not match filename: expected {sorted(expanded_filename_tags)}, "
+            f"found {sorted(wheel_metadata_tags)}\n"
+        )
+    if native_module is not None and not panic_test_hook_absent:
+        sys.stderr.write("production native module exposes _panic_for_test\n")
     if not native_size_within_limit:
         sys.stderr.write(f"native extension exceeds 20 MB: {native_member.file_size / 1_000_000:.2f} MB\n")
     if unexpected_members:
