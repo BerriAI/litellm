@@ -21,7 +21,8 @@ async function findGuardrail(page: PlaywrightPage, name: string): Promise<Stored
   return (await listGuardrails(page)).find((row) => row.guardrail_name === name);
 }
 
-/** Sets up the fixture for the tests that need a guardrail they did not have to click through the wizard for. */
+const createdGuardrails: string[] = [];
+
 async function createKeywordGuardrailViaApi(page: PlaywrightPage, name: string, keyword: string): Promise<string> {
   const res = await page.request.post("/guardrails", {
     headers: { Authorization: `Bearer ${masterKey()}` },
@@ -38,12 +39,12 @@ async function createKeywordGuardrailViaApi(page: PlaywrightPage, name: string, 
     },
   });
   expect(res.ok(), `POST /guardrails failed (${res.status()}): ${await res.text()}`).toBe(true);
+  createdGuardrails.push(name);
   const guardrail = await findGuardrail(page, name);
   expect(guardrail?.guardrail_id, `guardrail ${name} has an id`).toBeTruthy();
   return guardrail!.guardrail_id;
 }
 
-/** Walks the Create guardrail wizard from Basic Info to the Keywords step. */
 async function openKeywordsStep(page: PlaywrightPage, name: string) {
   await page.getByRole("button", { name: "Add New Guardrail" }).click();
   await page.getByRole("menuitem", { name: "Add Provider Guardrail" }).click();
@@ -67,6 +68,19 @@ async function openKeywordsStep(page: PlaywrightPage, name: string) {
 test.describe("Guardrails", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
+  test.afterEach(async ({ page }) => {
+    // Guardrails live in the database and show up in the table and the playground list, so a run
+    // that leaves them behind changes what the next run sees.
+    for (const name of createdGuardrails.splice(0)) {
+      const guardrail = await findGuardrail(page, name);
+      if (guardrail) {
+        await page.request.delete(`/guardrails/${guardrail.guardrail_id}`, {
+          headers: { Authorization: `Bearer ${masterKey()}` },
+        });
+      }
+    }
+  });
+
   test("A guardrail created through the wizard blocks the keyword it was given", async ({ page }) => {
     const stamp = Date.now();
     const guardrailName = `e2e-guardrail-create-${stamp}`;
@@ -76,6 +90,7 @@ test.describe("Guardrails", () => {
     await navigateToPage(page, Page.Guardrails);
     await dismissFeedbackPopup(page);
 
+    createdGuardrails.push(guardrailName);
     const wizard = await openKeywordsStep(page, guardrailName);
 
     await wizard.getByRole("button", { name: "Add keyword" }).click();
