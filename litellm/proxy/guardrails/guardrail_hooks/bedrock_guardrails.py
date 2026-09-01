@@ -150,30 +150,17 @@ _CONTENT_TYPE_TO_QUALIFIER: Final[dict[str, BedrockGuardrailQualifier]] = {
 # must not be graded against as if it were the application's own source material.
 _GROUNDING_SOURCE_TRUSTED_ROLES: Final = frozenset({"system", "developer"})
 
-# ApplyGuardrail only accepts png/jpeg image blocks. Anything else (gif, webp, ...)
-# has no representation in the payload, so it cannot be scanned at all.
-# AWS's hard limits for image content filters:
+# AWS image-filter limits, none of which litellm checked before. Anything other than
+# png/jpeg has no representation in the payload and cannot be scanned at all.
 # https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-mmfilter.html
-#   4 MB per image, 20 images per request, 8000x8000, PNG/JPEG only, 25 images/second,
-#   and only the first 100 words of text inside an image are evaluated.
-# Nothing in litellm checked these. BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS is the
-# text-side quota and says nothing about images, and the strings
-# _BEDROCK_TOO_LARGE_ERROR_SUBSTRINGS matches are all text-shaped, so an image-count
-# rejection would not even reach the chunking fallback.
 _MAX_IMAGE_BYTES: Final = 4 * 1024 * 1024
 _MAX_IMAGES_PER_APPLY_GUARDRAIL_CALL: Final = 20
 
-# A per-image cap does not bound a request. Content items are built by gathering
-# over every message and then every part, so N urls are fetched concurrently, and
-# the image-count limit above is not reached until _bin_pack_bedrock_content runs
-# on items that are already resident. 500 urls is 500 fetches before anything says
-# stop. These two bound the request itself: how much may be fetched in total, and
-# how much of it may be in flight at once.
-#
-# The total is what a single ApplyGuardrail call would accept anyway (20 images at
-# 4 MB), so no request the API would take in one call is refused. A conversation
-# chunked across several calls can exceed it, and images past the budget are then
-# unscannable and left to on_unscannable_image -- blocked by default.
+# A per-image cap does not bound a request: parts are gathered over every message,
+# so N urls are fetched concurrently long before the image-count limit is consulted.
+# The total is what one ApplyGuardrail call accepts anyway, so no request the API
+# would take in one call is refused; a conversation chunked across several calls can
+# exceed it, and images past the budget fall to on_unscannable_image.
 _MAX_TOTAL_IMAGE_FETCH_BYTES: Final = _MAX_IMAGE_BYTES * _MAX_IMAGES_PER_APPLY_GUARDRAIL_CALL
 _MAX_CONCURRENT_IMAGE_FETCHES: Final = 4
 
@@ -596,13 +583,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def _refuse_file_backed_images(self, request_data: Mapping[str, object], input_type: str) -> None:
         """Hand a file-backed image to on_unscannable_image rather than ignoring it.
 
-        Read from the raw request rather than inputs["structured_messages"]: the
-        /v1/messages handler translates to OpenAI spec before populating that field,
-        and the translation drops a file source entirely, so the block never survives
-        to be counted. The provider still forwards it to the model.
-
-        Images are a request-side concern; an OUTPUT scan takes generated text, so a
-        file reference sitting in the conversation history is not this scan's problem.
+        Reads the raw request, not inputs["structured_messages"]: the /v1/messages
+        handler fills that field by translating to OpenAI spec, which drops a file
+        source outright, so a check reading it never fires while the provider still
+        forwards the file. The cost is that the scope flags no longer narrow this
+        check, and over-refusing is the safer error here.
         """
         if input_type != "request":
             return
@@ -613,44 +598,40 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             reason=f"{found} image(s) reference a provider file id, whose bytes are not available here"
         )
 
-    @staticmethod
-    def _file_backed_image_count(messages: object) -> int:
-        """Count image parts whose bytes live behind a provider Files API.
+    @classmethod
+    def _file_backed_image_count(cls, messages: object) -> int:
+        """Count Anthropic `{"type": "image", "source": {"type": "file"}}` parts.
 
-        An Anthropic `{"type": "image", "source": {"type": "file", "file_id": ...}}`
-        block carries no data, so the guardrail translation yields nothing for it
-        while the provider still forwards the file to the model. Left alone that is
-        an image the policy never sees, which is the failure this whole path exists
-        to remove, so it is counted here and refused rather than documented.
-
-        Counts this one shape rather than comparing totals against
-        `inputs["images"]`, whose length is narrowed by the skip and scope flags; a
-        mismatch there is not by itself evidence of a dropped image, and refusing a
-        legitimate request is worse than the gap.
-
-        Deliberately reads the whole request rather than the scanned subset. Under
-        `experimental_use_latest_role_message_only` that means a file source in an
-        older turn is refused even though the operator scoped scanning to the latest
-        one. The alternative is the scoped list, which for /v1/messages has already
-        been translated to OpenAI spec with the file source dropped, so the check
-        would never fire at all. Over-refusing is the safer of the two errors here,
-        and `on_unscannable_image: allow` turns it off.
+        Matches that one shape rather than comparing counts against
+        `inputs["images"]`, whose length the skip and scope flags already narrow, so
+        a mismatch there is not by itself evidence of a dropped image.
         """
         if not isinstance(messages, list):
             return 0
-        found = 0  # rebind-ok: running count over the message list
-        for message in messages:
-            if not isinstance(message, dict):
+        return sum(cls._file_backed_parts(message.get("content")) for message in messages if isinstance(message, dict))
+
+    @classmethod
+    def _file_backed_parts(cls, content: object) -> int:
+        """Count file-backed images in one content list, descending into tool_result.
+
+        The extractor pulls scannable images out of a tool_result's nested blocks, so
+        a file source sitting there has to be refused for the same reason a top-level
+        one is: nothing else in the request will surface it.
+        """
+        if not isinstance(content, list):
+            return 0
+        found = 0  # rebind-ok: running count over the content list
+        for part in content:
+            if not isinstance(part, dict):
                 continue
-            content = message.get("content")
-            if not isinstance(content, list):
+            if part.get("type") == "tool_result":
+                found += cls._file_backed_parts(part.get("content"))
                 continue
-            for part in content:
-                if not isinstance(part, dict) or part.get("type") != "image":
-                    continue
-                source = part.get("source")
-                if isinstance(source, dict) and source.get("type") == "file":
-                    found += 1
+            if part.get("type") != "image":
+                continue
+            source = part.get("source")
+            if isinstance(source, dict) and source.get("type") == "file":
+                found += 1
         return found
 
     async def _build_image_content_item(
@@ -683,18 +664,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         async with request_budget.gate:
             item: Final = await self._decode_image_content_item(image_url=image_url, max_bytes=granted)
 
-        # Refund only what a usable image did not take. Returning the whole
-        # reservation would make the budget bound in-flight bytes alone, while
-        # decoded images stay resident in the request being assembled.
-        #
-        # A response that produced nothing is charged in full rather than refunded:
-        # the transfer still happened, and refunding it would let a url serving
-        # megabytes of unusable bytes be repeated down the whole list for free --
-        # the exact shape of the exhaustion this guards against.
-        #
-        # No try/finally: the only escape from the line above is the HTTPException
-        # _handle_unscannable_image raises under the block policy, which ends the
-        # request and takes this request-scoped budget with it.
+        # Refund what a usable image did not take, not the whole reservation: decoded
+        # images stay resident in the request being assembled. A response that produced
+        # nothing is charged in full, or one url serving unusable megabytes could be
+        # repeated down the whole list for free.
         request_budget.give_back(granted - _retained_image_bytes(item) if item is not None else 0)
         return item
 

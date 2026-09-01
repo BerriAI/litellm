@@ -5861,6 +5861,82 @@ class TestBedrockGuardrailImageInput:
 
         assert "file id" in str(exc_info.value.detail)
 
+    @pytest.mark.asyncio
+    async def test_a_file_backed_image_inside_a_tool_result_is_refused(self):
+        """The extractor pulls scannable images out of a tool_result's nested blocks.
+
+        A file source sitting there is invisible to both: it yields no bytes to scan
+        and, until the count descended into tool_result, no refusal either.
+        """
+        g = self._guardrail()
+        sent: list = []
+
+        async def spy(**kwargs):
+            sent.append(kwargs["messages"])
+            return {"action": "NONE", "outputs": []}
+
+        with patch.object(g, "make_bedrock_api_request", new=spy):
+            with pytest.raises(HTTPException) as exc_info:
+                await g.apply_guardrail(
+                    inputs={"texts": ["what does this say?"], "images": []},
+                    request_data={
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": "what does this say?"},
+                                    {
+                                        "type": "tool_result",
+                                        "tool_use_id": "tu_1",
+                                        "content": [
+                                            {"type": "image", "source": {"type": "file", "file_id": "file_abc"}}
+                                        ],
+                                    },
+                                ],
+                            }
+                        ]
+                    },
+                    input_type="request",
+                )
+
+        assert "file id" in str(exc_info.value.detail)
+        assert sent == []
+
+    @pytest.mark.asyncio
+    async def test_a_scannable_image_inside_a_tool_result_is_not_refused(self):
+        """Descending into tool_result must not start refusing what can be scanned."""
+        g = self._guardrail()
+        sent: list = []
+
+        async def spy(**kwargs):
+            sent.append(kwargs["messages"])
+            return {"action": "NONE", "outputs": []}
+
+        with patch.object(g, "make_bedrock_api_request", new=spy):
+            await g.apply_guardrail(
+                inputs={"texts": ["hello"], "images": [self._PNG_DATA_URI]},
+                request_data={
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "hello"},
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": "tu_1",
+                                    "content": [
+                                        {"type": "image", "source": {"type": "base64", "data": "AAAA"}}
+                                    ],
+                                },
+                            ],
+                        }
+                    ]
+                },
+                input_type="request",
+            )
+
+        assert sent, "a scannable nested image still has to be scanned, not refused"
+
     @staticmethod
     def _file_parts_in(messages) -> int:
         return sum(
