@@ -3579,95 +3579,58 @@ async def _build_model_max_budget_usage(
     )
 
 
-def _budget_window_to_dict(window: object) -> Mapping[str, object] | None:
-    """Coerce a budget_limits entry to a dict; None when the entry is unusable."""
-    if isinstance(window, dict):
-        return window
-    model_dump: Final = getattr(window, "model_dump", None)
-    if not callable(model_dump):
+def _window_max_budget(window: Mapping[str, object]) -> float | None:
+    """A window's max_budget as a float; None when absent or unparseable."""
+    value: Final = window.get("max_budget")
+    if not isinstance(value, (int, float, str)):
         return None
     try:
-        dumped: Final = model_dump()
-    except Exception:  # noqa: BLE001  # model_dump implementations can raise arbitrary errors
+        return float(value)
+    except ValueError:
         return None
-    return dumped if isinstance(dumped, dict) else None
-
-
-def _coerce_budget_limits(budget_limits: object) -> Sequence[object] | None:
-    """Coerce budget_limits to a sequence of windows, parsing JSON strings; None when unusable."""
-    if isinstance(budget_limits, str):
-        try:
-            parsed: Final = json.loads(budget_limits)
-        except (TypeError, ValueError):
-            return None
-        return parsed if isinstance(parsed, list) else None
-    return budget_limits if isinstance(budget_limits, list) else None
-
-
-def _parse_window_max_budget(value: object) -> float | None:
-    """Coerce a window's max_budget to float; None when absent or unparseable."""
-    if isinstance(value, (int, float, str)):
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-    return None
 
 
 async def _budget_window_with_usage(window: Mapping[str, object], api_key_hash: str) -> Mapping[str, object]:
     """
-    Return a copy of a budget window with current-window spend attached.
+    Copy of a budget window with current-window spend attached.
 
-    Per-window spend is not persisted in the DB; it lives in the cross-pod spend
-    counters (spend:key:{hashed_token}:window:{budget_duration}) that
-    _virtual_key_multi_budget_check enforces against, so we read the same
-    counters via get_current_spend. Passing max_budget + window_start makes the
-    read re-check against the authoritative spend-log aggregate when the counter
-    is stale-low (e.g. after a Redis flush), same as the enforcement path.
+    Reads the same cross-pod counter (spend:key:{hashed_token}:window:{budget_duration})
+    that _virtual_key_multi_budget_check enforces against, passing the same
+    window_duration + window_start so a stale-low counter is re-checked against
+    the LiteLLM_BudgetWindowSpend row instead of a spend-log aggregate.
     """
     from litellm.proxy.proxy_server import get_current_spend
 
     duration: Final = window.get("budget_duration")
-    if not duration:
-        return dict(window)  # mutable-ok: per-window response copy, built once per window
+    if not isinstance(duration, str) or not duration:
+        return window
     spend: Final = await get_current_spend(
         counter_key=f"spend:key:{api_key_hash}:window:{duration}",
         fallback_spend=0.0,
-        max_budget=_parse_window_max_budget(window.get("max_budget")),
+        max_budget=_window_max_budget(window),
         window_entity_type="Key",
         window_entity_id=api_key_hash,
+        window_duration=duration,
         window_start=get_budget_window_start(window),
     )
     return {**window, "current_spend": round(spend, 4)}  # mutable-ok: per-window response copy, built once per window
 
 
-async def _budget_limits_entry_with_usage(window: object, api_key_hash: str) -> object:
-    """Return the window as an enriched dict when dict-coercible; the original entry otherwise."""
-    coerced: Final = _budget_window_to_dict(window)
-    if not coerced:
-        return window
-    return await _budget_window_with_usage(window=coerced, api_key_hash=api_key_hash)
-
-
-async def _budget_limits_with_usage(budget_limits: object, api_key_hash: str) -> Sequence[object] | None:
+async def _budget_limits_with_usage(
+    budget_limits: Sequence[object] | str | None, api_key_hash: str
+) -> tuple[Mapping[str, object], ...] | None:
     """
-    Return budget_limits as window dicts with current-window spend attached.
-
-    None when budget_limits is not a usable (possibly JSON-encoded) list; the
-    caller keeps the original value then. Entries that are not dict-coercible
-    are preserved as-is.
+    budget_limits as window dicts with current-window spend attached; None when
+    the key has no windows so the caller keeps the stored value.
     """
-    windows: Final = _coerce_budget_limits(budget_limits)
-    if windows is None:
+    windows: Final = _budget_limit_windows(budget_limits)
+    if not windows:
         return None
-    return [  # mutable-ok: entries are awaited, so they cannot be built inside a frozen wrapper
-        await _budget_limits_entry_with_usage(window=window, api_key_hash=api_key_hash) for window in windows
-    ]
-
-
-# Caps per-request fan-out: each key with budget windows costs one spend-counter
-# read (worst case a SpendLogs aggregation) per window.
-MAX_KEY_INFO_KEYS_PER_REQUEST: Final = 100
+    return tuple(
+        await asyncio.gather(
+            *(_budget_window_with_usage(window=window, api_key_hash=api_key_hash) for window in windows)
+        )
+    )
 
 
 @router.post(
@@ -3712,18 +3675,6 @@ async def info_key_fn_v2(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={"message": "Malformed request. No keys passed in."},
             )
-        requested_key_count: Final = len(data.keys or ()) + len(data.key_aliases or ())
-        if requested_key_count > MAX_KEY_INFO_KEYS_PER_REQUEST:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={  # mutable-ok: one-shot HTTPException payload matching the sibling detail dict above; never mutated after construction
-                    "message": (
-                        f"Too many keys requested: {requested_key_count}. "
-                        f"At most {MAX_KEY_INFO_KEYS_PER_REQUEST} keys and key_aliases combined per request."
-                    )
-                },
-            )
-
         # Resolve key_aliases to tokens so we never pass token=None (unbounded query)
         tokens_to_query: Final = list(data.keys) if data.keys else []
         if data.key_aliases:
