@@ -3814,13 +3814,53 @@ _MODEL_ARMOR_BLOCK = {
     }
 }
 
-# The streaming hook checks _should_block_content without allow_sanitization, so a
-# deidentifyResult MATCH_FOUND blocks rather than masks. The root-level sanitizedText
-# fallback in _get_sanitized_content is the shape that reaches the masking branch.
+# The root-level sanitizedText fallback in _get_sanitized_content, i.e. a rewrite that trips no
+# named filter
 _MODEL_ARMOR_SANITIZED = {
     "sanitizedText": "my card is [REDACTED]",
     "sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND"},
 }
+
+# The shape a real de-identify template returns: the SDP filter both matches and hands back the
+# rewritten text, so whether it blocks or masks is decided by allow_sanitization alone
+_MODEL_ARMOR_DEIDENTIFIED = {
+    "sanitizationResult": {
+        "filterMatchState": "MATCH_FOUND",
+        "filterResults": {
+            "sdp": {
+                "sdpFilterResult": {
+                    "deidentifyResult": {
+                        "matchState": "MATCH_FOUND",
+                        "data": {"text": "my card is [REDACTED]"},
+                    }
+                }
+            }
+        },
+    }
+}
+
+
+def _chat_completion_chunks():
+    """The chat-completions surface: typed ModelResponseStream chunks."""
+    return (
+        litellm.types.utils.ModelResponseStream(
+            choices=[
+                litellm.types.utils.StreamingChoices(
+                    index=0,
+                    delta=litellm.types.utils.Delta(content="my card is 4111-1111-1111-1111"),
+                )
+            ]
+        ),
+        litellm.types.utils.ModelResponseStream(
+            choices=[
+                litellm.types.utils.StreamingChoices(
+                    index=0,
+                    delta=litellm.types.utils.Delta(content=""),
+                    finish_reason="stop",
+                )
+            ]
+        ),
+    )
 
 
 def _surface_guardrail(**kwargs):
@@ -4391,3 +4431,70 @@ async def test_streaming_hook_does_not_forward_typed_chunks_that_end_with_an_err
     body = b"".join(item if isinstance(item, bytes) else str(item).encode() for item in delivered)
     assert b"4111-1111-1111-1111" not in body
     assert b"could not be assembled for scanning" in body
+
+
+def _delivered_bytes(delivered):
+    return b"".join(
+        item
+        if isinstance(item, bytes)
+        else item.encode()
+        if isinstance(item, str)
+        else str(item.model_dump() if hasattr(item, "model_dump") else item).encode()
+        for item in delivered
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunks, case", [(None, "chat_completions"), (_ANTHROPIC_SSE_CHUNKS, "anthropic_sse")])
+async def test_streaming_deidentify_match_masks_when_masking_is_enabled(chunks, case):
+    """A de-identify template reports MATCH_FOUND for every redaction it makes, so reading that
+    match as a refusal makes mask_response_content unusable on a stream: the client gets an error
+    where its non-streaming sibling gets redacted text. The block check has to allow sanitization
+    exactly as the non-streaming hook does."""
+    guardrail = _surface_guardrail(mask_response_content=True)
+    post = _armor_post_mock(_MODEL_ARMOR_DEIDENTIFIED)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(
+            guardrail, _chat_completion_chunks() if chunks is None else chunks
+        )
+
+    body = _delivered_bytes(delivered)
+    assert b"[REDACTED]" in body, case
+    assert b"4111-1111-1111-1111" not in body, case
+    assert b"blocked by Model Armor" not in body, case
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunks, case", [(None, "chat_completions"), (_ANTHROPIC_SSE_CHUNKS, "anthropic_sse")])
+async def test_streaming_deidentify_match_still_blocks_when_masking_is_disabled(chunks, case):
+    """Without mask_response_content there is nowhere to put the rewritten text, so the same
+    de-identify match must still end the stream rather than release the original."""
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_DEIDENTIFIED)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(
+            guardrail, _chat_completion_chunks() if chunks is None else chunks
+        )
+
+    body = _delivered_bytes(delivered)
+    assert b"Streaming response blocked by Model Armor" in body, case
+    assert b"4111-1111-1111-1111" not in body, case
+
+
+@pytest.mark.asyncio
+async def test_streaming_deidentify_match_logs_masked_run_as_success_not_blocked():
+    """The status stamped on request metadata feeds the spend log, so it has to agree with what
+    the client actually received: a masked stream is a success, not a block."""
+    guardrail = _surface_guardrail(mask_response_content=True)
+    request_data = {
+        "model": "claude-haiku",
+        "messages": [{"role": "user", "content": "show me a card"}],
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_DEIDENTIFIED)):
+        await _drain_surface_hook(guardrail, _chat_completion_chunks(), request_data=request_data)
+
+    assert request_data["metadata"]["_model_armor_status"] == "success"

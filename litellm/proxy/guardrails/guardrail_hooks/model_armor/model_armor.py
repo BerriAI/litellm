@@ -941,7 +941,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
     @staticmethod
     def _assemble_chat_completion_stream(
-        all_chunks: list[Any],  # mutable-ok: stream_chunk_builder only accepts a mutable list
+        all_chunks: list[object],  # mutable-ok: stream_chunk_builder only accepts a mutable list
     ) -> ModelResponse | TextCompletionResponse | None:
         """Assemble chat-completion chunks, returning ``None`` when they cannot be assembled."""
         from litellm.main import stream_chunk_builder
@@ -1065,14 +1065,19 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             if isinstance(request_data, dict):
                 _, metadata = get_or_create_metadata_bucket(request_data)
                 metadata["_model_armor_response"] = self._build_logging_response(armor_response)
-                metadata["_model_armor_status"] = "blocked" if self._should_block_content(armor_response) else "success"
+                metadata["_model_armor_status"] = (
+                    "blocked"
+                    if self._should_block_content(armor_response, allow_sanitization=self.mask_response_content)
+                    else "success"
+                )
 
             # Add guardrail to applied_guardrails BEFORE potential blocking
             # This ensures guardrail is recorded even when it blocks the request
             add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
 
-            # Check if blocked
-            if self._should_block_content(armor_response):
+            # Check if blocked. Mirrors the non-streaming sibling: with masking on, a de-identify
+            # match is a redaction to apply below, not a refusal
+            if self._should_block_content(armor_response, allow_sanitization=self.mask_response_content):
                 raise HTTPException(
                     status_code=400,
                     detail=self._build_block_error_detail(
