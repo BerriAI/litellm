@@ -7,7 +7,7 @@ Transforms between OpenAI Realtime API format and Bedrock Nova Sonic format.
 import base64
 import json
 import uuid as uuid_lib
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from pydantic import BaseModel
 
@@ -20,27 +20,52 @@ from litellm.types.llms.openai import (
     OpenAIRealtimeContentPartDone,
     OpenAIRealtimeDoneEvent,
     OpenAIRealtimeEvents,
+    OpenAIRealtimeInputAudioBufferSpeechEvent,
+    OpenAIRealtimeInputAudioTranscriptionCompleted,
+    OpenAIRealtimeInputAudioTranscriptionDelta,
     OpenAIRealtimeOutputItemDone,
     OpenAIRealtimeResponseAudioDone,
     OpenAIRealtimeResponseContentPartAdded,
     OpenAIRealtimeResponseDelta,
     OpenAIRealtimeResponseDoneObject,
     OpenAIRealtimeResponseTextDone,
+    OpenAIRealtimeResponseUsage,
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamResponseOutputItemAdded,
     OpenAIRealtimeStreamSession,
     OpenAIRealtimeStreamSessionEvents,
+    OpenAIRealtimeUsageTokenDetails,
 )
 from litellm.types.realtime import (
     ALL_DELTA_TYPES,
     RealtimeResponseTransformInput,
     RealtimeResponseTypedDict,
 )
-from litellm.utils import get_empty_usage
 
 
 class BedrockContentEnd(BaseModel):
     stopReason: str | None = None
+
+
+class BedrockUsageTokenDetails(BaseModel):
+    speechTokens: int = 0
+    textTokens: int = 0
+
+
+class BedrockUsageDetailsTotal(BaseModel):
+    input: BedrockUsageTokenDetails = BedrockUsageTokenDetails()
+    output: BedrockUsageTokenDetails = BedrockUsageTokenDetails()
+
+
+class BedrockUsageDetails(BaseModel):
+    total: BedrockUsageDetailsTotal = BedrockUsageDetailsTotal()
+
+
+class BedrockUsageEvent(BaseModel):
+    totalInputTokens: int = 0
+    totalOutputTokens: int = 0
+    totalTokens: int = 0
+    details: BedrockUsageDetails = BedrockUsageDetails()
 
 
 TRIGGER_AUDIO_SAMPLE_RATE_HERTZ: Final = 16000
@@ -86,6 +111,15 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         # Text configuration
         self.text_media_type = "text/plain"
+
+        # Response-stream state (Bedrock events carry no role on textOutput,
+        # so the USER/ASSISTANT split from contentStart is tracked here)
+        self._user_transcript_active = False
+        self._user_transcript_generation_stage: str | None = None
+        self._user_item_id: str | None = None
+        self._user_transcript_buffer = ""
+        self._cumulative_usage = BedrockUsageEvent()
+        self._reported_usage = BedrockUsageEvent()
 
     def validate_environment(self, headers: dict, model: str, api_key: str | None = None) -> dict:
         """Validate environment - no special validation needed for Bedrock."""
@@ -691,6 +725,11 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         role: Final = content_start.get("role")
 
         if role != "ASSISTANT":
+            if role == "USER" and content_start.get("type") == "TEXT":
+                self._user_transcript_active = True
+                self._user_transcript_generation_stage = self._parse_generation_stage(
+                    content_start.get("additionalModelFields")
+                )
             return (
                 [],
                 current_response_id,
@@ -700,6 +739,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             )
 
         verbose_logger.debug("Handling ASSISTANT contentStart")
+        is_new_response: Final = current_response_id is None
 
         # Initialize IDs if needed
         if not current_response_id:
@@ -715,7 +755,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         returned_messages: Final[list[OpenAIRealtimeEvents]] = []
 
-        # Send response.created
+        # Send response.created only once per response (a response can contain
+        # multiple content blocks, e.g. TEXT then AUDIO)
         response_created: Final = OpenAIRealtimeStreamResponseBaseObject(
             type="response.created",
             event_id=f"event_{uuid.uuid4()}",
@@ -727,7 +768,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 "conversation_id": current_conversation_id,
             },
         )
-        returned_messages.append(response_created)
+        if is_new_response:
+            returned_messages.append(response_created)
 
         # Send response.output_item.added
         output_item_added: Final = OpenAIRealtimeStreamResponseOutputItemAdded(
@@ -766,6 +808,108 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             current_conversation_id,
             current_delta_type,
         )
+
+    @staticmethod
+    def _parse_generation_stage(additional_model_fields: object) -> str | None:
+        if not isinstance(additional_model_fields, str):
+            return None
+        try:
+            parsed: Final = json.loads(additional_model_fields)
+        except json.JSONDecodeError:
+            return None
+        stage: Final = parsed.get("generationStage") if isinstance(parsed, dict) else None
+        return stage if isinstance(stage, str) else None
+
+    def _current_user_item_id(self, new_utterance: bool = False) -> str:
+        """Item id shared by all events of one user utterance (speech boundaries and transcript)."""
+        if new_utterance or self._user_item_id is None:
+            self._user_item_id = f"item_{uuid.uuid4()}"
+        return self._user_item_id
+
+    def transform_user_speech_event(self, is_speech_start: bool) -> tuple[OpenAIRealtimeEvents, ...]:
+        """Transform Bedrock userSpeechStart/userSpeechEnd to OpenAI speech boundary events."""
+        verbose_logger.debug("Handling userSpeech%s", "Start" if is_speech_start else "End")
+        speech_event: Final[OpenAIRealtimeInputAudioBufferSpeechEvent] = {
+            "type": "input_audio_buffer.speech_started" if is_speech_start else "input_audio_buffer.speech_stopped",
+            "event_id": f"event_{uuid.uuid4()}",
+            "item_id": self._current_user_item_id(new_utterance=is_speech_start),
+        }
+        return (speech_event,)
+
+    def transform_usage_event(self, usage_event: BedrockUsageEvent) -> None:
+        """Record Bedrock's session-cumulative usage totals for the next response.done."""
+        verbose_logger.debug("Handling usageEvent")
+        self._cumulative_usage = usage_event
+
+    def _take_usage_delta(self) -> OpenAIRealtimeResponseUsage:
+        """Usage for the response now completing: cumulative totals minus what prior response.done events reported."""
+        prior: Final = self._reported_usage
+        latest: Final = self._cumulative_usage
+        self._reported_usage = latest
+        input_details: Final[OpenAIRealtimeUsageTokenDetails] = {
+            "audio_tokens": latest.details.total.input.speechTokens - prior.details.total.input.speechTokens,
+            "text_tokens": latest.details.total.input.textTokens - prior.details.total.input.textTokens,
+            "cached_tokens": 0,
+        }
+        output_details: Final[OpenAIRealtimeUsageTokenDetails] = {
+            "audio_tokens": latest.details.total.output.speechTokens - prior.details.total.output.speechTokens,
+            "text_tokens": latest.details.total.output.textTokens - prior.details.total.output.textTokens,
+        }
+        usage_delta: Final[OpenAIRealtimeResponseUsage] = {
+            "input_tokens": latest.totalInputTokens - prior.totalInputTokens,
+            "output_tokens": latest.totalOutputTokens - prior.totalOutputTokens,
+            "total_tokens": latest.totalTokens - prior.totalTokens,
+            "input_token_details": input_details,
+            "output_token_details": output_details,
+        }
+        return usage_delta
+
+    def leftover_usage_done_events(self) -> tuple[OpenAIRealtimeEvents, ...]:
+        """Logged-only response.done for usage Bedrock reports after the final turn's contentEnd."""
+        if self._cumulative_usage == self._reported_usage:
+            return ()
+        usage: Final = self._take_usage_delta()
+        leftover_done: Final = OpenAIRealtimeDoneEvent(
+            type="response.done",
+            event_id=f"event_{uuid.uuid4()}",
+            response=OpenAIRealtimeResponseDoneObject(
+                object="realtime.response",
+                id=f"resp_{uuid.uuid4()}",
+                status="completed",
+                conversation_id=f"conv_{uuid.uuid4()}",
+                usage=dict(usage),  # mutable-ok: OpenAIRealtimeResponseDoneObject types usage as plain dict
+            ),
+        )
+        return (leftover_done,)
+
+    def transform_user_transcript_event(self, transcript: str) -> tuple[OpenAIRealtimeEvents, ...]:
+        """Transform a USER-role Bedrock textOutput (ASR transcript) to an OpenAI transcription delta."""
+        verbose_logger.debug("Handling USER textOutput (ASR transcript)")
+        delta_event: Final[OpenAIRealtimeInputAudioTranscriptionDelta] = {
+            "type": "conversation.item.input_audio_transcription.delta",
+            "event_id": f"event_{uuid.uuid4()}",
+            "item_id": self._current_user_item_id(),
+            "content_index": 0,
+            "delta": transcript,
+        }
+        if self._user_transcript_generation_stage != "SPECULATIVE":
+            self._user_transcript_buffer += transcript
+        return (delta_event,)
+
+    def user_transcript_completed_events(self) -> tuple[OpenAIRealtimeEvents, ...]:
+        """One completed event with the full transcript once the FINAL user content block ends."""
+        transcript: Final = self._user_transcript_buffer
+        if not transcript:
+            return ()
+        self._user_transcript_buffer = ""
+        completed_event: Final[OpenAIRealtimeInputAudioTranscriptionCompleted] = {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "event_id": f"event_{uuid.uuid4()}",
+            "item_id": self._current_user_item_id(),
+            "content_index": 0,
+            "transcript": transcript,
+        }
+        return (completed_event,)
 
     def transform_text_output_event(
         self,
@@ -985,7 +1129,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         if not current_response_id or not current_conversation_id:
             return [], None, None, None
 
-        usage_obj: Final = get_empty_usage()
+        usage: Final = self._take_usage_delta()
         response_done: Final = OpenAIRealtimeDoneEvent(
             type="response.done",
             event_id=f"event_{uuid.uuid4()}",
@@ -995,11 +1139,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 status="completed",
                 output=[],
                 conversation_id=current_conversation_id,
-                usage={
-                    "prompt_tokens": usage_obj.prompt_tokens,
-                    "completion_tokens": usage_obj.completion_tokens,
-                    "total_tokens": usage_obj.total_tokens,
-                },
+                usage=dict(usage),
             ),
         )
 
@@ -1042,8 +1182,6 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         # Create a function call arguments done event
         # This is a custom event format that matches what clients expect
-        from typing import cast
-
         function_call_event: Final[dict[str, Any]] = {
             "type": "response.function_call_arguments.done",
             "event_id": f"event_{uuid.uuid4()}",
@@ -1194,17 +1332,25 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             returned_messages.extend(events)
 
         elif "textOutput" in event:
-            events, current_delta_chunks = self.transform_text_output_event(
-                event,
-                current_output_item_id,
-                current_response_id,
-                current_delta_chunks,
-            )
-            returned_messages.extend(events)
+            if self._user_transcript_active:
+                returned_messages.extend(self.transform_user_transcript_event(event["textOutput"].get("content", "")))
+            else:
+                events, current_delta_chunks = self.transform_text_output_event(
+                    event,
+                    current_output_item_id,
+                    current_response_id,
+                    current_delta_chunks,
+                )
+                returned_messages.extend(events)
 
         elif "audioOutput" in event:
             events = self.transform_audio_output_event(event, current_output_item_id, current_response_id)
             returned_messages.extend(events)
+
+        elif "contentEnd" in event and self._user_transcript_active:
+            self._user_transcript_active = False
+            self._user_transcript_generation_stage = None
+            returned_messages.extend(self.user_transcript_completed_events())
 
         elif "contentEnd" in event:
             events, current_delta_chunks = self.transform_content_end_event(
@@ -1223,6 +1369,12 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                     current_delta_type,
                 ) = self._response_done_events(current_response_id, current_conversation_id)
                 returned_messages.extend(done_events)
+
+        elif "userSpeechStart" in event or "userSpeechEnd" in event:
+            returned_messages.extend(self.transform_user_speech_event("userSpeechStart" in event))
+
+        elif "usageEvent" in event:
+            self.transform_usage_event(BedrockUsageEvent.model_validate(event["usageEvent"]))
 
         elif "toolUse" in event:
             events, tool_call_id, tool_name = self.transform_tool_use_event(
