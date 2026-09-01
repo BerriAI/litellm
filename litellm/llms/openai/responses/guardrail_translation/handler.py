@@ -30,11 +30,11 @@ Output: response.output is List[GenericResponseOutputItem] where each has:
 
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, TypeGuard, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Union, cast
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from openai.types.responses.tool_param import FunctionToolParam
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -90,26 +90,22 @@ _TOOL_TYPES_NOT_SENT_TO_GUARDRAIL: Final = frozenset(
 )
 
 
-def _is_str_object_mapping(value: object) -> TypeGuard[Mapping[str, object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
-    return isinstance(value, Mapping)
+_NAMESPACE_MEMBERS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 
 
-def _is_object_sequence(value: object) -> TypeGuard[Sequence[object]]:  # guard-ok: isinstance narrows correctly; str/bytes excluded  # fmt: skip
-    return isinstance(value, Sequence) and not isinstance(value, (str, bytes))
+def _namespace_members(tool: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    try:
+        return _NAMESPACE_MEMBERS.validate_python(tool.get("tools") or ())
+    except ValidationError:
+        return ()
 
 
-def _namespace_members(tool: Mapping[str, object]) -> tuple[object, ...]:
-    members: Final = tool.get("tools")
-    return tuple(members) if _is_object_sequence(members) else ()
+def _is_function_member(member: Mapping[str, object]) -> bool:
+    return member.get("type") == "function"
 
 
-def _is_function_member(member: object) -> bool:
-    return _is_str_object_mapping(member) and member.get("type") == "function"
-
-
-def _qualified_member_name(namespace: str, member: object) -> str:
-    member_name: Final = member.get("name") if _is_str_object_mapping(member) else None
-    return f"{namespace}__{member_name or ''}"
+def _qualified_member_name(namespace: str, member: Mapping[str, object]) -> str:
+    return f"{namespace}__{member.get('name') or ''}"
 
 
 def _flattened_function_names(tools: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
@@ -128,8 +124,8 @@ def _flattened_function_names(tools: Sequence[Mapping[str, object]]) -> tuple[st
 
 
 def _merge_namespace_tool(
-    tool: dict[str, object], remapped_functions: Mapping[str, dict[str, object]]
-) -> dict[str, object] | None:
+    tool: Mapping[str, object], remapped_functions: Mapping[str, Mapping[str, object]]
+) -> Mapping[str, object] | None:
     namespace: Final = str(tool.get("name") or "")
     members: Final = _namespace_members(tool)
     surviving: Final = tuple(
@@ -141,14 +137,14 @@ def _merge_namespace_tool(
         return tool
     if not any(_is_function_member(member) for member in surviving):
         return None
-    return {**tool, "tools": list(surviving)}
+    return {**tool, "tools": [*surviving]}  # mutable-ok: request tools are JSON dicts sent to the provider
 
 
 def _merge_original_tool(
-    tool: dict[str, object],
-    remapped_functions: Mapping[str, dict[str, object]],
-    remapped_passthrough: Sequence[dict[str, object]],
-) -> dict[str, object] | None:
+    tool: Mapping[str, object],
+    remapped_functions: Mapping[str, Mapping[str, object]],
+    remapped_passthrough: Sequence[Mapping[str, object]],
+) -> Mapping[str, object] | None:
     tool_type: Final = tool.get("type")
     if tool_type in _TOOL_TYPES_NOT_SENT_TO_GUARDRAIL:
         return tool
@@ -348,9 +344,9 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     def _merge_tools_after_guardrail(
         self,
-        original_tools: list[dict[str, object]],
+        original_tools: Sequence[Mapping[str, object]],
         remapped: list[dict[str, object]],
-    ) -> list[dict[str, object]]:
+    ) -> Sequence[Mapping[str, object]]:
         """
         Rebuild the Responses tool list from ``original_tools`` and apply only the
         guardrail's delta: tools it dropped are removed (namespace members
@@ -378,7 +374,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             if (tool.get("type") == "function" and str(tool.get("name") or "") not in original_function_names)
             or (tool.get("type") != "function" and tool not in original_tools)
         )
-        return [*kept, *appended]
+        return [*kept, *appended]  # mutable-ok: request tools are JSON dicts sent to the provider
 
     def _apply_guardrailed_tools_to_data(
         self,
