@@ -80,10 +80,15 @@ class VectorStorePreCallHook(CustomLogger):
 
             # Get prisma_client for database fallback
             prisma_client = None
+            llm_router = None
             try:
-                from litellm.proxy.proxy_server import prisma_client as _prisma_client
+                from litellm.proxy.proxy_server import (
+                    llm_router as _llm_router,
+                    prisma_client as _prisma_client,
+                )
 
                 prisma_client = _prisma_client
+                llm_router = _llm_router
             except ImportError:
                 pass
 
@@ -114,12 +119,23 @@ class VectorStorePreCallHook(CustomLogger):
                 vector_store_id = vector_store_to_run.get("vector_store_id", "")
                 custom_llm_provider = vector_store_to_run.get("custom_llm_provider")
                 litellm_params_for_vector_store = vector_store_to_run.get("litellm_params", {}) or {}
-                # Call litellm.vector_stores.search() with the required parameters
-                search_response = await litellm.vector_stores.asearch(
+                request_litellm_params: Final = (
+                    litellm_logging_obj.model_call_details.get("litellm_params", {})
+                    if litellm_logging_obj is not None
+                    else {}
+                )
+                request_metadata: Final = (
+                    request_litellm_params.get("metadata", {}) if isinstance(request_litellm_params, dict) else {}
+                )
+                search_function: Final = (
+                    llm_router.avector_store_search if llm_router is not None else litellm.vector_stores.asearch
+                )
+                search_response = await search_function(
                     **{
                         "vector_store_id": vector_store_id,
                         "query": query,
                         "custom_llm_provider": custom_llm_provider,
+                        "metadata": request_metadata,
                         **litellm_params_for_vector_store,
                     },
                 )
