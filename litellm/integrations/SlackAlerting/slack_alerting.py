@@ -57,6 +57,13 @@ from litellm.types.proxy.model_deprecation import (
 
 from ..email_templates.templates import *
 from .batching_handler import send_to_webhook, squash_payloads
+from .ms_teams import (
+    MS_TEAMS_ALERT_HEADERS,
+    MS_TEAMS_ALERTING_DESTINATION,
+    MSTeamsAlertText,
+    MSTeamsQueueItem,
+    get_ms_teams_webhook_url,
+)
 from .utils import process_slack_alerting_variables
 
 if TYPE_CHECKING:
@@ -538,7 +545,6 @@ class SlackAlerting(CustomBatchLogger):
         # Get the appropriate budget alert type handler
         budget_alert_class: Final = get_budget_alert_type(type)
         _id: Final = budget_alert_class.get_id(user_info)
-        user_info_json: Final = user_info.model_dump(exclude_none=True)
         user_info_str: Final = self._get_user_info_str(user_info)
         event_message = budget_alert_class.get_event_message()
 
@@ -568,7 +574,22 @@ class SlackAlerting(CustomBatchLogger):
                 webhook_event = WebhookEvent(
                     event=event,
                     event_message=event_message,
-                    **user_info_json,
+                    spend=user_info.spend,
+                    max_budget=user_info.max_budget,
+                    soft_budget=user_info.soft_budget,
+                    token=user_info.token,
+                    customer_id=user_info.customer_id,
+                    user_id=user_info.user_id,
+                    team_id=user_info.team_id,
+                    team_alias=user_info.team_alias,
+                    organization_id=user_info.organization_id,
+                    user_email=user_info.user_email,
+                    key_alias=user_info.key_alias,
+                    projected_exceeded_date=user_info.projected_exceeded_date,
+                    projected_spend=user_info.projected_spend,
+                    event_group=user_info.event_group,
+                    alert_emails=user_info.alert_emails,
+                    max_budget_alert_emails=user_info.max_budget_alert_emails,
                 )
                 await self.send_alert(
                     message=event_message + "\n\n" + user_info_str,
@@ -650,7 +671,7 @@ class SlackAlerting(CustomBatchLogger):
         """
         Create a standard message for a budget alert
         """
-        _all_fields_as_dict: Final = user_info.model_dump(exclude_none=True)
+        _all_fields_as_dict: Final[dict[str, object]] = user_info.model_dump(exclude_none=True)
         _all_fields_as_dict.pop("token")
         msg = ""
         for k, v in _all_fields_as_dict.items():
@@ -999,7 +1020,7 @@ class SlackAlerting(CustomBatchLogger):
         except Exception:
             pass
 
-    async def model_added_alert(self, model_name: str, litellm_model_name: str, passed_model_info: Any):
+    async def model_added_alert(self, model_name: str, litellm_model_name: str, passed_model_info: object):
         base_model_from_user: Final = getattr(passed_model_info, "base_model", None)
         model_info = {}
         base_model = ""
@@ -1431,12 +1452,42 @@ Model Info:
             # only send budget alerts over Email
             await self.send_email_alert_using_smtp(webhook_event=user_info, alert_type=alert_type)
 
-        if "slack" not in self.alerting:
+        send_to_slack: Final = "slack" in self.alerting
+        send_to_ms_teams: Final = MS_TEAMS_ALERTING_DESTINATION in self.alerting
+        if not send_to_slack and not send_to_ms_teams:
             return
         if alert_type not in self.alert_types:
             return
 
         from datetime import datetime
+
+        current_time: Final = datetime.now().strftime("%H:%M:%S")
+        _proxy_base_url: Final = os.getenv("PROXY_BASE_URL", None)
+        alert_type_name: Final = getattr(alert_type, "name", alert_type)
+        alert_type_formatted: Final = f"Alert type: `{alert_type_name}`"
+        if alert_type == "daily_reports" or alert_type == "new_model_added":
+            formatted_message = alert_type_formatted + message
+        else:
+            formatted_message = (
+                f"{alert_type_formatted}\nLevel: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
+            )
+
+        if kwargs:
+            for key, value in kwargs.items():
+                formatted_message += f"\n\n{key}: `{value}`\n\n"
+        if alerting_metadata:
+            for key, value in alerting_metadata.items():
+                formatted_message += f"\n\n*Alerting Metadata*: \n{key}: `{value}`\n\n"
+        if _proxy_base_url is not None:
+            formatted_message += f"\n\nProxy URL: `{_proxy_base_url}`"
+
+        if send_to_ms_teams:
+            self._enqueue_ms_teams_alert(formatted_message=formatted_message, alert_type=alert_type)
+
+        if not send_to_slack:
+            if len(self.log_queue) >= self.batch_size:
+                await self.flush_queue()
+            return
 
         # Check if digest mode is enabled for this alert type
         alert_type_name_str: Final = getattr(alert_type, "value", str(alert_type))
@@ -1448,9 +1499,9 @@ Model Info:
             elif self.default_webhook_url is not None:
                 _digest_webhook = self.default_webhook_url
             else:
-                _digest_webhook = os.getenv("SLACK_WEBHOOK_URL", None)
+                _digest_webhook = os.getenv("SLACK_WEBHOOK_URL") or os.getenv("ALERTING_WEBHOOK_URL")
             if _digest_webhook is None:
-                raise ValueError("Missing SLACK_WEBHOOK_URL from environment")
+                raise ValueError("Missing SLACK_WEBHOOK_URL / ALERTING_WEBHOOK_URL from environment")
 
             digest_key: Final = f"{alert_type_name_str}:{request_model or ''}:{api_base or ''}"
 
@@ -1473,38 +1524,16 @@ Model Info:
                     )
             return  # Suppress immediate alert; will be emitted by _flush_digest_buckets
 
-        # Get the current timestamp
-        current_time: Final = datetime.now().strftime("%H:%M:%S")
-        _proxy_base_url: Final = os.getenv("PROXY_BASE_URL", None)
-        # Use .name if it's an enum, otherwise use as is
-        alert_type_name: Final = getattr(alert_type, "name", alert_type)
-        alert_type_formatted: Final = f"Alert type: `{alert_type_name}`"
-        if alert_type == "daily_reports" or alert_type == "new_model_added":
-            formatted_message = alert_type_formatted + message
-        else:
-            formatted_message = (
-                f"{alert_type_formatted}\nLevel: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
-            )
-
-        if kwargs:
-            for key, value in kwargs.items():
-                formatted_message += f"\n\n{key}: `{value}`\n\n"
-        if alerting_metadata:
-            for key, value in alerting_metadata.items():
-                formatted_message += f"\n\n*Alerting Metadata*: \n{key}: `{value}`\n\n"
-        if _proxy_base_url is not None:
-            formatted_message += f"\n\nProxy URL: `{_proxy_base_url}`"
-
         # check if we find the slack webhook url in self.alert_to_webhook_url
         if self.alert_to_webhook_url is not None and alert_type in self.alert_to_webhook_url:
             slack_webhook_url: str | list[str] | None = self.alert_to_webhook_url[alert_type]
         elif self.default_webhook_url is not None:
             slack_webhook_url = self.default_webhook_url
         else:
-            slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL", None)
+            slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL") or os.getenv("ALERTING_WEBHOOK_URL")
 
         if slack_webhook_url is None:
-            raise ValueError("Missing SLACK_WEBHOOK_URL from environment")
+            raise ValueError("Missing SLACK_WEBHOOK_URL / ALERTING_WEBHOOK_URL from environment")
         payload: Final = {"text": formatted_message}
         headers: Final = {"Content-type": "application/json"}
 
@@ -1530,6 +1559,24 @@ Model Info:
 
         if len(self.log_queue) >= self.batch_size:
             await self.flush_queue()
+
+    def _enqueue_ms_teams_alert(self, formatted_message: str, alert_type: AlertType) -> None:
+        ms_teams_webhook_url: Final = get_ms_teams_webhook_url()
+        if ms_teams_webhook_url is None:
+            verbose_proxy_logger.error(
+                "MS Teams alerting is enabled but MS_TEAMS_WEBHOOK_URL is not set. Dropping alert type=%s",
+                alert_type,
+            )
+            return
+        payload: Final[MSTeamsAlertText] = {"text": formatted_message}
+        item: Final[MSTeamsQueueItem] = {
+            "url": ms_teams_webhook_url,
+            "headers": MS_TEAMS_ALERT_HEADERS,
+            "payload": payload,
+            "alert_type": alert_type,
+            "format": MS_TEAMS_ALERTING_DESTINATION,
+        }
+        self.log_queue.append(item)
 
     async def async_send_batch(self):
         if not self.log_queue:
@@ -1940,7 +1987,7 @@ Model Info:
         try:
             message = f"`{event_name}`\n"
 
-            key_event_dict: Final = key_event.model_dump()
+            key_event_dict: Final[dict[str, object]] = key_event.model_dump()
 
             # Add Created by information first
             message += "*Action Done by:*\n"

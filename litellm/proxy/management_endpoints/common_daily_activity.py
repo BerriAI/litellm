@@ -95,6 +95,9 @@ class DailySpendRecord(Protocol):
     def prompt_caching_savings_spend(self) -> float: ...
 
     @property
+    def gateway_injected_caching_savings_spend(self) -> float: ...
+
+    @property
     def autorouter_savings_spend(self) -> float: ...
 
     @property
@@ -137,6 +140,7 @@ class _GroupingSetsRow(SimpleNamespace):
     compression_saved_tokens: int | None
     compression_savings_spend: float | None
     prompt_caching_savings_spend: float | None
+    gateway_injected_caching_savings_spend: float | None
     autorouter_savings_spend: float | None
     api_requests: int | None
     successful_requests: int | None
@@ -189,6 +193,9 @@ def update_metrics(existing_metrics: SpendMetrics, record: DailySpendRecord) -> 
     existing_metrics.compression_saved_tokens += record.compression_saved_tokens or 0
     existing_metrics.compression_savings_spend += record.compression_savings_spend or 0
     existing_metrics.prompt_caching_savings_spend += record.prompt_caching_savings_spend or 0
+    existing_metrics.gateway_injected_caching_savings_spend += (  # rebind-ok: this accumulator mutates its target in place for every metric on the row
+        record.gateway_injected_caching_savings_spend or 0
+    )
     existing_metrics.autorouter_savings_spend += record.autorouter_savings_spend or 0
     existing_metrics.api_requests += record.api_requests or 0
     existing_metrics.successful_requests += record.successful_requests or 0
@@ -721,6 +728,7 @@ def _build_aggregated_sql_query(
             SUM(compression_saved_tokens)::bigint AS compression_saved_tokens,
             SUM(compression_savings_spend)::float AS compression_savings_spend,
             SUM(prompt_caching_savings_spend)::float AS prompt_caching_savings_spend,
+            SUM(gateway_injected_caching_savings_spend)::float AS gateway_injected_caching_savings_spend,
             SUM(autorouter_savings_spend)::float AS autorouter_savings_spend,
             SUM(api_requests)::bigint AS api_requests,
             SUM(successful_requests)::bigint AS successful_requests,
@@ -799,6 +807,7 @@ def _build_entity_rollup_sql_query(
             SUM(compression_saved_tokens)::bigint AS compression_saved_tokens,
             SUM(compression_savings_spend)::float AS compression_savings_spend,
             SUM(prompt_caching_savings_spend)::float AS prompt_caching_savings_spend,
+            SUM(gateway_injected_caching_savings_spend)::float AS gateway_injected_caching_savings_spend,
             SUM(autorouter_savings_spend)::float AS autorouter_savings_spend,
             SUM(api_requests)::bigint AS api_requests,
             SUM(successful_requests)::bigint AS successful_requests,
@@ -934,6 +943,7 @@ def _record_to_spend_metrics(record: _GroupingSetsRow) -> SpendMetrics:
         compression_saved_tokens=record.compression_saved_tokens or 0,
         compression_savings_spend=record.compression_savings_spend or 0,
         prompt_caching_savings_spend=record.prompt_caching_savings_spend or 0,
+        gateway_injected_caching_savings_spend=record.gateway_injected_caching_savings_spend or 0,
         autorouter_savings_spend=record.autorouter_savings_spend or 0,
         api_requests=record.api_requests or 0,
         successful_requests=record.successful_requests or 0,
@@ -1200,6 +1210,7 @@ async def get_daily_activity(
                 total_compression_saved_tokens=metadata_metrics.compression_saved_tokens,
                 total_compression_savings_spend=metadata_metrics.compression_savings_spend,
                 total_prompt_caching_savings_spend=metadata_metrics.prompt_caching_savings_spend,
+                total_gateway_injected_caching_savings_spend=metadata_metrics.gateway_injected_caching_savings_spend,
                 total_autorouter_savings_spend=metadata_metrics.autorouter_savings_spend,
                 page=page,
                 total_pages=-(-total_count // page_size),  # Ceiling division
@@ -1372,6 +1383,9 @@ async def get_daily_activity_aggregated(
                 total_compression_saved_tokens=aggregated["totals"].compression_saved_tokens,
                 total_compression_savings_spend=aggregated["totals"].compression_savings_spend,
                 total_prompt_caching_savings_spend=aggregated["totals"].prompt_caching_savings_spend,
+                total_gateway_injected_caching_savings_spend=aggregated[
+                    "totals"
+                ].gateway_injected_caching_savings_spend,
                 total_autorouter_savings_spend=aggregated["totals"].autorouter_savings_spend,
                 page=1,
                 total_pages=1,

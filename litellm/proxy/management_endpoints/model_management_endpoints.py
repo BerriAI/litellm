@@ -16,10 +16,10 @@ import json
 from collections.abc import Awaitable, Mapping, Sequence
 from json import JSONDecodeError
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -81,10 +81,15 @@ from litellm.router_strategy.complexity_router import (
     ClassificationRubric,
     ComplexityRouterConfig,
     ComplexityTier,
+    TierDefinition,
     classification_system_prompt,
+    custom_tier_classification_prompt,
+    normalize_classification_prompt,
 )
 from litellm.router_utils.auto_router_model_naming import (
     STRATEGY_ROUTER_PARAM_FIELDS,
+    carries_complexity_router_settings,
+    validate_complexity_router_config_placement,
     validate_complexity_router_config_write,
     validate_strategy_router_model_write,
 )
@@ -226,14 +231,19 @@ def _strategy_router_write_violation(
     )
     if config_violation is not None:
         return config_violation
-    if incoming_params.model is None:
-        return None
     present_fields: Final = frozenset(
         field
         for field in STRATEGY_ROUTER_PARAM_FIELDS
         for source in (incoming_params, existing_params)
         if source is not None and getattr(source, field, None) is not None
     )
+    # Scope reads the incoming model because the stored one is encrypted at rest.
+    if carries_complexity_router_settings(incoming_params.model, present_fields):
+        placement_violation: Final = validate_complexity_router_config_placement(incoming_params.model_extra)
+        if placement_violation is not None:
+            return placement_violation
+    if incoming_params.model is None:
+        return None
     return validate_strategy_router_model_write(model=incoming_params.model, present_fields=present_fields)
 
 
@@ -249,6 +259,38 @@ def _raise_on_strategy_router_write_violation(
         type=ProxyErrorTypes.validation_error.value,
         code=status.HTTP_400_BAD_REQUEST,
         param="litellm_params.model",
+    )
+
+
+ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING: Final = "enforce_rpm_tpm_on_model_add"
+_REQUIRED_RATE_LIMIT_FIELDS: Final = ("rpm", "tpm")
+
+
+def _raise_if_rate_limits_required_but_missing(*, litellm_params: GenericLiteLLMParams, enforced: bool) -> None:
+    """Require both rpm and tpm (each a positive value) when the operator opts in via config.yaml.
+
+    Off by default, so deployments keep adding models without limits. When
+    ``enforce_rpm_tpm_on_model_add: true`` is set under general_settings, a model added
+    without both rpm and tpm set to a positive value is rejected rather than stored
+    unbounded (or effectively excluded from routing by a zero/negative limit).
+    """
+    if not enforced:
+        return
+    missing: Final = tuple(
+        field
+        for field in _REQUIRED_RATE_LIMIT_FIELDS
+        if (value := getattr(litellm_params, field)) is None or value <= 0
+    )
+    if not missing:
+        return
+    raise ProxyException(
+        message=(
+            f"{' and '.join(missing)} must be set to a positive value when "
+            f"'{ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING}' is enabled in general_settings"
+        ),
+        type=ProxyErrorTypes.validation_error.value,
+        code=status.HTTP_400_BAD_REQUEST,
+        param=f"litellm_params.{missing[0]}",
     )
 
 
@@ -326,9 +368,10 @@ def _validate_ptu_model_info(model_info: Mapping[str, object]) -> None:
         raise HTTPException(status_code=400, detail=error)
 
 
-# The mirrored per-token pricing fields plus the three remaining fields
-# Router._inherit_builtin_cache_pricing back-fills from the public cost map. An unset field is
-# what that back-fill targets, so a field left out here is one a PTU deployment still bills.
+# The mirrored per-token pricing fields plus the remaining rates the public cost map or a
+# provider default would otherwise supply (the cache back-fills, the Maps grounding rate). An
+# unset field falls back to those sources, so a field left out here is one a PTU deployment
+# still bills.
 # tiered_pricing is the one mirrored field that is a table of ranges, not a rate, so it is stored
 # empty (see _PTU_EMPTIED_PRICING_FIELDS): its tiers outrank the zeros written beside them, so
 # dropping it would leave the cost map's tiers billing the traffic the reserved capacity covers.
@@ -500,7 +543,7 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
         _raise_if_ptu_cost_attribution_disabled(updated_patch.model_info.model_dump(exclude_none=True))
     merged_model_name: Final = updated_patch.model_name or db_model.model_name
     merged_litellm_params: Final = db_model.litellm_params.model_dump(exclude_none=True)
-    merged_model_info: Final = db_model.model_info.model_dump(exclude_none=True)
+    merged_model_info: Final[dict[str, object]] = db_model.model_info.model_dump(exclude_none=True)
 
     # update litellm params
     if updated_patch.litellm_params:
@@ -1748,6 +1791,11 @@ async def add_new_model(
             existing_params=None,
         )
 
+        _raise_if_rate_limits_required_but_missing(
+            litellm_params=model_params.litellm_params,
+            enforced=bool(general_settings.get(ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING, False)),
+        )
+
         model_response: prisma_models.LiteLLM_ProxyModelTable | LiteLLM_ProxyModelTable | None = None
         # update DB
         incoming_model_info: Final = model_params.model_info.model_dump(exclude_none=True)
@@ -1934,7 +1982,7 @@ async def update_model(
 
             ### MERGE WITH EXISTING DATA ###
             merged_dictionary: Final = {}
-            _mp: Final = model_params.litellm_params.dict()
+            _mp: Final[dict[str, object]] = model_params.litellm_params.dict()
 
             for key, value in _mp.items():
                 if value is not None:
@@ -2185,6 +2233,39 @@ def _labeled_tiers_from_query(tier_labels: str | None) -> tuple[tuple[Complexity
         ) from e
 
 
+class AutoRouterClassifierPromptPreviewRequest(BaseModel):
+    """A POST rather than query params: classification_prompt is the operator's own text, which must
+    not reach access logs through a URL."""
+
+    tier_definitions: tuple[TierDefinition, ...]
+    context_window_size: Annotated[int, Field(ge=0)] = DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE
+    classification_prompt: str | None = None
+
+    _normalize_prompt = field_validator("classification_prompt")(normalize_classification_prompt)
+
+
+@router.post(
+    "/auto_router/classifier/default_prompt",
+    description="Get the system prompt an auto-router's LLM classifier sends for an edited tier set",
+    tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
+)
+async def preview_auto_router_classifier_prompt(
+    request: AutoRouterClassifierPromptPreviewRequest,
+) -> AutoRouterClassifierDefaultPromptResponse:
+    """
+    Get the classifier system prompt an edited tier set sends, so the dashboard can show it.
+
+    Built by the same function the live classifier uses, so the preview cannot drift from what the
+    router sends. Payload validity beyond a renderable definition stays the dry-run's job.
+    """
+    return AutoRouterClassifierDefaultPromptResponse(
+        system_prompt=custom_tier_classification_prompt(
+            request.tier_definitions, request.classification_prompt, request.context_window_size
+        )
+    )
+
+
 @router.get(
     "/auto_router/classifier/default_prompt",
     description="Get the built-in system prompt used by an auto-router's LLM classifier",
@@ -2197,12 +2278,15 @@ async def get_auto_router_classifier_default_prompt(
     classification_rubric: ClassificationRubric | None = None,
 ) -> AutoRouterClassifierDefaultPromptResponse:
     """
-    Get the default classifier system prompt, so the dashboard's prompt editor can prefill it.
+    Get the classifier system prompt a router would send, so the dashboard can show it.
 
     The prompt's closing line depends on whether prior conversation turns are quoted to the
     classifier, its tier bullets are named by the router's tier_labels, and its calibration examples
     come from the router's classification rubric, so the caller passes all three to get the text that router
     would actually send rather than a rubric it does not use.
+
+    An edited tier set replaces the whole rubric; POST to this path for that prompt, which carries
+    the operator's own instructions and so must not ride in a query string.
 
     Parameters:
     - context_window_size: int - The router's classifier_context_window_size. Defaults to the

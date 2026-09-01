@@ -162,3 +162,16 @@ class RealtimeErrorDetail(TypedDict):
 class RealtimeErrorEvent(TypedDict):
     type: ReadOnly[Literal["error"]]
     error: ReadOnly[RealtimeErrorDetail]
+
+
+class RealtimeInputAudioTranscriptionUsageInputTokenDetails(TypedDict):
+    text_tokens: ReadOnly[int]
+    audio_tokens: ReadOnly[int]
+
+
+class RealtimeInputAudioTranscriptionUsage(TypedDict):
+    type: ReadOnly[Literal["tokens"]]
+    input_tokens: ReadOnly[int]
+    output_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+    input_token_details: ReadOnly[RealtimeInputAudioTranscriptionUsageInputTokenDetails]

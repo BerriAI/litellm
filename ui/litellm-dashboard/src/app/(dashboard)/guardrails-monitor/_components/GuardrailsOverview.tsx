@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import type { ColumnDef, OnChangeFn, SortingState } from "@tanstack/react-table";
-import { Download, Settings, Shield, TrendingUp, TriangleAlert } from "lucide-react";
+import { Download, HeartPulse, Settings, TrendingUp, TriangleAlert } from "lucide-react";
 import React, { useMemo, useState } from "react";
 import { DataTable, DataTableSortHeader } from "@/components/shared/DataTable";
 import { getGuardrailsUsageOverview } from "@/components/networking";
 import { type PerformanceRow } from "@/components/GuardrailsMonitor/mockData";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/shared/PageHeader";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { EvaluationSettingsModal } from "./EvaluationSettingsModal";
 import { MetricCard } from "@/components/GuardrailsMonitor/MetricCard";
@@ -16,6 +17,7 @@ interface GuardrailsOverviewProps {
   startDate: string;
   endDate: string;
   onSelectGuardrail: (id: string) => void;
+  dateRangeControl?: React.ReactNode;
 }
 
 type SortKey = "failRate" | "requestsEvaluated" | "avgLatency" | "falsePositiveRate" | "falseNegativeRate";
@@ -43,6 +45,7 @@ export function GuardrailsOverview({
   startDate,
   endDate,
   onSelectGuardrail,
+  dateRangeControl,
 }: GuardrailsOverviewProps) {
   const [sortBy, setSortBy] = useState<SortKey>("failRate");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -197,23 +200,22 @@ export function GuardrailsOverview({
 
   return (
     <div>
-      <div className="flex items-start justify-between mb-5">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <Shield className="size-5 text-indigo-500" />
-            <h1 className="text-xl font-semibold text-foreground">Guardrails Monitor</h1>
-          </div>
-          <p className="text-sm text-muted-foreground">Monitor guardrail performance across all requests</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <Button variant="outline" title="Coming soon">
-            <Download className="size-4" />
-            Export Data
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        icon={<HeartPulse />}
+        title="Guardrails Monitor"
+        subtitle="Monitor guardrail performance across all requests"
+        utilities={
+          <>
+            {dateRangeControl}
+            <Button variant="outline" title="Coming soon">
+              <Download className="size-4" />
+              Export Data
+            </Button>
+          </>
+        }
+      />
 
-      <div className="mb-6 grid grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] gap-4">
+      <div className="mt-6 mb-6 grid grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] gap-4">
         <MetricCard label="Total Evaluations" value={metrics.totalRequests.toLocaleString()} />
         <MetricCard
           label="Blocked Requests"

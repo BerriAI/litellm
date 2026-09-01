@@ -661,7 +661,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         dateValue={dateValue}
         entityType={entityType}
         spendData={spendData}
-        showFilters={filterSlot === undefined && entityList !== null && entityList.length > 0}
+        showFilters={filterSlot === undefined && entityList !== null}
         filterSlot={filterSlot}
         filterLabel={getFilterLabel(entityType)}
         filterPlaceholder={getFilterPlaceholder(entityType)}

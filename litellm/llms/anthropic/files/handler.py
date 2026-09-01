@@ -2,7 +2,7 @@ import asyncio
 import json
 import time
 from collections.abc import Coroutine
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
@@ -116,7 +116,7 @@ class AnthropicFilesHandler:
         api_key: str | None = None,
         timeout: float | httpx.Timeout = 600.0,
         max_retries: int | None = None,
-    ) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
+    ) -> HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent]:
         """
         Retrieve file content from Anthropic.
 

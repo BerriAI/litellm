@@ -3,8 +3,7 @@ Legacy /v1/embedding handler for Bedrock Cohere.
 """
 
 import json
-from collections.abc import Callable
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -19,6 +18,9 @@ from litellm.types.llms.bedrock import CohereEmbeddingRequest
 from litellm.types.utils import EmbeddingResponse
 
 from .v1_transformation import CohereEmbeddingConfig
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 def validate_environment(api_key, headers: dict):
@@ -58,7 +60,7 @@ async def async_embedding(
     api_base: str,
     api_key: str | None,
     headers: dict,
-    encoding: Callable,
+    encoding: "tiktoken.Encoding | None",
     client: AsyncHTTPHandler | None = None,
 ):
     ## LOGGING
@@ -120,7 +122,7 @@ def embedding(
     logging_obj: LiteLLMLoggingObj,
     optional_params: dict,
     headers: dict,
-    encoding: Any,
+    encoding: "tiktoken.Encoding | None",
     data: dict | CohereEmbeddingRequest | None = None,
     complete_api_base: str | None = None,
     api_key: str | None = None,

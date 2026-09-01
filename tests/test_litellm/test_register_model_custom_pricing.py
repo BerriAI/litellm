@@ -435,6 +435,151 @@ def test_register_model_warns_when_no_builtin_match_for_cache_pricing(caplog):
         litellm.model_cost.pop(registered_key, None)
 
 
+def test_register_model_no_warning_without_custom_pricing(caplog):
+    """LIT-6318: an entry with no custom pricing (e.g. router deployment
+    metadata) never drives cost calculation, so registering it under an
+    unmatched key must not emit the missing-cache-pricing warning.
+    """
+    import logging
+
+    from litellm._logging import verbose_logger
+
+    registered_key = "azure/lit6318-deployment-without-pricing"
+    litellm.model_cost.pop(registered_key, None)
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            litellm.register_model(
+                {
+                    registered_key: {
+                        "litellm_provider": "azure",
+                        "base_model": "azure/text-embedding-3-large",
+                    }
+                }
+            )
+
+        assert not any("register_model" in record.message for record in caplog.records), (
+            "entry without custom pricing must register silently"
+        )
+    finally:
+        litellm.model_cost.pop(registered_key, None)
+
+
+def test_register_model_no_warning_for_tiered_pricing_without_cache_costs(caplog):
+    """LIT-6318: tiered pricing bills cache reads at the tier's input rate when
+    cache costs are omitted, so a tiered entry must not trigger the
+    cache-defaults-to-0 warning.
+    """
+    import logging
+
+    from litellm._logging import verbose_logger
+
+    registered_key = "bedrock/lit6318-tiered-priced-model"
+    litellm.model_cost.pop(registered_key, None)
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            litellm.register_model(
+                {
+                    registered_key: {
+                        "litellm_provider": "bedrock",
+                        "tiered_pricing": [
+                            {
+                                "range": [0, 200000],
+                                "input_cost_per_token": 1e-06,
+                                "output_cost_per_token": 5e-06,
+                            }
+                        ],
+                    }
+                }
+            )
+
+        assert not any("register_model" in record.message for record in caplog.records), (
+            "tiered pricing entry must register silently"
+        )
+    finally:
+        litellm.model_cost.pop(registered_key, None)
+
+
+def test_router_deployment_without_custom_pricing_registers_silently(caplog):
+    """LIT-6318: the router registers every deployment under its hashed id and
+    its backend key. Deployments without custom pricing are costed at request
+    time from the underlying model name, so startup must not warn about them.
+    """
+    import logging
+
+    from litellm import Router
+    from litellm._logging import verbose_logger
+
+    deployment_model = "azure/lit6318-my-deployment-name"
+    deployment_id = "lit6318-no-pricing-deployment"
+    snapshot = _snapshot_model_cost_entries([deployment_model, deployment_id])
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            Router(
+                model_list=[
+                    {
+                        "model_name": "indexing",
+                        "litellm_params": {
+                            "model": deployment_model,
+                            "api_base": "https://example.openai.azure.com",
+                            "api_key": "fake-key",
+                        },
+                        "model_info": {
+                            "id": deployment_id,
+                            "base_model": "azure/text-embedding-3-large",
+                        },
+                    }
+                ]
+            )
+
+        register_warnings = [record.message for record in caplog.records if "register_model" in record.message]
+        assert not register_warnings, register_warnings
+    finally:
+        _restore_model_cost_entries(snapshot)
+
+
+def test_router_custom_priced_deployment_warning_names_model_not_hash(caplog):
+    """LIT-6318: when a custom-priced deployment genuinely lacks cache pricing
+    and no built-in entry matches, the warning must name the deployment's
+    model rather than its opaque hashed id.
+    """
+    import logging
+
+    from litellm import Router
+    from litellm._logging import verbose_logger
+
+    deployment_model = "bedrock/lit6318-totally-made-up-model"
+    deployment_id = "lit6318-custom-priced-deployment-hash"
+    snapshot = _snapshot_model_cost_entries([deployment_model, deployment_id])
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            Router(
+                model_list=[
+                    {
+                        "model_name": "made-up",
+                        "litellm_params": {
+                            "model": deployment_model,
+                            "aws_region_name": "us-east-1",
+                            "input_cost_per_token": 1e-06,
+                            "output_cost_per_token": 5e-06,
+                        },
+                        "model_info": {"id": deployment_id},
+                    }
+                ]
+            )
+
+        register_warnings = [record.message for record in caplog.records if "register_model" in record.message]
+        assert register_warnings, "expected a warning for missing cache pricing"
+        for message in register_warnings:
+            assert deployment_id not in message, message
+            assert deployment_model in message, message
+    finally:
+        _restore_model_cost_entries(snapshot)
+
+
 def test_register_model_router_add_deployment_custom_pricing_applies():
     """End-to-end regression for https://github.com/BerriAI/litellm/issues/28336.
 
@@ -648,3 +793,203 @@ def test_embedding_direct_sdk_custom_pricing_still_registers_shared_key():
     finally:
         litellm.model_cost.pop(model_key, None)
         _invalidate_model_cost_lowercase_map()
+
+
+def test_update_dictionary_merges_nested_dicts_without_aliasing():
+    """A nested dict must be merged copy-on-write: the pre-existing nested dict
+    object stays untouched, and the caller's incoming nested dict is never
+    inserted by reference into the merged result.
+    """
+    from litellm.utils import _update_dictionary
+
+    existing_nested = {"hours_utc": "01:00-02:00"}
+    existing = {"off_peak_pricing": existing_nested}
+    incoming_nested = {"windows": [{"hours_utc": "16:00-19:00", "weekdays": [2]}]}
+    incoming = {"off_peak_pricing": incoming_nested}
+
+    merged = _update_dictionary(existing, incoming)
+
+    assert merged["off_peak_pricing"] == {
+        "hours_utc": "01:00-02:00",
+        "windows": [{"hours_utc": "16:00-19:00", "weekdays": [2]}],
+    }
+    assert existing_nested == {"hours_utc": "01:00-02:00"}
+    assert merged["off_peak_pricing"] is not incoming_nested
+
+    fresh = _update_dictionary({}, incoming)
+    assert fresh["off_peak_pricing"] == incoming_nested
+    assert fresh["off_peak_pricing"] is not incoming_nested
+
+
+def test_router_deployments_sharing_backend_keep_their_own_off_peak_pricing():
+    """Two deployments of the same backend model with different
+    ``off_peak_pricing`` blocks must each keep their own schedule under their
+    unique model id, and neither block may leak onto the shared backend keys.
+
+    Before the fix, ``register_model`` inserted the first deployment's block by
+    reference into the built-in ``gpt-4o-mini`` entry, and the second
+    deployment's registration merged its keys into that same object, corrupting
+    the first deployment's schedule and polluting the built-in entry.
+    """
+    from litellm import Router
+
+    active_block = {
+        "windows": [{"hours_utc": "16:00-19:00", "weekdays": [2]}],
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 1e-06,
+    }
+    inactive_block = {
+        "hours_utc": "05:00-06:00",
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 1e-06,
+    }
+    shared_keys = ["gpt-4o-mini", "openai/gpt-4o-mini"]
+    deployment_ids = ["offpeak-alias-dep-1", "offpeak-alias-dep-2"]
+    original_entries = _snapshot_model_cost_entries(shared_keys)
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "offpeak-active-weekday",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key-for-registration",
+                },
+                "model_info": {
+                    "id": deployment_ids[0],
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 2e-06,
+                    "off_peak_pricing": dict(active_block),
+                },
+            },
+            {
+                "model_name": "offpeak-inactive-hours",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key-for-registration",
+                },
+                "model_info": {
+                    "id": deployment_ids[1],
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 2e-06,
+                    "off_peak_pricing": dict(inactive_block),
+                },
+            },
+        ]
+    )
+
+    try:
+        registered_first = litellm.model_cost[deployment_ids[0]]["off_peak_pricing"]
+        registered_second = litellm.model_cost[deployment_ids[1]]["off_peak_pricing"]
+        assert registered_first == active_block
+        assert registered_second == inactive_block
+        for shared_key in shared_keys:
+            shared_entry = litellm.model_cost.get(shared_key) or {}
+            assert not shared_entry.get("off_peak_pricing")
+    finally:
+        for deployment_id in deployment_ids:
+            litellm.model_cost.pop(deployment_id, None)
+        _restore_model_cost_entries(original_entries)
+        del router
+
+
+def test_router_off_peak_only_deployment_inherits_builtin_base_rates():
+    """A deployment that sets only ``off_peak_pricing`` on its model_info must
+    still be costed from its deployment-scoped entry: the base token rates are
+    inherited from the backend model's built-in cost map entry, since the
+    shared backend key deliberately never carries the off-peak block.
+    """
+    from litellm import Router
+
+    block = {
+        "hours_utc": "00:00-00:00",
+        "input_cost_per_token": 5e-05,
+        "output_cost_per_token": 1e-04,
+    }
+    shared_keys = ["gpt-4o-mini", "openai/gpt-4o-mini"]
+    deployment_id = "offpeak-only-dep-1"
+    original_entries = _snapshot_model_cost_entries(shared_keys + [deployment_id])
+    builtin_info = litellm.get_model_info(model="openai/gpt-4o-mini")
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "offpeak-only",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key-for-registration",
+                },
+                "model_info": {"id": deployment_id, "off_peak_pricing": dict(block)},
+            }
+        ]
+    )
+
+    try:
+        entry = litellm.model_cost[deployment_id]
+        assert entry["off_peak_pricing"] == block
+        assert entry["input_cost_per_token"] is not None
+        assert entry["input_cost_per_token"] == builtin_info["input_cost_per_token"]
+        assert entry["output_cost_per_token"] == builtin_info["output_cost_per_token"]
+        for shared_key in shared_keys:
+            shared_entry = litellm.model_cost.get(shared_key) or {}
+            assert not shared_entry.get("off_peak_pricing")
+    finally:
+        _restore_model_cost_entries(original_entries)
+        del router
+
+
+def test_use_custom_pricing_for_model_sees_off_peak_only_model_info():
+    from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
+
+    block = {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-05}
+    assert use_custom_pricing_for_model({"metadata": {"model_info": {"off_peak_pricing": block}}}) is True
+    assert use_custom_pricing_for_model({"metadata": {"model_info": {"off_peak_pricing": None}}}) is False
+    assert use_custom_pricing_for_model({"metadata": {"model_info": {"id": "some-id"}}}) is False
+
+
+def test_completion_cost_applies_off_peak_only_deployment_pricing():
+    """End to end through the cost calculator: with ``custom_pricing`` set and
+    a ``router_model_id`` whose entry carries only an always-on off-peak block,
+    the request bills at the block's rates rather than the shared backend rate.
+    """
+    from litellm import Router
+    from litellm.types.utils import ModelResponse, Usage
+
+    block = {
+        "hours_utc": "00:00-00:00",
+        "input_cost_per_token": 5e-05,
+        "output_cost_per_token": 1e-04,
+    }
+    shared_keys = ["gpt-4o-mini", "openai/gpt-4o-mini"]
+    deployment_id = "offpeak-only-dep-2"
+    original_entries = _snapshot_model_cost_entries(shared_keys + [deployment_id])
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "offpeak-only",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key-for-registration",
+                },
+                "model_info": {"id": deployment_id, "off_peak_pricing": dict(block)},
+            }
+        ]
+    )
+
+    try:
+        response = ModelResponse(
+            model="gpt-4o-mini",
+            usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        )
+        cost = litellm.completion_cost(
+            completion_response=response,
+            model="openai/gpt-4o-mini",
+            custom_llm_provider="openai",
+            custom_pricing=True,
+            router_model_id=deployment_id,
+        )
+        assert cost == pytest.approx(100 * 5e-05 + 50 * 1e-04)
+    finally:
+        _restore_model_cost_entries(original_entries)
+        del router

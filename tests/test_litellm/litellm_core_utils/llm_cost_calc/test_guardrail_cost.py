@@ -111,3 +111,74 @@ def test_cost_breakdown_with_guardrail_merges_and_creates():
     assert merged["input_cost"] == pytest.approx(0.1)
     created = cost_breakdown_with_guardrail(None, 0.0003)
     assert created == {"guardrail_cost": 0.0003, "total_cost": 0.0003}
+
+
+def test_azure_prompt_shield_guardrail_cost_paid_tier_prices_text_records():
+    from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
+        azure_prompt_shield_guardrail_cost,
+    )
+
+    cost = azure_prompt_shield_guardrail_cost(
+        usage_units={"text_records": 3, "requests": 1, "input_characters": 2100},
+        cost_tier="paid",
+        price_per_1000_text_records=0.38,
+    )
+    assert cost == pytest.approx(0.00114)
+
+
+def test_azure_prompt_shield_guardrail_cost_free_tier_is_zero():
+    from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
+        azure_prompt_shield_guardrail_cost,
+    )
+
+    assert azure_prompt_shield_guardrail_cost({"text_records": 50}, "free", 0.38) == 0.0
+
+
+def test_azure_prompt_shield_guardrail_cost_unconfigured_is_none():
+    from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
+        azure_prompt_shield_guardrail_cost,
+    )
+
+    assert azure_prompt_shield_guardrail_cost({"text_records": 50}, None, None) is None
+
+
+def test_azure_prompt_shield_guardrail_cost_no_text_records_is_zero():
+    from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
+        azure_prompt_shield_guardrail_cost,
+    )
+
+    assert azure_prompt_shield_guardrail_cost({}, None, 0.38) == 0.0
+
+
+def test_guardrail_information_cost_excludes_entries_marked_not_in_spend():
+    entries = [
+        {"guardrail_name": "azure-shield", "guardrail_cost": 0.5, "guardrail_cost_in_spend": False},
+        {"guardrail_name": "bedrock", "guardrail_cost": 0.0003},
+    ]
+    assert guardrail_information_cost(entries) == pytest.approx(0.0003)
+    assert guardrail_information_cost({"guardrail_cost": 0.5, "guardrail_cost_in_spend": False}) == 0.0
+    assert guardrail_information_cost({"guardrail_cost": 0.5, "guardrail_cost_in_spend": True}) == pytest.approx(0.5)
+
+
+def test_guardrail_information_cost_treats_none_in_spend_as_billed():
+    """An explicit ``guardrail_cost_in_spend: None`` (the TypedDict sanctions it)
+    keeps the default billed behavior AND must not fail union validation, which
+    would silently zero a sibling entry's real cost."""
+    assert guardrail_information_cost({"guardrail_cost": 0.5, "guardrail_cost_in_spend": None}) == pytest.approx(0.5)
+    entries = [
+        {"guardrail_name": "azure-shield", "guardrail_cost": 0.5, "guardrail_cost_in_spend": None},
+        {"guardrail_name": "bedrock", "guardrail_cost": 0.0003},
+    ]
+    assert guardrail_information_cost(entries) == pytest.approx(0.5003)
+
+
+def test_guardrail_information_cost_skips_malformed_entry_keeps_siblings():
+    """Entries are validated one by one: a malformed entry (a custom hook stamping
+    a non-boolean guardrail_cost_in_spend) prices to 0.0 by itself and must not
+    zero a sibling entry's real billable cost."""
+    entries = [
+        {"guardrail_name": "custom", "guardrail_cost": 0.5, "guardrail_cost_in_spend": "maybe"},
+        {"guardrail_name": "bedrock", "guardrail_cost": 0.0003},
+    ]
+    assert guardrail_information_cost(entries) == pytest.approx(0.0003)
+    assert guardrail_information_cost({"guardrail_cost": 0.5, "guardrail_cost_in_spend": "maybe"}) == 0.0

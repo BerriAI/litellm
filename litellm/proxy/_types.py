@@ -20,6 +20,7 @@ from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    validate_langfuse_environment_value,
     validate_no_callback_env_reference,
 )
 from litellm.types.integrations.compression_interception import (
@@ -240,6 +241,7 @@ class Litellm_EntityType(enum.Enum):
     PROJECT = "project"
     TAG = "tag"
     AGENT = "agent"
+    MODEL_ACCESS_GROUP = "model_access_group"
 
     # global proxy level entity
     PROXY = "proxy"
@@ -420,6 +422,9 @@ class LiteLLMRoutes(enum.Enum):
         "/responses/{response_id}/cancel",
         "/v1/responses/{response_id}/cancel",
         "/openai/v1/responses/{response_id}/cancel",
+        "/responses/input_tokens",
+        "/v1/responses/input_tokens",
+        "/openai/v1/responses/input_tokens",
         # vector stores
         "/vector_stores",
         "/v1/vector_stores",
@@ -469,6 +474,7 @@ class LiteLLMRoutes(enum.Enum):
         "/vllm",
         "/mistral",
         "/milvus",
+        "/gigachat",
         "/watsonx",
     ]
 
@@ -503,6 +509,7 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp-rest/tools/list",
         "/mcp-rest/tools/call",
         "/v1/mcp/tools",
+        "/introspect",
     ]
 
     # MCP server CRUD routes — control-plane. Gated by DISABLE_ADMIN_ENDPOINTS.
@@ -565,6 +572,7 @@ class LiteLLMRoutes(enum.Enum):
     model_info_routes = [
         "/model/info",
         "/v1/model/info",
+        "/model_group/info",
     ]
 
     llm_api_routes = (
@@ -728,6 +736,7 @@ class LiteLLMRoutes(enum.Enum):
             "/litellm/.well-known/litellm-ui-config",
             "/.well-known/litellm-ui-config",
             "/public/model_hub",
+            "/public/v1/model_hub",
             "/public/model_hub/info",
             "/public/agent_hub",
             "/public/mcp_hub",
@@ -937,6 +946,8 @@ class LiteLLMRoutes(enum.Enum):
             # Model cost map maintenance views (read-only status / source).
             "/schedule/model_cost_map_reload/status",
             "/model/cost_map/source",
+            # A pure read; POST only so the prompt does not ride in a URL.
+            "/auto_router/classifier/default_prompt",
         ]
         # Spend tracking reads (/spend/logs, /spend/logs/ui, /spend/keys,
         # /spend/users, /spend/tags, /spend/calculate, /cost/estimate). Admin
@@ -1399,15 +1410,15 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
     approval_status: str | None = Field(
-        None,
+        default=None,
         description="Server-managed: set by the endpoint; caller values are overridden.",
     )
     submitted_by: str | None = Field(
-        None,
+        default=None,
         description="Server-managed: set by the endpoint; caller values are overridden.",
     )
     submitted_at: datetime | None = Field(
-        None,
+        default=None,
         description="Server-managed: set by the endpoint; caller values are overridden.",
     )
 
@@ -2027,6 +2038,8 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
                 raise ValueError(f"Invalid callback variable: {key}. Must be one of {valid_keys}")
             callback_vars[key] = str(value)
             validate_no_callback_env_reference(key, callback_vars[key], source="key/team callback metadata")
+            if key == "langfuse_environment":
+                validate_langfuse_environment_value(callback_vars[key])
         return values
 
 
@@ -2507,9 +2520,32 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "are skipped for on-demand GET /health as well as the background health loop."
         ),
     )
+    background_health_check_model_groups: tuple[str, ...] | None = Field(
+        None,
+        description=(
+            "Opt-in allowlist of model group names for background health checks and "
+            "health-check routing. When set, the background loop probes only deployments "
+            "whose model_name is listed, and enable_health_check_routing filters unhealthy "
+            "deployments only within the listed groups; every other group, including newly "
+            "added deployments, is skipped and keeps its configured routing strategy. "
+            "When unset, all deployments participate (opt out per deployment via "
+            "model_info.disable_background_health_check)."
+        ),
+    )
+    model_list_healthy_only: bool | None = Field(
+        None,
+        description=(
+            "When true, `/models`, `/v1/models/{id}` and `/model/info` hide models whose backing "
+            "deployments are all unhealthy, for every caller, without needing `healthy_only=true` "
+            "per request. Requires `background_health_checks: true`, and keeps deployment health "
+            "state cached without turning on `enable_health_check_routing`, so routing is "
+            "unaffected. With no health state nothing is hidden. Hiding is presentation-only, a "
+            "hidden model can still be called."
+        ),
+    )
     alerting: list | None = Field(
         None,
-        description="List of alerting integrations. Today, just slack - `alerting: ['slack']`",
+        description="List of alerting integrations - e.g. `alerting: ['slack', 'webhook', 'email']`. 'slack' posts Slack-format messages to any Slack-compatible webhook (Slack, Rocket.Chat, Mattermost); 'webhook' posts structured JSON budget alerts to WEBHOOK_URL",
     )
     alert_types: list[AlertType] | None = Field(
         None,
@@ -2577,6 +2613,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     disable_auto_add_proxy_admin_to_teams: bool | None = Field(
         None,
         description="By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.",
+    )
+    enforce_fallback_model_access: bool | None = Field(
+        None,
+        description="If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is False.",
     )
     scheduled_job_stagger: ScheduledJobStaggerSettings | None = Field(
         None,
@@ -2834,7 +2874,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # Values stay `object` rather than BudgetConfig: this is the raw JSON column,
     # and validating it here would make one malformed row fail auth outright.
     # resolve_model_budget validates the single entry a request actually needs.
-    user_model_max_budget: dict[str, object] | None = None
+    user_model_max_budget: Mapping[str, object] | None = None
     request_route: str | None = None
     is_session_token: bool = False
     # Server-only marker set exclusively by the MCP gateway admission path
@@ -2867,6 +2907,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         ),
     )
     budget_reservation: dict[str, Any] | None = Field(default=None, exclude=True)
+    matched_model_access_groups: list[str] | None = Field(default=None, exclude=True)
     budget_throttle_pct: float | None = Field(default=None, exclude=True)
     user: Any | None = None  # Expanded user object when expand=user is used
     created_by_user: Any | None = None  # Expanded created_by user when expand=user is used
@@ -3012,8 +3053,8 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     sso_user_id: str | None = None
     teams: list[str] = []  # Just team IDs, not full team objects
     object_permission: LiteLLM_ObjectPermissionTable | None = None
-    model_max_budget: dict | None = None
-    model_max_budget_usage: dict | None = None
+    model_max_budget: Mapping[str, object] | None = None
+    model_max_budget_usage: Mapping[str, Mapping[str, object]] | None = None
 
 
 from litellm.models.config import LiteLLM_Config as LiteLLM_Config  # noqa: E402
@@ -3527,6 +3568,19 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
     )
 
 
+class SpendLogsRouterMetadata(TypedDict):
+    """
+    Router provenance stamped on spend logs for deployments flagged with
+    model_info.internal_router_model, correlating the requested model group
+    with the provider deployment that served the call
+    """
+
+    requested_model: ReadOnly[str | None]
+    selected_model: ReadOnly[str | None]
+    selected_provider: ReadOnly[str | None]
+    router_correlation_id: ReadOnly[str | None]
+
+
 class SpendLogsMetadata(TypedDict):
     """
     Specific metadata k,v pairs logged to spendlogs for easier cost tracking
@@ -3554,6 +3608,8 @@ class SpendLogsMetadata(TypedDict):
     status: StandardLoggingPayloadStatus
     proxy_server_request: str | None
     batch_models: list[str] | None
+    batch_successful_requests: int | None  # writable-ok: built by assignment like every sibling key in this TypedDict
+    batch_failed_requests: int | None  # writable-ok: built by assignment like every sibling key in this TypedDict
     error_information: StandardLoggingPayloadErrorInformation | None
     usage_object: dict | None
     model_map_information: StandardLoggingModelInformation | None
@@ -3566,6 +3622,8 @@ class SpendLogsMetadata(TypedDict):
     cost_breakdown: CostBreakdown | None  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
     compression_savings: CompressionSavingsMetadata | None
     autorouter_savings: ReadOnly[float | None]  # stamped by the logging payload; None = not auto-routed
+    litellm_gateway_injected_cache: ReadOnly[str | None]
+    router_metadata: ReadOnly[SpendLogsRouterMetadata | None]  # None = deployment not flagged internal_router_model
 
 
 class SpendLogsPayload(TypedDict):
@@ -4846,6 +4904,7 @@ class BaseDailySpendTransaction(TypedDict):
     # cost-savings metrics (dollars, priced per request before aggregation)
     compression_savings_spend: float
     prompt_caching_savings_spend: float
+    gateway_injected_caching_savings_spend: float  # writable-ok: the rollup queue accumulates into this key in place, as it does for every sibling spend field
     # Not required: rows queued by a pod running the previous release, or replayed from
     # the Redis buffer across an upgrade, carry no such key. Every reader coalesces a
     # missing value to zero, so requiring it here would describe a shape the aggregation
@@ -4897,6 +4956,7 @@ class DBSpendUpdateTransactions(TypedDict):
     org_list_transactions: dict[str, float] | None
     tag_list_transactions: dict[str, float] | None
     agent_list_transactions: dict[str, float] | None
+    model_access_group_list_transactions: ReadOnly[dict[str, float] | None]
 
 
 class SpendUpdateQueueItem(TypedDict, total=False):

@@ -711,6 +711,66 @@ def test_stream_chunk_builder_anthropic_web_search():
     assert usage.server_tool_use.web_search_requests == 2
 
 
+def test_calculate_usage_carries_google_maps_grounding_requests():
+    """
+    The Maps grounding counter set on a streamed usage chunk must survive the stream rebuild even
+    when a later chunk carries its own prompt_tokens_details, or Maps grounding on streaming
+    requests silently bills $0.
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-maps-usage-0",
+        created=1745513207,
+        model="gemini-2.5-flash",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="Here"),
+                logprobs=None,
+            )
+        ],
+        stream_options={"include_usage": True},
+        usage=Usage(
+            completion_tokens=0,
+            prompt_tokens=15,
+            total_tokens=15,
+            prompt_tokens_details=PromptTokensDetailsWrapper(google_maps_grounding_requests=1),
+        ),
+    )
+
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-maps-usage-0",
+        created=1745513207,
+        model="gemini-2.5-flash",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content=None),
+                logprobs=None,
+            )
+        ],
+        stream_options={"include_usage": True},
+        usage=Usage(
+            completion_tokens=27,
+            prompt_tokens=0,
+            total_tokens=27,
+            prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=0),
+        ),
+    )
+
+    chunks = [chunk1, chunk2]
+    processor = ChunkProcessor(chunks=chunks)
+
+    usage = processor.calculate_usage(chunks=chunks, model="gemini-2.5-flash", completion_output="")
+
+    assert usage.prompt_tokens_details.google_maps_grounding_requests == 1
+
+
 def test_sort_chunks_handles_dict_hidden_params_created_at():
     chunks = [
         {

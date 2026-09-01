@@ -93,6 +93,8 @@ from .custom_tools import (
     convert_custom_tool_to_function_tool,
     extract_custom_tool_names,
     is_custom_tool_call,
+    openai_shaped_tool_call_item_id,
+    serialize_tool_call_arguments,
     unwrap_custom_tool_arguments,
     validated_allowed_callers,
 )
@@ -1010,7 +1012,7 @@ class LiteLLMCompletionResponsesConfig:
             type=cast(Literal["function"], tool_use_type),
             function=ChatCompletionToolCallFunctionChunk(
                 name=str(function.get("name", "")),
-                arguments=str(function.get("arguments", "{}")),
+                arguments=serialize_tool_call_arguments(function.get("arguments"), "{}"),
             ),
             index=index,
         )
@@ -1300,16 +1302,14 @@ class LiteLLMCompletionResponsesConfig:
         if isinstance(content, str) and content.strip():
             return content
         if isinstance(content, list):
-            text_parts: Final[list[str]] = []  # mutable-ok: text accumulator
-            for block in content:
-                if not isinstance(block, Mapping):
-                    continue
-                block_type = block.get("type")
-                if block_type in ("encrypted_content", "redacted_thinking"):
-                    continue
-                text = block.get("text")
-                if isinstance(text, str) and text.strip():
-                    text_parts.append(text.strip())
+            text_parts: Final = tuple(
+                text.strip()
+                for block in content
+                if isinstance(block, Mapping)
+                and block.get("type") not in ("encrypted_content", "redacted_thinking")
+                and isinstance(text := block.get("text"), str)
+                and text.strip()
+            )
             if text_parts:
                 return "\n".join(text_parts)
         return None
@@ -1325,13 +1325,11 @@ class LiteLLMCompletionResponsesConfig:
         summary: Final[object] = input_item.get("summary")
         if not isinstance(summary, list):
             return None
-        text_parts: Final[list[str]] = []  # mutable-ok: text accumulator
-        for block in summary:
-            if not isinstance(block, Mapping):
-                continue
-            text = block.get("text")
-            if isinstance(text, str) and text.strip():
-                text_parts.append(text.strip())
+        text_parts: Final = tuple(
+            text.strip()
+            for block in summary
+            if isinstance(block, Mapping) and isinstance(text := block.get("text"), str) and text.strip()
+        )
         return "\n".join(text_parts) if text_parts else None
 
     @staticmethod
@@ -1543,7 +1541,7 @@ class LiteLLMCompletionResponsesConfig:
                 type=cast(Literal["function"], _tool_use_definition.get("type") or "function"),
                 function=ChatCompletionToolCallFunctionChunk(
                     name=function.get("name") or "",
-                    arguments=str(function.get("arguments") or ""),
+                    arguments=serialize_tool_call_arguments(function.get("arguments")),
                 ),
                 index=0,
             )
@@ -1593,7 +1591,7 @@ class LiteLLMCompletionResponsesConfig:
             type="function",
             function=ChatCompletionToolCallFunctionChunk(
                 name=f"{namespace}__{raw_name}" if qualify else raw_name,
-                arguments=str(raw_arguments or ""),
+                arguments=serialize_tool_call_arguments(raw_arguments),
             ),
             index=0,
         )
@@ -1633,6 +1631,8 @@ class LiteLLMCompletionResponsesConfig:
             file_dict["file_id"] = file_id
         if item.get("file_data"):
             file_dict["file_data"] = item["file_data"]
+        if item.get("filename"):
+            file_dict["filename"] = item["filename"]
 
         new_item: Final[dict[str, object]] = {"type": "file", "file": file_dict}
         if "cache_control" in item:
@@ -2026,7 +2026,7 @@ class LiteLLMCompletionResponsesConfig:
                 function_definition = tool.function
                 tool_name = function_definition.name or ""
                 tool_id = tool.id or ""
-                tool_arguments = function_definition.get("arguments") or ""
+                tool_arguments = serialize_tool_call_arguments(function_definition.get("arguments"))
 
                 # Check if this is a custom tool
                 if is_custom_tool_call(tool_name, custom_tool_names):
@@ -2035,7 +2035,7 @@ class LiteLLMCompletionResponsesConfig:
                     custom_item = CustomToolCallOutputItem(
                         type="custom_tool_call",
                         call_id=tool_id,
-                        id=tool_id,
+                        id=openai_shaped_tool_call_item_id("custom_tool_call", tool_id),
                         name=tool_name,
                         input=input_str,
                         status=function_definition.get("status") or "completed",
@@ -2066,7 +2066,7 @@ class LiteLLMCompletionResponsesConfig:
                         name=tool_name,
                         arguments=tool_arguments,
                         call_id=tool_id,
-                        id=tool_id,
+                        id=openai_shaped_tool_call_item_id("function_call", tool_id),
                         type="function_call",
                         status=function_definition.get("status") or "completed",
                     )
@@ -2503,8 +2503,7 @@ class LiteLLMCompletionResponsesConfig:
                     choice=choice,
                 )
                 message_output_items.extend(image_generation_items)
-            else:
-                # Regular message output
+            elif choice.message.content is not None:
                 message_output_items.append(
                     GenericResponseOutputItem(
                         type="message",
@@ -2561,7 +2560,7 @@ class LiteLLMCompletionResponsesConfig:
             type="function",
             function=Function(
                 name=tool_call.get("name") or "",
-                arguments=tool_call.get("arguments") or "",
+                arguments=serialize_tool_call_arguments(tool_call.get("arguments")),
             ),
         )
 
@@ -2665,6 +2664,7 @@ class LiteLLMCompletionResponsesConfig:
             optional_output_details: Final[dict[str, int]] = {
                 field: value
                 for field, value in (
+                    ("audio_tokens", getattr(completion_details, "audio_tokens", None)),
                     ("text_tokens", getattr(completion_details, "text_tokens", None)),
                     ("image_tokens", getattr(completion_details, "image_tokens", None)),
                 )

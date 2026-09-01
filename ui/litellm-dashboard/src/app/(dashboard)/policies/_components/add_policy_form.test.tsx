@@ -198,6 +198,12 @@ describe("AddPolicyForm", () => {
     renderWithProviders(<AddPolicyForm {...defaultProps} onClose={onClose} onOpenFlowBuilder={onOpenFlowBuilder} />);
 
     await user.click(await screen.findByText("Flow Builder"));
+
+    expect(
+      screen.getByText("You'll be taken to the Flow Builder to design your policy logic visually."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/full-screen/i)).not.toBeInTheDocument();
+
     await user.click(screen.getByRole("button", { name: "Continue to Builder" }));
 
     expect(onOpenFlowBuilder).toHaveBeenCalledTimes(1);

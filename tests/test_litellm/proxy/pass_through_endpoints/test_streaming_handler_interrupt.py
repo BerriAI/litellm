@@ -28,12 +28,21 @@ def _make_streaming_response(chunks):
     return mock
 
 
+def _unarmed_logging_obj():
+    """Real Logging objects only carry _on_deferred_stream_complete when the
+    proxy arms deferred dispatch; a bare MagicMock's auto-attribute is truthy
+    and would spuriously trigger the deferral branch."""
+    obj = MagicMock()
+    obj._on_deferred_stream_complete = None
+    return obj
+
+
 @pytest.mark.asyncio
 async def test_chunk_processor_logs_on_normal_completion():
     chunks = [b"chunk-1", b"chunk-2", b"chunk-3"]
     response = _make_streaming_response(chunks)
 
-    mock_logging_obj = MagicMock()
+    mock_logging_obj = _unarmed_logging_obj()
     mock_passthrough_handler = MagicMock()
 
     with patch.object(
@@ -66,7 +75,7 @@ async def test_chunk_processor_logs_on_client_disconnect():
     chunks = [b"event-1", b"event-2", b"event-3"]
     response = _make_streaming_response(chunks)
 
-    mock_logging_obj = MagicMock()
+    mock_logging_obj = _unarmed_logging_obj()
     mock_passthrough_handler = MagicMock()
 
     with patch.object(
@@ -104,7 +113,7 @@ async def test_chunk_processor_does_not_schedule_success_logging_for_upstream_er
     response = _make_streaming_response(chunks)
     response.status_code = 403
 
-    mock_logging_obj = MagicMock()
+    mock_logging_obj = _unarmed_logging_obj()
     mock_passthrough_handler = MagicMock()
 
     with patch.object(
@@ -134,7 +143,7 @@ async def test_chunk_processor_does_not_schedule_success_logging_for_upstream_er
 async def test_chunk_processor_does_not_schedule_logging_when_no_chunks():
     response = _make_streaming_response([])
 
-    mock_logging_obj = MagicMock()
+    mock_logging_obj = _unarmed_logging_obj()
     mock_passthrough_handler = MagicMock()
 
     with patch.object(
@@ -189,7 +198,7 @@ async def test_chunk_processor_routes_logging_through_logging_worker():
         async for chunk in PassThroughStreamingHandler.chunk_processor(
             response=response,
             request_body={"model": "claude-3-haiku"},
-            litellm_logging_obj=MagicMock(),
+            litellm_logging_obj=_unarmed_logging_obj(),
             endpoint_type=EndpointType.GENERIC,
             start_time=datetime.now(),
             passthrough_success_handler_obj=MagicMock(),
@@ -230,7 +239,7 @@ async def test_chunk_processor_routes_logging_through_logging_worker_on_disconne
         gen = PassThroughStreamingHandler.chunk_processor(
             response=response,
             request_body={"model": "claude-3-haiku"},
-            litellm_logging_obj=MagicMock(),
+            litellm_logging_obj=_unarmed_logging_obj(),
             endpoint_type=EndpointType.GENERIC,
             start_time=datetime.now(),
             passthrough_success_handler_obj=MagicMock(),
@@ -246,7 +255,7 @@ async def test_chunk_processor_routes_logging_through_logging_worker_on_disconne
 def _logging_obj_with_write_once_cst():
     """Build a MagicMock that mirrors the real Logging behavior: _update_completion_start_time
     latches self.completion_start_time so the write-once guard actually latches."""
-    obj = MagicMock()
+    obj = _unarmed_logging_obj()
     obj.completion_start_time = None
 
     def _update(*, completion_start_time):
@@ -301,7 +310,7 @@ async def test_chunk_processor_does_not_reset_completion_start_time_on_later_chu
     response = _make_streaming_response(chunks)
 
     real_first = datetime(2020, 1, 1, 0, 0, 0)
-    mock_logging_obj = MagicMock()
+    mock_logging_obj = _unarmed_logging_obj()
     # Simulate first-chunk stamp having already landed (e.g. under contention or a
     # prior wrapper that already set it): later chunks must be no-ops.
     mock_logging_obj.completion_start_time = real_first
@@ -387,7 +396,7 @@ async def _collect_openai_passthrough_chunks(chunks, endpoint_type):
     async for chunk in PassThroughStreamingHandler.chunk_processor(
         response=response,
         request_body={"model": "gpt-4o-mini", "stream": True},
-        litellm_logging_obj=MagicMock(),
+        litellm_logging_obj=_unarmed_logging_obj(),
         endpoint_type=endpoint_type,
         start_time=datetime.now(),
         passthrough_success_handler_obj=MagicMock(),
@@ -517,3 +526,109 @@ def test_convert_raw_bytes_survives_truncated_multibyte_sequence():
     lines = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
 
     assert any('"type": "message_delta"' in line for line in lines)
+
+
+@pytest.mark.asyncio
+async def test_chunk_processor_defers_logging_until_fire_when_armed():
+    """Regression for PR #38722: native /v1/messages streams route through
+    chunk_processor, which enqueued the spend log the moment the stream ended,
+    racing the guardrail end-of-stream scan and logging
+    guardrail_information as null. With deferred dispatch armed, the completed
+    stream must park the logging coroutine on logging_obj and only enqueue it
+    when ProxyLogging._fire_deferred_stream_logging fires after the scan."""
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.proxy.utils import ProxyLogging
+
+    chunks = [b"event-1", b"event-2"]
+    response = _make_streaming_response(chunks)
+
+    logging_obj = _unarmed_logging_obj()
+    logging_obj._deferred_stream_complete_args = None
+
+    enqueued = []
+
+    def _capture(async_coroutine):
+        enqueued.append(async_coroutine)
+        async_coroutine.close()
+
+    with patch.object(  # test-quality-ok: GLOBAL_LOGGING_WORKER is a process-global singleton with no injection seam
+        GLOBAL_LOGGING_WORKER,
+        "ensure_initialized_and_enqueue",
+        side_effect=_capture,
+    ) as mock_enqueue:
+        gen = PassThroughStreamingHandler.chunk_processor(
+            response=response,
+            request_body={"model": "claude-3-haiku"},
+            litellm_logging_obj=logging_obj,
+            endpoint_type=EndpointType.ANTHROPIC,
+            start_time=datetime.now(),
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/v1/messages",
+            route_streaming_logging=AsyncMock(),
+        )
+        ProxyBaseLLMRequestProcessing(data={})._arm_deferred_stream_dispatch(
+            response=gen,
+            route_type="anthropic_messages",
+            user_api_key_dict=MagicMock(),
+            logging_obj=logging_obj,
+        )
+
+        received = []
+        async for chunk in gen:
+            received.append(chunk)
+        await asyncio.sleep(0)
+
+        assert received == chunks
+        mock_enqueue.assert_not_called()
+        parked = logging_obj._deferred_stream_complete_args
+        assert isinstance(parked, tuple) and len(parked) == 1
+        assert asyncio.iscoroutine(parked[0])
+
+        ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+        await asyncio.sleep(0)
+
+        mock_enqueue.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_chunk_processor_enqueues_immediately_on_disconnect_even_when_armed():
+    """Client disconnects never reach _fire_deferred_stream_logging, so parking
+    the coroutine there would lose the partial-usage spend log (LIT-2642); the
+    disconnect path must keep enqueueing immediately."""
+    chunks = [b"event-1", b"event-2", b"event-3"]
+    response = _make_streaming_response(chunks)
+
+    logging_obj = _unarmed_logging_obj()
+
+    async def _armed_closure(logging_coroutine):
+        raise AssertionError("deferred closure must not fire on disconnect")
+
+    logging_obj._on_deferred_stream_complete = _armed_closure
+    logging_obj._deferred_stream_complete_args = None
+
+    enqueued = []
+
+    def _capture(async_coroutine):
+        enqueued.append(async_coroutine)
+        async_coroutine.close()
+
+    with patch.object(  # test-quality-ok: GLOBAL_LOGGING_WORKER is a process-global singleton with no injection seam
+        GLOBAL_LOGGING_WORKER,
+        "ensure_initialized_and_enqueue",
+        side_effect=_capture,
+    ) as mock_enqueue:
+        gen = PassThroughStreamingHandler.chunk_processor(
+            response=response,
+            request_body={"model": "claude-3-haiku"},
+            litellm_logging_obj=logging_obj,
+            endpoint_type=EndpointType.ANTHROPIC,
+            start_time=datetime.now(),
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/v1/messages",
+            route_streaming_logging=AsyncMock(),
+        )
+        await gen.__anext__()
+        await gen.aclose()
+
+    mock_enqueue.assert_called_once()
+    assert logging_obj._deferred_stream_complete_args is None

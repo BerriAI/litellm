@@ -40,18 +40,29 @@ type TeamInfoResponse struct {
 
 // TeamResponse represents a response from the API containing team information.
 type TeamResponse struct {
-	TeamID                string                 `json:"team_id,omitempty"`
-	TeamAlias             string                 `json:"team_alias,omitempty"`
-	OrganizationID        string                 `json:"organization_id,omitempty"`
-	Metadata              map[string]interface{} `json:"metadata,omitempty"`
-	TPMLimit              *int                   `json:"tpm_limit,omitempty"`
-	RPMLimit              *int                   `json:"rpm_limit,omitempty"`
-	MaxBudget             *float64               `json:"max_budget,omitempty"`
-	SoftBudget            *float64               `json:"soft_budget,omitempty"`
-	BudgetDuration        string                 `json:"budget_duration,omitempty"`
-	Models                []string               `json:"models"`
-	Blocked               bool                   `json:"blocked,omitempty"`
-	TeamMemberPermissions []string               `json:"team_member_permissions,omitempty"`
+	TeamID                   string                 `json:"team_id,omitempty"`
+	TeamAlias                string                 `json:"team_alias,omitempty"`
+	OrganizationID           string                 `json:"organization_id,omitempty"`
+	Metadata                 map[string]interface{} `json:"metadata,omitempty"`
+	TPMLimit                 *int                   `json:"tpm_limit,omitempty"`
+	RPMLimit                 *int                   `json:"rpm_limit,omitempty"`
+	MaxBudget                *float64               `json:"max_budget,omitempty"`
+	SoftBudget               *float64               `json:"soft_budget,omitempty"`
+	BudgetDuration           string                 `json:"budget_duration,omitempty"`
+	Models                   []string               `json:"models"`
+	Blocked                  bool                   `json:"blocked,omitempty"`
+	TeamMemberPermissions    []string               `json:"team_member_permissions,omitempty"`
+	ModelAliases             map[string]interface{} `json:"model_aliases,omitempty"`
+	Guardrails               []string               `json:"guardrails,omitempty"`
+	Prompts                  []string               `json:"prompts,omitempty"`
+	TeamMemberBudget         *float64               `json:"team_member_budget,omitempty"`
+	TeamMemberBudgetDuration string                 `json:"team_member_budget_duration,omitempty"`
+	TeamMemberRPMLimit       *int                   `json:"team_member_rpm_limit,omitempty"`
+	TeamMemberTPMLimit       *int                   `json:"team_member_tpm_limit,omitempty"`
+	TeamMemberKeyDuration    string                 `json:"team_member_key_duration,omitempty"`
+	ModelRPMLimit            map[string]interface{} `json:"model_rpm_limit,omitempty"`
+	ModelTPMLimit            map[string]interface{} `json:"model_tpm_limit,omitempty"`
+	AllowedPassthroughRoutes []string               `json:"allowed_passthrough_routes,omitempty"`
 }
 
 // OrganizationResponse represents a response from the API containing organization information.
@@ -107,31 +118,40 @@ type ModelInfo struct {
 
 // Key represents a LiteLLM API key.
 type Key struct {
-	Key                  string                 `json:"key,omitempty"`
-	TokenID              string                 `json:"token_id,omitempty"`
-	Models               []string               `json:"models"`
-	Spend                float64                `json:"spend,omitempty"`
-	MaxBudget            *float64               `json:"max_budget,omitempty"`
-	UserID               string                 `json:"user_id,omitempty"`
-	TeamID               string                 `json:"team_id,omitempty"`
-	MaxParallelRequests  *int                   `json:"max_parallel_requests,omitempty"`
-	Metadata             map[string]interface{} `json:"metadata,omitempty"`
-	TPMLimit             *int                   `json:"tpm_limit,omitempty"`
-	RPMLimit             *int                   `json:"rpm_limit,omitempty"`
-	BudgetDuration       string                 `json:"budget_duration,omitempty"`
-	AllowedCacheControls []string               `json:"allowed_cache_controls,omitempty"`
-	SoftBudget           *float64               `json:"soft_budget,omitempty"`
-	KeyAlias             string                 `json:"key_alias,omitempty"`
-	Duration             string                 `json:"duration,omitempty"`
-	Aliases              map[string]interface{} `json:"aliases,omitempty"`
-	Config               map[string]interface{} `json:"config,omitempty"`
-	Permissions          map[string]interface{} `json:"permissions,omitempty"`
-	ModelMaxBudget       map[string]interface{} `json:"model_max_budget,omitempty"`
-	ModelRPMLimit        map[string]interface{} `json:"model_rpm_limit,omitempty"`
-	ModelTPMLimit        map[string]interface{} `json:"model_tpm_limit,omitempty"`
-	Guardrails           []string               `json:"guardrails,omitempty"`
-	Blocked              bool                   `json:"blocked"`
-	Tags                 []string               `json:"tags,omitempty"`
+	Key                      string                 `json:"key,omitempty"`
+	TokenID                  string                 `json:"token_id,omitempty"`
+	Models                   []string               `json:"models"`
+	Spend                    float64                `json:"spend,omitempty"`
+	MaxBudget                *float64               `json:"max_budget,omitempty"`
+	UserID                   string                 `json:"user_id,omitempty"`
+	TeamID                   string                 `json:"team_id,omitempty"`
+	MaxParallelRequests      *int                   `json:"max_parallel_requests,omitempty"`
+	Metadata                 map[string]interface{} `json:"metadata,omitempty"`
+	TPMLimit                 *int                   `json:"tpm_limit,omitempty"`
+	RPMLimit                 *int                   `json:"rpm_limit,omitempty"`
+	BudgetDuration           string                 `json:"budget_duration,omitempty"`
+	AllowedCacheControls     []string               `json:"allowed_cache_controls,omitempty"`
+	SoftBudget               *float64               `json:"soft_budget,omitempty"`
+	KeyAlias                 string                 `json:"key_alias,omitempty"`
+	Duration                 string                 `json:"duration,omitempty"`
+	Aliases                  map[string]interface{} `json:"aliases,omitempty"`
+	Config                   map[string]interface{} `json:"config,omitempty"`
+	Permissions              map[string]interface{} `json:"permissions,omitempty"`
+	ModelMaxBudget           map[string]interface{} `json:"model_max_budget,omitempty"`
+	ModelRPMLimit            map[string]interface{} `json:"model_rpm_limit,omitempty"`
+	ModelTPMLimit            map[string]interface{} `json:"model_tpm_limit,omitempty"`
+	Guardrails               []string               `json:"guardrails,omitempty"`
+	Blocked                  bool                   `json:"blocked"`
+	Tags                     []string               `json:"tags,omitempty"`
+	BudgetID                 string                 `json:"budget_id,omitempty"`
+	EnforcedParams           []string               `json:"enforced_params,omitempty"`
+	AllowedRoutes            []string               `json:"allowed_routes,omitempty"`
+	AllowedPassthroughRoutes []string               `json:"allowed_passthrough_routes,omitempty"`
+	RPMLimitType             string                 `json:"rpm_limit_type,omitempty"`
+	TPMLimitType             string                 `json:"tpm_limit_type,omitempty"`
+	Prompts                  []string               `json:"prompts,omitempty"`
+	OrganizationID           string                 `json:"organization_id,omitempty"`
+	ProjectID                string                 `json:"project_id,omitempty"`
 }
 
 // KeyResponse represents a response from the API containing key information.
@@ -251,4 +271,34 @@ type VectorStoreDeleteRequest struct {
 // VectorStoreInfoRequest represents a request to get vector store information.
 type VectorStoreInfoRequest struct {
 	VectorStoreID string `json:"vector_store_id"`
+}
+
+type JWTKeyMappingRequest struct {
+	JWTClaimName  string `json:"jwt_claim_name"`
+	JWTClaimValue string `json:"jwt_claim_value"`
+	Key           string `json:"key"`
+	Description   string `json:"description,omitempty"`
+}
+
+type JWTKeyMappingUpdateRequest struct {
+	ID          string `json:"id"`
+	Key         string `json:"key,omitempty"`
+	Description string `json:"description"`
+	IsActive    bool   `json:"is_active"`
+}
+
+type JWTKeyMappingDeleteRequest struct {
+	ID string `json:"id"`
+}
+
+type JWTKeyMappingResponse struct {
+	ID            string `json:"id"`
+	JWTClaimName  string `json:"jwt_claim_name"`
+	JWTClaimValue string `json:"jwt_claim_value"`
+	Description   string `json:"description,omitempty"`
+	IsActive      bool   `json:"is_active"`
+	CreatedAt     string `json:"created_at,omitempty"`
+	UpdatedAt     string `json:"updated_at,omitempty"`
+	CreatedBy     string `json:"created_by,omitempty"`
+	UpdatedBy     string `json:"updated_by,omitempty"`
 }

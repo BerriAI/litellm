@@ -10,16 +10,19 @@ vi.mock(
   async () => await import("../../../tests/mocks/complexityScorerDefaults"),
 );
 
-const { modelPatchUpdateCall, modelAvailableCall, getAutoRouterClassifierDefaultPromptCall } = vi.hoisted(() => ({
-  modelPatchUpdateCall: vi.fn().mockResolvedValue({}),
-  modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
-  getAutoRouterClassifierDefaultPromptCall: vi.fn().mockResolvedValue("Classify the request into exactly one tier."),
-}));
+const { modelPatchUpdateCall, modelAvailableCall, getAutoRouterClassifierDefaultPromptCall, validateAutoRouterConfig } =
+  vi.hoisted(() => ({
+    validateAutoRouterConfig: vi.fn().mockResolvedValue({ valid: true }),
+    modelPatchUpdateCall: vi.fn().mockResolvedValue({}),
+    modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
+    getAutoRouterClassifierDefaultPromptCall: vi.fn().mockResolvedValue("Classify the request into exactly one tier."),
+  }));
 
 vi.mock("../networking", () => ({
   modelPatchUpdateCall,
   modelAvailableCall,
   getAutoRouterClassifierDefaultPromptCall,
+  validateAutoRouterConfig,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => ({ accessToken: "sk-test" }) }));
@@ -94,6 +97,23 @@ describe("EditAutoRouterModal keyword matching", () => {
     expect(config.semantic_keyword_matching).toBe(true);
     expect(config.embedding_model).toBe("voyage-4-large");
     expect(config.match_threshold).toBe(0.72);
+  });
+
+  // Same gate as the create form: the dry-run's verdict has to stop the PATCH, or an operator sees
+  // a raw 400 instead of the inline message the dry-run was added to give them.
+  it("does not PATCH when the backend's dry-run rejects the config", async () => {
+    const user = userEvent.setup();
+    validateAutoRouterConfig.mockResolvedValueOnce({
+      valid: false,
+      error: "tier_labels cannot be combined with tier_definitions",
+    });
+
+    renderModal();
+    await screen.findByText(/Escalation Keywords/i);
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(validateAutoRouterConfig).toHaveBeenCalled());
+    expect(modelPatchUpdateCall).not.toHaveBeenCalled();
   });
 
   // The create form blocks this; the edit modal renders the same controls, so it must block it
@@ -275,8 +295,7 @@ describe("EditAutoRouterModal classifier context window", () => {
     renderLlmModal();
 
     await user.click(await screen.findByText("Advanced: Classification Method"));
-    const windowSizeSection = (await screen.findByText("Context Window Size")).closest("div") as HTMLElement;
-    const input = within(windowSizeSection).getByRole("spinbutton");
+    const input = await screen.findByLabelText("Context Window Size");
     fireEvent.change(input, { target: { value: "8" } });
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
@@ -345,7 +364,7 @@ describe("EditAutoRouterModal assistant turns", () => {
   });
 });
 
-describe("EditAutoRouterModal session affinity", () => {
+describe("EditAutoRouterModal classification frequency", () => {
   beforeEach(() => {
     modelPatchUpdateCall.mockClear();
   });
@@ -362,15 +381,15 @@ describe("EditAutoRouterModal session affinity", () => {
       />,
     );
 
-  // A stored config with no session_affinity key now runs with affinity OFF, because the backend
-  // field defaults to False. The toggle has to render what the router actually does, and an
-  // untouched save must not flip it.
-  it("shows a stored config with no session_affinity key as off", async () => {
+  // A stored config with neither key now runs with affinity OFF, because both backend fields
+  // default that way. The picker has to render what the router actually does, and an untouched
+  // save must not flip it.
+  it("shows a stored config with neither key as every request", async () => {
     const user = userEvent.setup();
     renderWithStoredConfig(STORED_CONFIG);
 
-    await user.click(await screen.findByText("Advanced: Affinity"));
-    expect(await screen.findByRole("switch", { name: "Pin a session to its first model" })).not.toBeChecked();
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    expect(await screen.findByRole("radio", { name: /Every request/ })).toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -378,12 +397,12 @@ describe("EditAutoRouterModal session affinity", () => {
     expect(savedConfig().session_affinity).toBe(false);
   });
 
-  it("shows a stored session_affinity=true as on and preserves it through an untouched save", async () => {
+  it("shows a stored session_affinity=true as once per session and preserves it through an untouched save", async () => {
     const user = userEvent.setup();
     renderWithStoredConfig({ ...STORED_CONFIG, session_affinity: true });
 
-    await user.click(await screen.findByText("Advanced: Affinity"));
-    expect(await screen.findByRole("switch", { name: "Pin a session to its first model" })).toBeChecked();
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    expect(await screen.findByRole("radio", { name: /Once per session/ })).toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -391,12 +410,12 @@ describe("EditAutoRouterModal session affinity", () => {
     expect(savedConfig().session_affinity).toBe(true);
   });
 
-  it("persists turning session affinity on", async () => {
+  it("persists picking once per session", async () => {
     const user = userEvent.setup();
     renderWithStoredConfig(STORED_CONFIG);
 
-    await user.click(await screen.findByText("Advanced: Affinity"));
-    await user.click(await screen.findByRole("switch", { name: "Pin a session to its first model" }));
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await user.click(await screen.findByRole("radio", { name: /Once per session/ }));
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -404,17 +423,70 @@ describe("EditAutoRouterModal session affinity", () => {
     expect(savedConfig().session_affinity).toBe(true);
   });
 
-  it("persists turning session affinity back off", async () => {
+  it("persists picking every request back over a stored session pin", async () => {
     const user = userEvent.setup();
     renderWithStoredConfig({ ...STORED_CONFIG, session_affinity: true });
 
-    await user.click(await screen.findByText("Advanced: Affinity"));
-    await user.click(await screen.findByRole("switch", { name: "Pin a session to its first model" }));
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await user.click(await screen.findByRole("radio", { name: /Every request/ }));
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
     expect(savedConfig().session_affinity).toBe(false);
+  });
+
+  it("clears a stored session pin when the operator moves to every new user message", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, session_affinity: true });
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await user.click(await screen.findByRole("radio", { name: /Every new user message/ }));
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().session_affinity).toBe(false);
+    expect(savedConfig().classification_mode).toBe("user_turn");
+  });
+
+  it("shows a stored user_turn as selected and preserves it through an untouched save", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, classification_mode: "user_turn" });
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    expect(await screen.findByRole("radio", { name: /Every new user message/ })).toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().classification_mode).toBe("user_turn");
+  });
+
+  it("persists switching a stored config to every new user message", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig(STORED_CONFIG);
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await user.click(await screen.findByRole("radio", { name: /Every new user message/ }));
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().classification_mode).toBe("user_turn");
+  });
+
+  it("rewrites the stored mode to every_request when the operator picks it back", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, classification_mode: "user_turn" });
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await user.click(await screen.findByRole("radio", { name: /Every request/ }));
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().classification_mode).toBe("every_request");
   });
 });
 
@@ -797,5 +869,76 @@ describe("EditAutoRouterModal plan-mode minimum tier", () => {
 
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
     expect(savedConfig()).not.toHaveProperty("plan_mode_min_tier");
+  });
+});
+
+describe("EditAutoRouterModal with a stored custom tier set", () => {
+  const CUSTOM_STORED = {
+    tiers: { CASUAL: ["gpt-4o-mini"], SECURITY_REVIEW: ["gpt-4o-mini"] },
+    tier_definitions: [
+      { name: "CASUAL", description: "small talk" },
+      { name: "SECURITY_REVIEW", description: "audits and vulnerability review" },
+    ],
+    fallback_tier: "CASUAL",
+    classifier_type: "llm",
+    classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    plan_mode_min_tier: "SECURITY_REVIEW",
+    classification_prompt: "operator written preamble",
+    tier_model_configs: {
+      SECURITY_REVIEW: [{ model_name: "gpt-4o-mini", litellm_params: { reasoning_effort: "high" } }],
+    },
+  };
+
+  const renderCustomModal = () =>
+    renderWithProviders(
+      <EditAutoRouterModal
+        isVisible
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        modelData={{
+          ...MODEL_DATA,
+          litellm_params: { ...MODEL_DATA.litellm_params, complexity_router_config: CUSTOM_STORED },
+        }}
+        accessToken="token"
+        userRole="Admin"
+      />,
+    );
+
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  it("shows the stored tier names rather than the built-in four", async () => {
+    renderCustomModal();
+    expect(await screen.findByText("SECURITY_REVIEW Tier")).toBeInTheDocument();
+    expect(screen.queryByText("Simple Tier")).not.toBeInTheDocument();
+  });
+
+  it("saves an untouched custom-tier router back byte-identically, tier set and floor included", async () => {
+    const user = userEvent.setup();
+    renderCustomModal();
+
+    await screen.findByText("SECURITY_REVIEW Tier");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+
+    const config = savedConfig();
+    expect(config.tier_definitions).toEqual(CUSTOM_STORED.tier_definitions);
+    expect(config.tiers).toEqual(CUSTOM_STORED.tiers);
+    expect(config.fallback_tier).toBe("CASUAL");
+    expect(config.plan_mode_min_tier).toBe("SECURITY_REVIEW");
+    expect(config.classification_prompt).toBe("operator written preamble");
+    expect(config.classifier_type).toBe("llm");
+  });
+
+  it("keeps the stored per-model reasoning effort, which hydrates by tier name and saves by row id", async () => {
+    const user = userEvent.setup();
+    renderCustomModal();
+
+    await screen.findByText("SECURITY_REVIEW Tier");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+
+    expect(savedConfig().tier_model_configs).toEqual(CUSTOM_STORED.tier_model_configs);
   });
 });
