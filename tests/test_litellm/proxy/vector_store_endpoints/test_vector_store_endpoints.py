@@ -37,6 +37,7 @@ from litellm.proxy.vector_store_files_endpoints.endpoints import (
 from litellm.types.utils import EmbeddingResponse, LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
 from litellm.vector_stores.main import _direct_vector_store_embedding_executor
+from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
 
 def _serialize_litellm_params(litellm_params):
@@ -767,6 +768,35 @@ async def test_unmarked_managed_milvus_connection_requires_admin_resave():
 
     assert exc_info.value.status_code == 403
     assert "re-saved" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_config_loaded_milvus_grpc_connection_is_trusted():
+    registry = VectorStoreRegistry()
+    registry.load_vector_stores_from_config(
+        [
+            {
+                "vector_store_name": "configured",
+                "litellm_params": {
+                    "vector_store_id": "configured",
+                    "custom_llm_provider": "milvus",
+                    "milvus_transport": "grpc",
+                    "api_base": "https://configured-milvus:19530",
+                    "litellm_embedding_model": "team-embedding-alias",
+                },
+            }
+        ]
+    )
+
+    with patch.object(litellm, "vector_store_registry", registry):
+        result = await _update_request_data_with_litellm_managed_vector_store_registry(
+            data={"query": "allowed"},
+            vector_store_id="configured",
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    assert result["api_base"] == "https://configured-milvus:19530"
+    assert result[MILVUS_ADMIN_CONFIGURED_CONNECTION] is True
 
 
 def test_admin_persistence_strips_forged_marker_and_adds_server_marker():

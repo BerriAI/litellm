@@ -18,10 +18,12 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.types.utils import LlmProviders
-from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+from litellm.types.vector_stores import (
+    MILVUS_ADMIN_CONFIGURED_CONNECTION,
+    LiteLLM_ManagedVectorStore,
+)
 from litellm.utils import ProviderConfigManager
 
-MILVUS_ADMIN_CONFIGURED_CONNECTION: Final = "_litellm_admin_configured_milvus_grpc"
 MILVUS_GRPC_CONNECTION_FIELDS: Final = frozenset(
     {
         "api_base",

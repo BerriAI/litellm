@@ -17,6 +17,7 @@ from litellm.repositories.table_repositories import (
     ManagedVectorStoresRepository,
 )
 from litellm.types.vector_stores import (
+    MILVUS_ADMIN_CONFIGURED_CONNECTION,
     VECTOR_STORE_OPENAI_PARAMS,
     LiteLLM_ManagedVectorStore,
     LiteLLM_ManagedVectorStoreIndex,
@@ -417,6 +418,9 @@ class VectorStoreRegistry:
                 raise ValueError(
                     f"custom_llm_provider is required for initializing vector store, got custom_llm_provider={custom_llm_provider}"
                 )
+
+            if custom_llm_provider == "milvus" and vector_store_litellm_params.get("milvus_transport") == "grpc":
+                vector_store_litellm_params[MILVUS_ADMIN_CONFIGURED_CONNECTION] = True
 
             litellm_managed_vector_store = LiteLLM_ManagedVectorStore(
                 vector_store_id=vector_store_id,
