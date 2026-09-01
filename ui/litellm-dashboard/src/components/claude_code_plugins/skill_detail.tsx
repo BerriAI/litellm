@@ -182,7 +182,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
               <button
                 onClick={() => copyToClipboard(installCommand, "install")}
                 className={cn(
-                  "flex cursor-pointer items-center gap-1 border-none bg-none p-0 text-xs",
+                  "flex cursor-pointer items-center gap-1 border-none bg-transparent p-0 text-xs",
                   copiedKey === "install" ? "text-success" : "text-info",
                 )}
               >
@@ -230,7 +230,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
                   copyToClipboard(`/plugin marketplace add ${origin}/claude-code/marketplace.json`, "marketplace-cmd");
                 }}
                 className={cn(
-                  "flex cursor-pointer items-center gap-1 border-none bg-none p-0 text-xs",
+                  "flex cursor-pointer items-center gap-1 border-none bg-transparent p-0 text-xs",
                   copiedKey === "marketplace-cmd" ? "text-success" : "text-info",
                 )}
               >
@@ -255,7 +255,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
               <button
                 onClick={() => copyToClipboard(settingsSnippet, "settings")}
                 className={cn(
-                  "flex cursor-pointer items-center gap-1 border-none bg-none p-0 text-xs",
+                  "flex cursor-pointer items-center gap-1 border-none bg-transparent p-0 text-xs",
                   copiedKey === "settings" ? "text-success" : "text-info",
                 )}
               >
