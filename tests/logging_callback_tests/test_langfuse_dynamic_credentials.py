@@ -51,7 +51,13 @@ def test_resolve_langfuse_credentials_keeps_env_for_global_config(monkeypatch):
     assert host == "https://admin-configured.example"
 
 
-def test_upstream_langfuse_debug_env_is_passed(monkeypatch):
+def test_upstream_langfuse_env_is_read_without_building_a_client(monkeypatch):
+    """The UPSTREAM_LANGFUSE_* values are recorded, and nothing consumes them.
+
+    A client was built here and never referenced. On v4 that means a second
+    exporter, its own threads, and an entry in the SDK's per-key registry, so it
+    is no longer constructed.
+    """
     from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
     class FakeLangfuse:
@@ -81,7 +87,10 @@ def test_upstream_langfuse_debug_env_is_passed(monkeypatch):
     )
 
     assert logger.upstream_langfuse_debug == "true"
-    assert FakeLangfuse.instances[-1].kwargs["debug"] is True
+    assert logger.upstream_langfuse_public_key == "upstream-public"
+    assert logger.upstream_langfuse_host == "https://upstream.example"
+    assert logger.upstream_langfuse_release == "release"
+    assert not hasattr(logger, "upstream_langfuse")
 
 
 def test_langfuse_handler_accepts_secret_key_alias(monkeypatch):
