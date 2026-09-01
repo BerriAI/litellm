@@ -6178,7 +6178,7 @@ def test_is_anthropic_usage_object_rejects_responses_api_usage():
         ("claude-fable-5", True),
         ("claude-mythos-5", True),
         # unmapped future family member -> claude-always-on-thinking fallback rule
-        ("claude-fable-5-1", True),
+        ("claude-fable-6-1", True),
         # adaptive-capable models that ACCEPT disabled must keep it verbatim
         ("claude-opus-5", False),
         ("claude-sonnet-5", False),
