@@ -1,7 +1,7 @@
 """Tests for the optional Rust-backed OCR path."""
 
-import importlib
 import builtins
+import importlib
 import types
 from typing import Any
 
@@ -10,6 +10,7 @@ import pytest
 
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
+from litellm.rust_bridge import configuration
 
 # `litellm/__init__.py` does `from .ocr.main import *`, which binds the `ocr`
 # function onto `litellm.ocr` and shadows the submodule, so import the modules
@@ -214,10 +215,12 @@ def build_prepared_request(
 @pytest.fixture(autouse=True)
 def _reset_rust_flag():
     """Keep the global toggle isolated between tests."""
-    rust_bridge.use_litellm_rust(False, ocr=None, aocr=None)
+    rust_bridge.set_rust_ocr(ocr=None, aocr=None)
+    configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
     yield
-    rust_bridge.use_litellm_rust(False, ocr=None, aocr=None)
+    rust_bridge.set_rust_ocr(ocr=None, aocr=None)
+    configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
 
 
@@ -247,7 +250,14 @@ def test_use_litellm_rust_toggles_flag():
 
 def test_env_var_enables_rust_ocr(monkeypatch):
     monkeypatch.setenv("LITELLM_USE_RUST_OCR", "1")
-    assert rust_bridge._env_enables_rust_ocr() is True
+    with pytest.warns(DeprecationWarning, match="LITELLM_USE_RUST_OCR is deprecated"):
+        assert rust_bridge.rust_ocr_enabled() is True
+
+
+def test_explicit_false_overrides_process_enable():
+    litellm.use_litellm_rust(True)
+
+    assert ocr_main._rust_ocr_enabled(build_prepared_request(litellm_params={"rust": False})) is False
 
 
 def test_load_rust_ocr_returns_injected_impl():
@@ -471,9 +481,7 @@ def test_run_rust_ocr_resolves_key_via_secret_manager_when_missing():
 
     ocr_main._run_rust_ocr(
         prepared_request=build_prepared_request(api_key=None, timeout=None),
-        resolve_api_key=lambda name: (
-            "sk-from-vault" if name == "MISTRAL_API_KEY" else None
-        ),
+        resolve_api_key=lambda name: "sk-from-vault" if name == "MISTRAL_API_KEY" else None,
     )
 
     assert bridge.calls[0]["api_key"] == "sk-from-vault"
@@ -580,9 +588,7 @@ def test_prepare_rust_ocr_call_resolves_azure_ai_api_base_from_secret_manager():
             api_base=None,
             timeout=None,
         ),
-        resolve_api_key=lambda name: (
-            "https://azure.example.com" if name == "AZURE_AI_API_BASE" else None
-        ),
+        resolve_api_key=lambda name: "https://azure.example.com" if name == "AZURE_AI_API_BASE" else None,
     )
 
     assert bridge.calls[0]["api_base"] == "https://azure.example.com"
@@ -600,9 +606,7 @@ def test_prepare_rust_ocr_call_resolves_document_intelligence_endpoint():
             timeout=None,
         ),
         resolve_api_key=lambda name: (
-            "https://document-intelligence.example.com"
-            if name == "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT"
-            else None
+            "https://document-intelligence.example.com" if name == "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT" else None
         ),
     )
 
@@ -815,9 +819,6 @@ def test_ocr_provider_configs_expose_api_key_env_vars():
     assert BaseOCRConfig().get_api_key_env_var() is None
     assert MistralOCRConfig().get_api_key_env_var() == "MISTRAL_API_KEY"
     assert AzureAIOCRConfig().get_api_key_env_var() == "AZURE_AI_API_KEY"
-    assert (
-        AzureDocumentIntelligenceOCRConfig().get_api_key_env_var()
-        == "AZURE_DOCUMENT_INTELLIGENCE_API_KEY"
-    )
+    assert AzureDocumentIntelligenceOCRConfig().get_api_key_env_var() == "AZURE_DOCUMENT_INTELLIGENCE_API_KEY"
     assert VertexAIOCRConfig().get_api_key_env_var() == "VERTEX_AI_API_KEY"
     assert VertexAIDeepSeekOCRConfig().get_api_key_env_var() == "VERTEX_AI_API_KEY"
