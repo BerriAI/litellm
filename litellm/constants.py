@@ -828,6 +828,7 @@ openai_compatible_endpoints: Final[list] = [
 
 openai_compatible_providers: Final[list] = [
     "anyscale",
+    "agnes_ai",
     "groq",
     "nvidia_nim",
     "cerebras",
