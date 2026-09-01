@@ -55,6 +55,7 @@ describe("buildComplexityRouterConfig", () => {
       classification_mode: "every_request",
       session_affinity: false,
       deployment_affinity: true,
+      modality_routing: false,
       escalation_keywords: ["LITELLM ESCALATE"],
     };
     expect(config).toEqual(expected);
@@ -246,6 +247,12 @@ describe("buildComplexityRouterConfig", () => {
   it("omits return_raw_model_name when disabled", () => {
     const config = buildComplexityRouterConfig({ ...baseParams, returnRawModelName: false });
     expect(config.return_raw_model_name).toBeUndefined();
+  });
+
+  it("writes modality_routing explicitly both ways, so the stored config never relies on the backend default", () => {
+    expect(buildComplexityRouterConfig({ ...baseParams, modalityRouting: true }).modality_routing).toBe(true);
+    expect(buildComplexityRouterConfig(baseParams).modality_routing).toBe(false);
+    expect(buildComplexityRouterConfig({ ...baseParams, modalityRouting: false }).modality_routing).toBe(false);
   });
 
   it("writes session_affinity=true so turning the toggle on overrides the backend's off-by-default", () => {
