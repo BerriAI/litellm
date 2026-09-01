@@ -88,16 +88,19 @@ class FailureCounts(NamedTuple):
     source: int
 
 
+def _parse_int_setting(value: object) -> object:
+    if not isinstance(value, str):
+        return value
+    try:
+        return int(value.strip())
+    except ValueError:
+        return value
+
+
 def _int_setting(name: str, value: object, default: int, minimum: int) -> int:
     if value is None:
         return default
-    if isinstance(value, str):
-        try:
-            parsed: Final = int(value.strip())
-        except ValueError:
-            parsed = value
-    else:
-        parsed = value
+    parsed: Final = _parse_int_setting(value)
     if isinstance(parsed, bool) or not isinstance(parsed, int) or parsed < minimum:
         verbose_proxy_logger.warning(
             "general_settings.%s=%r is not an integer >= %s; using the default of %s", name, value, minimum, default
