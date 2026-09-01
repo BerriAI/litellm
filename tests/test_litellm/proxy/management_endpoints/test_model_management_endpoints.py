@@ -285,6 +285,14 @@ class TestModelManagementAuthChecks:
             )
         assert exc_info.value.code == "403"
 
+    def test_can_user_attach_credential_unchanged_existing_allows_any_role(self):
+        result = ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=LiteLLM_Params(model="test_model", litellm_credential_name="shared-credential"),
+            user_api_key_dict=self.team_admin_user,
+            existing_litellm_params=LiteLLM_Params(model="test_model", litellm_credential_name="shared-credential"),
+        )
+        assert result is True
+
     def test_can_user_attach_credential_internal_user_fails(self):
         with pytest.raises(Exception, match="Only a proxy admin can attach a stored credential") as exc_info:
             ModelManagementAuthChecks.can_user_attach_credential(

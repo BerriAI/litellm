@@ -701,15 +701,11 @@ async def patch_model(
                 param="blocked",
             )
 
-        if (
-            patch_data.litellm_params is not None
-            and patch_data.litellm_params.litellm_credential_name is not None
-            and patch_data.litellm_params.litellm_credential_name != db_model.litellm_params.litellm_credential_name
-        ):
-            ModelManagementAuthChecks.can_user_attach_credential(
-                litellm_params=patch_data.litellm_params,
-                user_api_key_dict=user_api_key_dict,
-            )
+        ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=patch_data.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+            existing_litellm_params=db_model.litellm_params,
+        )
 
         _raise_on_strategy_router_write_violation(
             incoming_params=patch_data.litellm_params,
@@ -1478,8 +1474,13 @@ class ModelManagementAuthChecks:
     def can_user_attach_credential(
         litellm_params: GenericLiteLLMParams | None,
         user_api_key_dict: UserAPIKeyAuth,
+        existing_litellm_params: GenericLiteLLMParams | None = None,
     ) -> Literal[True]:
         if litellm_params is None or litellm_params.litellm_credential_name is None:
+            return True
+        if existing_litellm_params is not None and (
+            litellm_params.litellm_credential_name == existing_litellm_params.litellm_credential_name
+        ):
             return True
         if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
             return True
@@ -1989,15 +1990,11 @@ async def update_model(
             premium_user=premium_user,
         )
 
-        if (
-            model_params.litellm_params is not None
-            and model_params.litellm_params.litellm_credential_name is not None
-            and model_params.litellm_params.litellm_credential_name != deployment.litellm_params.litellm_credential_name
-        ):
-            ModelManagementAuthChecks.can_user_attach_credential(
-                litellm_params=model_params.litellm_params,
-                user_api_key_dict=user_api_key_dict,
-            )
+        ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=model_params.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+            existing_litellm_params=deployment.litellm_params,
+        )
 
         _raise_on_strategy_router_write_violation(
             incoming_params=model_params.litellm_params,
