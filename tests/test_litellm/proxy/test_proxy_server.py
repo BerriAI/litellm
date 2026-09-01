@@ -11428,12 +11428,12 @@ async def test_authoritative_floor_spend_keeps_a_reset_marker_written_during_the
 
 
 @pytest.mark.asyncio
-async def test_login_throttle_settings_are_not_overridable_from_the_database():
-    """LIT-5285: the sign-in limits stay config.yaml only.
+async def test_login_throttle_settings_are_not_hot_applied_from_the_database():
+    """LIT-5285: a stored sign-in limit does not take effect on a live worker.
 
-    _update_general_settings copies an allowlist of keys out of the DB row. Adding these
-    to it would let a stored value outrank config.yaml, so an operator refused by a bad
-    value could not fix it by editing YAML and restarting.
+    _update_general_settings copies an allowlist of keys out of the DB row on every config
+    poll. Adding these to it would let a stored value outrank config.yaml without a restart,
+    so an operator locked out by a bad value could not fix it by editing YAML and restarting.
     """
     import litellm.proxy.proxy_server as ps
     from litellm.proxy.proxy_server import ProxyConfig

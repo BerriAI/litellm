@@ -24152,7 +24152,7 @@ export interface components {
             enable_public_model_hub: boolean;
             /**
              * Failed Login Window Seconds
-             * @description Fixed window in seconds over which failed Admin UI sign-in attempts are counted. The window starts at the first failure and is not extended by later ones. Configurable from config.yaml only. Defaults to 900
+             * @description Fixed window in seconds over which failed Admin UI sign-in attempts are counted. The window starts at the first failure and is not extended by later ones. Set under `general_settings` in config.yaml. Defaults to 900
              */
             failed_login_window_seconds?: number | null;
             /**
@@ -24201,12 +24201,12 @@ export interface components {
             max_batch_file_size_mb?: number | null;
             /**
              * Max Failed Login Attempts
-             * @description Number of failed Admin UI sign-in attempts allowed for one username, from any source address, within `failed_login_window_seconds`, before further attempts for that username are refused with 429. Attempts are answered with a doubling delay well before this ceiling. Configurable from config.yaml only. Defaults to 50
+             * @description Number of failed Admin UI sign-in attempts allowed for one username, from any source address, within `failed_login_window_seconds`, before further attempts for that username are refused with 429. Attempts are answered with a doubling delay well before this ceiling. Set under `general_settings` in config.yaml. Defaults to 50
              */
             max_failed_login_attempts?: number | null;
             /**
              * Max Failed Login Attempts Per Source
-             * @description Number of failed Admin UI sign-in attempts allowed from one source address, across every username, within `failed_login_window_seconds`, before further attempts from that address are refused with 429. Counted independently of `max_failed_login_attempts`. Configurable from config.yaml only. Defaults to 250
+             * @description Number of failed Admin UI sign-in attempts allowed from one source address, across every username, within `failed_login_window_seconds`, before further attempts from that address are refused with 429. Counted independently of `max_failed_login_attempts`. Set under `general_settings` in config.yaml. Defaults to 250
              */
             max_failed_login_attempts_per_source?: number | null;
             /**
