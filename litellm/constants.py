@@ -830,6 +830,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://pinstripes.io/v1",
     "https://api.meta.ai/v1",
     "https://api.cognition.ai/v1",
+    "https://api.jetinfer.com/v1",
     "https://api.scx.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
 ]
@@ -876,6 +877,7 @@ openai_compatible_providers: Final[list] = [
     "poe",  # Poe - JSON-configured provider
     "chutes",  # Chutes - JSON-configured provider
     "parasail",  # Parasail - JSON-configured provider
+    "jetinfer",  # JetInfer - JSON-configured provider
     "libertai",  # LibertAI - JSON-configured provider
     "featherless_ai",
     "nscale",

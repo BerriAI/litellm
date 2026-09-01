@@ -1290,6 +1290,23 @@
         "rerank": false
       }
     },
+    "jetinfer": {
+      "display_name": "JetInfer (`jetinfer`)",
+      "url": "https://docs.litellm.ai/docs/providers/jetinfer",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "jina_ai": {
       "display_name": "Jina AI (`jina_ai`)",
       "url": "https://docs.litellm.ai/docs/providers/jina_ai",
