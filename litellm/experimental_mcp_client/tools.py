@@ -1,6 +1,7 @@
 import json
 from typing import Final, Literal
 
+import anyio
 from mcp import ClientSession
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
@@ -11,7 +12,11 @@ from openai.types.responses.function_tool_param import FunctionToolParam
 from openai.types.shared_params.function_definition import FunctionDefinition
 
 from litellm._logging import verbose_logger
-from litellm.constants import MCP_TOOL_LISTING_MAX_PAGES
+from litellm.constants import (
+    MCP_CLIENT_TIMEOUT,
+    MCP_TOOL_LISTING_MAX_PAGES,
+    MCP_TOOL_LISTING_TIMEOUT,
+)
 from litellm.types.llms.anthropic import AnthropicMessagesTool
 from litellm.types.utils import ChatCompletionMessageToolCall
 
@@ -97,36 +102,49 @@ async def list_tools_with_pagination(session: ClientSession) -> list[MCPTool]:  
     """Collect tools from every tools/list page by following nextCursor.
 
     Stops and returns the tools collected so far when the upstream repeats a
-    cursor or the page cap is reached, so a buggy upstream yields a partial
-    catalog instead of an error.
+    cursor, the page cap is reached, or the whole-walk deadline expires, so a
+    buggy or slow upstream yields a partial catalog instead of an error.
     """
     tools: Final[list[MCPTool]] = []  # mutable-ok: accumulates each page's tools
     seen_cursors: Final[set[str]] = set()  # mutable-ok: guards against cursor loops
     cursor: str | None = None  # rebind-ok: advances to each page's nextCursor
+    # The per-request session read timeout restarts on every page, so a multi-page
+    # walk needs its own overall deadline. max() keeps the pre-pagination guarantee
+    # that a single page slower than the listing timeout but within the client
+    # timeout still succeeds.
+    listing_deadline: Final = max(MCP_CLIENT_TIMEOUT, MCP_TOOL_LISTING_TIMEOUT)
 
-    for _ in range(MCP_TOOL_LISTING_MAX_PAGES):
-        result = (
-            await session.list_tools()
-            if cursor is None
-            else await session.list_tools(params=PaginatedRequestParams(cursor=cursor))
-        )
-        tools.extend(result.tools)
-
-        next_cursor = getattr(result, "nextCursor", None)
-        if not isinstance(next_cursor, str) or not next_cursor:
-            return tools
-        if next_cursor in seen_cursors:
-            verbose_logger.warning(
-                "MCP server repeated a tools/list cursor while listing tools; returning %s tools collected so far",
-                len(tools),
+    with anyio.move_on_after(listing_deadline):
+        for _ in range(MCP_TOOL_LISTING_MAX_PAGES):
+            result = (
+                await session.list_tools()
+                if cursor is None
+                else await session.list_tools(params=PaginatedRequestParams(cursor=cursor))
             )
-            return tools
-        seen_cursors.add(next_cursor)
-        cursor = next_cursor
+            tools.extend(result.tools)
+
+            next_cursor = getattr(result, "nextCursor", None)
+            if not isinstance(next_cursor, str) or not next_cursor:
+                return tools
+            if next_cursor in seen_cursors:
+                verbose_logger.warning(
+                    "MCP server repeated a tools/list cursor while listing tools; returning %s tools collected so far",
+                    len(tools),
+                )
+                return tools
+            seen_cursors.add(next_cursor)
+            cursor = next_cursor
+
+        verbose_logger.warning(
+            "MCP server tools/list pagination exceeded the maximum of %s pages; returning %s tools collected so far",
+            MCP_TOOL_LISTING_MAX_PAGES,
+            len(tools),
+        )
+        return tools
 
     verbose_logger.warning(
-        "MCP server tools/list pagination exceeded the maximum of %s pages; returning %s tools collected so far",
-        MCP_TOOL_LISTING_MAX_PAGES,
+        "MCP server tools/list pagination exceeded the %s second listing deadline; returning %s tools collected so far",
+        listing_deadline,
         len(tools),
     )
     return tools
