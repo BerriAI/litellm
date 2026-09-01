@@ -1069,6 +1069,61 @@ def test_get_config_callbacks_deduplicates_configured_and_runtime(client, auth_a
     assert {callback["name"] for callback in callbacks} == {"langfuse"}
 
 
+def test_get_config_callbacks_deduplicates_dotted_path_callback(client, auth_as, mock_prisma, monkeypatch):
+    """A dotted-path callback stays a single editable row instead of duplicating under its class name."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "llm_router", None)
+
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class _DottedPathTestHandler(CustomLogger):
+        pass
+
+    dotted_handler = _DottedPathTestHandler()
+    dotted_path = f"{__name__}.dotted_handler"
+
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(
+        return_value={
+            "litellm_settings": {"success_callback": [dotted_path]},
+            "general_settings": {},
+            "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
+        }
+    )
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    monkeypatch.setattr(litellm, "callbacks", [dotted_handler])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_callbacks_by_type",
+        MagicMock(
+            return_value={
+                "success": [],
+                "failure": [],
+                "success_and_failure": ["_DottedPathTestHandler"],
+            }
+        ),
+    )
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/get/config/callbacks")
+
+    assert response.status_code == 200
+    callbacks = response.json()["callbacks"]
+    assert [(callback["name"], callback["type"], callback.get("read_only", False)) for callback in callbacks] == [
+        (dotted_path, "success", False)
+    ]
+
+
 def test_get_config_callbacks_lists_dict_shaped_config_callbacks(client, auth_as, mock_prisma, monkeypatch):
     """Dict-shaped success_callback config values list their keys as editable rows."""
     from litellm.proxy import proxy_server as ps

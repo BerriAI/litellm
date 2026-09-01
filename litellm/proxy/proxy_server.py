@@ -17029,7 +17029,15 @@ def _hidden_runtime_callback_names(configured_callback_names: frozenset[str]) ->
             CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE[configured_name]
         )
     )
-    return guardrail_names | configured_instance_names
+    configured_modules: Final = frozenset(
+        configured_name.rsplit(".", 1)[0] for configured_name in configured_callback_names if "." in configured_name
+    )
+    dotted_instance_names: Final = frozenset(
+        _callback_display_name(instance)
+        for instance in litellm.logging_callback_manager.get_custom_loggers_for_type(CustomLogger)
+        if type(instance).__module__ in configured_modules
+    )
+    return guardrail_names | configured_instance_names | dotted_instance_names
 
 
 def _is_runtime_logging_callback(callback_name: str, hidden_callback_names: frozenset[str]) -> bool:
@@ -17113,22 +17121,13 @@ async def get_config(
         """
 
         for _callback in _success_callbacks:
-            row: Final = process_callback(_callback, "success", environment_variables)
-            if isinstance(_callback, str) and "." in _callback:
-                row["read_only"] = True
-            _data_to_return.append(row)
+            _data_to_return.append(process_callback(_callback, "success", environment_variables))
 
         for _callback in _failure_callbacks:
-            row: Final = process_callback(_callback, "failure", environment_variables)
-            if isinstance(_callback, str) and "." in _callback:
-                row["read_only"] = True
-            _data_to_return.append(row)
+            _data_to_return.append(process_callback(_callback, "failure", environment_variables))
 
         for _callback in _success_and_failure_callbacks:
-            row: Final = process_callback(_callback, "success_and_failure", environment_variables)
-            if isinstance(_callback, str) and "." in _callback:
-                row["read_only"] = True
-            _data_to_return.append(row)
+            _data_to_return.append(process_callback(_callback, "success_and_failure", environment_variables))
 
         configured_callback_names: Final = frozenset(
             _normalize_callback_alias(callback)
