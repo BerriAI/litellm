@@ -309,7 +309,6 @@ class TestLangfuseUsageDetails(unittest.TestCase):
                 side_effect=lambda generation_params, **kwargs: generation_params,
                 create=True,
             ) as mock_add_prompt_params,
-            patch.object(self.logger, "_supports_prompt", return_value=True),
         ):
             # Create a mock response object with usage information containing None values
             response_obj = MagicMock()
@@ -980,7 +979,7 @@ def test_failure_handler_langfuse_kwargs_excludes_original_response():
 
     try:
         # Mock LangFuseHandler to return our capturing mock logger
-        with patch("litellm.litellm_core_utils.litellm_logging.LangFuseHandler") as mock_handler_class:
+        with patch("litellm.litellm_core_utils.litellm_logging.LangFuseHandler") as mock_handler_class:  # test-quality-ok: route the request to the capturing logger; the real handler builds live clients
             mock_handler_class.get_langfuse_logger_for_request.return_value = mock_langfuse_logger
 
             # Call the actual failure_handler
@@ -1047,7 +1046,7 @@ async def test_async_log_failure_event_logs_to_langfuse():
             "generation_id": "mock-gen",
         }
 
-        with patch("litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler") as mock_handler:
+        with patch("litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler") as mock_handler:  # test-quality-ok: route the request to the capturing logger; the real handler builds live clients
             mock_handler.get_langfuse_logger_for_request.return_value = mock_logger
 
             kwargs = {
@@ -1112,7 +1111,7 @@ async def test_async_log_failure_event_works_without_standard_logging_object():
             "generation_id": "mock-gen",
         }
 
-        with patch("litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler") as mock_handler:
+        with patch("litellm.integrations.langfuse.langfuse_prompt_management.LangFuseHandler") as mock_handler:  # test-quality-ok: route the request to the capturing logger; the real handler builds live clients
             mock_handler.get_langfuse_logger_for_request.return_value = mock_logger
 
             kwargs = {
@@ -1263,7 +1262,7 @@ class _RecordingLangfuse:
 def _build_langfuse_logger(monkeypatch) -> LangFuseLogger:
     monkeypatch.setenv("LANGFUSE_MOCK", "false")
     monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
-    with patch("langfuse.Langfuse", _RecordingLangfuse):
+    with patch("litellm.integrations.langfuse.langfuse_sdk.Langfuse", _RecordingLangfuse):  # test-quality-ok: the ctor must be intercepted where acquire_langfuse_client resolves it; a real client spawns export threads
         return LangFuseLogger(
             langfuse_public_key="pk-lit5228",
             langfuse_secret="sk-lit5228",
@@ -1275,7 +1274,7 @@ def test_langfuse_environment_is_passed_to_sdk_client(monkeypatch):
     monkeypatch.setenv("LANGFUSE_MOCK", "false")
     monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
     monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
-    with patch("langfuse.Langfuse", _RecordingLangfuse):
+    with patch("litellm.integrations.langfuse.langfuse_sdk.Langfuse", _RecordingLangfuse):  # test-quality-ok: the ctor must be intercepted where acquire_langfuse_client resolves it; a real client spawns export threads
         logger = LangFuseLogger(
             langfuse_public_key="pk-env",
             langfuse_secret="sk-env",
@@ -1290,7 +1289,7 @@ def test_langfuse_environment_falls_back_to_deployment_env_var(monkeypatch):
     monkeypatch.setenv("LANGFUSE_MOCK", "false")
     monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", "deployment-wide")
     monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
-    with patch("langfuse.Langfuse", _RecordingLangfuse):
+    with patch("litellm.integrations.langfuse.langfuse_sdk.Langfuse", _RecordingLangfuse):  # test-quality-ok: the ctor must be intercepted where acquire_langfuse_client resolves it; a real client spawns export threads
         logger = LangFuseLogger(
             langfuse_public_key="pk-env",
             langfuse_secret="sk-env",
@@ -1577,7 +1576,7 @@ def test_langfuse_environment_is_coerced_and_validated(monkeypatch):
     monkeypatch.setenv("LANGFUSE_MOCK", "false")
     monkeypatch.delenv("LANGFUSE_TRACING_ENVIRONMENT", raising=False)
     monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
-    with patch("langfuse.Langfuse", _RecordingLangfuse):
+    with patch("litellm.integrations.langfuse.langfuse_sdk.Langfuse", _RecordingLangfuse):  # test-quality-ok: the ctor must be intercepted where acquire_langfuse_client resolves it; a real client spawns export threads
         logger = LangFuseLogger(
             langfuse_public_key="pk-env",
             langfuse_secret="sk-env",
@@ -1604,7 +1603,7 @@ def test_langfuse_empty_environment_falls_back_and_is_not_dynamic(monkeypatch):
     # '' falls back to the deployment env var at init
     monkeypatch.setenv("LANGFUSE_MOCK", "false")
     monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
-    with patch("langfuse.Langfuse", _RecordingLangfuse):
+    with patch("litellm.integrations.langfuse.langfuse_sdk.Langfuse", _RecordingLangfuse):  # test-quality-ok: the ctor must be intercepted where acquire_langfuse_client resolves it; a real client spawns export threads
         logger = LangFuseLogger(
             langfuse_public_key="pk-env",
             langfuse_secret="sk-env",
@@ -1769,3 +1768,59 @@ def test_resolve_credentials_falls_back_to_langfuse_base_url(monkeypatch):
 
     _, _, host = langfuse_module.resolve_langfuse_credentials(langfuse_host="https://explicit.example")
     assert host == "https://explicit.example"
+
+
+def test_version_gate_rejects_v5_prereleases():
+    """"5.0.0rc1" sorts below "5", so a plain version comparison would admit it."""
+    langfuse_module.raise_if_unsupported_langfuse_version("4.7")
+    with pytest.raises(ImportError):
+        langfuse_module.raise_if_unsupported_langfuse_version("5.0.0rc1")
+    with pytest.raises(ImportError):
+        langfuse_module.raise_if_unsupported_langfuse_version("5.0.0")
+
+
+def test_int_steering_values_survive_v4_propagation():
+    """v4 drops non-string propagated values outright; v2's pydantic coerced them."""
+    rig = _steering_logger()
+
+    _, _, span = _emit(
+        rig, metadata={"trace_user_id": 12345, "session_id": 67, "trace_version": 3, "tags": ["ok", 99]}
+    )
+
+    # the SDK validates AFTER litellm's coercion: a surviving attribute proves the value was a str
+    assert span.attributes["user.id"] == "12345"
+    assert span.attributes["session.id"] == "67"
+    assert span.attributes["langfuse.version"] == "3"
+    # tags reach propagation as a list; non-str entries must be coerced item-wise
+    assert langfuse_module._coerce_propagated_value(["ok", 99]) == ["ok", "99"]
+
+
+def test_long_steering_values_are_capped_not_dropped():
+    """The SDK drops any propagated value over 200 characters with only a warning."""
+    rig = _steering_logger()
+    long_user: Final = "u" * 250
+
+    _, _, span = _emit(rig, metadata={"trace_user_id": long_user})
+
+    assert span.attributes["user.id"] == "u" * 200
+
+
+def test_returned_generation_id_names_the_exported_observation():
+    """v4 derives observation ids from the OTel span, so a pre-computed id would name nothing."""
+    logger, exporter = _steering_logger()
+
+    returned = logger.log_event_on_langfuse(
+        kwargs={
+            "call_type": "completion",
+            "litellm_params": {"metadata": {"trace_id": "d" * 32}},
+            "messages": [{"role": "user", "content": "the-input"}],
+            "optional_params": {},
+        },
+        response_obj=litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "the-output"}}]),
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+    )
+    logger.Langfuse.flush()
+
+    span = exporter.get_finished_spans()[-1]
+    assert returned["generation_id"] == format(span.context.span_id, "016x")

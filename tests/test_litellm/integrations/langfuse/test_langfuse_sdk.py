@@ -23,6 +23,7 @@ from litellm.integrations.langfuse.langfuse import (
 )
 from litellm.integrations.langfuse.langfuse_sdk import (
     AS_ROOT_ATTRIBUTE,
+    _litellm_built_providers,
     PUBLIC_ATTRIBUTE,
     RELEASE_ATTRIBUTE,
     build_isolated_tracer_provider,
@@ -100,9 +101,9 @@ def test_guardrail_span_with_float_timestamps_does_not_break_the_generation(clie
     lf, exporter = client
     context, claim_root = open_trace_context(client=lf, trace_id="9" * 32, parent_observation_id=None)
     guardrail_start = 1709294400.0
-    start_child_span(client=lf, context=context, name="guardrail", start_time=guardrail_start, attributes={}).end(
-        end_time=to_unix_nanos(guardrail_start + 2)
-    )
+    start_child_span(
+        client=lf, context=context, name="guardrail", start_time=guardrail_start, claim_trace_root=claim_root, attributes={}
+    ).end(end_time=to_unix_nanos(guardrail_start + 2))
     start_generation(
         client=lf, context=context, name="gen", start_time=CALL_START, claim_trace_root=claim_root, attributes={}
     ).end(end_time=to_unix_nanos(CALL_END))
@@ -141,9 +142,9 @@ def test_child_span_keeps_its_own_window_and_stays_a_sibling(client):
     lf, exporter = client
     context, claim_root = open_trace_context(client=lf, trace_id="d" * 32, parent_observation_id=None)
     guardrail_start = CALL_START + timedelta(seconds=1)
-    start_child_span(client=lf, context=context, name="guardrail", start_time=guardrail_start, attributes={}).end(
-        end_time=to_unix_nanos(guardrail_start + timedelta(seconds=2))
-    )
+    start_child_span(
+        client=lf, context=context, name="guardrail", start_time=guardrail_start, claim_trace_root=claim_root, attributes={}
+    ).end(end_time=to_unix_nanos(guardrail_start + timedelta(seconds=2)))
     start_generation(
         client=lf, context=context, name="gen", start_time=CALL_START, claim_trace_root=claim_root, attributes={}
     ).end(end_time=to_unix_nanos(CALL_END))
@@ -152,8 +153,10 @@ def test_child_span_keeps_its_own_window_and_stays_a_sibling(client):
     guardrail = _only_span(exporter, "guardrail")
     generation = _only_span(exporter, "gen")
     assert (guardrail.end_time - guardrail.start_time) == 2 * 1_000_000_000
-    assert guardrail.parent.span_id == generation.parent.span_id
     assert guardrail.context.trace_id == generation.context.trace_id
+    # the shared remote parent is fabricated and never exported, so both must claim trace root
+    assert guardrail.attributes.get(AS_ROOT_ATTRIBUTE) is True
+    assert generation.attributes.get(AS_ROOT_ATTRIBUTE) is True
 
 
 def test_release_is_carried_on_the_root_observation(client):
@@ -423,6 +426,7 @@ def _shared_resources_pair():
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
+    _litellm_built_providers.add(provider)
     first = Langfuse(
         public_key=PUBLIC_KEY,
         secret_key="sk-original",
@@ -502,3 +506,43 @@ def test_shutdown_of_a_stale_client_does_not_deregister_the_live_one():
 
     assert stale_resources is not live._resources
     assert LangfuseResourceManager._instances.get(PUBLIC_KEY) is live._resources
+
+
+def test_ssl_exporter_is_only_built_with_custom_tls_material(monkeypatch, tmp_path):
+    """v4 exports over its own OTLP channel, so litellm's CA bundle must be rebuilt onto it."""
+    import litellm
+    from litellm.integrations.langfuse.langfuse_sdk import _build_verified_span_exporter
+
+    monkeypatch.delenv("SSL_CERTIFICATE", raising=False)
+    monkeypatch.setattr(litellm, "ssl_verify", True)
+    monkeypatch.setattr(litellm, "ssl_certificate", None)
+    assert (
+        _build_verified_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example") is None
+    )
+
+    ca_path = tmp_path / "private-ca.pem"
+    ca_path.write_text("dummy")
+    monkeypatch.setattr(litellm, "ssl_verify", str(ca_path))
+    exporter = _build_verified_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example")
+    assert exporter is not None
+    assert exporter._endpoint == "https://lf.internal.example/api/public/otel/v1/traces"
+    assert exporter._certificate_file == str(ca_path)
+    assert exporter._headers["x-langfuse-public-key"] == "pk"
+
+
+def test_second_client_on_the_same_key_does_not_build_another_provider():
+    """A discarded TracerProvider is pinned forever by its atexit hook."""
+    from litellm.integrations.langfuse.langfuse_sdk import acquire_langfuse_client
+
+    pk = "pk-provider-reuse-test"
+    LangfuseResourceManager._instances.pop(pk, None)
+    parameters = {"public_key": pk, "secret_key": "sk-reuse", "base_url": "http://127.0.0.1:1"}
+    try:
+        first = acquire_langfuse_client(parameters=parameters, environment=None, release=None, mock_mode=True)
+        providers_after_first = len(_litellm_built_providers)
+        second = acquire_langfuse_client(parameters=parameters, environment=None, release=None, mock_mode=True)
+
+        assert second._resources is first._resources
+        assert len(_litellm_built_providers) == providers_after_first
+    finally:
+        LangfuseResourceManager._instances.pop(pk, None)

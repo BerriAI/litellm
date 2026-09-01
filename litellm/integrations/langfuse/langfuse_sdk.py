@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import re
 import threading
+from base64 import b64encode
 from collections.abc import Mapping
 from datetime import datetime
 from hashlib import sha256
@@ -22,6 +24,7 @@ __all__ = (
     "PUBLIC_ATTRIBUTE",
     "RELEASE_ATTRIBUTE",
     "DiscardingSpanExporter",
+    "acquire_langfuse_client",
     "build_isolated_tracer_provider",
     "evict_stale_langfuse_resources",
     "open_trace_context",
@@ -135,17 +138,28 @@ def start_child_span(
     context: Context,
     name: str,
     start_time: datetime | float | None,
+    claim_trace_root: bool,
     attributes: Mapping[str, object],
 ) -> LangfuseSpan:
-    """Create a sibling observation inside the same trace, keeping its own window."""
+    """Create a sibling observation inside the same trace, keeping its own window.
+
+    When the shared parent is the fabricated remote span, every observation must
+    claim trace root itself — the SDK's own remote-parent paths stamp each span —
+    or it exports with a parent id that is never exported.
+    """
     otel_span: Final = client._otel_tracer.start_span(  # pyright: ignore[reportPrivateUsage]  # only route to a historical start time
         name=name, context=context, start_time=to_unix_nanos(start_time)
     )
+    if claim_trace_root:
+        otel_span.set_attribute(AS_ROOT_ATTRIBUTE, True)
     return LangfuseSpan(otel_span=otel_span, langfuse_client=client, **attributes)  # pyright: ignore[reportArgumentType]  # kwargs-ok: callback-built params, v2 accepted the same shapes
 
 
 _ENVIRONMENT_ATTRIBUTE: Final = "langfuse.environment"
-_RELEASE_ATTRIBUTE: Final = "langfuse.release"
+
+# providers litellm itself constructed; a bundle adopted from user code may hold the
+# process-global provider, which litellm must never shut down.
+_litellm_built_providers: Final[WeakSet] = WeakSet()
 
 
 def build_isolated_tracer_provider(*, environment: str | None, release: str | None) -> TracerProvider:
@@ -162,11 +176,13 @@ def build_isolated_tracer_provider(*, environment: str | None, release: str | No
     attributes: Final = MappingProxyType(
         {
             key: value
-            for key, value in ((_ENVIRONMENT_ATTRIBUTE, environment), (_RELEASE_ATTRIBUTE, release))
+            for key, value in ((_ENVIRONMENT_ATTRIBUTE, environment), (RELEASE_ATTRIBUTE, release))
             if value is not None
         }
     )
-    return TracerProvider(resource=Resource.create(dict(attributes)))
+    provider: Final = TracerProvider(resource=Resource.create(dict(attributes)))
+    _litellm_built_providers.add(provider)
+    return provider
 
 
 class DiscardingSpanExporter(SpanExporter):
@@ -187,23 +203,122 @@ class DiscardingSpanExporter(SpanExporter):
         return True
 
 
-def evict_stale_langfuse_resources(*, public_key: str | None, secret_key: str | None, base_url: str | None) -> None:
-    """Drop a cached client whose credentials no longer match the ones being requested.
+def _evict_if_stale_locked(
+    *, public_key: object, secret_key: object, base_url: object
+) -> LangfuseResourceManager | None:
+    """Assumes ``LangfuseResourceManager._lock`` is held; returns the still-valid cached bundle, if any.
 
     langfuse keys its client registry on the public key alone, so a rotated
     secret or a moved host silently keeps exporting with the original values.
     Only the one stale entry is removed; the SDK's own reset would shut down
-    every other tenant in the process.
+    every other tenant in the process. A stale bundle no live litellm client
+    still holds also has its export thread stopped — but only when litellm
+    built the provider, because a bundle adopted from user code may share the
+    process-global provider.
     """
     if not public_key:
-        return
+        return None
+    cached: Final = LangfuseResourceManager._instances.get(public_key)  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
+    if cached is None:
+        return None
+    if getattr(cached, "secret_key", None) == secret_key and getattr(cached, "base_url", None) == base_url:
+        return cached
+    LangfuseResourceManager._instances.pop(public_key, None)  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
+    with _LIVE_CLIENTS_LOCK:
+        holders: Final = _live_clients.get(cached)
+        abandoned: Final = holders is None or len(holders) == 0
+    provider: Final = getattr(cached, "tracer_provider", None)
+    if abandoned and provider is not None and provider in _litellm_built_providers:
+        provider.shutdown()
+    return None
+
+
+def evict_stale_langfuse_resources(*, public_key: str | None, secret_key: str | None, base_url: str | None) -> None:
+    """Drop a cached client whose credentials no longer match the ones being requested."""
     with LangfuseResourceManager._lock:  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
-        cached: Final = LangfuseResourceManager._instances.get(public_key)  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
-        if cached is None:
-            return
-        if getattr(cached, "secret_key", None) == secret_key and getattr(cached, "base_url", None) == base_url:
-            return
-        LangfuseResourceManager._instances.pop(public_key, None)  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
+        _evict_if_stale_locked(public_key=public_key, secret_key=secret_key, base_url=base_url)
+
+
+def _build_verified_span_exporter(*, public_key: object, secret_key: object, base_url: object) -> SpanExporter | None:
+    """Rebuild litellm's TLS material onto the export channel.
+
+    v2 ingested through the injected httpx client, which carried litellm's CA
+    bundle and client certificate; v4 ships every observation through its own
+    OTLP exporter, so a private-CA deployment would fail TLS on every export in
+    a background thread while ``auth_check`` (still on the httpx client) stays
+    green. Only built when custom TLS material is configured; endpoint and
+    headers mirror ``langfuse._client.span_processor``.
+    """
+    import litellm
+
+    ca_bundle: Final = litellm.ssl_verify if isinstance(litellm.ssl_verify, str) else None
+    configured_certificate: Final = os.getenv("SSL_CERTIFICATE") or litellm.ssl_certificate
+    client_certificate: Final = configured_certificate if isinstance(configured_certificate, str) else None
+    if ca_bundle is None and client_certificate is None:
+        return None
+    import langfuse as langfuse_package
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
+    langfuse_version: Final = getattr(langfuse_package, "__version__", "unknown")
+
+    export_path: Final = os.getenv("LANGFUSE_OTEL_TRACES_EXPORT_PATH")
+    endpoint: Final = f"{base_url}/{export_path}" if export_path else f"{base_url}/api/public/otel/v1/traces"
+    encoded_auth: Final = b64encode(f"{public_key}:{secret_key}".encode()).decode("ascii")
+    return OTLPSpanExporter(
+        endpoint=endpoint,
+        headers={  # mutable-ok: the exporter copies these into its session headers
+            "Authorization": "Basic " + encoded_auth,
+            "x-langfuse-sdk-name": "python",
+            "x-langfuse-sdk-version": langfuse_version,
+            "x-langfuse-public-key": str(public_key),
+        },
+        certificate_file=ca_bundle,
+        client_certificate_file=client_certificate,
+    )
+
+
+def acquire_langfuse_client(
+    *,
+    parameters: Mapping[str, object],
+    environment: str | None,
+    release: str | None,
+    mock_mode: bool,
+) -> Langfuse:
+    """Evict-check, construct, and register a client as one atomic step.
+
+    The SDK registry lock is held across the whole sequence: released between
+    eviction and construction, two concurrent inits for the same public key
+    with different secrets can bind one tenant's logger to the other tenant's
+    exporter. The isolated provider is only built when the registry does not
+    already hold the key — a discarded ``TracerProvider`` stays pinned forever
+    by its atexit hook, so building one per health probe or alerting lookup
+    would leak a provider each time.
+    """
+    public_key: Final = parameters.get("public_key")
+    span_exporter: Final = (
+        DiscardingSpanExporter()
+        if mock_mode
+        else _build_verified_span_exporter(
+            public_key=public_key,
+            secret_key=parameters.get("secret_key"),
+            base_url=parameters.get("base_url"),
+        )
+    )
+    with LangfuseResourceManager._lock:  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
+        cached: Final = _evict_if_stale_locked(
+            public_key=public_key,
+            secret_key=parameters.get("secret_key"),
+            base_url=parameters.get("base_url"),
+        )
+        client: Final = Langfuse(
+            **parameters,  # pyright: ignore[reportArgumentType]  # kwargs-ok: dict mirrors the typed ctor, values resolved by the callers
+            tracer_provider=None
+            if cached is not None
+            else build_isolated_tracer_provider(environment=environment, release=release),
+            span_exporter=span_exporter,
+        )
+        register_langfuse_client(client)
+    return client
 
 
 _LIVE_CLIENTS_LOCK: Final = threading.Lock()
@@ -256,21 +371,24 @@ def shutdown_langfuse_client(client: Langfuse) -> None:
     A client that shares its resources with another live client only flushes:
     shutting the shared provider down here would silence the other client for
     the rest of its life, as it did before the reference count existed.
+
+    The registry entry is removed before the blocking shutdown so a concurrent
+    construct builds a fresh bundle instead of adopting a dying one, and the
+    provider is only shut down when litellm built it: a bundle adopted from
+    user code may share the process-global provider.
     """
     resources: Final = getattr(client, "_resources", None)
     client.flush()
     if resources is None:
         client.shutdown()
         return
-    if not _release_langfuse_resources(resources, client):
-        return
+    public_key: Final = getattr(resources, "public_key", None)
+    with LangfuseResourceManager._lock:  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
+        if not _release_langfuse_resources(resources, client):
+            return
+        if public_key is not None and LangfuseResourceManager._instances.get(public_key) is resources:  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
+            LangfuseResourceManager._instances.pop(public_key, None)  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
     client.shutdown()
     provider: Final = getattr(resources, "tracer_provider", None)
-    if provider is not None and not isinstance(provider, otel_trace.ProxyTracerProvider):
+    if provider is not None and provider in _litellm_built_providers:
         provider.shutdown()
-    public_key: Final = getattr(resources, "public_key", None)
-    if public_key is None:
-        return
-    with LangfuseResourceManager._lock:  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
-        if LangfuseResourceManager._instances.get(public_key) is resources:  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor
-            LangfuseResourceManager._instances.pop(public_key, None)  # pyright: ignore[reportPrivateUsage]  # registry has no public accessor

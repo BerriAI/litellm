@@ -91,13 +91,12 @@ class TestLangfusePromptManagement:
                 "litellm.integrations.langfuse.langfuse_prompt_management.LangFuseLogger._get_langfuse_flush_interval",
                 return_value=1,
             ),
-            patch.dict("sys.modules", {"langfuse": self._mock_langfuse}),
+            patch("litellm.integrations.langfuse.langfuse_sdk.Langfuse", mock_langfuse_class),  # test-quality-ok: the ctor must be intercepted where acquire_langfuse_client resolves it; a real client spawns export threads
             patch(
                 "litellm.llms.custom_httpx.http_handler.get_ssl_configuration",
                 return_value=False,
             ) as mock_get_ssl,
         ):
-            self._mock_langfuse.Langfuse = mock_langfuse_class
 
             langfuse_client_init(
                 langfuse_public_key="pk-1234",
@@ -128,15 +127,12 @@ class _RecordingLangfuseForEnv:
     (("Production", "default"), ("production ", "production"), ("prod", "prod")),
 )
 def test_langfuse_client_init_resolves_deployment_environment(monkeypatch, env_value, expected):
-    mock_langfuse_module: Final = MagicMock()
-    mock_langfuse_module.version.__version__ = "2.60.0"
-    mock_langfuse_module.Langfuse = _RecordingLangfuseForEnv
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
     monkeypatch.setenv("LANGFUSE_HOST", "https://test.langfuse.com")
     monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", env_value)
     monkeypatch.setattr(_RecordingLangfuseForEnv, "last_environment", None)
-    with patch.dict("sys.modules", MappingProxyType({"langfuse": mock_langfuse_module})):
+    with patch("litellm.integrations.langfuse.langfuse_sdk.Langfuse", _RecordingLangfuseForEnv):  # test-quality-ok: the ctor must be intercepted where acquire_langfuse_client resolves it; a real client spawns export threads
         langfuse_client_init.cache_clear()
         langfuse_client_init()
     langfuse_client_init.cache_clear()

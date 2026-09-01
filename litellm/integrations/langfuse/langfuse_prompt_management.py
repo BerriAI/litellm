@@ -68,7 +68,9 @@ def langfuse_client_init(
         Exception: If langfuse package is not installed
     """
     try:
-        from langfuse import Langfuse
+        from langfuse import (
+            Langfuse,  # noqa: F401  # the import is the install probe; construction moved to acquire_langfuse_client
+        )
     except Exception as e:
         raise Exception(
             f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\n\033[0m"
@@ -118,20 +120,14 @@ def langfuse_client_init(
 
     parameters["environment"] = LangFuseLogger.resolve_deployment_environment()
 
-    from .langfuse_sdk import (
-        DiscardingSpanExporter,
-        build_isolated_tracer_provider,
-        evict_stale_langfuse_resources,
-        register_langfuse_client,
-    )
+    from .langfuse_sdk import acquire_langfuse_client
 
-    evict_stale_langfuse_resources(public_key=public_key, secret_key=secret_key, base_url=langfuse_host)
-    client: Final = Langfuse(
-        **parameters,  # pyright: ignore[reportArgumentType]  # kwargs-ok: dict mirrors the typed ctor, values resolved above
-        tracer_provider=build_isolated_tracer_provider(environment=parameters["environment"], release=langfuse_release),
-        span_exporter=DiscardingSpanExporter() if is_mock_mode else None,
+    client: Final = acquire_langfuse_client(
+        parameters=parameters,
+        environment=parameters["environment"],
+        release=langfuse_release,
+        mock_mode=is_mock_mode,
     )
-    register_langfuse_client(client)
 
     return client
 
