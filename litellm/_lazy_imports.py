@@ -81,7 +81,10 @@ def _get_utils_globals() -> dict[str, object]:
     This is where we cache imported attributes so we don't import them twice.
     When you do `litellm.utils.some_function`, it gets stored in this dictionary.
     """
-    return sys.modules["litellm.utils"].__dict__
+    cached: Final = sys.modules.get("litellm.utils")
+    if cached is not None:
+        return cached.__dict__
+    return importlib.import_module("litellm.utils").__dict__
 
 
 def _get_module_level_client_timeout(litellm_globals: Mapping[str, Any]) -> "float | httpx.Timeout | None":

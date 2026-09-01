@@ -2030,7 +2030,7 @@ _SDK_SYMBOLS_IMPORT_MAP: Final[Mapping[str, tuple[str, str]]] = MappingProxyType
         "SerializerFunctionWrapHandler": ("litellm.assistants.main", "SerializerFunctionWrapHandler"),
         "ServiceUnavailableError": ("litellm.exceptions", "ServiceUnavailableError"),
         "ShellToolParam": ("litellm.types.llms.openai", "ShellToolParam"),
-        "SlackAlerting": ("litellm.integrations", "SlackAlerting"),
+        "SlackAlerting": ("litellm.integrations.SlackAlerting.slack_alerting", "SlackAlerting"),
         "StandardLoggingRoutingDecision": ("litellm.types.utils", "StandardLoggingRoutingDecision"),
         "StreamingChoices": ("litellm.types.utils", "StreamingChoices"),
         "SyncCursorPage": ("litellm.assistants.main", "SyncCursorPage"),

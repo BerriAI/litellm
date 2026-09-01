@@ -2151,16 +2151,6 @@ if TYPE_CHECKING:
 # Track if async client cleanup has been registered (for lazy loading)
 _async_client_cleanup_registered = False
 
-# Eager loading for backwards compatibility with VCR and other HTTP recording tools
-# When LITELLM_DISABLE_LAZY_LOADING is set, lazy-loaded attributes are loaded at import time
-# For now, this only affects encoding (tiktoken) as it was the only reported issue
-# See: https://github.com/BerriAI/litellm/issues/18659
-# This ensures encoding is initialized before VCR starts recording HTTP requests
-if os.getenv("LITELLM_DISABLE_LAZY_LOADING", "").lower() in ("1", "true", "yes", "on"):
-    # Load encoding at import time (pre-#18070 behavior)
-    # This ensures encoding is initialized before VCR starts recording
-    from .main import encoding
-
 
 def __getattr__(name: str) -> Any:
     """Lazy import handler with cached registry for improved performance."""
@@ -2377,3 +2367,12 @@ __all__ = list(STAR_IMPORT_PUBLIC_NAMES)  # mutable-ok: star imports require __a
 
 
 # ALL_LITELLM_RESPONSE_TYPES is lazy-loaded via __getattr__ to avoid loading utils at import time
+
+# Eager loading for backwards compatibility with VCR and other HTTP recording tools
+# When LITELLM_DISABLE_LAZY_LOADING is set, lazy-loaded attributes are loaded at import time
+# For now, this only affects encoding (tiktoken) as it was the only reported issue
+# See: https://github.com/BerriAI/litellm/issues/18659
+# This ensures encoding is initialized before VCR starts recording HTTP requests
+# This block stays at the bottom so __getattr__ can resolve attributes main.py needs during its import
+if os.getenv("LITELLM_DISABLE_LAZY_LOADING", "").lower() in ("1", "true", "yes", "on"):
+    from .main import encoding
