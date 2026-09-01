@@ -243,12 +243,9 @@ async def test_afile_content_assumes_role_with_external_id(monkeypatch):
         def get_object(self, Bucket, Key):
             return {"Body": FakeS3Body()}
 
-    s3_client_kwargs = {}
-
     def fake_boto3_client(service_name, **kwargs):
         if service_name == "sts":
             return FakeSTSClient()
-        s3_client_kwargs.update(kwargs)
         return FakeS3Client()
 
     optional_params = {
@@ -261,7 +258,7 @@ async def test_afile_content_assumes_role_with_external_id(monkeypatch):
         "aws_external_id": "external-id-files-download",
     }
 
-    with patch.object(boto3, "client", side_effect=fake_boto3_client):
+    with patch.object(boto3, "client", side_effect=fake_boto3_client) as mock_boto3_client:
         response = await BedrockFilesHandler().afile_content(
             file_content_request={"file_id": "s3://safe-bucket/litellm-bedrock-files-model-id-abc.jsonl"},
             optional_params=optional_params,
@@ -269,6 +266,7 @@ async def test_afile_content_assumes_role_with_external_id(monkeypatch):
             max_retries=None,
         )
 
+    s3_client_kwargs = next(call.kwargs for call in mock_boto3_client.call_args_list if call.args[0] == "s3")
     assert s3_client_kwargs["aws_access_key_id"] == "ASIAFILESDOWNLOADROLE"
     assert s3_client_kwargs["aws_session_token"] == "assumed-session-token"
     assert response.content == b'{"custom_id": "req-1"}'
