@@ -7,7 +7,7 @@ Canonical definition for ``litellm_tagtable``. Re-exported from
 
 from datetime import datetime
 
-from pydantic import model_validator
+from pydantic import BaseModel, model_validator
 
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
@@ -28,8 +28,14 @@ class LiteLLM_TagTable(LiteLLMPydanticObjectBase):
     @model_validator(mode="before")
     @classmethod
     def set_model_info(cls, values):
-        if values.get("spend") is None:
-            values.update({"spend": 0.0})
-        if values.get("models") is None:
-            values.update({"models": []})
+        if isinstance(values, BaseModel):
+            values = values.model_dump()
+        elif hasattr(values, "__dict__") and not isinstance(values, dict):
+            values = dict(values.__dict__)
+
+        if isinstance(values, dict):
+            if values.get("spend") is None:
+                values.update({"spend": 0.0})
+            if values.get("models") is None:
+                values.update({"models": []})
         return values

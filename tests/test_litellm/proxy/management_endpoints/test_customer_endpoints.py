@@ -466,6 +466,35 @@ def test_block_customer_success_serializes_through_response_model(mock_prisma_cl
     assert body["blocked_users"][0]["blocked"] is True
 
 
+def test_block_customer_success_with_prisma_row_object(mock_prisma_client, mock_user_api_key_auth):
+    """
+    /customer/block returns {"blocked_users": [<end user rows>]}. When the database
+    driver returns raw model/ORM objects with attributes (and spend=None),
+    BlockUsersResponse must serialize them without raising 500.
+    """
+    class MockPrismaRow:
+        def __init__(self, user_id, blocked, spend=None):
+            self.user_id = user_id
+            self.blocked = blocked
+            self.spend = spend
+            self.alias = None
+
+    blocked_row = MockPrismaRow(user_id="blocked-prisma-1", blocked=True, spend=None)
+    mock_prisma_client.db.litellm_endusertable.upsert = AsyncMock(return_value=blocked_row)
+
+    response = client.post(
+        "/customer/block",
+        json={"user_ids": ["blocked-prisma-1"]},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["blocked_users"][0]["user_id"] == "blocked-prisma-1"
+    assert body["blocked_users"][0]["blocked"] is True
+    assert body["blocked_users"][0]["spend"] == 0.0
+
+
 def test_delete_customer_success_serializes_through_response_model(mock_prisma_client, mock_user_api_key_auth):
     """
     /customer/delete returns {"deleted_customers": <int>, "message": <str>}.

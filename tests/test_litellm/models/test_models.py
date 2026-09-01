@@ -5,7 +5,7 @@ Tests for backend domain models.
 from datetime import datetime
 
 import pytest
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm.models.access_group import LiteLLM_AccessGroupTable
 from litellm.models.budget import (
@@ -40,7 +40,6 @@ from litellm.models.verification_token import (
     LiteLLM_DeletedVerificationToken,
     LiteLLM_VerificationToken,
 )
-from pydantic import ValidationError
 
 
 class TestBudget:
@@ -436,6 +435,32 @@ class TestEndUserTable:
 
     def test_end_user_spend_coerced_when_none(self):
         eu = LiteLLM_EndUserTable(user_id="eu2", blocked=True, spend=None)
+        assert eu.spend == 0.0
+
+    def test_end_user_from_object_with_attributes(self):
+        class MockPrismaEndUser:
+            def __init__(self, user_id, blocked, spend=None, alias=None):
+                self.user_id = user_id
+                self.blocked = blocked
+                self.spend = spend
+                self.alias = alias
+
+        obj = MockPrismaEndUser(user_id="eu3", blocked=True, spend=None)
+        eu = LiteLLM_EndUserTable.model_validate(obj)
+        assert eu.user_id == "eu3"
+        assert eu.blocked is True
+        assert eu.spend == 0.0
+
+    def test_end_user_from_pydantic_model(self):
+        class MockPydanticRow(BaseModel):
+            user_id: str
+            blocked: bool
+            spend: float | None = None
+
+        row = MockPydanticRow(user_id="eu4", blocked=False, spend=None)
+        eu = LiteLLM_EndUserTable.model_validate(row)
+        assert eu.user_id == "eu4"
+        assert eu.blocked is False
         assert eu.spend == 0.0
 
 

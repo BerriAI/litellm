@@ -7,7 +7,7 @@ Canonical definition for ``litellm_usertable``. Re-exported from
 
 from datetime import datetime
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization_membership import (
@@ -50,12 +50,18 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     @model_validator(mode="before")
     @classmethod
     def set_model_info(cls, values):
-        if values.get("spend") is None:
-            values.update({"spend": 0.0})
-        if values.get("models") is None:
-            values.update({"models": []})
-        if values.get("teams") is None:
-            values.update({"teams": []})
+        if isinstance(values, BaseModel):
+            values = values.model_dump()
+        elif hasattr(values, "__dict__") and not isinstance(values, dict):
+            values = dict(values.__dict__)
+
+        if isinstance(values, dict):
+            if values.get("spend") is None:
+                values.update({"spend": 0.0})
+            if values.get("models") is None:
+                values.update({"models": []})
+            if values.get("teams") is None:
+                values.update({"teams": []})
         return values
 
     def is_over_budget(self) -> bool:

@@ -7,7 +7,7 @@ Canonical definition for ``litellm_endusertable``. Re-exported from
 
 from typing import Literal
 
-from pydantic import ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
@@ -29,8 +29,13 @@ class LiteLLM_EndUserTable(LiteLLMPydanticObjectBase):
     @model_validator(mode="before")
     @classmethod
     def set_model_info(cls, values):
-        if values.get("spend") is None:
-            values.update({"spend": 0.0})
+        if isinstance(values, BaseModel):
+            values = values.model_dump()
+        elif hasattr(values, "__dict__") and not isinstance(values, dict):
+            values = dict(values.__dict__)
+
+        if isinstance(values, dict) and values.get("spend") is None:
+            values["spend"] = 0.0
         return values
 
     model_config = ConfigDict(protected_namespaces=())
