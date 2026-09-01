@@ -11,7 +11,14 @@ from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
 from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.llms.reducto.ocr.transformation import ReductoParseLegacyConfig, ReductoParseV3Config
 from litellm.llms.vertex_ai.ocr.deepseek_transformation import VertexAIDeepSeekOCRConfig
-from tests.test_litellm.ocr.fixture_models import (
+from tests.test_litellm.ocr.fixtures.generate import (
+    azure_document_intelligence_input_strategy,
+    mistral_input_strategy,
+    reducto_legacy_input_strategy,
+    reducto_v3_input_strategy,
+    vertex_deepseek_input_strategy,
+)
+from tests.test_litellm.ocr.fixtures.models import (
     AzureDocumentIntelligenceOcrSdkInput,
     AzureMistralOcrSdkInput,
     JsonSchemaDefinition,
@@ -31,13 +38,6 @@ from tests.test_litellm.ocr.fixture_models import (
     ReductoSettings,
     VertexDeepSeekOcrSdkInput,
     VertexMistralOcrSdkInput,
-)
-from tests.test_litellm.ocr.generate_fixtures import (
-    azure_document_intelligence_input_strategy,
-    mistral_input_strategy,
-    reducto_legacy_input_strategy,
-    reducto_v3_input_strategy,
-    vertex_deepseek_input_strategy,
 )
 
 COMMON_FIELDS: Final = frozenset(

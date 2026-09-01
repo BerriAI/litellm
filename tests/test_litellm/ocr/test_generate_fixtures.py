@@ -7,7 +7,7 @@ from typing import Final
 import pytest
 
 from tests.route_parity.fixture_recorder import generate_case_inputs
-from tests.test_litellm.ocr.generate_fixtures import (
+from tests.test_litellm.ocr.fixtures.generate import (
     discover_targets,
     parse_generator_args,
     require_targets,
@@ -80,9 +80,9 @@ def test_azure_mistral_discovery_requires_and_normalizes_deployment_model() -> N
     }
     assert discover_targets(incomplete, _unused_sdk_call) == ()
 
-    target: Final = discover_targets(
-        {**incomplete, "AZURE_AI_OCR_MODEL": "mistral-ocr-deployment"}, _unused_sdk_call
-    )[0]
+    target: Final = discover_targets({**incomplete, "AZURE_AI_OCR_MODEL": "mistral-ocr-deployment"}, _unused_sdk_call)[
+        0
+    ]
     assert target.required_inputs[0].model == "azure_ai/mistral-ocr-deployment"
 
 

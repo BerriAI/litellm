@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import argparse
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Generic, TypeVar, cast
+from typing import Final, Generic, Protocol, TypeVar, cast
 
 from hypothesis.strategies import SearchStrategy
 from pydantic import BaseModel
@@ -32,6 +32,26 @@ class FixtureTarget(Generic[InputT]):
     strategy: SearchStrategy[InputT]
     invoke: Callable[[str, InputT], object]
     required_inputs: tuple[InputT, ...] = ()
+
+
+class FixtureSdkCall(Protocol):
+    def __call__(self, **kwargs: object) -> object: ...
+
+
+class FixtureProvider(Protocol[InputT]):
+    def targets(
+        self,
+        environ: Mapping[str, str],
+        sdk_call: FixtureSdkCall,
+    ) -> tuple[FixtureTarget[InputT], ...]: ...
+
+
+def discover_fixture_targets(
+    providers: tuple[FixtureProvider[InputT], ...],
+    environ: Mapping[str, str],
+    sdk_call: FixtureSdkCall,
+) -> tuple[FixtureTarget[InputT], ...]:
+    return tuple(target for provider in providers for target in provider.targets(environ, sdk_call))
 
 
 def generate_target_fixtures(

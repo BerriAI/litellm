@@ -38,7 +38,7 @@ from tests.route_parity.runner import (
     parity_worker_main,
     run_execution,
 )
-from tests.test_litellm.ocr.fixture_models import OcrParityCase, OcrSdkInput
+from tests.test_litellm.ocr.fixtures.models import OcrParityCase, OcrSdkInput
 
 API_KEY: Final = "test-key"
 PYTHON_HTTP_SENTINEL: Final = "python-ocr-parity-fallback"
@@ -318,7 +318,7 @@ def sdk_workers() -> Generator[tuple[PythonScriptWorker, PythonScriptWorker]]:
 
 @pytest.fixture(scope="module")
 def startup_ocr_fixture() -> OcrParityCase:
-    default_directory: Final = Path(__file__).with_name("fixtures")
+    default_directory: Final = Path(__file__).with_name("fixtures") / "data"
     configured: Final = os.environ.get(FIXTURE_DIR_ENV)
     directory: Final = Path(configured).expanduser() if configured is not None else default_directory
     fixtures: Final = recorded_fixtures(directory, OcrParityCase)
