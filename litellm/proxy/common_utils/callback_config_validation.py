@@ -77,7 +77,7 @@ def cross_entry_family_error(
     callback_vars: Mapping[str, str] | None,
     stored_vars_by_entry: Sequence[Mapping[str, str]],
 ) -> str | None:
-    """Reject an entry that brings a new value to a family another entry holds.
+    """Reject an entry that changes what a family another entry holds resolves to.
 
     Every stored entry's variables are flattened into one dict before a request
     reads them, and the flattened dict is what the exporter authenticates and
@@ -86,14 +86,18 @@ def cross_entry_family_error(
     with the key from the first, and the request carries that key to the new
     host.
 
-    A destination the caller controls is by definition a value the owning entries
-    do not already carry, so requiring every value to be one of theirs removes
-    the pairing. Repeating what they carry is allowed: that is how the same
-    integration gets registered for both the success and the failure event, and
-    it holds for the spellings the same credential has (``langfuse_secret`` and
-    ``langfuse_secret_key`` are one key) without anything here having to list
-    them. A team admin who does want to move a family deletes the entry holding
-    it first, which reveals nothing.
+    Two rules together keep the flattened dict out of the caller's hands. A
+    variable the family already configures has to keep the value it has, so
+    nothing already in use can be moved. A variable the family does not yet
+    configure may only carry a value the family already holds, which is what lets
+    the same credential go in under its other spelling (``langfuse_secret`` and
+    ``langfuse_secret_key`` are one key) without anything here having to list the
+    spellings. Between them, no value the caller chose can enter the family, and
+    repeating the family as it stands is still allowed -- that is how one
+    integration gets registered for both the success and the failure event.
+
+    A team admin who does want to move a family deletes the entry holding it
+    first, which reveals nothing.
 
     Only the writers this endpoint newly admits are held to this, because a proxy
     admin already holds every credential the proxy has.
@@ -103,20 +107,23 @@ def cross_entry_family_error(
     """
     if not callback_vars:
         return None
-    stored: Final = tuple(
+    stored_by_var: Final = {
+        var: value for entry in stored_vars_by_entry for var, value in entry.items() if _family_of(var) is not None
+    }
+    family_values: Final = frozenset(
         (family, value)
         for entry in stored_vars_by_entry
         for var, value in entry.items()
         if (family := _family_of(var)) is not None
     )
-    held_values: Final = frozenset(stored)
-    held_families: Final = frozenset(family for family, _ in stored)
+    held_families: Final = frozenset(family for family, _ in family_values)
     return next(
         (
             f"{family} is already configured by another callback entry on this team. "
-            f"Remove that entry before setting {var} to a new value here."
+            f"Remove that entry before setting {var} here."
             for var, value, family in ((v, callback_vars[v], _family_of(v)) for v in callback_vars)
-            if family in held_families and (family, value) not in held_values
+            if family in held_families
+            and (stored_by_var[var] != value if var in stored_by_var else (family, value) not in family_values)
         ),
         None,
     )

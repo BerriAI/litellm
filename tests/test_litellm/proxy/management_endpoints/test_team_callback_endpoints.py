@@ -1543,6 +1543,9 @@ async def test_proxy_admin_still_told_the_team_is_unknown():
         ({"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}, [{"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], False),
         # the same credential under its other spelling is the same credential
         ({"langfuse_secret": "sk"}, [{"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], False),
+        # a value the family already holds cannot be moved into another of its
+        # variables either; the exporter would address or authenticate with it
+        ({"langfuse_host": "pk"}, [{"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk"}], True),
         # the same shape with one value moved is the redirect again
         ({"langfuse_host": "http://attacker.invalid", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}, [{"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], True),
     ],
