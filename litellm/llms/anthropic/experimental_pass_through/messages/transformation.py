@@ -8,6 +8,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
+from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import verbose_logger
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -37,6 +38,11 @@ DROP_UNSUPPORTED_ADAPTIVE_EFFORT_WARNING: Final = (
     "Dropping adaptive `thinking`/`output_config.effort` for model=%s: the model "
     "does not support extended thinking, or max_tokens is too small to fit the "
     "minimum thinking budget."
+)
+
+DROP_UNFITTING_REASONING_EFFORT_WARNING: Final = (
+    "Dropping `thinking` mapped from reasoning_effort=%s for model=%s: max_tokens=%s "
+    "is too small to fit the minimum thinking budget."
 )
 
 
@@ -307,10 +313,20 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         # Check for Anthropic OAuth token in Authorization header
         headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
 
-        if "x-api-key" not in headers and "authorization" not in headers:
+        header_names: Final = frozenset(name.lower() for name in headers)
+        if "x-api-key" not in header_names and "authorization" not in header_names:
             auth_header: Final = AnthropicModelInfo.get_auth_header(api_key)
-            if auth_header is not None:
-                headers.update(auth_header)
+            if auth_header is None:
+                raise AuthenticationError(
+                    message=(
+                        "Missing Anthropic API Key - A call is being made to anthropic but no key is set "
+                        "either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` "
+                        "or `ANTHROPIC_AUTH_TOKEN` in your environment vars"
+                    ),
+                    llm_provider=self._resolved_provider,
+                    model=model,
+                )
+            headers.update(auth_header)
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION
         if "content-type" not in headers:
@@ -324,11 +340,15 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         return headers, api_base
 
     @staticmethod
-    def _translate_reasoning_effort_to_anthropic(model: str, optional_params: dict, custom_llm_provider: str) -> None:
+    def _translate_reasoning_effort_to_anthropic(
+        model: str, optional_params: dict, max_tokens: int | None, custom_llm_provider: str
+    ) -> None:
         """Map OpenAI-style ``reasoning_effort`` to native Anthropic params.
 
         Caller-supplied ``thinking`` / ``output_config`` win over the alias.
-        ``effort='none'`` clears both. Invalid efforts raise a 400.
+        ``effort='none'`` clears both. Invalid efforts raise a 400. A mapped
+        thinking budget is capped below ``max_tokens`` and dropped when even
+        the minimum budget cannot fit.
         """
         from litellm.exceptions import BadRequestError as _BadRequestError
         from litellm.llms.anthropic.chat.transformation import (
@@ -354,7 +374,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params.pop("output_config", None)
             return
 
-        optional_params.setdefault("thinking", mapped_thinking)
+        fitted_thinking: Final = AnthropicConfig.cap_thinking_budget_to_max_tokens(mapped_thinking, max_tokens)
+        if fitted_thinking is None:
+            verbose_logger.warning(DROP_UNFITTING_REASONING_EFFORT_WARNING, reasoning_effort, model, max_tokens)
+            return
+
+        optional_params.setdefault("thinking", fitted_thinking)
         if AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
             mapped_effort: Final = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
             if mapped_effort is None:
@@ -499,7 +524,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         except _BadRequestError as e:
             raise AnthropicError(message=str(e.message), status_code=400)
         capped_thinking: Final = (
-            AnthropicConfig._cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
+            AnthropicConfig.cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
             if legacy_thinking is not None
             else None
         )
@@ -571,6 +596,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self._translate_reasoning_effort_to_anthropic(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
+            max_tokens=max_tokens,
             custom_llm_provider=self._resolved_provider,
         )
 

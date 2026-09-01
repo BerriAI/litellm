@@ -1,3 +1,4 @@
+import base64
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
@@ -124,6 +125,48 @@ class TestVertexAITextToSpeechConfig:
 
         assert voice_str is None
         assert voice_dict == voice_input
+
+
+@pytest.mark.parametrize(
+    ("audio", "expected_content_type"),
+    [
+        (b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00", "audio/wav"),
+        (b"\xff\xfb\x90\x64\x00\x00\x00\x00", "audio/mpeg"),
+        (b"OggS" + b"\x00" * 24 + b"OpusHead", "audio/opus"),
+        (b"fLaC\x00\x00\x00\x22", "audio/flac"),
+    ],
+)
+def test_transform_text_to_speech_response_labels_content_type(audio, expected_content_type):
+    raw_response = httpx.Response(
+        status_code=200,
+        json={"audioContent": base64.b64encode(audio).decode()},
+    )
+
+    result = VertexAITextToSpeechConfig().transform_text_to_speech_response(
+        model="vertex_ai/chirp",
+        raw_response=raw_response,
+        logging_obj=MagicMock(),
+    )
+
+    assert result.response.headers["content-type"] == expected_content_type
+    assert result.response.content == audio
+
+
+def test_transform_text_to_speech_response_leaves_unknown_bytes_unlabeled():
+    raw_pcm = b"\x00\x01\x02\x03\x04\x05\x06\x07"
+    raw_response = httpx.Response(
+        status_code=200,
+        json={"audioContent": base64.b64encode(raw_pcm).decode()},
+    )
+
+    result = VertexAITextToSpeechConfig().transform_text_to_speech_response(
+        model="vertex_ai/chirp",
+        raw_response=raw_response,
+        logging_obj=MagicMock(),
+    )
+
+    assert "content-type" not in result.response.headers
+    assert result.response.content == raw_pcm
 
 
 @patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post")

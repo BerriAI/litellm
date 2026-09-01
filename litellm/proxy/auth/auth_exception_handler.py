@@ -2,13 +2,14 @@
 Handles Authentication Errors
 """
 
+import logging
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import HTTPException, Request, status
 
 import litellm
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import verbose_proxy_logger, verbose_proxy_stdout_logger
 from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.otel.runtime import seed_request_identity
 from litellm.litellm_core_utils.core_helpers import is_expected_client_error
@@ -18,7 +19,11 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_utils import _get_request_ip_address
+from litellm.proxy.auth.auth_utils import (
+    _get_request_ip_address,
+    is_invalid_virtual_key_error,
+    mark_invalid_virtual_key_error,
+)
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
 
@@ -34,6 +39,41 @@ if TYPE_CHECKING:
     Span = _Span | Any
 else:
     Span = Any
+
+
+def _as_proxy_exception(e: Exception) -> ProxyException:
+    """Convert an authentication failure into the ProxyException the client receives."""
+    if isinstance(e, litellm.BudgetExceededError):
+        return ProxyException(
+            message=e.message,
+            type=ProxyErrorTypes.budget_exceeded,
+            param=None,
+            code=getattr(e, "status_code", status.HTTP_429_TOO_MANY_REQUESTS),
+        )
+    if isinstance(e, HTTPException):
+        return ProxyException(
+            message=getattr(e, "detail", f"Authentication Error({e})"),
+            type=ProxyErrorTypes.auth_error,
+            param=getattr(e, "param", "None"),
+            code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),
+        )
+    if isinstance(e, ProxyException):
+        return e
+    if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
+        return ProxyException(
+            message=(
+                "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."
+            ),
+            type=ProxyErrorTypes.no_db_connection,
+            param="None",
+            code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return ProxyException(
+        message="Authentication Error, " + str(e),
+        type=ProxyErrorTypes.auth_error,
+        param=getattr(e, "param", "None"),
+        code=status.HTTP_401_UNAUTHORIZED,
+    )
 
 
 def _with_requester_ip_address(request_data: dict[str, object], requester_ip: str | None) -> dict[str, object]:
@@ -110,16 +150,21 @@ class UserAPIKeyAuthExceptionHandler:
                 request=request,
                 use_x_forwarded_for=general_settings.get("use_x_forwarded_for") is True,
             )
-            log_fn: Final = (
-                verbose_proxy_logger.error
-                if is_expected_client_error(e) and not litellm.log_client_error_tracebacks
-                else verbose_proxy_logger.exception
-            )
-            log_fn(
+
+            # Log authentication failures before identity seeding and callbacks, so the log
+            # survives a raising callback pipeline. Classify and route malformed virtual-key
+            # rejections to WARNING on stdout (suppressible via LITELLM_LOG=ERROR).
+            log_extra: Final = {"requester_ip": requester_ip}
+            is_invalid_virtual_key: Final = is_invalid_virtual_key_error(e)
+            is_quiet_log: Final = is_invalid_virtual_key and not litellm.log_client_error_tracebacks
+            logger: Final = verbose_proxy_stdout_logger if is_quiet_log else verbose_proxy_logger
+            logger.log(
+                logging.WARNING if is_quiet_log else logging.ERROR,
                 "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s",
                 e,
                 requester_ip,
-                extra={"requester_ip": requester_ip},
+                exc_info=True if litellm.log_client_error_tracebacks or not is_expected_client_error(e) else None,
+                extra=log_extra,
             )
 
             # Log this exception to OTEL, Datadog etc. Reuse the identity resolved
@@ -167,35 +212,13 @@ class UserAPIKeyAuthExceptionHandler:
             if transformed_exception is not None:
                 e = transformed_exception
 
-            if isinstance(e, litellm.BudgetExceededError):
-                raise ProxyException(
-                    message=e.message,
-                    type=ProxyErrorTypes.budget_exceeded,
-                    param=None,
-                    code=getattr(e, "status_code", status.HTTP_429_TOO_MANY_REQUESTS),
+            final_exception: Final = mark_invalid_virtual_key_error(_as_proxy_exception(e), is_invalid_virtual_key)
+            # If a quiet-logged malformed-key transform yields non-401, escalate to ERROR
+            if is_quiet_log and str(final_exception.code) != str(status.HTTP_401_UNAUTHORIZED):
+                verbose_proxy_logger.error(
+                    "litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - %s\nRequester IP Address:%s",
+                    final_exception,
+                    requester_ip,
+                    extra=log_extra,
                 )
-            if isinstance(e, HTTPException):
-                raise ProxyException(
-                    message=getattr(e, "detail", f"Authentication Error({e})"),
-                    type=ProxyErrorTypes.auth_error,
-                    param=getattr(e, "param", "None"),
-                    code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),
-                )
-            elif isinstance(e, ProxyException):
-                raise e
-            if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
-                raise ProxyException(
-                    message=(
-                        "Service Unavailable, the authentication database is "
-                        "temporarily unreachable. Please retry shortly."
-                    ),
-                    type=ProxyErrorTypes.no_db_connection,
-                    param="None",
-                    code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
-            raise ProxyException(
-                message="Authentication Error, " + str(e),
-                type=ProxyErrorTypes.auth_error,
-                param=getattr(e, "param", "None"),
-                code=status.HTTP_401_UNAUTHORIZED,
-            )
+            raise final_exception

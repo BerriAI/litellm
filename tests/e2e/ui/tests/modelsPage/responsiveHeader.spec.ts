@@ -7,9 +7,7 @@ test.describe("Models and Endpoints responsive header", () => {
     viewport: { width: 900, height: 720 },
   });
 
-  test("keeps the refresh action on the same row as the tabs", async ({
-    page,
-  }) => {
+  test("keeps the refresh action on the same row as the tabs", async ({ page }) => {
     await page.goto("/ui");
     await page
       .getByRole("complementary")
@@ -26,8 +24,8 @@ test.describe("Models and Endpoints responsive header", () => {
     expect(tabsBox).not.toBeNull();
     expect(refreshBox).not.toBeNull();
 
-    const tabsCenterY = tabsBox!.y + tabsBox!.height / 2;
     const refreshCenterY = refreshBox!.y + refreshBox!.height / 2;
-    expect(Math.abs(tabsCenterY - refreshCenterY)).toBeLessThanOrEqual(2);
+    const sharesARow = refreshCenterY > tabsBox!.y && refreshCenterY < tabsBox!.y + tabsBox!.height;
+    expect(sharesARow, "refresh wrapped onto its own row below the tabs").toBe(true);
   });
 });

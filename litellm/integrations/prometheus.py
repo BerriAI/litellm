@@ -59,6 +59,8 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from prometheus_client.metrics import MetricWrapperBase
+
+    from litellm.router import Router
 else:
     AsyncIOScheduler = Any
 
@@ -66,6 +68,8 @@ _BudgetRowT: Final = TypeVar("_BudgetRowT")
 _TableRowT: Final = TypeVar("_TableRowT", bound=BaseModel)
 
 _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT: Final = 5.0
+
+UNRECOGNIZED_REQUESTED_MODEL_LABEL: Final = "other"
 
 _NON_ENUM_METRIC_LABELS: Final[frozenset[str]] = frozenset(
     (
@@ -152,6 +156,44 @@ def _get_budget_metrics_per_request_timeout() -> float:
         )
         return _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT
     return parsed
+
+
+def _get_proxy_llm_router() -> Router | None:
+    try:
+        from litellm.proxy.proxy_server import llm_router
+    except Exception:
+        return None
+    return llm_router
+
+
+def _bounded_requested_model_label(requested_model: str | None, router_originated: bool = False) -> str | None:
+    """
+    Bound ``requested_model`` label cardinality: names the router recognizes
+    (model names, deployment ids, aliases, routing groups, team public model
+    names) or matches via a global or team wildcard/pattern route keep their
+    own label value; any other client-supplied string collapses into the
+    single ``other`` bucket. With no proxy router to vouch for the string,
+    client-supplied values collapse to ``other`` while ``router_originated``
+    values (emitted by an SDK ``Router``'s own deployment failure and
+    fallback events, where the proxy router never exists) pass through.
+    """
+    if not requested_model:
+        return requested_model
+    llm_router: Final = _get_proxy_llm_router()
+    if llm_router is None:
+        return requested_model if router_originated else UNRECOGNIZED_REQUESTED_MODEL_LABEL
+    if llm_router.is_recognized_model(requested_model):
+        return requested_model
+    if requested_model in llm_router.team_public_model_names:
+        return requested_model
+    if llm_router.pattern_router.route(requested_model) is not None:
+        return requested_model
+    if any(
+        team_pattern_router.route(requested_model) is not None
+        for team_pattern_router in llm_router.team_pattern_routers.values()
+    ):
+        return requested_model
+    return UNRECOGNIZED_REQUESTED_MODEL_LABEL
 
 
 class PrometheusLogger(CustomLogger):
@@ -2407,7 +2449,7 @@ class PrometheusLogger(CustomLogger):
                 team_alias=user_api_key_dict.team_alias,
                 org_id=user_api_key_dict.org_id,
                 org_alias=user_api_key_dict.organization_alias,
-                requested_model=request_data.get("model", ""),
+                requested_model=_bounded_requested_model_label(request_data.get("model", "")),
                 status_code=str(status_code),
                 exception_status=str(status_code),
                 exception_class=self._get_exception_class_name(original_exception),
@@ -2495,12 +2537,12 @@ class PrometheusLogger(CustomLogger):
             return None
 
         def _get_user_email() -> str | None:
-            val = _metadata.get("user_api_key_user_email")
-            if val is not None:
-                return val
-            val = _litellm_params_metadata.get("user_api_key_user_email")
-            if val is not None:
-                return val
+            from_metadata: Final = _metadata.get("user_api_key_user_email")
+            if from_metadata is not None:
+                return from_metadata
+            from_params: Final = _litellm_params_metadata.get("user_api_key_user_email")
+            if from_params is not None:
+                return from_params
             if user_api_key_auth is not None:
                 return self._safe_get(user_api_key_auth, "user_email")
             return None
@@ -2627,7 +2669,9 @@ class PrometheusLogger(CustomLogger):
                 label_model_id = ""
                 label_api_base = ""
                 label_api_provider = ""
-                label_requested_model = litellm_model_name or model_group or ""
+                label_requested_model = (
+                    _bounded_requested_model_label(litellm_model_name or model_group, router_originated=True) or ""
+                )
 
             enum_values: Final = UserAPIKeyLabelValues(
                 litellm_model_name=label_litellm_model_name,
@@ -3186,7 +3230,7 @@ class PrometheusLogger(CustomLogger):
         _tags: Final = cast(list[str], kwargs.get("tags") or [])
 
         enum_values: Final = UserAPIKeyLabelValues(
-            requested_model=original_model_group,
+            requested_model=_bounded_requested_model_label(original_model_group, router_originated=True),
             fallback_model=_new_model,
             hashed_api_key=standard_metadata["user_api_key_hash"],
             api_key_alias=standard_metadata["user_api_key_alias"],
@@ -3227,7 +3271,7 @@ class PrometheusLogger(CustomLogger):
         )
 
         enum_values: Final = UserAPIKeyLabelValues(
-            requested_model=original_model_group,
+            requested_model=_bounded_requested_model_label(original_model_group, router_originated=True),
             fallback_model=_new_model,
             hashed_api_key=standard_metadata["user_api_key_hash"],
             api_key_alias=standard_metadata["user_api_key_alias"],
@@ -3576,7 +3620,9 @@ class PrometheusLogger(CustomLogger):
         except Exception as e:
             verbose_logger.exception("Error initializing user/team count metrics: %s", e)
 
-    async def _set_key_list_budget_metrics(self, keys: list[str | UserAPIKeyAuth | LiteLLM_DeletedVerificationToken]):
+    async def _set_key_list_budget_metrics(
+        self, keys: list[str | UserAPIKeyAuth | LiteLLM_DeletedVerificationToken]
+    ) -> None:
         """Helper function to set budget metrics for a list of keys"""
         for key in keys:
             if isinstance(key, UserAPIKeyAuth):
