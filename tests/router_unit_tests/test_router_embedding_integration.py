@@ -5,16 +5,106 @@ These tests simulate real-world scenarios where headers and configuration
 need to be properly propagated through the router to the LLM API.
 """
 
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 from litellm import Router
+from litellm.llms.base_llm.vector_store.transformation import (
+    LiteLLMVectorStoreEmbeddingExecutor,
+    RouterVectorStoreEmbeddingExecutor,
+)
+from litellm.types.utils import EmbeddingResponse
 
 
 class TestRouterEmbeddingIntegration:
     """Integration tests for embedding with router configuration."""
+
+    def test_vector_store_request_metadata_prefers_litellm_metadata(self):
+        assert Router._vector_store_request_metadata(
+            {
+                "litellm_metadata": {"user_api_key_team_id": "team-a"},
+                "metadata": {"user_api_key_team_id": "team-b"},
+            }
+        ) == {"user_api_key_team_id": "team-a"}
+
+        assert Router._vector_store_request_metadata({"metadata": {"user_api_key_team_id": "team-b"}}) == {
+            "user_api_key_team_id": "team-b"
+        }
+        assert Router._vector_store_request_metadata({}) == {}
+
+    def test_sync_vector_store_wrapper_injects_router_embedding_executor(self):
+        router = Router(model_list=[])
+        original = MagicMock(return_value="searched")
+        wrapped = router.factory_function(original, call_type="vector_store_search")
+
+        assert (
+            wrapped(
+                vector_store_id="store",
+                query="query",
+                custom_llm_provider="valkey",
+                metadata={"user_api_key_team_id": "team-a"},
+            )
+            == "searched"
+        )
+
+        call_kwargs = original.call_args.kwargs
+        assert call_kwargs["custom_llm_provider"] == "valkey"
+        executor = call_kwargs["_direct_vector_store_embedding_executor"]
+        assert isinstance(executor, RouterVectorStoreEmbeddingExecutor)
+        assert executor.metadata == {"user_api_key_team_id": "team-a"}
+
+    def test_sync_vector_store_wrapper_preserves_model_routing(self):
+        router = Router(model_list=[])
+        original = MagicMock()
+        wrapped = router.factory_function(original, call_type="vector_store_search")
+
+        with patch.object(router, "_generic_api_call_with_fallbacks", return_value="routed") as fallback:
+            assert wrapped(model="vector-alias", vector_store_id="store", query="query") == "routed"
+
+        assert fallback.call_args.kwargs["model"] == "vector-alias"
+        assert fallback.call_args.kwargs["original_function"] is original
+        assert isinstance(
+            fallback.call_args.kwargs["_direct_vector_store_embedding_executor"],
+            RouterVectorStoreEmbeddingExecutor,
+        )
+
+    @pytest.mark.asyncio
+    async def test_vector_store_embedding_executors_cover_sdk_and_router_paths(self):
+        response = EmbeddingResponse(data=[{"embedding": [0.1], "index": 0, "object": "embedding"}])
+        sdk_executor = LiteLLMVectorStoreEmbeddingExecutor()
+
+        with (
+            patch("litellm.embedding", return_value=response) as embedding,
+            patch("litellm.aembedding", new=AsyncMock(return_value=response)) as aembedding,
+        ):
+            assert sdk_executor.embed("openai/model", "sync", {"api_key": "explicit"}) is response
+            assert await sdk_executor.aembed("openai/model", "async", {"api_key": "explicit"}) is response
+
+        embedding.assert_called_once_with(model="openai/model", input=["sync"], api_key="explicit")
+        aembedding.assert_awaited_once_with(model="openai/model", input=["async"], api_key="explicit")
+
+        mock_router = MagicMock()
+        mock_router.embedding.return_value = response
+        router_executor = RouterVectorStoreEmbeddingExecutor(
+            router=mock_router,
+            metadata={"user_api_key_team_id": "team-a"},
+        )
+        assert router_executor.embed("team-alias", "query", {}) is response
+        mock_router.embedding.assert_called_once_with(
+            model="team-alias",
+            input=["query"],
+            metadata={"user_api_key_team_id": "team-a"},
+        )
+
+        with patch("litellm.embedding", return_value=response) as explicit_embedding:
+            assert router_executor.embed("openai/model", "query", {"api_key": "store-key"}) is response
+        explicit_embedding.assert_called_once_with(model="openai/model", input=["query"], api_key="store-key")
+        mock_router.embedding.assert_called_once()
+
+        with patch("litellm.aembedding", new=AsyncMock(return_value=response)) as explicit_aembedding:
+            assert await router_executor.aembed("openai/model", "query", {"api_key": "store-key"}) is response
+        explicit_aembedding.assert_awaited_once_with(model="openai/model", input=["query"], api_key="store-key")
 
     def test_embedding_with_deployment_specific_headers(self):
         """
