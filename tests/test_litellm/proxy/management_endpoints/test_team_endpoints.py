@@ -3745,8 +3745,11 @@ async def test_list_team_v2_with_status_deleted():
 async def test_list_team_v2_includes_litellm_model_table():
     """
     Regression test for GH #26312: GET /v2/team/list must eagerly load the
-    litellm_model_table relation, same as /team/info and /team/list, or a
-    team's model_aliases always read back as null from this endpoint.
+    litellm_model_table relation for active teams, same as /team/info and
+    /team/list, or a team's model_aliases always read back as null from this
+    endpoint. Deleted teams are excluded: LiteLLM_DeletedTeamTable has no such
+    relation in the Prisma schema, so requesting it there raises
+    UnknownRelationalFieldError against a real database.
 
     The fake find_many below only attaches litellm_model_table when its own
     `include` kwarg actually asks for the relation, so the assertions below
@@ -3813,7 +3816,7 @@ async def test_list_team_v2_includes_litellm_model_table():
         )
         mock_db.litellm_deletedteamtable.count = AsyncMock(return_value=1)
 
-        result = await list_team_v2(
+        await list_team_v2(
             http_request=mock_request,
             user_id=None,
             user_api_key_dict=mock_user_api_key_dict_admin,
@@ -3822,8 +3825,7 @@ async def test_list_team_v2_includes_litellm_model_table():
             status="deleted",
         )
 
-        assert result["teams"][0].litellm_model_table is not None
-        assert result["teams"][0].litellm_model_table.model_aliases == {"my-fast-model": "fake-model"}
+        assert "include" not in mock_db.litellm_deletedteamtable.find_many.call_args.kwargs
 
 
 @pytest.mark.asyncio
