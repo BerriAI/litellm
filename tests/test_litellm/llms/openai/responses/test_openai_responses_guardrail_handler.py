@@ -1245,8 +1245,10 @@ class ToolDroppingGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional[Any] = None,
     ) -> GenericGuardrailAPIInputs:
-        inputs["tools"] = [t for t in inputs.get("tools") or [] if t["function"]["name"] != self.drop]
-        return inputs
+        return {
+            **inputs,
+            "tools": [t for t in inputs.get("tools") or [] if t["function"]["name"] != self.drop],
+        }
 
 
 CODEX_NAMESPACE_TOOL = {
