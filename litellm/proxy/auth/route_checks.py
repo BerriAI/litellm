@@ -497,10 +497,17 @@ class RouteChecks:
 
         def _placeholder_to_regex(match: re.Match) -> str:
             placeholder: Final = match.group(0).strip("{}")
-            if placeholder.endswith(":path"):
-                # allow "/" in the placeholder value, but don't eat the route suffix after ":"
-                return r"[^:]+"
-            return r"[^/]+"
+            if not placeholder.endswith(":path"):
+                return r"[^/]+"
+            # A ":path" placeholder takes whatever the router's own path
+            # converter takes, slashes and colons alike, so an id spelled with
+            # either (or both) still matches the template it was mounted under.
+            #
+            # Unless the template puts a ":" literal of its own after the
+            # placeholder: the Google routes end in ":generateContent" and
+            # friends, and there the value has to stop before that suffix
+            # rather than swallow it and match a different verb.
+            return r"[^:]+" if ":" in match.string[match.end() :] else r".+"
 
         pattern = re.sub(r"\{[^}]+\}", _placeholder_to_regex, pattern)
         # Anchor the pattern to match the entire string

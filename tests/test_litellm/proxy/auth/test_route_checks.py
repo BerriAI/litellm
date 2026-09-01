@@ -3551,10 +3551,13 @@ TEAM_CALLBACK_ROUTES = (
     # contain a slash
     "/team/tenant/06bda574/callback",
     "/team/tenant/06bda574/callback/langfuse",
-    # team_id is a free-form string, so it may also contain a colon, which the
-    # gate's :path expansion excludes
+    # team_id is a free-form string, so it may also contain a colon
     "/team/tenant:06bda574/callback",
     "/team/tenant:06bda574/callback/langfuse",
+    # or both, which is the shape neither a "[^:]+" nor a "[^/]+" expansion
+    # of the placeholder reaches on its own
+    "/team/tenant:acme/prod/callback",
+    "/team/tenant:acme/prod/callback/langfuse",
 )
 
 
@@ -3597,8 +3600,6 @@ def test_team_callback_routes_are_self_managed():
     for template in (
         "/team/{team_id:path}/callback",
         "/team/{team_id:path}/callback/{callback_name}",
-        "/team/{team_id}/callback",
-        "/team/{team_id}/callback/{callback_name}",
     ):
         assert template in LiteLLMRoutes.self_managed_routes.value
 
@@ -3623,6 +3624,50 @@ def test_team_callback_routes_reach_their_handler_for_non_admins(route, role):
     check was unreachable for them.
     """
     assert _gate(route, role) == "allowed"
+
+
+@pytest.mark.parametrize(
+    "pattern, route, matches",
+    [
+        # a :path placeholder takes what the router's path converter takes
+        ("/team/{team_id:path}/callback", "/team/plain/callback", True),
+        ("/team/{team_id:path}/callback", "/team/tenant/acme/callback", True),
+        ("/team/{team_id:path}/callback", "/team/tenant:acme/callback", True),
+        ("/team/{team_id:path}/callback", "/team/tenant:acme/prod/callback", True),
+        # and still has to reach the template's own suffix
+        ("/team/{team_id:path}/callback", "/team/tenant:acme/disable_logging", False),
+        # a template with a ":" literal after the placeholder keeps the suffix
+        (
+            "/v1beta/models/{model_name:path}:generateContent",
+            "/v1beta/models/gemini-2.5-flash:generateContent",
+            True,
+        ),
+        (
+            "/v1beta/models/{model_name:path}:generateContent",
+            "/v1beta/models/publishers/google/gemini-2.5-flash:generateContent",
+            True,
+        ),
+        # the value must not swallow that suffix and match a different verb
+        (
+            "/v1beta/models/{model_name:path}:generateContent",
+            "/v1beta/models/gemini-2.5-flash:countTokens",
+            False,
+        ),
+        # an ordinary placeholder stays one segment
+        ("/team/{team_id}/members/me", "/team/abc/members/me", True),
+        ("/team/{team_id}/members/me", "/team/tenant/abc/members/me", False),
+    ],
+)
+def test_path_placeholder_matches_what_the_router_accepts(pattern, route, matches):
+    """The gate's placeholder expansion has to agree with the router's.
+
+    A team id may carry a slash, a colon, or both, and the router mounted these
+    paths with the same :path converter, so an id the router routes must not be
+    an id the gate fails to recognize. The one narrowing that stays is a template
+    whose own suffix begins with a colon: there the value stops before it, or
+    ":generateContent" would also match a ":countTokens" request.
+    """
+    assert RouteChecks._route_matches_pattern(route=route, pattern=pattern) is matches
 
 
 def test_team_disable_logging_stays_proxy_admin_only():

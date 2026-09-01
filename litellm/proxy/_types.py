@@ -834,14 +834,10 @@ class LiteLLMRoutes(enum.Enum):
         # handler calls _verify_team_access, which admits only a proxy admin, an
         # org admin for the team, or an admin of this team.
         #
-        # Two spellings per route because neither placeholder alone covers every
-        # team id the router accepts: the gate expands {x:path} to "[^:]+", which
-        # takes a slash but not a colon, and {x} to "[^/]+", which takes a colon
-        # but not a slash. team_id is a free-form string, so both are reachable.
+        # team_id is a free-form string, so it spells these with the same path
+        # converter the router uses; the gate matches that converter.
         "/team/{team_id:path}/callback",
         "/team/{team_id:path}/callback/{callback_name}",
-        "/team/{team_id}/callback",
-        "/team/{team_id}/callback/{callback_name}",
         "/model/new",
         "/model/update",
         "/model/delete",
