@@ -1,5 +1,8 @@
 """Simple tests for lazy import functionality."""
 
+import importlib
+import json
+import subprocess
 import sys
 
 import pytest
@@ -7,6 +10,10 @@ import pytest
 
 import litellm
 from litellm._lazy_imports import (
+    _SDK_MODULE_ALIASES,
+    _SDK_SYMBOLS_IMPORT_MAP,
+    lazy_import_litellm_submodule,
+    _lazy_import_sdk_symbols,
     COST_CALCULATOR_NAMES,
     LITELLM_LOGGING_NAMES,
     UTILS_NAMES,
@@ -346,3 +353,67 @@ def test_utils_module_lazy_imports():
         assert name in utils_globals
 
         _verify_only_requested_name_imported_in_utils(name, UTILS_MODULE_NAMES)
+
+
+def test_sdk_symbols_lazy_imports():
+    """Every symbol previously imported eagerly in litellm/__init__.py resolves to the source module attribute."""
+    for name, (module_path, attr_name) in _SDK_SYMBOLS_IMPORT_MAP.items():
+        resolved = getattr(litellm, name)
+        expected = getattr(importlib.import_module(module_path), attr_name)
+        assert resolved is expected, f"litellm.{name} is not {module_path}.{attr_name}"
+
+
+def test_sdk_module_aliases():
+    """Module-valued attributes (litellm.anthropic, litellm.httpx, ...) resolve to the aliased modules."""
+    for name, module_path in _SDK_MODULE_ALIASES.items():
+        assert getattr(litellm, name) is importlib.import_module(module_path)
+
+
+def test_litellm_submodule_fallback():
+    """litellm.<submodule> attribute access resolves real submodules and returns None for unknown names."""
+    assert lazy_import_litellm_submodule("budget_manager") is importlib.import_module("litellm.budget_manager")
+    assert litellm.utils is importlib.import_module("litellm.utils")
+    assert lazy_import_litellm_submodule("not_a_real_submodule") is None
+    with pytest.raises(AttributeError):
+        _ = litellm.not_a_real_attribute
+
+
+def test_lazy_instances_are_singletons():
+    """Lazily created instances are cached, so repeated access returns the same object."""
+    assert litellm._key_management_settings is litellm._key_management_settings
+    assert litellm.vertexAITextEmbeddingConfig is litellm.vertexAITextEmbeddingConfig
+    from litellm.types.secret_managers.main import KeyManagementSettings
+
+    assert isinstance(litellm._key_management_settings, KeyManagementSettings)
+
+
+def test_star_import_exports_public_api():
+    """`from litellm import *` keeps exporting the full public surface despite lazy loading."""
+    code = (
+        "from litellm import *\n"
+        "import litellm\n"
+        "missing = [n for n in litellm.__all__ if n not in dir()]\n"
+        "assert not missing, missing[:20]\n"
+        "assert callable(completion) and callable(Router)\n"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="reads /proc for RSS")
+def test_import_litellm_stays_lightweight():
+    """`import litellm` must not pull in the SDK/proxy heavyweights or blow up RSS (LIT-6607)."""
+    code = (
+        "import json, re, sys\n"
+        "import litellm\n"
+        "heavy = [m for m in ('litellm.main', 'litellm.utils', 'litellm.router', 'litellm.proxy.proxy_cli',\n"
+        "                     'tiktoken', 'fastapi', 'grpc', 'boto3') if m in sys.modules]\n"
+        "with open('/proc/self/status') as f:\n"
+        "    rss_kb = int(re.search(r'VmRSS:\\s+(\\d+) kB', f.read()).group(1))\n"
+        "print(json.dumps({'total': len(sys.modules), 'heavy': heavy, 'rss_mb': rss_kb / 1024}))\n"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    stats = json.loads(result.stdout)
+    assert stats["heavy"] == [], f"heavy modules imported eagerly: {stats['heavy']}"
+    assert stats["total"] < 800, f"import litellm loaded {stats['total']} modules"
+    assert stats["rss_mb"] < 75, f"import litellm used {stats['rss_mb']:.1f} MB RSS"

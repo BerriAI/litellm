@@ -16,9 +16,10 @@ until they're actually needed.
 """
 
 import importlib
+import importlib.util
 import sys
 from collections.abc import Callable, Mapping
-from types import ModuleType
+from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from typing_extensions import ReadOnly, TypedDict
@@ -34,6 +35,8 @@ from ._lazy_imports_registry import (
     _LITELLM_LOGGING_IMPORT_MAP,
     _LLM_CONFIGS_IMPORT_MAP,
     _LLM_PROVIDER_LOGIC_IMPORT_MAP,
+    _SDK_MODULE_ALIASES,
+    _SDK_SYMBOLS_IMPORT_MAP,
     _TOKEN_COUNTER_IMPORT_MAP,
     _TYPES_IMPORT_MAP,
     _TYPES_UTILS_IMPORT_MAP,
@@ -214,6 +217,10 @@ def _get_lazy_import_registry() -> dict[str, Callable[[str], object]]:
             _LAZY_IMPORT_REGISTRY[name] = _lazy_import_llm_provider_logic
         for name in UTILS_MODULE_NAMES:
             _LAZY_IMPORT_REGISTRY[name] = _lazy_import_utils_module
+        for name in _SDK_SYMBOLS_IMPORT_MAP:
+            _LAZY_IMPORT_REGISTRY.setdefault(name, _lazy_import_sdk_symbols)
+        for name in _SDK_MODULE_ALIASES:
+            _LAZY_IMPORT_REGISTRY.setdefault(name, _lazy_import_sdk_module_alias)
 
     return _LAZY_IMPORT_REGISTRY
 
@@ -229,7 +236,7 @@ def _module_attribute(module: ModuleType, attr_name: str) -> object:
     return attribute["value"]
 
 
-def _generic_lazy_import(name: str, import_map: dict[str, tuple[str, str]], category: str) -> object:
+def _generic_lazy_import(name: str, import_map: Mapping[str, tuple[str, str]], category: str) -> object:
     """
     Generic function that handles lazy importing for most attributes.
 
@@ -348,6 +355,75 @@ def _lazy_import_litellm_logging(name: str) -> object:
 def _lazy_import_llm_provider_logic(name: str) -> object:
     """Handler for LLM provider logic functions (get_llm_provider, etc.)"""
     return _generic_lazy_import(name, _LLM_PROVIDER_LOGIC_IMPORT_MAP, "LLM provider logic")
+
+
+def _lazy_import_sdk_symbols(name: str) -> object:
+    """Handler for SDK symbols previously imported eagerly at the bottom of litellm/__init__.py"""
+    return _generic_lazy_import(name, _SDK_SYMBOLS_IMPORT_MAP, "SDK symbols")
+
+
+def _lazy_import_sdk_module_alias(name: str) -> object:
+    """Handler for litellm attributes that bind a module (e.g. litellm.anthropic)"""
+    _globals: Final = get_litellm_globals()
+    if name in _globals:
+        return _globals[name]
+    module: Final = importlib.import_module(_SDK_MODULE_ALIASES[name])
+    _globals[name] = module
+    return module
+
+
+_SHADOWABLE_SDK_FUNCTIONS: Final = MappingProxyType(
+    {
+        "batch_completion": ("litellm.batch_completion.main", "batch_completion"),
+        "ocr": ("litellm.ocr.main", "ocr"),
+        "responses": ("litellm.responses.main", "responses"),
+        "search": ("litellm.search.main", "search"),
+    }
+)
+
+
+def _shadowable_function_property(name: str) -> property:
+    """Property keeping litellm.<name> bound to the SDK function even after the import
+    machinery binds the identically named litellm.<name> subpackage onto the litellm module."""
+    module_path, attr_name = _SHADOWABLE_SDK_FUNCTIONS[name]
+
+    def _get(module: ModuleType) -> object:
+        stored: Final = module.__dict__.get(name)
+        if stored is not None and not (isinstance(stored, ModuleType) and stored.__name__ == f"litellm.{name}"):
+            return stored
+        value: Final = _module_attribute(importlib.import_module(module_path), attr_name)
+        module.__dict__[name] = value  # rebind-ok: caches the resolved function on the litellm module
+        return value
+
+    def _set(module: ModuleType, value: object) -> None:
+        module.__dict__[name] = value  # rebind-ok: property setter must store assignments on the module
+
+    return property(_get, _set)
+
+
+class LiteLLMModule(ModuleType):
+    """Module type installed on the litellm package so function names shadowed by
+    same-named subpackages (litellm.responses, ...) keep resolving to the functions."""
+
+    batch_completion = _shadowable_function_property("batch_completion")
+    ocr = _shadowable_function_property("ocr")
+    responses = _shadowable_function_property("responses")
+    search = _shadowable_function_property("search")
+
+
+def lazy_import_litellm_submodule(name: str) -> "ModuleType | None":
+    """Resolve litellm.<name> as a submodule (e.g. litellm.utils) when no other handler matches"""
+    if name.startswith("__") or not name.isidentifier():
+        return None
+    try:
+        spec: Final = importlib.util.find_spec(f"litellm.{name}")
+    except ModuleNotFoundError:
+        return None
+    if spec is None:
+        return None
+    module: Final = importlib.import_module(f"litellm.{name}")
+    get_litellm_globals()[name] = module
+    return module
 
 
 def _lazy_import_utils_module(name: str) -> object:

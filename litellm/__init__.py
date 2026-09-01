@@ -13,6 +13,7 @@ warnings.filterwarnings("ignore", message=".*`ReadOnly` qualifier.*")
 ### INIT VARIABLES #########################
 import threading
 import os
+import sys
 
 # Load .env before any other litellm imports so env vars (e.g. LITELLM_UI_SESSION_DURATION) are available
 import dotenv as _dotenv
@@ -45,8 +46,6 @@ from typing import (
     TYPE_CHECKING,
     Union,
 )
-from litellm.types.integrations.datadog import DatadogInitParams
-from litellm.types.integrations.newrelic import NewRelicInitParams
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
@@ -95,8 +94,7 @@ from litellm.constants import (
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
 )
-import httpx
-
+# httpx is lazy-loaded via __getattr__
 # register_async_client_cleanup is lazy-loaded and called on first access
 
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
@@ -364,8 +362,6 @@ guardrail_name_config_map: Dict[str, GuardrailItem] = {}
 include_cost_in_streaming_usage: bool = False
 reasoning_auto_summary: bool = False
 ### PROMPTS ####
-from litellm.types.prompts.init_prompts import PromptSpec
-
 prompt_name_config_map: Dict[str, PromptSpec] = {}
 
 ##################
@@ -1256,219 +1252,214 @@ openai_video_generation_models = ["sora-2"]
 # get_llm_provider is lazy-loaded via __getattr__
 # remove_index_from_tool_calls is lazy-loaded via __getattr__
 
-# Import KeyManagementSettings here (before utils import) because _key_management_settings
-# is accessed during import time in secret_managers/main.py (via dd_tracing -> datadog -> _service_logger -> utils)
-from litellm.types.secret_managers.main import KeyManagementSettings
+# SDK symbols previously imported eagerly here are lazy-loaded via __getattr__
+# (_SDK_SYMBOLS_IMPORT_MAP in _lazy_imports_registry.py); mirrored under TYPE_CHECKING
+# so static type checkers still see them
+if TYPE_CHECKING:
+    _key_management_settings: KeyManagementSettings
 
-_key_management_settings: KeyManagementSettings = KeyManagementSettings()
+    from .utils import client
 
-# client must be imported immediately as it's used as a decorator at function definition time
-from .utils import client
-
-# Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py
-# (which imports tiktoken) at import time
-
-from .llms.custom_llm import CustomLLM
-from .llms.anthropic.common_utils import AnthropicModelInfo
-from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
-from .llms.deprecated_providers.palm import (
-    PalmConfig,
-)  # here to prevent breaking changes
-from .llms.deprecated_providers.aleph_alpha import AlephAlphaConfig
-from .llms.gemini.common_utils import GeminiModelInfo
+    from .llms.custom_llm import CustomLLM
+    from .llms.anthropic.common_utils import AnthropicModelInfo
+    from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
+    from .llms.deprecated_providers.palm import (
+        PalmConfig,
+    )  # here to prevent breaking changes
+    from .llms.deprecated_providers.aleph_alpha import AlephAlphaConfig
+    from .llms.gemini.common_utils import GeminiModelInfo
 
 
-from .llms.vertex_ai.vertex_embeddings.transformation import (
-    VertexAITextEmbeddingConfig,
-)
+    from .llms.vertex_ai.vertex_embeddings.transformation import (
+        VertexAITextEmbeddingConfig,
+    )
 
-vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
+    vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
 
 
-from .llms.bedrock.embed.amazon_titan_v2_transformation import (
-    AmazonTitanV2Config,
-)
-from .llms.topaz.common_utils import TopazModelInfo
+    from .llms.bedrock.embed.amazon_titan_v2_transformation import (
+        AmazonTitanV2Config,
+    )
+    from .llms.topaz.common_utils import TopazModelInfo
 
-# OpenAIOSeriesConfig is lazy loaded - openaiOSeriesConfig will be created on first access
-# OpenAIGPTConfig, OpenAIGPT5Config, etc. are lazy loaded - instances will be created on first access
-from .llms.xai.common_utils import XAIModelInfo
+    # OpenAIOSeriesConfig is lazy loaded - openaiOSeriesConfig will be created on first access
+    # OpenAIGPTConfig, OpenAIGPT5Config, etc. are lazy loaded - instances will be created on first access
+    from .llms.xai.common_utils import XAIModelInfo
 
-# PublicAI now uses JSON-based configuration (see litellm/llms/openai_like/providers.json)
-# All remaining configs are now lazy loaded - see _lazy_imports_registry.py
+    # PublicAI now uses JSON-based configuration (see litellm/llms/openai_like/providers.json)
+    # All remaining configs are now lazy loaded - see _lazy_imports_registry.py
 
-# Import LlmProviders here (before main import) because it's imported during import time
-# in multiple places including openai.py (via main import)
-from litellm.types.utils import LlmProviders
+    # Import LlmProviders here (before main import) because it's imported during import time
+    # in multiple places including openai.py (via main import)
 
-## Lazy loading this is not straightforward, will leave it here for now.
-from .main import *
-from .compression import compress
+    ## Lazy loading this is not straightforward, will leave it here for now.
+    from .main import *
+    from .compression import compress
 
-# Skills API
-from .skills.main import (
-    create_skill,
-    acreate_skill,
-    list_skills,
-    alist_skills,
-    get_skill,
-    aget_skill,
-    delete_skill,
-    adelete_skill,
-)
-from .evals.main import (
-    create_eval,
-    acreate_eval,
-    list_evals,
-    alist_evals,
-    get_eval,
-    aget_eval,
-    delete_eval,
-    adelete_eval,
-    cancel_eval,
-    acancel_eval,
-    create_run,
-    acreate_run,
-    list_runs,
-    alist_runs,
-    get_run,
-    aget_run,
-    delete_run,
-    adelete_run,
-    cancel_run,
-    acancel_run,
-)
-from .integrations import *
-from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
-from .exceptions import (
-    AuthenticationError,
-    InvalidRequestError,
-    BadRequestError,
-    ImageFetchError,
-    NotFoundError,
-    PermissionDeniedError,
-    RateLimitError,
-    RateLimitErrorCategory,
-    RateLimitType,
-    ServiceUnavailableError,
-    BadGatewayError,
-    OpenAIError,
-    ContextWindowExceededError,
-    ContentPolicyViolationError,
-    BudgetExceededError,
-    APIError,
-    Timeout,
-    APIConnectionError,
-    UnsupportedParamsError,
-    APIResponseValidationError,
-    UnprocessableEntityError,
-    InternalServerError,
-    JSONSchemaValidationError,
-    LITELLM_EXCEPTION_TYPES,
-    MockException,
-)
-from .budget_manager import BudgetManager
-from .proxy.proxy_cli import run_server
-from .router import Router
-from .assistants.main import *
-from .batches.main import *
-from .images.main import *
-from .videos.main import *
-from .batch_completion.main import *
-from .rerank_api.main import *
-from .llms.anthropic.experimental_pass_through.messages.handler import *
-from .responses.main import *
+    # Skills API
+    from .skills.main import (
+        create_skill,
+        acreate_skill,
+        list_skills,
+        alist_skills,
+        get_skill,
+        aget_skill,
+        delete_skill,
+        adelete_skill,
+    )
+    from .evals.main import (
+        create_eval,
+        acreate_eval,
+        list_evals,
+        alist_evals,
+        get_eval,
+        aget_eval,
+        delete_eval,
+        adelete_eval,
+        cancel_eval,
+        acancel_eval,
+        create_run,
+        acreate_run,
+        list_runs,
+        alist_runs,
+        get_run,
+        aget_run,
+        delete_run,
+        adelete_run,
+        cancel_run,
+        acancel_run,
+    )
+    from .integrations import *
+    from .llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
+    from .exceptions import (
+        AuthenticationError,
+        InvalidRequestError,
+        BadRequestError,
+        ImageFetchError,
+        NotFoundError,
+        PermissionDeniedError,
+        RateLimitError,
+        RateLimitErrorCategory,
+        RateLimitType,
+        ServiceUnavailableError,
+        BadGatewayError,
+        OpenAIError,
+        ContextWindowExceededError,
+        ContentPolicyViolationError,
+        BudgetExceededError,
+        APIError,
+        Timeout,
+        APIConnectionError,
+        UnsupportedParamsError,
+        APIResponseValidationError,
+        UnprocessableEntityError,
+        InternalServerError,
+        JSONSchemaValidationError,
+        LITELLM_EXCEPTION_TYPES,
+        MockException,
+    )
+    from .budget_manager import BudgetManager
+    from .proxy.proxy_cli import run_server
+    from .router import Router
+    from .assistants.main import *
+    from .batches.main import *
+    from .images.main import *
+    from .videos.main import *
+    from .batch_completion.main import *
+    from .rerank_api.main import *
+    from .llms.anthropic.experimental_pass_through.messages.handler import *
+    from .responses.main import *
 
-# Interactions API is available as litellm.interactions module
-# Usage: litellm.interactions.create(), litellm.interactions.get(), etc.
-from . import interactions
-from .interactions.agents.main import (
-    acreate as acreate_agent,
-    create as create_agent,
-    alist as alist_agents,
-    list as list_agents,
-    aget as aget_agent,
-    get as get_agent,
-    adelete as adelete_agent,
-    delete as delete_agent,
-    alist_versions as alist_agent_versions,
-    list_versions as list_agent_versions,
-)
-from .skills.main import (
-    create_skill,
-    acreate_skill,
-    list_skills,
-    alist_skills,
-    get_skill,
-    aget_skill,
-    delete_skill,
-    adelete_skill,
-)
-from .containers.main import *
-from .ocr.main import *
-from .rust_bridge.ocr import use_litellm_rust
-from .rag.main import *
-from .sandbox.main import *
-from .search.main import *
-from .realtime_api.main import (
-    _arealtime,
-    acreate_realtime_client_secret,
-    acreate_realtime_transcription_session,
-    arealtime_calls,
-)
-from .responses.main import _aresponses_websocket
-from .fine_tuning.main import *
-from .files.main import *
-from .vector_store_files.main import (
-    acreate as avector_store_file_create,
-    adelete as avector_store_file_delete,
-    alist as avector_store_file_list,
-    aretrieve as avector_store_file_retrieve,
-    aretrieve_content as avector_store_file_content,
-    aupdate as avector_store_file_update,
-    create as vector_store_file_create,
-    delete as vector_store_file_delete,
-    list as vector_store_file_list,
-    retrieve as vector_store_file_retrieve,
-    retrieve_content as vector_store_file_content,
-    update as vector_store_file_update,
-)
-from .scheduler import *
+    # Interactions API is available as litellm.interactions module
+    # Usage: litellm.interactions.create(), litellm.interactions.get(), etc.
+    from . import interactions
+    from .interactions.agents.main import (
+        acreate as acreate_agent,
+        create as create_agent,
+        alist as alist_agents,
+        list as list_agents,
+        aget as aget_agent,
+        get as get_agent,
+        adelete as adelete_agent,
+        delete as delete_agent,
+        alist_versions as alist_agent_versions,
+        list_versions as list_agent_versions,
+    )
+    from .skills.main import (
+        create_skill,
+        acreate_skill,
+        list_skills,
+        alist_skills,
+        get_skill,
+        aget_skill,
+        delete_skill,
+        adelete_skill,
+    )
+    from .containers.main import *
+    from .ocr.main import *
+    from .rust_bridge.ocr import use_litellm_rust
+    from .rag.main import *
+    from .sandbox.main import *
+    from .search.main import *
+    from .realtime_api.main import (
+        _arealtime,
+        acreate_realtime_client_secret,
+        acreate_realtime_transcription_session,
+        arealtime_calls,
+    )
+    from .responses.main import _aresponses_websocket
+    from .fine_tuning.main import *
+    from .files.main import *
+    from .vector_store_files.main import (
+        acreate as avector_store_file_create,
+        adelete as avector_store_file_delete,
+        alist as avector_store_file_list,
+        aretrieve as avector_store_file_retrieve,
+        aretrieve_content as avector_store_file_content,
+        aupdate as avector_store_file_update,
+        create as vector_store_file_create,
+        delete as vector_store_file_delete,
+        list as vector_store_file_list,
+        retrieve as vector_store_file_retrieve,
+        retrieve_content as vector_store_file_content,
+        update as vector_store_file_update,
+    )
+    from .scheduler import *
+
+    ### ADAPTERS ###
+    import litellm.anthropic_interface as anthropic
+
+
+    ### Vector Store Registry ###
+
+
+    ### RAG ###
+    from . import rag
+
+    ### CUSTOM LLMs ###
+
+
+    ### CLI UTILITIES ###
+    from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key
+
+    ### PASSTHROUGH ###
+    from .passthrough import allm_passthrough_route, llm_passthrough_route
+    from .google_genai import agenerate_content
 
 ### ADAPTERS ###
-from .types.adapter import AdapterItem
-import litellm.anthropic_interface as anthropic
-
 adapters: List[AdapterItem] = []
 
 ### Vector Store Registry ###
-from .vector_stores.vector_store_registry import (
-    VectorStoreRegistry,
-    VectorStoreIndexRegistry,
-)
-
 vector_store_registry: Optional[VectorStoreRegistry] = None
 vector_store_index_registry: Optional[VectorStoreIndexRegistry] = None
 
-### RAG ###
-from . import rag
-
 ### CUSTOM LLMs ###
-from .types.llms.custom_llm import CustomLLMItem
-
 custom_provider_map: List[CustomLLMItem] = []
 _custom_providers: List[str] = []  # internal helper util, used to track names of custom providers
 disable_hf_tokenizer_download: Optional[bool] = (
     None  # disable huggingface tokenizer download. Defaults to openai clk100
 )
 global_disable_no_log_param: bool = False
-
-### CLI UTILITIES ###
-from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key
-
-### PASSTHROUGH ###
-from .passthrough import allm_passthrough_route, llm_passthrough_route
-from .google_genai import agenerate_content
 
 ### GLOBAL CONFIG ###
 global_bitbucket_config: Optional[Dict[str, Any]] = None
@@ -1493,10 +1484,21 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
 # Lazy loading system for heavy modules to reduce initial import time and memory usage
 
 if TYPE_CHECKING:
+    import httpx
+
     from litellm.types.utils import ModelInfo as _ModelInfoType
     from litellm.types.utils import PriorityReservationSettings
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.caching.caching import Cache
+    from litellm.types.adapter import AdapterItem
+    from litellm.types.integrations.datadog import DatadogInitParams
+    from litellm.types.integrations.newrelic import NewRelicInitParams
+    from litellm.types.llms.custom_llm import CustomLLMItem
+    from litellm.types.prompts.init_prompts import PromptSpec
+    from litellm.vector_stores.vector_store_registry import (
+        VectorStoreIndexRegistry,
+        VectorStoreRegistry,
+    )
 
     # Type stubs for lazy-loaded configs to help mypy
     from .llms.bedrock.chat.converse_transformation import (
@@ -2243,6 +2245,8 @@ def __getattr__(name: str) -> Any:
         "openAIGPT5Config": "OpenAIGPT5Config",
         "nvidiaNimConfig": "NvidiaNimConfig",
         "nvidiaNimEmbeddingConfig": "NvidiaNimEmbeddingConfig",
+        "vertexAITextEmbeddingConfig": "VertexAITextEmbeddingConfig",
+        "_key_management_settings": "KeyManagementSettings",
     }
     if name in _config_instances:
         from ._lazy_imports import get_litellm_globals
@@ -2360,7 +2364,21 @@ def __getattr__(name: str) -> Any:
 
         return locals()[name]
 
+    from ._lazy_imports import lazy_import_litellm_submodule
+
+    submodule: Final = lazy_import_litellm_submodule(name)
+    if submodule is not None:
+        return submodule
+
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+from ._lazy_imports import LiteLLMModule
+from ._lazy_imports_registry import STAR_IMPORT_PUBLIC_NAMES
+
+sys.modules[__name__].__class__ = LiteLLMModule
+
+__all__ = list(STAR_IMPORT_PUBLIC_NAMES)  # mutable-ok: star imports require __all__ to be a list of str
 
 
 # ALL_LITELLM_RESPONSE_TYPES is lazy-loaded via __getattr__ to avoid loading utils at import time
