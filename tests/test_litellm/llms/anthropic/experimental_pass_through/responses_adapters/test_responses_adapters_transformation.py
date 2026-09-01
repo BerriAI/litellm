@@ -1971,3 +1971,44 @@ class TestPromptCacheBreakpointToResponses:
             extra_kwargs={"prompt_cache_options": {"mode": "explicit"}},
         )
         assert kwargs["prompt_cache_options"] == {"mode": "explicit"}
+
+
+class TestTranslateResponseHeaders:
+    """The llm_provider-* header mirror must survive the Responses -> Anthropic conversion.
+
+    The proxy reads `_hidden_params["additional_headers"]` to forward upstream
+    response headers to clients as `llm_provider-*`. The inner
+    ResponsesAPIResponse carries the mirror; without propagation the returned
+    TypedDict (a shape that cannot carry attributes) drops it, so
+    /v1/messages loses every upstream response header while
+    /v1/chat/completions for the same deployment forwards them.
+    """
+
+    def test_additional_headers_are_carried_onto_the_anthropic_response(self):
+        response = _make_mock_response(output=[_make_output_message(["Hello!"])])
+        response._hidden_params = {
+            "additional_headers": {"llm_provider-x-cortecs-provider": "tensorix"},
+            "model_id": "deployment-1",
+        }
+        result: Any = _ADAPTER.translate_response(response)
+        assert result["_hidden_params"] == {
+            "additional_headers": {"llm_provider-x-cortecs-provider": "tensorix"}
+        }
+
+    def test_no_hidden_params_means_no_key(self):
+        response = _make_mock_response(output=[_make_output_message(["Hello!"])])
+        del response._hidden_params  # MagicMock auto-attrs: remove, so getattr misses
+        result: Any = _ADAPTER.translate_response(response)
+        assert "_hidden_params" not in result
+
+    def test_hidden_params_without_additional_headers_means_no_key(self):
+        response = _make_mock_response(output=[_make_output_message(["Hello!"])])
+        response._hidden_params = {"model_id": "deployment-1"}
+        result: Any = _ADAPTER.translate_response(response)
+        assert "_hidden_params" not in result
+
+    def test_non_dict_hidden_params_are_ignored(self):
+        response = _make_mock_response(output=[_make_output_message(["Hello!"])])
+        response._hidden_params = "not-a-dict"
+        result: Any = _ADAPTER.translate_response(response)
+        assert "_hidden_params" not in result

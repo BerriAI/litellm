@@ -188,7 +188,26 @@ class LiteLLMMessagesToResponsesAPIHandler:
             wrapper: Final = AnthropicResponsesStreamWrapper(
                 responses_stream=result, model=local_model_name(model, kwargs.get("custom_llm_provider"))
             )
-            return wrapper.async_anthropic_sse_wrapper()
+            # The bare generator the wrapper returns cannot carry attributes,
+            # so the proxy would drop the upstream header mirror the inner
+            # Responses iterator built from its response headers.
+            # AnthropicMessagesStreamingResponse is the passthrough route's
+            # attribute-carrying shape for exactly this -- reuse it. It is
+            # still an AsyncIterator, so streaming detection is unchanged.
+            from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+                AnthropicMessagesStreamHiddenParams,
+                AnthropicMessagesStreamingResponse,
+            )
+
+            sse_stream: Final = wrapper.async_anthropic_sse_wrapper()
+            inner_hidden: Final = getattr(result, "_hidden_params", None)
+            inner_additional: Final = inner_hidden.get("additional_headers") if isinstance(inner_hidden, dict) else None
+            if inner_additional:
+                return AnthropicMessagesStreamingResponse(
+                    completion_stream=sse_stream,
+                    hidden_params=AnthropicMessagesStreamHiddenParams(additional_headers=inner_additional),
+                )
+            return sse_stream
 
         if not isinstance(result, ResponsesAPIResponse):
             raise ValueError(f"Expected ResponsesAPIResponse, got {type(result)}")

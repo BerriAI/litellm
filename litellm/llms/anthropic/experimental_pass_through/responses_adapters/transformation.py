@@ -622,6 +622,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             ResponseReasoningItem,
         )
 
+        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+            AnthropicMessagesStreamHiddenParams,
+        )
+
         content: Final[list[dict[str, object]]] = []
         stop_reason: AnthropicFinishReason = "end_turn"
 
@@ -686,7 +690,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
         anthropic_usage: Final = self.translate_responses_api_usage_to_anthropic_usage(response.usage)
 
-        return AnthropicMessagesResponse(
+        anthropic_response: Final = AnthropicMessagesResponse(
             id=response.id,
             type="message",
             role="assistant",
@@ -696,3 +700,22 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             content=content,
             stop_reason=stop_reason,
         )
+
+        # Keep the upstream header mirror visible to the proxy. The
+        # ResponsesAPIResponse carries `_hidden_params["additional_headers"]`
+        # (the llm_provider-* mirror); without this the TypedDict returned
+        # here drops it, so /v1/messages loses every upstream response header
+        # while /v1/chat/completions for the same deployment forwards them.
+        # The proxy reads a dict-shaped "_hidden_params" key via
+        # get_hidden_params_dict() and pops it from the body before
+        # serialising, so nothing leaks into the response. Aliased, not
+        # copied: the inner response is discarded right after this call.
+        response_hidden: Final = getattr(response, "_hidden_params", None)
+        response_additional_headers: Final = (
+            response_hidden.get("additional_headers") if isinstance(response_hidden, dict) else None
+        )
+        if response_additional_headers:
+            anthropic_response["_hidden_params"] = AnthropicMessagesStreamHiddenParams(  # pyright: ignore[reportGeneralTypeIssues]  # header payload for the proxy, which reads the dict-shaped key and pops it before serialising
+                additional_headers=response_additional_headers
+            )
+        return anthropic_response
