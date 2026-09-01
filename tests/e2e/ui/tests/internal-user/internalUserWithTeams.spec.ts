@@ -8,12 +8,6 @@ import {
 import { Page } from "../../fixtures/pages";
 import { navigateToPage } from "../../helpers/navigation";
 
-/**
- * Differential partner to internalUserNoTeam.spec.ts: the seeded
- * e2e-internal-user belongs to exactly three teams, so the Create Key dropdown
- * must list all of them. Without this, the no-team spec's "zero options" assertion
- * would still pass against a bug that empties the dropdown for everyone.
- */
 test.describe("Internal User with team memberships", () => {
   test.use({ storageState: INTERNAL_USER_STORAGE_PATH });
 
@@ -26,8 +20,6 @@ test.describe("Internal User with team memberships", () => {
     const teamSelect = page.getByTestId("team-dropdown").getByRole("combobox");
     await teamSelect.click();
 
-    // All seeded memberships render, and nothing else does — proving the
-    // dropdown is scoped to the user's teams rather than empty or unfiltered.
     await expect(page.getByRole("option", { name: E2E_TEAM_CRUD_ALIAS })).toBeVisible({ timeout: 10_000 });
     await expect(page.getByRole("option", { name: E2E_TEAM_ORG_ALIAS })).toBeVisible();
     await expect(page.getByRole("option", { name: E2E_TEAM_KEYGEN_ALIAS })).toBeVisible();

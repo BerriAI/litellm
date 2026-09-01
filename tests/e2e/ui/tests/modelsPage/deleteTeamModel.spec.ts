@@ -5,8 +5,10 @@ import { navigateToPage } from "../../helpers/navigation";
 import { readBack } from "../../helpers/roundTrip";
 import { masterKey } from "../../helpers/traffic";
 
-async function findDeploymentByName(page: PlaywrightPage, modelName: string): Promise<Record<string, any> | undefined> {
-  const body = await readBack<{ data: Record<string, any>[] }>(page, "/v2/model/info");
+type DeploymentRow = { model_name?: string };
+
+async function findDeploymentByName(page: PlaywrightPage, modelName: string): Promise<DeploymentRow | undefined> {
+  const body = await readBack<{ data: DeploymentRow[] }>(page, "/v2/model/info");
   return body.data.find((row) => row.model_name === modelName);
 }
 
@@ -41,7 +43,7 @@ test.describe("Delete team model", () => {
     await navigateToPage(page, Page.Models);
     await page.getByPlaceholder("Search model names").fill(modelName);
 
-    const row = page.locator("table tbody tr").filter({ hasText: modelName });
+    const row = page.getByRole("row").filter({ hasText: modelName });
     await expect(row).toHaveCount(1, { timeout: 15_000 });
     await expect(row.getByText(E2E_TEAM_CRUD_ID)).toBeVisible({ timeout: 10_000 });
 
@@ -65,6 +67,6 @@ test.describe("Delete team model", () => {
     await page.reload();
     await page.getByPlaceholder("Search model names").fill(modelName);
     await expect(page.getByText("No models found").first()).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator("table tbody tr").filter({ hasText: modelName })).toHaveCount(0);
+    await expect(page.getByRole("row").filter({ hasText: modelName })).toHaveCount(0);
   });
 });

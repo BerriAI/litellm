@@ -147,8 +147,6 @@ test.describe("Team Admin", () => {
     expect(teamRes.ok(), `team create failed (${teamRes.status()}): ${await teamRes.text()}`).toBe(true);
     const teamId = (await teamRes.json()).team_id as string;
 
-    let modelId = "";
-    let teamKey = "";
     try {
       const modelRes = await request.post("/model/new", {
         headers: auth,
@@ -163,55 +161,57 @@ test.describe("Team Admin", () => {
         },
       });
       expect(modelRes.ok(), `model create failed (${modelRes.status()}): ${await modelRes.text()}`).toBe(true);
-      modelId = (await modelRes.json()).model_info?.id as string;
+      const modelId = (await modelRes.json()).model_info?.id as string;
 
-      const keyRes = await request.post("/key/generate", { headers: auth, data: { team_id: teamId } });
-      expect(keyRes.ok(), `key generate failed (${keyRes.status()}): ${await keyRes.text()}`).toBe(true);
-      teamKey = (await keyRes.json()).key as string;
+      try {
+        const keyRes = await request.post("/key/generate", { headers: auth, data: { team_id: teamId } });
+        expect(keyRes.ok(), `key generate failed (${keyRes.status()}): ${await keyRes.text()}`).toBe(true);
+        const teamKey = (await keyRes.json()).key as string;
 
-      await expect
-        .poll(
-          async () => {
-            const res = await request.get("/model_group/info", {
-              headers: { Authorization: `Bearer ${teamKey}` },
-            });
-            if (!res.ok()) return false;
-            const body: { data?: { model_group?: string }[] } = await res.json();
-            return (body.data ?? []).some((group) => group.model_group === teamModelName);
-          },
-          {
-            message: `model group ${teamModelName} never became visible to the team key`,
-            timeout: 30_000,
-          },
-        )
-        .toBe(true);
+        try {
+          await expect
+            .poll(
+              async () => {
+                const res = await request.get("/model_group/info", {
+                  headers: { Authorization: `Bearer ${teamKey}` },
+                });
+                if (!res.ok()) return false;
+                const body: { data?: { model_group?: string }[] } = await res.json();
+                return (body.data ?? []).some((group) => group.model_group === teamModelName);
+              },
+              {
+                message: `model group ${teamModelName} never became visible to the team key`,
+                timeout: 30_000,
+              },
+            )
+            .toBe(true);
 
-      await openPlayground(page);
-      await keySourceSelect(page).click();
-      await onlyVisible(page.getByRole("option", { name: "Virtual Key" })).click({ timeout: 15_000 });
+          await openPlayground(page);
+          await keySourceSelect(page).click();
+          await onlyVisible(page.getByRole("option", { name: "Virtual Key" })).click({ timeout: 15_000 });
 
-      const keyInput = onlyVisible(page.getByPlaceholder("Enter custom Virtual Key"));
-      await expect(keyInput).toBeVisible({ timeout: 10_000 });
-      await keyInput.fill(teamKey);
+          const keyInput = onlyVisible(page.getByPlaceholder("Enter custom Virtual Key"));
+          await expect(keyInput).toBeVisible({ timeout: 10_000 });
+          await keyInput.fill(teamKey);
 
-      const select = modelSelect(page);
-      await select.click();
-      await select.fill(teamModelName);
-      await expect(onlyVisible(page.getByRole("option", { name: teamModelName }))).toBeVisible({
-        timeout: 15_000,
-      });
+          const select = modelSelect(page);
+          await select.click();
+          await select.fill(teamModelName);
+          await expect(onlyVisible(page.getByRole("option", { name: teamModelName }))).toBeVisible({
+            timeout: 15_000,
+          });
 
-      await select.fill(CHAT_MODEL_A);
-      await expect(onlyVisible(page.getByRole("option", { name: CHAT_MODEL_A }))).toBeVisible({
-        timeout: 15_000,
-      });
-    } finally {
-      if (teamKey) {
-        await request.post("/key/delete", { headers: auth, data: { keys: [teamKey] } });
-      }
-      if (modelId) {
+          await select.fill(CHAT_MODEL_A);
+          await expect(onlyVisible(page.getByRole("option", { name: CHAT_MODEL_A }))).toBeVisible({
+            timeout: 15_000,
+          });
+        } finally {
+          await request.post("/key/delete", { headers: auth, data: { keys: [teamKey] } });
+        }
+      } finally {
         await request.post("/model/delete", { headers: auth, data: { id: modelId } });
       }
+    } finally {
       await request.post("/team/delete", { headers: auth, data: { team_ids: [teamId] } });
     }
   });

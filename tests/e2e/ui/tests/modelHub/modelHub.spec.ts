@@ -85,7 +85,17 @@ test.describe("Public model hub (/ui/model_hub_table)", () => {
     const mcpServerName = `e2e_public_mcp_${suffix}`;
     const auth = { Authorization: `Bearer ${masterKey()}` };
 
-    const seedPublicEntries = async (api: APIRequestContext): Promise<{ agentId: string; serverId: string }> => {
+    const publicMcpServerIds = async (api: APIRequestContext): Promise<string[]> => {
+      const res = await api.get("/public/mcp_hub");
+      expect(res.ok(), `public mcp_hub read failed (${res.status()}): ${await res.text()}`).toBe(true);
+      const servers: { server_id: string }[] = await res.json();
+      return servers.map((server) => server.server_id);
+    };
+
+    const seedPublicEntries = async (
+      api: APIRequestContext,
+      priorMcpIds: string[],
+    ): Promise<{ agentId: string; serverId: string }> => {
       const agentRes = await api.post("/v1/agents", {
         headers: auth,
         data: {
@@ -117,21 +127,19 @@ test.describe("Public model hub (/ui/model_hub_table)", () => {
       expect(serverRes.ok(), `mcp server create failed (${serverRes.status()}): ${await serverRes.text()}`).toBe(true);
       const serverId = (await serverRes.json()).server_id as string;
 
-      const agentPublicRes = await api.post("/v1/agents/make_public", {
-        headers: auth,
-        data: { agent_ids: [agentId] },
-      });
-      expect(agentPublicRes.ok(), `agents make_public failed: ${await agentPublicRes.text()}`).toBe(true);
+      const agentPublicRes = await api.post(`/v1/agents/${agentId}/make_public`, { headers: auth });
+      expect(agentPublicRes.ok(), `agent make_public failed: ${await agentPublicRes.text()}`).toBe(true);
       const mcpPublicRes = await api.post("/v1/mcp/make_public", {
         headers: auth,
-        data: { mcp_server_ids: [serverId] },
+        data: { mcp_server_ids: [...priorMcpIds, serverId] },
       });
       expect(mcpPublicRes.ok(), `mcp make_public failed: ${await mcpPublicRes.text()}`).toBe(true);
 
       return { agentId, serverId };
     };
 
-    const { agentId, serverId } = await seedPublicEntries(request);
+    const priorMcpIds = await publicMcpServerIds(request);
+    const { agentId, serverId } = await seedPublicEntries(request, priorMcpIds);
     try {
       await page.goto(`/ui/model_hub_table?key=${masterKey()}`);
       await dismissFeedbackPopup(page);
@@ -150,8 +158,7 @@ test.describe("Public model hub (/ui/model_hub_table)", () => {
       await expect(page.getByRole("row").filter({ hasText: mcpServerName })).toHaveCount(1, { timeout: 10_000 });
       await expect(page.getByText("E2E public MCP server").first()).toBeVisible();
     } finally {
-      await request.post("/v1/agents/make_public", { headers: auth, data: { agent_ids: [] } });
-      await request.post("/v1/mcp/make_public", { headers: auth, data: { mcp_server_ids: [] } });
+      await request.post("/v1/mcp/make_public", { headers: auth, data: { mcp_server_ids: priorMcpIds } });
       await request.delete(`/v1/agents/${agentId}`, { headers: auth });
       await request.delete(`/v1/mcp/server/${serverId}`, { headers: auth });
     }

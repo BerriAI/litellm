@@ -13,35 +13,38 @@ test.describe("Second proxy admin", () => {
     const password = "e2e-second-admin-password";
     const auth = { Authorization: `Bearer ${masterKey()}` };
 
-    const adminContext = await browser.newContext({ storageState: ADMIN_STORAGE_PATH });
-    let userId = "";
-    try {
-      const adminPage = await adminContext.newPage();
-      await navigateToPage(adminPage, Page.Users);
-      await dismissFeedbackPopup(adminPage);
+    const inviteAdminUser = async (): Promise<string> => {
+      const adminContext = await browser.newContext({ storageState: ADMIN_STORAGE_PATH });
+      try {
+        const adminPage = await adminContext.newPage();
+        await navigateToPage(adminPage, Page.Users);
+        await dismissFeedbackPopup(adminPage);
 
-      await adminPage.getByRole("button", { name: "+ Invite User", exact: true }).click();
-      const dialog = adminPage.getByRole("dialog", { name: "Invite User" });
-      await expect(dialog).toBeVisible({ timeout: 5_000 });
+        await adminPage.getByRole("button", { name: "+ Invite User", exact: true }).click();
+        const dialog = adminPage.getByRole("dialog", { name: "Invite User" });
+        await expect(dialog).toBeVisible({ timeout: 5_000 });
 
-      await dialog.getByLabel("User Email").fill(email);
+        await dialog.getByLabel("User Email").fill(email);
 
-      await dialog.getByLabel(/Global Proxy Role/).click();
-      await adminPage.getByRole("option", { name: /Admin \(All Permissions\)/ }).click();
+        await dialog.getByLabel(/Global Proxy Role/).click();
+        await adminPage.getByRole("option", { name: /Admin \(All Permissions\)/ }).click();
 
-      const createdResponse = adminPage.waitForResponse(
-        (res) => res.url().includes("/user/new") && res.request().method() === "POST",
-      );
-      await dialog.getByRole("button", { name: "Invite User" }).click();
-      const createdBody = await (await createdResponse).json();
-      userId = (createdBody.data?.user_id ?? createdBody.user_id) as string;
-      expect(userId, "created user id from /user/new").toBeTruthy();
+        const createdResponse = adminPage.waitForResponse(
+          (res) => res.url().includes("/user/new") && res.request().method() === "POST",
+        );
+        await dialog.getByRole("button", { name: "Invite User" }).click();
+        const createdBody = await (await createdResponse).json();
+        const createdUserId = (createdBody.data?.user_id ?? createdBody.user_id) as string;
+        expect(createdUserId, "created user id from /user/new").toBeTruthy();
 
-      await expect(adminPage.getByText("API user Created").first()).toBeVisible({ timeout: 10_000 });
-    } finally {
-      await adminContext.close();
-    }
+        await expect(adminPage.getByText("API user Created").first()).toBeVisible({ timeout: 10_000 });
+        return createdUserId;
+      } finally {
+        await adminContext.close();
+      }
+    };
 
+    const userId = await inviteAdminUser();
     try {
       const passwordRes = await request.post("/user/update", {
         headers: auth,
