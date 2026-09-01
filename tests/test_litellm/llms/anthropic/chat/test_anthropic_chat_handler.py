@@ -2571,12 +2571,6 @@ class TestRustChatCompletionsHook:
 
 
 def test_anthropic_streaming_thinking_text_tool_use_sync():
-    """
-    Regression test for Issue #36262:
-    Ensure Anthropic SSE stream containing thinking -> text -> tool_use emits only
-    ModelResponseStream instances (no dummy GenericStreamingChunk dicts),
-    preserves delta.tool_calls, and successfully builds via stream_chunk_builder.
-    """
     sse_lines = [
         b'event: message_start\n',
         b'data: {"type":"message_start","message":{"id":"msg_test_123","type":"message","role":"assistant","model":"claude-3-7-sonnet-20250219","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}\n',
@@ -2625,10 +2619,8 @@ def test_anthropic_streaming_thinking_text_tool_use_sync():
     )
     chunks = list(iterator)
 
-    # All emitted chunks must be ModelResponseStream instances
     assert all(isinstance(c, litellm.ModelResponseStream) for c in chunks)
 
-    # Tool call chunks must be present
     tool_call_chunks = [
         c for c in chunks
         if getattr(c.choices[0].delta, "tool_calls", None) is not None
@@ -2637,7 +2629,6 @@ def test_anthropic_streaming_thinking_text_tool_use_sync():
     assert tool_call_chunks[0].choices[0].delta.tool_calls[0].function.name == "submit_result"
     assert tool_call_chunks[0].choices[0].delta.tool_calls[0].id == "toolu_01"
 
-    # stream_chunk_builder must reconstruct the message with tool calls
     built = litellm.stream_chunk_builder(chunks=chunks)
     assert built.choices[0].message.content == "I will now submit the result."
     assert built.choices[0].message.tool_calls is not None
@@ -2649,10 +2640,6 @@ def test_anthropic_streaming_thinking_text_tool_use_sync():
 
 @pytest.mark.asyncio
 async def test_anthropic_streaming_thinking_text_tool_use_async():
-    """
-    Regression test for Issue #36262 in async streaming (__anext__):
-    Ensure async iteration correctly yields all ModelResponseStream chunks and preserves tool_calls.
-    """
     sse_lines = [
         'event: message_start\n',
         'data: {"type":"message_start","message":{"id":"msg_async_123","type":"message","role":"assistant","model":"claude-3-7-sonnet-20250219","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}\n',
@@ -2708,4 +2695,3 @@ async def test_anthropic_streaming_thinking_text_tool_use_async():
     built = litellm.stream_chunk_builder(chunks=chunks)
     assert built.choices[0].message.tool_calls[0].function.name == "do_action"
     assert json.loads(built.choices[0].message.tool_calls[0].function.arguments) == {"action": "run"}
-
