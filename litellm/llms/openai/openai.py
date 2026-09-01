@@ -12,6 +12,9 @@ if TYPE_CHECKING:
 
 import openai
 from openai import AsyncOpenAI, OpenAI
+from openai._base_client import make_request_options
+from openai._types import RequestOptions
+from openai.types import CreateEmbeddingResponse
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from openai.types.file_deleted import FileDeleted
 from pydantic import BaseModel
@@ -1164,6 +1167,34 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         return {}
 
     # Embedding
+    # embeddings.create() kwargs that configure the HTTP request rather than the JSON
+    # body. On the direct-post path they must be translated to their FinalRequestOptions
+    # fields (extra_headers -> headers, extra_body -> extra_json, extra_query -> params)
+    # instead of being serialized into the body; make_request_options does that mapping.
+    _EMBEDDING_REQUEST_KWARGS: Final = ("extra_headers", "extra_body", "extra_query")
+
+    @classmethod
+    def _direct_embedding_body_and_options(
+        cls, data: Mapping[str, Any], timeout: float | httpx.Timeout
+    ) -> tuple[Mapping[str, Any], RequestOptions]:
+        """Split a suppressed-format embeddings payload into ``(body, options)``.
+
+        Request kwargs such as ``extra_headers`` are translated to their
+        ``FinalRequestOptions`` fields so they are applied to the HTTP request
+        instead of being serialized into the JSON body.
+        """
+        request_body: Final = {}  # mutable-ok: the OpenAI SDK takes the request body as a dict
+        for key, value in data.items():
+            if key not in cls._EMBEDDING_REQUEST_KWARGS:
+                request_body[key] = value
+        request_options: Final = make_request_options(
+            timeout=timeout,
+            extra_headers=data.get("extra_headers"),
+            extra_body=data.get("extra_body"),
+            extra_query=data.get("extra_query"),
+        )
+        return request_body, request_options
+
     @track_llm_api_timing()
     async def make_openai_embedding_request(
         self,
@@ -1178,6 +1209,22 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         - call embeddings.create by default
         """
         try:
+            if "encoding_format" not in data:
+                # embeddings.create() hard-defaults encoding_format="base64" when the
+                # kwarg is omitted, so a caller (or
+                # LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT=none) that deliberately
+                # removed the field cannot keep it off the wire — and a chained LiteLLM
+                # proxy forwarding to a provider with zero supported embedding params
+                # (e.g. Bedrock titan) then rejects the request (#38661). Post the body
+                # directly so an absent field stays absent.
+                request_body, request_options = self._direct_embedding_body_and_options(data, timeout)
+                bypass_response: Final = await openai_aclient.post(
+                    "/embeddings",
+                    body=request_body,
+                    cast_to=CreateEmbeddingResponse,
+                    options=request_options,
+                )
+                return {}, bypass_response  # mutable-ok: empty headers map, never mutated
             raw_response = await openai_aclient.embeddings.with_raw_response.create(**data, timeout=timeout)
             headers: Final = dict(raw_response.headers)
             response: Final = raw_response.parse()
@@ -1199,6 +1246,18 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         - call embeddings.create by default
         """
         try:
+            if "encoding_format" not in data:
+                # See make_openai_embedding_request: keep a deliberately-omitted
+                # encoding_format off the wire instead of letting the SDK
+                # re-inject its "base64" default (#38661).
+                sync_request_body, sync_request_options = self._direct_embedding_body_and_options(data, timeout)
+                sync_response: Final = openai_client.post(
+                    "/embeddings",
+                    body=sync_request_body,
+                    cast_to=CreateEmbeddingResponse,
+                    options=sync_request_options,
+                )
+                return {}, sync_response  # mutable-ok: empty headers map, never mutated
             raw_response = openai_client.embeddings.with_raw_response.create(**data, timeout=timeout)
 
             headers: Final = dict(raw_response.headers)
