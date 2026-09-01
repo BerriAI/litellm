@@ -40,7 +40,7 @@ describe("TeamDropdown", () => {
     const onTeamSelect = vi.fn();
     render(<TeamDropdown value="team-1" onChange={onChange} onTeamSelect={onTeamSelect} />);
 
-    await user.click(document.querySelector('[data-slot="combobox-clear"]') as HTMLElement);
+    await user.click(screen.getByRole("button", { name: "Clear" }));
 
     expect(onChange).toHaveBeenCalledWith(null);
     expect(onTeamSelect).toHaveBeenCalledWith(null);
