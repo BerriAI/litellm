@@ -27,7 +27,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python .github/workflows/monitor_databricks_pricing.py | tee /tmp/monitor_out.txt
+          python scripts/monitor_databricks_pricing.py | tee /tmp/monitor_out.txt
           if grep -q '^NO_CHANGE' /tmp/monitor_out.txt; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
@@ -45,11 +45,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
           git add model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
-          git commit -m "chore(model_prices): refresh Databricks Foundation Model Serving rates
-
-Automated daily monitor detected changed DBU rates on
-https://www.databricks.com/product/pricing/foundation-model-serving
-Updated entries: databricks/databricks-deepseek-v4-*"
+          git commit -m "chore(model_prices): refresh Databricks Foundation Model Serving rates - automated monitor detected changed DBU rates on the Databricks pricing page; updated databricks-deepseek-v4-* entries."
           git push "https://x-access-token:${GITHUB_TOKEN_FOR_PUSH}@github.com/${GITHUB_REPOSITORY}.git" "$BRANCH"
           gh pr create --repo "${{ github.repository }}" \
             --base litellm_internal_staging \
