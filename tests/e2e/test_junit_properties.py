@@ -97,13 +97,14 @@ class TestSourceFromLocation:
         [
             ("a2a/test_x.py", None),
             ("/app/e2e/a2a/test_x.py", 40),
+            ("C:\\app\\e2e\\a2a\\test_x.py", 40),
             ("../conftest.py", 40),
             ("", 40),
         ],
     )
     def test_nothing_linkable_yields_empty_rather_than_a_guess(self, path: str, lineno: int | None) -> None:
-        """A test that renders without a link is a smaller failure than one whose
-        link 404s or points into another repo's file."""
+        """A colon is rejected on two counts: it is how a Windows absolute path
+        arrives, and `path:line` cannot represent one in the path half."""
         assert source_from_location(path, lineno) == ""
 
 

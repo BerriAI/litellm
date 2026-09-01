@@ -8,14 +8,10 @@ ids a test covers, and where the test's source lives. Those ride along as JUnit
 `<property>` entries via each item's `user_properties`, attached in
 `conftest.py::pytest_collection_modifyitems`.
 
-`source` is here because of a reporter limitation rather than a missing pytest
-fact. Pytest knows every test's file and line, and its `xunit1` report family
-wrote them as `file=` / `line=` attributes on `<testcase>`. The default `xunit2`
-family -- pytest's since 6.0, and this suite's, since pytest.ini names no family
--- drops both. Switching families to get them back would change the document
-shape for every consumer of the same XML, the Buildkite Test Engine upload and
-the Loki pipeline included; a property is additive, so nothing that reads the
-report today sees a difference.
+`source` is a property rather than the `file=` / `line=` attributes pytest used
+to write, because the `xunit2` family this suite runs on drops those, and
+switching families would change the XML for every consumer of it -- the
+Buildkite Test Engine upload and the Loki pipeline included.
 """
 
 from __future__ import annotations
@@ -24,21 +20,18 @@ from collections.abc import Iterable
 
 import pytest
 
-# This module's own directory, relative to the repo root. Hardcoded because it
-# cannot be discovered at runtime: the e2e runner image copies tests/e2e/ to
-# /app/e2e and runs pytest from there, so no ancestor of this file names the
-# suite's place in the litellm tree. Moving tests/e2e/ means editing this line,
-# and test_junit_properties.py fails from a checkout until you do.
+# Hardcoded because the runner image copies tests/e2e/ to /app/e2e, so nothing
+# at runtime names this suite's place in the repo. test_junit_properties.py
+# fails from a checkout if it moves.
 SUITE_ROOT = "tests/e2e"
 
 
 def suite_parts(path_part: str) -> tuple[str, ...]:
-    """Path components of a suite file, relative to tests/e2e, either way it ran.
+    """Path components of a suite file relative to tests/e2e, however it ran.
 
-    Pytest reports paths relative to its rootdir, which moves with the
-    invocation: a repo-root run gives `tests/e2e/logging/test_x.py`, a suite-cwd
-    run (what the runner image does) gives `logging/test_x.py`. Strip the
-    `tests/e2e` prefix when present so both collapse to the same components.
+    Pytest paths are rootdir-relative, and rootdir moves with the invocation: a
+    repo-root run gives `tests/e2e/logging/test_x.py`, a suite-cwd run (the
+    runner image) gives `logging/test_x.py`. Both collapse to the same tuple.
     """
     raw = tuple(p for p in path_part.replace("\\", "/").split("/") if p and p != ".")
     return raw[2:] if len(raw) >= 3 and raw[0] == "tests" and raw[1] == "e2e" else raw
@@ -55,22 +48,20 @@ def package_from_nodeid(nodeid: str) -> str:
 def source_from_location(path: str, lineno: int | None) -> str:
     """Repo-relative `path:line` for a test, or '' when nothing is linkable.
 
-    `pytest.Item.location` supplies a rootdir-relative path and a ZERO-based
-    line number, and neither travels as-is. The path is re-rooted at SUITE_ROOT
-    so consumers never have to know how pytest was started, and the line is
-    emitted ONE-based, matching editors, tracebacks, and code hosts (GitHub's
-    `#L41` is the file's 41st line). A decorated test anchors at its first
-    decorator, which is where pytest reports it and which puts the marks and the
-    `def` on screen together.
+    `pytest.Item.location` gives a rootdir-relative path and a ZERO-based line.
+    The path is re-rooted at SUITE_ROOT so consumers need not know how pytest was
+    started, and the line is emitted ONE-based to match editors, tracebacks and
+    code hosts. A decorated test anchors at its first decorator, which is where
+    pytest reports it.
 
-    Returns '' rather than a guess when pytest reports no line, or when the path
-    escapes the suite root (absolute, or reaching upward): a test that renders
-    without a link is a smaller failure than one that links somewhere wrong.
+    Empty rather than a guess for anything unlinkable: no line, a path reaching
+    upward, or a path carrying a colon, which is both how an absolute Windows
+    path arrives and a character `path:line` has no way to represent.
     """
     if lineno is None:
         return ""
     normalized = path.replace("\\", "/")
-    if normalized.startswith("/") or ".." in normalized.split("/"):
+    if normalized.startswith("/") or ":" in normalized or ".." in normalized.split("/"):
         return ""
     parts = suite_parts(normalized)
     if not parts:
