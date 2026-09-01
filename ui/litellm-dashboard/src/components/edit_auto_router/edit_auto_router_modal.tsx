@@ -23,7 +23,14 @@ import {
   tierParamsByRowId,
   resolveComplexityDefaultModel,
 } from "../add_model/tier_rows";
-import { isComplexityRouter } from "../add_model/auto_router_strategies";
+import { isCapabilityRouter, isComplexityRouter } from "../add_model/auto_router_strategies";
+import CapabilityRouterConfig from "../add_model/CapabilityRouterConfig";
+import {
+  capabilityRouterConfigError,
+  defaultCapabilityRouterConfig,
+  hydrateCapabilityRouterConfig,
+  type CapabilityRouterConfigValue,
+} from "../add_model/capability_router_config";
 import {
   type BuildComplexityRouterConfigParams,
   buildComplexityRouterConfig,
@@ -409,28 +416,36 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
     tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
     classifier_type: "heuristic",
   });
+  const [capabilityRouterConfig, setCapabilityRouterConfig] =
+    useState<CapabilityRouterConfigValue>(defaultCapabilityRouterConfig);
   const isComplexityRouterModel = isComplexityRouter(modelData?.litellm_params);
+  const isCapabilityRouterModel = isCapabilityRouter(modelData?.litellm_params);
 
   const schema = useMemo(
-    () => (isComplexityRouterModel ? complexityRouterSchema : semanticRouterSchema),
-    [isComplexityRouterModel],
+    () => (isComplexityRouterModel || isCapabilityRouterModel ? complexityRouterSchema : semanticRouterSchema),
+    [isCapabilityRouterModel, isComplexityRouterModel],
   );
   const form = useZodForm(schema, { defaultValues: EMPTY_FORM_VALUES });
 
   // Mirrors the create form: the button says why it is unavailable and disables on the same
   // answer. Tiers use this modal's own rule, which allows a partly filled router, so an edit that
   // is legal today stays legal.
-  const submitBlockedReason = !isComplexityRouterModel
-    ? null
-    : (complexityRouterConfig.custom_tier_set
-        ? getCustomTierRowsError(complexityRouterConfig.custom_tier_set) ??
-          getMissingTiersError(activeTierRows(complexityRouterConfig))
-        : (Object.values(complexityRouterConfig.tiers).every((models) => models.length === 0)
-            ? "Please select at least one model for a complexity tier"
-            : null) ?? getTierLabelsError(complexityRouterConfig.tier_labels)) ??
-      getPlanModeTierError(complexityRouterConfig.plan_mode_min_tier, activeTierRows(complexityRouterConfig)) ??
-      getKeywordTierRulesError(keywordTierRules, activeTierRows(complexityRouterConfig)) ??
-      getClassifierModelError(complexityRouterConfig);
+  const complexitySubmitBlockedReason =
+    (complexityRouterConfig.custom_tier_set
+      ? getCustomTierRowsError(complexityRouterConfig.custom_tier_set) ??
+        getMissingTiersError(activeTierRows(complexityRouterConfig))
+      : (Object.values(complexityRouterConfig.tiers).every((models) => models.length === 0)
+          ? "Please select at least one model for a complexity tier"
+          : null) ?? getTierLabelsError(complexityRouterConfig.tier_labels)) ??
+    getPlanModeTierError(complexityRouterConfig.plan_mode_min_tier, activeTierRows(complexityRouterConfig)) ??
+    getKeywordTierRulesError(keywordTierRules, activeTierRows(complexityRouterConfig)) ??
+    getClassifierModelError(complexityRouterConfig);
+  let submitBlockedReason: string | null = null;
+  if (isCapabilityRouterModel) {
+    submitBlockedReason = capabilityRouterConfigError(capabilityRouterConfig);
+  } else if (isComplexityRouterModel) {
+    submitBlockedReason = complexitySubmitBlockedReason;
+  }
 
   useEffect(() => {
     if (isVisible && modelData) {
@@ -468,6 +483,15 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   const initializeForm = () => {
     setEditingTiers(false);
     try {
+      if (isCapabilityRouterModel) {
+        setCapabilityRouterConfig(hydrateCapabilityRouterConfig(modelData.litellm_params?.capability_router_config));
+        form.reset({
+          ...EMPTY_FORM_VALUES,
+          auto_router_name: modelData.model_name,
+          model_access_group: modelData.model_info?.access_groups || [],
+        });
+        return;
+      }
       if (isComplexityRouterModel) {
         // Parse the complexity_router_config if it exists and is a string
         let parsedConfig = modelData.litellm_params?.complexity_router_config || {};
@@ -532,6 +556,46 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   };
 
   const saveValues = async (values: EditAutoRouterFormValues) => {
+    if (isCapabilityRouterModel) {
+      const validationError = capabilityRouterConfigError(capabilityRouterConfig);
+      if (validationError) {
+        toast.fromError(validationError);
+        return;
+      }
+      const serverVerdict = await validateAutoRouterConfig(
+        accessToken,
+        capabilityRouterConfig as unknown as Record<string, unknown>,
+        modelData?.model_info?.team_id,
+        "capability",
+      );
+      const dryRunError = dryRunRejection(serverVerdict);
+      if (dryRunError) {
+        toast.fromError(dryRunError);
+        return;
+      }
+      const updatedLitellmParams = {
+        ...modelData.litellm_params,
+        capability_router_config: capabilityRouterConfig,
+      };
+      const updatedModelInfo = {
+        ...modelData.model_info,
+        access_groups: values.model_access_group || [],
+      };
+      await modelPatchUpdateCall(
+        accessToken,
+        { model_name: values.auto_router_name, litellm_params: updatedLitellmParams, model_info: updatedModelInfo },
+        modelData.model_info.id,
+      );
+      toast.success("Auto router configuration updated successfully");
+      onSuccess({
+        ...modelData,
+        model_name: values.auto_router_name,
+        litellm_params: updatedLitellmParams,
+        model_info: updatedModelInfo,
+      });
+      onCancel();
+      return;
+    }
     if (isComplexityRouterModel) {
       const { tiers, custom_tier_set, classifier_llm_config } = complexityRouterConfig;
       const rows = activeTierRows(complexityRouterConfig);
@@ -696,78 +760,86 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
                 {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g., auto_router_1, smart_routing" />}
               </FormField>
 
-              {isComplexityRouterModel ? (
-                /* Complexity Router Configuration */
-                <div className="w-full">
-                  <ComplexityRouterConfig
-                    editingTiers={editingTiers}
-                    onEditingTiersChange={setEditingTiers}
-                    showValidationErrors={showValidationErrors}
-                    modelInfo={modelInfo}
-                    value={complexityRouterConfig}
-                    onChange={(config) => {
-                      setComplexityRouterConfig(config);
-                    }}
-                    customTechnicalKeywords={customTechnicalKeywords}
-                    onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
-                    keywordTierRules={keywordTierRules}
-                    onKeywordTierRulesChange={setKeywordTierRules}
-                    keywordRulesError={getKeywordTierRulesError(
-                      keywordTierRules,
-                      activeTierRows(complexityRouterConfig),
-                    )}
-                    semanticMatchingEnabled={semanticMatchingEnabled}
-                    onSemanticMatchingEnabledChange={setSemanticMatchingEnabled}
-                    embeddingModel={embeddingModel}
-                    onEmbeddingModelChange={setEmbeddingModel}
-                    matchThreshold={matchThreshold}
-                    onMatchThresholdChange={setMatchThreshold}
-                    escalationKeywords={escalationKeywords}
-                    onEscalationKeywordsChange={setEscalationKeywords}
-                  />
-                </div>
-              ) : (
-                <>
-                  {/* Router Configuration Builder */}
+              {isCapabilityRouterModel && (
+                <CapabilityRouterConfig
+                  modelInfo={modelInfo}
+                  value={capabilityRouterConfig}
+                  onChange={setCapabilityRouterConfig}
+                />
+              )}
+              {!isCapabilityRouterModel &&
+                (isComplexityRouterModel ? (
+                  /* Complexity Router Configuration */
                   <div className="w-full">
-                    <RouterConfigBuilder
+                    <ComplexityRouterConfig
+                      editingTiers={editingTiers}
+                      onEditingTiersChange={setEditingTiers}
+                      showValidationErrors={showValidationErrors}
                       modelInfo={modelInfo}
-                      value={routerConfig}
+                      value={complexityRouterConfig}
                       onChange={(config) => {
-                        setRouterConfig(config);
+                        setComplexityRouterConfig(config);
                       }}
+                      customTechnicalKeywords={customTechnicalKeywords}
+                      onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
+                      keywordTierRules={keywordTierRules}
+                      onKeywordTierRulesChange={setKeywordTierRules}
+                      keywordRulesError={getKeywordTierRulesError(
+                        keywordTierRules,
+                        activeTierRows(complexityRouterConfig),
+                      )}
+                      semanticMatchingEnabled={semanticMatchingEnabled}
+                      onSemanticMatchingEnabledChange={setSemanticMatchingEnabled}
+                      embeddingModel={embeddingModel}
+                      onEmbeddingModelChange={setEmbeddingModel}
+                      matchThreshold={matchThreshold}
+                      onMatchThresholdChange={setMatchThreshold}
+                      escalationKeywords={escalationKeywords}
+                      onEscalationKeywordsChange={setEscalationKeywords}
                     />
                   </div>
-
-                  <FormField control={form.control} name="auto_router_default_model" label="Default Model">
-                    {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-                      <ModelChoiceCombobox
-                        id={id}
-                        value={value}
-                        onChange={onChange}
-                        choices={modelChoices}
-                        placeholder="Select a default model"
-                        ariaInvalid={ariaInvalid}
-                        ariaDescribedBy={ariaDescribedBy}
+                ) : (
+                  <>
+                    {/* Router Configuration Builder */}
+                    <div className="w-full">
+                      <RouterConfigBuilder
+                        modelInfo={modelInfo}
+                        value={routerConfig}
+                        onChange={(config) => {
+                          setRouterConfig(config);
+                        }}
                       />
-                    )}
-                  </FormField>
+                    </div>
 
-                  <FormField control={form.control} name="auto_router_embedding_model" label="Embedding Model">
-                    {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-                      <ModelChoiceCombobox
-                        id={id}
-                        value={value}
-                        onChange={onChange}
-                        choices={modelChoices}
-                        placeholder="Select an embedding model"
-                        ariaInvalid={ariaInvalid}
-                        ariaDescribedBy={ariaDescribedBy}
-                      />
-                    )}
-                  </FormField>
-                </>
-              )}
+                    <FormField control={form.control} name="auto_router_default_model" label="Default Model">
+                      {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+                        <ModelChoiceCombobox
+                          id={id}
+                          value={value}
+                          onChange={onChange}
+                          choices={modelChoices}
+                          placeholder="Select a default model"
+                          ariaInvalid={ariaInvalid}
+                          ariaDescribedBy={ariaDescribedBy}
+                        />
+                      )}
+                    </FormField>
+
+                    <FormField control={form.control} name="auto_router_embedding_model" label="Embedding Model">
+                      {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+                        <ModelChoiceCombobox
+                          id={id}
+                          value={value}
+                          onChange={onChange}
+                          choices={modelChoices}
+                          placeholder="Select an embedding model"
+                          ariaInvalid={ariaInvalid}
+                          ariaDescribedBy={ariaDescribedBy}
+                        />
+                      )}
+                    </FormField>
+                  </>
+                ))}
 
               {userRole === "Admin" && (
                 <FormField

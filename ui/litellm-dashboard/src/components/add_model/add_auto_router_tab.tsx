@@ -48,6 +48,12 @@ import { tierRowLabel } from "./complexity_router_tiers";
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
 import AutoRouterConnectionTest from "./auto_router_connection_test";
 import AutoRouterRoutingTest from "./AutoRouterRoutingTest";
+import CapabilityRouterConfig from "./CapabilityRouterConfig";
+import {
+  capabilityRouterConfigError,
+  defaultCapabilityRouterConfig,
+  type CapabilityRouterConfigValue,
+} from "./capability_router_config";
 import { toast } from "@/lib/toast";
 import {
   getAllPresets,
@@ -180,6 +186,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: [] },
     classifier_type: "heuristic",
   });
+  const [routerKind, setRouterKind] = useState<"complexity" | "capability">("complexity");
+  const [capabilityRouterConfig, setCapabilityRouterConfig] =
+    useState<CapabilityRouterConfigValue>(defaultCapabilityRouterConfig);
 
   const [customTechnicalKeywords, setCustomTechnicalKeywords] = useState<string[]>([]);
   const [keywordTierRules, setKeywordTierRules] = useState<KeywordTierRule[]>([]);
@@ -328,12 +337,15 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     defaultModel: complexityRouterConfig.default_model,
   };
 
-  const submitBlockedReason = getSubmitBlockedReason(
-    complexityRouterConfig,
-    keywordTierRules,
-    referencedModelsParams,
-    groupsOnlyAvailability,
-  );
+  const submitBlockedReason =
+    routerKind === "capability"
+      ? capabilityRouterConfigError(capabilityRouterConfig)
+      : getSubmitBlockedReason(
+          complexityRouterConfig,
+          keywordTierRules,
+          referencedModelsParams,
+          groupsOnlyAvailability,
+        );
 
   const complexityRouterConfigParams: BuildComplexityRouterConfigParams = {
     tiers: complexityRouterConfig.tiers,
@@ -441,21 +453,68 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
     setIsSubmitting(true);
     try {
-      await submitRecommendedRouter(name);
+      if (routerKind === "capability") {
+        const blockedReason = capabilityRouterConfigError(capabilityRouterConfig);
+        if (blockedReason) {
+          toast.fromError(blockedReason);
+          return;
+        }
+        if (!(await form.trigger(requiresTeamScope ? ["auto_router_name", "team_id"] : ["auto_router_name"]))) {
+          return;
+        }
+        const serverVerdict = await validateAutoRouterConfig(
+          accessToken,
+          capabilityRouterConfig as unknown as Record<string, unknown>,
+          requiresTeamScope ? form.getValues("team_id") : undefined,
+          "capability",
+        );
+        const dryRunError = dryRunRejection(serverVerdict);
+        if (dryRunError) {
+          toast.fromError(dryRunError);
+          return;
+        }
+        await handleAddAutoRouterSubmit(
+          {
+            auto_router_name: name,
+            ...teamScopePayload(requiresTeamScope, form.getValues("team_id")),
+            model_type: "capability_router",
+            capability_router_config: capabilityRouterConfig,
+            model_access_group: form.getValues("model_access_group"),
+          },
+          accessToken,
+          () => form.reset(EMPTY_FORM_VALUES),
+          handleOk,
+        );
+      } else {
+        await submitRecommendedRouter(name);
+      }
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const handleTestConnection = () => {
-    const testTargetParams = {
-      tiers: activeTierRows(complexityRouterConfig).map(
-        (row) => [activeTierName(row), row.models] as [string, string[]],
-      ),
-      semanticMatchingEnabled,
-      embeddingModel,
-      defaultModel: resolveComplexityDefaultModel(complexityRouterConfig, complexityRouterConfig.default_model),
-    };
+    const testTargetParams =
+      routerKind === "capability"
+        ? {
+            tiers: [
+              ["Candidates", capabilityRouterConfig.candidates.map((candidate) => candidate.model).filter(Boolean)] as [
+                string,
+                string[],
+              ],
+            ],
+            semanticMatchingEnabled: false,
+            embeddingModel: undefined,
+            defaultModel: capabilityRouterConfig.fallback_model,
+          }
+        : {
+            tiers: activeTierRows(complexityRouterConfig).map(
+              (row) => [activeTierName(row), row.models] as [string, string[]],
+            ),
+            semanticMatchingEnabled,
+            embeddingModel,
+            defaultModel: resolveComplexityDefaultModel(complexityRouterConfig, complexityRouterConfig.default_model),
+          };
     const targets = buildAutoRouterTestTargets(testTargetParams);
 
     if (targets.length === 0) {
@@ -483,61 +542,90 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                 {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g., smart_router, auto_router_1" />}
               </FormField>
 
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-2">Template</label>
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-foreground">Router type</label>
                 <Select
-                  items={templateItems}
-                  value={selectedPreset ?? null}
-                  onValueChange={(presetKey: string | null) => handlePresetChange(presetKey ?? undefined)}
+                  value={routerKind}
+                  onValueChange={(value: string | null) =>
+                    setRouterKind(value === "capability" ? "capability" : "complexity")
+                  }
                 >
-                  <SelectTrigger data-testid="template-selector" className="w-full">
-                    <SelectValue placeholder="Choose a template or select Custom to define your own" />
+                  <SelectTrigger className="w-full" data-testid="router-type-selector">
+                    <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {sortedPresetOptions.map(({ preset, availability: presetState }) => {
-                      const disabledHint = presetDisabledHint(presetState);
-                      const hintClass = isPresetHintAlarming(presetState)
-                        ? "text-destructive"
-                        : "text-muted-foreground";
-                      const matchedHint =
-                        presetState.kind === "available" && presetState.viaDeployments
-                          ? "Matches your deployments"
-                          : null;
-
-                      return (
-                        <SelectItem
-                          key={preset.key}
-                          value={preset.key}
-                          label={preset.label}
-                          disabled={disabledHint !== null}
-                          title={disabledHint ?? preset.description}
-                        >
-                          <div>
-                            <div className="font-medium">{preset.label}</div>
-                            <div className="text-xs text-muted-foreground">{preset.description}</div>
-                            {disabledHint && <div className={`text-xs mt-1 ${hintClass}`}>{disabledHint}</div>}
-                            {matchedHint && <div className="text-xs mt-1 text-success">{matchedHint}</div>}
-                          </div>
-                        </SelectItem>
-                      );
-                    })}
-                    <SelectItem value="custom" label="Custom Configuration">
-                      <div>
-                        <div className="font-medium">Custom Configuration</div>
-                        <div className="text-xs text-muted-foreground">Define your auto router from scratch</div>
-                      </div>
+                    <SelectItem value="complexity" label="Complexity">
+                      Complexity
+                    </SelectItem>
+                    <SelectItem value="capability" label="Capability">
+                      Capability
                     </SelectItem>
                   </SelectContent>
                 </Select>
-                {modelsUnverifiable && (
-                  <div className="text-xs mt-1 text-destructive">
-                    Could not load available models.{" "}
-                    <button type="button" className="underline" onClick={() => refetchModels()}>
-                      Retry
-                    </button>
-                  </div>
-                )}
+                <p className="text-xs text-muted-foreground">
+                  {routerKind === "capability"
+                    ? "Estimate each model's probability of success, then choose the cheapest model above your threshold."
+                    : "Route requests by estimated task complexity."}
+                </p>
               </div>
+
+              {routerKind === "complexity" && (
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-2">Template</label>
+                  <Select
+                    items={templateItems}
+                    value={selectedPreset ?? null}
+                    onValueChange={(presetKey: string | null) => handlePresetChange(presetKey ?? undefined)}
+                  >
+                    <SelectTrigger data-testid="template-selector" className="w-full">
+                      <SelectValue placeholder="Choose a template or select Custom to define your own" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {sortedPresetOptions.map(({ preset, availability: presetState }) => {
+                        const disabledHint = presetDisabledHint(presetState);
+                        const hintClass = isPresetHintAlarming(presetState)
+                          ? "text-destructive"
+                          : "text-muted-foreground";
+                        const matchedHint =
+                          presetState.kind === "available" && presetState.viaDeployments
+                            ? "Matches your deployments"
+                            : null;
+
+                        return (
+                          <SelectItem
+                            key={preset.key}
+                            value={preset.key}
+                            label={preset.label}
+                            disabled={disabledHint !== null}
+                            title={disabledHint ?? preset.description}
+                          >
+                            <div>
+                              <div className="font-medium">{preset.label}</div>
+                              <div className="text-xs text-muted-foreground">{preset.description}</div>
+                              {disabledHint && <div className={`text-xs mt-1 ${hintClass}`}>{disabledHint}</div>}
+                              {matchedHint && <div className="text-xs mt-1 text-success">{matchedHint}</div>}
+                            </div>
+                          </SelectItem>
+                        );
+                      })}
+                      <SelectItem value="custom" label="Custom Configuration">
+                        <div>
+                          <div className="font-medium">Custom Configuration</div>
+                          <div className="text-xs text-muted-foreground">Define your auto router from scratch</div>
+                        </div>
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {modelsUnverifiable && (
+                    <div className="text-xs mt-1 text-destructive">
+                      Could not load available models.{" "}
+                      <button type="button" className="underline" onClick={() => refetchModels()}>
+                        Retry
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {requiresTeamScope && (
                 <FormField
@@ -554,56 +642,64 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                 </FormField>
               )}
 
-              <div className="border border-border rounded-lg">
-                <button
-                  type="button"
-                  onClick={() => setDetailsExpanded((expanded) => !expanded)}
-                  className="w-full flex flex-col gap-1 px-4 py-3 text-left hover:bg-muted"
-                  data-testid="detailed-configuration-toggle"
-                >
-                  <span className="flex items-center gap-2 font-medium text-foreground">
-                    {detailsExpanded ? (
-                      <ChevronDown className="size-3 text-muted-foreground" />
-                    ) : (
-                      <ChevronRight className="size-3 text-muted-foreground" />
-                    )}
-                    Detailed Configuration
-                  </span>
-                  {!detailsExpanded && (
-                    <span className="text-xs text-muted-foreground line-clamp-2">
-                      {tierConfigSummary(complexityRouterConfig)}
-                    </span>
-                  )}
-                </button>
-                {detailsExpanded && (
-                  <div className="px-4 pb-4">
-                    <ComplexityRouterConfig
-                      editingTiers={editingTiers}
-                      onEditingTiersChange={setEditingTiers}
-                      modelInfo={modelInfo}
-                      value={complexityRouterConfig}
-                      onChange={setComplexityRouterConfig}
-                      customTechnicalKeywords={customTechnicalKeywords}
-                      onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
-                      keywordTierRules={keywordTierRules}
-                      onKeywordTierRulesChange={setKeywordTierRules}
-                      keywordRulesError={getKeywordTierRulesError(
-                        keywordTierRules,
-                        activeTierRows(complexityRouterConfig),
+              {routerKind === "complexity" ? (
+                <div className="border border-border rounded-lg">
+                  <button
+                    type="button"
+                    onClick={() => setDetailsExpanded((expanded) => !expanded)}
+                    className="w-full flex flex-col gap-1 px-4 py-3 text-left hover:bg-muted"
+                    data-testid="detailed-configuration-toggle"
+                  >
+                    <span className="flex items-center gap-2 font-medium text-foreground">
+                      {detailsExpanded ? (
+                        <ChevronDown className="size-3 text-muted-foreground" />
+                      ) : (
+                        <ChevronRight className="size-3 text-muted-foreground" />
                       )}
-                      semanticMatchingEnabled={semanticMatchingEnabled}
-                      onSemanticMatchingEnabledChange={setSemanticMatchingEnabled}
-                      embeddingModel={embeddingModel}
-                      onEmbeddingModelChange={setEmbeddingModel}
-                      matchThreshold={matchThreshold}
-                      onMatchThresholdChange={setMatchThreshold}
-                      escalationKeywords={escalationKeywords}
-                      onEscalationKeywordsChange={setEscalationKeywords}
-                      showValidationErrors={showValidationErrors}
-                    />
-                  </div>
-                )}
-              </div>
+                      Detailed Configuration
+                    </span>
+                    {!detailsExpanded && (
+                      <span className="text-xs text-muted-foreground line-clamp-2">
+                        {tierConfigSummary(complexityRouterConfig)}
+                      </span>
+                    )}
+                  </button>
+                  {detailsExpanded && (
+                    <div className="px-4 pb-4">
+                      <ComplexityRouterConfig
+                        editingTiers={editingTiers}
+                        onEditingTiersChange={setEditingTiers}
+                        modelInfo={modelInfo}
+                        value={complexityRouterConfig}
+                        onChange={setComplexityRouterConfig}
+                        customTechnicalKeywords={customTechnicalKeywords}
+                        onCustomTechnicalKeywordsChange={setCustomTechnicalKeywords}
+                        keywordTierRules={keywordTierRules}
+                        onKeywordTierRulesChange={setKeywordTierRules}
+                        keywordRulesError={getKeywordTierRulesError(
+                          keywordTierRules,
+                          activeTierRows(complexityRouterConfig),
+                        )}
+                        semanticMatchingEnabled={semanticMatchingEnabled}
+                        onSemanticMatchingEnabledChange={setSemanticMatchingEnabled}
+                        embeddingModel={embeddingModel}
+                        onEmbeddingModelChange={setEmbeddingModel}
+                        matchThreshold={matchThreshold}
+                        onMatchThresholdChange={setMatchThreshold}
+                        escalationKeywords={escalationKeywords}
+                        onEscalationKeywordsChange={setEscalationKeywords}
+                        showValidationErrors={showValidationErrors}
+                      />
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <CapabilityRouterConfig
+                  modelInfo={modelInfo}
+                  value={capabilityRouterConfig}
+                  onChange={setCapabilityRouterConfig}
+                />
+              )}
 
               {isAdmin && (
                 <FormField
@@ -689,8 +785,15 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
           {isRoutingTestVisible && (
             <AutoRouterRoutingTest
               accessToken={accessToken}
-              config={buildComplexityRouterConfig(complexityRouterConfigParams)}
-              defaultModel={resolveComplexityDefaultModel(complexityRouterConfig, complexityRouterConfig.default_model)}
+              config={
+                routerKind === "complexity" ? buildComplexityRouterConfig(complexityRouterConfigParams) : undefined
+              }
+              capabilityConfig={routerKind === "capability" ? capabilityRouterConfig : undefined}
+              defaultModel={
+                routerKind === "complexity"
+                  ? resolveComplexityDefaultModel(complexityRouterConfig, complexityRouterConfig.default_model)
+                  : undefined
+              }
               routerName={watchedName}
               teamId={requiresTeamScope ? watchedTeamId : undefined}
             />
