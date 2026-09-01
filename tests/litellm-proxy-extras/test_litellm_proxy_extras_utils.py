@@ -494,6 +494,11 @@ ADD CONSTRAINT "LiteLLM_SpendLogs_pkey" PRIMARY KEY ("request_id");
 DROP TABLE "LiteLLM_SpendLogs_legacy";
 """
 
+_EMPTY_DRIFT_SQL = "-- This is an empty migration.\n\n"
+
+_TRUNCATED_DRIFT_SQL = """-- AlterTable
+ALTER TABLE "LiteLLM_BudgetTable" ADD COL"""
+
 
 class TestPartitionedSpendLogsDriftFilter:
     """A doc-partitioned LiteLLM_SpendLogs (db_scripts/partition_spend_logs.sql) has a
@@ -537,15 +542,24 @@ class _FakeCompleted:
 
 
 class TestResolveAllMigrationsLedger:
-    def _run(self, monkeypatch, tmp_path, partitioned, execute_fails):
+    def _run(
+        self,
+        monkeypatch,
+        tmp_path,
+        partitioned,
+        execute_fails,
+        diff_sql=None,
+        diff_times_out=False,
+    ):
         import subprocess as subprocess_module
 
         import litellm_proxy_extras.utils as utils_module
 
         monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:5432/db")
         monkeypatch.delenv("DIRECT_URL", raising=False)
+        is_partitioned = partitioned if callable(partitioned) else lambda: partitioned
         monkeypatch.setattr(
-            ProxyExtrasDBManager, "spend_logs_is_partitioned", staticmethod(lambda: partitioned)
+            ProxyExtrasDBManager, "spend_logs_is_partitioned", staticmethod(is_partitioned)
         )
         monkeypatch.setattr(
             ProxyExtrasDBManager,
@@ -557,7 +571,11 @@ class TestResolveAllMigrationsLedger:
         def fake_run(cmd, **kwargs):
             calls.append(cmd)
             if "diff" in cmd:
-                kwargs["stdout"].write(_PARTITIONED_DRIFT_SQL)
+                kwargs["stdout"].write(
+                    _PARTITIONED_DRIFT_SQL if diff_sql is None else diff_sql
+                )
+                if diff_times_out:
+                    raise subprocess_module.TimeoutExpired(cmd, 60)
                 return _FakeCompleted()
             if "execute" in cmd:
                 executed_sql = open(cmd[cmd.index("--file") + 1]).read()
@@ -573,6 +591,9 @@ class TestResolveAllMigrationsLedger:
 
     def _resolved(self, calls):
         return [c for c in calls if isinstance(c, list) and "resolve" in c]
+
+    def _executed(self, calls):
+        return [c for c in calls if isinstance(c, list) and "execute" in c]
 
     def _executed_sql(self, calls):
         return next(c[1] for c in calls if isinstance(c, tuple) and c[0] == "executed_sql")
@@ -597,6 +618,44 @@ class TestResolveAllMigrationsLedger:
     def test_unpartitioned_spend_logs_drift_script_is_untouched(self, monkeypatch, tmp_path):
         calls = self._run(monkeypatch, tmp_path, partitioned=False, execute_fails=False)
         assert self._executed_sql(calls) == _PARTITIONED_DRIFT_SQL
+
+    def test_an_empty_drift_script_costs_no_prisma_invocation(self, monkeypatch, tmp_path):
+        calls = self._run(
+            monkeypatch,
+            tmp_path,
+            partitioned=False,
+            execute_fails=False,
+            diff_sql=_EMPTY_DRIFT_SQL,
+        )
+        assert self._executed(calls) == []
+        assert len(self._resolved(calls)) == 1
+
+    def test_a_truncated_drift_script_is_never_applied(self, monkeypatch, tmp_path):
+        calls = self._run(
+            monkeypatch,
+            tmp_path,
+            partitioned=False,
+            execute_fails=False,
+            diff_sql=_TRUNCATED_DRIFT_SQL,
+            diff_times_out=True,
+        )
+        assert self._executed(calls) == []
+        assert len(self._resolved(calls)) == 1
+
+    def test_a_partitioned_database_is_not_queried_for_an_empty_drift_script(
+        self, monkeypatch, tmp_path
+    ):
+        def explode():
+            raise AssertionError("spend_logs_is_partitioned should not be reached")
+
+        calls = self._run(
+            monkeypatch,
+            tmp_path,
+            partitioned=explode,
+            execute_fails=False,
+            diff_sql=_EMPTY_DRIFT_SQL,
+        )
+        assert self._executed(calls) == []
 
 
 class TestPartitionedSpendLogsPushGuard:
