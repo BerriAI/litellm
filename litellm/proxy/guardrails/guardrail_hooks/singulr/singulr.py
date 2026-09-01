@@ -268,6 +268,7 @@ class SingulrGuardrail(CustomGuardrail):
                 guardrail_name=self.guardrail_name,
                 status_code=400,
                 message=f"Blocked by Singulr, Blocking due to {guardrail_resp.blocking_due_to or 'unknown'}",
+                blocked_content=True,
             )
         return inputs
 
@@ -292,6 +293,7 @@ class SingulrGuardrail(CustomGuardrail):
                 guardrail_name=self.guardrail_name,
                 status_code=400,
                 message=f"Blocked by Singulr, Blocking due to {guardrail_resp.blocking_due_to or 'unknown'}",
+                blocked_content=True,
             )
 
     async def _apply_guardrail_on_mcp_response(
@@ -319,6 +321,7 @@ class SingulrGuardrail(CustomGuardrail):
                 guardrail_name=self.guardrail_name,
                 status_code=400,
                 message=f"Blocked by Singulr, Blocking due to {guardrail_resp.blocking_due_to or 'unknown'}",
+                blocked_content=True,
             )
 
         return inputs
@@ -379,6 +382,7 @@ class SingulrGuardrail(CustomGuardrail):
                 guardrail_name=self.guardrail_name,
                 status_code=400,
                 message=f"Blocked by Singulr, Blocking due to {guardrail_resp.blocking_due_to or 'unknown'}",
+                blocked_content=True,
             )
         return inputs
 

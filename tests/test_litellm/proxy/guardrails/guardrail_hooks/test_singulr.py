@@ -545,6 +545,7 @@ class TestSingulrBlockAction:
                     input_type="request",
                 )
             assert "PII Information detected" in str(exc_info.value)
+            assert exc_info.value.blocked_content is True
 
     @pytest.mark.asyncio
     async def test_should_block_true_raises_on_response(self, singulr_guardrail):
@@ -562,6 +563,7 @@ class TestSingulrBlockAction:
                     input_type="response",
                 )
             assert "Toxic content detected" in str(exc_info.value)
+            assert exc_info.value.blocked_content is True
 
     @pytest.mark.asyncio
     async def test_block_without_reason_uses_unknown_placeholder(self, singulr_guardrail):
@@ -607,12 +609,13 @@ class TestSingulrMcpRequest:
         resp = _make_response({"should_block": True, "blocking_due_to": "Disallowed tool"})
         request_data = {"mcp_tool_name": "delete_file", "mcp_arguments": {"path": "/etc/passwd"}}
         with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
-            with pytest.raises(GuardrailRaisedException, match="Disallowed tool"):
+            with pytest.raises(GuardrailRaisedException, match="Disallowed tool") as exc_info:
                 await singulr_guardrail.apply_guardrail(
                     inputs={"texts": []},
                     request_data=request_data,
                     input_type="request",
                 )
+            assert exc_info.value.blocked_content is True
 
 
 class TestSingulrMcpResponse:
@@ -653,12 +656,13 @@ class TestSingulrMcpResponse:
         resp = _make_response({"should_block": True, "blocking_due_to": "Sensitive tool output"})
         request_data = {"call_type": "call_mcp_tool", "mcp_tool_name": "search_docs"}
         with patch.object(singulr_guardrail.async_handler, "post", return_value=resp):
-            with pytest.raises(GuardrailRaisedException, match="Sensitive tool output"):
+            with pytest.raises(GuardrailRaisedException, match="Sensitive tool output") as exc_info:
                 await singulr_guardrail.apply_guardrail(
                     inputs={"texts": ["leaked secret"]},
                     request_data=request_data,
                     input_type="response",
                 )
+            assert exc_info.value.blocked_content is True
 
     @pytest.mark.asyncio
     async def test_mcp_response_resolves_metadata_from_nested_litellm_params(self, singulr_guardrail):
