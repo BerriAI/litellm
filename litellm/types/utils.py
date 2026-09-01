@@ -3506,17 +3506,22 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
         return {k: v for k, v in model_info.items() if k not in cls.model_fields}
 
 
-SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = frozenset(
-    ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__
-) - frozenset(CustomPricingLiteLLMParams.model_fields)
+DEPLOYMENT_SCOPED_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"off_peak_pricing"})
+
+SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
+    frozenset(ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__)
+    - frozenset(CustomPricingLiteLLMParams.model_fields)
+    - DEPLOYMENT_SCOPED_PRICING_FIELDS
+)
 
 
 def shared_backend_model_info(model_info: dict[str, Any]) -> dict[str, Any]:
     """Return only the fields safe to register under a shared ``{provider}/{model}``
     key in ``litellm.model_cost``: cost-map schema fields (``ModelInfoBase``) minus
-    per-deployment pricing overrides. Per-deployment metadata (``id``,
-    ``access_via_team_ids``, arbitrary custom keys) never belongs on the shared key;
-    it stays under the deployment's unique model id.
+    per-deployment pricing overrides and deployment-scoped pricing blocks such as
+    ``off_peak_pricing``. Per-deployment metadata (``id``, ``access_via_team_ids``,
+    arbitrary custom keys) never belongs on the shared key; it stays under the
+    deployment's unique model id.
     """
     return {k: v for k, v in model_info.items() if k in SHARED_BACKEND_MODEL_INFO_FIELDS}
 
