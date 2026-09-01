@@ -409,6 +409,74 @@ def test_get_token_base_cost_picks_highest_crossed_tier():
     assert prompt_base_cost == 9e-6
 
 
+def test_get_token_base_cost_falls_back_to_legacy_cache_hit_field():
+    """Regression test for #28854.
+
+    Model entries added before `cache_read_input_token_cost` was standardized (several
+    DeepSeek entries) only declare the legacy `input_cost_per_token_cache_hit` field.
+    Without a fallback, cache-hit tokens for those models are silently billed at $0
+    instead of the documented discounted rate.
+    """
+    model_info = {
+        "input_cost_per_token": 1.4e-07,
+        "output_cost_per_token": 2.8e-07,
+        "input_cost_per_token_cache_hit": 1.4e-08,
+    }
+    usage = Usage(prompt_tokens=1000, completion_tokens=10, total_tokens=1010)
+
+    cache_read_cost = _get_token_base_cost(model_info, usage)[4]
+
+    assert cache_read_cost == 1.4e-08
+
+
+def test_get_token_base_cost_prefers_canonical_over_legacy_cache_hit_field():
+    """The canonical `cache_read_input_token_cost` always wins when both fields are
+    present, so already-migrated model entries are unaffected by the fallback."""
+    model_info = {
+        "input_cost_per_token": 1.4e-07,
+        "output_cost_per_token": 2.8e-07,
+        "input_cost_per_token_cache_hit": 1.4e-08,
+        "cache_read_input_token_cost": 7e-08,
+    }
+    usage = Usage(prompt_tokens=1000, completion_tokens=10, total_tokens=1010)
+
+    cache_read_cost = _get_token_base_cost(model_info, usage)[4]
+
+    assert cache_read_cost == 7e-08
+
+
+def test_generic_cost_per_token_bills_cache_hits_via_legacy_field():
+    """End-to-end regression test for #28854: a model that only declares the legacy
+    `input_cost_per_token_cache_hit` field must bill cached tokens at that rate
+    instead of silently charging $0."""
+    model_info = {
+        "input_cost_per_token": 1.4e-07,
+        "output_cost_per_token": 2.8e-07,
+        "input_cost_per_token_cache_hit": 1.4e-08,
+    }
+    prompt_tokens = 1000
+    cached_tokens = 400
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=10,
+        total_tokens=prompt_tokens + 10,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+
+    prompt_cost, _ = generic_cost_per_token(
+        model="fake-legacy-cache-hit-model",
+        usage=usage,
+        custom_llm_provider="deepseek",
+        model_info=model_info,
+    )
+
+    text_tokens = prompt_tokens - cached_tokens
+    expected_prompt_cost = (
+        text_tokens * model_info["input_cost_per_token"] + cached_tokens * model_info["input_cost_per_token_cache_hit"]
+    )
+    assert round(prompt_cost, 12) == round(expected_prompt_cost, 12)
+
+
 def test_generic_cost_per_token_gpt54_above_272k_tokens(_local_model_cost_map):
     """GPT-5.4/5.4-pro: prompts >272K input tokens priced at 2x input, 1.5x output."""
     model = "gpt-5.4"

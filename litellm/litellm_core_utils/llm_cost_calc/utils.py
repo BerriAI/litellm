@@ -333,7 +333,14 @@ def _get_token_base_cost(
         float,
         _get_cost_per_unit(model_info, "cache_creation_input_token_cost_above_1hr"),
     )
-    cache_read_cost = cast(float, _get_cost_per_unit(model_info, cache_read_cost_key))
+    use_legacy_cache_hit_key: Final = (
+        model_info.get("cache_read_input_token_cost") is None
+        and model_info.get("input_cost_per_token_cache_hit") is not None
+    )
+    effective_cache_read_key: Final = (
+        "input_cost_per_token_cache_hit" if use_legacy_cache_hit_key else cache_read_cost_key
+    )
+    cache_read_cost = cast(float, _get_cost_per_unit(model_info, effective_cache_read_key))
 
     ## CHECK IF ABOVE THRESHOLD
     # Optimization: collect threshold keys first to avoid sorting all model_info keys.
