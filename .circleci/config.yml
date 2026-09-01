@@ -112,10 +112,10 @@ commands:
             node --version
             npm --version
   install_rust:
-    description: "Install pinned rustup (1.28.2) and Rust toolchain (1.97.1) with checksum verification. Adds ~/.cargo/bin to PATH. Run this before any `uv sync` or `uv build` of the workspace: the root package builds litellm-rust through maturin, and on an image without cargo maturin fetches an unpinned rustup and a floating toolchain by itself."
+    description: "Install pinned rustup (1.28.2) and Rust toolchain (1.98.0) with checksum verification. Adds ~/.cargo/bin to PATH. Run this before any `uv sync` or `uv build` of the workspace: the root package builds litellm-rust through maturin, and on an image without cargo maturin fetches an unpinned rustup and a floating toolchain by itself."
     steps:
       - run:
-          name: Install Rust (rustup 1.28.2, toolchain 1.97.1)
+          name: Install Rust (rustup 1.28.2, toolchain 1.98.0)
           command: |
             case "$(uname -m)" in
               x86_64)
@@ -135,7 +135,7 @@ commands:
               "https://static.rust-lang.org/rustup/archive/1.28.2/${RUSTUP_TRIPLE}/rustup-init"
             echo "${RUSTUP_SHA256}  /tmp/rustup-init" | sha256sum -c -
             chmod +x /tmp/rustup-init
-            /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain 1.97.1
+            /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain 1.98.0
             rm -f /tmp/rustup-init
             echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> "$BASH_ENV"
             export PATH="$HOME/.cargo/bin:$PATH"
@@ -300,7 +300,7 @@ jobs:
             if ($rustupActual -ne $rustupExpected) {
               throw "rustup installer hash mismatch: expected $rustupExpected got $rustupActual"
             }
-            & $rustupInit -y --profile minimal --default-toolchain stable
+            & $rustupInit -y --profile minimal --default-toolchain 1.98.0
             if ($LASTEXITCODE -ne 0) {
               exit $LASTEXITCODE
             }
