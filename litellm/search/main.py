@@ -15,6 +15,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.utils import SearchProviders
 from litellm.utils import ProviderConfigManager, client, filter_out_litellm_params
@@ -68,7 +69,7 @@ async def asearch(
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     extra_headers: dict[str, Any] | None = None,
-    client: Any | None = None,
+    client: HTTPHandler | AsyncHTTPHandler | None = None,
     **kwargs,
 ) -> SearchResponse:
     """
@@ -174,7 +175,7 @@ def search(
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     extra_headers: dict[str, Any] | None = None,
-    client: Any | None = None,
+    client: HTTPHandler | AsyncHTTPHandler | None = None,
     **kwargs,
 ) -> SearchResponse | Coroutine[Any, Any, SearchResponse]:
     """

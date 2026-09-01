@@ -10,18 +10,22 @@ leaving keyless providers and legitimate operator overrides untouched.
 """
 
 from typing import Dict, Tuple, Type
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 import litellm
 from litellm.llms.apiserpent.search.transformation import APISerpentSearchConfig
 from litellm.llms.azure.search.transformation import BingGroundingSearchConfig
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
     _is_trusted_search_api_base,
 )
 from litellm.llms.brave.search.transformation import BraveSearchConfig
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
 from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
 from litellm.llms.fastcrw.search.transformation import FastCRWSearchConfig
@@ -107,9 +111,7 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
 _IDS = tuple(spec[0].__name__ for spec in PROVIDERS)
 
 
-@pytest.mark.parametrize(
-    "config_cls, server_env, caller_key, extra_env", PROVIDERS, ids=_IDS
-)
+@pytest.mark.parametrize("config_cls, server_env, caller_key, extra_env", PROVIDERS, ids=_IDS)
 def test_server_secret_refused_for_caller_api_base(
     config_cls: Type[BaseSearchConfig],
     server_env: Dict[str, str],
@@ -124,9 +126,7 @@ def test_server_secret_refused_for_caller_api_base(
         config_cls().validate_environment(headers={}, api_base=ATTACKER_BASE)
 
 
-@pytest.mark.parametrize(
-    "config_cls, server_env, caller_key, extra_env", PROVIDERS, ids=_IDS
-)
+@pytest.mark.parametrize("config_cls, server_env, caller_key, extra_env", PROVIDERS, ids=_IDS)
 def test_caller_supplied_key_is_honored_for_custom_api_base(
     config_cls: Type[BaseSearchConfig],
     server_env: Dict[str, str],
@@ -139,14 +139,10 @@ def test_caller_supplied_key_is_honored_for_custom_api_base(
 
     # An explicit caller key is the caller's own credential, so pointing it at
     # the caller's own host must be allowed.
-    config_cls().validate_environment(
-        headers={}, api_key=caller_key, api_base=ATTACKER_BASE
-    )
+    config_cls().validate_environment(headers={}, api_key=caller_key, api_base=ATTACKER_BASE)
 
 
-@pytest.mark.parametrize(
-    "config_cls, server_env, caller_key, extra_env", PROVIDERS, ids=_IDS
-)
+@pytest.mark.parametrize("config_cls, server_env, caller_key, extra_env", PROVIDERS, ids=_IDS)
 def test_server_secret_used_without_caller_api_base(
     config_cls: Type[BaseSearchConfig],
     server_env: Dict[str, str],
@@ -167,9 +163,7 @@ def test_keyless_provider_allows_caller_api_base(
 ) -> None:
     monkeypatch.delenv("SEARXNG_API_KEY", raising=False)
 
-    headers = SearXNGSearchConfig().validate_environment(
-        headers={}, api_base="https://my-searxng.internal"
-    )
+    headers = SearXNGSearchConfig().validate_environment(headers={}, api_base="https://my-searxng.internal")
 
     assert "Authorization" not in headers
 
@@ -182,9 +176,7 @@ def test_operator_env_base_override_is_trusted(
 
     # Mirrors the second validate_environment call in the search handler, which
     # receives the already-resolved operator base as api_base.
-    headers = SerperSearchConfig().validate_environment(
-        headers={}, api_base="https://serper.internal.corp/search"
-    )
+    headers = SerperSearchConfig().validate_environment(headers={}, api_base="https://serper.internal.corp/search")
 
     assert headers["X-API-KEY"] == "srv"
 
@@ -200,9 +192,7 @@ class TestResolveServerApiKey:
         )
         assert result == "mine"
 
-    def test_returns_none_when_no_server_secret(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_none_when_no_server_secret(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("SEARXNG_API_KEY", raising=False)
         result = BaseSearchConfig().resolve_server_api_key(
             caller_api_key=None,
@@ -228,14 +218,10 @@ class TestResolveServerApiKey:
 
 class TestIsTrustedSearchApiBase:
     def test_matches_default_host(self) -> None:
-        assert _is_trusted_search_api_base(
-            "https://google.serper.dev/search", "https://google.serper.dev", None
-        )
+        assert _is_trusted_search_api_base("https://google.serper.dev/search", "https://google.serper.dev", None)
 
     def test_foreign_host_untrusted(self) -> None:
-        assert not _is_trusted_search_api_base(
-            ATTACKER_BASE, "https://google.serper.dev", None
-        )
+        assert not _is_trusted_search_api_base(ATTACKER_BASE, "https://google.serper.dev", None)
 
     def test_env_override_host_trusted(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SERPER_API_BASE", "https://serper.internal.corp")
@@ -248,9 +234,7 @@ class TestIsTrustedSearchApiBase:
     def test_schemeless_candidate_untrusted(self) -> None:
         # Without a scheme urlsplit puts the value in the path, leaving an empty
         # netloc; an unparseable host must never be treated as trusted.
-        assert not _is_trusted_search_api_base(
-            "attacker.example.com", "https://google.serper.dev", None
-        )
+        assert not _is_trusted_search_api_base("attacker.example.com", "https://google.serper.dev", None)
 
 
 @pytest.mark.asyncio
@@ -333,3 +317,179 @@ async def test_query_param_key_not_leaked_with_dummy_caller_key(
     assert captured["url"], "expected an outbound request to be attempted"
     assert server_key not in captured["url"]
     assert "sk-CALLER-DUMMY" in captured["url"]
+
+
+class TestSearchHTTPErrorHandling:
+    """Test suite verifying HTTP error handling for search providers."""
+
+    @pytest.mark.parametrize(
+        "status_code,error_body,provider,config_cls",
+        [
+            (401, {"error": "Invalid API Key"}, "tavily", TavilySearchConfig),
+            (429, {"error": "Rate limit exceeded"}, "perplexity", PerplexitySearchConfig),
+            (500, {"error": "Internal server error"}, "searxng", SearXNGSearchConfig),
+            (503, {"error": "Service unavailable"}, "serper", SerperSearchConfig),
+        ],
+    )
+    def test_sync_search_raises_on_http_error(
+        self, status_code: int, error_body: dict, provider: str, config_cls: Type[BaseSearchConfig]
+    ) -> None:
+        """Verify sync search raises an exception with the corresponding status code on HTTP errors."""
+        handler = BaseLLMHTTPHandler()
+        config = config_cls()
+
+        mock_client = MagicMock(spec=HTTPHandler)
+        mock_response = httpx.Response(
+            status_code=status_code,
+            json=error_body,
+            request=httpx.Request("POST", "https://example.com/search"),
+            headers={"content-type": "application/json"},
+        )
+        mock_client.post.return_value = mock_response
+        mock_client.get.return_value = mock_response
+
+        logging_obj = MagicMock()
+
+        with pytest.raises(BaseLLMException) as exc_info:
+            handler.search(
+                query="test query",
+                optional_params={},
+                timeout=10,
+                logging_obj=logging_obj,
+                api_key="test-key",
+                api_base="https://example.com",
+                custom_llm_provider=provider,
+                client=mock_client,
+                provider_config=config,
+            )
+
+        exc = exc_info.value
+        assert exc.status_code == status_code
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "status_code,error_body,provider,config_cls",
+        [
+            (401, {"error": "Unauthorized access"}, "tavily", TavilySearchConfig),
+            (429, {"error": "Rate limited"}, "searxng", SearXNGSearchConfig),
+            (500, {"error": "Backend crash"}, "perplexity", PerplexitySearchConfig),
+            (503, {"error": "Upstream unavailable"}, "serper", SerperSearchConfig),
+        ],
+    )
+    async def test_async_search_raises_on_http_error(
+        self, status_code: int, error_body: dict, provider: str, config_cls: Type[BaseSearchConfig]
+    ) -> None:
+        """Verify async search raises an exception with the corresponding status code on HTTP errors."""
+        handler = BaseLLMHTTPHandler()
+        config = config_cls()
+
+        mock_async_client = AsyncMock(spec=AsyncHTTPHandler)
+        mock_response = httpx.Response(
+            status_code=status_code,
+            json=error_body,
+            request=httpx.Request("POST", "https://example.com/search"),
+            headers={"content-type": "application/json"},
+        )
+        mock_async_client.post.return_value = mock_response
+        mock_async_client.get.return_value = mock_response
+
+        logging_obj = MagicMock()
+
+        with pytest.raises(BaseLLMException) as exc_info:
+            await handler.async_search(
+                query="test query",
+                optional_params={},
+                timeout=10,
+                logging_obj=logging_obj,
+                api_key="test-key",
+                api_base="https://example.com",
+                custom_llm_provider=provider,
+                client=mock_async_client,
+                provider_config=config,
+            )
+
+        exc = exc_info.value
+        assert exc.status_code == status_code
+
+    def test_litellm_search_top_level_exception_mapping(self) -> None:
+        """Verify high-level litellm.search() maps status codes to LiteLLM exception types."""
+        mock_client = MagicMock(spec=HTTPHandler)
+        mock_response = httpx.Response(
+            status_code=401,
+            json={"error": "Invalid API Key"},
+            request=httpx.Request("POST", "https://api.tavily.com/search"),
+            headers={"content-type": "application/json"},
+        )
+        mock_client.post.return_value = mock_response
+        mock_client.get.return_value = mock_response
+
+        with pytest.raises(litellm.AuthenticationError):
+            litellm.search(
+                query="test",
+                search_provider="tavily",
+                api_key="invalid-key",
+                client=mock_client,
+            )
+
+    @pytest.mark.asyncio
+    async def test_litellm_asearch_top_level_exception_mapping(self) -> None:
+        """Verify high-level litellm.asearch() maps status codes to LiteLLM exception types."""
+        mock_async_client = AsyncMock(spec=AsyncHTTPHandler)
+        mock_response = httpx.Response(
+            status_code=429,
+            json={"error": "Rate limit exceeded"},
+            request=httpx.Request("POST", "https://api.perplexity.ai/search"),
+            headers={"content-type": "application/json"},
+        )
+        mock_async_client.post.return_value = mock_response
+        mock_async_client.get.return_value = mock_response
+
+        with pytest.raises(litellm.RateLimitError):
+            await litellm.asearch(
+                query="test",
+                search_provider="perplexity",
+                api_key="fake-key",
+                client=mock_async_client,
+            )
+
+    def test_sync_search_success_parsing(self) -> None:
+        """Verify successful 200 OK responses continue to parse correctly."""
+        handler = BaseLLMHTTPHandler()
+        config = TavilySearchConfig()
+
+        mock_client = MagicMock(spec=HTTPHandler)
+        mock_response = httpx.Response(
+            status_code=200,
+            json={
+                "results": [
+                    {
+                        "title": "LiteLLM Docs",
+                        "url": "https://docs.litellm.ai",
+                        "content": "LiteLLM Documentation",
+                    }
+                ]
+            },
+            request=httpx.Request("POST", "https://api.tavily.com/search"),
+            headers={"content-type": "application/json"},
+        )
+        mock_client.post.return_value = mock_response
+        mock_client.get.return_value = mock_response
+
+        logging_obj = MagicMock()
+
+        response = handler.search(
+            query="LiteLLM documentation",
+            optional_params={},
+            timeout=10,
+            logging_obj=logging_obj,
+            api_key="test-key",
+            api_base="https://api.tavily.com",
+            custom_llm_provider="tavily",
+            client=mock_client,
+            provider_config=config,
+        )
+
+        assert response.object == "search"
+        assert len(response.results) == 1
+        assert response.results[0].title == "LiteLLM Docs"
+        assert response.results[0].url == "https://docs.litellm.ai"
