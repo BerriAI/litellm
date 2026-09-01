@@ -420,16 +420,47 @@ def test_raise_public_plain_unauthorized_has_no_challenge():
 
 
 @pytest.mark.parametrize(
-    "root_path, expected_prefix",
+    "root_path",
     [
-        ("/", ""),  # "/" means no prefix
-        ("", ""),  # empty means no prefix
-        ("/api/v1", "/api/v1"),  # a real root path is prepended verbatim
+        "/",  # "/" means no prefix
+        "",  # empty means no prefix
     ],
 )
-def test_oauth_protected_resource_path_honors_root_path(root_path, expected_prefix):
+def test_oauth_protected_resource_path_no_prefix(root_path, monkeypatch):
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
     path = oauth_protected_resource_path(root_path, _server(alias="my-srv"))
-    assert path == f"/.well-known/oauth-protected-resource{expected_prefix}/mcp/my-srv"
+    assert path == "/.well-known/oauth-protected-resource/mcp/my-srv"
+
+
+def test_oauth_protected_resource_path_scalar_prefix_uses_rfc8414_insertion(monkeypatch):
+    # A scalar SERVER_ROOT_PATH deployment registers the well-known routes with
+    # the prefix inserted (via well_known_root_suffix at import time). The URL
+    # must match that insertion or a client fetching it 404s.
+    monkeypatch.setenv("SERVER_ROOT_PATH", "/api/v1")
+    path = oauth_protected_resource_path("/api/v1", _server(alias="my-srv"))
+    assert path == "/.well-known/oauth-protected-resource/api/v1/mcp/my-srv"
+
+
+def test_oauth_protected_resource_path_per_request_prefix_goes_before_wellknown(monkeypatch):
+    # Per-request deployment: SERVER_ROOT_PATHS matched /tenant-a for this
+    # request but the scalar SERVER_ROOT_PATH is unset. Routes were registered
+    # without the well-known insertion, so the URL must place the prefix
+    # *before* .well-known — PerRequestRootPathMiddleware strips it and the
+    # router matches the un-inserted route.
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    path = oauth_protected_resource_path("/tenant-a", _server(alias="my-srv"))
+    assert path == "/tenant-a/.well-known/oauth-protected-resource/mcp/my-srv"
+
+
+def test_oauth_protected_resource_path_dynamic_prefix_wins_over_scalar(monkeypatch):
+    # Both env vars configured: the middleware matched a SERVER_ROOT_PATHS
+    # prefix (/tenant-a) that differs from the scalar (/legacy). The URL must
+    # advertise /tenant-a — the prefix the client called — with no /legacy
+    # segment stacked onto it. Same review-fix invariant get_custom_url pins.
+    monkeypatch.setenv("SERVER_ROOT_PATH", "/legacy")
+    path = oauth_protected_resource_path("/tenant-a", _server(alias="my-srv"))
+    assert path == "/tenant-a/.well-known/oauth-protected-resource/mcp/my-srv"
+    assert "/legacy" not in path
 
 
 @pytest.mark.parametrize(
@@ -454,12 +485,30 @@ def test_raise_user_oauth_challenge_points_at_per_server_prm():
     )
 
 
-def test_raise_user_oauth_challenge_includes_server_root_path():
+def test_raise_user_oauth_challenge_includes_server_root_path(monkeypatch):
+    # The scalar deployment: routes are registered with the prefix inserted
+    # (via well_known_root_suffix at import time), so the challenge URL uses
+    # the RFC 8414 §3 insertion form.
+    monkeypatch.setenv("SERVER_ROOT_PATH", "/api/v1")
     with pytest.raises(HTTPException) as exc_info:
         raise_user_oauth_challenge(_server(alias="my-srv"), root_path="/api/v1")
     assert (
         exc_info.value.headers["WWW-Authenticate"]
         == 'Bearer resource_metadata="/.well-known/oauth-protected-resource/api/v1/mcp/my-srv"'
+    )
+
+
+def test_raise_user_oauth_challenge_per_request_prefix_is_routable(monkeypatch):
+    # Per-request deployment (SERVER_ROOT_PATHS matched /tenant-a): the
+    # challenge URL must place /tenant-a before .well-known so the client's
+    # discovery fetch routes through the same middleware strip the original
+    # request went through. The scalar-inserted form would 404 here.
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    with pytest.raises(HTTPException) as exc_info:
+        raise_user_oauth_challenge(_server(alias="my-srv"), root_path="/tenant-a")
+    assert (
+        exc_info.value.headers["WWW-Authenticate"]
+        == 'Bearer resource_metadata="/tenant-a/.well-known/oauth-protected-resource/mcp/my-srv"'
     )
 
 
@@ -479,15 +528,28 @@ def test_raise_token_exchange_challenge_is_rfc9728_invalid_token():
     assert "error_description=" in www
 
 
-def test_raise_token_exchange_challenge_includes_server_root_path():
+def test_raise_token_exchange_challenge_includes_server_root_path(monkeypatch):
     from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
         raise_token_exchange_challenge,
     )
 
+    monkeypatch.setenv("SERVER_ROOT_PATH", "/api/v1")
     with pytest.raises(HTTPException) as exc_info:
         raise_token_exchange_challenge(_server(alias="obo-srv"), root_path="/api/v1")
     www = exc_info.value.headers["WWW-Authenticate"]
     assert 'resource_metadata="/.well-known/oauth-protected-resource/api/v1/mcp/obo-srv"' in www
+
+
+def test_raise_token_exchange_challenge_per_request_prefix_is_routable(monkeypatch):
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+        raise_token_exchange_challenge,
+    )
+
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    with pytest.raises(HTTPException) as exc_info:
+        raise_token_exchange_challenge(_server(alias="obo-srv"), root_path="/tenant-a")
+    www = exc_info.value.headers["WWW-Authenticate"]
+    assert 'resource_metadata="/tenant-a/.well-known/oauth-protected-resource/mcp/obo-srv"' in www
 
 
 def test_raise_token_exchange_challenge_static_form_is_unchanged_without_step_up():
@@ -533,9 +595,7 @@ def test_id_jag_client_secret_maps_to_config():
     # ID-JAG asserts the user's id_token; the access_token default maps to id_token.
     assert spec.config.subject_token_type == "urn:ietf:params:oauth:token-type:id_token"
     assert isinstance(spec.config.client_auth, ClientSecretAuth)
-    assert spec.config.client_auth.client_secret.get_secret_value() == (
-        "litellm-client-secret"
-    )
+    assert spec.config.client_auth.client_secret.get_secret_value() == ("litellm-client-secret")
 
 
 def test_id_jag_private_key_maps_to_private_key_jwt_auth():
@@ -561,9 +621,7 @@ def test_id_jag_private_key_wins_over_client_secret():
 
 
 def test_id_jag_honors_explicit_subject_token_type():
-    spec = to_server_spec(
-        _id_jag_server(subject_token_type="urn:ietf:params:oauth:token-type:saml2")
-    )
+    spec = to_server_spec(_id_jag_server(subject_token_type="urn:ietf:params:oauth:token-type:saml2"))
     assert spec is not None and isinstance(spec.config, IdJagConfig)
     assert spec.config.subject_token_type == "urn:ietf:params:oauth:token-type:saml2"
 

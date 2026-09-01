@@ -304,9 +304,9 @@ class LazyFeatureMiddleware:
             # resolves SERVER_ROOT_PATHS prefixes there per request. The
             # `+ "/"` boundary prevents false-positive matches (e.g. /apiv2
             # against root /api); a pre-stripped path is left alone.
-            root_path = str(scope.get("root_path", "")).rstrip("/") or self._root_path
+            root_path: Final = str(scope.get("root_path", "")).rstrip("/") or self._root_path
             if root_path and path.startswith(root_path + "/"):
-                path = path[len(root_path) :]
+                path = path[len(root_path) :]  # rebind-ok: local strip after the boundary check above
             for feat in self._features:
                 if feat.module_path in self._loaded:
                     continue

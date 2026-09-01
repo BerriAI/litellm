@@ -37,21 +37,26 @@ def get_request_root_path() -> str:
     """Return the effective ``root_path`` for the current request.
 
     Reads the value ``PerRequestRootPathMiddleware`` stashed for this request;
-    falls back to the ``SERVER_ROOT_PATH`` env when the middleware did not run
-    (i.e. ``SERVER_ROOT_PATHS`` is unset — the scalar-only deployment). The
-    fallback keeps the return value identical to ``get_server_root_path()`` for
-    every deployment that has not opted into the multi-prefix mechanism.
+    falls back through :func:`~litellm.proxy.utils.get_server_root_path` (i.e.
+    the ``SERVER_ROOT_PATH`` env) when the middleware did not run — the
+    scalar-only deployment. Delegating to the existing helper keeps every
+    existing ``monkeypatch.setattr("litellm.proxy.utils.get_server_root_path"``
+    test override working, and keeps a single source of truth for the scalar.
     """
     value: Final = _request_root_path_var.get()
     if value is not None:
         return value
-    return os.getenv("SERVER_ROOT_PATH", "")
+    # Lazy import: utils.py imports this module (via the lazy import inside
+    # get_custom_url), so a top-level import would build a cycle at load time.
+    from litellm.proxy.utils import get_server_root_path  # noqa: PLC0415  # lazy import breaks a two-way dep
+
+    return get_server_root_path()
 
 
 def normalize_root_paths(raw_paths: Sequence[str]) -> tuple[str, ...]:
     """Strip whitespace and trailing slashes, dedupe, order longest-first;
     warn and drop entries missing a leading ``/`` and the bare root."""
-    kept: list[str] = []  # mutable-ok: local accumulator; escapes only as a tuple
+    kept: Final[list[str]] = []  # mutable-ok: local accumulator; escapes only as a tuple
     for entry in raw_paths:
         candidate = entry.strip()
         if not candidate:
@@ -102,7 +107,7 @@ class PerRequestRootPathMiddleware:
             path: Final = scope.get("path", "")
             for prefix in self.root_paths:
                 if path == prefix or path.startswith(prefix + "/"):
-                    scope["root_path"] = prefix
+                    scope["root_path"] = prefix  # rebind-ok: ASGI middleware contract; Router and base_url read it
                     break
             # Stash the effective root_path (matched prefix, or the scope's
             # existing value when nothing matched — i.e. FastAPI's scalar

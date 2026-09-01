@@ -12,6 +12,7 @@ every other mode so the caller defers to v1 (parity-safe); it grows one branch p
 from __future__ import annotations
 
 import base64
+import os
 from typing import TYPE_CHECKING, Final, Literal, NoReturn
 
 from fastapi import HTTPException
@@ -304,13 +305,30 @@ def raise_public(error: CredError) -> NoReturn:
 def oauth_protected_resource_path(root_path: str, server: MCPServer) -> str:
     """The server's RFC 9728 Protected Resource Metadata path, the shared anchor of both challenges.
 
-    ``root_path`` is the proxy's ``SERVER_ROOT_PATH``, resolved by the caller (the imperative shell)
-    so this stays a pure function of its inputs; ``"/"`` and ``""`` both mean no prefix. The path is
-    relative, so it resolves against the caller's own host (correct even behind a reverse proxy).
+    ``root_path`` is the prefix the request was routed under, resolved by the caller (the imperative
+    shell); ``"/"`` and ``""`` both mean no prefix. The path is relative, so it resolves against the
+    caller's own host (correct even behind a reverse proxy).
+
+    URL structure depends on how the prefix is served:
+
+    - The scalar ``SERVER_ROOT_PATH`` deployment registers the well-known routes with the prefix
+      *inserted* into the path (via :func:`well_known_root_suffix` at import time), matching RFC 8414
+      §3 well-known path insertion. When ``root_path`` equals ``SERVER_ROOT_PATH`` the URL must use
+      the same insertion or a client fetching it 404s.
+    - The per-request ``SERVER_ROOT_PATHS`` deployment can't register routes per prefix (the prefix
+      set is dynamic and could contain many entries); the middleware strips the prefix from
+      ``scope["path"]`` and the router matches the un-inserted well-known route. The URL must place
+      the prefix *before* ``.well-known`` so the strip leaves a matching path.
+
+    Picking the wrong form 404s the client's discovery fetch — the discovery document and the 401
+    challenge would then disagree on where the resource metadata lives.
     """
     prefix: Final = "" if root_path == "/" else root_path
     name: Final = server.alias or server.server_name or server.name or server.server_id
-    return f"/.well-known/oauth-protected-resource{prefix}/mcp/{name}"
+    scalar_env: Final = os.getenv("SERVER_ROOT_PATH", "").rstrip("/")
+    if not prefix or (scalar_env and prefix == scalar_env):
+        return f"/.well-known/oauth-protected-resource{prefix}/mcp/{name}"
+    return f"{prefix}/.well-known/oauth-protected-resource/mcp/{name}"
 
 
 def raise_user_oauth_challenge(server: MCPServer, *, root_path: str) -> NoReturn:

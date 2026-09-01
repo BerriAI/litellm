@@ -7197,7 +7197,7 @@ def get_custom_url(request_base_url: str, route: str | None = None) -> str:
     # dynamic prefix (which would produce /tenant-a/legacy/... — a path that
     # doesn't exist). join_paths()'s tail-dedup then collapses the append when
     # base_url (i.e. request.base_url) already ends in the same prefix.
-    from litellm.proxy.middleware.per_request_root_path_middleware import (  # noqa: PLC0415
+    from litellm.proxy.middleware.per_request_root_path_middleware import (  # noqa: PLC0415  # lazy: middleware imports utils
         get_request_root_path,
     )
 

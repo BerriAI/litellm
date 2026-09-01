@@ -3838,10 +3838,10 @@ if MCP_AVAILABLE:
             # then exchanges. A tool-call-time 401 would be wrapped into a JSON-RPC error and the
             # header lost, so the discovery flow needs this pre-emptive challenge.
             if server and server.auth_type == MCPAuth.oauth2_token_exchange and not oauth2_headers:
-                from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415
+                from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415  # lazy: adapter pulls MCP subgraph
                     raise_token_exchange_challenge,
                 )
-                from litellm.proxy.middleware.per_request_root_path_middleware import (  # noqa: PLC0415
+                from litellm.proxy.middleware.per_request_root_path_middleware import (  # noqa: PLC0415  # lazy: middleware imports proxy utils
                     get_request_root_path,
                 )
 
