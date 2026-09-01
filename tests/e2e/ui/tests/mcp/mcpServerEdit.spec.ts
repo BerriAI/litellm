@@ -73,7 +73,7 @@ test.describe("MCP Servers - edit and delete", () => {
   test("Deleting a server removes it", async ({ page }) => {
     expect(await findServerByName(page, serverName), `created server ${serverName} exists`).toBeTruthy();
 
-    const card = page.getByTestId("mcp-servers-grid").locator("div").filter({ hasText: serverName }).first();
+    const card = page.getByTestId("mcp-servers-grid").getByRole("button", { name: serverName });
     await card.getByRole("button", { name: "Server actions" }).click();
     await page.getByRole("menuitem", { name: "Delete" }).click();
 
