@@ -146,6 +146,7 @@ class _BedrockS3RequestParams(BaseModel):
     aws_role_name: str | None = None
     aws_web_identity_token: str | None = None
     aws_sts_endpoint: str | None = None
+    aws_external_id: str | None = None
     s3_region_name: str | None = None
     s3_endpoint_url: str | None = None
 
@@ -1029,6 +1030,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             aws_role_name=optional_params.get("aws_role_name"),
             aws_web_identity_token=optional_params.get("aws_web_identity_token"),
             aws_sts_endpoint=optional_params.get("aws_sts_endpoint"),
+            aws_external_id=optional_params.get("aws_external_id"),
         )
 
         # Calculate SHA256 hash of the content (REQUIRED for S3)
@@ -1290,6 +1292,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             aws_role_name=request_params.aws_role_name,
             aws_web_identity_token=request_params.aws_web_identity_token,
             aws_sts_endpoint=request_params.aws_sts_endpoint,
+            aws_external_id=request_params.aws_external_id,
         )
 
         empty_body_hash: Final = hashlib.sha256(b"").hexdigest()
