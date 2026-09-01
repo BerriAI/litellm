@@ -135,11 +135,18 @@ async def test_lowest_cost_routing_uses_direct_match():
 
 
 @pytest.mark.asyncio
-async def test_lowest_cost_routing_fallback_for_unmapped_model():
+@pytest.mark.parametrize(
+    "litellm_params",
+    [
+        {"model": "custom-unknown-provider/unknown-model-xyz"},
+        {},
+    ],
+)
+async def test_lowest_cost_routing_fallback_for_unmapped_model(litellm_params: dict[str, str]):
     deployments = [
         {
             "model_name": "test-group-unmapped",
-            "litellm_params": {"model": "custom-unknown-provider/unknown-model-xyz"},
+            "litellm_params": litellm_params,
             "model_info": {"id": "unmapped-1"},
         },
     ]
