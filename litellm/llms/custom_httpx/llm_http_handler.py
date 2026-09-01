@@ -160,7 +160,11 @@ def _rust_responses_websocket_enabled(
     custom_llm_provider: str | None,
     litellm_params: GenericLiteLLMParams,
 ) -> bool:
-    return custom_llm_provider == "openai" and litellm_params.get("rust") is True
+    if custom_llm_provider != "openai" or litellm_params.get("rust") is not True:
+        return False
+    from litellm.rust_bridge.streaming import supports_streaming
+
+    return supports_streaming("responses", custom_llm_provider, "websocket")
 
 
 from .http_handler import get_shared_realtime_ssl_context
@@ -6506,9 +6510,12 @@ class BaseLLMHTTPHandler:
                     from litellm.rust_bridge import responses_websocket as rust_responses_websocket
 
                     rust_backend: Final = await rust_responses_websocket.connect(
-                        url=ws_url,
+                        provider="openai",
+                        api_key=api_key,
+                        api_base=api_base,
                         headers={str(key): str(value) for key, value in headers.items()},
                         timeout=timeout,
+                        litellm_metadata=litellm_metadata,
                     )
                     if rust_backend is not None:
                         yield rust_backend

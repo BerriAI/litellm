@@ -2672,7 +2672,7 @@ async def test_generic_http_handler_async_streaming_forwards_provider_response_h
 @pytest.mark.parametrize(
     "custom_llm_provider, litellm_params, expected",
     [
-        ("openai", GenericLiteLLMParams(rust=True), True),
+        ("openai", GenericLiteLLMParams(rust=True), False),
         ("openai", GenericLiteLLMParams(), False),
         ("openai", GenericLiteLLMParams(rust=False), False),
         ("azure", GenericLiteLLMParams(rust=True), False),
@@ -2680,7 +2680,7 @@ async def test_generic_http_handler_async_streaming_forwards_provider_response_h
         (None, GenericLiteLLMParams(rust=True), False),
     ],
 )
-def test_the_rust_responses_websocket_needs_both_openai_and_the_rust_flag(
+def test_the_rust_responses_websocket_stays_disabled_without_a_typed_capability(
     custom_llm_provider, litellm_params, expected
 ):
     assert _rust_responses_websocket_enabled(custom_llm_provider, litellm_params) is expected

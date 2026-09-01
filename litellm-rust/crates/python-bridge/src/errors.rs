@@ -9,6 +9,10 @@ pyo3::create_exception!(
     "The route declined before calling the provider, so the host may retry on its own path."
 );
 
+pub(crate) fn declined(error: impl std::fmt::Display) -> PyErr {
+    RustBridgeDeclined::new_err(error.to_string())
+}
+
 pyo3::create_exception!(
     _native,
     RustUpstreamError,

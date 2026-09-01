@@ -19,9 +19,14 @@ use serde_json::{Map, Value};
 
 use crate::error::Error;
 
+use crate::streaming::{
+    OpenedStream, StreamApi, StreamCapability, StreamTransport, supports_streaming,
+};
 use handler::execute_chat_completions_provider_call;
 use prepare::{parse_messages, prepare_chat_completions_call, resolve_provider_config};
-use types::{ChatCompletionsRequest, ChatCompletionsResponse};
+use types::{
+    ChatCompletionsRequest, ChatCompletionsResponse, ChatCompletionsStreamRequest, ChatStreamEvent,
+};
 
 pub async fn chat_completions(
     request: ChatCompletionsRequest<'_>,
@@ -53,6 +58,22 @@ pub fn chat_completions_decline_reason(
     config
         .unsupported_reason(&messages, optional_params)
         .map(|reason| reason.0)
+}
+
+pub async fn chat_completions_stream(
+    request: ChatCompletionsStreamRequest,
+) -> Result<OpenedStream<ChatStreamEvent>, Error> {
+    let capability = StreamCapability {
+        api: StreamApi::ChatCompletions,
+        provider: request.context.provider,
+        transport: StreamTransport::Http,
+    };
+    if !supports_streaming(capability) {
+        return Err(Error::Unsupported("chat completions streaming"));
+    }
+    Err(Error::Unsupported(
+        "chat completions streaming provider registration",
+    ))
 }
 
 #[cfg(test)]

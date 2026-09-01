@@ -15,10 +15,15 @@ pub mod transformation;
 pub mod types;
 
 use crate::error::Error;
+use crate::streaming::{
+    OpenedStream, StreamApi, StreamCapability, StreamTransport, supports_streaming,
+};
 
 use handler::{execute_messages_provider_call, execute_messages_provider_stream};
 use prepare::prepare_messages_call;
-use types::{AnthropicMessagesResponse, MessagesRequest};
+use types::{
+    AnthropicMessagesResponse, MessagesRequest, MessagesStreamEvent, MessagesStreamRequest,
+};
 
 pub async fn messages(request: MessagesRequest<'_>) -> Result<AnthropicMessagesResponse, Error> {
     execute_messages_provider_call(prepare_messages_call(request)?).await
@@ -26,6 +31,22 @@ pub async fn messages(request: MessagesRequest<'_>) -> Result<AnthropicMessagesR
 
 pub async fn messages_stream(request: MessagesRequest<'_>) -> Result<reqwest::Response, Error> {
     execute_messages_provider_stream(prepare_messages_call(request)?).await
+}
+
+pub async fn messages_event_stream(
+    request: MessagesStreamRequest,
+) -> Result<OpenedStream<MessagesStreamEvent>, Error> {
+    let capability = StreamCapability {
+        api: StreamApi::Messages,
+        provider: request.context.provider,
+        transport: StreamTransport::Http,
+    };
+    if !supports_streaming(capability) {
+        return Err(Error::Unsupported("messages event streaming"));
+    }
+    Err(Error::Unsupported(
+        "messages event streaming provider registration",
+    ))
 }
 
 #[cfg(test)]

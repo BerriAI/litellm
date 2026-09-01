@@ -6,6 +6,18 @@ use super::types::{
     ChatCompletionsResponse, ChatMessage, ChatMessageContent, ProviderChatRequestData,
     ProviderChatResponseData,
 };
+use super::types::{ChatCompletionsStreamRequest, ChatStreamEvent};
+use crate::streaming::StreamProvider;
+
+pub trait ChatCompletionsStreamProvider:
+    StreamProvider<ChatCompletionsStreamRequest, ChatStreamEvent>
+{
+}
+
+impl<T> ChatCompletionsStreamProvider for T where
+    T: StreamProvider<ChatCompletionsStreamRequest, ChatStreamEvent>
+{
+}
 
 /// How the upstream call is authenticated. API-key strategies are resolved in
 /// `prepare`; SigV4 needs the serialized body, so the handler signs it.

@@ -519,7 +519,6 @@ class AnthropicChatCompletion(BaseLLM):
                     stream=stream,
                     _is_function_call=_is_function_call,
                     json_mode=json_mode,
-                    litellm_params=litellm_params,
                     logger_fn=logger_fn,
                     headers=headers,
                     timeout=timeout,

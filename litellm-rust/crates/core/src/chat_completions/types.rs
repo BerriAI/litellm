@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::transformation::{ChatCompletionsAuth, ChatCompletionsProviderConfig};
+use crate::streaming::{JsonObject, ProviderCallContext};
 
 /// A `/chat/completions` call as it crosses into the core.
 ///
@@ -109,4 +110,183 @@ pub struct ChatCompletionsResponse {
     pub model: String,
     pub choices: Vec<ChatCompletionsChoice>,
     pub usage: ChatCompletionsUsage,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ChatStreamRole {
+    Assistant,
+    Developer,
+    Function,
+    System,
+    Tool,
+    User,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ChatStreamMessageContent {
+    Text(String),
+    Parts(Vec<JsonObject>),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatStreamMessage {
+    pub role: ChatStreamRole,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<ChatStreamMessageContent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ChatStreamStop {
+    One(String),
+    Many(Vec<String>),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ChatStreamStringOrObject {
+    Name(String),
+    Definition(JsonObject),
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChatCompletionsStreamParameters {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_completion_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop: Option<ChatStreamStop>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<JsonObject>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<JsonObject>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ChatStreamStringOrObject>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<JsonObject>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ChatStreamStringOrObject>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<JsonObject>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatCompletionsStreamRequestBody {
+    pub model: String,
+    pub messages: Vec<ChatStreamMessage>,
+    #[serde(flatten)]
+    pub parameters: ChatCompletionsStreamParameters,
+}
+
+pub struct ChatCompletionsStreamRequest {
+    pub body: ChatCompletionsStreamRequestBody,
+    pub context: ProviderCallContext,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatStreamToolFunctionChunk {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub arguments: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_specific_fields: Option<JsonObject>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatStreamToolCallChunk {
+    pub id: Option<String>,
+    #[serde(rename = "type")]
+    pub tool_type: String,
+    pub function: ChatStreamToolFunctionChunk,
+    pub index: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatStreamUsage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens_details: Option<JsonObject>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_tokens_details: Option<JsonObject>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatStreamEvent {
+    pub text: String,
+    pub tool_use: Option<ChatStreamToolCallChunk>,
+    pub is_finished: bool,
+    pub finish_reason: String,
+    pub usage: Option<ChatStreamUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_specific_fields: Option<JsonObject>,
+}
+
+#[cfg(test)]
+mod stream_contract_tests {
+    use super::*;
+
+    #[test]
+    fn request_uses_public_chat_completion_parameter_names() {
+        let request: ChatCompletionsStreamRequestBody = serde_json::from_value(serde_json::json!({
+            "model": "claude-sonnet",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 32,
+            "stream": true,
+            "tool_choice": "auto"
+        }))
+        .expect("public request shape");
+
+        assert_eq!(request.parameters.max_tokens, Some(32));
+        assert_eq!(request.parameters.stream, Some(true));
+        assert!(matches!(
+            request.parameters.tool_choice,
+            Some(ChatStreamStringOrObject::Name(ref value)) if value == "auto"
+        ));
+    }
+
+    #[test]
+    fn event_matches_python_generic_streaming_chunk_shape() {
+        let event = ChatStreamEvent {
+            text: "hello".to_string(),
+            tool_use: None,
+            is_finished: false,
+            finish_reason: String::new(),
+            usage: None,
+            index: Some(0),
+            provider_specific_fields: None,
+        };
+
+        assert_eq!(
+            serde_json::to_value(event).expect("serializable event"),
+            serde_json::json!({
+                "text": "hello",
+                "tool_use": null,
+                "is_finished": false,
+                "finish_reason": "",
+                "usage": null,
+                "index": 0
+            })
+        );
+    }
 }

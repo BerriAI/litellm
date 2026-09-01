@@ -126,3 +126,15 @@ jobs:
 
       - name: Test native route wheel
         run: python .github/scripts/test_native_routes.py dist/*.whl
+
+      - name: Test Python-Rust bridge contract from release wheel
+        env:
+          LITELLM_REQUIRE_NATIVE_BRIDGE: "1"
+        run: |
+          uv venv --python python3.12 .native-test
+          uv pip install --python .native-test/bin/python dist/*.whl pytest==9.0.3 pytest-asyncio==1.3.0
+          cp tests/test_litellm/rust_bridge/test_native_integration.py /tmp/test_native_integration.py
+          cd /tmp
+          "$GITHUB_WORKSPACE/.native-test/bin/python" -m pytest \
+            /tmp/test_native_integration.py \
+            --rootdir=/tmp -q

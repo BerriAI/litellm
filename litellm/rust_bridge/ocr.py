@@ -108,8 +108,16 @@ def use_litellm_rust(
             set_rust_messages(amessages=amessages)
     if configuring_responses_websocket:
         from litellm.rust_bridge.responses_websocket import set_rust_responses_websocket
+        from litellm.rust_bridge.streaming import set_rust_streaming
 
         set_rust_responses_websocket(connection=responses_websocket)
+        set_rust_streaming(
+            capability=(
+                lambda api, provider, transport: (
+                    enabled and api == "responses" and provider == "openai" and transport == "websocket"
+                )
+            )
+        )
 
 
 def rust_ocr_enabled() -> bool:

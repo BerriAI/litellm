@@ -1,21 +1,26 @@
-"""Thin Python wrapper for the native Rust Responses WebSocket bridge."""
-
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final, Protocol
 
 import httpx
+from pydantic import TypeAdapter
 from websockets.exceptions import ConnectionClosedOK
 
+from litellm.rust_bridge import streaming
 from litellm.rust_bridge.loader import get_native_bridge
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
+_EVENT_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
 
 class RustResponsesWebSocket(Protocol):
-    async def send_text(self, text: str) -> None: ...
+    async def send_event(self, event: Mapping[str, object]) -> None: ...
 
-    async def recv_text(self) -> str | None: ...
+    async def recv_event(self) -> Mapping[str, object] | None: ...
 
     async def close(self) -> None: ...
 
@@ -24,9 +29,12 @@ class RustResponsesWebSocketConnection(Protocol):
     @classmethod
     async def connect(
         cls,
-        url: str,
-        headers: dict[str, str],
+        provider: str,
+        credentials: Mapping[str, str] | None,
+        api_base: str | None,
+        extra_headers: Mapping[str, str] | None,
         timeout_seconds: float | None,
+        litellm_metadata: Mapping[str, object] | None,
     ) -> RustResponsesWebSocket: ...
 
 
@@ -34,49 +42,50 @@ class _Unset:
     pass
 
 
-_UNSET: Final[_Unset] = _Unset()
+_UNSET: Final = _Unset()
 
 
 @dataclass(slots=True)
 class _RustResponsesWebSocketState:
-    connection: RustResponsesWebSocketConnection | None = None
+    connection: type[RustResponsesWebSocketConnection] | None = None
 
 
-_STATE: Final[_RustResponsesWebSocketState] = _RustResponsesWebSocketState()
+_STATE: Final = _RustResponsesWebSocketState()
 
 
 def set_rust_responses_websocket(
     *,
-    connection: RustResponsesWebSocketConnection | None | _Unset = _UNSET,
+    connection: type[RustResponsesWebSocketConnection] | None | _Unset = _UNSET,
 ) -> None:
     if not isinstance(connection, _Unset):
         _STATE.connection = connection
 
 
-def load_rust_responses_websocket() -> RustResponsesWebSocketConnection | None:
+def load_rust_responses_websocket() -> type[RustResponsesWebSocketConnection] | None:
     if _STATE.connection is not None:
         return _STATE.connection
     native_bridge: Final = get_native_bridge()
     if native_bridge is None:
         return None
-    connection_type: Final[RustResponsesWebSocketConnection | None] = getattr(
-        native_bridge, "ResponsesWebSocketConnection", None
+    connection_type: Final[type[RustResponsesWebSocketConnection] | None] = getattr(
+        native_bridge, "ResponsesWebSocketSession", None
     )
     return connection_type
 
 
 class _ConnectionAdapter:
     def __init__(self, connection: RustResponsesWebSocket):
-        self._connection: Final[RustResponsesWebSocket] = connection
+        self._connection: Final = connection
 
     async def send(self, text: str) -> None:
-        await self._connection.send_text(text)
+        event: Final = _EVENT_ADAPTER.validate_json(text)
+        await self._connection.send_event(event)
 
     async def recv(self) -> str:
-        message: Final = await self._connection.recv_text()
-        if message is None:
+        event: Final = await self._connection.recv_event()
+        if event is None:
             raise ConnectionClosedOK(None, None)
-        return message
+        return json.dumps(dict(event), separators=(",", ":"))  # mutable-ok: JSON requires a concrete dict
 
     async def close(self) -> None:
         await self._connection.close()
@@ -84,19 +93,32 @@ class _ConnectionAdapter:
 
 async def connect(
     *,
-    url: str,
-    headers: dict[str, str],
+    provider: str,
+    api_key: str | None,
+    api_base: str | None,
+    headers: Mapping[str, str],
     timeout: float | httpx.Timeout | None,
+    litellm_metadata: Mapping[str, object] | None,
 ) -> _ConnectionAdapter | None:
+    if not streaming.supports_streaming("responses", provider, "websocket"):
+        return None
     connection_type: Final = load_rust_responses_websocket()
     if connection_type is None:
         return None
+    credentials: Final = None if api_key is None else MappingProxyType({"api_key": api_key})
     try:
         connection: Final = await connection_type.connect(
-            url=url,
-            headers=headers,
-            timeout_seconds=timeout_to_seconds(timeout),
+            provider,
+            credentials,
+            api_base,
+            headers,
+            timeout_to_seconds(timeout),
+            litellm_metadata,
         )
-    except Exception:  # noqa: BLE001  # bridge failures must fall back to Python
-        return None
+    except Exception as error:
+        native: Final = get_native_bridge()
+        declined: Final = None if native is None else getattr(native, "RustBridgeDeclined", None)
+        if isinstance(declined, type) and isinstance(error, declined):
+            return None
+        raise
     return _ConnectionAdapter(connection)
