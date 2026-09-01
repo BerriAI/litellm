@@ -1,0 +1,1 @@
+18:16:33 - LiteLLM Proxy.stdout:WARNING: auth_exception_handler.py:161 - litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - 401: LiteLLM Virtual Key expected. Received=unde****ined, expected to start with 'sk-'.
