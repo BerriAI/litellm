@@ -58,6 +58,24 @@ def router():
     )
 
 
+@pytest.fixture
+def team_router():
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-internal-gpt",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake-key"},
+                "model_info": {"team_id": "team-1", "team_public_model_name": "team-alias-gpt"},
+            },
+            {
+                "model_name": "team-internal-bedrock",
+                "litellm_params": {"model": "openai/*", "api_key": "fake-key"},
+                "model_info": {"team_id": "team-1", "team_public_model_name": "team-models/*"},
+            },
+        ]
+    )
+
+
 def _requested_model_values(metric) -> set[str]:
     index = metric._labelnames.index("requested_model")
     return {sample_key[index] for sample_key in metric._metrics}
@@ -114,6 +132,26 @@ async def test_known_alias_and_wildcard_models_keep_their_own_labels(router):
             "gpt-4o-mini",
             "gpt4o-alias",
             "openai/gpt-4o-audio-preview",
+            UNRECOGNIZED_REQUESTED_MODEL_LABEL,
+        }
+
+
+@pytest.mark.asyncio
+async def test_team_alias_and_team_wildcard_models_keep_their_own_labels(team_router):
+    logger = PrometheusLogger()
+
+    with patch("litellm.proxy.proxy_server.llm_router", team_router, create=True):  # test-quality-ok: production reads proxy_server.llm_router lazily, no injection seam
+        await _fire_proxy_failure(logger, "team-alias-gpt")
+        await _fire_proxy_failure(logger, "team-models/gpt-4o-audio-preview")
+        await _fire_proxy_failure(logger, "agent-typo-hallucinated")
+
+    for metric in (
+        logger.litellm_proxy_failed_requests_metric,
+        logger.litellm_proxy_total_requests_metric,
+    ):
+        assert _requested_model_values(metric) == {
+            "team-alias-gpt",
+            "team-models/gpt-4o-audio-preview",
             UNRECOGNIZED_REQUESTED_MODEL_LABEL,
         }
 
