@@ -2,26 +2,27 @@ from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import litellm
+from litellm.constants import MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES, MAX_S3_OBJECT_KEY_BYTES
 from litellm.integrations.s3 import S3Logger
 
 TEST_KMS_KEY_ARN = "arn:aws:kms:us-east-1:111122223333:key/test-key-id"
 
 
-def _standard_logging_payload() -> dict:
+def _standard_logging_payload(response_id: str = "chatcmpl-test-id") -> dict:
     return {
-        "id": "chatcmpl-test-id",
+        "id": response_id,
         "metadata": {"user_api_key_team_alias": None},
     }
 
 
-def _log_event_kwargs() -> dict:
+def _log_event_kwargs(response_id: str = "chatcmpl-test-id") -> dict:
     return {
         "litellm_params": {"metadata": {}},
-        "standard_logging_object": _standard_logging_payload(),
+        "standard_logging_object": _standard_logging_payload(response_id),
     }
 
 
-def _run_log_event(callback_params: dict) -> MagicMock:
+def _run_log_event(callback_params: dict, response_id: str = "chatcmpl-test-id") -> MagicMock:
     original = litellm.s3_callback_params
     litellm.s3_callback_params = callback_params
     try:
@@ -30,8 +31,8 @@ def _run_log_event(callback_params: dict) -> MagicMock:
             mock_boto3_client.return_value = mock_s3_client
             logger = S3Logger()
             logger.log_event(
-                kwargs=_log_event_kwargs(),
-                response_obj={},
+                kwargs=_log_event_kwargs(response_id),
+                response_obj={"id": response_id},
                 start_time=datetime(2026, 7, 30, 12, 0, 0),
                 end_time=datetime(2026, 7, 30, 12, 0, 1),
                 print_verbose=lambda *args, **kwargs: None,
@@ -154,3 +155,32 @@ def test_non_string_key_id_is_dropped_and_valid_algorithm_is_kept():
     put_object_kwargs = mock_s3_client.put_object.call_args.kwargs
     assert put_object_kwargs["ServerSideEncryption"] == "aws:kms"
     assert "SSEKMSKeyId" not in put_object_kwargs
+
+
+def test_put_object_key_and_filename_are_bounded_for_an_oversized_response_id():
+    """The reported failure hits the sync logger too: an oversized Responses API id pushed
+    the key past S3's 1024 byte limit, so the PUT came back 400 and the record was dropped."""
+    mock_s3_client = _run_log_event(
+        {"s3_bucket_name": "test-bucket", "s3_region_name": "us-west-2", "s3_path": "logs"},
+        response_id="resp_" + "A" * 1100,
+    )
+
+    put_object_kwargs = mock_s3_client.put_object.call_args.kwargs
+    assert len(put_object_kwargs["Key"].encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES
+    assert put_object_kwargs["Key"].startswith("logs/2026-07-30/time-12-00-00-000000_resp_")
+    filename = put_object_kwargs["ContentDisposition"].removeprefix('inline; filename="').removesuffix('"')
+    assert len(filename.encode("utf-8")) <= MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES
+
+
+def test_put_object_keeps_the_configured_path_intact_when_only_the_id_has_to_shrink():
+    """A long configured s3_path must survive whole whenever the id can be shortened instead,
+    or a prefix scoped IAM policy stops matching and the PUT is denied."""
+    long_path = "litellm-prod-logs/" + "t" * 921
+    mock_s3_client = _run_log_event(
+        {"s3_bucket_name": "test-bucket", "s3_region_name": "us-west-2", "s3_path": long_path},
+        response_id="resp_" + "B" * 100,
+    )
+
+    key = mock_s3_client.put_object.call_args.kwargs["Key"]
+    assert key.startswith(long_path + "/2026-07-30/")
+    assert len(key.encode("utf-8")) == MAX_S3_OBJECT_KEY_BYTES

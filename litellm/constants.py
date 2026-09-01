@@ -21,8 +21,9 @@ MAX_S3_OBJECT_KEY_BYTES: Final = 1024
 S3_BOUNDED_OBJECT_KEY_HEAD_BYTES: Final = 64
 # Hex chars of the prefix digest appended when a configured s3 path/alias prefix is trimmed.
 S3_PREFIX_DIGEST_CHARS: Final = 16
-# S3 caps a request's combined metadata headers at 2048 bytes, so the Content-Disposition
-# filename gets a budget that leaves room for the other headers the loggers send.
+# S3 caps a request's combined metadata headers at 2048 bytes and Content-Disposition counts
+# against it, so half the cap goes to the filename and the rest covers the signing, content and
+# encryption headers the loggers send alongside it.
 MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = int(os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1))

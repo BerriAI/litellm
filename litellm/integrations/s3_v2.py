@@ -263,11 +263,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             now: Final = datetime.now(timezone.utc)
             audit_log_id: Final = audit_log.get("id", "unknown")
 
-            s3_path = cast(str | None, self.s3_path) or ""
-            s3_path = s3_path.rstrip("/") + "/" if s3_path else ""
-
-            s3_object_key: Final = (
-                f"{s3_path}audit_logs/{now.strftime('%Y-%m-%d')}/{now.strftime('%H-%M-%S')}_{audit_log_id}.json"
+            s3_object_key: Final = get_s3_object_key(
+                cast(str | None, self.s3_path) or "",
+                "audit_logs/",
+                now,
+                f"{now.strftime('%H-%M-%S')}_{audit_log_id}",
             )
 
             element: Final = s3BatchLoggingElement(

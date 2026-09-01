@@ -203,6 +203,9 @@ def resolve_sse_params(
     return algorithm, valid_key_id
 
 
+S3_MIN_BOUNDED_FILE_NAME_BYTES: Final = 64
+
+
 def _truncate_to_utf8_bytes(value: str, max_bytes: int) -> str:
     """Trim `value` so its UTF-8 encoding fits `max_bytes`, never splitting a character."""
     if max_bytes <= 0:
@@ -215,27 +218,30 @@ def _truncate_to_utf8_bytes(value: str, max_bytes: int) -> str:
 
 def get_s3_object_download_filename(start_time: datetime, response_id: str) -> str:
     """Content-Disposition filename, bounded because S3 caps a request's metadata headers at 2048 bytes."""
+    sanitized_response_id: Final = response_id.replace("/", "_").replace('"', "_")
     file_name: Final = f"time-{start_time.strftime('%Y-%m-%dT%H-%M-%S-%f')}_{response_id}"
+    sanitized_file_name: Final = f"time-{start_time.strftime('%Y-%m-%dT%H-%M-%S-%f')}_{sanitized_response_id}"
     budget: Final = MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES - len(b".json")
-    if len(file_name.encode("utf-8")) <= budget:
-        return file_name + ".json"
-    return _bounded_s3_file_name(file_name, file_name) + ".json"
+    if len(sanitized_file_name.encode("utf-8")) <= budget:
+        return sanitized_file_name + ".json"
+    return _bounded_s3_file_name(file_name, sanitized_file_name, budget) + ".json"
 
 
-def _bounded_s3_file_name(s3_file_name: str, sanitized_s3_file_name: str) -> str:
-    """Readable head of the file name plus the sha256 of the whole name, so shortening stays collision free."""
+def _bounded_s3_file_name(s3_file_name: str, sanitized_s3_file_name: str, max_bytes: int) -> str:
+    """As much of the file name as `max_bytes` allows, then the sha256 of the whole name."""
     digest: Final = hashlib.sha256(s3_file_name.encode("utf-8")).hexdigest()
-    head: Final = _truncate_to_utf8_bytes(sanitized_s3_file_name, S3_BOUNDED_OBJECT_KEY_HEAD_BYTES)
+    head_budget: Final = min(S3_BOUNDED_OBJECT_KEY_HEAD_BYTES, max_bytes - len(digest) - 1)
+    head: Final = _truncate_to_utf8_bytes(sanitized_s3_file_name, head_budget)
     return f"{head}_{digest}" if head else digest
 
 
 def _bounded_s3_prefix(configured_prefix: str, max_bytes: int) -> str:
-    """Whole leading path segments that fit, then a digest segment of the full prefix."""
+    """As much of the configured prefix as fits, then a digest segment naming the full prefix."""
     digest_segment: Final = hashlib.sha256(configured_prefix.encode("utf-8")).hexdigest()[:S3_PREFIX_DIGEST_CHARS] + "/"
     if max_bytes < len(digest_segment):
         return ""
-    head: Final = _truncate_to_utf8_bytes(configured_prefix, max_bytes - len(digest_segment))
-    return head[: head.rfind("/") + 1] + digest_segment
+    head: Final = _truncate_to_utf8_bytes(configured_prefix, max_bytes - len(digest_segment) - 1).rstrip("/")
+    return f"{head}/{digest_segment}" if head else digest_segment
 
 
 def get_s3_object_key(
@@ -252,14 +258,17 @@ def get_s3_object_key(
     if len(s3_object_key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES:
         return s3_object_key
 
-    # S3 rejects an over-limit key with a 400, dropping the record, so bound it while keeping the
-    # `<prefix>/<date>/<file>` layout that lifecycle rules and prefix-scoped IAM policies match on.
-    bounded_file_name: Final = _bounded_s3_file_name(s3_file_name, sanitized_s3_file_name)
-    reserved_bytes: Final = len(bounded_file_name.encode("utf-8")) + len(b".json") + len(date_segment.encode("utf-8"))
-    prefix_budget: Final = MAX_S3_OBJECT_KEY_BYTES - reserved_bytes
-    bounded_prefix: Final = (
-        configured_prefix
-        if len(configured_prefix.encode("utf-8")) <= prefix_budget
-        else _bounded_s3_prefix(configured_prefix, prefix_budget)
+    # S3 rejects an over-limit key with a 400 and the record is dropped. Spend the whole budget:
+    # shorten the response id first, and only trim the operator's configured prefix if that is the
+    # part that does not fit, so lifecycle rules and prefix-scoped IAM policies keep matching.
+    budget: Final = MAX_S3_OBJECT_KEY_BYTES - len(date_segment.encode("utf-8")) - len(b".json")
+    prefix_bytes: Final = len(configured_prefix.encode("utf-8"))
+    if prefix_bytes + S3_MIN_BOUNDED_FILE_NAME_BYTES <= budget:
+        bounded_file_name: Final = _bounded_s3_file_name(s3_file_name, sanitized_s3_file_name, budget - prefix_bytes)
+        return configured_prefix + date_segment + bounded_file_name + ".json"
+
+    shortest_file_name: Final = _bounded_s3_file_name(
+        s3_file_name, sanitized_s3_file_name, S3_MIN_BOUNDED_FILE_NAME_BYTES
     )
-    return bounded_prefix + date_segment + bounded_file_name + ".json"
+    bounded_prefix: Final = _bounded_s3_prefix(configured_prefix, budget - len(shortest_file_name.encode("utf-8")))
+    return bounded_prefix + date_segment + shortest_file_name + ".json"
