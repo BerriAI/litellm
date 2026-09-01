@@ -11,7 +11,7 @@ spend tracking stores, so a follow-up previous_response_id still finds the conve
 """
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -510,13 +510,6 @@ def test_final_tool_events_and_completed_snapshot_reuse_streamed_call_identity()
 
 
 def test_final_events_preserve_distinct_streamed_item_id_and_call_id():
-    from litellm.responses.litellm_completion_transformation.custom_tools import (
-        build_tool_call_item_kwargs,
-    )
-    from litellm.responses.litellm_completion_transformation.transformation import (
-        LiteLLMCompletionResponsesConfig,
-    )
-
     iterator = LiteLLMCompletionStreamingIterator(
         model="test-model",
         litellm_custom_stream_wrapper=AsyncMock(),
@@ -546,61 +539,31 @@ def test_final_events_preserve_distinct_streamed_item_id_and_call_id():
             }
         ],
     )
-
-    def distinct_item_id_builder(call_id, *args, **kwargs):
-        item_kwargs = build_tool_call_item_kwargs(call_id, *args, **kwargs)
-        if call_id == "call_stream":
-            item_kwargs["id"] = "fc_stream"
-        return item_kwargs
-
-    with patch(
-        "litellm.responses.litellm_completion_transformation.streaming_iterator.build_tool_call_item_kwargs",
-        side_effect=distinct_item_id_builder,
-    ):
-        iterator._queue_tool_call_delta_events(
-            [
-                {
-                    "index": 0,
-                    "id": "call_stream",
-                    "type": "function",
-                    "function": {"name": "tool", "arguments": '{"value":'},
-                }
-            ]
-        )
-        streamed_added = next(
-            event
-            for event in iterator._pending_tool_events
-            if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
-        )
-        assert (streamed_added.item.id, streamed_added.item.call_id) == (
-            "fc_stream",
-            "call_stream",
-        )
-        assert {
-            event.item_id
-            for event in iterator._pending_tool_events
-            if event.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
-        } == {"fc_stream"}
-        iterator._pending_tool_events.clear()
-        iterator._queue_final_tool_call_done_events(terminal_response)
-
-    original_transform = (
-        LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response
+    iterator._queue_tool_call_delta_events(
+        [
+            {
+                "index": 0,
+                "id": "call_stream",
+                "type": "function",
+                "function": {"name": "tool", "arguments": '{"value":'},
+            }
+        ]
     )
-
-    def terminal_response_with_distinct_item_id(*args, **kwargs):
-        response = original_transform(*args, **kwargs)
-        terminal_call = next(item for item in response.output if item.type == "function_call")
-        terminal_call.id = "fc_terminal"
-        terminal_call.call_id = "call_terminal"
-        return response
-
-    with patch.object(
-        LiteLLMCompletionResponsesConfig,
-        "transform_chat_completion_response_to_responses_api_response",
-        side_effect=terminal_response_with_distinct_item_id,
-    ):
-        completed = iterator._emit_response_completed_event(terminal_response)
+    streamed_added = next(
+        event for event in iterator._pending_tool_events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    )
+    assert (streamed_added.item.id, streamed_added.item.call_id) == (
+        "fc_call_stream",
+        "call_stream",
+    )
+    assert {
+        event.item_id
+        for event in iterator._pending_tool_events
+        if event.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
+    } == {"fc_call_stream"}
+    iterator._pending_tool_events.clear()
+    iterator._queue_final_tool_call_done_events(terminal_response)
+    completed = iterator._emit_response_completed_event(terminal_response)
 
     assert completed is not None
     argument_events = [
@@ -613,15 +576,13 @@ def test_final_events_preserve_distinct_streamed_item_id_and_call_id():
         }
     ]
     assert argument_events
-    assert {event.item_id for event in argument_events} == {"fc_stream"}
+    assert {event.item_id for event in argument_events} == {"fc_call_stream"}
     final_item = next(
-        event.item
-        for event in iterator._pending_tool_events
-        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+        event.item for event in iterator._pending_tool_events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
     )
-    assert (final_item.id, final_item.call_id) == ("fc_stream", "call_stream")
+    assert (final_item.id, final_item.call_id) == ("fc_call_stream", "call_stream")
     completed_call = next(item for item in completed.response.output if item.type == "function_call")
-    assert (completed_call.id, completed_call.call_id) == ("fc_stream", "call_stream")
+    assert (completed_call.id, completed_call.call_id) == ("fc_call_stream", "call_stream")
 
 
 def test_terminal_only_tool_calls_keep_terminal_identity():
