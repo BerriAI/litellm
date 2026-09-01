@@ -13,6 +13,10 @@ import {
 
 /** Covers /ui/usage. The legacy /ui/old-usage view is deprecated and deliberately not covered. */
 
+/** One PROXY_CONFIG_RELOAD_INTERVAL_SECONDS (30s by default) plus room for the reload to run. */
+const ROUTER_RELOAD_TIMEOUT_MS = 45_000;
+const ROUTER_RELOAD_POLL_MS = 3_000;
+
 /** Stepping up from the title is exact; the page renders several other tables. */
 const topKeysCard = (page: PlaywrightPage): Locator =>
   page.getByText("Top Virtual Keys", { exact: true }).locator("xpath=..");
@@ -84,22 +88,34 @@ test.describe("Usage page", () => {
     // A deployment left behind keeps its custom pricing, so it goes on changing what later runs
     // route and what they cost. Runs on the failure path too, which the test body would not.
     // Resolved by name rather than by a returned id, so a create that persisted without answering
-    // 2xx is still cleaned up, and one that never persisted is simply absent here.
+    // 2xx is still cleaned up. /model/info serves the router rather than the database, and
+    // /model/new swallows a failed in-request reload, so a persisted deployment can take until the
+    // next reload to become listable; absent for longer than that means it never persisted.
     const names = pricedDeployments.splice(0);
     if (names.length === 0) return;
     const auth = { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" };
-    const listed = await request.get(`${rootPath()}/model/info`, { headers: auth });
-    expect(listed.ok(), `GET /model/info (${listed.status()})`).toBe(true);
-    const deployments = ((await listed.json()).data ?? []) as {
-      model_name?: string;
-      model_info?: { id?: string };
-    }[];
+
+    const listedId = async (name: string): Promise<string | undefined> => {
+      const listed = await request.get(`${rootPath()}/model/info`, { headers: auth });
+      expect(listed.ok(), `GET /model/info (${listed.status()})`).toBe(true);
+      const deployments = ((await listed.json()).data ?? []) as {
+        model_name?: string;
+        model_info?: { id?: string };
+      }[];
+      return deployments.find((d) => d.model_name === name)?.model_info?.id;
+    };
+
     for (const name of names) {
-      const match = deployments.find((d) => d.model_name === name);
-      if (!match?.model_info?.id) continue;
+      const giveUpAt = Date.now() + ROUTER_RELOAD_TIMEOUT_MS;
+      let id = await listedId(name);
+      while (id === undefined && Date.now() < giveUpAt) {
+        await new Promise((resolve) => setTimeout(resolve, ROUTER_RELOAD_POLL_MS));
+        id = await listedId(name);
+      }
+      if (id === undefined) continue;
       const deleted = await request.post(`${rootPath()}/model/delete`, {
         headers: auth,
-        data: { id: match.model_info.id },
+        data: { id },
       });
       expect(deleted.ok(), `POST /model/delete for ${name} (${deleted.status()})`).toBe(true);
     }
