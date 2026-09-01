@@ -163,6 +163,26 @@ def filter_team_based_models(
     ]
 
 
+def _is_web_search_tool(tool: dict) -> bool:
+    tool_type = str(tool.get("type") or "")
+    tool_name = str(tool.get("name") or "")
+    return (
+        tool_type in ("web_search", "web_search_preview")
+        or tool_type.startswith("web_search_")
+        or tool_name == "web_search"
+    )
+
+
+def _is_web_fetch_tool(tool: dict) -> bool:
+    tool_type = str(tool.get("type") or "")
+    tool_name = str(tool.get("name") or "")
+    return (
+        tool_type in ("web_fetch", "web_fetch_preview")
+        or tool_type.startswith("web_fetch_")
+        or tool_name == "web_fetch"
+    )
+
+
 def _deployment_supports_web_search(deployment: dict) -> bool:
     """
     Check if a deployment supports web search.
@@ -183,12 +203,28 @@ def _deployment_supports_web_search(deployment: dict) -> bool:
     return True
 
 
+def _deployment_supports_web_fetch(deployment: dict) -> bool:
+    """
+    Check if a deployment supports web fetch.
+
+    Priority:
+    1. Check config-level override in model_info.supports_web_fetch
+    2. Default to True (assume supported unless explicitly disabled)
+    """
+    model_info: Final = deployment.get("model_info", {})
+
+    if "supports_web_fetch" in model_info:
+        return model_info["supports_web_fetch"]
+
+    return True
+
+
 def filter_web_search_deployments(
     healthy_deployments: list[dict] | dict,
     request_kwargs: dict | None = None,
 ) -> list[dict] | dict:
     """
-    If the request is websearch, filter out deployments that don't support web search
+    If the request is websearch or webfetch, filter out deployments that don't support it
     """
     if request_kwargs is None:
         return healthy_deployments
@@ -198,20 +234,32 @@ def filter_web_search_deployments(
         return healthy_deployments
 
     is_web_search_request = False
+    is_web_fetch_request = False
     tools: Final = request_kwargs.get("tools") or []
     for tool in tools:
-        # These are the two websearch tools for OpenAI / Azure.
-        if tool.get("type") == "web_search" or tool.get("type") == "web_search_preview":
+        if not isinstance(tool, dict):
+            continue
+        if _is_web_search_tool(tool):
             is_web_search_request = True
-            break
+        if _is_web_fetch_tool(tool):
+            is_web_fetch_request = True
 
-    if not is_web_search_request:
+    if not is_web_search_request and not is_web_fetch_request:
         return healthy_deployments
 
+    final_deployments = healthy_deployments
     # Filter out deployments that don't support web search
-    final_deployments: Final = [d for d in healthy_deployments if _deployment_supports_web_search(d)]
-    if len(healthy_deployments) > 0 and len(final_deployments) == 0:
-        verbose_logger.warning("No deployments support web search for request")
+    if is_web_search_request:
+        final_deployments = [d for d in final_deployments if _deployment_supports_web_search(d)]
+        if len(healthy_deployments) > 0 and len(final_deployments) == 0:
+            verbose_logger.warning("No deployments support web search for request")
+
+    # Filter out deployments that don't support web fetch
+    if is_web_fetch_request:
+        final_deployments = [d for d in final_deployments if _deployment_supports_web_fetch(d)]
+        if len(healthy_deployments) > 0 and len(final_deployments) == 0:
+            verbose_logger.warning("No deployments support web fetch for request")
+
     return final_deployments
 
 
