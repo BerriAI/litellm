@@ -1,344 +1,42 @@
 from __future__ import annotations
 
-import base64
-import binascii
-from typing import Annotated, Literal
+from collections.abc import Mapping
+from typing import Annotated, Final, cast
 
-from pydantic import Field, field_validator, model_validator
-from typing_extensions import Self
+from pydantic import Discriminator, Tag
 
-from tests.route_parity.fixture_models import (
-    FixtureModel,
-    JsonObject,
-    JsonSchemaDefinition,
-    JsonSchemaResponseFormat,
-    ParityCase,
-    SdkInputBase,
+from tests.route_parity.fixture_models import ParityCase
+from tests.test_litellm.ocr.fixtures.azure import (
+    AzureDocumentIntelligenceOcrSdkInput,
+    AzureMistralOcrSdkInput,
 )
-
-__all__ = (
-    "JsonSchemaDefinition",
-    "JsonSchemaResponseFormat",
-    "OcrParityCase",
-    "OcrSdkInput",
-    "OcrSdkInputBase",
-)
-
-OcrSdkInputBase = SdkInputBase
-
-
-class MistralImageUrlValue(FixtureModel):
-    url: str
-    detail: Literal["low", "auto", "high"] | None = None
-
-
-class MistralImageUrlDocument(FixtureModel):
-    type: Literal["image_url"]
-    image_url: str | MistralImageUrlValue
-
-
-class MistralDocumentUrlDocument(FixtureModel):
-    type: Literal["document_url"]
-    document_url: str
-    document_name: str | None = None
-
-
-MistralDocument = Annotated[
-    MistralImageUrlDocument | MistralDocumentUrlDocument,
-    Field(discriminator="type"),
-]
-
-
-MistralModel = Literal[
-    "mistral/mistral-ocr-2512",
-    "mistral/mistral-ocr-4-0",
-    "mistral/mistral-ocr-4-1",
-    "mistral/mistral-ocr-4",
-    "mistral/mistral-ocr-latest",
-    "mistral-ocr-2512",
-    "mistral-ocr-4-0",
-    "mistral-ocr-4-1",
-    "mistral-ocr-4",
-    "mistral-ocr-latest",
-]
-
-
-class MistralCompatibleOcrSdkInput(OcrSdkInputBase):
-    document: MistralDocument
-    pages: str | list[int] | None = None
-    include_image_base64: bool | None = None
-    image_limit: int | None = None
-    image_min_size: int | None = None
-    bbox_annotation_format: JsonSchemaResponseFormat | None = None
-    document_annotation_format: JsonSchemaResponseFormat | None = None
-    document_annotation_prompt: str | None = None
-    extract_header: bool = False
-    extract_footer: bool = False
-    table_format: Literal["markdown", "html"] | None = None
-    confidence_scores_granularity: Literal["page", "word", "block"] | None = None
-    include_blocks: bool = True
-    id: str | None = None
-
-    @model_validator(mode="after")
-    def validate_annotation_prompt(self) -> Self:
-        if self.document_annotation_prompt is not None and self.document_annotation_format is None:
-            raise ValueError("document_annotation_prompt requires document_annotation_format")
-        return self
-
-
-class MistralOcrSdkInput(MistralCompatibleOcrSdkInput):
-    boundary: Literal["mistral"] = "mistral"
-    model: MistralModel
-    custom_llm_provider: Literal["mistral"] | None = None
-
-    @model_validator(mode="after")
-    def validate_provider_routing(self) -> Self:
-        if not self.model.startswith("mistral/") and self.custom_llm_provider != "mistral":
-            raise ValueError("unqualified Mistral models require custom_llm_provider='mistral'")
-        return self
-
-
-class AzureMistralOcrSdkInput(MistralCompatibleOcrSdkInput):
-    boundary: Literal["azure_mistral"] = "azure_mistral"
-    model: str
-    custom_llm_provider: Literal["azure_ai"] | None = None
-
-    @field_validator("model")
-    @classmethod
-    def validate_model_namespace(cls, model: str) -> str:
-        if not model.startswith("azure_ai/"):
-            raise ValueError("Azure Mistral models must use the azure_ai/ LiteLLM namespace")
-        return model
-
-
-class VertexMistralOcrSdkInput(MistralCompatibleOcrSdkInput):
-    boundary: Literal["vertex_mistral"] = "vertex_mistral"
-    model: Literal["vertex_ai/mistral-ocr-2505"] = "vertex_ai/mistral-ocr-2505"
-    custom_llm_provider: Literal["vertex_ai"] | None = None
-    vertex_project: str
-    vertex_location: str = "us-central1"
-
-
-class AzureDocumentIntelligenceOcrSdkInput(OcrSdkInputBase):
-    boundary: Literal["azure_document_intelligence"] = "azure_document_intelligence"
-    model: Literal[
-        "azure_ai/doc-intelligence/prebuilt-read",
-        "azure_ai/doc-intelligence/prebuilt-layout",
-        "azure_ai/doc-intelligence/prebuilt-document",
-    ]
-    document: MistralDocument
-    custom_llm_provider: Literal["azure_ai"] | None = None
-    pages: str | list[int] | None = None
-    features: str | list[str] | None = None
-    req_format: Literal["litellm"] = "litellm"
-
-
-class VertexDeepSeekOcrSdkInput(OcrSdkInputBase):
-    boundary: Literal["vertex_deepseek"] = "vertex_deepseek"
-    model: Literal["vertex_ai/deepseek-ocr-maas"] = "vertex_ai/deepseek-ocr-maas"
-    document: MistralDocument
-    custom_llm_provider: Literal["vertex_ai"] | None = None
-    vertex_project: str
-    vertex_location: str = "us-central1"
-
-
-def _validate_reducto_source(source: str) -> str:
-    if source.startswith("reducto://"):
-        return source
-    if not source.startswith("data:"):
-        raise ValueError("Reducto documents require a reducto:// id or base64 data URI")
-    try:
-        header, encoded = source.split(",", 1)
-    except ValueError as error:
-        raise ValueError("invalid Reducto data URI") from error
-    if ";base64" not in header:
-        raise ValueError("Reducto data URIs must be base64 encoded")
-    try:
-        base64.b64decode(encoded, validate=True)
-    except (binascii.Error, ValueError) as error:
-        raise ValueError("invalid Reducto base64 payload") from error
-    return source
-
-
-class ReductoImageUrlDocument(FixtureModel):
-    type: Literal["image_url"]
-    image_url: str
-
-    @field_validator("image_url")
-    @classmethod
-    def validate_image_url(cls, value: str) -> str:
-        return _validate_reducto_source(value)
-
-
-class ReductoDocumentUrlDocument(FixtureModel):
-    type: Literal["document_url"]
-    document_url: str
-
-    @field_validator("document_url")
-    @classmethod
-    def validate_document_url(cls, value: str) -> str:
-        return _validate_reducto_source(value)
-
-
-ReductoDocument = Annotated[
-    ReductoImageUrlDocument | ReductoDocumentUrlDocument,
-    Field(discriminator="type"),
-]
-
-ReductoTableOutputFormat = Literal["html", "json", "md", "jsonbbox", "dynamic", "csv"]
-ReductoFormattingInclude = Literal[
-    "change_tracking",
-    "highlight",
-    "comments",
-    "hyperlinks",
-    "signatures",
-    "ignore_watermarks",
-]
-ReductoBlockType = Literal[
-    "Header",
-    "Footer",
-    "Title",
-    "Section Header",
-    "Page Number",
-    "List Item",
-    "Figure",
-    "Table",
-    "Key Value",
-    "Text",
-    "Comment",
-    "Signature",
-]
-
-
-class ReductoFormatting(FixtureModel):
-    add_page_markers: bool = False
-    table_output_format: ReductoTableOutputFormat = "dynamic"
-    merge_tables: bool = False
-    include: list[ReductoFormattingInclude] = Field(default_factory=list)
-
-    @field_validator("include")
-    @classmethod
-    def validate_unique_include(cls, value: list[ReductoFormattingInclude]) -> list[ReductoFormattingInclude]:
-        if len(value) != len(set(value)):
-            raise ValueError("formatting.include entries must be unique")
-        return value
-
-
-class ReductoChunking(FixtureModel):
-    chunk_mode: Literal["variable", "section", "page", "disabled", "block", "page_sections"] = "disabled"
-    chunk_size: int | None = None
-    chunk_overlap: int = Field(default=0, ge=0)
-
-    @model_validator(mode="after")
-    def validate_chunking(self) -> Self:
-        if self.chunk_size is not None and self.chunk_size <= 0:
-            raise ValueError("chunk_size must be positive")
-        if self.chunk_size is not None and self.chunk_overlap >= self.chunk_size:
-            raise ValueError("chunk_overlap must be less than chunk_size")
-        return self
-
-
-class ReductoRetrieval(FixtureModel):
-    chunking: ReductoChunking = Field(default_factory=ReductoChunking)
-    filter_blocks: list[ReductoBlockType] = Field(default_factory=list)
-    embedding_optimized: bool = False
-
-    @field_validator("filter_blocks")
-    @classmethod
-    def validate_unique_blocks(cls, value: list[ReductoBlockType]) -> list[ReductoBlockType]:
-        if len(value) != len(set(value)):
-            raise ValueError("retrieval.filter_blocks entries must be unique")
-        return value
-
-
-class ReductoPageRange(FixtureModel):
-    start: int | None = Field(default=None, ge=1)
-    end: int | None = Field(default=None, ge=1)
-
-    @model_validator(mode="after")
-    def validate_range(self) -> Self:
-        if self.start is not None and self.end is not None and self.end < self.start:
-            raise ValueError("page range end must be greater than or equal to start")
-        return self
-
-
-class ReductoTenantThrottling(FixtureModel):
-    tenant_id: str = Field(min_length=1, max_length=256)
-    max_share: float = Field(default=0.5, gt=0, le=1)
-
-
-class ReductoHybridVpcSettings(FixtureModel):
-    environment: str | None = None
-
-
-ReductoPageSelection = ReductoPageRange | list[ReductoPageRange] | list[int] | list[str]
-
-
-class ReductoSettings(FixtureModel):
-    ocr_system: Literal["standard", "legacy"] = "standard"
-    extraction_mode: Literal["ocr", "hybrid"] = "hybrid"
-    force_url_result: bool = False
-    force_file_extension: str | None = None
-    return_ocr_data: bool = False
-    return_images: list[Literal["figure", "table", "page"]] = Field(default_factory=list)
-    embed_pdf_metadata: bool = False
-    embed_pdf_metadata_dpi: int = Field(default=100, ge=50, le=250)
-    persist_results: bool = False
-    tenant_throttling: ReductoTenantThrottling | None = None
-    timeout: float | None = Field(default=None, gt=0)
-    page_range: ReductoPageSelection | None = None
-    document_password: str | None = None
-    hybrid_vpc: ReductoHybridVpcSettings = Field(default_factory=ReductoHybridVpcSettings)
-
-    @field_validator("return_images")
-    @classmethod
-    def validate_unique_images(
-        cls, value: list[Literal["figure", "table", "page"]]
-    ) -> list[Literal["figure", "table", "page"]]:
-        if len(value) != len(set(value)):
-            raise ValueError("settings.return_images entries must be unique")
-        return value
-
-
-class ReductoParseV3SdkInput(OcrSdkInputBase):
-    boundary: Literal["reducto_v3"] = "reducto_v3"
-    model: Literal["reducto/parse-v3", "parse-v3"]
-    document: ReductoDocument
-    custom_llm_provider: Literal["reducto"] | None = None
-    formatting: ReductoFormatting = Field(default_factory=ReductoFormatting)
-    retrieval: ReductoRetrieval = Field(default_factory=ReductoRetrieval)
-    settings: ReductoSettings = Field(default_factory=ReductoSettings)
-
-    @model_validator(mode="after")
-    def validate_provider_routing(self) -> Self:
-        if self.model == "parse-v3" and self.custom_llm_provider != "reducto":
-            raise ValueError("unqualified Reducto models require custom_llm_provider='reducto'")
-        return self
-
-
-class ReductoParseLegacySdkInput(OcrSdkInputBase):
-    boundary: Literal["reducto_legacy"] = "reducto_legacy"
-    model: Literal["reducto/parse-legacy", "parse-legacy"]
-    document: ReductoDocument
-    custom_llm_provider: Literal["reducto"] | None = None
-    enhance: JsonObject | None = None
-
-    @model_validator(mode="after")
-    def validate_provider_routing(self) -> Self:
-        if self.model == "parse-legacy" and self.custom_llm_provider != "reducto":
-            raise ValueError("unqualified Reducto models require custom_llm_provider='reducto'")
-        return self
+from tests.test_litellm.ocr.fixtures.base import OcrSdkInputBase
+from tests.test_litellm.ocr.fixtures.mistral import MistralOcrSdkInput
+from tests.test_litellm.ocr.fixtures.reducto import ReductoParseLegacySdkInput, ReductoParseV3SdkInput
+from tests.test_litellm.ocr.fixtures.vertex import VertexDeepSeekOcrSdkInput, VertexMistralOcrSdkInput
+
+__all__ = ("OcrParityCase", "OcrSdkInput")
+
+
+def _ocr_boundary(value: object) -> str | None:
+    if isinstance(value, Mapping):
+        mapping: Final = cast(Mapping[object, object], value)
+        boundary: Final = mapping.get("boundary")
+        return boundary if isinstance(boundary, str) else None
+    if isinstance(value, OcrSdkInputBase):
+        return value.boundary
+    return None
 
 
 OcrSdkInput = Annotated[
-    MistralOcrSdkInput
-    | AzureMistralOcrSdkInput
-    | VertexMistralOcrSdkInput
-    | AzureDocumentIntelligenceOcrSdkInput
-    | VertexDeepSeekOcrSdkInput
-    | ReductoParseV3SdkInput
-    | ReductoParseLegacySdkInput,
-    Field(discriminator="boundary"),
+    Annotated[MistralOcrSdkInput, Tag("mistral")]
+    | Annotated[AzureMistralOcrSdkInput, Tag("azure_mistral")]
+    | Annotated[VertexMistralOcrSdkInput, Tag("vertex_mistral")]
+    | Annotated[AzureDocumentIntelligenceOcrSdkInput, Tag("azure_document_intelligence")]
+    | Annotated[VertexDeepSeekOcrSdkInput, Tag("vertex_deepseek")]
+    | Annotated[ReductoParseV3SdkInput, Tag("reducto_v3")]
+    | Annotated[ReductoParseLegacySdkInput, Tag("reducto_legacy")],
+    Discriminator(_ocr_boundary),
 ]
 
 

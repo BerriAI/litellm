@@ -11,18 +11,21 @@ from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
 from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.llms.reducto.ocr.transformation import ReductoParseLegacyConfig, ReductoParseV3Config
 from litellm.llms.vertex_ai.ocr.deepseek_transformation import VertexAIDeepSeekOCRConfig
-from tests.test_litellm.ocr.fixtures.azure import azure_document_intelligence_input_strategy
-from tests.test_litellm.ocr.fixtures.mistral import mistral_input_strategy
-from tests.test_litellm.ocr.fixtures.models import (
+from tests.test_litellm.ocr.fixtures.azure import (
     AzureDocumentIntelligenceOcrSdkInput,
     AzureMistralOcrSdkInput,
+    azure_document_intelligence_input_strategy,
+)
+from tests.test_litellm.ocr.fixtures.base import (
+    DocumentUrlDocument,
+    ImageUrlDocument,
+    ImageUrlValue,
     JsonSchemaDefinition,
     JsonSchemaResponseFormat,
-    MistralDocumentUrlDocument,
-    MistralImageUrlDocument,
-    MistralImageUrlValue,
-    MistralOcrSdkInput,
     OcrSdkInputBase,
+)
+from tests.test_litellm.ocr.fixtures.mistral import MistralOcrSdkInput, mistral_input_strategy
+from tests.test_litellm.ocr.fixtures.reducto import (
     ReductoChunking,
     ReductoDocumentUrlDocument,
     ReductoFormatting,
@@ -31,11 +34,14 @@ from tests.test_litellm.ocr.fixtures.models import (
     ReductoParseV3SdkInput,
     ReductoRetrieval,
     ReductoSettings,
+    reducto_legacy_input_strategy,
+    reducto_v3_input_strategy,
+)
+from tests.test_litellm.ocr.fixtures.vertex import (
     VertexDeepSeekOcrSdkInput,
     VertexMistralOcrSdkInput,
+    vertex_deepseek_input_strategy,
 )
-from tests.test_litellm.ocr.fixtures.reducto import reducto_legacy_input_strategy, reducto_v3_input_strategy
-from tests.test_litellm.ocr.fixtures.vertex import vertex_deepseek_input_strategy
 
 COMMON_FIELDS: Final = frozenset(
     {"boundary", "model", "document", "custom_llm_provider", "vertex_project", "vertex_location"}
@@ -88,18 +94,18 @@ def test_deepseek_fixture_fields_match_provider_config() -> None:
     (
         AzureMistralOcrSdkInput(
             model="azure_ai/mistral-ocr-deployment",
-            document=MistralImageUrlDocument(type="image_url", image_url="data:image/png;base64,AA=="),
+            document=ImageUrlDocument(type="image_url", image_url="data:image/png;base64,AA=="),
         ),
         VertexMistralOcrSdkInput(
-            document=MistralImageUrlDocument(type="image_url", image_url="data:image/png;base64,AA=="),
+            document=ImageUrlDocument(type="image_url", image_url="data:image/png;base64,AA=="),
             vertex_project="project-1",
         ),
         AzureDocumentIntelligenceOcrSdkInput(
             model="azure_ai/doc-intelligence/prebuilt-layout",
-            document=MistralImageUrlDocument(type="image_url", image_url="data:image/png;base64,AA=="),
+            document=ImageUrlDocument(type="image_url", image_url="data:image/png;base64,AA=="),
         ),
         VertexDeepSeekOcrSdkInput(
-            document=MistralImageUrlDocument(type="image_url", image_url="data:image/png;base64,AA=="),
+            document=ImageUrlDocument(type="image_url", image_url="data:image/png;base64,AA=="),
             vertex_project="project-1",
         ),
     ),
@@ -122,15 +128,15 @@ def test_mistral_input_preserves_omission_and_explicit_boolean_values() -> None:
 def test_mistral_input_supports_document_and_page_variants() -> None:
     nested_image: Final = MistralOcrSdkInput(
         model="mistral/mistral-ocr-4-1",
-        document=MistralImageUrlDocument(
+        document=ImageUrlDocument(
             type="image_url",
-            image_url=MistralImageUrlValue(url="https://example.com/image.png", detail="high"),
+            image_url=ImageUrlValue(url="https://example.com/image.png", detail="high"),
         ),
         pages="0,2-4",
     )
     named_document: Final = MistralOcrSdkInput(
         model="mistral/mistral-ocr-2512",
-        document=MistralDocumentUrlDocument(
+        document=DocumentUrlDocument(
             type="document_url",
             document_url="https://example.com/document.pdf",
             document_name="invoice.pdf",
@@ -186,7 +192,7 @@ def test_unqualified_models_require_explicit_provider() -> None:
     with pytest.raises(ValidationError, match="custom_llm_provider='mistral'"):
         MistralOcrSdkInput(
             model="mistral-ocr-latest",
-            document=MistralImageUrlDocument(type="image_url", image_url="https://example.com/image.png"),
+            document=ImageUrlDocument(type="image_url", image_url="https://example.com/image.png"),
         )
     with pytest.raises(ValidationError, match="custom_llm_provider='reducto'"):
         ReductoParseV3SdkInput(model="parse-v3", document=_reducto_document())

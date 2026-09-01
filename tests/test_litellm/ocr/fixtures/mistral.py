@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Final, cast
+from typing import Final, Literal, cast
 
 from hypothesis import strategies as st
 from hypothesis.strategies import DrawFn, SearchStrategy
+from pydantic import Field, model_validator
+from typing_extensions import Self
 
 from tests.route_parity.fixtures.recording import ProviderSpec
+from tests.test_litellm.ocr.fixtures.base import (
+    JsonSchemaResponseFormat,
+    OcrDocument,
+    OcrSdkInputBase,
+)
 from tests.test_litellm.ocr.fixtures.common import (
     OcrFixtureClient,
     OcrRecordingTarget,
@@ -15,7 +22,55 @@ from tests.test_litellm.ocr.fixtures.common import (
     invoke_with_api_key,
     public_document_strategy,
 )
-from tests.test_litellm.ocr.fixtures.models import MistralOcrSdkInput, OcrSdkInputBase
+
+MistralModel = Literal[
+    "mistral/mistral-ocr-2512",
+    "mistral/mistral-ocr-4-0",
+    "mistral/mistral-ocr-4-1",
+    "mistral/mistral-ocr-4",
+    "mistral/mistral-ocr-latest",
+    "mistral-ocr-2512",
+    "mistral-ocr-4-0",
+    "mistral-ocr-4-1",
+    "mistral-ocr-4",
+    "mistral-ocr-latest",
+]
+
+
+class MistralCompatibleOcrSdkInput(OcrSdkInputBase):
+    document: OcrDocument
+    pages: str | list[int] | None = None
+    include_image_base64: bool | None = None
+    image_limit: int | None = None
+    image_min_size: int | None = None
+    bbox_annotation_format: JsonSchemaResponseFormat | None = None
+    document_annotation_format: JsonSchemaResponseFormat | None = None
+    document_annotation_prompt: str | None = None
+    extract_header: bool = False
+    extract_footer: bool = False
+    table_format: Literal["markdown", "html"] | None = None
+    confidence_scores_granularity: Literal["page", "word", "block"] | None = None
+    include_blocks: bool = True
+    id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_annotation_prompt(self) -> Self:
+        if self.document_annotation_prompt is not None and self.document_annotation_format is None:
+            raise ValueError("document_annotation_prompt requires document_annotation_format")
+        return self
+
+
+class MistralOcrSdkInput(MistralCompatibleOcrSdkInput):
+    boundary: str = Field(default="mistral", pattern=r"^mistral$")
+    model: MistralModel
+    custom_llm_provider: Literal["mistral"] | None = None
+
+    @model_validator(mode="after")
+    def validate_provider_routing(self) -> Self:
+        if not self.model.startswith("mistral/") and self.custom_llm_provider != "mistral":
+            raise ValueError("unqualified Mistral models require custom_llm_provider='mistral'")
+        return self
+
 
 MISTRAL_MODEL: Final = "mistral/mistral-ocr-latest"
 _VALUE_TEXT: Final = st.just("case-1")

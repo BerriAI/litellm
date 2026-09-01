@@ -16,9 +16,10 @@ from tests.test_litellm.ocr.fixtures.azure import (
     azure_document_intelligence_recording_targets,
     azure_mistral_recording_targets,
 )
+from tests.test_litellm.ocr.fixtures.base import OcrSdkInputBase
 from tests.test_litellm.ocr.fixtures.common import OcrFixtureClient, OcrRecordingTarget, OcrSdkCall
 from tests.test_litellm.ocr.fixtures.mistral import mistral_recording_targets
-from tests.test_litellm.ocr.fixtures.models import OcrParityCase, OcrSdkInputBase
+from tests.test_litellm.ocr.fixtures.models import OcrParityCase
 from tests.test_litellm.ocr.fixtures.reducto import reducto_recording_targets
 from tests.test_litellm.ocr.fixtures.vertex import vertex_recording_targets
 

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Final, cast
+from typing import Final, Literal, cast
 
 from hypothesis import strategies as st
 from hypothesis.strategies import DrawFn, SearchStrategy
+from pydantic import Field, field_validator
 
 from tests.route_parity.fixtures.recording import ProviderSpec
+from tests.test_litellm.ocr.fixtures.base import OcrDocument, OcrSdkInputBase
 from tests.test_litellm.ocr.fixtures.common import (
     OcrFixtureClient,
     OcrRecordingTarget,
@@ -16,15 +18,38 @@ from tests.test_litellm.ocr.fixtures.common import (
 )
 from tests.test_litellm.ocr.fixtures.mistral import (
     MISTRAL_MODEL,
+    MistralCompatibleOcrSdkInput,
+    MistralOcrSdkInput,
     mistral_input_strategy,
     required_mistral_inputs,
 )
-from tests.test_litellm.ocr.fixtures.models import (
-    AzureDocumentIntelligenceOcrSdkInput,
-    AzureMistralOcrSdkInput,
-    MistralOcrSdkInput,
-    OcrSdkInputBase,
-)
+
+
+class AzureMistralOcrSdkInput(MistralCompatibleOcrSdkInput):
+    boundary: str = Field(default="azure_mistral", pattern=r"^azure_mistral$")
+    model: str
+    custom_llm_provider: Literal["azure_ai"] | None = None
+
+    @field_validator("model")
+    @classmethod
+    def validate_model_namespace(cls, model: str) -> str:
+        if not model.startswith("azure_ai/"):
+            raise ValueError("Azure Mistral models must use the azure_ai/ LiteLLM namespace")
+        return model
+
+
+class AzureDocumentIntelligenceOcrSdkInput(OcrSdkInputBase):
+    boundary: str = Field(default="azure_document_intelligence", pattern=r"^azure_document_intelligence$")
+    model: Literal[
+        "azure_ai/doc-intelligence/prebuilt-read",
+        "azure_ai/doc-intelligence/prebuilt-layout",
+        "azure_ai/doc-intelligence/prebuilt-document",
+    ]
+    document: OcrDocument
+    custom_llm_provider: Literal["azure_ai"] | None = None
+    pages: str | list[int] | None = None
+    features: str | list[str] | None = None
+    req_format: Literal["litellm"] = "litellm"
 
 
 def _as_azure_mistral(case_input: MistralOcrSdkInput, model: str) -> AzureMistralOcrSdkInput:

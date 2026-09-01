@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Final, cast
+from typing import Final, Literal, cast
 
 from hypothesis import strategies as st
 from hypothesis.strategies import DrawFn, SearchStrategy
+from pydantic import Field
 
 from tests.route_parity.fixtures.recording import ProviderSpec
+from tests.test_litellm.ocr.fixtures.base import OcrDocument, OcrSdkInputBase
 from tests.test_litellm.ocr.fixtures.common import (
     OcrFixtureClient,
     OcrRecordingTarget,
@@ -16,15 +18,28 @@ from tests.test_litellm.ocr.fixtures.common import (
 )
 from tests.test_litellm.ocr.fixtures.mistral import (
     MISTRAL_MODEL,
+    MistralCompatibleOcrSdkInput,
+    MistralOcrSdkInput,
     mistral_input_strategy,
     required_mistral_inputs,
 )
-from tests.test_litellm.ocr.fixtures.models import (
-    MistralOcrSdkInput,
-    OcrSdkInputBase,
-    VertexDeepSeekOcrSdkInput,
-    VertexMistralOcrSdkInput,
-)
+
+
+class VertexMistralOcrSdkInput(MistralCompatibleOcrSdkInput):
+    boundary: str = Field(default="vertex_mistral", pattern=r"^vertex_mistral$")
+    model: Literal["vertex_ai/mistral-ocr-2505"] = "vertex_ai/mistral-ocr-2505"
+    custom_llm_provider: Literal["vertex_ai"] | None = None
+    vertex_project: str
+    vertex_location: str = "us-central1"
+
+
+class VertexDeepSeekOcrSdkInput(OcrSdkInputBase):
+    boundary: str = Field(default="vertex_deepseek", pattern=r"^vertex_deepseek$")
+    model: Literal["vertex_ai/deepseek-ocr-maas"] = "vertex_ai/deepseek-ocr-maas"
+    document: OcrDocument
+    custom_llm_provider: Literal["vertex_ai"] | None = None
+    vertex_project: str
+    vertex_location: str = "us-central1"
 
 
 def _as_vertex_mistral(case_input: MistralOcrSdkInput, project: str, location: str) -> VertexMistralOcrSdkInput:

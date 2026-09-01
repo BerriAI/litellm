@@ -9,7 +9,7 @@ import pytest
 
 from tests.route_parity.fixtures.inputs import generate_case_inputs
 from tests.route_parity.fixtures.pipeline import parse_recording_args
-from tests.test_litellm.ocr.fixtures.models import OcrSdkInputBase
+from tests.test_litellm.ocr.fixtures.base import OcrSdkInputBase
 from tests.test_litellm.ocr.fixtures.record import (
     discover_targets,
     require_targets,
