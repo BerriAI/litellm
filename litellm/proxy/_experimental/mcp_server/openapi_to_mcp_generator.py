@@ -163,6 +163,18 @@ def load_openapi_spec(filepath: str) -> dict[str, Any]:
     return asyncio.run(load_openapi_spec_async(filepath))
 
 
+<def _is_yaml_content(filepath: str, content_type: str | None = None) -> bool:
+    """Determine if the content should be parsed as YAML."""
+    # Check file extension
+    lower = filepath.lower()
+    if lower.endswith((".yaml", ".yml")):
+        return True
+    # Check Content-Type header
+    if content_type and "yaml" in content_type:
+        return True
+    return False
+
+
 async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> dict[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
@@ -172,14 +184,40 @@ async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None
             else await async_safe_get(client, filepath, max_response_bytes=max_bytes)
         )
         r.raise_for_status()
-        return r.json()
+
+        content_type = r.headers.get("content-type", "")
+        if _is_yaml_content(filepath, content_type):
+            import yaml
+
+            return yaml.safe_load(r.text)
+        # Try JSON first; fall back to YAML for specs served without
+        # proper Content-Type headers (common with raw GitHub URLs).
+        try:
+            return r.json()
+        except Exception:
+            import yaml
+
+            return yaml.safe_load(r.text)
 
     # fallback: local file
     # Local filesystem path
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"OpenAPI spec not found at {filepath}")
+
+    if _is_yaml_content(filepath):
+        import yaml
+
+        with open(filepath, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+
     with open(filepath, "r", encoding="utf-8") as f:
-        return json.load(f)
+        try:
+            return json.load(f)
+        except Exception:
+            import yaml
+
+            f.seek(0)
+            return yaml.safe_load(f)
 
 
 def get_base_url(spec: Mapping[str, Any], spec_path: str | None = None) -> str:
