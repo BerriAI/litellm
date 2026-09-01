@@ -13,6 +13,7 @@ Opt-in: with ``SERVER_ROOT_PATHS`` unset the middleware is not added at all.
 
 import os
 from collections.abc import Sequence
+from contextvars import ContextVar
 from typing import Final
 
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -20,6 +21,31 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from litellm._logging import verbose_proxy_logger
 
 SERVER_ROOT_PATHS_ENV: Final = "SERVER_ROOT_PATHS"
+
+# The effective ``root_path`` for the currently-handled request. Populated by
+# ``PerRequestRootPathMiddleware`` from the (possibly-mutated) scope so code
+# that emits URLs off the request path — the 401 challenges' resource_metadata
+# and ``get_custom_url``'s SSO callbacks among them — can pick up the prefix
+# the client actually called without threading scope through every call site.
+# ``None`` means "middleware did not run" (the ``SERVER_ROOT_PATHS`` env is
+# unset, so no per-request prefix exists); readers fall back to the scalar
+# ``SERVER_ROOT_PATH`` in that case, which matches the pre-middleware behavior.
+_request_root_path_var: Final[ContextVar[str | None]] = ContextVar("_request_root_path_var", default=None)
+
+
+def get_request_root_path() -> str:
+    """Return the effective ``root_path`` for the current request.
+
+    Reads the value ``PerRequestRootPathMiddleware`` stashed for this request;
+    falls back to the ``SERVER_ROOT_PATH`` env when the middleware did not run
+    (i.e. ``SERVER_ROOT_PATHS`` is unset — the scalar-only deployment). The
+    fallback keeps the return value identical to ``get_server_root_path()`` for
+    every deployment that has not opted into the multi-prefix mechanism.
+    """
+    value: Final = _request_root_path_var.get()
+    if value is not None:
+        return value
+    return os.getenv("SERVER_ROOT_PATH", "")
 
 
 def normalize_root_paths(raw_paths: Sequence[str]) -> tuple[str, ...]:
@@ -78,4 +104,14 @@ class PerRequestRootPathMiddleware:
                 if path == prefix or path.startswith(prefix + "/"):
                     scope["root_path"] = prefix
                     break
+            # Stash the effective root_path (matched prefix, or the scope's
+            # existing value when nothing matched — i.e. FastAPI's scalar
+            # SERVER_ROOT_PATH) so code that emits URLs off the request path
+            # picks the same prefix the router will resolve the request under.
+            token: Final = _request_root_path_var.set(str(scope.get("root_path", "")))
+            try:
+                await self.app(scope, receive, send)
+            finally:
+                _request_root_path_var.reset(token)
+            return
         await self.app(scope, receive, send)

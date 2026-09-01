@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from litellm.proxy.middleware.per_request_root_path_middleware import (
     PerRequestRootPathMiddleware,
+    get_request_root_path,
     get_server_root_paths,
     normalize_root_paths,
 )
@@ -200,3 +201,102 @@ class TestEndToEndRouting:
     def test_unlisted_prefix_404s(self):
         client = _routed_client(["/tenant-a"])
         assert client.get("/tenant-c/where").status_code == 404
+
+
+class TestGetRequestRootPath:
+    """``get_request_root_path`` is the accessor that plumbs the middleware's
+    resolved prefix to code that doesn't have scope in hand — the 401 challenge
+    builders in ``mcp_server_manager`` / ``server`` and ``get_custom_url`` on the
+    SSO callback path. Reading the SERVER_ROOT_PATH scalar there would emit URLs
+    under a prefix the client didn't call, and stack a second prefix onto ones it
+    did (the two review points this fixture pins)."""
+
+    def test_falls_back_to_server_root_path_env_outside_a_request(self, monkeypatch):
+        # Outside a request the middleware's ContextVar is unset. The scalar
+        # env still owns the answer, so pre-middleware call sites (module-load
+        # UI URL builders, background tasks) behave exactly as they did.
+        monkeypatch.setenv("SERVER_ROOT_PATH", "/legacy")
+        assert get_request_root_path() == "/legacy"
+
+    def test_returns_empty_string_when_no_env_and_no_request(self, monkeypatch):
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        assert get_request_root_path() == ""
+
+    def test_returns_matched_prefix_inside_a_request(self, monkeypatch):
+        # With both env vars set, a request matching a SERVER_ROOT_PATHS prefix
+        # must see that prefix — not the SERVER_ROOT_PATH scalar — so the URL
+        # it emits stays under the prefix the router will resolve it against.
+        monkeypatch.setenv("SERVER_ROOT_PATH", "/legacy")
+
+        seen: list[str] = []
+        app = FastAPI()
+
+        @app.get("/where")
+        def where():
+            seen.append(get_request_root_path())
+            return {}
+
+        app.add_middleware(PerRequestRootPathMiddleware, root_paths=["/tenant-a"])
+        client = TestClient(app)
+
+        assert client.get("/tenant-a/where").status_code == 200
+        assert seen == ["/tenant-a"]
+
+    def test_unmatched_request_falls_through_to_scope_scalar(self, monkeypatch):
+        # A request the middleware saw but did not match keeps whatever
+        # scope["root_path"] the app was mounted under (the scalar). The
+        # ContextVar still reflects the effective per-request answer, so
+        # emitted URLs and the router agree even on the fallback path.
+        monkeypatch.setenv("SERVER_ROOT_PATH", "/legacy")
+        seen: list[str] = []
+
+        app = FastAPI(root_path="/legacy")
+
+        @app.get("/where")
+        def where():
+            seen.append(get_request_root_path())
+            return {}
+
+        app.add_middleware(PerRequestRootPathMiddleware, root_paths=["/tenant-a"])
+        client = TestClient(app)
+
+        assert client.get("/legacy/where").status_code == 200
+        assert seen == ["/legacy"]
+
+    def test_each_request_sees_its_own_prefix(self, monkeypatch):
+        # Two sequential requests through the same app must each see the
+        # prefix they arrived under, so one tenant's client is never sent
+        # the URL of another tenant's origin.
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        seen: list[tuple[str, str]] = []
+        app = FastAPI()
+
+        @app.get("/where")
+        def where(tag: str):
+            seen.append((tag, get_request_root_path()))
+            return {}
+
+        app.add_middleware(PerRequestRootPathMiddleware, root_paths=["/tenant-a", "/tenant-b"])
+        client = TestClient(app)
+        assert client.get("/tenant-a/where?tag=a").status_code == 200
+        assert client.get("/tenant-b/where?tag=b").status_code == 200
+        assert seen == [("a", "/tenant-a"), ("b", "/tenant-b")]
+
+    def test_context_var_reset_after_request(self, monkeypatch):
+        # A ContextVar left set after the request finishes would poison the
+        # module-load-time callers that read it lazily (they'd think they were
+        # inside a request under the last-seen prefix).
+        monkeypatch.setenv("SERVER_ROOT_PATH", "/legacy")
+
+        app = FastAPI()
+
+        @app.get("/where")
+        def where():
+            return {"prefix": get_request_root_path()}
+
+        app.add_middleware(PerRequestRootPathMiddleware, root_paths=["/tenant-a"])
+        client = TestClient(app)
+        assert client.get("/tenant-a/where").json() == {"prefix": "/tenant-a"}
+        # After the request finishes, the scalar-env fallback owns the answer
+        # again — nothing was left stashed from the last request's scope.
+        assert get_request_root_path() == "/legacy"

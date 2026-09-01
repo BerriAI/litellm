@@ -148,7 +148,10 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
-from litellm.proxy.utils import PrismaClient, ProxyLogging, get_server_root_path
+from litellm.proxy.middleware.per_request_root_path_middleware import (
+    get_request_root_path,
+)
+from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.table_repositories import MCPServerRepository
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import (
@@ -3548,7 +3551,7 @@ class MCPServerManager:
                 if err.tag == "unauthorized" and isinstance(spec.config, AuthorizationCodeConfig):
                     # authorization_code's missing per-user token -> the per-server browser-OAuth
                     # challenge, built here where the full MCPServer is in hand.
-                    raise_user_oauth_challenge(server, root_path=get_server_root_path())
+                    raise_user_oauth_challenge(server, root_path=get_request_root_path())
                 if err.tag == "unauthorized" and isinstance(spec.config, TokenExchangeConfig):
                     # token_exchange (OBO): a missing/rejected subject token -> the RFC 9728 challenge
                     # pointing at the IdP the client must SSO with to obtain one, rather than an opaque
@@ -3556,7 +3559,7 @@ class MCPServerManager:
                     # Access) threads its claims blob into the challenge for the client to satisfy.
                     raise_token_exchange_challenge(
                         server,
-                        root_path=get_server_root_path(),
+                        root_path=get_request_root_path(),
                         claims=err.unauthorized.claims,
                     )
                 raise_public(err)
@@ -3591,7 +3594,7 @@ class MCPServerManager:
                 if err.tag == "unauthorized":
                     raise_token_exchange_challenge(
                         resolved_server,
-                        root_path=get_server_root_path(),
+                        root_path=get_request_root_path(),
                         claims=err.unauthorized.claims,
                     )
                 raise_public(err)

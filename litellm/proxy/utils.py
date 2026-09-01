@@ -7189,7 +7189,19 @@ def get_custom_url(request_base_url: str, route: str | None = None) -> str:
     else:
         base_url = request_base_url
 
-    server_root_path: Final = get_server_root_path()
+    # get_request_root_path() returns the prefix the router is actually
+    # resolving this request under: the matched SERVER_ROOT_PATHS entry when
+    # PerRequestRootPathMiddleware ran, otherwise the SERVER_ROOT_PATH scalar.
+    # This keeps the emitted URL under one prefix — the one the client called —
+    # instead of stacking the scalar onto a request already living under a
+    # dynamic prefix (which would produce /tenant-a/legacy/... — a path that
+    # doesn't exist). join_paths()'s tail-dedup then collapses the append when
+    # base_url (i.e. request.base_url) already ends in the same prefix.
+    from litellm.proxy.middleware.per_request_root_path_middleware import (  # noqa: PLC0415
+        get_request_root_path,
+    )
+
+    server_root_path: Final = get_request_root_path()
     if route is not None:
         if server_root_path != "":
             # First join base_url with server_root_path, then with route

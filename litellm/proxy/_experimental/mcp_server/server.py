@@ -3841,9 +3841,11 @@ if MCP_AVAILABLE:
                 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415
                     raise_token_exchange_challenge,
                 )
-                from litellm.proxy.utils import get_server_root_path  # noqa: PLC0415
+                from litellm.proxy.middleware.per_request_root_path_middleware import (  # noqa: PLC0415
+                    get_request_root_path,
+                )
 
-                raise_token_exchange_challenge(server, root_path=get_server_root_path())
+                raise_token_exchange_challenge(server, root_path=get_request_root_path())
 
             # token_exchange (OBO) with a subject present: run the exchange here at the transport
             # edge, so a rejected subject raises the RFC 9728 challenge (and a gateway fault its
