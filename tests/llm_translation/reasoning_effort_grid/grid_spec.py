@@ -164,6 +164,13 @@ _CAPS_NONE: FrozenSet[str] = frozenset()
 
 ANTHROPIC_DIRECT_MODELS: Tuple[ModelEntry, ...] = (
     ModelEntry(
+        alias="claude-fable-5-1",
+        model="anthropic/claude-fable-5-1",
+        mode="adaptive",
+        required_env=_ANTHROPIC_REQ,
+        caps=_CAPS_XHIGH_MAX,
+    ),
+    ModelEntry(
         alias="claude-fable-5",
         model="anthropic/claude-fable-5",
         mode="adaptive",
