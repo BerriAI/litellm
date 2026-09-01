@@ -1356,6 +1356,46 @@ class TestBuildBlockSseChunks:
         assert types[3] == "response.output_item.added"
         assert payloads[3]["output_index"] == 1
 
+    def test_continuation_closes_open_function_call_as_incomplete(self):
+        handler = OpenAIResponsesHandler()
+        yielded = [
+            {"type": "response.created", "response": {"id": "resp_live", "model": "gpt-5.4-mini"}},
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "id": "fc_live",
+                    "type": "function_call",
+                    "status": "in_progress",
+                    "call_id": "call_1",
+                    "name": "run_payment",
+                    "arguments": "",
+                },
+            },
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_live",
+                "output_index": 0,
+                "delta": '{"amount": 100}',
+            },
+        ]
+        payloads = self._payloads(
+            handler.build_block_sse_chunks(
+                self._exc(original_response=yielded), stream_started=True, responses_so_far=yielded
+            )
+        )
+        types = [payload["type"] for payload in payloads]
+        assert types[0] == "response.output_item.done"
+        closed = payloads[0]["item"]
+        assert closed["id"] == "fc_live"
+        assert closed["type"] == "function_call"
+        assert closed["status"] == "incomplete"
+        assert closed["name"] == "run_payment"
+        assert "content" not in closed
+        assert types[1] == "response.output_item.added"
+        assert payloads[1]["output_index"] == 1
+        assert types[-1] == "response.completed"
+
     def test_continuation_without_open_item_emits_no_closing_events(self):
         handler = OpenAIResponsesHandler()
         yielded = [
