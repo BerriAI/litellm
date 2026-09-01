@@ -74,10 +74,14 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         drop_params: bool,
     ) -> dict:
         # Force tool-based structured outputs for Bedrock Invoke
-        # (similar to VertexAI fix in #19201)
-        # Bedrock Invoke doesn't support output_format parameter
+        # (similar to VertexAI fix in #19201) unless the model map advertises
+        # native structured output
+        from litellm.utils import supports_native_structured_output
+
         original_model: Final = model
-        if "response_format" in non_default_params:
+        if "response_format" in non_default_params and not supports_native_structured_output(
+            model=model, custom_llm_provider="bedrock"
+        ):
             # Use a model name that forces tool-based approach
             model = "claude-3-sonnet-20240229"
 
