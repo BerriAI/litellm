@@ -1658,7 +1658,19 @@ class CustomStreamWrapper:
                 self.tool_call = True
 
             if hasattr(chunk, "usage") and chunk.usage is not None:
-                model_response.usage = chunk.usage
+                # A provider may attach the final usage to a chunk that still
+                # carries a choice, which routes it here rather than through the
+                # usage-only path. `usage` is not a declared field on
+                # ModelResponseStream, so this assignment does not coerce -- and
+                # cost tracking only understands litellm Usage, so a raw provider
+                # usage model loses prompt_tokens_details with it: cached_tokens
+                # disappear and cached input is billed at the full input rate.
+                usage_from_chunk = chunk.usage
+                if not isinstance(usage_from_chunk, Usage) and hasattr(
+                    usage_from_chunk, "model_dump"
+                ):
+                    usage_from_chunk = Usage(**usage_from_chunk.model_dump())
+                model_response.usage = usage_from_chunk
 
             ## RETURN ARG
             result: Final = self.return_processed_chunk_logic(
