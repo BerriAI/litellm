@@ -77,6 +77,16 @@ def _is_json_array(value: object) -> TypeIs[list[object]]:  # guard-ok: trivial 
     return isinstance(value, list)
 
 
+def _optional_str(value: object) -> str | None:
+    """Keep a JSON payload entry only when it is a string, since the wire format is caller-controlled."""
+    return value if isinstance(value, str) else None
+
+
+def _json_array_or_empty(value: object) -> Sequence[object]:
+    """Narrow a JSON payload entry that the caller iterates, tolerating a missing or malformed value."""
+    return value if _is_json_array(value) else ()
+
+
 def _is_str_mapping(value: object) -> TypeIs[dict[str, str]]:  # guard-ok: verifies every value is str
     return _is_json_object(value) and all(isinstance(item, str) for item in value.values())
 
@@ -94,10 +104,6 @@ class _MutableJsonObject(Protocol):
 
 class _GetsLitellmParams(Protocol):
     def __call__(self, key: str, default: Mapping[str, object], /) -> LiteLLM_Params: ...
-
-
-class _PopsOptionalStr(Protocol):
-    def __call__(self, key: str, default: None, /) -> str | None: ...
 
 
 class _UnmasksPiiText(Protocol):
@@ -124,10 +130,6 @@ class _HasPostStreamingDeploymentHook(Protocol):
 
 
 def _typed_gets_litellm_params(fn: _GetsLitellmParams) -> _GetsLitellmParams:
-    return fn
-
-
-def _typed_pops_optional_str(fn: _PopsOptionalStr) -> _PopsOptionalStr:
     return fn
 
 
@@ -342,7 +344,7 @@ class BaseResponsesAPIStreamingIterator:
                     ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                     ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                 ):
-                    _item: Final = getattr(openai_responses_api_chunk, "item", None)
+                    _item: Final[object] = getattr(openai_responses_api_chunk, "item", None)
                     if _item is not None:
                         ResponsesAPIRequestUtils._encode_container_id_on_output_item(
                             item=_item,
@@ -350,7 +352,7 @@ class BaseResponsesAPIStreamingIterator:
                             model_id=_stream_model_id,
                         )
                 elif _event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED:
-                    _annotation: Final = getattr(openai_responses_api_chunk, "annotation", None)
+                    _annotation: Final[object] = getattr(openai_responses_api_chunk, "annotation", None)
                     if _annotation is not None:
                         ResponsesAPIRequestUtils._encode_container_id_on_output_item(
                             item=_annotation,
@@ -1021,7 +1023,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         transformed: ResponsesAPIResponse,
         logging_obj: LiteLLMLoggingObj,
     ) -> None:
-        self._events: list[ResponsesAPIStreamingResponse] = _build_synthetic_response_events(
+        self._events: Sequence[ResponsesAPIStreamingResponse] = build_synthetic_response_events(
             transformed=transformed,
             logging_obj=logging_obj,
             chunk_size=self.CHUNK_SIZE,
@@ -1088,7 +1090,7 @@ class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         transformed: ResponsesAPIResponse,
         logging_obj: LiteLLMLoggingObj,
     ) -> None:
-        self._events = _build_synthetic_response_events(
+        self._events = build_synthetic_response_events(
             transformed=transformed,
             logging_obj=logging_obj,
             chunk_size=MockResponsesAPIStreamingIterator.CHUNK_SIZE,
@@ -1272,10 +1274,10 @@ def _add_text_like_part_events(
         )
 
 
-def _build_synthetic_response_events(
+def build_synthetic_response_events(
     *,
     transformed: ResponsesAPIResponse,
-    logging_obj: LiteLLMLoggingObj,
+    logging_obj: LiteLLMLoggingObj | None,
     chunk_size: int,
 ) -> list[ResponsesAPIStreamingResponse]:
     openai_types: Final = _get_openai_response_types()
@@ -1310,8 +1312,7 @@ def _build_synthetic_response_events(
         )
 
         if item_type == "message":
-            raw_content_parts = output_item_payload.get("content")
-            content_parts: Sequence[object] = raw_content_parts if _is_json_array(raw_content_parts) else []
+            content_parts: Sequence[object] = _json_array_or_empty(output_item_payload.get("content"))
             for content_index, part in enumerate(content_parts):
                 part_payload = _dump_response_object(part)
                 events.append(
@@ -1359,9 +1360,8 @@ def _build_synthetic_response_events(
                 )
             )
         elif item_type == "reasoning":
-            raw_summary_items = output_item_payload.get("summary")
-            summary_items: Sequence[object] = raw_summary_items if _is_json_array(raw_summary_items) else []
-            for summary_index, summary in enumerate(summary_items):
+            summaries: Sequence[object] = _json_array_or_empty(output_item_payload.get("summary"))
+            for summary_index, summary in enumerate(summaries):
                 summary_payload = _dump_response_object(summary)
                 summary_text = str(summary_payload.get("text") or "")
                 for i in range(0, len(summary_text), chunk_size):
@@ -2518,14 +2518,12 @@ class ManagedResponsesWebSocketHandler:
         # reuse the router-resolved self.model; passing the alias raw to
         # litellm.aresponses fails in get_llm_provider. A genuinely different
         # provider-prefixed per-frame model is still honored.
-        requested_model: Final[str | None] = _typed_pops_optional_str(call_kwargs.pop)("model", None)
+        requested_model: Final[str | None] = _optional_str(call_kwargs.pop("model", None))
         model: Final[str] = (
             self.model if requested_model is None or requested_model == self.model_group else requested_model
         )
 
-        previous_response_id: Final[str | None] = _typed_pops_optional_str(call_kwargs.pop)(
-            "previous_response_id", None
-        )
+        previous_response_id: Final[str | None] = _optional_str(call_kwargs.pop("previous_response_id", None))
         current_messages: Final = self._input_to_messages(call_kwargs.get("input"))
 
         # Fetch history once; reused in both _apply_history and _save_turn_history

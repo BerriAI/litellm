@@ -5,7 +5,7 @@ Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if t
 from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Dict, Final, List, Literal, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -87,7 +87,7 @@ class CheckBatchCost:
             return
         self.batch_processed_support_confirmed = True
 
-    async def _get_user_info(self, batch_id: str, user_id: Optional[str]) -> Dict[str, Any]:
+    async def _get_user_info(self, batch_id: str, user_id: Optional[str]) -> dict[str, str | None]:
         """
         Look up user email and key alias by user_id for enriching the S3 callback metadata.
         Returns a dict with user_api_key_user_email and user_api_key_alias (both may be None).
@@ -97,8 +97,10 @@ class CheckBatchCost:
         if not user_id:
             return {}
         try:
-            user_row = await self.prisma_client.db.litellm_usertable.find_unique(
-                where={"user_id": user_id}
+            user_row: prisma_models.LiteLLM_UserTable | None = (
+                await self.prisma_client.db.litellm_usertable.find_unique(
+                    where={"user_id": user_id}
+                )
             )
             if user_row is None:
                 return {}
@@ -115,8 +117,10 @@ class CheckBatchCost:
         if not api_key:
             return None
         try:
-            key_row = await self.prisma_client.db.litellm_verificationtoken.find_unique(
-                where={"token": api_key}
+            key_row: prisma_models.LiteLLM_VerificationToken | None = (
+                await self.prisma_client.db.litellm_verificationtoken.find_unique(
+                    where={"token": api_key}
+                )
             )
             return getattr(key_row, "key_alias", None) if key_row is not None else None
         except Exception as e:
@@ -128,8 +132,10 @@ class CheckBatchCost:
         if not team_id:
             return None
         try:
-            team_row = await self.prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id}
+            team_row: prisma_models.LiteLLM_TeamTable | None = (
+                await self.prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id}
+                )
             )
             return getattr(team_row, "team_alias", None) if team_row is not None else None
         except Exception as e:
@@ -138,7 +144,7 @@ class CheckBatchCost:
 
     async def _build_creator_attribution_metadata(
         self, job: "LiteLLM_ManagedObjectTable", batch_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Rebuild the spend-tracking metadata for the key, team, and tags that created the
         batch so the batch-cost spend log is attributed the same way a non-batch request
@@ -152,7 +158,7 @@ class CheckBatchCost:
         team_id = getattr(job, "team_id", None)
         request_tags = getattr(job, "request_tags", None)
 
-        metadata: Dict[str, Any] = {
+        metadata: dict[str, object] = {
             "user_api_key_user_id": job.created_by,
             "user_api_key": api_key,
             "user_api_key_team_id": team_id,

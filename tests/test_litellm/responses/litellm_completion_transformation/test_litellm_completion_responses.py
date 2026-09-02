@@ -124,6 +124,25 @@ class TestLiteLLMCompletionResponsesConfig:
         assert "extra_field" not in result["file"]
         assert "another_field" not in result["file"]
 
+    def test_transform_input_file_item_to_file_item_keeps_filename(self):
+        """OpenAI rejects file_data with no filename beside it, so dropping it 400s the request"""
+        result = (
+            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+                {
+                    "type": "input_file",
+                    "filename": "report.pdf",
+                    "file_data": "data:application/pdf;base64,JVBERi0=",
+                }
+            )
+        )
+        assert result == {
+            "type": "file",
+            "file": {
+                "file_data": "data:application/pdf;base64,JVBERi0=",
+                "filename": "report.pdf",
+            },
+        }
+
     def test_transform_input_file_item_to_file_item_with_file_url(self):
         """file_url should be mapped to file_id for downstream URL handling"""
         result = (
@@ -629,6 +648,72 @@ class TestLiteLLMCompletionResponsesConfig:
 
         assert responses_api_response.status == "incomplete"
 
+    def test_tool_call_only_response_emits_no_null_text_message_item(self):
+        """A tool-calls-only turn (message content None, e.g. from Anthropic)
+        must not emit a message output item whose output_text has text null.
+        OpenAI rejects such an item on replay with
+        "Invalid type for 'input[..].content[..].text': expected a string, but
+        got null instead." Native OpenAI tool-only turns carry no message item."""
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-sonnet-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="toolu_01OnlyToolCall",
+                                type="function",
+                                function=Function(name="get_weather", arguments='{"city": "SF"}'),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="what's the weather in SF?",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+        output_types = [item.type for item in responses_api_response.output]
+        assert "message" not in output_types
+        assert "function_call" in output_types
+
+    def test_content_bearing_response_still_emits_message_item(self):
+        """Turns with real text content must keep their message output item."""
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-sonnet-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="It is sunny.", role="assistant"),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="what's the weather in SF?",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+        message_items = [item for item in responses_api_response.output if item.type == "message"]
+        assert len(message_items) == 1
+        assert message_items[0].content[0].text == "It is sunny."
+
     def test_transform_chat_completion_response_preserves_hidden_params(self):
         """Test that _hidden_params from chat completion response are preserved in responses API response"""
         # Setup
@@ -965,6 +1050,55 @@ class TestFunctionCallTransformation:
         )
 
         assert result[0]["tool_calls"][0]["function"]["arguments"] == "{}"
+
+    def test_function_call_transformation_json_encodes_object_arguments(self):
+        """A decoded arguments object must be JSON-encoded, not str()'d.
+
+        Clients and providers sometimes send `arguments` as an object rather
+        than a JSON string; `str()` on a dict produces a Python repr with
+        single quotes, which downstream JSON parsers reject with errors like
+        "Expecting ',' delimiter".
+        """
+        function_call_item = {
+            "type": "function_call",
+            "name": "shell",
+            "arguments": {"command": "ls", "timeout": 30, "flags": ["-l", "-a"]},
+            "call_id": "call_123",
+            "id": "call_123",
+            "status": "completed",
+        }
+
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+            function_call=function_call_item
+        )
+
+        arguments = result[0].get("tool_calls", [])[0].get("function", {}).get("arguments")
+        assert json.loads(arguments) == {"command": "ls", "timeout": 30, "flags": ["-l", "-a"]}
+        assert "'" not in arguments
+
+    def test_create_tool_call_chunk_json_encodes_object_arguments(self):
+        """Cached tool_call definitions with object arguments stay valid JSON."""
+        chunk = LiteLLMCompletionResponsesConfig._create_tool_call_chunk(
+            tool_use_definition={
+                "id": "call_456",
+                "type": "function",
+                "function": {"name": "shell", "arguments": {"command": "ls"}},
+            },
+            tool_call_id="call_456",
+            index=0,
+        )
+
+        assert json.loads(chunk["function"]["arguments"]) == {"command": "ls"}
+
+    def test_create_tool_call_chunk_keeps_empty_arguments_default(self):
+        """Missing arguments still fall back to an empty JSON object."""
+        chunk = LiteLLMCompletionResponsesConfig._create_tool_call_chunk(
+            tool_use_definition={"id": "call_789", "type": "function", "function": {"name": "shell"}},
+            tool_call_id="call_789",
+            index=0,
+        )
+
+        assert chunk["function"]["arguments"] == "{}"
 
     def test_complete_input_transformation_with_function_calls(self):
         """Test the complete transformation with the exact input from the issue"""
@@ -3275,6 +3409,7 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._pending_tool_events = []
         iterator._tool_output_index_by_call_id = {}
         iterator._tool_args_by_call_id = {}
+        iterator._tool_item_id_by_call_id = {}
         iterator._tool_call_id_by_index = {}
         iterator._ambiguous_tool_call_indexes = set()
         iterator._next_tool_output_index = 1
