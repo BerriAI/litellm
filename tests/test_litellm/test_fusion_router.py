@@ -1,7 +1,7 @@
 import asyncio
 import json
 from collections.abc import Mapping
-from typing import Final
+from typing import Final, cast
 
 import pytest
 
@@ -157,6 +157,8 @@ async def test_panel_gets_only_function_schemas_and_aggregator_owns_tool_call() 
     aggregator_call = completion.calls[-1]
     assert aggregator_call["tools"] == [function_tool, hosted_tool]
     assert aggregator_call["tool_choice"] == hosted_tool_choice
+    aggregator_metadata = cast(Mapping[str, object], aggregator_call["litellm_metadata"])
+    assert aggregator_metadata["user_api_key_budget_reservation"] == {"id": "must-not-propagate"}
     aggregator_messages = aggregator_call["messages"]
     assert isinstance(aggregator_messages, list)
     instruction = str(aggregator_messages[0]["content"])
@@ -306,6 +308,14 @@ async def test_router_registers_and_executes_fusion_deployment() -> None:
     assert response.choices[0].message.content == "Final"
     deployment = router.get_deployment(model_id=router.model_list[-1]["model_info"]["id"])
     assert deployment is not None
+
+    router._unregister_fusion_router_for_deployment(  # pyright: ignore[reportPrivateUsage]  # regression covers registry lifecycle
+        deployment
+    )
+    assert "fusion/test" not in router.fusion_routers
+    router.init_fusion_router_deployment(deployment)
+    assert "fusion/test" in router.fusion_routers
+
     router.delete_deployment(id=deployment.model_info.id)
     assert "fusion/test" not in router.fusion_routers
 
@@ -341,8 +351,12 @@ async def test_router_responses_api_bridges_through_the_same_fusion_model() -> N
     router = Router(model_list=_router_model_list())
 
     response = await router.aresponses(model="fusion/test", input="Answer")
+    direct_response = await router._fusion_aware_aresponses(  # pyright: ignore[reportPrivateUsage]  # regression covers the Fusion bridge
+        model="fusion/test", input="Answer"
+    )
 
     assert response.output[0].content[0].text == "Final"
+    assert direct_response.output[0].content[0].text == "Final"
     with pytest.raises(litellm.BadRequestError, match="Background Responses"):
         await router.aresponses(model="fusion/test", input="Answer", background=True)
 
@@ -361,17 +375,27 @@ async def test_router_anthropic_messages_bridges_through_the_same_fusion_model()
         messages=[{"role": "user", "content": "Answer"}],
         max_tokens=256,
     )
+    direct_response = await router._fusion_aware_aanthropic_messages(  # pyright: ignore[reportPrivateUsage]  # regression covers the Fusion bridge
+        model="fusion/test",
+        messages=[{"role": "user", "content": "Answer"}],
+        max_tokens=256,
+    )
 
     assert response["content"][0]["text"] == "Final"
     assert alias_response["content"][0]["text"] == "Final"
+    assert direct_response["content"][0]["text"] == "Final"
 
 
 def test_sync_responses_api_supports_nonstreaming_fusion() -> None:
     router = Router(model_list=_router_model_list())
 
     response = router.responses(model="fusion/test", input="Answer")
+    direct_response = router._fusion_aware_responses(  # pyright: ignore[reportPrivateUsage]  # regression covers the Fusion bridge
+        model="fusion/test", input="Answer"
+    )
 
     assert response.output[0].content[0].text == "Final"
+    assert direct_response.output[0].content[0].text == "Final"
     with pytest.raises(litellm.BadRequestError, match="Synchronous Responses streaming"):
         router.responses(model="fusion/test", input="Answer", stream=True)
 

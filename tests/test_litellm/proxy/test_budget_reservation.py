@@ -1048,6 +1048,60 @@ async def test_should_reserve_tiered_pricing_cost(spend_counter_state):
     await release_budget_reservation(reservation)
 
 
+def test_fusion_reservation_sums_panels_and_candidate_inflated_aggregator() -> None:
+    router = Router(
+        model_list=[
+            {
+                "model_name": "panel-a",
+                "litellm_params": {"model": "openai/panel-a", "api_key": "fake"},
+            },
+            {
+                "model_name": "panel-b",
+                "litellm_params": {"model": "openai/panel-b", "api_key": "fake"},
+            },
+            {
+                "model_name": "aggregator",
+                "litellm_params": {"model": "openai/aggregator", "api_key": "fake"},
+            },
+            {
+                "model_name": "fusion/test",
+                "litellm_params": {
+                    "model": "fusion_router",
+                    "fusion_router_config": {
+                        "panel_models": ["panel-a", "panel-b"],
+                        "aggregator_model": "aggregator",
+                        "max_candidate_chars": 1000,
+                    },
+                },
+            },
+        ]
+    )
+    request_body = {
+        "model": "fusion/test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 10,
+    }
+
+    def child_estimate(*, model: str, input_tokens: int | None = None, **_: object) -> float:
+        if model == "aggregator":
+            assert input_tokens is not None
+            assert input_tokens >= 9000
+            return 3.0
+        return {"panel-a": 1.0, "panel-b": 2.0}[model]
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation._estimate_request_max_cost_for_model",
+        side_effect=child_estimate,
+    ):
+        estimated = estimate_request_max_cost(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=router,
+        )
+
+    assert estimated == pytest.approx(6.0)
+
+
 def test_tiered_reservation_is_all_or_nothing_with_output_tier_from_input_length():
     """Dashscope tiered pricing is all-or-nothing: the tier is chosen by the total
     input tokens and every token (input and output) is billed at that tier's rate.
@@ -2264,6 +2318,7 @@ async def test_should_reserve_all_budgeted_counters(spend_counter_state):
             proxy_logging_obj=proxy_logging_obj,
         )
 
+    assert reservation is not None
     assert (
         counter_cache.in_memory_cache.get_cache(key="spend:key:key-budget-all") == 0.3
     )

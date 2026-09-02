@@ -9,12 +9,12 @@ import { modelCreationScope } from "@/utils/modelPermissions";
 import { FusionModelsPanel } from "../components/FusionModels/FusionModelsPanel";
 
 export default function FusionModelsTabPanel() {
-  const { accessToken, userRole, userId: userID } = useAuthorized();
+  const { accessToken, userRole, userId: userID, isViewOnly } = useAuthorized();
   const { data: teams } = useTeams();
   const { data: uiSettings } = useUISettings();
   const isInternalUser = userRole != null && internalUserRoles.includes(userRole);
   const scope = modelCreationScope(
-    { userRole, userID },
+    { userRole, userID, isViewOnly },
     {
       teams: teams ?? null,
       disabledForInternalUsers: isInternalUser && uiSettings?.values?.disable_model_add_for_internal_users === true,
@@ -26,6 +26,7 @@ export default function FusionModelsTabPanel() {
       accessToken={accessToken}
       userRole={userRole ?? ""}
       userID={userID ?? null}
+      isViewOnly={isViewOnly}
       teams={teams ?? null}
       createScope={scope}
     />

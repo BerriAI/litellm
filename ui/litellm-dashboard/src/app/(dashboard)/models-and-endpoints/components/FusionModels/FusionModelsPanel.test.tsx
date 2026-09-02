@@ -62,7 +62,14 @@ const existingDeployment = {
 
 const renderPanel = (createScope: "unscoped-ok" | "team-required" = "unscoped-ok") =>
   render(
-    <FusionModelsPanel accessToken="token" userRole="Admin" userID="user-1" teams={[]} createScope={createScope} />,
+    <FusionModelsPanel
+      accessToken="token"
+      userRole="Admin"
+      userID="user-1"
+      isViewOnly={false}
+      teams={[]}
+      createScope={createScope}
+    />,
   );
 
 describe("FusionModelsPanel", () => {

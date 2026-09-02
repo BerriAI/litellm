@@ -55,19 +55,20 @@ describe("Fusion model configuration", () => {
   });
 
   it("parses stored configs defensively and supplies stable defaults", () => {
-    expect(
-      parseFusionConfig({
-        panel_models: ["a", "a", "b", 4],
-        aggregator_model: "judge",
-        on_quorum_failure: "aggregator_only",
-      }),
-    ).toEqual({
+    const expectedConfig = {
       panel_models: ["a", "b"],
       aggregator_model: "judge",
       min_successful_panelists: 2,
       panel_timeout_seconds: 120,
       max_candidate_chars: 12000,
       on_quorum_failure: "aggregator_only",
-    });
+    };
+    expect(
+      parseFusionConfig({
+        panel_models: ["a", "a", "b", 4],
+        aggregator_model: "judge",
+        on_quorum_failure: "aggregator_only",
+      }),
+    ).toEqual(expectedConfig);
   });
 });

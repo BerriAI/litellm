@@ -1012,7 +1012,7 @@ def estimate_request_max_cost(
     input_token_counts: Mapping[str, int] | None = None,
 ) -> float | None:
     estimates = [
-        _estimate_request_max_cost_for_model(
+        _estimate_request_model_max_cost(
             request_body=request_body,
             route=route,
             model=model_name,
@@ -1025,6 +1025,64 @@ def estimate_request_max_cost(
     if not estimates:
         return None
     return max(cast(list[float], estimates))
+
+
+def _estimate_request_model_max_cost(
+    request_body: dict,
+    route: str,
+    model: str,
+    llm_router: Router | None,
+    input_tokens: int | None = None,
+) -> float | None:
+    """Estimate one selectable model, expanding Fusion into every billable child call."""
+    registered_model_name: Final = (
+        llm_router._get_model_from_alias(model=model) or model  # pyright: ignore[reportPrivateUsage]  # admission must price the routed group
+        if llm_router is not None
+        else model
+    )
+    fusion_router: Final = (
+        llm_router.fusion_routers.get(registered_model_name) if llm_router is not None else None
+    )
+    if fusion_router is None:
+        return _estimate_request_max_cost_for_model(
+            request_body=request_body,
+            route=route,
+            model=model,
+            llm_router=llm_router,
+            input_tokens=input_tokens,
+        )
+
+    panel_estimates: Final = tuple(
+        _estimate_request_max_cost_for_model(
+            request_body=request_body,
+            route=route,
+            model=panel_model,
+            llm_router=llm_router,
+        )
+        for panel_model in fusion_router.config.panel_models
+    )
+    original_aggregator_tokens: Final = _count_input_tokens(
+        request_body=request_body,
+        model=fusion_router.config.aggregator_model,
+    )
+    # Four tokens per bounded character plus fixed protocol headroom safely covers
+    # candidate serialization without materializing a synthetic prompt at admission.
+    candidate_token_ceiling: Final = (
+        4 * fusion_router.config.max_candidate_chars * len(fusion_router.config.panel_models)
+    ) + 1024
+    aggregator_input_tokens: Final = (
+        original_aggregator_tokens + candidate_token_ceiling if original_aggregator_tokens is not None else None
+    )
+    aggregator_estimate: Final = _estimate_request_max_cost_for_model(
+        request_body=request_body,
+        route=route,
+        model=fusion_router.config.aggregator_model,
+        llm_router=llm_router,
+        input_tokens=aggregator_input_tokens,
+    )
+    child_estimates: Final = (*panel_estimates, aggregator_estimate)
+    known_estimates: Final = tuple(estimate for estimate in child_estimates if estimate is not None)
+    return sum(known_estimates) if known_estimates else None
 
 
 def estimate_request_input_cost(

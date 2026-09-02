@@ -34,6 +34,7 @@ interface FusionModelsPanelProps {
   accessToken: string;
   userRole: string;
   userID: string | null;
+  isViewOnly: boolean;
   teams: Team[] | null;
   createScope: ModelWriteScope;
 }
@@ -293,7 +294,14 @@ function FusionModelDialog({
   );
 }
 
-export function FusionModelsPanel({ accessToken, userRole, userID, teams, createScope }: FusionModelsPanelProps) {
+export function FusionModelsPanel({
+  accessToken,
+  userRole,
+  userID,
+  isViewOnly,
+  teams,
+  createScope,
+}: FusionModelsPanelProps) {
   const { data: deployments, isLoading } = useFusionRouters();
   const availableModels = usePlainModelGroups();
   const invalidateFusionRouters = useInvalidateFusionRouters();
@@ -305,7 +313,7 @@ export function FusionModelsPanel({ accessToken, userRole, userID, teams, create
   const modelOptions = useMemo(() => Array.from(availableModels).sort(), [availableModels]);
 
   const canModify = (deployment: AutoRouterDeployment) =>
-    canModifyModel({ userRole, userID }, teams, {
+    canModifyModel({ userRole, userID, isViewOnly }, teams, {
       teamId: deployment.model_info?.team_id,
       isDbModel: deployment.model_info?.db_model === true,
     });
