@@ -9,6 +9,10 @@ pyo3::create_exception!(
     "The route declined before calling the provider, so the host may retry on its own path."
 );
 
+pub(crate) fn declined(error: impl std::fmt::Display) -> PyErr {
+    RustBridgeDeclined::new_err(error.to_string())
+}
+
 pyo3::create_exception!(
     _native,
     RustUpstreamError,
@@ -34,6 +38,12 @@ pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
 pub(crate) fn fallback_route_error_to_pyerr(err: Error) -> PyErr {
     match err {
         Error::Unsupported(_) => RustBridgeDeclined::new_err(err.to_string()),
+        other => executed_route_error_to_pyerr(other),
+    }
+}
+
+pub(crate) fn executed_route_error_to_pyerr(err: Error) -> PyErr {
+    match err {
         Error::Http { status, body } => {
             RustUpstreamError::new_err((status, format!("{status}: {body}")))
         }
@@ -93,6 +103,11 @@ mod tests {
                     .expect("upstream error should carry status and message");
                 assert_eq!(args, (expected.0, expected.1.to_string()));
             }
+
+            let midstream = executed_route_error_to_pyerr(Error::Unsupported(
+                "a stream cannot fall back after opening",
+            ));
+            assert!(midstream.is_instance_of::<RustUpstreamError>(py));
         });
     }
 }
