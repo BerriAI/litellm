@@ -7,10 +7,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from litellm.proxy.middleware.admission_control_middleware import (
-    _get_admission_control_settings,
     AdmissionControlMiddleware,
     AdmissionControlSettings,
     AdmissionControlStats,
+    get_admission_control_settings,
     get_admission_control_stats,
 )
 
@@ -236,4 +236,4 @@ def test_get_admission_control_settings(
     settings: dict[str, object],
     expected: AdmissionControlSettings | None,
 ) -> None:
-    assert _get_admission_control_settings(settings) == expected
+    assert get_admission_control_settings(settings) == expected

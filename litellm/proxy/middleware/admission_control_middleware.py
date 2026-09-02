@@ -1,16 +1,16 @@
 import asyncio
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Final, Protocol, TypeAlias, runtime_checkable
 
 from pydantic import TypeAdapter, ValidationError
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-AdmissionControlSettingsGetter: TypeAlias = Callable[  # mutable-ok: Callable syntax uses a list-shaped type argument
-    [], "AdmissionControlSettings | None"  # mutable-ok: Callable syntax uses a list-shaped type argument
-]
+AdmissionControlSettingsGetter: TypeAlias = Callable[
+    [], "AdmissionControlSettings | None"
+]  # mutable-ok: Callable typing syntax is parsed as a list literal
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,7 +184,7 @@ class AdmissionControlMiddleware:
                 "litellm_admission_queued_requests",
                 "Number of requests queued by this worker",
             )
-            rejected_counter: Final = Counter(  # mutable-ok: prometheus Counter must be constructed at runtime
+            rejected_counter: Final = Counter(  # mutable-ok: Prometheus requires runtime Counter construction
                 "litellm_admission_rejected_requests_total",
                 "Number of requests rejected by this worker",
                 labelnames=("reason",),
@@ -192,7 +192,7 @@ class AdmissionControlMiddleware:
             cls._admitted_gauge = admitted_gauge
             cls._queued_gauge = queued_gauge
             cls._rejected_counter = rejected_counter
-        except Exception:  # noqa: BLE001  # Prometheus registration failures are non-fatal
+        except Exception:
             cls._admitted_gauge = None
             cls._queued_gauge = None
             cls._rejected_counter = None
@@ -214,15 +214,7 @@ def get_admission_control_stats() -> AdmissionControlStats:
     return AdmissionControlMiddleware.get_stats()
 
 
-def get_admission_control_settings(
-    settings: dict[str, object],  # mutable-ok: proxy settings are held in a mutable configuration dictionary
-) -> AdmissionControlSettings | None:
-    return _get_admission_control_settings(settings)
-
-
-def _get_admission_control_settings(  # mutable-ok: settings is provided by the mutable proxy configuration store
-    settings: dict[str, object],  # mutable-ok: helper contract receives the proxy configuration dictionary
-) -> AdmissionControlSettings | None:
+def get_admission_control_settings(settings: Mapping[str, object]) -> AdmissionControlSettings | None:
     max_in_flight_raw: Final = settings.get("max_in_flight_requests_per_worker")
     if max_in_flight_raw is None:
         return None
@@ -232,13 +224,9 @@ def _get_admission_control_settings(  # mutable-ok: settings is provided by the 
             return None
         max_queued_raw: Final = settings.get("max_queued_requests_per_worker")
         max_queued: Final = (
-            max_in_flight
-            if max_queued_raw is None
-            else TypeAdapter(int).validate_python(max_queued_raw)
+            max_in_flight if max_queued_raw is None else TypeAdapter(int).validate_python(max_queued_raw)
         )
-        queue_timeout: Final = TypeAdapter(float).validate_python(
-            settings.get("admission_queue_timeout_seconds", 1.0)
-        )
+        queue_timeout: Final = TypeAdapter(float).validate_python(settings.get("admission_queue_timeout_seconds", 1.0))
     except ValidationError:
         return None
     return AdmissionControlSettings(
@@ -251,20 +239,19 @@ def _get_admission_control_settings(  # mutable-ok: settings is provided by the 
 async def _send_overloaded_response(send: Send) -> None:
     stats: Final = get_admission_control_stats()
     body: Final = json.dumps(
-        {  # mutable-ok: json.dumps requires a plain response mapping
-            "error": {  # mutable-ok: json.dumps requires a plain nested response mapping
+        {  # mutable-ok: JSON serialization requires a plain response mapping
+            "error": {  # mutable-ok: JSON serialization requires a nested response mapping
                 "message": (
-                    f"Worker at capacity: {stats.admitted} in-flight, "
-                    f"{stats.queued} queued requests. Retry later."
+                    f"Worker at capacity: {stats.admitted} in-flight, {stats.queued} queued requests. Retry later."
                 ),
                 "type": "overloaded_error",
                 "code": "503",
             }
-        },  # mutable-ok: json.dumps requires a plain nested response mapping
+        },
         separators=(",", ":"),
     ).encode("utf-8")
     await send(
-        {  # mutable-ok: ASGI requires a mutable response message mapping
+        {  # mutable-ok: ASGI requires a response message mapping
             "type": "http.response.start",
             "status": 503,
             "headers": (
@@ -275,7 +262,7 @@ async def _send_overloaded_response(send: Send) -> None:
         }
     )
     await send(
-        {  # mutable-ok: ASGI requires a mutable response message mapping
+        {  # mutable-ok: ASGI requires a response message mapping
             "type": "http.response.body",
             "body": body,
             "more_body": False,
