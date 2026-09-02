@@ -11,11 +11,13 @@ warnings.filterwarnings("ignore", message=".*Accessing the.*attribute on the ins
 # cannot enforce it at runtime, which floods proxy boot once such a type is schema-walked
 warnings.filterwarnings("ignore", message=".*`ReadOnly` qualifier.*")
 ### INIT VARIABLES #########################
-import threading
 import os
+import threading
 
 # Load .env before any other litellm imports so env vars (e.g. LITELLM_UI_SESSION_DURATION) are available
 import dotenv as _dotenv
+
+from ._dotenv_loader import should_load_dotenv as _should_load_dotenv
 
 
 def _dev_env_hot_reload_enabled() -> bool:
@@ -26,7 +28,7 @@ def _dev_env_hot_reload_enabled() -> bool:
     return os.getenv("LITELLM_DEV_ENV_HOT_RELOAD") == "True"
 
 
-if os.getenv("LITELLM_MODE", "DEV") == "DEV":
+if _should_load_dotenv():
     _dotenv.load_dotenv(override=_dev_env_hot_reload_enabled())
 
 from collections.abc import Sequence
