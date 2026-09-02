@@ -5110,6 +5110,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/get/mcp_tool_search_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Mcp Tool Search Settings
+         * @description Get the `litellm_settings.mcp_tool_search` configuration used by the native `mcp_tool_search` virtual tool.
+         */
+        get: operations["get_mcp_tool_search_settings_get_mcp_tool_search_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/get/sso_settings": {
         parameters: {
             query?: never;
@@ -16124,6 +16144,27 @@ export interface paths {
          *     Settings will be picked up by all pods within approximately 10 seconds via background polling.
          */
         patch: operations["update_mcp_semantic_filter_settings_update_mcp_semantic_filter_settings_patch"];
+        trace?: never;
+    };
+    "/update/mcp_tool_search_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Mcp Tool Search Settings
+         * @description Update `litellm_settings.mcp_tool_search` in the database.
+         *     Settings will be picked up by all pods within approximately 10 seconds via background polling.
+         */
+        patch: operations["update_mcp_tool_search_settings_update_mcp_tool_search_settings_patch"];
         trace?: never;
     };
     "/update/sso_settings": {
@@ -31112,6 +31153,49 @@ export interface components {
             rejected: number;
             /** Total */
             total: number;
+        };
+        /**
+         * MCPToolSearchSettings
+         * @description `litellm_settings.mcp_tool_search`: how the native `mcp_tool_search` virtual tool ranks the caller's tools.
+         */
+        MCPToolSearchSettings: {
+            /**
+             * Core Tools
+             * @description Tool names always returned first when the caller can access them, e.g. `my_server-get_rates`.
+             * @default []
+             */
+            core_tools: string[];
+            /**
+             * Embedding Model
+             * @description Embedding model from model_list used to rank tools by meaning. Unset keeps keyword matching.
+             */
+            embedding_model?: string | null;
+            /**
+             * Similarity Threshold
+             * @description Lowest cosine similarity a tool needs to appear in semantic results (0.0 = no cutoff).
+             * @default 0
+             */
+            similarity_threshold: number;
+            /**
+             * Top K
+             * @description Most ranked tools a search returns. A smaller top_k in the tool call wins. Core tools do not count.
+             * @default 5
+             */
+            top_k: number;
+        };
+        /**
+         * MCPToolSearchSettingsResponse
+         * @description Response model for native MCP tool search settings
+         */
+        MCPToolSearchSettingsResponse: {
+            /** Field Schema */
+            field_schema: {
+                [key: string]: unknown;
+            };
+            /** Values */
+            values: {
+                [key: string]: unknown;
+            };
         };
         /** MCPToolsetTool */
         MCPToolsetTool: {
@@ -46645,6 +46729,26 @@ export interface operations {
             };
         };
     };
+    get_mcp_tool_search_settings_get_mcp_tool_search_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPToolSearchSettingsResponse"];
+                };
+            };
+        };
+    };
     get_sso_settings_get_sso_settings_get: {
         parameters: {
             query?: never;
@@ -58963,6 +59067,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_mcp_tool_search_settings_update_mcp_tool_search_settings_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MCPToolSearchSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

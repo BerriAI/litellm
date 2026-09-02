@@ -2,20 +2,31 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypedDict, assert_never
 
+from pydantic import ValidationError
 from typing_extensions import ReadOnly, Required
 
 import litellm
 from litellm.proxy.agent_endpoints.agent_search import DEFAULT_AGENT_SEARCH_TOP_K
+from litellm.proxy.common_utils.semantic_text_index import (
+    Embedder,
+    EmbeddingFailed,
+    SemanticTextIndex,
+    router_embedder,
+)
+from litellm.types.mcp import MCPToolSearchSettings
 
 if TYPE_CHECKING:
-    from mcp.types import CallToolResult
+    from mcp.types import CallToolResult, Tool
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
 
+MCP_TOOL_SEARCH_SETTINGS_KEY: Final[str] = "mcp_tool_search"
 MCP_TOOL_SEARCH_TOOL_NAME: Final[str] = "mcp_tool_search"
 MCP_TOOL_CALL_TOOL_NAME: Final[str] = "mcp_tool_call"
 AGENT_SEARCH_TOOL_NAME: Final[str] = "agent_search"
@@ -29,17 +40,91 @@ def coerce_top_k(value: Any, default: int = 5) -> int:
         return default
 
 
-def search_tools(query: str, tools: list[dict[str, Any]], top_k: int = 5) -> list[dict[str, Any]]:
+class ToolSearchResult(TypedDict, total=False):
+    name: Required[ReadOnly[str]]
+    description: Required[ReadOnly[str]]
+    inputSchema: Required[ReadOnly[Mapping[str, object]]]
+    score: ReadOnly[float]
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticToolRanker:
+    embed: Embedder
+    embedding_model: str
+    index: SemanticTextIndex
+
+
+global_mcp_tool_search_index: Final = SemanticTextIndex()
+
+
+def mcp_tool_search_settings() -> MCPToolSearchSettings | ValidationError:
+    try:
+        return MCPToolSearchSettings.model_validate(litellm.mcp_tool_search or {})
+    except ValidationError as exc:
+        return exc
+
+
+def _tool_result(tool: Tool) -> ToolSearchResult:
+    return {"name": tool.name, "description": tool.description or "", "inputSchema": tool.inputSchema}
+
+
+def _scored_result(tool: Tool, score: float) -> ToolSearchResult:
+    return {"name": tool.name, "description": tool.description or "", "inputSchema": tool.inputSchema, "score": score}
+
+
+def _tool_text(tool: Tool) -> str:
+    return "\n".join(part for part in (tool.name, tool.description or "") if part)
+
+
+def _keyword_score(query: str, tool: Tool) -> float:
+    haystack: Final = _tool_text(tool).lower()
+    return float(sum(1 for token in query.lower().split() if token in haystack))
+
+
+def _split_core_tools(tools: Sequence[Tool], core_tools: Sequence[str]) -> tuple[tuple[Tool, ...], tuple[Tool, ...]]:
+    by_name: Final = MappingProxyType({tool.name: tool for tool in tools})
+    core: Final = tuple(by_name[name] for name in dict.fromkeys(core_tools) if name in by_name)
+    rest: Final = tuple(tool for tool in tools if tool.name not in frozenset(core_tools))
+    return core, rest
+
+
+def _top_hits(
+    tools: Sequence[Tool], scores: Sequence[float], minimum: float, limit: int
+) -> tuple[tuple[float, Tool], ...]:
+    hits: Final = ((score, tool) for score, tool in zip(scores, tools, strict=True) if score >= minimum)
+    return tuple(sorted(hits, key=lambda hit: hit[0], reverse=True)[:limit])
+
+
+def search_tools(query: str, tools: Sequence[Tool], top_k: int = 5) -> tuple[ToolSearchResult, ...]:
+    """Keyword fallback used when no embedding model is configured: one point per query token found in the tool."""
     if not query:
-        return []
-    tokens: Final = query.lower().split()
+        return ()
+    scores: Final = tuple(_keyword_score(query, tool) for tool in tools)
+    return tuple(_tool_result(tool) for _, tool in _top_hits(tools, scores, minimum=1.0, limit=top_k))
 
-    def _score(tool: dict[str, Any]) -> int:
-        haystack: Final = (tool.get("name", "") + " " + tool.get("description", "")).lower()
-        return sum(1 for t in tokens if t in haystack)
 
-    scored: Final = ((s, tool) for tool in tools if (s := _score(tool)) > 0)
-    return [tool for _, tool in sorted(scored, key=lambda x: x[0], reverse=True)[:top_k]]
+async def search_mcp_tools(
+    query: str,
+    tools: Sequence[Tool],
+    top_k: int,
+    settings: MCPToolSearchSettings,
+    ranker: SemanticToolRanker | None,
+) -> tuple[ToolSearchResult, ...] | EmbeddingFailed:
+    """Core tools the caller can access come first, then up to `top_k` ranked matches from the remaining tools."""
+    core, rest = _split_core_tools(tools, settings.core_tools)
+    limit: Final = min(top_k, settings.top_k)
+    core_results: Final = tuple(_tool_result(tool) for tool in core)
+    if ranker is None:
+        return (*core_results, *search_tools(query, rest, limit))
+    if not query:
+        return core_results
+    scores: Final = await ranker.index.scores(
+        query, tuple(_tool_text(tool) for tool in rest), ranker.embed, ranker.embedding_model
+    )
+    if isinstance(scores, EmbeddingFailed):
+        return scores
+    hits: Final = _top_hits(rest, scores, minimum=settings.similarity_threshold, limit=limit)
+    return (*core_results, *(_scored_result(tool, score) for score, tool in hits))
 
 
 class _ToolParamSchema(TypedDict, total=False):
@@ -66,11 +151,17 @@ def _json_array(*items: str) -> Sequence[str]:
 
 _MCP_TOOL_SEARCH_DEFINITION: Final[VirtualToolDefinition] = {
     "name": MCP_TOOL_SEARCH_TOOL_NAME,
-    "description": "Search for MCP tools by keyword. Returns top matching tools with names, descriptions, and input schemas.",
+    "description": (
+        "Search for MCP tools by describing what you need. "
+        "Returns top matching tools with names, descriptions, and input schemas."
+    ),
     "inputSchema": {
         "type": "object",
         "properties": {
-            "query": {"type": "string", "description": "Keywords to search for in tool names and descriptions."},
+            "query": {
+                "type": "string",
+                "description": "What the tool should do, matched against names and descriptions.",
+            },
             "top_k": {"type": "integer", "description": "Maximum number of results to return.", "default": 5},
         },
         "required": _json_array("query"),
@@ -165,10 +256,28 @@ async def handle_mcp_tool_search(
     oauth2_headers: dict[str, str] | None = None,
     raw_headers: dict[str, str] | None = None,
 ) -> CallToolResult:
-    from mcp.types import CallToolResult, TextContent
-
     from litellm.proxy._experimental.mcp_server.server import _list_mcp_tools
+    from litellm.proxy.proxy_server import llm_router
 
+    settings: Final = mcp_tool_search_settings()
+    if isinstance(settings, ValidationError):
+        return _text_tool_result(
+            f"litellm_settings.{MCP_TOOL_SEARCH_SETTINGS_KEY} is invalid: {settings}", is_error=True
+        )
+    if settings.embedding_model is not None and llm_router is None:
+        return _text_tool_result(
+            f"litellm_settings.{MCP_TOOL_SEARCH_SETTINGS_KEY}.embedding_model needs a model_list so it can be called",
+            is_error=True,
+        )
+    ranker: Final = (
+        SemanticToolRanker(
+            embed=router_embedder(llm_router, settings.embedding_model, user_api_key_dict),
+            embedding_model=settings.embedding_model,
+            index=global_mcp_tool_search_index,
+        )
+        if settings.embedding_model is not None and llm_router is not None
+        else None
+    )
     mcp_listing: Final = await _list_mcp_tools(
         user_api_key_auth=user_api_key_dict,
         mcp_servers=mcp_servers,
@@ -178,17 +287,10 @@ async def handle_mcp_tool_search(
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
     )
-    mcp_tools: Final = mcp_listing.tools
-    tools: Final = [
-        {
-            "name": t.name,
-            "description": t.description or "",
-            "inputSchema": t.inputSchema,
-        }
-        for t in mcp_tools
-    ]
-    results: Final = search_tools(query, tools, top_k)
-    return CallToolResult(content=[TextContent(type="text", text=json.dumps(results))], isError=False)
+    results: Final = await search_mcp_tools(query, mcp_listing.tools, top_k, settings, ranker)
+    if isinstance(results, EmbeddingFailed):
+        return _text_tool_result(results.reason, is_error=True)
+    return _text_tool_result(json.dumps(results), is_error=False)
 
 
 async def handle_mcp_tool_call(
