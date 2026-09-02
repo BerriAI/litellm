@@ -6,11 +6,9 @@ count actual model entries, not reserved meta keys) and the extraction of the
 
 import json
 import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.litellm_core_utils.fallback_generalizations import (
     get_fallback_generalization_rules,
@@ -248,3 +246,299 @@ def test_azure_ai_claude_1m_context_entries(cost_map: dict):
         "azure_ai/claude-haiku-4-5",
     ]:
         assert cost_map[model]["max_input_tokens"] == 200000, model
+
+
+def test_get_model_cost_map_stamps_loaded_at(monkeypatch):
+    """The load time feeds each pod's reload-due decision; a load that does not stamp it
+    would make manual reload requests race the proxy's startup"""
+    from datetime import datetime, timezone
+
+    from litellm.litellm_core_utils import get_model_cost_map as module
+
+    monkeypatch.setattr(module._cost_map_source_info, "loaded_at", None)
+    client, _calls = _mock_client(
+        [httpx.Response(200, content=_real_map_bytes())], client_cls=httpx.Client
+    )
+
+    before = datetime.now(timezone.utc)
+    module.get_model_cost_map(url="https://example.invalid/cost_map.json", client=client)
+    loaded_at = module.get_model_cost_map_loaded_at()
+
+    assert loaded_at is not None
+    assert before <= loaded_at <= datetime.now(timezone.utc)
+
+# ---------------------------------------------------------------------------
+# refetch_model_cost_map: retry/backoff behavior for runtime reloads
+# ---------------------------------------------------------------------------
+
+import functools
+import random
+
+import httpx
+
+from litellm.litellm_core_utils.get_model_cost_map import (
+    ModelCostMapReloaded,
+    ModelCostMapReloadUnavailable,
+    refetch_model_cost_map,
+)
+
+_URL = "https://example.invalid/model_prices.json"
+
+
+@functools.lru_cache(maxsize=1)
+def _real_map_bytes() -> bytes:
+    return json.dumps(_load_root_cost_map()).encode()
+
+
+class _SleepRecorder:
+    """Injected in place of asyncio.sleep so tests assert waits without real delay."""
+
+    def __init__(self):
+        self.waits = []
+
+    async def __call__(self, seconds: float) -> None:
+        self.waits.append(seconds)
+
+
+@pytest.fixture(autouse=True)
+def _unset_local_cost_map_env(monkeypatch):
+    """CI exports LITELLM_LOCAL_MODEL_COST_MAP=True; clear it so fetch behavior is deterministic."""
+    monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
+
+
+def _mock_client(outcomes, client_cls=httpx.AsyncClient):
+    """httpx client over a MockTransport serving one outcome per request; an exception instance is raised."""
+    calls = {"count": 0}
+
+    def handler(request):
+        idx = min(calls["count"], len(outcomes) - 1)
+        calls["count"] += 1
+        outcome = outcomes[idx]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    return client_cls(transport=httpx.MockTransport(handler)), calls
+
+
+@pytest.mark.asyncio
+async def test_refetch_retries_429_honoring_retry_after():
+    """Two 429s with Retry-After then success: waits follow the header, not backoff."""
+    client, calls = _mock_client(
+        [
+            httpx.Response(429, headers={"Retry-After": "7"}),
+            httpx.Response(429, headers={"Retry-After": "7"}),
+            httpx.Response(200, content=_real_map_bytes()),
+        ]
+    )
+    sleeper = _SleepRecorder()
+    result = await refetch_model_cost_map(
+        url=_URL, sleep=sleeper, rng=random.Random(0), client=client
+    )
+    assert isinstance(result, ModelCostMapReloaded)
+    assert len(result.model_cost_map) > 100
+    assert calls["count"] == 3
+    assert sleeper.waits == [7.0, 7.0]
+
+
+@pytest.mark.asyncio
+async def test_refetch_gives_up_after_max_attempts_with_exponential_backoff():
+    """All 429 without Retry-After: exponential backoff waits, then a failure value."""
+    client, calls = _mock_client([httpx.Response(429)])
+    sleeper = _SleepRecorder()
+    result = await refetch_model_cost_map(
+        url=_URL, sleep=sleeper, rng=random.Random(0), client=client
+    )
+    assert isinstance(result, ModelCostMapReloadUnavailable)
+    assert "429" in result.reason
+    assert "after 3 attempts" in result.reason
+    assert calls["count"] == 3
+    assert len(sleeper.waits) == 2
+    assert 2.0 <= sleeper.waits[0] < 3.0
+    assert 4.0 <= sleeper.waits[1] < 5.0
+
+
+@pytest.mark.asyncio
+async def test_refetch_caps_retry_after_wait():
+    """A hostile/huge Retry-After is capped so reloads never sleep unbounded."""
+    client, _calls = _mock_client(
+        [
+            httpx.Response(429, headers={"Retry-After": "9999"}),
+            httpx.Response(200, content=_real_map_bytes()),
+        ]
+    )
+    sleeper = _SleepRecorder()
+    result = await refetch_model_cost_map(
+        url=_URL, sleep=sleeper, rng=random.Random(0), client=client
+    )
+    assert isinstance(result, ModelCostMapReloaded)
+    assert sleeper.waits == [30.0]
+
+
+@pytest.mark.asyncio
+async def test_refetch_retries_transport_errors():
+    """Connection failures are transient: retried like 5xx, succeeding when the network heals."""
+    client, calls = _mock_client(
+        [
+            httpx.ConnectError("connection refused"),
+            httpx.Response(200, content=_real_map_bytes()),
+        ]
+    )
+    sleeper = _SleepRecorder()
+    result = await refetch_model_cost_map(
+        url=_URL, sleep=sleeper, rng=random.Random(0), client=client
+    )
+    assert isinstance(result, ModelCostMapReloaded)
+    assert calls["count"] == 2
+    assert len(sleeper.waits) == 1
+
+
+@pytest.mark.asyncio
+async def test_refetch_non_retryable_status_fails_immediately():
+    """A 404 is permanent: one attempt, no sleeps, failure value."""
+    client, calls = _mock_client([httpx.Response(404)])
+    sleeper = _SleepRecorder()
+    result = await refetch_model_cost_map(
+        url=_URL, sleep=sleeper, rng=random.Random(0), client=client
+    )
+    assert isinstance(result, ModelCostMapReloadUnavailable)
+    assert "404" in result.reason
+    assert calls["count"] == 1
+    assert sleeper.waits == []
+
+
+@pytest.mark.asyncio
+async def test_refetch_invalid_json_fails_immediately():
+    client, calls = _mock_client([httpx.Response(200, content=b"not json")])
+    sleeper = _SleepRecorder()
+    result = await refetch_model_cost_map(
+        url=_URL, sleep=sleeper, rng=random.Random(0), client=client
+    )
+    assert isinstance(result, ModelCostMapReloadUnavailable)
+    assert "invalid JSON" in result.reason
+    assert calls["count"] == 1
+    assert sleeper.waits == []
+
+
+@pytest.mark.asyncio
+async def test_refetch_shrunk_map_fails_integrity_not_swapped_in():
+    """A drastically shrunk upstream file is rejected instead of being adopted."""
+    tiny = json.dumps(_make_models(60)).encode()
+    client, _calls = _mock_client([httpx.Response(200, content=tiny)])
+    result = await refetch_model_cost_map(
+        url=_URL, sleep=_SleepRecorder(), rng=random.Random(0), client=client
+    )
+    assert isinstance(result, ModelCostMapReloadUnavailable)
+    assert "integrity validation" in result.reason
+
+
+@pytest.mark.asyncio
+async def test_refetch_respects_local_env_override(monkeypatch):
+    """LITELLM_LOCAL_MODEL_COST_MAP=True short-circuits to the bundled backup, zero HTTP."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+    def _fail(request):
+        raise AssertionError("no HTTP request should be made when local map is forced")
+
+    result = await refetch_model_cost_map(
+        url=_URL,
+        sleep=_SleepRecorder(),
+        rng=random.Random(0),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(_fail)),
+    )
+    assert isinstance(result, ModelCostMapReloaded)
+    assert len(result.model_cost_map) > 100
+
+
+# ---------------------------------------------------------------------------
+# get_model_cost_map: the boot-time load retries transient failures like a reload does
+# ---------------------------------------------------------------------------
+
+from litellm.litellm_core_utils.get_model_cost_map import (
+    get_model_cost_map,
+    get_model_cost_map_source_info,
+)
+
+
+class _SyncSleepRecorder:
+    """Injected in place of time.sleep so the boot path's waits are asserted without delay."""
+
+    def __init__(self):
+        self.waits = []
+
+    def __call__(self, seconds: float) -> None:
+        self.waits.append(seconds)
+
+
+def test_boot_load_retries_transient_failures_instead_of_falling_back():
+    """A refused connection then a 503 at pod boot used to pin the process to the bundled
+    backup for its lifetime; both are transient and must be retried before giving up."""
+    client, calls = _mock_client(
+        [
+            httpx.ConnectError("connection refused"),
+            httpx.Response(503),
+            httpx.Response(200, content=_real_map_bytes()),
+        ],
+        client_cls=httpx.Client,
+    )
+    sleeper = _SyncSleepRecorder()
+
+    cost_map = get_model_cost_map(url=_URL, sleep=sleeper, rng=random.Random(0), client=client)
+
+    assert calls["count"] == 3
+    assert len(sleeper.waits) == 2
+    assert 2.0 <= sleeper.waits[0] < 3.0
+    assert 4.0 <= sleeper.waits[1] < 5.0
+    source = get_model_cost_map_source_info()
+    assert source["source"] == "remote"
+    assert source["fallback_reason"] is None
+    assert cost_map.keys() >= _load_root_cost_map().keys() - {"sample_spec", FALLBACK_GENERALIZATIONS_KEY}
+
+
+def test_boot_load_honors_retry_after_then_falls_back_after_max_attempts():
+    """An outage longer than the retry budget still ends on the bundled backup, and the
+    recorded fallback reason says how many attempts were spent so operators can tell."""
+    client, calls = _mock_client(
+        [httpx.Response(429, headers={"Retry-After": "7"})], client_cls=httpx.Client
+    )
+    sleeper = _SyncSleepRecorder()
+
+    cost_map = get_model_cost_map(url=_URL, sleep=sleeper, rng=random.Random(0), client=client)
+
+    assert calls["count"] == 3
+    assert sleeper.waits == [7.0, 7.0]
+    source = get_model_cost_map_source_info()
+    assert source["source"] == "local"
+    assert "after 3 attempts" in source["fallback_reason"]
+    assert len(cost_map) > 100
+
+
+def test_boot_load_does_not_retry_permanent_failures():
+    """A 404 or a malformed URL cannot heal by waiting: one attempt, no sleeps, backup."""
+    client, calls = _mock_client([httpx.Response(404)], client_cls=httpx.Client)
+    sleeper = _SyncSleepRecorder()
+
+    get_model_cost_map(url=_URL, sleep=sleeper, rng=random.Random(0), client=client)
+    assert calls["count"] == 1
+    assert sleeper.waits == []
+    assert get_model_cost_map_source_info()["source"] == "local"
+
+    get_model_cost_map(url="not a url", sleep=sleeper, rng=random.Random(0))
+    assert sleeper.waits == []
+    assert get_model_cost_map_source_info()["source"] == "local"
+
+
+def test_boot_load_respects_local_env_override(monkeypatch):
+    """LITELLM_LOCAL_MODEL_COST_MAP=True still short-circuits to the backup with zero HTTP."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+    def _fail(request):
+        raise AssertionError("no HTTP request should be made when local map is forced")
+
+    cost_map = get_model_cost_map(
+        url=_URL,
+        sleep=_SyncSleepRecorder(),
+        client=httpx.Client(transport=httpx.MockTransport(_fail)),
+    )
+    assert len(cost_map) > 100
+    assert get_model_cost_map_source_info()["is_env_forced"] is True

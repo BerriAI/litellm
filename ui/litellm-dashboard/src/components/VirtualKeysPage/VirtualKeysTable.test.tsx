@@ -1,14 +1,14 @@
 import { screen, waitFor, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { vi, it, expect, beforeEach, describe, MockedFunction } from "vitest";
-import { renderWithProviders } from "../../../tests/test-utils";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { vi, it, expect, beforeEach, describe, Mock, MockedFunction } from "vitest";
+import { chooseSelectOption, renderWithProviders } from "../../../tests/test-utils";
 import { VirtualKeysTable } from "./VirtualKeysTable";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
-
-vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams(window.location.search) }));
+import { regenerateKeyCall } from "../networking";
 
 // Resolve debounced values synchronously so an applied filter lands in the useKeys query within the test tick.
 vi.mock("@tanstack/react-pacer/debouncer", async () => {
@@ -23,6 +23,13 @@ vi.mock("@tanstack/react-pacer/debouncer", async () => {
     useDebouncer: (fn: (...args: unknown[]) => void) => ({ maybeExecute: fn, cancel: vi.fn(), flush: vi.fn() }),
   };
 });
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
+vi.mock("../networking", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../networking")>()),
+  regenerateKeyCall: vi.fn(),
+}));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: vi.fn(() => ({
@@ -169,10 +176,11 @@ const keysResult = (keys: KeyResponse[], data: Partial<KeysResponse> = {}, extra
 
 const openFilters = () => fireEvent.click(screen.getByRole("button", { name: "Filters" }));
 
+const lastKeyParam = (onUrlUpdate: Mock<OnUrlUpdateFunction>) =>
+  onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("key");
+
 beforeEach(() => {
   vi.clearAllMocks();
-
-  window.history.pushState(null, "", "/");
 
   mockUseKeys.mockReturnValue(keysResult([mockKey]));
   mockUseKeyInfo.mockReturnValue(keyInfoResult(undefined));
@@ -199,6 +207,8 @@ it("left-anchors the create-key CTA below the title, between the header and the 
   renderWithProviders(<VirtualKeysTable headerActions={<button>Create New Key</button>} />);
 
   const heading = screen.getByRole("heading", { name: "Virtual Keys" });
+  expect(screen.getByText("Every key that authenticates requests to the gateway.")).toBeInTheDocument();
+  expect(document.querySelector(".lucide-key-round")).not.toBeNull();
   const ctas = screen.getAllByRole("button", { name: "Create New Key" });
   expect(ctas).toHaveLength(1);
   const cta = ctas[0];
@@ -317,8 +327,7 @@ it("sorts by the backend max_budget field when 'Budget descending' is chosen fro
   const user = userEvent.setup();
   renderWithProviders(<VirtualKeysTable />);
 
-  await user.click(screen.getByTestId("sort-trigger-spend"));
-  await user.click(await screen.findByText("Budget descending"));
+  await chooseSelectOption(user, screen.getByTestId("sort-trigger-spend"), "Budget descending", "menuitem");
 
   await waitFor(() => {
     expect(mockUseKeys).toHaveBeenLastCalledWith(
@@ -333,25 +342,19 @@ it("emphasizes the active field in the Spend / Budget header so the sorted colum
   const user = userEvent.setup();
   renderWithProviders(<VirtualKeysTable />);
 
-  await user.click(screen.getByTestId("sort-trigger-spend"));
-  await user.click(await screen.findByText("Budget descending"));
+  await chooseSelectOption(user, screen.getByTestId("sort-trigger-spend"), "Budget descending", "menuitem");
 
   await waitFor(() => {
-    expect(screen.getByText("Budget", { selector: "[data-sort-field='max_budget']" }).className).toContain(
-      "font-semibold",
-    );
+    expect(screen.getByText("Budget", { selector: "[data-sort-field='max_budget']" })).toHaveClass("font-semibold");
   });
-  expect(screen.getByText("Spend", { selector: "[data-sort-field='spend']" }).className).toContain(
-    "text-muted-foreground",
-  );
+  expect(screen.getByText("Spend", { selector: "[data-sort-field='spend']" })).toHaveClass("text-muted-foreground");
 });
 
 it("sorts by spend ascending when 'Spend ascending' is chosen from the Spend / Budget menu", async () => {
   const user = userEvent.setup();
   renderWithProviders(<VirtualKeysTable />);
 
-  await user.click(screen.getByTestId("sort-trigger-spend"));
-  await user.click(await screen.findByText("Spend ascending"));
+  await chooseSelectOption(user, screen.getByTestId("sort-trigger-spend"), "Spend ascending", "menuitem");
 
   await waitFor(() => {
     expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ sortBy: "spend", sortOrder: "asc" }));
@@ -359,7 +362,8 @@ it("sorts by spend ascending when 'Spend ascending' is chosen from the Spend / B
 });
 
 it("clicking the key cell deep-links via ?key=", async () => {
-  renderWithProviders(<VirtualKeysTable />);
+  const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+  renderWithProviders(<VirtualKeysTable />, { onUrlUpdate });
 
   await waitFor(() => {
     expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
@@ -367,13 +371,14 @@ it("clicking the key cell deep-links via ?key=", async () => {
 
   fireEvent.click(screen.getByText("Test Key Alias"));
 
-  expect(window.location.search).toContain(`key=${encodeURIComponent(mockKey.token)}`);
+  await waitFor(() => {
+    expect(lastKeyParam(onUrlUpdate)).toBe(mockKey.token);
+  });
 });
 
 it("renders KeyInfoView when the URL has ?key= for a key on the current page, without refetching it", async () => {
-  window.history.pushState(null, "", `/?key=${encodeURIComponent(mockKey.token)}`);
-
-  renderWithProviders(<VirtualKeysTable />);
+  const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+  renderWithProviders(<VirtualKeysTable />, { searchParams: { key: mockKey.token }, onUrlUpdate });
 
   await waitFor(() => {
     expect(screen.getByText("Back to Keys")).toBeInTheDocument();
@@ -383,16 +388,40 @@ it("renders KeyInfoView when the URL has ?key= for a key on the current page, wi
 
   fireEvent.click(screen.getByText("Back to Keys"));
 
-  expect(window.location.search).not.toContain("key=");
+  await waitFor(() => {
+    expect(lastKeyParam(onUrlUpdate)).toBeNull();
+  });
+  expect(screen.getByTestId("pagination-range")).toBeInTheDocument();
+});
+
+it("repoints ?key= to the rotated hash once the regenerate dialog is dismissed", async () => {
+  const user = userEvent.setup();
+  vi.mocked(regenerateKeyCall).mockResolvedValue({
+    key: "sk-rotated-plaintext",
+    token: null,
+    token_id: "rotated-hash-456",
+  });
+  const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+  renderWithProviders(<VirtualKeysTable />, { searchParams: { key: mockKey.token }, onUrlUpdate });
+
+  await user.click(await screen.findByRole("button", { name: /regenerate key/i }));
+  await user.click(await screen.findByRole("button", { name: /^Regenerate$/ }));
+  expect(await screen.findAllByText("sk-rotated-plaintext")).not.toHaveLength(0);
+  expect(lastKeyParam(onUrlUpdate)).toBeUndefined();
+
+  await user.click(screen.getAllByRole("button", { name: "Close" })[0]);
+
+  await waitFor(() => {
+    expect(lastKeyParam(onUrlUpdate)).toBe("rotated-hash-456");
+  });
 });
 
 it("fetches the key by id when the URL has ?key= for a key not in the loaded page", async () => {
-  window.history.pushState(null, "", "/?key=other-key-hash");
   mockUseKeyInfo.mockReturnValue(
     keyInfoResult({ ...mockKey, token: "other-key-hash", key_alias: "Fetched Key Alias" }),
   );
 
-  renderWithProviders(<VirtualKeysTable />);
+  renderWithProviders(<VirtualKeysTable />, { searchParams: { key: "other-key-hash" } });
 
   await waitFor(() => {
     expect(screen.getByText("Back to Keys")).toBeInTheDocument();
@@ -402,19 +431,16 @@ it("fetches the key by id when the URL has ?key= for a key not in the loaded pag
 });
 
 it("shows a loading state while a deep-linked key is being fetched", () => {
-  window.history.pushState(null, "", "/?key=other-key-hash");
-
-  renderWithProviders(<VirtualKeysTable />);
+  renderWithProviders(<VirtualKeysTable />, { searchParams: { key: "other-key-hash" } });
 
   expect(screen.getByText("Loading key...")).toBeInTheDocument();
   expect(screen.queryByTestId("pagination-range")).not.toBeInTheDocument();
 });
 
 it("shows 'Key not found' when the deep-linked key fails to load", async () => {
-  window.history.pushState(null, "", "/?key=missing-key-hash");
   mockUseKeyInfo.mockReturnValue(keyInfoResult(undefined, true));
 
-  renderWithProviders(<VirtualKeysTable />);
+  renderWithProviders(<VirtualKeysTable />, { searchParams: { key: "missing-key-hash" } });
 
   await waitFor(() => {
     expect(screen.getByText("Key not found")).toBeInTheDocument();
@@ -534,7 +560,7 @@ describe("refresh button", () => {
 
     const refresh = screen.getByTestId("datatable-refresh");
     expect(refresh).toBeInTheDocument();
-    expect(refresh).not.toBeDisabled();
+    expect(refresh).toBeEnabled();
   });
 
   it("disables the refresh control while a fetch is in flight but keeps data visible", () => {

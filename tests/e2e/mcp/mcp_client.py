@@ -18,6 +18,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
+from e2e_config import settle_propagation
 from e2e_http import Headers, NoBody, Result, Success, UnknownApiError, unwrap
 from models import KeyGenerateBody, ObjectPermission
 from proxy_client import ProxyClient
@@ -330,7 +331,7 @@ class McpClient:
         tool-call hook (pre_mcp_call) and blocks a single keyword. The keyword is
         unique per test, so default_on only ever intercepts this test's own
         banned tool call on the shared proxy."""
-        return unwrap(
+        guardrail_id = unwrap(
             self.proxy.transport.post(
                 "/guardrails",
                 headers=self.proxy.transport.master,
@@ -345,6 +346,8 @@ class McpClient:
                 response_type=GuardrailCreateResponse,
             )
         ).guardrail_id
+        settle_propagation(time.monotonic())
+        return guardrail_id
 
     def delete_guardrail(self, guardrail_id: str) -> None:
         _ = self.proxy.transport.delete(

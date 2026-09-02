@@ -2,7 +2,9 @@
 Modern Email Templates for LiteLLM Email Service with professional styling
 """
 
-KEY_CREATED_EMAIL_TEMPLATE = """
+from typing import Final
+
+KEY_CREATED_EMAIL_TEMPLATE: Final = """
 <!DOCTYPE html>
 <html lang="en">
 <head>

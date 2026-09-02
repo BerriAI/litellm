@@ -1,8 +1,9 @@
 # What is this?
 ## Helper utils for the management endpoints (keys/users/teams)
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from datetime import datetime
 from functools import wraps
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Final, Protocol
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel
@@ -22,6 +23,7 @@ from litellm.proxy._types import (  # key request types; user request types; tea
     LiteLLM_UserTable,
     ManagementEndpointLoggingPayload,
     Member,
+    Span,
     SSOUserDefinedValues,
     UpdateCustomerRequest,
     UpdateKeyRequest,
@@ -32,16 +34,131 @@ from litellm.proxy._types import (  # key request types; user request types; tea
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-from litellm.proxy.utils import PrismaClient
+from litellm.proxy.utils import PrismaClient, jsonify_object
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.table_repositories import TeamMembershipRepository
 from litellm.repositories.user_repository import UserRepository
 
 
-def get_new_internal_user_defaults(user_id: str, user_email: Optional[str] = None) -> dict:
-    user_info = litellm.default_internal_user_params or {}
+class _PrismaRecord(Protocol):
+    """Row surface the management helpers read back from Prisma."""
 
-    returned_dict: SSOUserDefinedValues = {
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
+class _PrismaUserRecord(Protocol):
+    """User row surface the management helpers read back from Prisma."""
+
+    user_id: str
+
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
+class _PrismaBudgetRecord(Protocol):
+    """Budget row surface the management helpers read back from Prisma."""
+
+    budget_id: str
+
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
+class _PrismaBudgetTable(Protocol):
+    """Budget table actions the management helpers issue."""
+
+    async def create(self, *, data: Mapping[str, object]) -> _PrismaBudgetRecord: ...
+
+    async def find_unique(self, *, where: Mapping[str, object]) -> _PrismaBudgetRecord | None: ...
+
+
+class _PrismaUserTable(Protocol):
+    """User table actions the management helpers issue."""
+
+    async def update_many(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
+
+    async def upsert(
+        self, *, where: Mapping[str, object], data: Mapping[str, Mapping[str, object]]
+    ) -> _PrismaUserRecord | None: ...
+
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_PrismaUserRecord]: ...
+
+
+class _PrismaTeamMembershipTable(Protocol):
+    """Team membership table actions the management helpers issue."""
+
+    async def create(self, *, data: Mapping[str, object], include: Mapping[str, bool]) -> _PrismaRecord: ...
+
+
+class MemberWriteTx(Protocol):
+    """Transaction surface `add_new_member` writes through when the caller owns one.
+
+    A caller already holding a transaction, and with it a pooled connection plus that
+    transaction's locks, passes it here so these writes reuse that connection rather than
+    checking out another one that lock waiters may already have drained from the pool.
+    """
+
+    @property
+    def litellm_usertable(self) -> _PrismaUserTable: ...
+
+    @property
+    def litellm_budgettable(self) -> _PrismaBudgetTable: ...
+
+    @property
+    def litellm_teammembership(self) -> _PrismaTeamMembershipTable: ...
+
+
+def _user_table(prisma_client: PrismaClient, tx: MemberWriteTx | None) -> _PrismaUserTable:
+    return tx.litellm_usertable if tx is not None else UserRepository(prisma_client).table
+
+
+def _budget_table(prisma_client: PrismaClient, tx: MemberWriteTx | None) -> _PrismaBudgetTable:
+    return tx.litellm_budgettable if tx is not None else BudgetRepository(prisma_client).table
+
+
+def _team_membership_table(prisma_client: PrismaClient, tx: MemberWriteTx | None) -> _PrismaTeamMembershipTable:
+    return tx.litellm_teammembership if tx is not None else TeamMembershipRepository(prisma_client).table
+
+
+async def _find_users_by_email(
+    prisma_client: PrismaClient, tx: MemberWriteTx | None, user_email: str
+) -> Sequence[_PrismaUserRecord]:
+    if tx is not None:
+        return await tx.litellm_usertable.find_many(where={"user_email": user_email})
+    rows: Final[Sequence[_PrismaUserRecord] | None] = await prisma_client.get_data(
+        key_val={"user_email": user_email},
+        table_name="user",
+        query_type="find_all",
+    )
+    return rows if rows is not None else ()
+
+
+async def _upsert_user_row(
+    user_table: _PrismaUserTable, user_id: str, create_data: Mapping[str, object]
+) -> _PrismaUserRecord | None:
+    """Insert the user row if it is absent, leaving an existing row as it is.
+
+    Upserting keeps concurrent provisioning of the same new user from racing on create.
+    The update branch re-states user_id rather than being empty because Prisma only
+    compiles an upsert down to INSERT ... ON CONFLICT when the update is non-empty, and
+    otherwise falls back to a racy SELECT-then-INSERT.
+    """
+    return await user_table.upsert(
+        where={"user_id": user_id},
+        data={"create": create_data, "update": {"user_id": user_id}},
+    )
+
+
+async def _create_user_row(
+    prisma_client: PrismaClient, tx: MemberWriteTx | None, user_data: dict[str, object]
+) -> _PrismaUserRecord | None:
+    if tx is not None:
+        return await _upsert_user_row(tx.litellm_usertable, str(user_data["user_id"]), jsonify_object(user_data))
+    return await prisma_client.insert_data(data=user_data, table_name="user")
+
+
+def get_new_internal_user_defaults(user_id: str, user_email: str | None = None) -> dict[str, object]:
+    user_info: Final = litellm.default_internal_user_params or {}
+
+    returned_dict: Final[SSOUserDefinedValues] = {
         "models": user_info.get("models") or [],
         "max_budget": user_info.get("max_budget", litellm.max_internal_user_budget),
         "budget_duration": user_info.get("budget_duration", litellm.internal_user_budget_duration),
@@ -50,7 +167,7 @@ def get_new_internal_user_defaults(user_id: str, user_email: Optional[str] = Non
         "user_role": "internal_user",
     }
 
-    non_null_dict = {}
+    non_null_dict: Final = {}
     for k, v in returned_dict.items():
         if v is not None:
             non_null_dict[k] = v
@@ -59,11 +176,11 @@ def get_new_internal_user_defaults(user_id: str, user_email: Optional[str] = Non
 
 async def handle_budget_for_entity(
     data,
-    existing_budget_id: Optional[str],
+    existing_budget_id: str | None,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
     litellm_proxy_admin_name: str,
-) -> Optional[str]:
+) -> str | None:
     """
     Common helper to handle budget creation/updates for entities (organizations, tags, etc).
 
@@ -87,14 +204,14 @@ async def handle_budget_for_entity(
     )
 
     # Get all budget field names
-    budget_params = LiteLLM_BudgetTable.model_fields.keys()
+    budget_params: Final = LiteLLM_BudgetTable.model_fields.keys()
 
     # Extract budget fields from data
-    _json_data = data.model_dump(exclude_none=True) if hasattr(data, "model_dump") else data
-    _budget_data = {k: v for k, v in _json_data.items() if k in budget_params}
+    _json_data: Final = data.model_dump(exclude_none=True) if hasattr(data, "model_dump") else data
+    _budget_data: Final = {k: v for k, v in _json_data.items() if k in budget_params}
 
     # Check if budget_id is explicitly provided in the data
-    data_budget_id = getattr(data, "budget_id", None)
+    data_budget_id: Final[str | None] = getattr(data, "budget_id", None)
 
     # Case 1: Creating new entity - no existing budget_id
     if existing_budget_id is None:
@@ -103,16 +220,16 @@ async def handle_budget_for_entity(
             return data_budget_id
         elif _budget_data:
             # Create a new budget with the provided fields
-            budget_row = LiteLLM_BudgetTable(**_budget_data)
-            new_budget_data = prisma_client.jsonify_object(budget_row.model_dump(exclude_none=True))
+            budget_row: Final = LiteLLM_BudgetTable(**_budget_data)
+            new_budget_data: Final = prisma_client.jsonify_object(budget_row.model_dump(exclude_none=True))
 
-            _budget = await BudgetRepository(prisma_client).table.create(
+            _budget: Final[_PrismaBudgetRecord] = await BudgetRepository(prisma_client).table.create(
                 data={
-                    **new_budget_data,  # type: ignore
+                    **new_budget_data,
                     "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                     "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                 }
-            )  # type: ignore
+            )
 
             return _budget.budget_id
         else:
@@ -140,7 +257,7 @@ async def handle_budget_for_entity(
 # (i.e. the values an admin sets). We copy these when cloning a team's
 # default member-budget into an individual member-budget so that the new
 # row starts with the same limits as the default.
-_CLONABLE_BUDGET_FIELDS: Tuple[str, ...] = (
+_CLONABLE_BUDGET_FIELDS: Final[tuple[str, ...]] = (
     "max_budget",
     "soft_budget",
     "max_parallel_requests",
@@ -157,8 +274,9 @@ async def _clone_team_default_budget_for_member(
     default_team_budget_id: str,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
-    budget_duration_override: Optional[str] = None,
-) -> Optional[str]:
+    budget_duration_override: str | None = None,
+    tx: MemberWriteTx | None = None,
+) -> str | None:
     """
     Create a new budget row that copies the values from the team's default
     member budget. Returns the new budget_id, or None if the default budget
@@ -172,14 +290,13 @@ async def _clone_team_default_budget_for_member(
     member while keeping the default's other limits, so an admin can set a
     member's reset cadence without discarding the team default's max_budget.
     """
-    default_budget = await BudgetRepository(prisma_client).table.find_unique(
-        where={"budget_id": default_team_budget_id}
-    )
+    budget_table: Final[_PrismaBudgetTable] = _budget_table(prisma_client, tx)
+    default_budget: Final = await budget_table.find_unique(where={"budget_id": default_team_budget_id})
     if default_budget is None:
         return None
 
-    default_budget_dict = default_budget.model_dump()
-    cloned_data: dict = {
+    default_budget_dict: Final = default_budget.model_dump()
+    cloned_data: Final[dict] = {
         "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
         "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
     }
@@ -201,7 +318,7 @@ async def _clone_team_default_budget_for_member(
     if cloned_data.get("budget_duration"):
         cloned_data["budget_reset_at"] = get_budget_reset_time(cloned_data["budget_duration"])
 
-    new_budget = await BudgetRepository(prisma_client).table.create(data=cloned_data)
+    new_budget: Final[_PrismaBudgetRecord] = await budget_table.create(data=cloned_data)
     return new_budget.budget_id
 
 
@@ -209,11 +326,12 @@ async def _resolve_member_budget_id(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
-    max_budget_in_team: Optional[float],
-    allowed_models: Optional[list[str]],
-    budget_duration: Optional[str],
-    default_team_budget_id: Optional[str],
-) -> Optional[str]:
+    max_budget_in_team: float | None,
+    allowed_models: list[str] | None,
+    budget_duration: str | None,
+    default_team_budget_id: str | None,
+    tx: MemberWriteTx | None = None,
+) -> str | None:
     """
     Resolve the budget a new team member should be linked to.
 
@@ -223,7 +341,7 @@ async def _resolve_member_budget_id(
     with no team default creates a window-only budget. With nothing set the
     member gets no budget.
     """
-    has_explicit_limit = max_budget_in_team is not None or allowed_models is not None
+    has_explicit_limit: Final = max_budget_in_team is not None or allowed_models is not None
 
     if not has_explicit_limit and default_team_budget_id is not None:
         return await _clone_team_default_budget_for_member(
@@ -232,12 +350,13 @@ async def _resolve_member_budget_id(
             user_api_key_dict=user_api_key_dict,
             litellm_proxy_admin_name=litellm_proxy_admin_name,
             budget_duration_override=budget_duration,
+            tx=tx,
         )
 
     if not has_explicit_limit and budget_duration is None:
         return None
 
-    budget_data: dict = {
+    budget_data: Final[dict[str, object]] = {
         "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
         "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
     }
@@ -248,11 +367,14 @@ async def _resolve_member_budget_id(
     if budget_duration is not None:
         budget_data["budget_duration"] = budget_duration
         budget_data["budget_reset_at"] = get_budget_reset_time(budget_duration=budget_duration)
-    response = await BudgetRepository(prisma_client).table.create(data=budget_data)
+    budget_table: Final[_PrismaBudgetTable] = _budget_table(prisma_client, tx)
+    response: Final = await budget_table.create(data=budget_data)
     return response.budget_id
 
 
-async def _append_team_id_if_absent(prisma_client: PrismaClient, user_id: str, team_id: str) -> None:
+async def _append_team_id_if_absent(
+    prisma_client: PrismaClient, user_id: str, team_id: str, tx: MemberWriteTx | None = None
+) -> None:
     """Append team_id to a user's teams array, only if it is not already present.
 
     The row-level filter makes the append a no-op once the team is present, so
@@ -261,7 +383,8 @@ async def _append_team_id_if_absent(prisma_client: PrismaClient, user_id: str, t
     number of teams a user belongs to). Teams added concurrently for a different
     team id are unaffected, since each update filters on its own team id.
     """
-    await UserRepository(prisma_client).table.update_many(
+    user_table: Final[_PrismaUserTable] = _user_table(prisma_client, tx)
+    await user_table.update_many(
         where={"user_id": user_id, "NOT": {"teams": {"has": team_id}}},
         data={"teams": {"push": [team_id]}},
     )
@@ -269,15 +392,16 @@ async def _append_team_id_if_absent(prisma_client: PrismaClient, user_id: str, t
 
 async def add_new_member(
     new_member: Member,
-    max_budget_in_team: Optional[float],
+    max_budget_in_team: float | None,
     prisma_client: PrismaClient,
     team_id: str,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
-    default_team_budget_id: Optional[str] = None,
-    allowed_models: Optional[List[str]] = None,
-    budget_duration: Optional[str] = None,
-) -> Tuple[LiteLLM_UserTable, Optional[LiteLLM_TeamMembership]]:
+    default_team_budget_id: str | None = None,
+    allowed_models: list[str] | None = None,
+    budget_duration: str | None = None,
+    tx: MemberWriteTx | None = None,
+) -> tuple[LiteLLM_UserTable, LiteLLM_TeamMembership | None]:
     """
     Add a new member to a team
 
@@ -285,48 +409,41 @@ async def add_new_member(
     - add team member w/ budget to team member table
 
     Returns created/existing user + team membership w/ budget id
+
+    Callers already inside a transaction pass it as ``tx`` so every write here runs on that
+    connection instead of borrowing more from the pool while the caller's locks are held.
     """
-    returned_user: Optional[LiteLLM_UserTable] = None
-    returned_team_membership: Optional[LiteLLM_TeamMembership] = None
+    returned_user: LiteLLM_UserTable | None = None
+    returned_team_membership: LiteLLM_TeamMembership | None = None
     ## ADD TEAM ID, to USER TABLE IF NEW ##
     if new_member.user_id is not None:
         new_user_defaults = get_new_internal_user_defaults(user_id=new_member.user_id)
-        # Upsert ensures the user row exists atomically (no create race when the
-        # same new user is provisioned concurrently), seeding teams on create.
-        # The teams append lives in the filtered update below rather than the
-        # upsert's update branch so an already-existing user does not get a
-        # duplicate team id. The update branch still has to write something:
-        # Prisma only compiles an upsert down to INSERT ... ON CONFLICT when it
-        # is non-empty, and falls back to a racy SELECT-then-INSERT when it is
-        # not, so this re-states user_id as a no-op rather than being empty.
-        _returned_user = await UserRepository(prisma_client).table.upsert(
-            where={"user_id": new_member.user_id},
-            data={
-                "create": {"teams": [team_id], **new_user_defaults},
-                "update": {"user_id": new_member.user_id},
-            },
+        # The teams append lives in the filtered update below rather than the upsert's
+        # update branch so an already-existing user does not get a duplicate team id.
+        _returned_user: _PrismaUserRecord | None = await _upsert_user_row(
+            _user_table(prisma_client, tx),
+            new_member.user_id,
+            {"teams": [team_id], **new_user_defaults},
         )
-        await _append_team_id_if_absent(prisma_client, new_member.user_id, team_id)
+        await _append_team_id_if_absent(prisma_client, new_member.user_id, team_id, tx)
         if _returned_user is not None:
             returned_user = LiteLLM_UserTable.model_validate(_returned_user.model_dump())
     elif new_member.user_email is not None:
         new_user_defaults = get_new_internal_user_defaults(user_id=str(uuid.uuid4()), user_email=new_member.user_email)
         ## user email is not unique acc. to prisma schema -> future improvement
         ### for now: check if it exists in db, if not - insert it
-        existing_user_row: Optional[list] = await prisma_client.get_data(
-            key_val={"user_email": new_member.user_email},
-            table_name="user",
-            query_type="find_all",
+        existing_user_row: Final[Sequence[_PrismaUserRecord]] = await _find_users_by_email(
+            prisma_client, tx, new_member.user_email
         )
-        if existing_user_row is None or (isinstance(existing_user_row, list) and len(existing_user_row) == 0):
+        if len(existing_user_row) == 0:
             new_user_defaults["teams"] = [team_id]
-            _returned_user = await prisma_client.insert_data(data=new_user_defaults, table_name="user")  # type: ignore
+            _returned_user = await _create_user_row(prisma_client, tx, new_user_defaults)
 
             if _returned_user is not None:
                 returned_user = LiteLLM_UserTable.model_validate(_returned_user.model_dump())
         elif len(existing_user_row) == 1:
-            user_info = existing_user_row[0]
-            await _append_team_id_if_absent(prisma_client, user_info.user_id, team_id)
+            user_info: Final = existing_user_row[0]
+            await _append_team_id_if_absent(prisma_client, user_info.user_id, team_id, tx)
             returned_user = LiteLLM_UserTable.model_validate(user_info.model_dump())
         elif len(existing_user_row) > 1:
             raise HTTPException(
@@ -334,7 +451,7 @@ async def add_new_member(
                 detail={"error": "Multiple users with this email found in db. Please use 'user_id' instead."},
             )
 
-    _budget_id = await _resolve_member_budget_id(
+    _budget_id: Final = await _resolve_member_budget_id(
         prisma_client=prisma_client,
         user_api_key_dict=user_api_key_dict,
         litellm_proxy_admin_name=litellm_proxy_admin_name,
@@ -342,10 +459,12 @@ async def add_new_member(
         allowed_models=allowed_models,
         budget_duration=budget_duration,
         default_team_budget_id=default_team_budget_id,
+        tx=tx,
     )
 
     if _budget_id and returned_user is not None and returned_user.user_id is not None:
-        _returned_team_membership = await TeamMembershipRepository(prisma_client).table.create(
+        membership_table: Final[_PrismaTeamMembershipTable] = _team_membership_table(prisma_client, tx)
+        _returned_team_membership: Final = await membership_table.create(
             data={
                 "team_id": team_id,
                 "user_id": returned_user.user_id,
@@ -366,7 +485,7 @@ def _delete_user_id_from_cache(kwargs):
     from litellm.proxy.proxy_server import user_api_key_cache
 
     if kwargs.get("data") is not None:
-        update_user_request = kwargs.get("data")
+        update_user_request: Final = kwargs.get("data")
         if isinstance(update_user_request, UpdateUserRequest):
             user_api_key_cache.delete_cache(key=update_user_request.user_id)
 
@@ -374,14 +493,13 @@ def _delete_user_id_from_cache(kwargs):
         if isinstance(update_user_request, DeleteUserRequest):
             for user_id in update_user_request.user_ids:
                 user_api_key_cache.delete_cache(key=user_id)
-    pass
 
 
 def _delete_api_key_from_cache(kwargs):
     from litellm.proxy.proxy_server import user_api_key_cache
 
     if kwargs.get("data") is not None:
-        update_request = kwargs.get("data")
+        update_request: Final = kwargs.get("data")
         if isinstance(update_request, UpdateKeyRequest):
             user_api_key_cache.delete_cache(key=update_request.key)
 
@@ -389,14 +507,13 @@ def _delete_api_key_from_cache(kwargs):
         if isinstance(update_request, KeyRequest) and update_request.keys:
             for key in update_request.keys:
                 user_api_key_cache.delete_cache(key=key)
-    pass
 
 
 def _delete_team_id_from_cache(kwargs):
     from litellm.proxy.proxy_server import user_api_key_cache
 
     if kwargs.get("data") is not None:
-        update_request = kwargs.get("data")
+        update_request: Final = kwargs.get("data")
         if isinstance(update_request, UpdateTeamRequest):
             user_api_key_cache.delete_cache(key=update_request.team_id)
 
@@ -404,14 +521,13 @@ def _delete_team_id_from_cache(kwargs):
         if isinstance(update_request, DeleteTeamRequest):
             for team_id in update_request.team_ids:
                 user_api_key_cache.delete_cache(key=team_id)
-    pass
 
 
 def _delete_customer_id_from_cache(kwargs):
     from litellm.proxy.proxy_server import user_api_key_cache
 
     if kwargs.get("data") is not None:
-        update_request = kwargs.get("data")
+        update_request: Final = kwargs.get("data")
         if isinstance(update_request, UpdateCustomerRequest):
             user_api_key_cache.delete_cache(key=update_request.user_id)
 
@@ -419,7 +535,6 @@ def _delete_customer_id_from_cache(kwargs):
         if isinstance(update_request, DeleteCustomerRequest):
             for user_id in update_request.user_ids:
                 user_api_key_cache.delete_cache(key=user_id)
-    pass
 
 
 async def send_management_endpoint_alert(
@@ -436,7 +551,7 @@ async def send_management_endpoint_alert(
     from litellm.proxy.proxy_server import proxy_logging_obj
     from litellm.types.integrations.slack_alerting import AlertType
 
-    management_function_to_event_name = {
+    management_function_to_event_name: Final = {
         "generate_key_fn": AlertType.new_virtual_key_created,
         "update_key_fn": AlertType.virtual_key_updated,
         "delete_key_fn": AlertType.virtual_key_deleted,
@@ -454,9 +569,9 @@ async def send_management_endpoint_alert(
     if proxy_logging_obj is not None and proxy_logging_obj.slack_alerting_instance is not None:
         # Virtual Key Events
         if function_name in management_function_to_event_name:
-            _event_name: AlertType = management_function_to_event_name[function_name]
+            _event_name: Final[AlertType] = management_function_to_event_name[function_name]
 
-            key_event = VirtualKeyEvent(
+            key_event: Final = VirtualKeyEvent(
                 created_by_user_id=user_api_key_dict.user_id or "Unknown",
                 created_by_user_role=user_api_key_dict.user_role or "Unknown",
                 created_by_key_alias=user_api_key_dict.key_alias,
@@ -464,7 +579,7 @@ async def send_management_endpoint_alert(
             )
 
             # replace all "_" with " " and capitalize
-            event_name = _event_name.replace("_", " ").title()
+            event_name: Final = _event_name.replace("_", " ").title()
             await proxy_logging_obj.slack_alerting_instance.send_virtual_key_event_slack(
                 key_event=key_event,
                 event_name=event_name,
@@ -472,8 +587,18 @@ async def send_management_endpoint_alert(
             )
 
 
-def _redacted_env_var(entry: Any) -> dict:
-    get = entry.get if isinstance(entry, dict) else lambda k: getattr(entry, k, None)
+def _object_mapping(value: object) -> Mapping[str, object] | None:
+    """Return ``value`` as an opaque mapping when it is a dict."""
+    return value if isinstance(value, dict) else None
+
+
+def _object_list(value: object) -> Sequence[object] | None:
+    """Return ``value`` as an opaque sequence when it is a list."""
+    return value if isinstance(value, list) else None
+
+
+def _redacted_env_var(entry: object) -> dict[str, object]:
+    get: Final[Callable[[str], object]] = entry.get if isinstance(entry, dict) else lambda k: getattr(entry, k, None)
     return {
         "name": get("name"),
         "scope": get("scope"),
@@ -482,25 +607,28 @@ def _redacted_env_var(entry: Any) -> dict:
     }
 
 
-def _redact_record_env_vars(record: Any) -> Any:
+def _redact_record_env_vars(record: object) -> object:
     """Return ``record`` with its ``env_vars[].value`` blanked.
 
     Copies rather than mutating, because the record aliases the live response
     object that is also returned to the caller. Records without an ``env_vars``
     list are returned unchanged.
     """
-    env_vars = record.get("env_vars") if isinstance(record, dict) else getattr(record, "env_vars", None)
-    if not isinstance(env_vars, list):
+    record_map: Final = _object_mapping(record)
+    env_vars: Final = _object_list(
+        record_map.get("env_vars") if record_map is not None else getattr(record, "env_vars", None)
+    )
+    if env_vars is None:
         return record
-    redacted = [_redacted_env_var(entry) for entry in env_vars]
-    if isinstance(record, dict):
-        return {**record, "env_vars": redacted}
+    redacted: Final = [_redacted_env_var(entry) for entry in env_vars]
+    if record_map is not None:
+        return {**record_map, "env_vars": redacted}
     if isinstance(record, BaseModel):
         return record.model_copy(update={"env_vars": redacted})
     return record
 
 
-def _redact_env_var_values(response: dict) -> None:
+def _redact_env_var_values(response: MutableMapping[str, object]) -> None:
     """Blank ``env_vars[].value`` in a management response before telemetry.
 
     MCP endpoints return decrypted ``scope="global"`` env var values so the admin
@@ -510,22 +638,23 @@ def _redact_env_var_values(response: dict) -> None:
     create/update) and nested under ``items`` (the submissions queue), so both are
     scrubbed. Names, scopes, and descriptions are kept so traces stay useful.
     """
-    if isinstance(response.get("env_vars"), list):
-        response["env_vars"] = [_redacted_env_var(entry) for entry in response["env_vars"]]
+    env_vars: Final = _object_list(response.get("env_vars"))
+    if env_vars is not None:
+        response["env_vars"] = [_redacted_env_var(entry) for entry in env_vars]
 
-    items = response.get("items")
-    if isinstance(items, list):
+    items: Final = _object_list(response.get("items"))
+    if items is not None:
         response["items"] = [_redact_record_env_vars(item) for item in items]
 
 
 async def _emit_management_endpoint_otel_span(
     func: Callable,
     kwargs: dict,
-    parent_otel_span: Any,
+    parent_otel_span: Span | None,
     start_time: datetime,
     end_time: datetime,
     result: Any = None,
-    exception: Optional[Exception] = None,
+    exception: Exception | None = None,
 ) -> None:
     """Stamp + end the parent OTEL SERVER span for a management endpoint.
 
@@ -547,7 +676,7 @@ async def _emit_management_endpoint_otel_span(
     if is_otel_v2_enabled():
         return
 
-    http_request: Optional[Request] = kwargs.get("http_request")
+    http_request: Final[Request | None] = kwargs.get("http_request")
     if http_request is not None:
         # Inline import — auth_utils participates in a proxy import cycle.
         from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
@@ -560,7 +689,7 @@ async def _emit_management_endpoint_otel_span(
         route = func.__name__
         request_body = {}
 
-    _CREDENTIAL_FIELDS = frozenset(
+    _CREDENTIAL_FIELDS: Final = frozenset(
         {
             "key",
             "token",
@@ -574,16 +703,16 @@ async def _emit_management_endpoint_otel_span(
         }
     )
 
-    _response: Optional[dict] = None
+    _response: dict[str, object] | None = None
     if exception is None and result is not None:
         try:
-            raw = dict(result)
+            raw: Final[Mapping[str, object]] = dict(result)
             _response = {k: v for k, v in raw.items() if k not in _CREDENTIAL_FIELDS}
             _redact_env_var_values(_response)
         except Exception:
             _response = None
 
-    logging_payload = ManagementEndpointLoggingPayload(
+    logging_payload: Final = ManagementEndpointLoggingPayload(
         route=route,
         request_data=request_body,
         response=_response,
@@ -614,9 +743,9 @@ def management_endpoint_wrapper(func):
 
     @wraps(func)
     async def wrapper(*args, **kwargs):
-        start_time = datetime.now()
+        start_time: Final = datetime.now()
         try:
-            result = await func(*args, **kwargs)
+            result: Final = await func(*args, **kwargs)
             end_time = datetime.now()
             try:
                 user_api_key_dict: UserAPIKeyAuth = kwargs.get("user_api_key_dict") or UserAPIKeyAuth()
@@ -626,7 +755,7 @@ def management_endpoint_wrapper(func):
                     user_api_key_dict=user_api_key_dict,
                     function_name=func.__name__,
                 )
-                parent_otel_span = getattr(user_api_key_dict, "parent_otel_span", None)
+                parent_otel_span: Span | None = getattr(user_api_key_dict, "parent_otel_span", None)
                 if parent_otel_span is not None:
                     await _emit_management_endpoint_otel_span(
                         func=func,
@@ -645,7 +774,6 @@ def management_endpoint_wrapper(func):
             except Exception as e:
                 # Non-Blocking Exception
                 verbose_logger.debug("Error in management endpoint wrapper: %s", str(e))
-                pass
 
             return result
         except Exception as e:

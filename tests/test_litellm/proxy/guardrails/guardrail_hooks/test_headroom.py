@@ -17,14 +17,18 @@ Tests cover:
 - CCR: headroom_retrieve tool injected when compressed messages contain hashes
 - CCR: async_should_run_agentic_loop returns True when response has headroom_retrieve tool calls
 - CCR: async_build_agentic_loop_plan calls retrieve endpoint and builds follow-up messages
+- CCR: streaming /chat/completions is converted to a non-streaming call so the agentic
+  loop resolves the retrieve tool call, then fake-streamed back to the client
 """
 
 import json
 import time
+from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from fastapi import HTTPException
 
 import litellm
@@ -38,7 +42,11 @@ from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
 from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
+from litellm.types.utils import (
+    CallTypes,
+    GenericGuardrailAPIInputs,
+)
 
 FAKE_API_BASE = "https://headroom.example.com"
 FAKE_API_KEY = "test-key"
@@ -1041,6 +1049,64 @@ async def test_apply_guardrail_http_status_error_raises():
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_404_error_includes_troubleshooting_hint():
+    """404 responses include a troubleshooting hint for self-hosted Headroom deployments."""
+    guardrail = _make_guardrail()
+
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello"],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        side_effect=_make_http_status_error(404, "Not Found"),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="request",
+            )
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail["status_code"] == 404
+    assert exc_info.value.detail["body"] == "Not Found"
+    assert "hint" in exc_info.value.detail
+    assert "HEADROOM_COMPRESS_ALLOW_REMOTE=1" in exc_info.value.detail["hint"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_non_404_error_omits_troubleshooting_hint():
+    guardrail = _make_guardrail()
+
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello"],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        side_effect=_make_http_status_error(500, "headroom internal error"),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="request",
+            )
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail["status_code"] == 500
+    assert exc_info.value.detail["body"] == "headroom internal error"
+    assert "hint" not in exc_info.value.detail
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_http_status_error_fail_open_forwards_uncompressed():
     guardrail = _make_guardrail(unreachable_fallback="fail_open")
 
@@ -1833,6 +1899,199 @@ async def test_fail_open_returns_original_parts_shapes():
 
     messages = result["structured_messages"]
     assert [m["content"] for m in messages] == [m["content"] for m in PARTS_MESSAGES]
+
+
+CCR_HASH = "b573993006976af767214fac"
+
+
+def _retrieve_tool_definition() -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": HEADROOM_RETRIEVE_TOOL_NAME,
+            "description": "retrieve compressed content",
+            "parameters": {"type": "object", "properties": {"hash": {"type": "string"}}},
+        },
+    }
+
+
+def _openai_completion_payload(message: dict, finish_reason: str) -> dict:
+    return {
+        "id": "chatcmpl-ccr",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4o",
+        "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+
+
+def _openai_tool_call_payload() -> dict:
+    return _openai_completion_payload(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_ccr",
+                    "type": "function",
+                    "function": {
+                        "name": HEADROOM_RETRIEVE_TOOL_NAME,
+                        "arguments": json.dumps({"hash": CCR_HASH}),
+                    },
+                }
+            ],
+        },
+        "tool_calls",
+    )
+
+
+def _openai_text_payload(content: str) -> dict:
+    return _openai_completion_payload({"role": "assistant", "content": content}, "stop")
+
+
+@pytest.mark.parametrize(
+    "call_type, stream, tools, expect_conversion",
+    [
+        (CallTypes.acompletion, True, [_retrieve_tool_definition()], True),
+        (CallTypes.completion, True, [_retrieve_tool_definition()], True),
+        (CallTypes.acompletion, False, [_retrieve_tool_definition()], False),
+        (CallTypes.acompletion, True, [{"type": "function", "function": {"name": "get_weather"}}], False),
+        (CallTypes.acompletion, True, None, False),
+        (CallTypes.aresponses, True, [_retrieve_tool_definition()], False),
+        (CallTypes.anthropic_messages, True, [_retrieve_tool_definition()], False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_pre_call_deployment_hook_converts_stream_only_for_ccr_chat_completions(
+    guardrail: HeadroomGuardrail,
+    call_type: CallTypes,
+    stream: bool,
+    tools: Optional[list],
+    expect_conversion: bool,
+):
+    kwargs = {"model": "gpt-4o", "stream": stream, "tools": tools}
+
+    result = await guardrail.async_pre_call_deployment_hook(kwargs=kwargs, call_type=call_type)
+
+    if not expect_conversion:
+        assert result is kwargs
+        assert HEADROOM_CONVERTED_STREAM_KEY not in kwargs
+        assert kwargs["stream"] is stream
+        return
+
+    assert result is not None
+    assert result["stream"] is False
+    assert result[HEADROOM_CONVERTED_STREAM_KEY] is True
+    assert kwargs["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_pre_call_deployment_hook_still_compresses_for_deployment_level_configs(
+    guardrail: HeadroomGuardrail,
+):
+    """Regression for the stream-conversion override swallowing the parent hook:
+    when the guardrail is attached at the deployment level and proxy pre_call never
+    ran, the deployment hook is the only place compression executes, so the
+    override must delegate to CustomGuardrail.async_pre_call_deployment_hook."""
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [dict(m) for m in ORIGINAL_MESSAGES],
+        "stream": False,
+        "guardrails": ["headroom"],
+        "metadata": {},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=_make_compress_response(COMPRESSED_MESSAGES),
+    ):
+        result = await guardrail.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.acompletion)
+
+    assert result is not None
+    assert result["messages"] == EXPECTED_MESSAGES
+
+
+@pytest.mark.asyncio
+async def test_pre_call_deployment_hook_converts_stream_after_deployment_level_compression(
+    guardrail: HeadroomGuardrail,
+):
+    kwargs = {
+        "model": "gpt-4o",
+        "messages": [dict(m) for m in ORIGINAL_MESSAGES],
+        "stream": True,
+        "guardrails": ["headroom"],
+        "metadata": {},
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=_make_compress_response(COMPRESSED_MESSAGES_WITH_HASH),
+    ):
+        result = await guardrail.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.acompletion)
+
+    assert result is not None
+    assert has_headroom_retrieve_tool(result["tools"])
+    assert result["stream"] is False
+    assert result[HEADROOM_CONVERTED_STREAM_KEY] is True
+
+
+@pytest.mark.asyncio
+async def test_streaming_chat_completion_resolves_ccr_retrieval_end_to_end(
+    guardrail: HeadroomGuardrail,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Regression test for streaming /chat/completions: the retrieve tool call the
+    model emits must be resolved by the agentic loop instead of being streamed back
+    to a client that never declared the tool."""
+    original_content = "the full uncompressed document"
+    final_answer = "the document says hello"
+    guardrail._issued_hashes_by_call_id["ccr-call-id"] = (
+        frozenset({CCR_HASH}),
+        time.monotonic() + 999,
+    )
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=[
+            httpx.Response(200, json=_openai_tool_call_payload()),
+            httpx.Response(200, json=_openai_text_payload(final_answer)),
+        ]
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "get",
+        new_callable=AsyncMock,
+        return_value=_make_retrieve_response(original_content),
+    ) as mock_get:
+        response = await litellm.acompletion(
+            model="openai/gpt-4o",
+            messages=[{"role": "user", "content": f"summarize hash={CCR_HASH}"}],
+            tools=[_retrieve_tool_definition()],
+            stream=True,
+            litellm_call_id="ccr-call-id",
+        )
+        chunks = [chunk async for chunk in response]
+
+    streamed_text = "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices)
+    assert streamed_text == final_answer
+    assert not any(chunk.choices and chunk.choices[0].delta.tool_calls for chunk in chunks)
+    mock_get.assert_called_once()
+    assert CCR_HASH in (mock_get.call_args.kwargs.get("url") or mock_get.call_args.args[0])
+
+    assert len(upstream.calls) == 2
+    followup_body = json.loads(upstream.calls[1].request.content)
+    assert not followup_body.get("stream")
+    assert original_content in json.dumps(followup_body["messages"])
+    assert not any(key.startswith("_headroom_interception") for key in followup_body)
 
 
 # ---------------------------------------------------------------------------

@@ -12,16 +12,31 @@ from unittest.mock import ANY, MagicMock, Mock, patch
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 import litellm
-from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+from litellm.integrations.anthropic_cache_control_hook import (
+    AnthropicCacheControlHook,
+    supports_openai_prompt_cache_breakpoint,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import StandardCallbackDynamicParams
 
 
+@pytest.fixture(autouse=True)
+def _no_openai_api_base_override(monkeypatch):
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "api_base", None)
+
+
+def _rendered_log_message(call):
+    message = str(call.args[0])
+    values = call.args[1:]
+    return message % values if values else message
+
+
 @pytest.mark.asyncio
-async def test_anthropic_cache_control_hook_system_message():
+async def test_anthropic_cache_control_hook_system_message(monkeypatch: pytest.MonkeyPatch):
     # Use patch.dict to mock environment variables instead of setting them directly
     with patch.dict(
         os.environ,
@@ -32,7 +47,7 @@ async def test_anthropic_cache_control_hook_system_message():
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         # Mock response data
         mock_response = MagicMock()
@@ -100,7 +115,7 @@ async def test_anthropic_cache_control_hook_system_message():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_cache_control_hook_user_message():
+async def test_anthropic_cache_control_hook_user_message(monkeypatch: pytest.MonkeyPatch):
     # Use patch.dict to mock environment variables instead of setting them directly
     with patch.dict(
         os.environ,
@@ -111,7 +126,7 @@ async def test_anthropic_cache_control_hook_user_message():
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         # Mock response data
         mock_response = MagicMock()
@@ -172,7 +187,7 @@ async def test_anthropic_cache_control_hook_user_message():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_cache_control_hook_negative_indices():
+async def test_anthropic_cache_control_hook_negative_indices(monkeypatch: pytest.MonkeyPatch):
     """
     Test the bug fix for handling negative indices in cache control injection points.
     This test verifies that negative indices (-1, -2) are properly converted to positive indices
@@ -188,7 +203,7 @@ async def test_anthropic_cache_control_hook_negative_indices():
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         # Mock response data
         mock_response = MagicMock()
@@ -286,7 +301,7 @@ async def test_anthropic_cache_control_hook_negative_indices():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_cache_control_hook_out_of_bounds_logging():
+async def test_anthropic_cache_control_hook_out_of_bounds_logging(monkeypatch: pytest.MonkeyPatch):
     """
     Test that warning logs are generated when out-of-bounds indices are used.
     This verifies that the verbose_logger.warning is called with the correct message.
@@ -300,7 +315,7 @@ async def test_anthropic_cache_control_hook_out_of_bounds_logging():
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         # Mock response data
         mock_response = MagicMock()
@@ -339,7 +354,7 @@ async def test_anthropic_cache_control_hook_out_of_bounds_logging():
 
                 # Verify that warning was called with the expected message
                 mock_logger.warning.assert_called_once()
-                warning_call = mock_logger.warning.call_args[0][0]
+                warning_call = _rendered_log_message(mock_logger.warning.call_args)
 
                 # Check that the warning message contains the expected information
                 assert "AnthropicCacheControlHook: Provided index 10 is out of bounds" in warning_call
@@ -349,7 +364,7 @@ async def test_anthropic_cache_control_hook_out_of_bounds_logging():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_cache_control_hook_negative_out_of_bounds_logging():
+async def test_anthropic_cache_control_hook_negative_out_of_bounds_logging(monkeypatch: pytest.MonkeyPatch):
     """
     Test that warning logs are generated for negative indices that are out of bounds.
     """
@@ -362,7 +377,7 @@ async def test_anthropic_cache_control_hook_negative_out_of_bounds_logging():
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         # Mock response data
         mock_response = MagicMock()
@@ -405,7 +420,7 @@ async def test_anthropic_cache_control_hook_negative_out_of_bounds_logging():
 
                 # Verify that warning was called with the expected message
                 mock_logger.warning.assert_called_once()
-                warning_call = mock_logger.warning.call_args[0][0]
+                warning_call = _rendered_log_message(mock_logger.warning.call_args)
 
                 # Check that the warning message contains the original negative index
                 assert "AnthropicCacheControlHook: Provided index -5 is out of bounds" in warning_call
@@ -415,7 +430,7 @@ async def test_anthropic_cache_control_hook_negative_out_of_bounds_logging():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_cache_control_hook_multiple_user_messages():
+async def test_anthropic_cache_control_hook_multiple_user_messages(monkeypatch: pytest.MonkeyPatch):
     """
     Test cache control injection on multiple user messages specifically.
     Note: Bedrock API combines consecutive user messages into a single message with multiple content blocks.
@@ -429,7 +444,7 @@ async def test_anthropic_cache_control_hook_multiple_user_messages():
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         # Mock response data
         mock_response = MagicMock()
@@ -507,7 +522,7 @@ async def test_anthropic_cache_control_hook_multiple_user_messages():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("bad_index", [10, -10])
-async def test_anthropic_cache_control_hook_out_of_bounds(bad_index):
+async def test_anthropic_cache_control_hook_out_of_bounds(bad_index, monkeypatch: pytest.MonkeyPatch):
     """
     Verify the hook does not raise an error and makes no changes
     when an out-of-bounds index is provided.
@@ -521,7 +536,7 @@ async def test_anthropic_cache_control_hook_out_of_bounds(bad_index):
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         # Mock response data
         mock_response = MagicMock()
@@ -570,7 +585,7 @@ async def test_anthropic_cache_control_hook_out_of_bounds(bad_index):
     "message_list",
     [[{"role": "user", "content": "Single message"}]],  # Single message only - empty list will fail at API level
 )
-async def test_anthropic_cache_control_hook_single_message(message_list):
+async def test_anthropic_cache_control_hook_single_message(message_list, monkeypatch: pytest.MonkeyPatch):
     """
     Verify the hook runs without error on very short message lists.
     """
@@ -583,7 +598,7 @@ async def test_anthropic_cache_control_hook_single_message(message_list):
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         # Mock response data
         mock_response = MagicMock()
@@ -621,7 +636,7 @@ async def test_anthropic_cache_control_hook_single_message(message_list):
 
 
 @pytest.mark.asyncio
-async def test_anthropic_cache_control_hook_empty_message_list():
+async def test_anthropic_cache_control_hook_empty_message_list(monkeypatch: pytest.MonkeyPatch):
     """
     Verify that empty message lists are handled appropriately (should fail at API level, not hook level).
     """
@@ -634,7 +649,7 @@ async def test_anthropic_cache_control_hook_empty_message_list():
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         client = AsyncHTTPHandler()
         with patch.object(client, "post", return_value=MagicMock()) as mock_post:
@@ -652,7 +667,7 @@ async def test_anthropic_cache_control_hook_empty_message_list():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_cache_control_hook_no_op():
+async def test_anthropic_cache_control_hook_no_op(monkeypatch: pytest.MonkeyPatch):
     """
     Verify that if no injection points are specified, messages remain unmodified.
     """
@@ -665,7 +680,7 @@ async def test_anthropic_cache_control_hook_no_op():
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         # Mock response data
         mock_response = MagicMock()
@@ -710,7 +725,7 @@ async def test_anthropic_cache_control_hook_no_op():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_cache_control_hook_multiple_content_items_last_only():
+async def test_anthropic_cache_control_hook_multiple_content_items_last_only(monkeypatch: pytest.MonkeyPatch):
     """
     Test that cache_control is only applied to the last content item in a list, not all items.
     This verifies the fix for https://github.com/BerriAI/litellm/issues/15696
@@ -724,7 +739,7 @@ async def test_anthropic_cache_control_hook_multiple_content_items_last_only():
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -781,7 +796,7 @@ async def test_anthropic_cache_control_hook_multiple_content_items_last_only():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_cache_control_hook_document_analysis_multiple_pages():
+async def test_anthropic_cache_control_hook_document_analysis_multiple_pages(monkeypatch: pytest.MonkeyPatch):
     """
     Test cache_control with multiple document pages to ensure only the last page gets cached.
     This simulates document analysis with 6 content blocks, verifying the fix for issue 15696.
@@ -795,7 +810,7 @@ async def test_anthropic_cache_control_hook_document_analysis_multiple_pages():
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -953,7 +968,7 @@ def test_gemini_cache_control_injection_list_content_detected():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_cache_control_hook_string_negative_index():
+async def test_anthropic_cache_control_hook_string_negative_index(monkeypatch: pytest.MonkeyPatch):
     """
     Test that string negative indices like "-1" are handled correctly.
 
@@ -970,7 +985,7 @@ async def test_anthropic_cache_control_hook_string_negative_index():
         },
     ):
         anthropic_cache_control_hook = AnthropicCacheControlHook()
-        litellm.callbacks = [anthropic_cache_control_hook]
+        monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
 
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -1169,7 +1184,7 @@ def test_cache_control_hook_does_not_overwrite_existing_cache_control():
 
 
 @pytest.mark.asyncio
-async def test_cache_control_hook_bedrock_payload_caps_cachepoints_at_four():
+async def test_cache_control_hook_bedrock_payload_caps_cachepoints_at_four(monkeypatch: pytest.MonkeyPatch):
     """End-to-end: outgoing Bedrock payload must not exceed 4 cachePoint blocks.
 
     Reproduces the customer report where 4 client cache_control system blocks
@@ -1183,7 +1198,7 @@ async def test_cache_control_hook_bedrock_payload_caps_cachepoints_at_four():
             "AWS_REGION_NAME": "us-east-1",
         },
     ):
-        litellm.callbacks = [AnthropicCacheControlHook()]
+        monkeypatch.setattr(litellm, "callbacks", [AnthropicCacheControlHook()])
 
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -1273,7 +1288,7 @@ def test_cache_control_hook_reserves_slot_for_tool_config_point():
 
 
 @pytest.mark.asyncio
-async def test_cache_control_hook_bedrock_payload_caps_with_tool_config_point():
+async def test_cache_control_hook_bedrock_payload_caps_with_tool_config_point(monkeypatch: pytest.MonkeyPatch):
     """End-to-end: message + tool_config injection must not exceed 4 cachePoints."""
     with patch.dict(
         os.environ,
@@ -1283,7 +1298,7 @@ async def test_cache_control_hook_bedrock_payload_caps_with_tool_config_point():
             "AWS_REGION_NAME": "us-east-1",
         },
     ):
-        litellm.callbacks = [AnthropicCacheControlHook()]
+        monkeypatch.setattr(litellm, "callbacks", [AnthropicCacheControlHook()])
 
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -1584,9 +1599,31 @@ class TestEnableAnthropicPromptCaching:
         assert supports_prompt_caching(model=model, custom_llm_provider=provider) is True
         assert self._points(model=model, provider=provider) == []
 
+    def test_databricks_claude_not_injected_despite_caching_support(self, monkeypatch, local_model_cost_map):
+        from litellm.utils import supports_prompt_caching
+
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        model = "databricks/databricks-claude-sonnet-4-5"
+        assert supports_prompt_caching(model=model, custom_llm_provider="databricks") is True
+        assert self._points(model=model, provider="databricks") == []
+
     def test_model_without_caching_support_not_injected(self, monkeypatch):
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
         assert self._points(model="anthropic.claude-3-5-sonnet-20240620-v1:0", provider="bedrock") == []
+
+    @pytest.mark.parametrize("model", ["us.xai.grok-4.6", "global.xai.grok-4.6"])
+    def test_bedrock_grok_not_injected(self, monkeypatch, local_model_cost_map, model):
+        """Bedrock supports only implicit prompt caching for Grok: explicit cachePoint
+        breakpoints make it reject the whole request ("You invoked an unsupported model
+        or your request did not allow prompt caching"), so supports_prompt_caching stays
+        false, while implicit cache hits still bill at the cache-read rate."""
+        from litellm.utils import supports_prompt_caching
+
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert supports_prompt_caching(model=model, custom_llm_provider="bedrock") is False
+        assert self._points(model=model, provider="bedrock") == []
+        entry = litellm.model_cost[model]
+        assert 0 < entry["cache_read_input_token_cost"] < entry["input_cost_per_token"]
 
     def test_stands_down_when_client_sent_cache_control(self, monkeypatch):
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
@@ -1721,6 +1758,104 @@ class TestEnableAnthropicPromptCaching:
         assert result_sys == [{"type": "text", "text": "a system prompt", "cache_control": {"type": "ephemeral"}}]
         assert result_msgs[-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
         assert "cache_control" not in result_msgs[0]["content"][-1]
+
+    def test_messages_with_default_injections_leaves_the_caller_list_untouched(self, monkeypatch):
+        """
+        Routing calls this on the live request's own message list to derive the affinity key, before
+        the request is sent. Marking in place would leak litellm's breakpoints into the caller's
+        messages, where the real injection pass later reads them back as client-supplied ones.
+        """
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        messages = copy.deepcopy(self.MESSAGES)
+        before = copy.deepcopy(messages)
+
+        injected = AnthropicCacheControlHook.messages_with_default_injections(
+            messages=messages, models=("claude-sonnet-4-5",)
+        )
+
+        assert injected != messages
+        assert messages == before
+
+
+class TestPerKeyEnablePromptCaching:
+    """Per-request enable_prompt_caching override (stamped from key metadata) with the global flag off."""
+
+    MESSAGES: List[AllMessageValues] = [
+        {"role": "system", "content": "a long system prompt"},
+        {"role": "user", "content": "latest turn"},
+    ]
+
+    def _points(self, enable_prompt_caching, model="claude-sonnet-4-5", provider="anthropic", messages=None):
+        return AnthropicCacheControlHook.get_default_injection_points(
+            messages=copy.deepcopy(self.MESSAGES) if messages is None else messages,
+            system=None,
+            model=model,
+            custom_llm_provider=provider,
+            enable_prompt_caching=enable_prompt_caching,
+        )
+
+    def test_true_injects_with_global_flag_off(self):
+        assert litellm.enable_anthropic_prompt_caching is False
+        assert self._points(True) == [
+            {"location": "message", "role": "system", "index": None, "control": {"type": "ephemeral"}},
+            {"location": "message", "role": None, "index": -1, "control": {"type": "ephemeral"}},
+        ]
+
+    @pytest.mark.parametrize("enable_prompt_caching", [False, None])
+    def test_false_and_none_fall_back_to_global_flag(self, enable_prompt_caching):
+        assert self._points(enable_prompt_caching) == []
+
+    def test_false_does_not_suppress_global_flag(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert [p["index"] for p in self._points(False)] == [None, -1]
+
+    def test_provider_gate_still_applies(self):
+        assert self._points(True, model="gpt-4o", provider="openai") == []
+
+    def test_unsupported_model_gate_still_applies(self):
+        assert self._points(True, model="anthropic.claude-3-5-sonnet-20240620-v1:0", provider="bedrock") == []
+
+    def test_client_markers_still_win(self):
+        messages = [
+            {"role": "system", "content": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral"}}]},
+            {"role": "user", "content": "latest turn"},
+        ]
+        assert self._points(True, messages=messages) == []
+
+    def test_seed_injects_with_global_flag_off(self):
+        params: dict = {}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+            enable_prompt_caching=True,
+        )
+        assert [p["index"] for p in params["cache_control_injection_points"]] == [None, -1]
+
+    def test_v1_messages_injects_and_pops_flag_from_kwargs(self):
+        kwargs: dict = {"enable_prompt_caching": True}
+        result_msgs, result_sys = AnthropicCacheControlHook.maybe_inject_cache_control(
+            [{"role": "user", "content": [{"type": "text", "text": "latest"}]}],
+            "a system prompt",
+            kwargs,
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        assert result_sys == [{"type": "text", "text": "a system prompt", "cache_control": {"type": "ephemeral"}}]
+        assert result_msgs[-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+        assert "enable_prompt_caching" not in kwargs
+
+    def test_v1_messages_pops_flag_even_when_noop(self):
+        kwargs: dict = {"enable_prompt_caching": True}
+        AnthropicCacheControlHook.maybe_inject_cache_control(
+            [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+            None,
+            kwargs,
+            model="gpt-4o",
+            custom_llm_provider="openai",
+        )
+        assert "enable_prompt_caching" not in kwargs
 
     def test_v1_messages_is_noop_when_disabled(self):
         messages = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
@@ -1909,3 +2044,882 @@ class TestAnthropicPromptCachingEnvVars:
         """An unparseable TTL must fall back to Anthropic's 5m default, never reach the provider verbatim."""
         _, ttl = self._import_litellm_with_env({"LITELLM_ANTHROPIC_PROMPT_CACHING_TTL": value})
         assert ttl is None
+
+
+def _contains_key(value, key) -> bool:
+    if isinstance(value, dict):
+        return key in value or any(_contains_key(v, key) for v in value.values())
+    if isinstance(value, list):
+        return any(_contains_key(v, key) for v in value)
+    return False
+
+
+class TestOpenAIPromptCacheBreakpoint:
+    """OpenAI GPT-5.6+ targets get content-block `prompt_cache_breakpoint` markers and a
+    request-level `prompt_cache_options` instead of Anthropic `cache_control` (#37509)."""
+
+    EXPLICIT = {"mode": "explicit"}
+    SYSTEM_POINT = [{"location": "message", "role": "system"}]
+
+    @staticmethod
+    def _inject(messages, system, kwargs, model="openai/gpt-5.6", custom_llm_provider=None):
+        return AnthropicCacheControlHook.maybe_inject_cache_control(
+            copy.deepcopy(messages),
+            copy.deepcopy(system),
+            kwargs,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    @staticmethod
+    def _chat(messages, params, model="openai/gpt-5.6"):
+        return AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=model,
+            messages=copy.deepcopy(messages),
+            non_default_params=params,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            ("gpt-5.6", True),
+            ("openai/gpt-5.6", True),
+            ("gpt-5.6-sol", True),
+            ("gpt-5.6-luna", True),
+            ("gpt-5.7", True),
+            ("gpt-6", True),
+            ("GPT-5.6", True),
+            ("gpt-5.5", False),
+            ("gpt-5", False),
+            ("gpt-5-chat-latest", False),
+            ("gpt-4.1", False),
+            ("o3", False),
+            ("claude-sonnet-4-5", False),
+        ],
+    )
+    def test_model_support_truth_table(self, model, expected):
+        assert supports_openai_prompt_cache_breakpoint(model) is expected
+
+    @pytest.mark.parametrize(
+        "model,provider,expected",
+        [
+            ("openai/gpt-5.6", None, True),
+            ("gpt-5.6", None, True),
+            ("gpt-5.6", "openai", True),
+            ("gpt-5.6", "azure", False),
+            ("azure/gpt-5.6", None, False),
+            ("openai/gpt-4.1", None, False),
+            ("anthropic/claude-sonnet-4-5", None, False),
+            ("no-provider-can-route-this-model", None, False),
+            (None, "openai", False),
+        ],
+    )
+    def test_dialect_resolution(self, model, provider, expected):
+        assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(model, provider) is expected
+
+    def test_count_covers_both_marker_kinds(self):
+        message = {
+            "role": "user",
+            "cache_control": {"type": "ephemeral"},
+            "content": [
+                {"type": "text", "text": "a", "prompt_cache_breakpoint": self.EXPLICIT},
+                {"type": "text", "text": "b", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "c"},
+            ],
+        }
+        assert AnthropicCacheControlHook._count_cache_control_blocks(message) == 3
+
+    def test_v1_messages_string_system_gets_block_breakpoint(self):
+        kwargs = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        messages, system = self._inject([{"role": "user", "content": "hi"}], "sys", kwargs)
+        assert system == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}]
+        assert messages == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        assert kwargs == {"prompt_cache_options": self.EXPLICIT}
+        assert not _contains_key(system, "cache_control")
+
+    def test_v1_messages_list_system_marks_last_block_only(self):
+        kwargs = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        system = [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]
+        _, result_system = self._inject([{"role": "user", "content": "hi"}], system, kwargs)
+        assert result_system == [
+            {"type": "text", "text": "a"},
+            {"type": "text", "text": "b", "prompt_cache_breakpoint": self.EXPLICIT},
+        ]
+        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+
+    def test_v1_messages_targets_by_role(self):
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "first"}, {"type": "text", "text": "second"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "reply"}]},
+            {"role": "user", "content": "last"},
+        ]
+        kwargs = {"cache_control_injection_points": [{"location": "message", "role": "user"}]}
+        result, _ = self._inject(messages, None, kwargs)
+        assert result[0]["content"] == [
+            {"type": "text", "text": "first"},
+            {"type": "text", "text": "second", "prompt_cache_breakpoint": self.EXPLICIT},
+        ]
+        assert result[1] == messages[1]
+        assert result[2]["content"] == [{"type": "text", "text": "last", "prompt_cache_breakpoint": self.EXPLICIT}]
+        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+
+    def test_v1_messages_targets_by_index(self):
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "first"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "reply"}]},
+            {"role": "user", "content": [{"type": "text", "text": "last"}]},
+        ]
+        kwargs = {"cache_control_injection_points": [{"location": "message", "index": -1}]}
+        result, _ = self._inject(messages, None, kwargs)
+        assert result[:2] == messages[:2]
+        assert result[2]["content"] == [{"type": "text", "text": "last", "prompt_cache_breakpoint": self.EXPLICIT}]
+
+    def test_v1_messages_control_field_is_ignored(self):
+        ttl_control = {"type": "ephemeral", "ttl": "1h"}
+        kwargs = {
+            "cache_control_injection_points": [
+                {"location": "message", "role": "system", "control": ttl_control},
+                {"location": "message", "index": -1, "control": ttl_control},
+            ]
+        }
+        messages, system = self._inject([{"role": "user", "content": "hi"}], "sys", kwargs)
+        assert system[0]["prompt_cache_breakpoint"] == self.EXPLICIT
+        assert messages[0]["content"][-1]["prompt_cache_breakpoint"] == self.EXPLICIT
+        assert not _contains_key(system, "cache_control")
+        assert not _contains_key(messages, "cache_control")
+
+    def test_v1_messages_keeps_caller_prompt_cache_options(self):
+        caller_options = {"mode": "explicit", "ttl": "30m"}
+        kwargs = {
+            "cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT),
+            "prompt_cache_options": dict(caller_options),
+        }
+        _, system = self._inject([{"role": "user", "content": "hi"}], "sys", kwargs)
+        assert system[0]["prompt_cache_breakpoint"] == self.EXPLICIT
+        assert kwargs["prompt_cache_options"] == caller_options
+
+    def test_v1_messages_no_prompt_cache_options_when_nothing_injected(self):
+        kwargs = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        messages, system = self._inject([{"role": "user", "content": "hi"}], None, kwargs)
+        assert system is None
+        assert "prompt_cache_options" not in kwargs
+        assert not _contains_key(messages, "prompt_cache_breakpoint")
+
+    def test_v1_messages_anthropic_target_unchanged(self):
+        kwargs = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        _, system = self._inject(
+            [{"role": "user", "content": "hi"}],
+            "sys",
+            kwargs,
+            model="anthropic/claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        assert system == [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}]
+        assert kwargs == {}
+
+    def test_v1_messages_older_openai_model_keeps_cache_control(self):
+        kwargs = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        _, system = self._inject([{"role": "user", "content": "hi"}], "sys", kwargs, model="openai/gpt-4.1")
+        assert system == [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}]
+        assert kwargs == {}
+
+    def test_v1_messages_client_content_breakpoint_makes_configured_points_stand_down(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}]}]
+        kwargs = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        result, system = self._inject(messages, "sys", kwargs)
+        assert result == messages
+        assert system == "sys"
+        assert kwargs == {}
+
+    def test_v1_messages_client_system_breakpoint_makes_configured_points_stand_down(self):
+        system = [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}]
+        messages = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        kwargs = {"cache_control_injection_points": [{"location": "message", "index": -1}]}
+        result, result_system = self._inject(messages, system, kwargs)
+        assert result == messages
+        assert result_system == system
+        assert kwargs == {}
+
+    def test_chat_system_string_wrapped_with_block_breakpoint(self):
+        params = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        messages = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
+        _, processed, returned = self._chat(messages, params)
+        assert processed[0] == {
+            "role": "system",
+            "content": [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}],
+        }
+        assert processed[1] == {"role": "user", "content": "hi"}
+        assert returned is params
+        assert returned == {"prompt_cache_options": self.EXPLICIT}
+
+    def test_chat_list_content_marks_last_block(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "look"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+                ],
+            }
+        ]
+        params = {"cache_control_injection_points": [{"location": "message", "index": -1}]}
+        _, processed, _ = self._chat(messages, params)
+        assert processed[0]["content"] == [
+            {"type": "text", "text": "look"},
+            {
+                "type": "image_url",
+                "image_url": {"url": "https://example.com/a.png"},
+                "prompt_cache_breakpoint": self.EXPLICIT,
+            },
+        ]
+        assert params["prompt_cache_options"] == self.EXPLICIT
+
+    def test_chat_unprefixed_model_resolves_to_openai(self):
+        params = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        _, processed, _ = self._chat([{"role": "system", "content": "sys"}], params, model="gpt-5.6")
+        assert processed[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}]
+        assert params["prompt_cache_options"] == self.EXPLICIT
+
+    def test_chat_keeps_caller_prompt_cache_options(self):
+        params = {
+            "cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT),
+            "prompt_cache_options": {"mode": "implicit"},
+        }
+        self._chat([{"role": "system", "content": "sys"}], params)
+        assert params["prompt_cache_options"] == {"mode": "implicit"}
+
+    def test_chat_no_prompt_cache_options_when_nothing_injected(self):
+        params = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        messages = [{"role": "user", "content": "hi"}]
+        _, processed, _ = self._chat(messages, params)
+        assert processed == messages
+        assert params == {}
+
+    @pytest.mark.parametrize("model", ["openai/gpt-4.1", "anthropic/claude-sonnet-4-5"])
+    def test_chat_other_targets_keep_message_level_cache_control(self, model):
+        params = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        _, processed, _ = self._chat([{"role": "system", "content": "sys"}], params, model=model)
+        assert processed[0] == {"role": "system", "content": "sys", "cache_control": {"type": "ephemeral"}}
+        assert params == {}
+
+    def test_chat_client_breakpoint_makes_seeded_points_stand_down(self):
+        params = {"cache_control_injection_points": copy.deepcopy(self.SYSTEM_POINT)}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=[
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}]},
+            ],
+            model="openai/gpt-5.6",
+            custom_llm_provider="openai",
+        )
+        assert params == {}
+
+    def test_cap_counts_client_breakpoints_of_both_kinds(self):
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "a", "prompt_cache_breakpoint": self.EXPLICIT}]},
+            {"role": "user", "content": [{"type": "text", "text": "b", "cache_control": {"type": "ephemeral"}}]},
+            {"role": "user", "content": [{"type": "text", "text": "c", "prompt_cache_breakpoint": self.EXPLICIT}]},
+            {"role": "user", "content": "d"},
+            {"role": "user", "content": "e"},
+        ]
+        result = AnthropicCacheControlHook._apply_message_injections(
+            points=[{"location": "message", "role": "user"}],
+            messages=copy.deepcopy(messages),
+            max_blocks=4,
+            openai_dialect=True,
+        )
+        assert result[:3] == messages[:3]
+        assert result[3]["content"] == [{"type": "text", "text": "d", "prompt_cache_breakpoint": self.EXPLICIT}]
+        assert result[4] == {"role": "user", "content": "e"}
+
+
+class TestOpenAIPromptCacheBreakpointPlacementRules:
+    """OpenAI dialect only marks blocks OpenAI (and the /v1/messages bridges) can carry (#37509)."""
+
+    EXPLICIT = {"mode": "explicit"}
+
+    def _chat(self, messages, points, model="openai/gpt-5.6"):
+        params = {"cache_control_injection_points": copy.deepcopy(points)}
+        _, out, params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=model,
+            messages=copy.deepcopy(messages),
+            non_default_params=params,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        return out, params
+
+    def test_assistant_message_is_never_marked_on_chat_path(self):
+        messages = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}]
+        out, params = self._chat(messages, [{"location": "message", "role": "assistant"}])
+        assert out == messages
+        assert "prompt_cache_options" not in params
+
+    def test_tool_message_text_is_marked_on_chat_path(self):
+        messages = [
+            {"role": "user", "content": "weather?"},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "w", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "sunny"},
+        ]
+        out, params = self._chat(messages, [{"location": "message", "index": -1}])
+        assert out[2]["content"] == [{"type": "text", "text": "sunny", "prompt_cache_breakpoint": self.EXPLICIT}]
+        assert params["prompt_cache_options"] == self.EXPLICIT
+
+    def test_tool_result_only_turn_is_skipped_on_v1_messages(self):
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "q"}]},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "w", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "sunny"}]},
+        ]
+        kwargs = {"cache_control_injection_points": [{"location": "message", "index": -1}]}
+        out, system = AnthropicCacheControlHook.maybe_inject_cache_control(
+            copy.deepcopy(messages), None, kwargs, model="openai/gpt-5.6"
+        )
+        assert out == messages
+        assert system is None
+        assert "prompt_cache_options" not in kwargs
+
+    def test_assistant_turn_is_skipped_on_v1_messages(self):
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "q"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "a"}]},
+        ]
+        kwargs = {"cache_control_injection_points": [{"location": "message", "role": "assistant"}]}
+        out, _ = AnthropicCacheControlHook.maybe_inject_cache_control(
+            copy.deepcopy(messages), None, kwargs, model="openai/gpt-5.6"
+        )
+        assert out == messages
+        assert "prompt_cache_options" not in kwargs
+
+    def test_text_after_tool_result_is_marked(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "t1", "content": "sunny"},
+                    {"type": "text", "text": "thanks"},
+                ],
+            }
+        ]
+        kwargs = {"cache_control_injection_points": [{"location": "message", "index": -1}]}
+        out, _ = AnthropicCacheControlHook.maybe_inject_cache_control(messages, None, kwargs, model="openai/gpt-5.6")
+        assert out[0]["content"] == [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "sunny"},
+            {"type": "text", "text": "thanks", "prompt_cache_breakpoint": self.EXPLICIT},
+        ]
+        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+
+    def test_marker_walks_back_to_last_eligible_block(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "read this"},
+                    {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "doc"}},
+                ],
+            }
+        ]
+        kwargs = {"cache_control_injection_points": [{"location": "message", "index": -1}]}
+        out, _ = AnthropicCacheControlHook.maybe_inject_cache_control(messages, None, kwargs, model="openai/gpt-5.6")
+        assert out[0]["content"][0] == {"type": "text", "text": "read this", "prompt_cache_breakpoint": self.EXPLICIT}
+        assert "prompt_cache_breakpoint" not in out[0]["content"][1]
+
+    def test_skipped_block_does_not_consume_a_slot(self):
+        messages = [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t0", "content": "r"}]}] + [
+            {"role": "user", "content": [{"type": "text", "text": f"m{i}"}]} for i in range(4)
+        ]
+        kwargs = {"cache_control_injection_points": [{"location": "message", "role": "user"}]}
+        out, _ = AnthropicCacheControlHook.maybe_inject_cache_control(messages, None, kwargs, model="openai/gpt-5.6")
+        assert "prompt_cache_breakpoint" not in out[0]["content"][0]
+        assert all(msg["content"][0]["prompt_cache_breakpoint"] == self.EXPLICIT for msg in out[1:])
+
+
+class TestChatPathProviderStamp:
+    """The chat path learns the dialect decision (provider, api_base, opt-in) through the seeded points (#37509)."""
+
+    POINTS = [{"location": "message", "role": "system"}]
+    MESSAGES = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}]
+    ANTHROPIC_STYLE = {"role": "system", "content": "sys", "cache_control": {"type": "ephemeral"}}
+    OPENAI_STYLE = [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
+    CUSTOM_API_BASE = "http://127.0.0.1:9/v1"
+
+    def _seed_and_run(self, model, custom_llm_provider, api_base=None, prompt_cache_options=None):
+        params = {"cache_control_injection_points": copy.deepcopy(self.POINTS)}
+        if prompt_cache_options is not None:
+            params["prompt_cache_options"] = prompt_cache_options
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+        )
+        return self._run(params, model)
+
+    def _run(self, params, model):
+        _, out, params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=model,
+            messages=copy.deepcopy(self.MESSAGES),
+            non_default_params=params,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        return out, params
+
+    def test_openai_compatible_provider_keeps_anthropic_style_markers(self):
+        out, params = self._seed_and_run("gpt-5.6", "hosted_vllm")
+        assert out[0] == {"role": "system", "content": "sys", "cache_control": {"type": "ephemeral"}}
+        assert "prompt_cache_options" not in params
+
+    def test_explicit_openai_provider_uses_openai_dialect(self):
+        out, params = self._seed_and_run("gpt-5.6", "openai")
+        assert out[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
+        assert params["prompt_cache_options"] == {"mode": "explicit"}
+
+    def test_bare_gpt_model_without_provider_resolves_to_openai(self):
+        out, params = self._seed_and_run("gpt-5.6", None)
+        assert out[0]["content"] == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
+        assert params["prompt_cache_options"] == {"mode": "explicit"}
+
+    def test_points_keep_identity_for_models_below_gpt_5_6(self):
+        points = copy.deepcopy(self.POINTS)
+        params = {"cache_control_injection_points": points}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model="anthropic/claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        assert params["cache_control_injection_points"] is points
+
+    def test_provider_lookup_skipped_for_models_below_gpt_5_6(self):
+        from unittest.mock import patch
+
+        with patch.object(AnthropicCacheControlHook, "_resolve_provider") as resolve:
+            assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("gpt-4.1", None) is False
+            assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("my-custom-model", None) is False
+        resolve.assert_not_called()
+
+    def test_litellm_proxy_target_keeps_anthropic_style_markers(self):
+        out, params = self._seed_and_run("litellm_proxy/gpt-5.6", None)
+        assert out[0] == self.ANTHROPIC_STYLE
+        assert "prompt_cache_options" not in params
+
+    def test_custom_api_base_keeps_anthropic_style_markers(self):
+        out, params = self._seed_and_run("gpt-5.6", None, api_base=self.CUSTOM_API_BASE)
+        assert out[0] == self.ANTHROPIC_STYLE
+        assert "prompt_cache_options" not in params
+
+    def test_custom_api_base_opts_in_through_prompt_cache_options(self):
+        out, params = self._seed_and_run(
+            "gpt-5.6", None, api_base=self.CUSTOM_API_BASE, prompt_cache_options={"mode": "explicit"}
+        )
+        assert out[0]["content"] == self.OPENAI_STYLE
+        assert params["prompt_cache_options"] == {"mode": "explicit"}
+
+    def test_regional_openai_api_base_uses_openai_dialect(self):
+        out, params = self._seed_and_run("gpt-5.6", None, api_base="https://eu.api.openai.com/v1")
+        assert out[0]["content"] == self.OPENAI_STYLE
+        assert params["prompt_cache_options"] == {"mode": "explicit"}
+
+    @pytest.mark.parametrize("env_var", ["OPENAI_BASE_URL", "OPENAI_API_BASE"])
+    def test_env_api_base_override_keeps_anthropic_style_markers(self, monkeypatch, env_var):
+        monkeypatch.setenv(env_var, self.CUSTOM_API_BASE)
+        out, params = self._seed_and_run("gpt-5.6", None)
+        assert out[0] == self.ANTHROPIC_STYLE
+        assert "prompt_cache_options" not in params
+
+    def test_global_litellm_api_base_keeps_anthropic_style_markers(self, monkeypatch):
+        monkeypatch.setattr(litellm, "api_base", self.CUSTOM_API_BASE)
+        out, params = self._seed_and_run("gpt-5.6", None)
+        assert out[0] == self.ANTHROPIC_STYLE
+        assert "prompt_cache_options" not in params
+
+    def test_request_api_base_wins_over_env_override(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_BASE_URL", self.CUSTOM_API_BASE)
+        out, params = self._seed_and_run("gpt-5.6", None, api_base="https://api.openai.com/v1")
+        assert out[0]["content"] == self.OPENAI_STYLE
+        assert params["prompt_cache_options"] == {"mode": "explicit"}
+
+    @pytest.mark.parametrize(
+        "api_base,expected",
+        [(None, True), ("http://127.0.0.1:9/v1", False), ("https://eu.api.openai.com/v1", True)],
+    )
+    def test_seed_stamps_the_dialect_decision(self, api_base, expected):
+        params = {"cache_control_injection_points": copy.deepcopy(self.POINTS)}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(self.MESSAGES),
+            model="gpt-5.6",
+            custom_llm_provider=None,
+            api_base=api_base,
+        )
+        assert params["cache_control_injection_points"][0]["_litellm_openai_dialect"] is expected
+
+    def test_stamp_is_authoritative_over_request_params(self):
+        points = [{**self.POINTS[0], "_litellm_openai_dialect": False}]
+        out, params = self._run({"cache_control_injection_points": points, "custom_llm_provider": "openai"}, "gpt-5.6")
+        assert out[0] == self.ANTHROPIC_STYLE
+        assert "prompt_cache_options" not in params
+
+    def test_unstamped_points_read_api_base_from_request_params(self):
+        params = {"cache_control_injection_points": copy.deepcopy(self.POINTS), "api_base": self.CUSTOM_API_BASE}
+        out, params = self._run(params, "gpt-5.6")
+        assert out[0] == self.ANTHROPIC_STYLE
+        assert "prompt_cache_options" not in params
+
+    def test_unstamped_points_read_prompt_cache_options_from_request_params(self):
+        params = {
+            "cache_control_injection_points": copy.deepcopy(self.POINTS),
+            "api_base": self.CUSTOM_API_BASE,
+            "prompt_cache_options": {"mode": "explicit"},
+        }
+        out, params = self._run(params, "gpt-5.6")
+        assert out[0]["content"] == self.OPENAI_STYLE
+        assert params["prompt_cache_options"] == {"mode": "explicit"}
+
+
+class TestClientBreakpointsCountedOnce:
+    def test_client_message_breakpoints_are_not_double_counted(self):
+        messages = [{"role": "user", "content": [{"type": "text", "text": "m0", "cache_control": {"type": "ephemeral"}}]}] + [
+            {"role": "user", "content": [{"type": "text", "text": f"m{i}"}]} for i in range(1, 4)
+        ]
+        out, system, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system="sys",
+            injection_points=[
+                {"location": "message", "role": "system"},
+                {"location": "message", "index": -1},
+                {"location": "message", "index": -2},
+                {"location": "message", "index": -3},
+            ],
+        )
+        marked = [msg["content"][0].get("cache_control") is not None for msg in out]
+        assert marked == [True, False, True, True]
+        assert system[0]["cache_control"] == {"type": "ephemeral"}
+
+
+class TestResponsesInputPartsEligible:
+    """Responses API input parts can carry prompt_cache_breakpoint on GPT-5.6+ (#37509)."""
+
+    EXPLICIT = {"mode": "explicit"}
+
+    def _chat(self, messages, points, model="openai/gpt-5.6"):
+        params = {"cache_control_injection_points": copy.deepcopy(points)}
+        _, out, params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=model,
+            messages=copy.deepcopy(messages),
+            non_default_params=params,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        return out, params
+
+    def test_marker_lands_on_last_input_text_part(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "first"}, {"type": "input_text", "text": "second"}],
+            }
+        ]
+        out, params = self._chat(messages, [{"location": "message", "index": -1}])
+        assert out[0]["content"][0] == {"type": "input_text", "text": "first"}
+        assert out[0]["content"][1] == {
+            "type": "input_text",
+            "text": "second",
+            "prompt_cache_breakpoint": self.EXPLICIT,
+        }
+        assert params["prompt_cache_options"] == self.EXPLICIT
+
+    @pytest.mark.parametrize(
+        "part",
+        [
+            {"type": "input_image", "image_url": "https://example.com/a.png"},
+            {"type": "input_file", "file_id": "file_1"},
+        ],
+    )
+    def test_input_image_and_input_file_parts_are_eligible(self, part):
+        out, params = self._chat([{"role": "user", "content": [part]}], [{"location": "message", "index": -1}])
+        assert out[0]["content"][0] == {**part, "prompt_cache_breakpoint": self.EXPLICIT}
+        assert params["prompt_cache_options"] == self.EXPLICIT
+
+
+class TestMessagesPathApiBaseGate:
+    """/v1/messages only speaks the OpenAI dialect when the request really targets api.openai.com (#37509)."""
+
+    EXPLICIT = {"mode": "explicit"}
+    USER_POINT = [{"location": "message", "role": "user"}]
+    MESSAGES = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+    CUSTOM_API_BASE = "http://127.0.0.1:9/v1"
+    CACHE_CONTROL_BLOCK = {"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}
+    BREAKPOINT_BLOCK = {"type": "text", "text": "hi", "prompt_cache_breakpoint": {"mode": "explicit"}}
+
+    def _inject(self, model, api_base=None, prompt_cache_options=None, custom_llm_provider=None):
+        kwargs = {"cache_control_injection_points": copy.deepcopy(self.USER_POINT)}
+        if prompt_cache_options is not None:
+            kwargs["prompt_cache_options"] = prompt_cache_options
+        out, _ = AnthropicCacheControlHook.maybe_inject_cache_control(
+            copy.deepcopy(self.MESSAGES),
+            None,
+            kwargs,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+        )
+        return out[0]["content"][0], kwargs
+
+    def test_litellm_proxy_target_keeps_cache_control(self):
+        block, kwargs = self._inject("gpt-5.6", api_base=self.CUSTOM_API_BASE, custom_llm_provider="litellm_proxy")
+        assert block == self.CACHE_CONTROL_BLOCK
+        assert "prompt_cache_options" not in kwargs
+
+    def test_custom_api_base_keeps_cache_control(self):
+        block, kwargs = self._inject("gpt-5.6", api_base=self.CUSTOM_API_BASE)
+        assert block == self.CACHE_CONTROL_BLOCK
+        assert "prompt_cache_options" not in kwargs
+
+    def test_custom_api_base_opts_in_through_prompt_cache_options(self):
+        block, kwargs = self._inject("gpt-5.6", api_base=self.CUSTOM_API_BASE, prompt_cache_options=self.EXPLICIT)
+        assert block == self.BREAKPOINT_BLOCK
+        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+
+    def test_regional_openai_api_base_uses_openai_dialect(self):
+        block, kwargs = self._inject("gpt-5.6", api_base="https://eu.api.openai.com/v1")
+        assert block == self.BREAKPOINT_BLOCK
+        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+
+    def test_default_api_base_uses_openai_dialect(self):
+        block, kwargs = self._inject("openai/gpt-5.6")
+        assert block == self.BREAKPOINT_BLOCK
+        assert kwargs["prompt_cache_options"] == self.EXPLICIT
+
+
+class TestToolConfigSlotInOpenAIDialect:
+    """OpenAI has no tool_config cache block, so the dialect does not hold a slot for one (#37509)."""
+
+    EXPLICIT = {"mode": "explicit"}
+    MESSAGES = [{"role": "user", "content": [{"type": "text", "text": f"m{i}"}]} for i in range(4)]
+    POINTS = [{"location": "message", "index": i} for i in range(4)] + [{"location": "tool_config"}]
+
+    def test_chat_path_marks_all_four_messages(self):
+        params = {"cache_control_injection_points": copy.deepcopy(self.POINTS)}
+        _, out, params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="openai/gpt-5.6",
+            messages=copy.deepcopy(self.MESSAGES),
+            non_default_params=params,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert [msg["content"][0].get("prompt_cache_breakpoint") for msg in out] == [self.EXPLICIT] * 4
+        assert params["prompt_cache_options"] == self.EXPLICIT
+
+    def test_messages_path_marks_all_four_messages(self):
+        out, _, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            copy.deepcopy(self.MESSAGES), None, copy.deepcopy(self.POINTS), openai_dialect=True
+        )
+        assert [msg["content"][0].get("prompt_cache_breakpoint") for msg in out] == [self.EXPLICIT] * 4
+
+    def test_anthropic_dialect_still_reserves_the_tool_config_slot(self):
+        out, _, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            copy.deepcopy(self.MESSAGES), None, copy.deepcopy(self.POINTS)
+        )
+        assert sum(msg["content"][0].get("cache_control") is not None for msg in out) == 3
+
+
+class TestPromptCacheBreakpointCapability:
+    """Eligibility comes from the model map's supports_prompt_cache_breakpoint flag when the entry carries one,
+    with the GPT version rule for unlisted models and for entries the published map has not flagged yet (#37509)."""
+
+    @pytest.fixture(autouse=True)
+    def _bundled_model_map(self, monkeypatch):
+        bundled = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
+        with open(bundled) as handle:
+            monkeypatch.setattr(litellm, "model_cost", json.load(handle))
+        litellm.utils._cached_get_model_info_helper.cache_clear()
+        yield
+        litellm.utils._cached_get_model_info_helper.cache_clear()
+
+    def test_public_helper_reads_the_model_map(self):
+        from litellm.utils import supports_prompt_cache_breakpoint
+
+        assert supports_prompt_cache_breakpoint("gpt-5.6") is True
+        assert supports_prompt_cache_breakpoint("openai/gpt-5.6-sol") is True
+        assert supports_prompt_cache_breakpoint("gpt-5.6", custom_llm_provider="openai") is True
+        assert supports_prompt_cache_breakpoint("gpt-4.1") is False
+
+    @pytest.mark.parametrize("model", ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
+    def test_model_map_flags_every_openai_gpt_5_6_entry(self, model):
+        assert litellm.model_cost[model]["litellm_provider"] == "openai"
+        assert litellm.model_cost[model]["supports_prompt_cache_breakpoint"] is True
+
+    def test_listed_model_uses_the_model_map_flag(self, monkeypatch):
+        flagged = {**litellm.model_cost["gpt-4.1"], "supports_prompt_cache_breakpoint": True}
+        monkeypatch.setitem(litellm.model_cost, "gpt-4.1", flagged)
+        assert supports_openai_prompt_cache_breakpoint("gpt-4.1") is True
+
+    def test_listed_gpt_5_6_without_the_flag_falls_back_to_the_version_rule(self, monkeypatch):
+        unflagged = {k: v for k, v in litellm.model_cost["gpt-5.6"].items() if k != "supports_prompt_cache_breakpoint"}
+        monkeypatch.setitem(litellm.model_cost, "gpt-5.6", unflagged)
+        assert supports_openai_prompt_cache_breakpoint("gpt-5.6") is True
+        assert supports_openai_prompt_cache_breakpoint("openai/gpt-5.6") is True
+
+    def test_listed_model_flagged_false_is_not_eligible(self, monkeypatch):
+        monkeypatch.setitem(
+            litellm.model_cost, "gpt-5.6", {**litellm.model_cost["gpt-5.6"], "supports_prompt_cache_breakpoint": False}
+        )
+        assert supports_openai_prompt_cache_breakpoint("gpt-5.6") is False
+
+    def test_listed_gpt_model_without_the_flag_follows_the_version_rule(self):
+        assert "supports_prompt_cache_breakpoint" not in litellm.model_cost["gpt-4.1"]
+        assert supports_openai_prompt_cache_breakpoint("gpt-4.1") is False
+
+    def test_published_map_without_the_flag_still_injects_on_gpt_5_6(self, monkeypatch):
+        unflagged = {k: v for k, v in litellm.model_cost["gpt-5.6"].items() if k != "supports_prompt_cache_breakpoint"}
+        monkeypatch.setitem(litellm.model_cost, "gpt-5.6", unflagged)
+        points = [{"location": "message", "role": "system"}]
+
+        _, chat_messages, chat_params = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="openai/gpt-5.6",
+            messages=[{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"}],
+            non_default_params={"cache_control_injection_points": copy.deepcopy(points)},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert chat_messages[0]["content"] == [
+            {"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}
+        ]
+        assert chat_params["prompt_cache_options"] == {"mode": "explicit"}
+
+        kwargs = {"cache_control_injection_points": copy.deepcopy(points)}
+        _, system = AnthropicCacheControlHook.maybe_inject_cache_control(
+            [{"role": "user", "content": "hi"}], "sys", kwargs, model="gpt-5.6", custom_llm_provider="openai"
+        )
+        assert system == [{"type": "text", "text": "sys", "prompt_cache_breakpoint": {"mode": "explicit"}}]
+        assert kwargs == {"prompt_cache_options": {"mode": "explicit"}}
+
+    @pytest.mark.parametrize("model,expected", [("gpt-5.6-2026-01-01", True), ("gpt-5.5-preview-unlisted", False)])
+    def test_unlisted_model_falls_back_to_the_version_rule(self, model, expected):
+        assert model not in litellm.model_cost
+        assert supports_openai_prompt_cache_breakpoint(model) is expected
+
+
+class TestRecordGatewayInjection:
+    """The injection marker spend accounting gates prompt-caching savings on."""
+
+    KEY = "litellm_gateway_injected_cache"
+    DEPLOYMENT = "dep-abc"
+
+    def test_records_only_an_actual_injection(self):
+        """A zero delta is hook re-entry and a negative one is a prompt manager replacing
+        the messages; neither is litellm adding a breakpoint."""
+        kwargs: dict = {"metadata": {}, "model_info": {"id": self.DEPLOYMENT}}
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 0)
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, -3)
+        assert kwargs["metadata"] == {}
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 2)
+        assert kwargs["metadata"][self.KEY] == self.DEPLOYMENT
+
+    def test_a_point_this_pass_did_not_place_is_not_claimed(self):
+        """A tool_config point is placed by the Bedrock converse transform, and only when
+        the request carries tools, so its presence here says nothing about whether a
+        breakpoint reaches the wire. Claiming it credited litellm on request shapes that
+        inject nothing, and under-crediting Bedrock tool caching is the fail-closed half.
+        """
+        kwargs: dict = {"metadata": {}, "model_info": {"id": self.DEPLOYMENT}}
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 0)
+        assert kwargs["metadata"] == {}
+
+    @pytest.mark.parametrize("kwargs", [{}, {"metadata": None}, {"metadata": "not-a-dict"}])
+    def test_never_introduces_a_metadata_key(self, kwargs):
+        """Stamping must not add a key to a dict the caller splats as ``**kwargs``.
+
+        ``aresponses`` takes ``metadata`` as an explicit parameter and forwards the rest
+        of the request as ``**kwargs``, so a bucket created here arrives twice and the
+        call dies with "got multiple values for keyword argument 'metadata'". Only the
+        proxy reads this marker and it always seeds the bucket first, so a request
+        without one has nothing to record.
+        """
+        before = dict(kwargs)
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 3)
+        assert kwargs == before
+
+    def test_a_later_pass_cannot_unset_an_earlier_injection(self):
+        kwargs: dict = {"litellm_metadata": {"user_api_key": "k"}, "model_info": {"id": self.DEPLOYMENT}}
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 2)
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 0)
+        assert kwargs["litellm_metadata"][self.KEY] == self.DEPLOYMENT
+
+    def test_v1_messages_auto_injection_stamps_the_marker(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        kwargs: dict = {"litellm_metadata": {}, "model_info": {"id": self.DEPLOYMENT}}
+        result_msgs, result_sys = AnthropicCacheControlHook.maybe_inject_cache_control(
+            [{"role": "user", "content": "latest turn"}],
+            "a long system prompt",
+            kwargs,
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        assert kwargs["litellm_metadata"][self.KEY] == self.DEPLOYMENT
+
+    def test_v1_messages_stand_down_leaves_no_marker(self, monkeypatch):
+        """Client-supplied cache_control means the gateway did nothing to credit."""
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        kwargs: dict = {"litellm_metadata": {}}
+        AnthropicCacheControlHook.maybe_inject_cache_control(
+            [
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral"}}],
+                },
+                {"role": "user", "content": "latest turn"},
+            ],
+            None,
+            kwargs,
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        assert self.KEY not in kwargs["litellm_metadata"]
+
+    def test_v1_messages_reentry_keeps_the_marker(self, monkeypatch):
+        """A second pass over already-injected messages computes a zero delta, which must
+        leave the first pass's mark standing rather than reading as no injection."""
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        kwargs: dict = {"litellm_metadata": {}, "model_info": {"id": self.DEPLOYMENT}}
+        messages = [{"role": "user", "content": "latest turn"}]
+        first_msgs, first_sys = AnthropicCacheControlHook.maybe_inject_cache_control(
+            messages, "a long system prompt", kwargs, model="claude-sonnet-4-5", custom_llm_provider="anthropic"
+        )
+        AnthropicCacheControlHook.maybe_inject_cache_control(
+            first_msgs, first_sys, kwargs, model="claude-sonnet-4-5", custom_llm_provider="anthropic"
+        )
+        assert kwargs["litellm_metadata"][self.KEY] == self.DEPLOYMENT
+
+    def test_configured_points_skipping_a_marked_target_record_nothing(self):
+        """Configured injection stands down on client breakpoints, so no marker lands."""
+        kwargs: dict = {
+            "litellm_metadata": {},
+            "cache_control_injection_points": [{"location": "message", "role": "system", "index": None}],
+        }
+        AnthropicCacheControlHook.maybe_inject_cache_control(
+            [
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral"}}],
+                },
+                {"role": "user", "content": "hi"},
+            ],
+            None,
+            kwargs,
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+        )
+        assert self.KEY not in kwargs["litellm_metadata"]

@@ -1107,3 +1107,70 @@ async def test_invalidate_credentials_for_id_jag_is_a_noop_without_a_caller_toke
     assert isinstance(first, Ok) and isinstance(second, Ok)
     assert _emitted(second.ok)["Authorization"] == "Bearer cached-bearer"
     assert len(endpoint.calls) == 2
+
+
+async def _resolve_with_carrier(kind: str, header: str):
+    """Resolve one minted-token arm whose config targets ``header``."""
+    if kind == "client_credentials":
+        source = _FakeM2MSource(Ok(OAuthToken(access_token="minted")))
+        config = _M2M.model_copy(update={"header_name": header})
+        provider = UpstreamCredentialProvider(client_credentials_source=source)
+        return await provider.resolve_credentials(_SUBJECT, _spec(config))
+    if kind == "token_exchange":
+        exchanger = _FakeExchanger(Ok(OAuthToken(access_token="minted")))
+        config = _OBO.model_copy(update={"header_name": header})
+        subject = Subject(tenant_id="acme", subject_id="alice", inbound_token=SecretStr("caller-jwt"))
+        provider = UpstreamCredentialProvider(token_exchanger=exchanger)
+        return await provider.resolve_credentials(subject, _spec(config))
+    if kind == "authorization_code":
+        store = _FakeTokenStore({("alice", "s"): OAuthToken(access_token="minted")})
+        provider = UpstreamCredentialProvider(oauth_token_store=store)
+        return await provider.resolve_credentials(
+            Subject(tenant_id="", subject_id="alice"),
+            _spec(AuthorizationCodeConfig(header_name=header)),
+        )
+    endpoint = _FakeTokenEndpoint(
+        [
+            Ok(ExchangedToken(access_token="id-jag-assertion", expires_in=300)),
+            Ok(ExchangedToken(access_token="minted", expires_in=300)),
+        ]
+    )
+    config = _id_jag_config().model_copy(update={"header_name": header})
+    subject = Subject(tenant_id="acme", subject_id="alice", inbound_token=SecretStr("caller-id-token"))
+    provider = UpstreamCredentialProvider(token_endpoint=endpoint)
+    return await provider.resolve_credentials(subject, _spec(config))
+
+
+_MINTED_ARMS = ("client_credentials", "token_exchange", "authorization_code", "id_jag")
+
+
+@pytest.mark.parametrize("kind", _MINTED_ARMS)
+@pytest.mark.asyncio
+async def test_every_minted_arm_emits_its_configured_header(kind):
+    # One arm left on a hardcoded Authorization is a silent no-op for exactly the server that
+    # configured the knob, so this is asserted across all four rather than on the M2M arm alone.
+    result = await _resolve_with_carrier(kind, "esb-oauth")
+    assert isinstance(result, Ok)
+    headers, _ = await _emitted_async(result.ok)
+    assert headers["esb-oauth"] == "Bearer minted"
+    assert "authorization" not in headers
+
+
+@pytest.mark.parametrize("kind", _MINTED_ARMS)
+@pytest.mark.asyncio
+async def test_every_minted_arm_still_defaults_to_authorization(kind):
+    result = await _resolve_with_carrier(kind, "Authorization")
+    assert isinstance(result, Ok)
+    headers, _ = await _emitted_async(result.ok)
+    assert headers["Authorization"] == "Bearer minted"
+
+
+@pytest.mark.asyncio
+async def test_passthrough_ignores_the_carrier_and_keeps_the_callers_slot():
+    # Passthrough mints nothing: it forwards the caller's own credential, so it has no carrier to
+    # configure and must keep using the header the caller aimed it at.
+    subject = Subject(tenant_id="", subject_id="", inbound_token=SecretStr("caller-token"))
+    result = await UpstreamCredentialProvider().resolve_credentials(subject, _spec(PassthroughConfig()))
+    assert isinstance(result, Ok)
+    headers, _ = await _emitted_async(result.ok)
+    assert headers["Authorization"] == "caller-token"

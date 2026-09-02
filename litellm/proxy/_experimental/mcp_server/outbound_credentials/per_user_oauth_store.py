@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.outbound_credentials.authz_code_refresher import (
@@ -45,7 +45,7 @@ if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 # A token with no declared expiry is cached for this long; one with an expiry is cached until then.
-_DEFAULT_TTL_SECONDS = 300.0
+_DEFAULT_TTL_SECONDS: Final = 300.0
 
 ServerLookup = Callable[[str], "MCPServer | None"]
 StoreBuilder = Callable[[ServerLookup], tuple[InvalidatableOAuthTokenStore, bool]]
@@ -97,14 +97,14 @@ async def _post_token_endpoint(url: str, form: dict[str, str], headers: dict[str
 
     # litellm's httpx handler and httpx.Response are only partially typed; the IdP returns a JSON
     # object and the refresher validates each field, so the untyped boundary is contained here.
-    provider = httpxSpecialProvider.Oauth2Check
-    request_headers = {"Accept": "application/json", **headers}
+    provider: Final = httpxSpecialProvider.Oauth2Check
+    request_headers: Final = {"Accept": "application/json", **headers}
     # A failed refresh is a miss, not a 500 (matches v1), so any error becomes None.
     try:
-        client = get_async_httpx_client(llm_provider=provider)  # pyright: ignore
-        response = await client.post(url, headers=request_headers, data=form)  # pyright: ignore
+        client: Final = get_async_httpx_client(llm_provider=provider)  # pyright: ignore
+        response: Final = await client.post(url, headers=request_headers, data=form)  # pyright: ignore
         response.raise_for_status()  # pyright: ignore
-        body: dict[str, object] = response.json()  # pyright: ignore
+        body: Final[dict[str, object]] = response.json()  # pyright: ignore
     except Exception as exc:  # noqa: BLE001
         verbose_logger.warning("MCP OAuth refresh request failed: %s", exc)
         return None
@@ -128,17 +128,17 @@ def _runtime_backend_and_coordinator() -> tuple[TokenCacheBackend | None, Refres
     )
     from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
 
-    coordinator = runtime_refresh_coordinator()
+    coordinator: Final = runtime_refresh_coordinator()
     if coordinator is None:
         return None, None, False
-    codec = OAuthTokenCacheCodec(
+    codec: Final = OAuthTokenCacheCodec(
         encrypt_value_helper,
         lambda blob: decrypt_value_helper(blob, "mcp_per_user_token", exception_type="debug"),
     )
     # user_api_key_cache satisfies the AsyncCache slice (DualCache types ttl via **kwargs) - an
     # untyped-boundary cast.
-    cache: AsyncCache = user_api_key_cache  # pyright: ignore
-    backend = DualCacheTokenCacheBackend(cache, codec)
+    cache: Final[AsyncCache] = user_api_key_cache  # pyright: ignore
+    backend: Final = DualCacheTokenCacheBackend(cache, codec)
     return backend, coordinator, True
 
 
@@ -146,8 +146,8 @@ def _build_per_user_oauth_token_store(
     server_lookup: ServerLookup,
 ) -> tuple[CachedOAuthTokenStore, bool]:
     backend, coordinator, uses_redis = _runtime_backend_and_coordinator()
-    refresher = AuthorizationCodeRefresher(server_lookup, _post_token_endpoint, _persist_credential)
-    refreshing = RefreshingTokenStore(V2PerUserTokenStore(_read_credential), refresher, coordinator=coordinator)
+    refresher: Final = AuthorizationCodeRefresher(server_lookup, _post_token_endpoint, _persist_credential)
+    refreshing: Final = RefreshingTokenStore(V2PerUserTokenStore(_read_credential), refresher, coordinator=coordinator)
     return CachedOAuthTokenStore(refreshing, default_ttl_seconds=_DEFAULT_TTL_SECONDS, backend=backend), uses_redis
 
 
@@ -223,7 +223,7 @@ class LazyPerUserOAuthTokenStore:
             if store is None or (not self._uses_redis and self._redis_available()):
                 store, self._uses_redis = self._store_builder(self._server_lookup)
                 self._store = store
-            uses_redis = self._uses_redis
+            uses_redis: Final = self._uses_redis
             if not uses_redis:
                 self._local_fetches += 1
             return store, uses_redis

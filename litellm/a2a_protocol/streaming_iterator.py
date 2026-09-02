@@ -3,8 +3,9 @@ A2A Streaming Iterator with token tracking and logging support.
 """
 
 import asyncio
+from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm._logging import verbose_logger
@@ -37,16 +38,16 @@ class A2AStreamingIterator:
         self.start_time = datetime.now()
 
         # Collect chunks for token counting
-        self.chunks: List[Any] = []
-        self.collected_text_parts: List[str] = []
-        self.final_chunk: Optional[Any] = None
+        self.chunks: list[Any] = []
+        self.collected_text_parts: list[str] = []
+        self.final_chunk: Any | None = None
 
     def __aiter__(self):
         return self
 
     async def __anext__(self) -> "SendStreamingMessageResponse":
         try:
-            chunk = await self.stream.__anext__()
+            chunk: Final = await self.stream.__anext__()
 
             # Store chunk
             self.chunks.append(chunk)
@@ -70,8 +71,8 @@ class A2AStreamingIterator:
     def _collect_text_from_chunk(self, chunk: Any) -> None:
         """Extract text from a streaming chunk and add to collected parts."""
         try:
-            chunk_dict = chunk.model_dump(mode="json", exclude_none=True) if hasattr(chunk, "model_dump") else {}
-            text = A2ARequestUtils.extract_text_from_response(chunk_dict)
+            chunk_dict: Final = chunk.model_dump(mode="json", exclude_none=True) if hasattr(chunk, "model_dump") else {}
+            text: Final = A2ARequestUtils.extract_text_from_response(chunk_dict)
             if text:
                 self.collected_text_parts.append(text)
         except Exception:
@@ -80,10 +81,10 @@ class A2AStreamingIterator:
     def _is_completed_chunk(self, chunk: Any) -> bool:
         """Check if chunk indicates stream completion."""
         try:
-            chunk_dict = chunk.model_dump(mode="json", exclude_none=True) if hasattr(chunk, "model_dump") else {}
-            result = chunk_dict.get("result", {})
+            chunk_dict: Final = chunk.model_dump(mode="json", exclude_none=True) if hasattr(chunk, "model_dump") else {}
+            result: Final = chunk_dict.get("result", {})
             if isinstance(result, dict):
-                status = result.get("status", {})
+                status: Final = result.get("status", {})
                 if isinstance(status, dict):
                     return status.get("state") == "completed"
         except Exception:
@@ -93,21 +94,21 @@ class A2AStreamingIterator:
     async def _handle_stream_complete(self) -> None:
         """Handle logging and token counting when stream completes."""
         try:
-            end_time = datetime.now()
+            end_time: Final = datetime.now()
 
             # Calculate tokens from collected text
-            input_message = A2ARequestUtils.get_input_message_from_request(self.request)
-            input_text = A2ARequestUtils.extract_text_from_message(input_message)
-            prompt_tokens = A2ARequestUtils.count_tokens(input_text)
+            input_message: Final = A2ARequestUtils.get_input_message_from_request(self.request)
+            input_text: Final = A2ARequestUtils.extract_text_from_message(input_message)
+            prompt_tokens: Final = A2ARequestUtils.count_tokens(input_text)
 
             # Use the last (most complete) text from chunks
-            output_text = self.collected_text_parts[-1] if self.collected_text_parts else ""
-            completion_tokens = A2ARequestUtils.count_tokens(output_text)
+            output_text: Final = self.collected_text_parts[-1] if self.collected_text_parts else ""
+            completion_tokens: Final = A2ARequestUtils.count_tokens(output_text)
 
-            total_tokens = prompt_tokens + completion_tokens
+            total_tokens: Final = prompt_tokens + completion_tokens
 
             # Create usage object
-            usage = litellm.Usage(
+            usage: Final = litellm.Usage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=total_tokens,
@@ -119,11 +120,11 @@ class A2AStreamingIterator:
             self.logging_obj.model_call_details["stream"] = False
 
             # Calculate cost using A2ACostCalculator
-            response_cost = A2ACostCalculator.calculate_a2a_cost(self.logging_obj)
+            response_cost: Final = A2ACostCalculator.calculate_a2a_cost(self.logging_obj)
             self.logging_obj.model_call_details["response_cost"] = response_cost
 
             # Build result for logging
-            result = self._build_logging_result(usage)
+            result: Final = self._build_logging_result(usage)
 
             # Call success handlers - they will build standard_logging_object
             asyncio.create_task(
@@ -137,17 +138,19 @@ class A2AStreamingIterator:
             )
 
             verbose_logger.info(
-                f"A2A streaming completed: prompt_tokens={prompt_tokens}, "
-                f"completion_tokens={completion_tokens}, total_tokens={total_tokens}, "
-                f"response_cost={response_cost}"
+                "A2A streaming completed: prompt_tokens=%s, completion_tokens=%s, total_tokens=%s, response_cost=%s",
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+                response_cost,
             )
 
         except Exception as e:
-            verbose_logger.debug(f"Error in A2A streaming completion handler: {e}")
+            verbose_logger.debug("Error in A2A streaming completion handler: %s", e)
 
-    def _build_logging_result(self, usage: litellm.Usage) -> Dict[str, Any]:
+    def _build_logging_result(self, usage: litellm.Usage) -> dict[str, Any]:
         """Build a result dict for logging."""
-        result: Dict[str, Any] = {
+        result: Final[dict[str, Any]] = {
             "id": getattr(self.request, "id", "unknown"),
             "jsonrpc": "2.0",
             "usage": (usage.model_dump() if hasattr(usage, "model_dump") else dict(usage)),
@@ -156,7 +159,7 @@ class A2AStreamingIterator:
         # Add final chunk result if available
         if self.final_chunk:
             try:
-                chunk_dict = self.final_chunk.model_dump(mode="json", exclude_none=True)
+                chunk_dict: Final = self.final_chunk.model_dump(mode="json", exclude_none=True)
                 result["result"] = chunk_dict.get("result", {})
             except Exception:
                 pass

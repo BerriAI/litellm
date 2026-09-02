@@ -4,43 +4,41 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import (
-    Any,
-    Dict,
-    Generic,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    TypeVar,
-    Union,
-    get_type_hints,
-)
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from typing_extensions import Protocol, Required, TypedDict, runtime_checkable
+from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._uuid import uuid
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
 from .llms.openai import OpenAIFileObject
 from .search import SearchProvider
-from .utils import CustomPricingLiteLLMParams, ModelResponse, StandardLoggingRoutingDecision
+from .utils import (
+    CustomPricingLiteLLMParams,
+    MirroredPricingParams,
+    ModelResponse,
+    StandardLoggingRoutingDecision,
+)
 
 
 class ConfigurableClientsideParamsCustomAuth(TypedDict):
     api_base: str
 
 
-CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = Optional[List[Union[str, ConfigurableClientsideParamsCustomAuth]]]
+CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = list[str | ConfigurableClientsideParamsCustomAuth] | None
 
 
 class ModelConfig(BaseModel):
     model_name: str
-    litellm_params: Union[CompletionRequest, EmbeddingRequest]
+    litellm_params: CompletionRequest | EmbeddingRequest
     tpm: int
     rpm: int
 
@@ -53,41 +51,41 @@ class RoutingGroup(BaseModel):
     """
 
     group_name: str
-    models: List[str]
+    models: list[str]
     routing_strategy: str
-    routing_strategy_args: Optional[dict] = None
+    routing_strategy_args: dict | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
 
 class RouterConfig(BaseModel):
-    model_list: List[ModelConfig]
+    model_list: list[ModelConfig]
 
-    redis_url: Optional[str] = None
-    redis_host: Optional[str] = None
-    redis_port: Optional[int] = None
-    redis_password: Optional[str] = None
+    redis_url: str | None = None
+    redis_host: str | None = None
+    redis_port: int | None = None
+    redis_password: str | None = None
 
-    cache_responses: Optional[bool] = False
-    cache_kwargs: Optional[Dict] = {}
-    caching_groups: Optional[List[Tuple[str, List[str]]]] = None
-    client_ttl: Optional[int] = 3600
-    num_retries: Optional[int] = 0
-    timeout: Optional[float] = None
-    default_litellm_params: Optional[Dict[str, str]] = {}
-    set_verbose: Optional[bool] = False
-    fallbacks: Optional[List] = []
-    allowed_fails: Optional[int] = None
-    context_window_fallbacks: Optional[List] = []
-    model_group_alias: Optional[Dict[str, List[str]]] = {}
-    retry_after: Optional[int] = 0
+    cache_responses: bool | None = False
+    cache_kwargs: dict | None = {}
+    caching_groups: list[tuple[str, list[str]]] | None = None
+    client_ttl: int | None = 3600
+    num_retries: int | None = 0
+    timeout: float | None = None
+    default_litellm_params: dict[str, str] | None = {}
+    set_verbose: bool | None = False
+    fallbacks: list | None = []
+    allowed_fails: int | None = None
+    context_window_fallbacks: list | None = []
+    model_group_alias: dict[str, list[str]] | None = {}
+    retry_after: int | None = 0
     routing_strategy: Literal[
         "simple-shuffle",
         "least-busy",
         "usage-based-routing",
         "latency-based-routing",
     ] = "simple-shuffle"
-    routing_groups: Optional[List[RoutingGroup]] = None
+    routing_groups: list[RoutingGroup] | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -100,12 +98,12 @@ class RetryPolicy(BaseModel):
     https://docs.litellm.ai/docs/exception_mapping
     """
 
-    BadRequestErrorRetries: Optional[int] = None
-    AuthenticationErrorRetries: Optional[int] = None
-    TimeoutErrorRetries: Optional[int] = None
-    RateLimitErrorRetries: Optional[int] = None
-    ContentPolicyViolationErrorRetries: Optional[int] = None
-    InternalServerErrorRetries: Optional[int] = None
+    BadRequestErrorRetries: int | None = None
+    AuthenticationErrorRetries: int | None = None
+    TimeoutErrorRetries: int | None = None
+    RateLimitErrorRetries: int | None = None
+    ContentPolicyViolationErrorRetries: int | None = None
+    InternalServerErrorRetries: int | None = None
 
 
 class UpdateRouterConfig(BaseModel):
@@ -113,60 +111,116 @@ class UpdateRouterConfig(BaseModel):
     Set of params that you can modify via `router.update_settings()`.
     """
 
-    routing_strategy_args: Optional[dict] = None
-    routing_strategy: Optional[str] = None
-    routing_groups: Optional[List[RoutingGroup]] = None
-    retry_policy: Optional[RetryPolicy] = None
-    model_group_retry_policy: Optional[Dict[str, RetryPolicy]] = None
-    model_group_affinity_config: Optional[Dict[str, List[str]]] = None
-    allowed_fails: Optional[int] = None
-    cooldown_time: Optional[float] = None
-    num_retries: Optional[int] = None
-    timeout: Optional[float] = None
-    max_retries: Optional[int] = None
-    retry_after: Optional[float] = None
-    fallbacks: Optional[List[dict]] = None
-    context_window_fallbacks: Optional[List[dict]] = None
-    model_group_alias: Optional[Dict[str, Union[str, Dict]]] = {}
-    enable_tag_filtering: Optional[bool] = None
+    routing_strategy_args: dict | None = None
+    routing_strategy: str | None = None
+    routing_groups: list[RoutingGroup] | None = None
+    retry_policy: RetryPolicy | None = None
+    model_group_retry_policy: dict[str, RetryPolicy] | None = None
+    model_group_affinity_config: dict[str, list[str]] | None = None
+    allowed_fails: int | None = None
+    cooldown_time: float | None = None
+    num_retries: int | None = None
+    timeout: float | None = None
+    max_retries: int | None = None
+    retry_after: float | None = None
+    fallbacks: list[dict] | None = None
+    context_window_fallbacks: list[dict] | None = None
+    model_group_alias: dict[str, str | dict] | None = {}
+    enable_tag_filtering: bool | None = None
+    tag_routing_prefix: str | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
 
-class ModelInfo(BaseModel):
-    id: Optional[str]  # Allow id to be optional on input, but it will always be present as a str in the model instance
+def _as_utc(value: datetime.datetime | None) -> datetime.datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=datetime.timezone.utc)
+    return value.astimezone(datetime.timezone.utc)
+
+
+class ModelInfo(MirroredPricingParams):
+    id: str | None  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
-    updated_at: Optional[datetime.datetime] = None
-    updated_by: Optional[str] = None
+    updated_at: datetime.datetime | None = None
+    updated_by: str | None = None
 
-    created_at: Optional[datetime.datetime] = None
-    created_by: Optional[str] = None
+    created_at: datetime.datetime | None = None
+    created_by: str | None = None
 
-    base_model: Optional[str] = None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
-    tier: Optional[Literal["free", "paid"]] = None
+    base_model: str | None = None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
+    tier: Literal["free", "paid"] | None = None
 
     """
     Team Model Specific Fields
     """
     # the team id that this model belongs to
-    team_id: Optional[str] = None
+    team_id: str | None = None
 
     # the model_name that can be used by the team when making LLM calls
-    team_public_model_name: Optional[str] = None
+    team_public_model_name: str | None = None
 
     # admin-toggled pause flag; mirrors LiteLLM_ProxyModelTable.blocked
-    blocked: Optional[bool] = None
+    blocked: bool | None = None
 
-    def __init__(self, id: Optional[Union[str, int]] = None, **params):
+    # Bounds live on the model rather than litellm.constants: names there reach
+    # litellm/__init__ through several modules' star re-exports, and a Final rebound that
+    # way trips the basedpyright gate.
+    MAX_PTU_COUNT: ClassVar[int] = 1_000_000
+    MAX_COST_PER_PTU_PER_HOUR: ClassVar[float] = 1_000_000.0
+
+    ptu_count: int | None = None
+    cost_per_ptu_per_hour: float | None = None
+    ptu_effective_from: datetime.datetime | None = None
+    ptu_effective_to: datetime.datetime | None = None
+
+    # when tag-based routing's "!" or "&" constraints eliminate every deployment
+    # in this model group, fall back to the default-tagged pool instead of
+    # raising no_deployments_with_tag_routing. Defaults to False (raise), so
+    # existing "!" negation behavior is unchanged unless explicitly opted in.
+    allow_fail_open: bool | None = None
+
+    # per-model-group override for router_settings.enable_tag_filtering; unset
+    # defers to the router-wide default. Checked against any deployment in the
+    # group, so set it consistently across every deployment sharing this
+    # model_name. A request-level enable_tag_filtering=True (from key/team
+    # settings) still wins over this, exactly as it already does over the
+    # router-wide default.
+    enable_tag_filtering: bool | None = None
+
+    # when True, calls routed to this deployment persist a router_metadata block
+    # (requested model group, selected model + provider, router correlation id)
+    # in the spend log row's metadata. Set it on every deployment of the group.
+    internal_router_model: bool | None = None
+
+    def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
             id = str(uuid.uuid4())  # Generate a UUID if id is None or not provided
         elif isinstance(id, int):
             id = str(id)
         super().__init__(id=id, **params)
 
+    @model_validator(mode="after")
+    def _validate_ptu_bounds(self) -> "ModelInfo":
+        if self.ptu_count is not None and not 0 < self.ptu_count <= self.MAX_PTU_COUNT:
+            raise ValueError(f"ptu_count must be a positive integer no greater than {self.MAX_PTU_COUNT}")
+        if (
+            self.cost_per_ptu_per_hour is not None
+            and not 0 <= self.cost_per_ptu_per_hour <= self.MAX_COST_PER_PTU_PER_HOUR
+        ):
+            raise ValueError(
+                f"cost_per_ptu_per_hour must be a finite number between 0 and {self.MAX_COST_PER_PTU_PER_HOUR}"
+            )
+        start: Final = _as_utc(self.ptu_effective_from)
+        end: Final = _as_utc(self.ptu_effective_to)
+        if start is not None and end is not None and end <= start:
+            raise ValueError("ptu_effective_to must be after ptu_effective_from")
+        return self
+
     model_config = ConfigDict(extra="allow")
 
-    def __contains__(self, key):
+    def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
@@ -178,44 +232,56 @@ class ModelInfo(BaseModel):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key, value) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
 
 class CredentialLiteLLMParams(BaseModel):
-    api_key: Optional[str] = None
-    api_base: Optional[str] = None
-    api_version: Optional[str] = None
+    api_key: str | None = None
+    api_base: str | None = None
+    api_version: str | None = None
     ## AZURE OAUTH ##
     # Without this field, ``get_deployment_credentials_with_provider``
     # round-trips ``litellm_params`` through a strict Pydantic dump and
     # silently drops the OAuth token before the files/batch/passthrough
     # callers see it, breaking Azure deployments configured with
     # ``azure_ad_token`` instead of a static ``api_key`` (#30235).
-    azure_ad_token: Optional[str] = None
+    azure_ad_token: str | None = None
     ## VERTEX AI ##
-    vertex_project: Optional[str] = None
-    vertex_location: Optional[str] = None
-    vertex_credentials: Optional[Union[str, dict]] = None
+    vertex_project: str | None = None
+    vertex_location: str | None = None
+    vertex_credentials: str | dict | None = None
     ## UNIFIED PROJECT/REGION ##
-    region_name: Optional[str] = None
+    region_name: str | None = None
 
     ## OBJECT STORAGE (files / batches) ##
-    gcs_bucket_name: Optional[str] = None
+    gcs_bucket_name: str | None = None
 
     ## AWS BEDROCK / SAGEMAKER ##
-    aws_access_key_id: Optional[str] = None
-    aws_secret_access_key: Optional[str] = None
-    aws_region_name: Optional[str] = None
-    aws_bedrock_runtime_endpoint: Optional[str] = None
-    aws_bedrock_project_id: Optional[str] = None
-    s3_bucket_name: Optional[str] = None
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    aws_session_token: str | None = None
+    aws_region_name: str | None = None
+    aws_session_name: str | None = None
+    aws_profile_name: str | None = None
+    aws_role_name: str | None = None
+    aws_web_identity_token: str | None = None
+    aws_sts_endpoint: str | None = None
+    aws_external_id: str | None = None
+    aws_bedrock_runtime_endpoint: str | None = None
+    aws_bedrock_project_id: str | None = None
+    s3_bucket_name: str | None = None
+    s3_region_name: str | None = None
+    s3_encryption_key_id: str | None = None
+    aws_batch_role_arn: str | None = None
+    s3_output_bucket_name: str | None = None
+    bedrock_tags: list | None = None
     ## IBM WATSONX ##
-    watsonx_region_name: Optional[str] = None
+    watsonx_region_name: str | None = None
 
 
-_RESERVED_INIT_KEYS = frozenset({"self", "params", "__class__"})
+_RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})
 
 
 class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
@@ -223,81 +289,87 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     LiteLLM Params without 'model' arg (used across completion / assistants api)
     """
 
-    custom_llm_provider: Optional[str] = None
-    tpm: Optional[int] = None
-    rpm: Optional[int] = None
-    itpm: Optional[int] = None
-    otpm: Optional[int] = None
-    timeout: Optional[Union[float, str, httpx.Timeout]] = None  # if str, pass in as os.environ/
-    stream_timeout: Optional[Union[float, str]] = (
-        None  # timeout when making stream=True calls, if str, pass in as os.environ/
-    )
-    max_retries: Optional[int] = None
-    organization: Optional[str] = None  # for openai orgs
+    custom_llm_provider: str | None = None
+    tpm: int | None = None
+    rpm: int | None = None
+    itpm: int | None = None
+    otpm: int | None = None
+    timeout: float | str | httpx.Timeout | None = None  # if str, pass in as os.environ/
+    stream_timeout: float | str | None = None  # timeout when making stream=True calls, if str, pass in as os.environ/
+    max_retries: int | None = None
+    organization: str | None = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
-    litellm_credential_name: Optional[str] = None
+    litellm_credential_name: str | None = None
 
     ## LOGGING PARAMS ##
-    litellm_trace_id: Optional[str] = None
+    litellm_trace_id: str | None = None
 
-    max_file_size_mb: Optional[float] = None
+    max_file_size_mb: float | None = None
 
     # Proxy-wide default rate limits applied to any API key using this deployment
     # when the key does not have a model-specific tpm/rpm limit configured.
-    default_api_key_tpm_limit: Optional[int] = None
-    default_api_key_rpm_limit: Optional[int] = None
+    default_api_key_tpm_limit: int | None = None
+    default_api_key_rpm_limit: int | None = None
 
     # Deployment budgets
-    max_budget: Optional[float] = None
-    budget_duration: Optional[str] = None
-    use_in_pass_through: Optional[bool] = False
-    use_litellm_proxy: Optional[bool] = False
-    use_chat_completions_api: Optional[bool] = None
-    use_xai_oauth: Optional[bool] = Field(
+    max_budget: float | None = None
+    budget_duration: str | None = None
+    keepalive_seconds: float | None = None
+    # keepalive_seconds is operator-only by default: a client's request-level
+    # value is ignored unless the deployment opts in here. Prevents a client
+    # from unilaterally enabling heartbeats (and the LB-idle-timeout evasion
+    # that comes with them) for a deployment that never configured them.
+    allow_client_keepalive_override: bool | None = False
+    use_in_pass_through: bool | None = False
+    use_litellm_proxy: bool | None = False
+    use_chat_completions_api: bool | None = None
+    use_xai_oauth: bool | None = Field(
         default=False,
         description="Use stored xAI OAuth credentials when no xAI API key is configured.",
     )
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
-    merge_reasoning_content_in_choices: Optional[bool] = False
-    model_info: Optional[Dict] = None
-    mock_response: Optional[Union[str, ModelResponse, Exception, Any]] = None
+    merge_reasoning_content_in_choices: bool | None = False
+    model_info: dict | None = None
+    mock_response: str | ModelResponse | Exception | Any | None = None
 
     # tag-based routing
-    tags: Optional[List[str]] = None
+    tags: list[str] | None = None
     # regex patterns matched against request headers for tag routing
-    tag_regex: Optional[List[str]] = None
+    tag_regex: list[str] | None = None
 
     # auto-router params
-    auto_router_config_path: Optional[str] = None
-    auto_router_config: Optional[str] = None
-    auto_router_default_model: Optional[str] = None
-    auto_router_embedding_model: Optional[str] = None
+    auto_router_config_path: str | None = None
+    auto_router_config: str | None = None
+    auto_router_default_model: str | None = None
+    auto_router_embedding_model: str | None = None
+    auto_router_max_input_chars: int | None = None
 
     # complexity-router params
-    complexity_router_config: Optional[Dict] = None
-    complexity_router_default_model: Optional[str] = None
+    complexity_router_config: dict | None = None
+    complexity_router_default_model: str | None = None
 
     # adaptive-router params
-    adaptive_router_default_model: Optional[str] = None
-    adaptive_router_config: Optional[Dict] = None
+    adaptive_router_default_model: str | None = None
+    adaptive_router_config: dict | None = None
     # quality-router params
-    quality_router_config: Optional[Dict] = None
-    quality_router_default_model: Optional[str] = None
-
-    # Batch/File API Params
-    s3_bucket_name: Optional[str] = None
-    s3_encryption_key_id: Optional[str] = None
-    gcs_bucket_name: Optional[str] = None
+    quality_router_config: dict | None = None
+    quality_router_default_model: str | None = None
 
     # Vector Store Params
-    vector_store_id: Optional[str] = None
-    milvus_text_field: Optional[str] = None
-    milvus_db_name: Optional[str] = None
-    milvus_partition_names: Optional[List[str]] = None
+    vector_store_id: str | None = None
+    milvus_text_field: str | None = None
+    milvus_db_name: str | None = None
+    milvus_partition_names: list[str] | None = None
+    valkey_host: str | None = None
+    valkey_port: int | None = None
+    valkey_password: str | None = None
+    valkey_ssl: bool | None = None
+    valkey_text_field: str | None = None
+    valkey_embedding_field: str | None = None
 
     @model_validator(mode="before")
     @classmethod
-    def preprocess_input_data(cls, data: Any) -> Any:
+    def preprocess_input_data(cls, data: object) -> object:
         """
         Pre-process input data before validation:
         1. Filter out reserved Python keywords ('self', 'params', '__class__') to prevent
@@ -305,13 +377,13 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         2. Convert max_retries from string to int if needed.
         """
         if isinstance(data, dict):
-            filtered = {k: v for k, v in data.items() if k not in _RESERVED_INIT_KEYS}
+            filtered: Final = {k: v for k, v in data.items() if k not in _RESERVED_INIT_KEYS}
             if "max_retries" in filtered and isinstance(filtered["max_retries"], str):
                 filtered["max_retries"] = int(filtered["max_retries"])
             return filtered
         return data
 
-    def __contains__(self, key):
+    def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
@@ -323,7 +395,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key, value) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -336,7 +408,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
     model: str
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
 
-    def __contains__(self, key):
+    def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
@@ -348,7 +420,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key, value) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -356,77 +428,87 @@ class LiteLLM_Params(GenericLiteLLMParams):
 class updateLiteLLMParams(GenericLiteLLMParams):
     # This class is used to update the LiteLLM_Params
     # only differece is model is optional
-    model: Optional[str] = None
+    model: str | None = None
 
 
 class updateDeployment(BaseModel):
-    model_name: Optional[str] = None
-    litellm_params: Optional[updateLiteLLMParams] = None
-    model_info: Optional[ModelInfo] = None
-    blocked: Optional[bool] = None
+    model_name: str | None = None
+    litellm_params: updateLiteLLMParams | None = None
+    model_info: ModelInfo | None = None
+    blocked: bool | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
 
 class LiteLLMParamsTypedDict(TypedDict, total=False):
     model: str
-    custom_llm_provider: Optional[str]
-    tpm: Optional[int]
-    rpm: Optional[int]
-    itpm: Optional[int]
-    otpm: Optional[int]
-    order: Optional[int]
-    weight: Optional[int]
-    max_parallel_requests: Optional[int]
-    api_key: Optional[str]
-    api_base: Optional[str]
-    api_version: Optional[str]
-    timeout: Optional[Union[float, str, httpx.Timeout]]
-    stream_timeout: Optional[Union[float, str]]
-    max_retries: Optional[int]
-    organization: Optional[Union[List, str]]  # for openai orgs
+    custom_llm_provider: str | None
+    tpm: int | None
+    rpm: int | None
+    itpm: int | None
+    otpm: int | None
+    order: int | None
+    weight: int | None
+    max_parallel_requests: int | None
+    api_key: str | None
+    api_base: str | None
+    api_version: str | None
+    timeout: float | str | httpx.Timeout | None
+    stream_timeout: float | str | None
+    max_retries: int | None
+    organization: list | str | None  # for openai orgs
     configurable_clientside_auth_params: (
         CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS  # for allowing api base switching on finetuned models
     )
     ## DROP PARAMS ##
-    drop_params: Optional[bool]
+    drop_params: bool | None
     ## RESPONSES API → CHAT COMPLETIONS BRIDGE ##
-    use_chat_completions_api: Optional[bool]
+    use_chat_completions_api: bool | None
+    ## PASS-THROUGH ENDPOINTS ##
+    use_in_pass_through: bool | None
+    litellm_credential_name: str | None
     ## UNIFIED PROJECT/REGION ##
-    region_name: Optional[str]
+    region_name: str | None
     ## VERTEX AI ##
-    vertex_project: Optional[str]
-    vertex_location: Optional[str]
+    vertex_project: str | None
+    vertex_location: str | None
     ## AWS BEDROCK / SAGEMAKER ##
-    aws_access_key_id: Optional[str]
-    aws_secret_access_key: Optional[str]
-    aws_region_name: Optional[str]
-    aws_bedrock_project_id: Optional[str]
+    aws_access_key_id: str | None
+    aws_secret_access_key: str | None
+    aws_region_name: str | None
+    aws_bedrock_project_id: str | None
     ## AWS S3 VECTORS ##
-    vector_bucket_name: Optional[str]
-    index_name: Optional[str]
-    embedding_model: Optional[str]
+    vector_bucket_name: str | None
+    index_name: str | None
+    embedding_model: str | None
     ## IBM WATSONX ##
-    watsonx_region_name: Optional[str]
+    watsonx_region_name: str | None
     ## CUSTOM PRICING ##
-    input_cost_per_token: Optional[float]
-    output_cost_per_token: Optional[float]
-    input_cost_per_second: Optional[float]
-    output_cost_per_second: Optional[float]
-    output_cost_per_second_1080p: Optional[float]
-    num_retries: Optional[int]
+    input_cost_per_token: float | None
+    output_cost_per_token: float | None
+    input_cost_per_second: float | None
+    output_cost_per_second: float | None
+    output_cost_per_second_480p: ReadOnly[float | None]
+    output_cost_per_second_1080p: float | None
+    output_cost_per_second_4k: ReadOnly[float | None]
+    num_retries: int | None
     ## MOCK RESPONSES ##
-    mock_response: Optional[Union[str, ModelResponse, Exception]]
+    mock_response: str | ModelResponse | Exception | None
 
     # routing params
     # use this for tag-based routing
-    tags: Optional[List[str]]
+    tags: list[str] | None
     # regex patterns matched against request headers (e.g. "^User-Agent:\\s*claude-code\\/")
-    tag_regex: Optional[List[str]]
+    tag_regex: list[str] | None
 
     # deployment budgets
-    max_budget: Optional[float]
-    budget_duration: Optional[str]
+    max_budget: float | None
+    budget_duration: str | None
+    keepalive_seconds: float | None
+    allow_client_keepalive_override: bool | None
+
+    # per-deployment cooldown override
+    cooldown_time: float | None
 
 
 class DeploymentTypedDict(TypedDict, total=False):
@@ -435,14 +517,7 @@ class DeploymentTypedDict(TypedDict, total=False):
     model_info: dict
 
 
-SPECIAL_MODEL_INFO_PARAMS = [
-    "input_cost_per_token",
-    "output_cost_per_token",
-    "input_cost_per_character",
-    "output_cost_per_character",
-    "cache_read_input_token_cost",
-    "cache_creation_input_token_cost",
-]
+SPECIAL_MODEL_INFO_PARAMS = tuple(MirroredPricingParams.model_fields)
 
 
 class Deployment(BaseModel):
@@ -456,9 +531,9 @@ class Deployment(BaseModel):
         self,
         model_name: str,
         litellm_params: LiteLLM_Params,
-        model_info: Optional[Union[ModelInfo, dict]] = None,
+        model_info: ModelInfo | dict | None = None,
         **params,
-    ):
+    ) -> None:
         if model_info is None:
             model_info = ModelInfo()
         elif isinstance(model_info, dict):
@@ -478,12 +553,12 @@ class Deployment(BaseModel):
 
     def to_json(self, **kwargs):
         try:
-            return self.model_dump(**kwargs)  # noqa
+            return self.model_dump(**kwargs)
         except Exception:
             # if using pydantic v1
             return self.dict(**kwargs)
 
-    def __contains__(self, key):
+    def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
@@ -495,7 +570,7 @@ class Deployment(BaseModel):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key, value) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
@@ -509,6 +584,11 @@ class RouterErrors(enum.Enum):
     no_deployments_available = "No deployments available for selected model"
     no_deployments_with_tag_routing = "Not allowed to access model due to tags configuration"
     no_deployments_with_provider_budget_routing = "No deployments available - crossed budget"
+    no_healthy_deployments = "There are no healthy deployments for this model"
+    only_strategy_marker_deployments = (
+        "Every deployment for it is a strategy router marker (auto_router/...), which is not a callable "
+        "model, and no pre-routing strategy selected a deployment for this request"
+    )
 
 
 class AllowedFailsPolicy(BaseModel):
@@ -520,12 +600,15 @@ class AllowedFailsPolicy(BaseModel):
     https://docs.litellm.ai/docs/exception_mapping
     """
 
-    BadRequestErrorAllowedFails: Optional[int] = None
-    AuthenticationErrorAllowedFails: Optional[int] = None
-    TimeoutErrorAllowedFails: Optional[int] = None
-    RateLimitErrorAllowedFails: Optional[int] = None
-    ContentPolicyViolationErrorAllowedFails: Optional[int] = None
-    InternalServerErrorAllowedFails: Optional[int] = None
+    BadRequestErrorAllowedFails: int | None = None
+    AuthenticationErrorAllowedFails: int | None = None
+    TimeoutErrorAllowedFails: int | None = None
+    RateLimitErrorAllowedFails: int | None = None
+    ContentPolicyViolationErrorAllowedFails: int | None = None
+    InternalServerErrorAllowedFails: int | None = None
+    ServiceUnavailableErrorAllowedFails: int | None = None
+    BadGatewayErrorAllowedFails: int | None = None
+    NotFoundErrorAllowedFails: int | None = None
 
 
 class AlertingConfig(BaseModel):
@@ -541,46 +624,43 @@ class AlertingConfig(BaseModel):
     """
 
     webhook_url: str
-    alerting_threshold: Optional[float] = 300
+    alerting_threshold: float | None = 300
+
+
+def _resolved_annotations(model_class: type[object]) -> Mapping[str, object]:
+    """Resolve a class's annotations, keeping each resolved annotation opaque."""
+    return get_type_hints(model_class)
 
 
 class ModelGroupInfo(BaseModel):
     model_group: str
-    providers: List[str]
-    max_input_tokens: Optional[float] = None
-    max_output_tokens: Optional[float] = None
-    input_cost_per_token: Optional[float] = None
-    output_cost_per_token: Optional[float] = None
-    input_cost_per_pixel: Optional[float] = None
-    mode: Optional[
-        Union[
-            str,
-            Literal[
-                "chat",
-                "embedding",
-                "completion",
-                "image_generation",
-                "audio_transcription",
-                "rerank",
-                "moderations",
-            ],
-        ]
-    ] = Field(default="chat")
-    tpm: Optional[int] = None
-    rpm: Optional[int] = None
-    itpm: Optional[int] = None
-    otpm: Optional[int] = None
+    providers: list[str]
+    max_input_tokens: float | None = None
+    max_output_tokens: float | None = None
+    input_cost_per_token: float | None = None
+    output_cost_per_token: float | None = None
+    input_cost_per_pixel: float | None = None
+    mode: (
+        str
+        | Literal["chat", "embedding", "completion", "image_generation", "audio_transcription", "rerank", "moderations"]
+        | None
+    ) = Field(default="chat")
+    tpm: int | None = None
+    rpm: int | None = None
+    itpm: int | None = None
+    otpm: int | None = None
     supports_parallel_function_calling: bool = Field(default=False)
     supports_vision: bool = Field(default=False)
     supports_web_search: bool = Field(default=False)
     supports_url_context: bool = Field(default=False)
     supports_reasoning: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
-    supported_openai_params: Optional[List[str]] = Field(default=[])
+    supported_reasoning_efforts: tuple[str, ...] | None = Field(default=None)
+    supported_openai_params: list[str] | None = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
 
-    def __init__(self, **data):
-        for field_name, field_type in get_type_hints(self.__class__).items():
+    def __init__(self, **data) -> None:
+        for field_name, field_type in _resolved_annotations(self.__class__).items():
             if field_type is bool and data.get(field_name) is None:
                 data[field_name] = False
         super().__init__(**data)
@@ -598,10 +678,10 @@ class SearchToolLiteLLMParams(TypedDict, total=False):
     """
 
     search_provider: Required[SearchProvider]
-    api_key: Optional[str]
-    api_base: Optional[str]
-    timeout: Optional[Union[float, str, httpx.Timeout]]
-    max_retries: Optional[int]
+    api_key: str | None
+    api_base: str | None
+    timeout: float | str | httpx.Timeout | None
+    max_retries: int | None
 
 
 class SearchToolInfoTypedDict(TypedDict, total=False):
@@ -636,9 +716,9 @@ class GuardrailLiteLLMParams(TypedDict, total=False):
 
     guardrail: Required[str]
     mode: Required[str]
-    api_key: Optional[str]
-    api_base: Optional[str]
-    weight: Optional[int]  # For load balancing
+    api_key: str | None
+    api_base: str | None
+    weight: int | None  # For load balancing
 
 
 class GuardrailTypedDict(TypedDict, total=False):
@@ -649,7 +729,7 @@ class GuardrailTypedDict(TypedDict, total=False):
     guardrail_name: Required[str]
     litellm_params: Required[GuardrailLiteLLMParams]
     callback: Any  # The CustomGuardrail instance
-    id: Optional[str]  # Unique identifier for the guardrail deployment
+    id: str | None  # Unique identifier for the guardrail deployment
 
 
 class FineTuningConfig(BaseModel):
@@ -660,11 +740,11 @@ class CustomRoutingStrategyBase:
     async def async_get_available_deployment(
         self,
         model: str,
-        messages: Optional[List[Dict[str, str]]] = None,
-        input: Optional[Union[str, List]] = None,
-        specific_deployment: Optional[bool] = False,
-        request_kwargs: Optional[Dict] = None,
-    ):
+        messages: list[dict[str, str]] | None = None,
+        input: str | list | None = None,
+        specific_deployment: bool | None = False,
+        request_kwargs: dict | None = None,
+    ) -> None:
         """
         Asynchronously retrieves the available deployment based on the given parameters.
 
@@ -679,16 +759,15 @@ class CustomRoutingStrategyBase:
             Returns an element from litellm.router.model_list
 
         """
-        pass
 
     def get_available_deployment(
         self,
         model: str,
-        messages: Optional[List[Dict[str, str]]] = None,
-        input: Optional[Union[str, List]] = None,
-        specific_deployment: Optional[bool] = False,
-        request_kwargs: Optional[Dict] = None,
-    ):
+        messages: list[dict[str, str]] | None = None,
+        input: str | list | None = None,
+        specific_deployment: bool | None = False,
+        request_kwargs: dict | None = None,
+    ) -> None:
         """
         Synchronously retrieves the available deployment based on the given parameters.
 
@@ -703,7 +782,6 @@ class CustomRoutingStrategyBase:
             Returns an element from litellm.router.model_list
 
         """
-        pass
 
 
 class RouterGeneralSettings(BaseModel):
@@ -721,9 +799,9 @@ class RouterRateLimitErrorBasic(ValueError):
     def __init__(
         self,
         model: str,
-    ):
+    ) -> None:
         self.model = model
-        _message = f"{RouterErrors.no_deployments_available.value}."
+        _message: Final = f"{RouterErrors.no_deployments_available.value}."
         super().__init__(_message)
 
 
@@ -733,8 +811,8 @@ class RouterRateLimitError(ValueError):
         model: str,
         cooldown_time: float,
         enable_pre_call_checks: bool,
-        cooldown_list: List,
-    ):
+        cooldown_list: list,
+    ) -> None:
         self.model = model
         self.cooldown_time = cooldown_time
         self.enable_pre_call_checks = enable_pre_call_checks
@@ -780,7 +858,18 @@ class GenericBudgetWindowDetails(BaseModel):
     ttl_seconds: int
 
 
-OptionalPreCallChecks = List[
+class FallbackAccessCheck(Protocol):
+    """
+    Decides whether the caller behind `request_kwargs` may be served by fallback `model`.
+
+    The router runs it before every cross-model-group fallback attempt and skips targets it
+    rejects, so a fallback can never reach a model the caller could not have requested directly.
+    """
+
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
+
+
+OptionalPreCallChecks = list[
     Literal[
         "prompt_caching",
         "router_budget_limiting",
@@ -805,16 +894,16 @@ class LiteLLM_RouterFileObject(TypedDict, total=False):
 
 @dataclass
 class MockRouterTestingParams:
-    mock_testing_fallbacks: Optional[bool] = None
-    mock_testing_context_fallbacks: Optional[bool] = None
-    mock_testing_content_policy_fallbacks: Optional[bool] = None
+    mock_testing_fallbacks: bool | None = None
+    mock_testing_context_fallbacks: bool | None = None
+    mock_testing_content_policy_fallbacks: bool | None = None
 
     @classmethod
     def from_kwargs(cls, kwargs: dict) -> "MockRouterTestingParams":
         from litellm.secret_managers.main import str_to_bool
 
-        def extract_bool_param(name: str) -> Optional[bool]:
-            value = kwargs.pop(name, None)
+        def extract_bool_param(name: str) -> bool | None:
+            value: Final = kwargs.pop(name, None)
             return str_to_bool(value) if isinstance(value, str) else value
 
         return cls(
@@ -825,7 +914,7 @@ class MockRouterTestingParams:
 
 
 class ModelGroupSettings(BaseModel):
-    forward_client_headers_to_llm_api: Optional[List[str]] = None
+    forward_client_headers_to_llm_api: list[str] | None = None
 
 
 class PreRoutingHookResponse(BaseModel):
@@ -838,8 +927,10 @@ class PreRoutingHookResponse(BaseModel):
     """
 
     model: str
-    messages: Optional[List[Dict[str, Any]]]
+    messages: list[dict[str, Any]] | None
     routing_decision: StandardLoggingRoutingDecision | None = None
+    session_affinity_ttl_seconds: int | None = None
+    litellm_params: Mapping[str, object] | None = None
 
 
 _PreRoutingStrategyT_co = TypeVar("_PreRoutingStrategyT_co", covariant=True)
@@ -851,6 +942,14 @@ class TaggedPreRoutingStrategy(Generic[_PreRoutingStrategyT_co]):
 
     tags: tuple[str, ...]
     strategy: _PreRoutingStrategyT_co
+
+
+@dataclass(frozen=True, slots=True)
+class ConsumedRequestTagsStamp:
+    """The model group a tagged router rewrote to, plus the request tags spent selecting it."""
+
+    model_group: str
+    tags: tuple[str, ...]
 
 
 @runtime_checkable
@@ -897,6 +996,21 @@ class RoutingPlugin(Protocol):
     async def run(self, context: RoutingContext) -> RoutingContext: ...
 
 
+@runtime_checkable
+class ClassifierPlugin(Protocol):
+    """Interface a custom classifier must implement to run as the complexity router's classifier_type='custom'.
+
+    `classify` returns the name of the tier the request belongs to (a built-in tier value or label,
+    or a tier_definitions name), or None to decline and let classifier_fallback decide.
+
+    The context's `candidate_models` is an informational snapshot of every tier's models, unlike
+    the narrowing surface RoutingPlugin filters: the returned tier decides the pool, so mutating
+    the list is a no-op.
+    """
+
+    async def classify(self, context: RoutingContext) -> str | None: ...
+
+
 class RequestType(str, enum.Enum):
     """Fixed v0 taxonomy. User-extensible types come in v1."""
 
@@ -916,14 +1030,14 @@ class AdaptiveRouterWeights(BaseModel):
     @field_validator("cost")
     @classmethod
     def _weights_sum_to_one(cls, v, info):
-        q = info.data.get("quality", 0.7)
+        q: Final = info.data.get("quality", 0.7)
         if abs(q + v - 1.0) > 0.001:
             raise ValueError(f"weights must sum to 1.0, got quality={q} + cost={v} = {q + v}")
         return v
 
 
 class AdaptiveRouterConfig(BaseModel):
-    available_models: List[str]
+    available_models: list[str]
     weights: AdaptiveRouterWeights = Field(default_factory=AdaptiveRouterWeights)
 
 
@@ -933,4 +1047,4 @@ class AdaptiveRouterPreferences(BaseModel):
     model_config = ConfigDict(use_enum_values=False)
 
     quality_tier: int = Field(ge=1, le=3)
-    strengths: List[RequestType] = Field(default_factory=list)
+    strengths: list[RequestType] = Field(default_factory=list)

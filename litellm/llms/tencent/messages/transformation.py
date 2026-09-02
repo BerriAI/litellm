@@ -5,7 +5,7 @@ Tencent TokenHub exposes an Anthropic-compatible Messages API endpoint
 alongside its standard OpenAI-compatible chat completions endpoint.
 """
 
-from typing import Any, Optional
+from typing import Any
 
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -24,18 +24,18 @@ class TencentAnthropicMessagesConfig(AnthropicMessagesConfig):
     """
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "tencent"
 
     def should_strip_billing_metadata(self) -> bool:
         return True
 
     @staticmethod
-    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+    def get_api_key(api_key: str | None = None) -> str | None:
         return api_key or get_secret_str("TENCENT_API_KEY") or litellm.api_key
 
     @staticmethod
-    def get_api_base(api_base: Optional[str] = None) -> str:
+    def get_api_base(api_base: str | None = None) -> str:
         return (
             api_base
             or get_secret_str("TENCENT_ANTHROPIC_API_BASE")
@@ -50,9 +50,9 @@ class TencentAnthropicMessagesConfig(AnthropicMessagesConfig):
         messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> tuple[dict, Optional[str]]:
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict, str | None]:
         return super().validate_anthropic_messages_environment(
             headers=headers,
             model=model,
@@ -65,12 +65,12 @@ class TencentAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         base_url = self.get_api_base(api_base=api_base).rstrip("/")
 
