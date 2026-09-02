@@ -750,13 +750,15 @@ class Router:
         self.deployment_names: list = []  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
         ### CACHING ###
-        cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = "local"  # default to an in-memory cache
         redis_cache = None
         cache_config: Final[dict[str, Any]] = {}
-
+        # FIX: Apply cache_kwargs regardless of whether Redis is used
+        cache_config.update(cache_kwargs)
+        if "type" in cache_config:
+            # Pop removes 'type' from cache_config to prevent it from being pass
+            cache_config.pop("type")
         self.client_ttl = client_ttl
         if redis_url is not None or (redis_host is not None and redis_port is not None):
-            cache_type = "redis"
 
             if redis_url is not None:
                 cache_config["url"] = redis_url
@@ -782,8 +784,14 @@ class Router:
 
         if cache_responses:
             if litellm.cache is None:
-                # the cache can be initialized on the proxy server. We should not overwrite it
-                litellm.cache = litellm.Cache(type=cache_type, **cache_config)
+                # SECURITY FIX: Do not allow a Router to initialize the global cache 
+                # with client-provided cache_kwargs. This prevents cache exfiltration.
+                # The global cache must be initialized by the server admin or proxy config.
+                 verbose_router_logger.warning(
+                    "cache_responses=True but litellm.cache is None. "
+                    "Global cache will not be initialized by the Router for security reasons. "
+                    "Please configure litellm.cache globally."
+                )
             self.cache_responses = cache_responses
         self.cache = DualCache(
             redis_cache=redis_cache, in_memory_cache=InMemoryCache()
