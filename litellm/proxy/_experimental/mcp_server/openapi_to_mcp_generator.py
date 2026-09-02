@@ -57,6 +57,19 @@ from litellm.proxy._experimental.mcp_server.tool_registry import (
 from litellm.types.mcp import credential_redirect_hook, custom_credential_slot
 
 
+def _import_yaml():
+    """Import and return the yaml module, raising a clear error if missing."""
+    try:
+        import yaml as _yaml
+
+        return _yaml
+    except ImportError:
+        raise ImportError(
+            "PyYAML is required to parse YAML OpenAPI specs. "
+            "Install it with: pip install pyyaml"
+        ) from None
+
+
 class _OpenAPIJSONSchema(TypedDict, total=False):
     properties: Mapping[str, object]
     type: ReadOnly[str]
@@ -183,17 +196,13 @@ async def load_openapi_spec_async(filepath: str) -> dict[str, Any]:
 
         content_type = r.headers.get("content-type", "")
         if _is_yaml_content(filepath, content_type):
-            import yaml
-
-            return yaml.safe_load(r.text)
+            return _import_yaml().safe_load(r.text)
         # Try JSON first; fall back to YAML for specs served without
         # proper Content-Type headers (common with raw GitHub URLs).
         try:
             return r.json()
         except Exception:
-            import yaml
-
-            return yaml.safe_load(r.text)
+            return _import_yaml().safe_load(r.text)
 
     # fallback: local file
     # Local filesystem path
@@ -201,19 +210,15 @@ async def load_openapi_spec_async(filepath: str) -> dict[str, Any]:
         raise FileNotFoundError(f"OpenAPI spec not found at {filepath}")
 
     if _is_yaml_content(filepath):
-        import yaml
-
         with open(filepath, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f)
+            return _import_yaml().safe_load(f)
 
     with open(filepath, "r", encoding="utf-8") as f:
         try:
             return json.load(f)
         except Exception:
-            import yaml
-
             f.seek(0)
-            return yaml.safe_load(f)
+            return _import_yaml().safe_load(f)
 
 
 def get_base_url(spec: Mapping[str, Any], spec_path: str | None = None) -> str:
