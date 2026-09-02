@@ -4200,6 +4200,86 @@ def test_generic_cost_per_token_gemini_37_flash(_local_model_cost_map):
     assert completion_cost == pytest.approx(0.001875)
 
 
+GEMINI_38_FLASH_LAUNCH_PRICING = [
+    ("gemini-3.8-flash", 7.5e-07, 3.75e-06, 7.5e-08),
+    ("gemini/gemini-3.8-flash", 7.5e-07, 3.75e-06, 7.5e-08),
+    ("vertex_ai/gemini-3.8-flash", 7.5e-07, 3.75e-06, 7.5e-08),
+]
+
+
+@pytest.mark.parametrize("model,input_cost,output_cost,cache_read_cost", GEMINI_38_FLASH_LAUNCH_PRICING)
+def test_gemini_38_flash_launch_pricing(model, input_cost, output_cost, cache_read_cost, _local_model_cost_map):
+    model_cost_map = litellm.model_cost[model]
+    assert model_cost_map["input_cost_per_token"] == input_cost
+    assert model_cost_map["output_cost_per_token"] == output_cost
+    assert model_cost_map["output_cost_per_reasoning_token"] == output_cost
+    assert model_cost_map["cache_read_input_token_cost"] == cache_read_cost
+    assert model_cost_map["mode"] == "chat"
+    assert model_cost_map["supports_reasoning"] is True
+    assert model_cost_map["supports_function_calling"] is True
+    assert model_cost_map["max_input_tokens"] == 1048576
+
+
+GEMINI_38_FLASH_FIELDS_SHARED_WITH_37_FLASH = (
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "output_cost_per_reasoning_token",
+    "cache_read_input_token_cost",
+    "input_cost_per_token_batches",
+    "output_cost_per_token_batches",
+    "input_cost_per_token_flex",
+    "output_cost_per_token_flex",
+    "cache_read_input_token_cost_flex",
+    "input_cost_per_token_priority",
+    "output_cost_per_token_priority",
+    "cache_read_input_token_cost_priority",
+    "search_context_cost_per_query",
+    "google_maps_grounding_cost_per_query",
+    "prompt_cache_min_tokens",
+    "max_input_tokens",
+    "max_output_tokens",
+    "supports_reasoning",
+    "supports_function_calling",
+    "supports_prompt_caching",
+    "supports_vision",
+    "supports_pdf_input",
+    "supports_audio_input",
+    "supports_video_input",
+    "supports_response_schema",
+    "supports_tool_choice",
+    "supports_web_search",
+    "supports_url_context",
+)
+
+
+@pytest.mark.parametrize("prefix", ["", "gemini/", "vertex_ai/"])
+def test_gemini_38_flash_matches_37_flash_promotional_pricing(prefix, _local_model_cost_map):
+    new_model = litellm.model_cost[f"{prefix}gemini-3.8-flash"]
+    old_model = litellm.model_cost[f"{prefix}gemini-3.7-flash"]
+    for field in GEMINI_38_FLASH_FIELDS_SHARED_WITH_37_FLASH:
+        assert new_model[field] == old_model[field], field
+
+
+def test_generic_cost_per_token_gemini_38_flash(_local_model_cost_map):
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            reasoning_tokens=200,
+            text_tokens=300,
+        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=1000),
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="gemini-3.8-flash",
+        usage=usage,
+        custom_llm_provider="gemini",
+    )
+    assert prompt_cost == pytest.approx(0.00075)
+    assert completion_cost == pytest.approx(0.001875)
+
+
 def test_grok_46_launch_pricing(_local_model_cost_map):
     model_cost_map = litellm.model_cost["xai/grok-4.6"]
     assert model_cost_map["input_cost_per_token"] == 2e-06
