@@ -171,6 +171,9 @@ class WaveSpeedImageGenerationConfig(BaseImageGenerationConfig):
         return model_response
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: Mapping[str, str] | httpx.Headers
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict | httpx.Headers,  # mutable-ok: matches BaseLLMException/base get_error_class contract
     ) -> WaveSpeedError:
         return WaveSpeedError(status_code=status_code, message=error_message, headers=headers)

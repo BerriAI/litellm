@@ -25,7 +25,7 @@ from typing import (
 )
 
 import httpx
-from httpx._types import RequestFiles
+from httpx._types import FileContent, RequestFiles
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -348,9 +348,10 @@ class WaveSpeedVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: Mapping[str, str],
-        extra_body: Mapping[str, object] | None = None,
-        prefetched_source_data: object | None = None,
+        headers: dict,  # mutable-ok: matches BaseVideoConfig.transform_video_edit_request signature
+        video_file: FileContent | None = None,
+        extra_body: dict[str, Any] | None = None,  # mutable-ok: matches base signature
+        prefetched_source_data: dict[str, Any] | None = None,  # mutable-ok: matches base signature
     ) -> Never:
         raise NotImplementedError("video edit is not supported for WaveSpeed")
 
@@ -384,6 +385,9 @@ class WaveSpeedVideoConfig(BaseVideoConfig):
         raise NotImplementedError("video extension is not supported for WaveSpeed")
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: Mapping[str, str] | httpx.Headers
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict | httpx.Headers,  # mutable-ok: matches BaseLLMException/base get_error_class contract
     ) -> WaveSpeedError:
         return WaveSpeedError(status_code=status_code, message=error_message, headers=headers)
