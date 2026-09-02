@@ -566,18 +566,17 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
                     )
                 reasoning_content: str | None = None
                 content: str | None = None
-                if text is not None:
-                    if "<think>" in text:
-                        text = text.replace("<think>", "")
-                        self.started_reasoning_content = True
-                    elif "</think>" in text:
-                        text = text.replace("</think>", "")
-                        self.finished_reasoning_content = True
+                if "<think>" in text:
+                    text = text.replace("<think>", "")
+                    self.started_reasoning_content = True
+                elif "</think>" in text:
+                    text = text.replace("</think>", "")
+                    self.finished_reasoning_content = True
 
-                    if self.started_reasoning_content and not self.finished_reasoning_content:
-                        reasoning_content = text
-                    else:
-                        content = text
+                if self.started_reasoning_content and not self.finished_reasoning_content:
+                    reasoning_content = text
+                else:
+                    content = text
 
                 return ModelResponseStream(
                     choices=[

@@ -974,6 +974,43 @@ class TestOllamaStreamingToolCallCluster:
         assert "error parsing tool call" in str(exc_info.value)
         assert "KeyError" not in str(exc_info.value)
 
+    def test_normalizing_a_tool_call_does_not_mutate_the_provider_chunk(self):
+        iterator = OllamaChatCompletionResponseIterator(streaming_response=iter([]), sync_stream=True)
+        chunk = self._tool_call_chunk("read_file", {"path": "a.rs"}, function_index=3)
+
+        iterator.chunk_parser(chunk)
+
+        assert chunk["message"]["tool_calls"][0] == {"function": {"name": "read_file", "arguments": {"path": "a.rs"}, "index": 3}}
+
+    def test_zero_eval_count_is_not_replaced_by_a_token_estimate(self):
+        import httpx
+
+        raw_response = httpx.Response(
+            200,
+            json={
+                "model": "qwen3",
+                "message": {"role": "assistant", "content": "some words the estimator would count"},
+                "done": True,
+                "done_reason": "stop",
+                "prompt_eval_count": 7,
+                "eval_count": 0,
+            },
+            request=httpx.Request("POST", "http://localhost:11434/api/chat"),
+        )
+        response = OllamaChatConfig().transform_response(
+            model="qwen3",
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert response.usage.completion_tokens == 0
+
     def test_transform_response_error_dict_raises_ollama_error(self):
         import httpx
 
