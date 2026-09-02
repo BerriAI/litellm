@@ -12,6 +12,7 @@ from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.proxy.agent_endpoints.agent_registry import (
     AgentRegistry,
     GrantMigrationResult,
+    _restore_redacted_litellm_params,
     redact_sensitive_agent_litellm_params,
 )
 
@@ -566,6 +567,103 @@ def test_redact_sensitive_agent_litellm_params_recurses_into_lists_of_dicts():
     assert redacted["provider_configs"][0]["region"] == "us-east-1"
     assert redacted["provider_configs"][1]["aws_secret_access_key"] == REDACTED_BY_LITELM_STRING
     assert redacted["provider_configs"][1]["region"] == "us-west-2"
+
+
+def test_redact_sensitive_agent_litellm_params_redacts_secrets_inside_model_list():
+    """The exact shape flagged in review: litellm_params.model_list, where each
+    entry carries its own nested litellm_params with a provider credential."""
+    redacted = redact_sensitive_agent_litellm_params(
+        {
+            "model_list": [
+                {
+                    "model_name": "gpt-4",
+                    "litellm_params": {"api_key": SENTINEL_AWS_SECRET_ACCESS_KEY, "model": "gpt-4"},
+                },
+                {
+                    "model_name": "claude",
+                    "litellm_params": {
+                        "aws_secret_access_key": "other-" + SENTINEL_AWS_SECRET_ACCESS_KEY,
+                        "model": "bedrock/claude",
+                    },
+                },
+            ]
+        }
+    )
+
+    assert SENTINEL_AWS_SECRET_ACCESS_KEY not in json.dumps(redacted)
+    assert redacted["model_list"][0]["litellm_params"]["api_key"] == REDACTED_BY_LITELM_STRING
+    assert redacted["model_list"][0]["litellm_params"]["model"] == "gpt-4"
+    assert redacted["model_list"][1]["litellm_params"]["aws_secret_access_key"] == REDACTED_BY_LITELM_STRING
+    assert redacted["model_list"][1]["litellm_params"]["model"] == "bedrock/claude"
+
+
+def test_restore_redacted_litellm_params_preserves_secret_inside_model_list():
+    """The write-side counterpart: a caller echoing the model_list back
+    unchanged, with its nested secret masked, while editing a sibling
+    top-level field, must not corrupt the stored per-deployment credential."""
+    existing = {
+        "agent_name": "my-agent",
+        "model_list": [
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"api_key": SENTINEL_AWS_SECRET_ACCESS_KEY, "model": "gpt-4"},
+            },
+        ],
+    }
+    incoming = {
+        "agent_name": "my-agent-renamed",
+        "model_list": [
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"api_key": REDACTED_BY_LITELM_STRING, "model": "gpt-4"},
+            },
+        ],
+    }
+
+    restored = _restore_redacted_litellm_params(incoming, existing)
+
+    assert SENTINEL_AWS_SECRET_ACCESS_KEY == restored["model_list"][0]["litellm_params"]["api_key"]
+    assert restored["agent_name"] == "my-agent-renamed"
+
+
+def test_restore_redacted_litellm_params_does_not_misassign_across_reordered_list_entries():
+    """If the model_list entries no longer match up (e.g. reordered, or the
+    entry actually changed), position-based restoration must not attach one
+    entry's credential to a different entry -- the caller's own value (even
+    the literal marker) is used instead of guessing."""
+    existing = {
+        "model_list": [
+            {"model_name": "gpt-4", "litellm_params": {"api_key": SENTINEL_AWS_SECRET_ACCESS_KEY}},
+            {"model_name": "claude", "litellm_params": {"api_key": "other-" + SENTINEL_AWS_SECRET_ACCESS_KEY}},
+        ],
+    }
+    incoming = {
+        "model_list": [
+            # Same index (0) now holds what used to be at index 1's entry.
+            {"model_name": "claude", "litellm_params": {"api_key": REDACTED_BY_LITELM_STRING}},
+        ],
+    }
+
+    restored = _restore_redacted_litellm_params(incoming, existing)
+
+    # Must NOT have pulled index 0's ("gpt-4") credential onto "claude": either
+    # dropped entirely (nothing to safely restore from) or left as the
+    # caller's own value, never another entry's real secret.
+    assert restored["model_list"][0]["litellm_params"].get("api_key") != SENTINEL_AWS_SECRET_ACCESS_KEY
+
+
+def test_restore_redacted_litellm_params_recovers_a_whole_subtree_collapsed_by_the_depth_cap():
+    """Past the read-side recursion depth cap, a whole nested subtree is
+    collapsed to the flat REDACTED_BY_LITELM marker rather than a dict/list.
+    If the caller echoes that flat marker back unchanged, the whole
+    subtree -- not just the literal marker string -- must be restored."""
+    existing_subtree = {"aws_secret_access_key": SENTINEL_AWS_SECRET_ACCESS_KEY, "region": "us-east-1"}
+    incoming = {"provider_config": REDACTED_BY_LITELM_STRING}
+    existing = {"provider_config": existing_subtree}
+
+    restored = _restore_redacted_litellm_params(incoming, existing)
+
+    assert restored["provider_config"] == existing_subtree
 
 
 def test_redact_sensitive_agent_litellm_params_does_not_reinterpret_plain_string_values_as_json():

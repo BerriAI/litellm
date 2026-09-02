@@ -212,15 +212,59 @@ _MISSING_AGENT_PARAM: Final = object()
 _RESTORE_AGENT_PARAMS_MAX_DEPTH: Final = 10
 
 
+def _agent_params_match_ignoring_secrets(incoming: object, existing: object, _depth: int = 0) -> bool:
+    """Whether ``incoming`` and ``existing`` describe the same logical value
+    once every credential-bearing leaf is ignored.
+
+    Used to confirm a list element still occupies the same conceptual
+    identity before restoring a masked secret from the same index: if
+    anything besides a secret differs, position no longer proves the two
+    entries correspond, and restoring by index would risk attaching one
+    entry's credential to a different one. Fails closed (returns ``False``,
+    so nothing gets restored) at the depth cap and on a dict/list shape
+    mismatch.
+    """
+    if _depth >= _RESTORE_AGENT_PARAMS_MAX_DEPTH:
+        return False
+    if isinstance(incoming, Mapping) and isinstance(existing, Mapping):
+        typed_incoming: Final = _AGENT_PARAMS_ADAPTER.validate_python(incoming)
+        typed_existing: Final = _AGENT_PARAMS_ADAPTER.validate_python(existing)
+        keys: Final = frozenset(typed_incoming) | frozenset(typed_existing)
+        return all(
+            _AGENT_PARAMS_MASKER.is_sensitive_key(key)
+            or (
+                key in typed_incoming
+                and key in typed_existing
+                and _agent_params_match_ignoring_secrets(typed_incoming[key], typed_existing[key], _depth + 1)
+            )
+            for key in keys
+        )
+    if isinstance(incoming, (list, tuple)) and isinstance(existing, (list, tuple)):
+        typed_incoming_seq: Final = _AGENT_PARAMS_SEQUENCE_ADAPTER.validate_python(incoming)
+        typed_existing_seq: Final = _AGENT_PARAMS_SEQUENCE_ADAPTER.validate_python(existing)
+        return len(typed_incoming_seq) == len(typed_existing_seq) and all(
+            _agent_params_match_ignoring_secrets(i, e, _depth + 1)
+            for i, e in zip(typed_incoming_seq, typed_existing_seq)
+        )
+    return incoming == existing
+
+
 def _restore_redacted_nested_value(incoming_value: object, existing_value: object, _depth: int) -> object:
     """Recurse into a non-sensitively-named dict/list value so a secret
     nested underneath it (e.g. inside a list of per-provider configs) is
     still restored, not just top-level keys. Mirrors the shapes
     ``redact_sensitive_agent_litellm_params`` recurses into on read, so
-    restore and redact stay symmetric. Depth-bounded like its read-side
+    restore and redact stay symmetric.
+
+    A value collapsed to the flat marker by the read side's depth cap is
+    recovered wholesale from ``existing_value`` (rather than the marker
+    string itself getting persisted) whenever ``existing_value`` isn't
+    already that same flat marker. Depth-bounded like its read-side
     counterpart; a value at the cap is returned unchanged rather than
     corrupted.
     """
+    if incoming_value == REDACTED_BY_LITELM_STRING and existing_value != REDACTED_BY_LITELM_STRING:
+        return existing_value
     if _depth >= _RESTORE_AGENT_PARAMS_MAX_DEPTH:
         return incoming_value
     if isinstance(incoming_value, Mapping):
@@ -239,7 +283,13 @@ def _restore_redacted_nested_value(incoming_value: object, existing_value: objec
             else ()
         )
         return tuple(
-            _restore_redacted_nested_value(item, existing_seq[index] if index < len(existing_seq) else None, _depth + 1)
+            _restore_redacted_nested_value(
+                item,
+                existing_seq[index]
+                if index < len(existing_seq) and _agent_params_match_ignoring_secrets(item, existing_seq[index])
+                else None,
+                _depth + 1,
+            )
             for index, item in enumerate(typed_incoming_seq)
         )
     return incoming_value
