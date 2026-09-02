@@ -6,6 +6,7 @@ import logging
 import os
 import threading
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -1535,6 +1536,91 @@ async def test_ageneric_api_call_deployment_model_overrides_alias():
     assert (
         captured["model"] == "vertex_ai/gemini-2.5-flash"
     ), f"Expected deployment model 'vertex_ai/gemini-2.5-flash', got '{captured['model']}'"
+
+
+@pytest.mark.asyncio
+async def test_ageneric_api_call_resolves_realtime_session_model():
+    """
+    Regression for #36742: realtime client secret requests carry the model inside `session` too, and the proxy
+    fills it with the pre-routing model group name. The underlying litellm function reads session.model first,
+    so it must see the resolved deployment, while a caller's nested transcription model stays untouched.
+    """
+    routed: Final = AsyncMock(return_value={"result": "ok"})
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-realtime-group",
+                "litellm_params": {
+                    "model": "openai/gpt-realtime-2.1-mini",
+                    "api_key": "fake-key",
+                },
+                "model_info": {"mode": "realtime"},
+            }
+        ]
+    )
+
+    await router._ageneric_api_call_with_fallbacks(
+        model="my-realtime-group",
+        original_function=routed,
+        session={
+            "type": "realtime",
+            "model": "my-realtime-group",
+            "audio": {"input": {"transcription": {"model": "gpt-4o-transcribe"}}},
+        },
+    )
+
+    sent: Final = routed.call_args.kwargs
+    assert sent["model"] == "openai/gpt-realtime-2.1-mini"
+    assert sent["session"]["model"] == "openai/gpt-realtime-2.1-mini"
+    assert sent["session"]["audio"]["input"]["transcription"]["model"] == "gpt-4o-transcribe"
+
+
+@pytest.mark.asyncio
+async def test_ageneric_api_call_does_not_add_session_model():
+    """
+    A session that never carried a model must not gain one from routing: the underlying function then falls back
+    to the resolved `model` kwarg itself, and the outgoing session body keeps the caller's shape.
+    """
+    routed: Final = AsyncMock(return_value={"result": "ok"})
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-realtime-group",
+                "litellm_params": {
+                    "model": "openai/gpt-realtime-2.1-mini",
+                    "api_key": "fake-key",
+                },
+                "model_info": {"mode": "realtime"},
+            }
+        ]
+    )
+
+    await router._ageneric_api_call_with_fallbacks(
+        model="my-realtime-group",
+        original_function=routed,
+        session={"type": "realtime"},
+    )
+
+    sent: Final = routed.call_args.kwargs
+    assert sent["model"] == "openai/gpt-realtime-2.1-mini"
+    assert sent["session"] == {"type": "realtime"}
+
+
+@pytest.mark.parametrize(
+    "session, expected",
+    [
+        ({"type": "realtime", "model": "my-realtime-group"}, {"session": {"type": "realtime", "model": "resolved"}}),
+        ({"type": "realtime"}, {}),
+        (None, {}),
+        ("not-a-session", {}),
+    ],
+)
+def test_with_router_resolved_session_model(session, expected):
+    from litellm.router import _with_router_resolved_session_model
+
+    assert dict(_with_router_resolved_session_model(session, "resolved")) == expected
 
 
 def test_router_get_model_access_groups_team_only_models():
@@ -11907,3 +11993,55 @@ class TestPreRoutingTierDrivesFallbacks:
         response = await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
 
         assert response.choices[0].message.content == "from backup-b"
+
+
+@pytest.mark.asyncio
+async def test_prompt_management_factory_marks_injection_for_every_deployment(monkeypatch):
+    """The factory stamps a provisional deployment's model_info into kwargs before the
+    prompt pass runs, then routes on the returned model, so any deployment can end up
+    billed. An injection recorded there must carry the every-deployment sentinel, never
+    the provisional deployment's id, or a differently-billed deployment loses the credit."""
+    import time
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "cached-claude",
+                "litellm_params": {
+                    "model": "anthropic_cache_control_hook/claude-sonnet-5",
+                    "prompt_id": "cache-points",
+                },
+                "model_info": {"id": "provisional-dep"},
+            }
+        ]
+    )
+    captured: dict = {}
+
+    async def _capture_acompletion(**kwargs):
+        captured.update(kwargs)
+        return litellm.ModelResponse()
+
+    monkeypatch.setattr(litellm, "acompletion", _capture_acompletion)
+    logging_obj = LiteLLMLogging(
+        model="cached-claude",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="lit-6445",
+        function_id="f",
+    )
+    await router.acompletion(
+        model="cached-claude",
+        messages=[
+            {"role": "system", "content": "a static system prompt"},
+            {"role": "user", "content": "hi"},
+        ],
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        litellm_logging_obj=logging_obj,
+    )
+    bucket = captured.get("litellm_metadata") or captured["metadata"]
+    assert captured["model_info"]["id"] == "provisional-dep"
+    assert bucket["litellm_gateway_injected_cache"] == ""
