@@ -3,6 +3,7 @@ from typing import Dict, Final, List, Optional, Union
 from unittest.mock import Mock
 
 import pytest
+import respx
 
 from litellm import Router
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
@@ -438,6 +439,46 @@ class TestFilterWebSearchDeployments:
         assert isinstance(result, list)
         assert tuple(d["model_info"]["id"] for d in result) == ("both",)
 
+    @pytest.mark.parametrize("tool", [None, {"type": 123}])
+    def test_malformed_tools_do_not_trigger_native_capability_filtering(self, tool: object):
+        deployments: Final = [
+            {"model_info": {"id": "custom", "supports_web_search": False, "supports_web_fetch": False}}
+        ]
+
+        assert filter_web_search_deployments(deployments, {"tools": [tool]}) == deployments
+
+    def test_web_fetch_missing_model_info_defaults_to_supported(self):
+        deployments: Final = [
+            {"model_info": None},
+            {"model_info": {"id": "unsupported", "supports_web_fetch": False}},
+        ]
+
+        result: Final = filter_web_search_deployments(
+            deployments,
+            {"tools": [{"type": "web_fetch_20250910"}]},
+        )
+
+        assert result == [deployments[0]]
+
+    def test_sync_explicit_deployment_bypasses_capability_filtering(self):
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "explicit-native-tools",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                    "model_info": {"id": "explicit-no-fetch", "supports_web_fetch": False},
+                }
+            ]
+        )
+
+        deployment: Final = router.get_available_deployment(
+            model="explicit-no-fetch",
+            messages=[{"role": "user", "content": "fetch a page"}],
+            request_kwargs={"tools": [{"type": "web_fetch_20250910"}]},
+        )
+
+        assert deployment["model_info"]["id"] == "explicit-no-fetch"
+
     def test_sync_router_filters_native_web_fetch_capability(self):
         router: Final = Router(
             model_list=[
@@ -455,6 +496,169 @@ class TestFilterWebSearchDeployments:
                 model="mixed-claude",
                 messages=[{"role": "user", "content": "fetch a page"}],
                 request_kwargs=request_kwargs,
+            )
+
+    @pytest.mark.parametrize(
+        ("tool_type", "capability"),
+        [
+            ("web_search_20250305", "supports_web_search"),
+            ("web_fetch_20250910", "supports_web_fetch"),
+        ],
+    )
+    def test_sync_router_selects_only_native_capability_compatible_deployment(self, tool_type: str, capability: str):
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "mixed-native-tools",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                    "model_info": {"id": "compatible", capability: True},
+                },
+                {
+                    "model_name": "mixed-native-tools",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"},
+                    "model_info": {"id": "incompatible", capability: False},
+                },
+            ],
+            routing_strategy="simple-shuffle",
+        )
+
+        deployment: Final = router.get_available_deployment(
+            model="mixed-native-tools",
+            messages=[{"role": "user", "content": "use the native server tool"}],
+            request_kwargs={"tools": [{"type": tool_type}]},
+        )
+
+        assert deployment["model_info"]["id"] == "compatible"
+
+    def test_sync_router_never_calls_incompatible_native_web_search_deployment(self):
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "mixed-native-tools",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-test",
+                        "api_base": "https://compatible.invalid/v1",
+                    },
+                    "model_info": {"id": "compatible", "supports_web_search": True},
+                },
+                {
+                    "model_name": "mixed-native-tools",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o",
+                        "api_key": "sk-test",
+                        "api_base": "https://incompatible.invalid/v1",
+                    },
+                    "model_info": {"id": "incompatible", "supports_web_search": False},
+                },
+            ],
+            routing_strategy="simple-shuffle",
+            num_retries=0,
+        )
+        response_payload: Final = {
+            "id": "chatcmpl-local",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "gpt-4o-mini",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+
+        with respx.mock(assert_all_called=False, assert_all_mocked=True) as mock:
+            compatible: Final = mock.post("https://compatible.invalid/v1/chat/completions").respond(
+                200, json=response_payload
+            )
+            incompatible: Final = mock.post("https://incompatible.invalid/v1/chat/completions").respond(
+                500, json={"error": "must not be called"}
+            )
+            response: Final = router.completion(
+                model="mixed-native-tools",
+                messages=[{"role": "user", "content": "Say ok"}],
+                tools=[{"type": "web_search_20250305", "name": "web_search"}],
+            )
+
+        assert response.choices[0].message.content == "ok"
+        assert compatible.called
+        assert not incompatible.called
+
+    async def test_async_router_intersects_native_search_and_fetch_capabilities(self):
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "mixed-native-tools",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                    "model_info": {
+                        "id": "supports-both",
+                        "supports_web_search": True,
+                        "supports_web_fetch": True,
+                    },
+                },
+                {
+                    "model_name": "mixed-native-tools",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"},
+                    "model_info": {
+                        "id": "search-only",
+                        "supports_web_search": True,
+                        "supports_web_fetch": False,
+                    },
+                },
+                {
+                    "model_name": "mixed-native-tools",
+                    "litellm_params": {"model": "openai/gpt-4.1-mini", "api_key": "sk-test"},
+                    "model_info": {
+                        "id": "fetch-only",
+                        "supports_web_search": False,
+                        "supports_web_fetch": True,
+                    },
+                },
+            ],
+            routing_strategy="simple-shuffle",
+        )
+
+        deployments: Final = await router.async_get_healthy_deployments(
+            model="mixed-native-tools",
+            request_kwargs={
+                "tools": [
+                    {"type": "web_search_20250305"},
+                    {"type": "web_fetch_20250910"},
+                ]
+            },
+        )
+
+        assert isinstance(deployments, list)
+        assert tuple(deployment["model_info"]["id"] for deployment in deployments) == ("supports-both",)
+
+    @pytest.mark.parametrize(
+        ("tool_type", "capability"),
+        [
+            ("web_search_20250305", "supports_web_search"),
+            ("web_fetch_20250910", "supports_web_fetch"),
+        ],
+    )
+    async def test_async_router_rejects_when_no_deployment_supports_native_capability(
+        self, tool_type: str, capability: str
+    ):
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "mixed-native-tools",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                    "model_info": {"id": "incompatible", capability: False},
+                }
+            ],
+            routing_strategy="simple-shuffle",
+        )
+
+        with pytest.raises(RouterRateLimitError):
+            await router.async_get_healthy_deployments(
+                model="mixed-native-tools",
+                request_kwargs={"tools": [{"type": tool_type}]},
             )
 
 
