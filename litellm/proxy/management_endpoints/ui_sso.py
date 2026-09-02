@@ -89,7 +89,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
 from litellm.proxy.auth.auth_utils import (
     _get_request_ip_address,
-    _has_user_setup_sso,
+    has_user_setup_sso,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -502,7 +502,7 @@ def _set_nested_metadata_value(metadata: dict[str, object], key_path: str, value
     placeholder: Final = "\x00"
     parts = key_path.replace("\\.", placeholder).split(".")
     parts = [p.replace(placeholder, ".") for p in parts]
-    current: Any = metadata
+    current: dict[str, object] = metadata
     for part in parts[:-1]:
         existing = current.get(part)
         if not isinstance(existing, dict):
@@ -2617,7 +2617,7 @@ async def get_ui_settings(request: Request):
     _proxy_base_url: Final = os.getenv("PROXY_BASE_URL", None)
     _logout_url: Final = os.getenv("PROXY_LOGOUT_URL", None)
     _api_doc_base_url: Final = os.getenv("LITELLM_UI_API_DOC_BASE_URL", None)
-    _is_sso_enabled: Final = _has_user_setup_sso()
+    _is_sso_enabled: Final = has_user_setup_sso()
     disable_expensive_db_queries: Final = (
         proxy_state.get_proxy_state_variable("spend_logs_row_count") > MAX_SPENDLOG_ROWS_TO_QUERY
     )
@@ -4076,7 +4076,7 @@ class SSOAuthenticationHandler:
                 )
                 if resp.status_code == 200:
                     try:
-                        userinfo_raw: Final = resp.json()
+                        userinfo_raw: Final[dict[str, object] | None] = resp.json()
                         if not userinfo_raw:
                             # JSON null (None) or empty dict ({}) — no identity claims.
                             # Treat as failure so id_token fallback can be attempted.
@@ -4406,7 +4406,7 @@ class MicrosoftSSOHandler:
     ) -> tuple[list[str], str | None]:
         """Helper function to fetch and parse group data from a URL"""
         response: Final = await async_client.get(url, headers=headers)
-        response_json: Final = response.json()
+        response_json: Final[dict[str, object]] = response.json()
         response_typed: Final = await MicrosoftSSOHandler._cast_graph_api_response_dict(response=response_json)
         group_ids: Final = MicrosoftSSOHandler._get_group_ids_from_graph_api_response(response=response_typed)
         return group_ids, response_typed.get("odata_nextLink")

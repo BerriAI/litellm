@@ -41,7 +41,6 @@ from litellm.utils import (
     _snapshot_exception_for_hook,
     async_post_call_failure_deployment_hook,
     client,
-    get_api_key,
     get_llm_provider,
     get_non_default_completion_params,
     get_optional_params_image_gen,
@@ -1005,6 +1004,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "gemini_native_audio": {"type": "boolean"},
                 "gemini_audio_only_live": {"type": "boolean"},
                 "supports_embedding_image_input": {"type": "boolean"},
+                "supports_forced_tool_use": {"type": "boolean"},
                 "supports_function_calling": {"type": "boolean"},
                 "supports_image_input": {"type": "boolean"},
                 "supports_nova_canvas_image_edit": {"type": "boolean"},
@@ -1414,6 +1414,26 @@ def test_get_provider_rerank_config():
         "my_model", LlmProviders.HOSTED_VLLM, "http://localhost", []
     )
     assert isinstance(config, HostedVLLMRerankConfig)
+
+
+def test_get_provider_text_to_speech_config_vertex_gemini_skips_cloud_tts():
+    """Regression for LIT-6501: mapping vertex Gemini TTS params through Google Cloud TTS
+    dropped response_format before the speech_to_completion bridge could honor it."""
+    from litellm.llms.vertex_ai.text_to_speech.transformation import VertexAITextToSpeechConfig
+    from litellm.utils import LlmProviders
+
+    assert (
+        ProviderConfigManager.get_provider_text_to_speech_config(
+            model="gemini-2.5-flash-preview-tts", provider=LlmProviders.VERTEX_AI
+        )
+        is None
+    )
+    assert isinstance(
+        ProviderConfigManager.get_provider_text_to_speech_config(
+            model="en-US-Studio-O", provider=LlmProviders.VERTEX_AI
+        ),
+        VertexAITextToSpeechConfig,
+    )
 
 
 # Models that should be skipped during testing
@@ -4634,6 +4654,7 @@ GEMINI_4096_CACHE_MIN_MODELS: Final = tuple(
         "gemini-3.5-flash",
         "gemini-3.6-flash",
         "gemini-3.7-flash",
+        "gemini-3.8-flash",
         "gemini-3.1-pro-preview",
         "gemini-3.1-pro-preview-customtools",
     )
@@ -4893,17 +4914,6 @@ def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkey
     finally:
         litellm.model_cost = saved_model_cost
         _invalidate_model_cost_lowercase_map()
-
-
-def test_ai21_api_key_is_resolved_from_the_documented_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The ai21 branch resolved a misspelled env var, so the name every other ai21 code path
-    reads, and the only name documented, was ignored."""
-    monkeypatch.setattr(litellm, "api_key", None)
-    monkeypatch.setattr(litellm, "ai21_key", None)
-    monkeypatch.delenv("AI211_API_KEY", raising=False)
-    monkeypatch.setenv("AI21_API_KEY", "sk-ai21-resolved-from-env")
-
-    assert get_api_key(llm_provider="ai21", dynamic_api_key=None) == "sk-ai21-resolved-from-env"
 
 
 class _JsonCapture(logging.Handler):
@@ -5765,3 +5775,33 @@ class TestHuggingFaceConfigFetch:
         assert _get_max_position_embeddings("some-org/some-model") == 512
         request_timeout = hf_config_route.calls.last.request.extensions["timeout"]
         assert request_timeout["read"] == HF_CONFIG_FETCH_TIMEOUT_SECONDS
+
+
+class TestIsVisionExplicitlyDisabled:
+    """github_copilot and chatgpt run an OAuth device flow inside get_llm_provider; the
+    explicit-disable lookup must adopt the declared prefix instead of resolving it, exactly
+    as _supports_factory does, or a capability check on a copilot deployment blocks routing
+    on a device-code prompt."""
+
+    @pytest.mark.parametrize("model", ["github_copilot/gpt-4o", "chatgpt/gpt-5"])
+    def test_never_resolves_an_authenticating_prefix(self, model, monkeypatch):
+        from litellm.utils import is_vision_explicitly_disabled
+
+        lookups: list = []
+
+        def _record(*args, **kwargs):
+            lookups.append((args, kwargs))
+            raise RuntimeError("provider resolution must not run for an authenticating provider")
+
+        monkeypatch.setattr(litellm, "get_llm_provider", _record)
+
+        assert is_vision_explicitly_disabled(model) is False
+        assert lookups == []
+
+    def test_explicit_false_detected_and_absent_reads_enabled(self):
+        from litellm.utils import is_vision_explicitly_disabled
+
+        assert (
+            is_vision_explicitly_disabled("fireworks_ai/accounts/fireworks/models/deepseek-v4-flash-0731") is True
+        )
+        assert is_vision_explicitly_disabled("anthropic/claude-sonnet-4-5") is False

@@ -1,27 +1,23 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use litellm_ai_gateway::io::audio_transcription::{
-    AudioTranscriptionRequest, audio_transcription as run_audio_transcription,
-};
 use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
 use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
+use litellm_core::audio_transcription::{
+    AudioTranscriptionRequest, audio_transcription as run_audio_transcription,
+};
 use litellm_core::chat_completions::types::{ChatCompletionsRequest, ChatCompletionsResponse};
 use litellm_core::chat_completions::{
     chat_completions as run_chat_completions, chat_completions_decline_reason,
 };
-use litellm_core::error::CoreError;
+use litellm_core::error::Error;
 use litellm_core::messages::messages as run_messages;
 use litellm_core::messages::types::{AnthropicMessagesResponse, MessagesRequest};
+use litellm_python_interop::{from_py, release_count, release_gil, to_py};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict};
 use serde_json::{Map, Value};
-
-mod gil;
-mod marshal;
-
-use marshal::{from_py, to_py};
 
 pyo3::create_exception!(
     _native,
@@ -58,13 +54,13 @@ fn chat_completions_response_to_py(
     to_py(py, &response)
 }
 
-fn core_error_to_pyerr(err: CoreError) -> PyErr {
+fn core_error_to_pyerr(err: Error) -> PyErr {
     match err {
-        CoreError::Auth(message) => PyValueError::new_err(message),
-        CoreError::InvalidProvider(_)
-        | CoreError::InvalidRequest(_)
-        | CoreError::InvalidType { .. }
-        | CoreError::MissingField(_) => PyValueError::new_err(err.to_string()),
+        Error::Auth(message) => PyValueError::new_err(message),
+        Error::InvalidProvider(_)
+        | Error::InvalidRequest(_)
+        | Error::InvalidType { .. }
+        | Error::MissingField(_) => PyValueError::new_err(err.to_string()),
         other => PyRuntimeError::new_err(other.to_string()),
     }
 }
@@ -75,22 +71,22 @@ fn core_error_to_pyerr(err: CoreError) -> PyErr {
 /// Everything raised before the request goes out is safe for the host to retry
 /// on its own path; anything after it is not, because the provider has already
 /// done the work and billed for it.
-fn chat_completions_error_to_pyerr(err: CoreError) -> PyErr {
+fn chat_completions_error_to_pyerr(err: Error) -> PyErr {
     match err {
-        CoreError::Unsupported(_)
-        | CoreError::Auth(_)
-        | CoreError::InvalidProvider(_)
-        | CoreError::InvalidRequest(_)
-        | CoreError::InvalidType { .. }
-        | CoreError::MissingField(_)
-        | CoreError::Routing(_)
+        Error::Unsupported(_)
+        | Error::Auth(_)
+        | Error::InvalidProvider(_)
+        | Error::InvalidRequest(_)
+        | Error::InvalidType { .. }
+        | Error::MissingField(_)
+        | Error::Routing(_)
         // Nothing reached the provider, so serving it on Python cannot double
         // bill and is the only way the caller gets an answer at all.
-        | CoreError::Connect(_) => RustBridgeDeclined::new_err(err.to_string()),
-        CoreError::Http { status, body } => {
+        | Error::Connect(_) => RustBridgeDeclined::new_err(err.to_string()),
+        Error::Http { status, body } => {
             RustUpstreamError::new_err((status, format!("{status}: {body}")))
         }
-        CoreError::Network(message) | CoreError::InvalidResponse(message) => {
+        Error::Network(message) | Error::InvalidResponse(message) => {
             RustUpstreamError::new_err((0u16, message))
         }
     }
@@ -230,7 +226,7 @@ fn ocr(
         timeout_seconds,
     )?;
 
-    let result = gil::release_gil(py, || {
+    let result = release_gil(py, || {
         pyo3_async_runtimes::tokio::get_runtime().block_on(run_ocr(OcrRequest {
             model: &model,
             document,
@@ -318,7 +314,7 @@ fn transcription(
     };
     let optional_params = optional_object_to_map(py, "optional_params", optional_params)?;
     let timeout = optional_timeout(timeout_seconds);
-    let result = gil::release_gil(py, || {
+    let result = release_gil(py, || {
         pyo3_async_runtimes::tokio::get_runtime().block_on(run_audio_transcription(
             AudioTranscriptionRequest {
                 model: &model,
@@ -329,10 +325,6 @@ fn transcription(
                 extra_headers,
                 optional_params,
                 timeout,
-                callbacks: Vec::new(),
-                guardrails: Vec::new(),
-                request_metadata: Default::default(),
-                litellm_call_id: None,
             },
         ))
     });
@@ -373,10 +365,6 @@ fn atranscription(
             extra_headers,
             optional_params,
             timeout,
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
-            request_metadata: Default::default(),
-            litellm_call_id: None,
         })
         .await
         .map_err(core_error_to_pyerr)?;
@@ -419,7 +407,7 @@ fn messages(
     let (body, extra_headers, timeout) =
         marshal_messages_inputs(py, body, extra_headers, timeout_seconds)?;
 
-    let result = gil::release_gil(py, || {
+    let result = release_gil(py, || {
         pyo3_async_runtimes::tokio::get_runtime().block_on(run_messages(MessagesRequest {
             model: &model,
             body,
@@ -546,7 +534,7 @@ fn chat_completions(
         timeout_seconds,
     )?;
 
-    let result = gil::release_gil(py, || {
+    let result = release_gil(py, || {
         pyo3_async_runtimes::tokio::get_runtime().block_on(run_chat_completions(
             ChatCompletionsRequest {
                 model: &model,
@@ -610,8 +598,14 @@ fn achat_completions(
 #[pyfunction]
 fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
     let stats = PyDict::new(py);
-    stats.set_item("releases", gil::release_count())?;
+    stats.set_item("releases", release_count())?;
     Ok(stats.into_any().unbind())
+}
+
+#[cfg(feature = "panic-test")]
+#[pyfunction]
+fn _panic_for_test() {
+    panic!("intentional PyO3 panic smoke test");
 }
 
 #[pymodule]
@@ -630,5 +624,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(achat_completions, module)?)?;
     module.add_class::<ResponsesWebSocketConnection>()?;
     module.add_function(wrap_pyfunction!(gil_stats, module)?)?;
+    #[cfg(feature = "panic-test")]
+    module.add_function(wrap_pyfunction!(_panic_for_test, module)?)?;
     Ok(())
 }

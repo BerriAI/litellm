@@ -21,6 +21,7 @@ from litellm.types.vector_stores import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.router import Router
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -161,6 +162,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         extra_body: Mapping[str, object] | None = None,
+        router: "Router | None" = None,
     ) -> tuple[str, dict[str, object]]:
         """
         Transform search request for Vertex AI RAG API
@@ -203,7 +205,6 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
             if value is not None
         }
 
-        # Build the request body for Vertex AI RAG API
         query_body: Final[Mapping[str, object]] = {
             key: value
             for key, value in (("text", query), ("rag_retrieval_config", rag_retrieval_config or None))
@@ -294,7 +295,6 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         # Add metadata if provided
         metadata: Final = vector_store_create_optional_params.get("metadata")
 
-        # Build the request body for Vertex AI RAG Corpus creation
         request_body: Final[dict[str, object]] = {
             key: value
             for key, value in (
