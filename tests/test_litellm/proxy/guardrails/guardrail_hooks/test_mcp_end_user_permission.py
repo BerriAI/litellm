@@ -2,15 +2,10 @@
 Tests for MCP End User Permission Guardrail Hook
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.exceptions import GuardrailRaisedException
 from litellm.proxy._types import UserAPIKeyAuth

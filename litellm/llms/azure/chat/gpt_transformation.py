@@ -1,8 +1,15 @@
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    drop_tool_reference_parts_from_tool_messages,
+    hoist_images_from_tool_messages,
+    tool_with_flattened_parameters,
+)
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
 )
@@ -19,11 +26,26 @@ from ...base_llm.chat.transformation import BaseConfig
 from ..common_utils import AzureOpenAIError
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+
+_NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def flattened_tools_update(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    tools: Final = optional_params.get("tools")
+    if not isinstance(tools, list):
+        return _NO_TOOLS_UPDATE
+    flattened: Final = [  # mutable-ok: request tools are a JSON list
+        tool_with_flattened_parameters(tool) if isinstance(tool, dict) else tool for tool in tools
+    ]
+    return MappingProxyType({"tools": flattened})
 
 
 class AzureOpenAIConfig(BaseConfig):
@@ -109,6 +131,16 @@ class AzureOpenAIConfig(BaseConfig):
             "store",
         ]
 
+    @classmethod
+    def requires_max_completion_tokens(cls, model: str) -> bool:
+        """Whether Azure rejects the legacy ``max_tokens`` key for this deployment.
+
+        Deliberately wider than ``AzureOpenAIGPT5Config.is_model_gpt_5_model``: the whole gpt-5
+        name family needs the rename, including the ``gpt-5-chat*`` models that are excluded from
+        the reasoning path by https://github.com/BerriAI/litellm/issues/13781.
+        """
+        return "gpt-5" in model or "gpt5_series" in model
+
     def _is_response_format_supported_model(self, model: str) -> bool:
         """
         Determines if the model supports response_format.
@@ -157,6 +189,7 @@ class AzureOpenAIConfig(BaseConfig):
         api_version: str = "",
     ) -> dict:
         supported_openai_params: Final = self.get_supported_openai_params(model)
+        renames_max_tokens: Final = self.requires_max_completion_tokens(model)
         api_version_times: Final = api_version.split("-")
 
         if len(api_version_times) >= 3:
@@ -169,7 +202,9 @@ class AzureOpenAIConfig(BaseConfig):
             api_version_day = None
 
         for param, value in non_default_params.items():
-            if param == "tool_choice":
+            if param == "max_tokens" and renames_max_tokens:
+                optional_params.setdefault("max_completion_tokens", value)
+            elif param == "tool_choice":
                 """
                 This parameter requires API version 2023-12-01-preview or later
 
@@ -236,11 +271,13 @@ class AzureOpenAIConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        messages = convert_to_azure_openai_messages(messages)
+        stripped_messages: Final = drop_tool_reference_parts_from_tool_messages(messages)
+        azure_messages: Final = convert_to_azure_openai_messages(hoist_images_from_tool_messages(stripped_messages))
         return {
             "model": model,
-            "messages": messages,
+            "messages": azure_messages,
             **optional_params,
+            **flattened_tools_update(optional_params),
         }
 
     def transform_response(
@@ -253,7 +290,7 @@ class AzureOpenAIConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

@@ -1,3 +1,5 @@
+from collections.abc import Mapping, MutableMapping
+from types import MappingProxyType
 from typing import Final
 
 from litellm.llms.openai.data_residency import infer_openai_data_residency
@@ -18,6 +20,14 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
         "aws_bedrock_project_id",
     }
 )
+
+# The per-deployment Rust opt-in.
+RUST_KWARG_KEY: Final = "rust"
+
+# Keys `completion()` forwards from its own kwargs into `get_litellm_params`,
+# which are otherwise invisible to it because that call site passes explicit
+# named arguments rather than `**kwargs`.
+FORWARDED_KWARGS_KEYS: Final = AWS_CREDENTIAL_KWARGS_KEYS | frozenset({RUST_KWARG_KEY})
 
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
@@ -40,11 +50,18 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "vertex_ai_project",
             "vertex_ai_location",
             "vertex_ai_credentials",
+            "gigachat_scope",
+            "gigachat_auth_url",
+            "gigachat_access_token",
             "tpm",
             "rpm",
             "itpm",
             "otpm",
             "use_xai_oauth",
+            # The per-deployment Rust opt-in. `all_litellm_params` keeps it out
+            # of the provider body; this keeps it *in* litellm_params, which is
+            # where the chat completions handlers read it from.
+            RUST_KWARG_KEY,
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS
@@ -184,3 +201,19 @@ def get_litellm_params(
                 litellm_params[key] = kwargs[key]
 
     return litellm_params
+
+
+def add_trusted_model_credentials_to_litellm_params(
+    litellm_params_dict: MutableMapping[str, object], kwargs: Mapping[str, object]
+) -> None:
+    """
+    Carry the immutable server-side credential snapshot into litellm_params.
+
+    get_litellm_params has a fixed signature, so callers that need the snapshot to
+    survive into the logging object and the downstream file read have to re-add it. Only
+    a MappingProxyType is accepted, since providers resolve trusted configuration such
+    as a Bedrock file bucket from it and must not read a request-supplied mapping.
+    """
+    trusted_model_credentials: Final = kwargs.get("_litellm_internal_model_credentials")
+    if isinstance(trusted_model_credentials, MappingProxyType):
+        litellm_params_dict["_litellm_internal_model_credentials"] = trusted_model_credentials
