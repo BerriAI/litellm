@@ -212,3 +212,59 @@ def test_newrelic_preset_unset_content_knob_keeps_default(monkeypatch):
     from litellm.integrations.otel.presets.newrelic import newrelic_preset
 
     assert newrelic_preset().capture_span_content is False
+
+
+def test_signoz_preset_reads_env_endpoint_and_key(monkeypatch):
+    monkeypatch.setenv("SIGNOZ_INGESTION_ENDPOINT", "https://ingest.eu.signoz.cloud:443")
+    monkeypatch.setenv("SIGNOZ_INGESTION_KEY", "env-ingestion-key")
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.presets.signoz import signoz_preset
+
+    cfg = signoz_preset()
+    spec = next(e for e in cfg.exporters if e.owner == ExporterOwner.SIGNOZ)
+    assert spec.kind == "otlp_http"
+    assert spec.endpoint == "https://ingest.eu.signoz.cloud:443"
+    assert spec.headers == "signoz-ingestion-key=env-ingestion-key"
+    assert spec.requires_headers is True
+    assert "genai" in cfg.mapper_names
+
+
+def test_signoz_preset_without_key_is_self_hosted(monkeypatch):
+    # A self-hosted collector accepts unauthenticated OTLP, so requiring headers
+    # would drop exports that would have succeeded.
+    monkeypatch.setenv("SIGNOZ_INGESTION_ENDPOINT", "http://signoz-collector.internal:4318")
+    monkeypatch.delenv("SIGNOZ_INGESTION_KEY", raising=False)
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.presets.signoz import signoz_preset
+
+    cfg = signoz_preset()
+    spec = next(e for e in cfg.exporters if e.owner == ExporterOwner.SIGNOZ)
+    assert spec.endpoint == "http://signoz-collector.internal:4318"
+    assert spec.headers is None
+    assert spec.requires_headers is False
+
+
+def test_signoz_preset_has_no_default_endpoint(monkeypatch):
+    # No region table and no default host: the preset never invents a destination.
+    monkeypatch.delenv("SIGNOZ_INGESTION_ENDPOINT", raising=False)
+    monkeypatch.delenv("SIGNOZ_INGESTION_KEY", raising=False)
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.presets.signoz import signoz_preset
+
+    cfg = signoz_preset()
+    spec = next(e for e in cfg.exporters if e.owner == ExporterOwner.SIGNOZ)
+    assert spec.endpoint is None
+
+
+def test_signoz_preset_endpoint_passed_through_verbatim(monkeypatch):
+    # The plumbing appends the signal path, so pre-appending would double it.
+    monkeypatch.setenv("SIGNOZ_INGESTION_ENDPOINT", "https://ingest.us.signoz.cloud:443/v1/traces")
+    monkeypatch.delenv("SIGNOZ_INGESTION_KEY", raising=False)
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.plumbing.providers import _otlp_traces_endpoint
+    from litellm.integrations.otel.presets.signoz import signoz_preset
+
+    cfg = signoz_preset()
+    spec = next(e for e in cfg.exporters if e.owner == ExporterOwner.SIGNOZ)
+    assert spec.endpoint == "https://ingest.us.signoz.cloud:443/v1/traces"
+    assert _otlp_traces_endpoint(spec.endpoint) == "https://ingest.us.signoz.cloud:443/v1/traces"

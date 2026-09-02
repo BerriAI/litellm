@@ -3398,6 +3398,11 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     newrelic_api_key: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
     newrelic_region: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
 
+    # SigNoz dynamic params (proxy-stamped team/key callback vars only;
+    # request-supplied values are blocked)
+    signoz_ingestion_endpoint: str | None  # writable-ok: assigned by initialize_standard_callback_dynamic_params
+    signoz_ingestion_key: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
+
     # Logging settings
     turn_off_message_logging: bool | None  # when true will not log messages
     litellm_disabled_callbacks: list[str] | None

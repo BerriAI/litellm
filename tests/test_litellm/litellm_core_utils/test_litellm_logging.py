@@ -6253,3 +6253,108 @@ def test_passthrough_embeddings_result_swapped_for_callbacks():
 
     assert isinstance(swapped_result, EmbeddingResponse)
     assert swapped_result.data[0]["embedding"] == [0.1, 0.2, 0.3]
+
+
+def test_signoz_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
+    """With LITELLM_OTEL_V2 on, the "signoz" callback builds the OTel v2 logger
+    carrying the preset's exporter; the same name must resolve to one instance."""
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import ExporterOwner, is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("SIGNOZ_INGESTION_ENDPOINT", "https://ingest.eu.signoz.cloud:443")
+    monkeypatch.setenv("SIGNOZ_INGESTION_KEY", "test-key")
+    is_otel_v2_enabled.cache_clear()
+    try:
+        v2_logger = logging_module._init_custom_logger_compatible_class(
+            logging_integration="signoz",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert isinstance(v2_logger, OpenTelemetryV2)
+        assert v2_logger.callback_name == "signoz"
+        spec = next(e for e in v2_logger.config.exporters if e.owner == ExporterOwner.SIGNOZ)
+        assert spec.endpoint == "https://ingest.eu.signoz.cloud:443"
+        assert spec.headers == "signoz-ingestion-key=test-key"
+        again = logging_module._init_custom_logger_compatible_class(
+            logging_integration="signoz",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert again is v2_logger
+    finally:
+        logging_module._in_memory_loggers.clear()
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()
+
+
+def test_signoz_dispatch_keeps_legacy_otel_when_flag_off(monkeypatch):
+    """With the flag off the callback still works, through the generic OTel
+    logger. The signal path is resolved and the key rides on the config rather
+    than OTEL_EXPORTER_OTLP_TRACES_HEADERS, which any other exporter would read."""
+    from litellm.integrations.opentelemetry import OpenTelemetry
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    monkeypatch.setenv("SIGNOZ_INGESTION_ENDPOINT", "http://signoz-collector.internal:4318")
+    monkeypatch.setenv("SIGNOZ_INGESTION_KEY", "legacy-key")
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        legacy = logging_module._init_custom_logger_compatible_class(
+            logging_integration="signoz",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert isinstance(legacy, OpenTelemetry)
+        assert legacy.callback_name == "signoz"
+        assert legacy.config.endpoint == "http://signoz-collector.internal:4318/v1/traces"
+        assert legacy.config.headers == "signoz-ingestion-key=legacy-key"
+        assert "OTEL_EXPORTER_OTLP_TRACES_HEADERS" not in os.environ
+        # Same name resolves to the same instance, not a second exporter.
+        again = logging_module._init_custom_logger_compatible_class(
+            logging_integration="signoz",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert again is legacy
+    finally:
+        logging_module._in_memory_loggers.clear()
+        is_otel_v2_enabled.cache_clear()
+
+
+def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
+    """There is no default host, so an unset endpoint has nowhere to export. The
+    branch rejects it before constructing anything, and the caller's non-blocking
+    handler turns that into no logger at all rather than a silent console exporter."""
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.delenv("SIGNOZ_INGESTION_ENDPOINT", raising=False)
+    monkeypatch.delenv("SIGNOZ_INGESTION_KEY", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        created = logging_module._init_custom_logger_compatible_class(
+            logging_integration="signoz",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert created is None
+        assert not [
+            cb for cb in logging_module._in_memory_loggers if getattr(cb, "callback_name", None) == "signoz"
+        ]
+    finally:
+        logging_module._in_memory_loggers.clear()
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()

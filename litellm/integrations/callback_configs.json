@@ -417,6 +417,27 @@
     "description": "S3 Bucket (AWS) Logging Integration"
   },
   {
+    "id": "signoz",
+    "displayName": "SigNoz",
+    "logo": "signoz.svg",
+    "supports_key_team_logging": true,
+    "dynamic_params": {
+      "signoz_ingestion_endpoint": {
+        "type": "text",
+        "ui_name": "SigNoz Ingestion Endpoint",
+        "description": "Ingestion endpoint for this team, e.g. https://ingest.us.signoz.cloud:443 for SigNoz Cloud or your own collector. Leave blank to use the proxy's configured endpoint. Regions: https://signoz.io/docs/ingestion/signoz-cloud/overview/",
+        "required": false
+      },
+      "signoz_ingestion_key": {
+        "type": "password",
+        "ui_name": "SigNoz Ingestion Key (optional)",
+        "description": "Ingestion key for this team, so its traces land in its own SigNoz account. Not needed for self-hosted SigNoz. Keys: https://signoz.io/docs/ingestion/signoz-cloud/keys/",
+        "required": false
+      }
+    },
+    "description": "SigNoz Logging Integration. Setup: https://signoz.io/docs/litellm-observability/"
+  },
+  {
     "id": "sqs",
     "displayName": "SQS",
     "logo": "aws.svg",
