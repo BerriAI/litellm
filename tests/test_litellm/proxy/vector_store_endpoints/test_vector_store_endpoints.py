@@ -2003,12 +2003,13 @@ async def test_vector_store_update_and_list_synchronization():
 
 
 @pytest.mark.asyncio
-async def test_list_vector_stores_keeps_config_defined_store_missing_from_db():
+async def test_list_vector_stores_keeps_config_defined_store_missing_from_db(monkeypatch):
     """
     Stores from config.yaml `vector_store_registry` are only loaded in memory and never written
     to the DB. Listing must not treat that DB miss as a deletion and evict them, while a
     DB-sourced store that disappeared from the DB is still evicted.
     """
+    from litellm.proxy import proxy_server
     from litellm.proxy.vector_store_endpoints.management_endpoints import list_vector_stores
     from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
@@ -2033,17 +2034,13 @@ async def test_list_vector_stores_keeps_config_defined_store_missing_from_db():
     }
     registry.add_vector_store_to_registry(vector_store=stale_db_store)
 
+    empty_db_prisma_client = MagicMock()
+    empty_db_prisma_client.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=[])
+    monkeypatch.setattr(proxy_server, "prisma_client", empty_db_prisma_client)
+    monkeypatch.setattr(litellm, "vector_store_registry", registry)
+
     admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value, user_id="admin")
-    with (
-        patch.dict("litellm.proxy.proxy_server.general_settings", {}, clear=True),
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        patch.object(litellm, "vector_store_registry", registry),
-        patch(
-            "litellm.proxy.vector_store_endpoints.management_endpoints.VectorStoreRegistry._get_vector_stores_from_db",
-            new=AsyncMock(return_value=[]),
-        ),
-    ):
-        response = await list_vector_stores(user_api_key_dict=admin)
+    response = await list_vector_stores(user_api_key_dict=admin)
 
     assert [vs.get("vector_store_id") for vs in response["data"]] == ["config-search-store"]
     assert registry.get_litellm_managed_vector_store_from_registry_by_name("config-search-store") is not None
