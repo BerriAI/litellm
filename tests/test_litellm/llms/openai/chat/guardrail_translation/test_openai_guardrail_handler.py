@@ -1128,6 +1128,99 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert chunks[1].choices[0].delta.content == " world"
         assert chunks[1].choices[0].finish_reason == "stop"
 
+    @staticmethod
+    def _two_choice_stream_chunks() -> list:
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        def chunk(index: int, content: str, finish_reason: Optional[str] = None) -> ModelResponseStream:
+            return ModelResponseStream(
+                id="chatcmpl-123",
+                created=1234567890,
+                model="gpt-4",
+                object="chat.completion.chunk",
+                choices=[StreamingChoices(index=index, delta=Delta(content=content), finish_reason=finish_reason)],
+            )
+
+        return [
+            chunk(0, "safe "),
+            chunk(1, "hello "),
+            chunk(0, "text", "stop"),
+            chunk(1, "world", "stop"),
+        ]
+
+    @staticmethod
+    def _world_masking_guardrail() -> CustomGuardrail:
+        class MaskWorld(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[Any] = None,
+            ) -> GenericGuardrailAPIInputs:
+                texts = inputs.get("texts", [])
+                return {**inputs, "texts": [t.replace("world", "[MASKED]") for t in texts]}
+
+        return MaskWorld(guardrail_name="test-mask")
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrite_on_multi_choice_stream_fails_closed(self):
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        handler = OpenAIChatCompletionsHandler()
+        chunks = self._two_choice_stream_chunks()
+
+        with pytest.raises(UndeliverableStreamRewrite):
+            await handler.process_output_streaming_response(
+                responses_so_far=chunks,
+                guardrail_to_apply=self._world_masking_guardrail(),
+                litellm_logging_obj=None,
+                deliver_ended_stream_rewrites=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_clean_multi_choice_stream_released_untouched(self):
+        handler = OpenAIChatCompletionsHandler()
+        chunks = self._two_choice_stream_chunks()
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=MockPassThroughGuardrail(guardrail_name="test"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is chunks
+        assert [c.choices[0].delta.content for c in chunks] == ["safe ", "hello ", "text", "world"]
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrite_lands_on_nonzero_choice_index(self):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        handler = OpenAIChatCompletionsHandler()
+
+        def chunk(content: str, finish_reason: Optional[str]) -> ModelResponseStream:
+            return ModelResponseStream(
+                id="chatcmpl-123",
+                created=1234567890,
+                model="gpt-4",
+                object="chat.completion.chunk",
+                choices=[StreamingChoices(index=1, delta=Delta(content=content), finish_reason=finish_reason)],
+            )
+
+        chunks = [chunk("hello ", None), chunk("world", "stop")]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._world_masking_guardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is chunks
+        assert chunks[0].choices[0].delta.content == "hello [MASKED]"
+        assert chunks[1].choices[0].delta.content in (None, "")
+
 
 class TestGetStructuredMessages:
     """Test the get_structured_messages method."""

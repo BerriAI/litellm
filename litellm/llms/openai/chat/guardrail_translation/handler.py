@@ -620,6 +620,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 responses_so_far=responses_so_far,
                 guardrailed_response=model_response,
                 pre_guardrail_texts=pre_guardrail_texts,
+                guardrail_name=guardrail_to_apply.guardrail_name or "unknown",
             )
 
     def build_stream_error_items(
@@ -747,8 +748,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         """
         combined_texts: Final[dict[tuple[int, int | None], str]] = {}
 
-        for response_idx, response in enumerate(responses_so_far):
-            for choice_idx, choice in enumerate(response.choices):
+        for response in responses_so_far:
+            for choice in response.choices:
                 if isinstance(choice, litellm.StreamingChoices):
                     content = choice.delta.content
                 elif isinstance(choice, litellm.Choices):
@@ -761,7 +762,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
                 if isinstance(content, str):
                     # String content - accumulate for this choice
-                    str_key: tuple[int, int | None] = (choice_idx, None)
+                    str_key: tuple[int, int | None] = (choice.index, None)
                     if str_key not in combined_texts:
                         combined_texts[str_key] = ""
                     combined_texts[str_key] += content
@@ -772,7 +773,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                         text_str = content_item.get("text")
                         if text_str:
                             list_key: tuple[int, int | None] = (
-                                choice_idx,
+                                choice.index,
                                 content_idx,
                             )
                             if list_key not in combined_texts:
@@ -973,24 +974,38 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         responses_so_far: list["ModelResponseStream"],  # mutable-ok: rewrites the caller's buffered chunks in place
         guardrailed_response: "ModelResponse",
         pre_guardrail_texts: tuple[str | None, ...],
+        guardrail_name: str,
     ) -> None:
         """Write ended-stream guardrail text rewrites back across the buffered
-        chunks: each rewritten choice's full text lands in its first
+        chunks: the full rewritten text lands in the choice's first
         content-carrying chunk and the rest are blanked, the same shape the
         in-flight write-back uses. Chunks carrying only finish_reason or usage
-        stay untouched."""
+        stay untouched. A rewrite on a stream carrying more than one distinct
+        choice index fails closed."""
         post_guardrail_texts: Final = self._string_choice_contents(guardrailed_response)
         changed: Final = tuple(
-            (choice_idx, after)
-            for choice_idx, (before, after) in enumerate(zip(pre_guardrail_texts, post_guardrail_texts))
+            after
+            for before, after in zip(pre_guardrail_texts, post_guardrail_texts)
             if before is not None and after is not None and after != before
         )
         if not changed:
             return
+        stream_choice_indices: Final = frozenset(
+            choice.index for response in responses_so_far for choice in response.choices
+        )
+        if len(stream_choice_indices) != 1:
+            # stream_chunk_builder collapses every choice into one index-0
+            # choice, so a rewrite of the rebuilt response cannot be attributed
+            # back to a single choice on an n>1 stream: withhold the stream
+            # rather than deliver the rewrite on the wrong choice
+            from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+            raise UndeliverableStreamRewrite(guardrail_name)
+        target_choice_index: Final = next(iter(stream_choice_indices))
         await self._apply_guardrail_responses_to_output_streaming(
             responses=responses_so_far,
-            guardrailed_texts=[after for _choice_idx, after in changed],  # mutable-ok: callee takes lists
-            task_mappings=[(choice_idx, None) for choice_idx, _after in changed],  # mutable-ok: callee takes lists
+            guardrailed_texts=list(changed),  # mutable-ok: callee takes lists
+            task_mappings=[(target_choice_index, None) for _ in changed],  # mutable-ok: callee takes lists
         )
 
     async def _apply_guardrail_responses_to_output_streaming(
@@ -1008,7 +1023,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         Args:
             responses: List of ModelResponseStream objects to modify
             guardrailed_texts: List of guardrailed text responses (combined from all chunks)
-            task_mappings: List of tuples (choice_idx, content_idx)
+            task_mappings: List of tuples (choice_idx, content_idx), where choice_idx
+                is the choice's ``index`` field, not its position in a chunk's list
 
         Override this method to customize how responses are applied to streaming responses.
         """
@@ -1024,9 +1040,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         # Key: (choice_idx, content_idx), Value: boolean (True if already set)
         already_set: Final[dict[tuple[int, int | None], bool]] = {}
 
-        # Iterate through all responses and update content
-        for response_idx, response in enumerate(responses):
-            for choice_idx_in_response, choice in enumerate(response.choices):
+        # Iterate through all responses and update content, matching each chunk's
+        # choice by its index field: on n>1 streams a chunk usually carries one
+        # choice at list position 0 whose index names the logical choice.
+        for response in responses:
+            for choice in response.choices:
                 if isinstance(choice, litellm.StreamingChoices):
                     content = choice.delta.content
                 elif isinstance(choice, litellm.Choices):
@@ -1039,7 +1057,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
                 if isinstance(content, str):
                     # String content
-                    str_key: tuple[int, int | None] = (choice_idx_in_response, None)
+                    str_key: tuple[int, int | None] = (choice.index, None)
                     if str_key in guardrail_map:
                         if str_key not in already_set:
                             # First chunk - set the complete guardrailed text
@@ -1060,7 +1078,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     for content_idx, content_item in enumerate(content):
                         if "text" in content_item:
                             list_key: tuple[int, int | None] = (
-                                choice_idx_in_response,
+                                choice.index,
                                 content_idx,
                             )
                             if list_key in guardrail_map:
