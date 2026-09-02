@@ -954,8 +954,7 @@ def test_reused_index_with_changed_tool_metadata_fails_closed(
     )
     events = []
     with pytest.raises(litellm.InternalServerError, match="changed tool metadata at tool call index 0"):
-        while True:
-            events.append(next(iterator))
+        events.extend(iterator)
 
     added_items = [event.item for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
     done_items = [event.item for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
@@ -1009,8 +1008,7 @@ def test_terminal_tool_metadata_drift_fails_closed():
 
     events = []
     with pytest.raises(litellm.InternalServerError, match="changed tool metadata at tool call index 0"):
-        while True:
-            events.append(next(iterator))
+        events.extend(iterator)
 
     added_items = [event.item for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
     done_items = [event.item for event in events if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
