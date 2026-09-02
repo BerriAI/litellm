@@ -723,13 +723,14 @@ class OpenTelemetryV2(CustomLogger):
         self,
         user_api_key_dict: "UserAPIKeyAuth",
         cache: "DualCache",
-        data: Mapping[str, object],
+        data: dict,
         call_type: "CallTypesLiteral",
-    ) -> None:
+    ) -> dict:
         self.seed_request_identity(
             user_api_key_dict,
             model=model_from_request_data(data),
         )
+        return data
 
     def record_error_attributes_on_span(
         self,
