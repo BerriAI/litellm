@@ -17,10 +17,11 @@ def redis_no_ping():
 
 @pytest.fixture
 def sync_batch_redis_cache(redis_no_ping):
-    cache = RedisCache(host="127.0.0.1", port=6379)
-    cache.redis_client = MagicMock()
-    cache.redis_client.mget.side_effect = OSError("redis unavailable")
-    return cache
+    with patch("litellm._redis.get_redis_client", return_value=MagicMock()) as get_client:
+        cache = RedisCache(host="127.0.0.1", port=6379)
+        cache.redis_client.mget.side_effect = OSError("redis unavailable")
+        get_client.assert_called_once()
+        yield cache
 
 
 @pytest.mark.parametrize(
