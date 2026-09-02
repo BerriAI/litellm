@@ -75,6 +75,28 @@ describe("Cost column", () => {
   });
 });
 
+describe("Model column", () => {
+  it("lists every model used across a conversation, not only the representative call's model", () => {
+    const conversationCall: Partial<LogEntry> = {
+      request_id: "req-session",
+      model: "gpt-5.6",
+      session_id: "sess-1",
+      session_total_count: 3,
+      session_models: ["claude-sonnet-5", "gpt-5.6"],
+    };
+    renderRows([logEntry(conversationCall)]);
+
+    expect(screen.getByText("claude-sonnet-5, gpt-5.6")).toBeInTheDocument();
+    expect(screen.queryByText("gpt-5.6")).not.toBeInTheDocument();
+  });
+
+  it("keeps a single call's own model", () => {
+    renderRows([logEntry({ request_id: "req-single", model: "gpt-5.6" })]);
+
+    expect(screen.getByText("gpt-5.6")).toBeInTheDocument();
+  });
+});
+
 describe("row action cells", () => {
   it("reports the key hash through the injected dependency rather than a row field", async () => {
     const user = userEvent.setup();
