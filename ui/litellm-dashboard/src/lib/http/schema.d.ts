@@ -34560,7 +34560,7 @@ export interface components {
              * @enum {string}
              */
             classifier_fallback: "heuristic" | "default_model";
-            /** @description Configuration for the LLM classifier; required when classifier_type is 'llm' or 'heuristic_first' */
+            /** @description Configuration for the LLM classifier; required when classifier_type is 'llm', 'heuristic_first' or 'hybrid' */
             classifier_llm_config?: components["schemas"]["ClassifierLLMConfig"] | null;
             /**
              * Classifier Plugin
@@ -34575,11 +34575,11 @@ export interface components {
             classifier_plugin_timeout_ms: number;
             /**
              * Classifier Type
-             * @description Classification strategy: local regex/keyword scoring, an LLM call, a custom classifier plugin, or 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier
+             * @description Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, an LLM call, a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer everywhere except when its score lands near a tier boundary
              * @default heuristic
              * @enum {string}
              */
-            classifier_type: "heuristic" | "llm" | "custom" | "heuristic_first";
+            classifier_type: "heuristic" | "heuristic_v2" | "llm" | "custom" | "heuristic_first" | "hybrid";
             /**
              * Code Keywords
              * @description Keywords indicating code-related content
@@ -34641,10 +34641,21 @@ export interface components {
              */
             heuristic_first_max_tier?: string | null;
             /**
+             * Heuristic V2 Artifact
+             * @description Success-probability artifact used by classifier_type 'heuristic_v2'. The bundled UltraFeedback artifact is selected by default; an inline trained artifact may replace it
+             * @default ultrafeedback
+             */
+            heuristic_v2_artifact: components["schemas"]["TrainedTierArtifact"] | "ultrafeedback";
+            /**
              * Housekeeping Patterns
              * @description Additional case-sensitive literal sentinels that mark a request as client housekeeping, on top of the built-in conversation-title ones. For clients whose wording the built-ins don't cover, or after a client release changes its strings.
              */
             housekeeping_patterns?: string[] | null;
+            /**
+             * Hybrid Boundary Margin
+             * @description How close to a tier boundary a heuristic score has to land before the LLM classifier breaks the tie; required when classifier_type is 'hybrid' and rejected otherwise. Everything further than this from every active boundary routes on the scorer's own tier with no classifier call, at any tier, which is what separates 'hybrid' from 'heuristic_first' and its cheap-tier ceiling. A prompt where no dimension fired still goes to the classifier, since the scorer has no opinion to be near a boundary with. 0 escalates only scores sitting exactly on a boundary.
+             */
+            hybrid_boundary_margin?: number | null;
             /**
              * Keyword Tier Rules
              * @description Rules that force a specific tier when their keywords match the prompt
@@ -34778,6 +34789,12 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /**
+         * RequestType
+         * @description Fixed v0 taxonomy. User-extensible types come in v1.
+         * @enum {string}
+         */
+        RequestType: "code_generation" | "code_understanding" | "technical_design" | "analytical_reasoning" | "writing" | "factual_lookup" | "general";
         /** ResetSpendRequest */
         ResetSpendRequest: {
             /** Reset To */
@@ -35855,7 +35872,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
@@ -36738,6 +36755,33 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** TierCohortStatistic */
+        TierCohortStatistic: {
+            /** Cohort */
+            cohort: string;
+            /** Observations */
+            observations: number;
+            /** Successes */
+            successes: number;
+            /** Tier */
+            tier: number;
+        };
+        /** TierDataset */
+        TierDataset: {
+            /** License */
+            license: string;
+            /** Name */
+            name: string;
+            /** Rows */
+            rows: number;
+            /**
+             * Success Definition
+             * @default quality score meets the dataset success threshold
+             */
+            success_definition: string;
+            /** Url */
+            url: string;
+        };
         /**
          * TierDefinition
          * @description An operator-defined tier: the name the LLM classifier must return and its rubric description.
@@ -36753,6 +36797,25 @@ export interface components {
              * @description Tier name; becomes a value the LLM classifier can return and a key of `tiers`
              */
             name: string;
+        };
+        /** TierDomainStatistic */
+        TierDomainStatistic: {
+            /** Observations */
+            observations: number;
+            request_type: components["schemas"]["RequestType"];
+            /** Successes */
+            successes: number;
+            /** Tier */
+            tier: number;
+        };
+        /** TierGlobalStatistic */
+        TierGlobalStatistic: {
+            /** Observations */
+            observations: number;
+            /** Successes */
+            successes: number;
+            /** Tier */
+            tier: number;
         };
         /**
          * TokenCountDetailsResponse
@@ -37022,6 +37085,57 @@ export interface components {
             token: string;
         } & {
             [key: string]: unknown;
+        };
+        /** TrainedTierArtifact */
+        TrainedTierArtifact: {
+            /**
+             * Cohort Prior Mass
+             * @default 20
+             */
+            cohort_prior_mass: number;
+            /**
+             * Cohort Statistics
+             * @default []
+             */
+            cohort_statistics: components["schemas"]["TierCohortStatistic"][];
+            /**
+             * Datasets
+             * @default []
+             */
+            datasets: components["schemas"]["TierDataset"][];
+            /**
+             * Domain Prior Mass
+             * @default 200
+             */
+            domain_prior_mass: number;
+            /**
+             * Domain Statistics
+             * @default []
+             */
+            domain_statistics: components["schemas"]["TierDomainStatistic"][];
+            /** Global Statistics */
+            global_statistics: components["schemas"]["TierGlobalStatistic"][];
+            /**
+             * Routing Threshold
+             * @default 0.75
+             */
+            routing_threshold: number;
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: 1;
+            /**
+             * Split Method
+             * @default sha256(prompt): 70% train, 15% validation, 15% test
+             */
+            split_method: string;
+            /**
+             * Success Definition
+             * @default quality score meets the dataset success threshold
+             */
+            success_definition: string;
         };
         /** TransformRequestBody */
         TransformRequestBody: {
