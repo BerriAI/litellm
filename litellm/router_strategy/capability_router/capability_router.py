@@ -138,14 +138,20 @@ def _classification_context(messages: Sequence[Mapping[str, object]]) -> tuple[M
     )
 
 
-def _capped(value: object, cap: int) -> object:
+def _capped_text(value: str, cap: int) -> str:
+    return value if len(value) <= cap else f"{value[:cap]}...[truncated {len(value) - cap} chars]"
+
+
+def _capped_value(value: object, cap: int) -> object:
     if isinstance(value, str):
-        return value if len(value) <= cap else f"{value[:cap]}...[truncated {len(value) - cap} chars]"
-    if isinstance(value, Mapping):
-        return {key: _capped(item, cap) for key, item in value.items()}  # mutable-ok: json.dumps needs a plain dict
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return tuple(_capped(item, cap) for item in value)
+        return _capped_text(value, cap)
+    if isinstance(value, Mapping) or (isinstance(value, Sequence) and not isinstance(value, (str, bytes))):
+        return _capped_text(json.dumps(value, default=str, ensure_ascii=False), cap)
     return value
+
+
+def _capped_message(message: Mapping[str, object], cap: int) -> Mapping[str, object]:
+    return {key: _capped_value(value, cap) for key, value in message.items()}  # mutable-ok: JSON payload needs dict
 
 
 def _tool_names(request_kwargs: Mapping[str, object]) -> tuple[str, ...]:
@@ -217,7 +223,7 @@ class CapabilityRouter(CustomLogger):
             raise CapabilityClassifierFailure("No user task was available for capability classification")
         cap: Final = self.config.classifier.max_message_chars
         payload: Final[_ClassifierPayload] = {
-            "conversation": tuple(_capped(message, cap) for message in context),
+            "conversation": tuple(_capped_message(message, cap) for message in context),
             "available_tools": _tool_names(request_kwargs),
         }
         return (
