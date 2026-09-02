@@ -282,7 +282,7 @@ def _response_cost_or_none(response: ModelResponse) -> float | None:
     return float(cost)
 
 
-def _effective_turn_off_message_logging(request_kwargs: Mapping[str, Any] | None) -> bool | None:
+def _effective_turn_off_message_logging(request_kwargs: Mapping[str, object] | None) -> bool | None:
     from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
         initialize_standard_callback_dynamic_params,
     )
@@ -1925,7 +1925,7 @@ class ComplexityRouter(CustomLogger):
         ceiling_severity: Final = self._active_tier_severity(hard_ceiling) if hard_ceiling is not None else None
         best_model: str | None = None
         best_score = float("-inf")
-        candidate_scores: Final[list[dict[str, Any]]] = []
+        candidate_scores: Final[list[dict[str, object]]] = []
         for model in candidates:
             if floor_severity is not None and all(
                 self._active_tier_severity(model_tier) < floor_severity

@@ -2,6 +2,7 @@ import contextvars
 import hashlib
 import os
 import secrets
+from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_args
 
@@ -227,13 +228,13 @@ class CustomGuardrail(CustomLogger):
                 )
         super().__init__(**kwargs)
 
-    def render_violation_message(self, default: str, context: dict[str, Any] | None = None) -> str:
+    def render_violation_message(self, default: str, context: Mapping[str, object] | None = None) -> str:
         """Return a custom violation message if template is configured."""
 
         if not self.violation_message_template:
             return default
 
-        format_context: Final[dict[str, Any]] = {"default_message": default}
+        format_context: Final[dict[str, object]] = {"default_message": default}
         if context:
             format_context.update(context)
         try:
@@ -661,7 +662,7 @@ class CustomGuardrail(CustomLogger):
         value: Final = self._get_admin_metadata(data).get("opted_out_global_guardrails")
         return value if isinstance(value, list) else []
 
-    def _is_valid_response_type(self, result: Any) -> bool:
+    def _is_valid_response_type(self, result: object) -> bool:
         """
         Check if result is a valid LLMResponseTypes instance.
 
@@ -722,7 +723,7 @@ class CustomGuardrail(CustomLogger):
             return None
         return f"{_PRE_CALL_EXECUTED_TOKEN}:{name}"
 
-    def mark_pre_call_hook_ran(self, data: dict[str, Any]) -> None:
+    def mark_pre_call_hook_ran(self, data: dict[str, object]) -> None:
         """
         Record that this guardrail's ``async_pre_call_hook`` already ran for this
         request, so the deployment-level hook does not run it a second time.
@@ -747,7 +748,7 @@ class CustomGuardrail(CustomLogger):
                 return
         data["metadata"] = {PRE_CALL_EXECUTED_GUARDRAILS_KEY: [marker]}
 
-    def _pre_call_hook_already_ran(self, data: dict[str, Any]) -> bool:
+    def _pre_call_hook_already_ran(self, data: dict[str, object]) -> bool:
         marker: Final = self._pre_call_marker()
         if marker is None:
             return False
@@ -1173,7 +1174,7 @@ class CustomGuardrail(CustomLogger):
         This gets logged on downsteam Langfuse, DataDog, etc.
         """
         # Convert None to empty dict to satisfy type requirements
-        guardrail_response: dict[str, Any] | str = {} if response is None else response
+        guardrail_response: dict[str, object] | str = {} if response is None else response
 
         # For apply_guardrail functions in custom_code_guardrail scenario,
         # simplify the logged response to "allow", "deny", or "mask"

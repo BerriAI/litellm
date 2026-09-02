@@ -648,6 +648,72 @@ class TestLiteLLMCompletionResponsesConfig:
 
         assert responses_api_response.status == "incomplete"
 
+    def test_tool_call_only_response_emits_no_null_text_message_item(self):
+        """A tool-calls-only turn (message content None, e.g. from Anthropic)
+        must not emit a message output item whose output_text has text null.
+        OpenAI rejects such an item on replay with
+        "Invalid type for 'input[..].content[..].text': expected a string, but
+        got null instead." Native OpenAI tool-only turns carry no message item."""
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-sonnet-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="toolu_01OnlyToolCall",
+                                type="function",
+                                function=Function(name="get_weather", arguments='{"city": "SF"}'),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="what's the weather in SF?",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+        output_types = [item.type for item in responses_api_response.output]
+        assert "message" not in output_types
+        assert "function_call" in output_types
+
+    def test_content_bearing_response_still_emits_message_item(self):
+        """Turns with real text content must keep their message output item."""
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-sonnet-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="It is sunny.", role="assistant"),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="what's the weather in SF?",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+        message_items = [item for item in responses_api_response.output if item.type == "message"]
+        assert len(message_items) == 1
+        assert message_items[0].content[0].text == "It is sunny."
+
     def test_transform_chat_completion_response_preserves_hidden_params(self):
         """Test that _hidden_params from chat completion response are preserved in responses API response"""
         # Setup
@@ -3343,6 +3409,7 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._pending_tool_events = []
         iterator._tool_output_index_by_call_id = {}
         iterator._tool_args_by_call_id = {}
+        iterator._tool_item_id_by_call_id = {}
         iterator._tool_call_id_by_index = {}
         iterator._ambiguous_tool_call_indexes = set()
         iterator._next_tool_output_index = 1
