@@ -1487,6 +1487,7 @@ class CommonBatchFilesUtils:
             aws_role_name=optional_params.get("aws_role_name"),
             aws_web_identity_token=optional_params.get("aws_web_identity_token"),
             aws_sts_endpoint=optional_params.get("aws_sts_endpoint"),
+            aws_external_id=optional_params.get("aws_external_id"),
         )
 
         # Prepare the request data

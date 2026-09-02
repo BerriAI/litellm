@@ -5148,6 +5148,7 @@ async def list_team_v2(
 
     # Get teams with pagination
     if use_deleted_table:
+        # LiteLLM_DeletedTeamTable has no litellm_model_table relation, unlike below
         teams = await _deleted_team_db(prisma_client).find_many(
             where=where_conditions,
             skip=skip,
@@ -5162,6 +5163,7 @@ async def list_team_v2(
             skip=skip,
             take=page_size,
             order=order_by if order_by else {"created_at": "desc"},  # Default sort
+            include=_INCLUDE_MODEL_TABLE,
         )
         # Get total count for pagination
         total_count = await _team_db(prisma_client).count(where=where_conditions)

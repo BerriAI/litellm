@@ -924,7 +924,7 @@ class AmazonConverseConfig(BaseConfig):
                         custom_llm_provider="bedrock",
                     )
                     capped = (
-                        AnthropicConfig._cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
+                        AnthropicConfig.cap_thinking_budget_to_max_tokens(legacy_thinking, max_tokens)
                         if legacy_thinking is not None
                         else None
                     )
@@ -1631,6 +1631,11 @@ class AmazonConverseConfig(BaseConfig):
                 bedrock_tool_config["toolChoice"] = tool_choice_values
                 self._drop_tool_choice_type_conflicting_with_tool_config(additional_request_params)
 
+        config_block_entries: Final = tuple(
+            (config_name, config_class, inference_params.pop(config_name, None))
+            for config_name, config_class in self.get_config_blocks().items()
+        )
+
         data: Final[CommonRequestObject] = {
             "inferenceConfig": self._transform_inference_params(inference_params=inference_params),
         }
@@ -1641,9 +1646,7 @@ class AmazonConverseConfig(BaseConfig):
         if system_content_blocks:
             data["system"] = system_content_blocks
 
-        # Handle all config blocks
-        for config_name, config_class in self.get_config_blocks().items():
-            config_value = inference_params.pop(config_name, None)
+        for config_name, config_class, config_value in config_block_entries:
             if config_value is not None:
                 data[config_name] = config_class(**config_value)
 
