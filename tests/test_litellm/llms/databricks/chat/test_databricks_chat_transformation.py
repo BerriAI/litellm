@@ -255,6 +255,40 @@ def test_transform_messages_sanitizes_empty_content():
     assert result[1]["content"] == "Hi"
 
 
+def test_transform_request_strips_thinking_blocks_and_reasoning_content():
+    """Regression for LIT-6762: replaying an assistant turn that litellm decorated with
+    `thinking_blocks` / `reasoning_content` made Databricks 400 with
+    'messages.N.thinking_blocks: Extra inputs are not permitted'."""
+    config = DatabricksConfig()
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "Hello! How can I help?",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "greet briefly", "signature": "sig_abc", "cache_control": {}}
+            ],
+            "reasoning_content": "greet briefly",
+            "provider_specific_fields": {"foo": "bar"},
+        },
+        {"role": "user", "content": "thanks"},
+    ]
+
+    result = config.transform_request(
+        model="databricks-claude-opus-5",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )["messages"]
+
+    assert result[1] == {"role": "assistant", "content": "Hello! How can I help?"}
+    assert not any(
+        key in message for message in result for key in ("thinking_blocks", "reasoning_content", "provider_specific_fields")
+    )
+    assert "thinking_blocks" in messages[1]
+
+
 def _parallel_tool_calls():
     return [
         {

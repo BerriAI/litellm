@@ -1554,6 +1554,20 @@ def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
     return cast(_MarkedT, marked)  # cast-ok: same block shape as the input plus the marker key
 
 
+LITELLM_INTERNAL_MESSAGE_FIELDS: Final = frozenset({"thinking_blocks", "reasoning_content", "provider_specific_fields"})
+
+
+def strip_litellm_internal_message_fields(message: AllMessageValues) -> AllMessageValues:
+    """Drop the fields litellm attaches to assistant messages (e.g. when translating Anthropic thinking
+    blocks) that OpenAI-compatible endpoints with strict schemas reject as extra inputs."""
+    if LITELLM_INTERNAL_MESSAGE_FIELDS.isdisjoint(message):
+        return message
+    return cast(  # cast-ok: same TypedDict minus internal keys
+        AllMessageValues,
+        {key: value for key, value in message.items() if key not in LITELLM_INTERNAL_MESSAGE_FIELDS},
+    )
+
+
 def filter_value_from_dict(dictionary: dict, key: str, depth: int = 0) -> Any:
     """
     Filters a value from a dictionary
