@@ -8,6 +8,7 @@ live here rather than in either command module.
 
 import shlex
 import shutil
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,8 @@ from typing import Final
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.private_json import write_private_json
+
+from .cmd_quoting import quote_for_cmd
 
 ENV_KEY: Final = "env"
 API_KEY_HELPER_KEY: Final = "apiKeyHelper"
@@ -87,8 +90,11 @@ def merge_claude_settings(
     return {**settings, ENV_KEY: env, API_KEY_HELPER_KEY: api_key_helper}
 
 
-def resolve_api_key_helper(base_url: str) -> str:
+def resolve_api_key_helper(base_url: str, platform: str = sys.platform) -> str:
     """Build the shell command Claude Code should run for its apiKeyHelper.
+
+    Claude Code hands the string to the system shell, `sh` on POSIX and cmd.exe
+    on Windows, so every token is quoted for the shell that will read it.
 
     Resolves `lite` to an absolute path so the helper works regardless of the
     PATH visible to whatever subprocess Claude Code spawns it from. Passing
@@ -106,7 +112,8 @@ def resolve_api_key_helper(base_url: str) -> str:
         raise ClaudeSettingsError(
             "Could not find `lite` on your PATH. Claude Code's apiKeyHelper needs an absolute path to it."
         )
-    return f"{shlex.quote(lite_path)} --base-url {shlex.quote(base_url)} auth print-token"
+    quote: Final = quote_for_cmd if platform.startswith("win") else shlex.quote
+    return " ".join(quote(token) for token in (lite_path, "--base-url", base_url, "auth", "print-token"))
 
 
 def write_claude_settings(base_url: str, settings_path: Path, owners: Sequence[SettingsFileOwner]) -> None:
