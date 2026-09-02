@@ -28,6 +28,8 @@ from pydantic import ValidationError
 
 
 import litellm
+from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import PromptCachingDeploymentCheck
 from litellm.types.router import RetryPolicy, UpdateRouterConfig
 
@@ -112,6 +114,44 @@ def test_update_settings_adds_optional_pre_call_check_once():
     ]
     assert len(prompt_caching_callbacks) == 1
     assert router.num_retries == 7
+
+
+def test_update_settings_clears_omitted_toggleable_pre_call_checks():
+    router = _build_router()
+
+    router.update_settings(optional_pre_call_checks=["prompt_caching"])
+    router.update_settings(optional_pre_call_checks=[])
+
+    assert not any(isinstance(callback, PromptCachingDeploymentCheck) for callback in (router.optional_callbacks or []))
+    assert not any(isinstance(callback, PromptCachingDeploymentCheck) for callback in litellm.callbacks)
+
+
+def test_update_settings_replaces_toggleable_pre_call_checks():
+    router = _build_router()
+
+    router.update_settings(optional_pre_call_checks=["prompt_caching"])
+    router.update_settings(optional_pre_call_checks=["enforce_model_rate_limits"])
+
+    assert not any(isinstance(callback, PromptCachingDeploymentCheck) for callback in (router.optional_callbacks or []))
+    assert not any(isinstance(callback, PromptCachingDeploymentCheck) for callback in litellm.callbacks)
+    assert any(isinstance(callback, ModelRateLimitingCheck) for callback in (router.optional_callbacks or []))
+
+
+@pytest.mark.asyncio
+async def test_update_settings_preserves_router_budget_limiting_when_omitted(monkeypatch):
+    async def _disable_periodic_sync(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "litellm.router_strategy.budget_limiter.RouterBudgetLimiting.periodic_sync_in_memory_spend_with_redis",
+        _disable_periodic_sync,
+    )
+    router = _build_router()
+
+    router.add_optional_pre_call_checks(["router_budget_limiting"])
+    router.update_settings(optional_pre_call_checks=[])
+
+    assert any(isinstance(callback, RouterBudgetLimiting) for callback in (router.optional_callbacks or []))
 
 
 def test_update_settings_persists_retry_policy_dict():
