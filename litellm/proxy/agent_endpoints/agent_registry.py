@@ -6,8 +6,12 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, TypedDict
 
+from pydantic import TypeAdapter, ValidationError
+
 import litellm
+from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
 )
@@ -51,6 +55,9 @@ class AgentRecord(Protocol):
 
     @property
     def agent_name(self) -> str: ...
+
+    @property
+    def litellm_params(self) -> Mapping[str, object] | None: ...
 
     @property
     def object_permission_id(self) -> str | None: ...
@@ -119,6 +126,116 @@ def _dump_agent_params(raw: Mapping[str, object]) -> dict[str, object]:
     if model_dump is not None:
         return model_dump()
     return dict(raw) if raw else {}
+
+
+_AGENT_PARAMS_MASKER: Final = SensitiveDataMasker()
+_REDACT_AGENT_PARAMS_MAX_DEPTH: Final = 10
+_AGENT_PARAMS_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(
+    dict[str, object]
+)  # mutable-ok: safe_dumps() and AgentResponse.litellm_params both require a real dict, not a Mapping
+_EMPTY_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def redact_sensitive_agent_litellm_params(litellm_params: object, _depth: int = 0) -> object:
+    """
+    Replace credential-bearing values in an agent's litellm_params with
+    ``REDACTED_BY_LITELM_STRING`` while preserving non-secret keys (``model``,
+    ``is_public``, rate-limit config). Used so list/get/create/update
+    responses never echo a stored provider credential back to the caller.
+
+    Handles a plain dict, a JSON-serialized string (some callers hold the
+    in-memory registry's params that way), and ``None``; anything else is
+    passed through. Recursion depth is bounded to match the convention
+    documented in ``tests/code_coverage_tests/recursive_detector.py``.
+    """
+    if _depth >= _REDACT_AGENT_PARAMS_MAX_DEPTH:
+        return REDACTED_BY_LITELM_STRING
+    if litellm_params is None:
+        return None
+    if isinstance(litellm_params, str):
+        try:
+            parsed_params: Final = _AGENT_PARAMS_ADAPTER.validate_json(litellm_params)
+        except ValidationError:
+            return REDACTED_BY_LITELM_STRING
+        return json.dumps(redact_sensitive_agent_litellm_params(parsed_params, _depth + 1))
+    if not isinstance(litellm_params, dict):
+        return litellm_params
+    typed_params: Final = _AGENT_PARAMS_ADAPTER.validate_python(litellm_params)
+    return {
+        key: (
+            REDACTED_BY_LITELM_STRING
+            if _AGENT_PARAMS_MASKER.is_sensitive_key(key)
+            else redact_sensitive_agent_litellm_params(_AGENT_PARAMS_ADAPTER.validate_python(value), _depth + 1)
+            if isinstance(value, dict)
+            else value
+        )
+        for key, value in typed_params.items()
+    }  # mutable-ok: consumed by json.dumps()/AgentResponse.litellm_params, both of which require a real dict
+
+
+def parse_agent_litellm_params(value: object) -> Mapping[str, object]:
+    """Normalize a stored litellm_params column to a read-only mapping.
+
+    The prisma Json column comes back as either an already-parsed dict or a
+    JSON string depending on the read path, so handle both rather than
+    assuming one. Only ever read from (merge-source lookups), never mutated
+    or re-serialized directly, so a read-only view is enough here.
+    """
+    if isinstance(value, str):
+        try:
+            return _AGENT_PARAMS_ADAPTER.validate_json(value)
+        except ValidationError:
+            return _EMPTY_LITELLM_PARAMS
+    if isinstance(value, Mapping):
+        try:
+            return _AGENT_PARAMS_ADAPTER.validate_python(value)
+        except ValidationError:
+            return _EMPTY_LITELLM_PARAMS
+    return _EMPTY_LITELLM_PARAMS
+
+
+_MISSING_AGENT_PARAM: Final = object()
+
+
+def _resolved_agent_param_value(
+    key: str,
+    incoming: Mapping[str, object],
+    existing: Mapping[str, object],
+) -> object:
+    """The value ``key`` should end up with in a restored litellm_params, or
+    ``_MISSING_AGENT_PARAM`` when it should be dropped entirely."""
+    if key in incoming:
+        value: Final = incoming[key]
+        if _AGENT_PARAMS_MASKER.is_sensitive_key(key) and value == REDACTED_BY_LITELM_STRING:
+            return existing.get(key, _MISSING_AGENT_PARAM)
+        return value
+    if _AGENT_PARAMS_MASKER.is_sensitive_key(key):
+        return existing.get(key, _MISSING_AGENT_PARAM)
+    return _MISSING_AGENT_PARAM
+
+
+def _restore_redacted_litellm_params(
+    incoming: Mapping[str, object],
+    existing: Mapping[str, object],
+) -> dict[str, object]:
+    """Restore the real credential behind any litellm_params value the caller
+    echoed back as ``REDACTED_BY_LITELM_STRING``, and behind any sensitive key
+    omitted entirely, so an edit to an unrelated field never overwrites (or
+    silently drops) a stored provider credential -- the UI never has to
+    read-and-resend a secret to keep it.
+
+    A sensitive key given a real (non-marker) value, including an explicit
+    empty string, is treated as a deliberate update -- that's how a caller
+    clears a credential. Non-sensitive keys always take the incoming value,
+    matching the endpoints' existing full-replace-on-PUT / merge-on-PATCH
+    semantics for everything that isn't a secret.
+    """
+    all_keys: Final = frozenset(incoming) | frozenset(existing)
+    return {
+        key: value
+        for key in all_keys
+        if (value := _resolved_agent_param_value(key, incoming, existing)) is not _MISSING_AGENT_PARAM
+    }  # mutable-ok: fed to safe_dumps() for JSON-column storage, which requires a real dict
 
 
 class GrantMigrationResult(NamedTuple):
@@ -301,9 +418,14 @@ class AgentRegistry:
         try:
             agent_name: Final = agent.get("agent_name")
 
-            # Serialize litellm_params
+            # Serialize litellm_params. A create has no stored row to restore a
+            # secret behind, so a sensitive key submitted as the redaction
+            # marker (e.g. a stray client re-post) is dropped rather than
+            # persisted as the literal placeholder string.
             litellm_params_obj: Final = agent.get("litellm_params", {})
-            litellm_params_dict: Final[dict[str, object]] = _dump_agent_params(litellm_params_obj)
+            litellm_params_dict: Final = _restore_redacted_litellm_params(
+                _dump_agent_params(litellm_params_obj), _EMPTY_LITELLM_PARAMS
+            )
             litellm_params: Final[str] = safe_dumps(litellm_params_dict)
 
             # Serialize agent_card_params
@@ -410,8 +532,14 @@ class AgentRegistry:
             update_data: Final[dict[str, object]] = {}
             if augment_agent.get("agent_name"):
                 update_data["agent_name"] = augment_agent.get("agent_name")
-            if augment_agent.get("litellm_params"):
-                update_data["litellm_params"] = safe_dumps(augment_agent.get("litellm_params"))
+            if "litellm_params" in agent:
+                existing_litellm_params: Final = parse_agent_litellm_params(existing_agent.get("litellm_params"))
+                update_data["litellm_params"] = safe_dumps(
+                    _restore_redacted_litellm_params(
+                        _dump_agent_params(agent.get("litellm_params") or _EMPTY_LITELLM_PARAMS),
+                        existing_litellm_params,
+                    )
+                )
             if augment_agent.get("agent_card_params"):
                 update_data["agent_card_params"] = safe_dumps(augment_agent.get("agent_card_params"))
 
@@ -474,9 +602,22 @@ class AgentRegistry:
         try:
             agent_name: Final = agent.get("agent_name")
 
+            # A PUT fully replaces litellm_params from the request body, so the
+            # existing row is read up front to restore any sensitive key the
+            # caller echoed back redacted (or omitted) rather than persisting
+            # the marker -- or nothing -- over the real stored credential.
+            existing_row: Final = await agents_table(prisma_client).find_unique(
+                where={"agent_id": agent_id}  # mutable-ok: prisma's query builder rejects a Mapping/MappingProxyType
+            )
+            existing_litellm_params: Final = parse_agent_litellm_params(
+                existing_row.litellm_params if existing_row is not None else None
+            )
+
             # Serialize litellm_params
             litellm_params_obj: Final = agent.get("litellm_params", {})
-            litellm_params_dict: Final[dict[str, object]] = _dump_agent_params(litellm_params_obj)
+            litellm_params_dict: Final = _restore_redacted_litellm_params(
+                _dump_agent_params(litellm_params_obj), existing_litellm_params
+            )
             litellm_params: Final[str] = safe_dumps(litellm_params_dict)
 
             # Serialize agent_card_params
@@ -512,9 +653,8 @@ class AgentRegistry:
                     update_data[rate_field] = _val
 
             if agent.get("object_permission") is not None:
-                existing_agent: Final = await agents_table(prisma_client).find_unique(where={"agent_id": agent_id})
                 existing_object_permission_id: Final = (
-                    existing_agent.object_permission_id if existing_agent is not None else None
+                    existing_row.object_permission_id if existing_row is not None else None
                 )
                 agent_copy: Final = dict(agent)
                 object_permission_id: Final = await handle_update_object_permission_common(

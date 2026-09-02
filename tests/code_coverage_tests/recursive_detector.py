@@ -64,6 +64,7 @@ IGNORE_FUNCTIONS = [
     "_flatten_form_field",  # bounded by the nesting depth of the already-parsed request body (a finite JSON tree, no cycles possible).
     "_flatten_form_data_field",  # bounded by the nesting depth of the already-parsed request body (a finite JSON tree, no cycles possible).
     "_json_safe",  # max depth set (_MAX_DEPTH) plus a seen-ids cycle guard for self-referential input.
+    "redact_sensitive_agent_litellm_params",  # max depth set (default 10), same shape as _redact_sensitive_litellm_params.
 ]
 
 
