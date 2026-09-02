@@ -2295,6 +2295,34 @@ class TestLoggingOnlyApplyGuardrail:
         assert {e["guardrail_mode"] for e in entries} == {"logging_only"}
         assert {e["guardrail_status"] for e in entries} == {"success"}
         assert "standard_logging_guardrail_information" not in kwargs["litellm_params"]["metadata"]
+        assert kwargs["standard_logging_object"] == {"guardrail_information": None}
+
+    @pytest.mark.asyncio
+    async def test_appends_to_pre_call_verdicts_without_duplicating_them(self):
+        guardrail = _ApplyOnlyObserver()
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+        pre_call_entry = {"guardrail_name": "pii-blocker", "guardrail_mode": "pre_call", "guardrail_status": "success"}
+        kwargs["litellm_params"]["metadata"]["standard_logging_guardrail_information"] = [pre_call_entry]
+        kwargs["standard_logging_object"]["guardrail_information"] = [pre_call_entry]
+
+        out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        entries = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert [e["guardrail_name"] for e in entries] == ["pii-blocker", "apply-only-observer", "apply-only-observer"]
+        assert kwargs["litellm_params"]["metadata"]["standard_logging_guardrail_information"] == [pre_call_entry]
+
+    @pytest.mark.asyncio
+    async def test_request_copy_failure_is_swallowed(self):
+        import threading
+
+        guardrail = _ApplyOnlyObserver()
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there", "lock": threading.Lock()}])
+
+        out_kwargs, out_response = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        assert guardrail.calls == []
+        assert out_kwargs is kwargs
+        assert out_response is response
 
     @pytest.mark.asyncio
     async def test_block_verdict_is_recorded_without_raising(self):
@@ -2348,23 +2376,33 @@ class TestLoggingOnlyApplyGuardrail:
         assert [e["guardrail_status"] for e in entries] == ["success", "success"]
 
     @pytest.mark.asyncio
-    async def test_acompletion_success_path_reaches_apply_guardrail(self, monkeypatch):
-        import litellm
+    async def test_async_success_handler_records_verdict_in_standard_logging_object(self):
+        import datetime as dt
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
 
         guardrail = _ApplyOnlyObserver()
         guardrail.default_on = True
-        monkeypatch.setattr(litellm, "callbacks", [guardrail])
-        monkeypatch.setattr(litellm, "success_callback", [])
-        monkeypatch.setattr(litellm, "_async_success_callback", [])
-
-        await litellm.acompletion(
+        messages = [{"role": "user", "content": "hello there"}]
+        _, response = _logged_call(messages)
+        logging_obj = Logging(
             model="gpt-5.4-mini",
-            messages=[{"role": "user", "content": "hello there"}],
-            mock_response="general kenobi",
+            messages=messages,
+            stream=False,
+            call_type=CallTypes.acompletion.value,
+            start_time=dt.datetime.now(),
+            litellm_call_id="call-1",
+            function_id="fn-1",
+            dynamic_async_success_callbacks=[guardrail],
         )
-        for _ in range(50):
-            if len(guardrail.calls) == 2:
-                break
-            await asyncio.sleep(0.1)
+        logging_obj.update_environment_variables(
+            litellm_params={"metadata": {}}, optional_params={}, model="gpt-5.4-mini", custom_llm_provider="openai"
+        )
+
+        await logging_obj.async_success_handler(
+            result=response, start_time=dt.datetime.now(), end_time=dt.datetime.now()
+        )
 
         assert guardrail.calls == [("request", ["hello there"]), ("response", ["general kenobi"])]
+        entries = logging_obj.model_call_details["standard_logging_object"]["guardrail_information"]
+        assert [e["guardrail_status"] for e in entries] == ["success", "success"]

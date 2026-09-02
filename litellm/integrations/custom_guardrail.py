@@ -40,6 +40,7 @@ except ImportError:
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 dc: Final = DualCache()
 
 
@@ -874,8 +875,34 @@ class CustomGuardrail(CustomLogger):
             )
             return kwargs, result
         litellm_params: Final = kwargs.get("litellm_params") or {}
+        scratch_metadata: Final = {
+            key: value
+            for key, value in (litellm_params.get("metadata") or {}).items()
+            if key != "standard_logging_guardrail_information"
+        }
+        try:
+            await self._scan_logged_call(kwargs, result, translation, scratch_metadata)
+        except Exception as e:
+            verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
+        recorded: Final = scratch_metadata.get("standard_logging_guardrail_information")
+        standard_logging_object: Final = kwargs.get("standard_logging_object")
+        if not recorded or not isinstance(standard_logging_object, dict):
+            return kwargs, result
+        entries: Final = recorded if isinstance(recorded, list) else [recorded]
+        existing: Final = standard_logging_object.get("guardrail_information") or []
+        return {
+            **kwargs,
+            "standard_logging_object": {**standard_logging_object, "guardrail_information": [*existing, *entries]},
+        }, result
+
+    async def _scan_logged_call(
+        self,
+        kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
+        result: object,
+        translation: "BaseTranslation",
+        scratch_metadata: dict,  # mutable-ok: apply_guardrail records its verdict into request metadata
+    ) -> None:
         optional_params: Final = kwargs.get("optional_params") or {}
-        scratch_metadata: Final = copy.deepcopy(litellm_params.get("metadata") or {})
         scratch_input: Final = copy.deepcopy(kwargs.get("messages") or kwargs.get("input"))
         scratch_request: Final = {
             "model": kwargs.get("model"),
@@ -885,21 +912,10 @@ class CustomGuardrail(CustomLogger):
             "litellm_call_id": kwargs.get("litellm_call_id"),
             "metadata": scratch_metadata,
         }
-        try:
-            await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
-            await translation.process_output_response(
-                response=copy.deepcopy(result), guardrail_to_apply=self, request_data=scratch_request
-            )
-        except Exception as e:
-            verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
-        recorded: Final = scratch_metadata.get("standard_logging_guardrail_information")
-        standard_logging_object: Final = kwargs.get("standard_logging_object")
-        if not recorded or not isinstance(standard_logging_object, dict):
-            return kwargs, result
-        entries: Final = recorded if isinstance(recorded, list) else [recorded]
-        existing: Final = standard_logging_object.get("guardrail_information")
-        standard_logging_object["guardrail_information"] = [*(existing or []), *entries]
-        return kwargs, result
+        await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
+        await translation.process_output_response(
+            response=copy.deepcopy(result), guardrail_to_apply=self, request_data=scratch_request
+        )
 
     def supports_scan_only_tool_results(self) -> bool:
         """Whether this guardrail can scan tool-result content.
