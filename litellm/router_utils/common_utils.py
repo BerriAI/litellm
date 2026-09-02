@@ -167,7 +167,15 @@ def _is_server_tool_type(tool: object, family: str) -> bool:
     if not isinstance(tool, Mapping):
         return False
     tool_type: Final = tool.get("type")
-    return isinstance(tool_type, str) and (tool_type == family or tool_type.startswith(f"{family}_"))
+    if not isinstance(tool_type, str):
+        return False
+    if tool_type == family:
+        return True
+    if family == "web_search" and tool_type == "web_search_preview":
+        return True
+    prefix: Final = f"{family}_"
+    version_suffix: Final = tool_type[len(prefix) :] if tool_type.startswith(prefix) else ""
+    return bool(version_suffix) and version_suffix.isdigit()
 
 
 def _deployment_supports_web_search(deployment: dict) -> bool:

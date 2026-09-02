@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List, Optional, Union
+from typing import Dict, Final, List, Optional, Union
 from unittest.mock import Mock
 
 import pytest
@@ -7,6 +7,7 @@ import pytest
 from litellm import Router
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.router import RouterRateLimitError
 from litellm.router_utils.common_utils import (
     _deployment_supports_web_search,
     add_model_file_id_mappings,
@@ -45,16 +46,12 @@ class TestFilterTeamBasedModels:
             {"model_info": {"id": "deployment-2"}},
         ]
 
-    def test_filter_team_based_models_none_request_kwargs(
-        self, sample_deployments_with_teams
-    ):
+    def test_filter_team_based_models_none_request_kwargs(self, sample_deployments_with_teams):
         """Test that when request_kwargs is None, all deployments are returned unchanged"""
         result = filter_team_based_models(sample_deployments_with_teams, None)
         assert result == sample_deployments_with_teams
 
-    def test_filter_team_based_models_empty_request_kwargs(
-        self, sample_deployments_with_teams
-    ):
+    def test_filter_team_based_models_empty_request_kwargs(self, sample_deployments_with_teams):
         """Test with empty request_kwargs"""
         result = filter_team_based_models(sample_deployments_with_teams, {})
         # Should include all deployments since no team_id in request
@@ -67,9 +64,7 @@ class TestFilterTeamBasedModels:
         # Should include only non-team based deployments
         assert len(result) == 1
 
-    def test_filter_team_based_models_team_match_metadata(
-        self, sample_deployments_with_teams
-    ):
+    def test_filter_team_based_models_team_match_metadata(self, sample_deployments_with_teams):
         """Test filtering when team_id is in metadata"""
         request_kwargs = {"metadata": {"user_api_key_team_id": "team-a"}}
         result = filter_team_based_models(sample_deployments_with_teams, request_kwargs)
@@ -84,9 +79,7 @@ class TestFilterTeamBasedModels:
         result_ids = [d.get("model_info", {}).get("id") for d in result]
         assert sorted(result_ids) == sorted(expected_ids)
 
-    def test_filter_team_based_models_team_match_litellm_metadata(
-        self, sample_deployments_with_teams
-    ):
+    def test_filter_team_based_models_team_match_litellm_metadata(self, sample_deployments_with_teams):
         """Test filtering when team_id is in litellm_metadata"""
         request_kwargs = {"litellm_metadata": {"user_api_key_team_id": "team-b"}}
         result = filter_team_based_models(sample_deployments_with_teams, request_kwargs)
@@ -101,9 +94,7 @@ class TestFilterTeamBasedModels:
         result_ids = [d.get("model_info", {}).get("id") for d in result]
         assert sorted(result_ids) == sorted(expected_ids)
 
-    def test_filter_team_based_models_priority_metadata_over_litellm(
-        self, sample_deployments_with_teams
-    ):
+    def test_filter_team_based_models_priority_metadata_over_litellm(self, sample_deployments_with_teams):
         """Test that metadata.user_api_key_team_id takes priority over litellm_metadata.user_api_key_team_id"""
         request_kwargs = {
             "metadata": {
@@ -118,9 +109,7 @@ class TestFilterTeamBasedModels:
         result_ids = [d.get("model_info", {}).get("id") for d in result]
         assert sorted(result_ids) == sorted(expected_ids)
 
-    def test_filter_team_based_models_no_matching_team(
-        self, sample_deployments_with_teams
-    ):
+    def test_filter_team_based_models_no_matching_team(self, sample_deployments_with_teams):
         """Test when request team doesn't match any deployment teams"""
         request_kwargs = {"metadata": {"user_api_key_team_id": "team-nonexistent"}}
         result = filter_team_based_models(sample_deployments_with_teams, request_kwargs)
@@ -130,9 +119,7 @@ class TestFilterTeamBasedModels:
         result_ids = [d.get("model_info", {}).get("id") for d in result]
         assert result_ids == expected_ids
 
-    def test_filter_team_based_models_no_team_restrictions(
-        self, sample_deployments_no_teams
-    ):
+    def test_filter_team_based_models_no_team_restrictions(self, sample_deployments_no_teams):
         """Test with deployments that have no team restrictions"""
         request_kwargs = {"metadata": {"user_api_key_team_id": "any-team"}}
         result = filter_team_based_models(sample_deployments_no_teams, request_kwargs)
@@ -179,9 +166,7 @@ class TestFilterTeamBasedModels:
 
     def test_filter_team_based_models_empty_deployments(self):
         """Test with empty deployments list"""
-        result = filter_team_based_models(
-            [], {"metadata": {"user_api_key_team_id": "team-a"}}
-        )
+        result = filter_team_based_models([], {"metadata": {"user_api_key_team_id": "team-a"}})
         assert result == []
 
     def test_filter_team_based_models_none_team_id_in_deployment(self):
@@ -325,9 +310,7 @@ class TestFilterWebSearchDeployments:
         deployments = [
             {"model_info": {"id": "d1"}},  # No supports_web_search - defaults to True
             {"model_info": {"id": "d2"}},  # No supports_web_search - defaults to True
-            {
-                "model_info": {"id": "d3", "supports_web_search": False}
-            },  # Explicit False
+            {"model_info": {"id": "d3", "supports_web_search": False}},  # Explicit False
         ]
         request_kwargs = {"tools": [{"type": "web_search"}]}
         result = filter_web_search_deployments(deployments, request_kwargs)
@@ -353,42 +336,95 @@ class TestFilterWebSearchDeployments:
         assert result == deployment
 
     def test_anthropic_versioned_web_search_filters_unsupported(self, sample_deployments):
-        """Anthropic versioned web_search tool types (e.g. web_search_20250305) should filter unsupported deployments"""
-        request_kwargs = {"tools": [{"type": "web_search_20250305", "name": "web_search"}]}
-        result = filter_web_search_deployments(sample_deployments, request_kwargs)
-        assert len(result) == 2
-        result_ids = [d["model_info"]["id"] for d in result]
+        request_kwargs: Final = {"tools": [{"type": "web_search_20250305", "name": "web_search"}]}
+        result: Final = filter_web_search_deployments(sample_deployments, request_kwargs)
+        assert isinstance(result, list)
+        result_ids: Final = tuple(d["model_info"]["id"] for d in result)
         assert "deployment-3" not in result_ids
 
     def test_anthropic_web_fetch_filters_unsupported(self):
-        """Anthropic web_fetch tool types (e.g. web_fetch_20250910) should filter out supports_web_fetch=False deployments"""
-        deployments = [
+        deployments: Final = [
             {"model_info": {"id": "d1", "supports_web_fetch": True}},
             {"model_info": {"id": "d2", "supports_web_fetch": False}},
         ]
-        request_kwargs = {"tools": [{"type": "web_fetch_20250910", "name": "web_fetch"}]}
-        result = filter_web_search_deployments(deployments, request_kwargs)
-        assert len(result) == 1
-        assert result[0]["model_info"]["id"] == "d1"
+        request_kwargs: Final = {"tools": [{"type": "web_fetch_20250910", "name": "web_fetch"}]}
+        result: Final = filter_web_search_deployments(deployments, request_kwargs)
+        assert isinstance(result, list)
+        assert tuple(d["model_info"]["id"] for d in result) == ("d1",)
+
+    def test_future_numeric_web_tool_versions_filter_unsupported(self):
+        deployments: Final = [
+            {"model_info": {"id": "supported", "supports_web_search": True, "supports_web_fetch": True}},
+            {"model_info": {"id": "unsupported", "supports_web_search": False, "supports_web_fetch": False}},
+        ]
+        search_result: Final = filter_web_search_deployments(deployments, {"tools": [{"type": "web_search_20990101"}]})
+        fetch_result: Final = filter_web_search_deployments(deployments, {"tools": [{"type": "web_fetch_20990101"}]})
+        assert isinstance(search_result, list)
+        assert isinstance(fetch_result, list)
+        assert tuple(d["model_info"]["id"] for d in search_result) == ("supported",)
+        assert tuple(d["model_info"]["id"] for d in fetch_result) == ("supported",)
+
+    def test_custom_server_tool_prefixes_do_not_trigger_native_filtering(self):
+        deployments: Final = [
+            {"model_info": {"id": "custom", "supports_web_search": False, "supports_web_fetch": False}}
+        ]
+        assert filter_web_search_deployments(deployments, {"tools": [{"type": "web_search_custom"}]}) == deployments
+        assert filter_web_search_deployments(deployments, {"tools": [{"type": "web_fetch_notes"}]}) == deployments
 
     def test_custom_function_names_do_not_trigger_native_capability_filtering(self):
-        deployments = [
-            {
-                "model_info": {
-                    "id": "custom-function",
-                    "supports_web_search": False,
-                    "supports_web_fetch": False,
-                }
-            }
+        deployments: Final = [
+            {"model_info": {"id": "custom", "supports_web_search": False, "supports_web_fetch": False}}
         ]
+        assert (
+            filter_web_search_deployments(deployments, {"tools": [{"type": "function", "name": "web_search"}]})
+            == deployments
+        )
+        assert (
+            filter_web_search_deployments(deployments, {"tools": [{"type": "function", "name": "web_fetch"}]})
+            == deployments
+        )
+        assert (
+            filter_web_search_deployments(
+                deployments, {"tools": [{"type": "function", "function": {"name": "web_search"}}]}
+            )
+            == deployments
+        )
+        assert (
+            filter_web_search_deployments(
+                deployments, {"tools": [{"type": "function", "function": {"name": "web_fetch"}}]}
+            )
+            == deployments
+        )
 
-        for tool in (
-            {"type": "function", "name": "web_search"},
-            {"type": "function", "name": "web_fetch"},
-            {"type": "function", "function": {"name": "web_search"}},
-            {"type": "function", "function": {"name": "web_fetch"}},
-        ):
-            assert filter_web_search_deployments(deployments, {"tools": [tool]}) == deployments
+    def test_combined_native_search_and_fetch_require_both_capabilities(self):
+        deployments: Final = [
+            {"model_info": {"id": "both", "supports_web_search": True, "supports_web_fetch": True}},
+            {"model_info": {"id": "search-only", "supports_web_search": True, "supports_web_fetch": False}},
+            {"model_info": {"id": "fetch-only", "supports_web_search": False, "supports_web_fetch": True}},
+        ]
+        request_kwargs: Final = {"tools": [{"type": "web_search_20250305"}, {"type": "web_fetch_20250910"}]}
+        result: Final = filter_web_search_deployments(deployments, request_kwargs)
+        assert isinstance(result, list)
+        assert tuple(d["model_info"]["id"] for d in result) == ("both",)
+
+    def test_sync_router_filters_native_web_fetch_capability(self):
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "mixed-claude",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                    "model_info": {"id": "no-fetch", "supports_web_fetch": False},
+                }
+            ],
+            routing_strategy="simple-shuffle",
+        )
+        request_kwargs: Final = {"tools": [{"type": "web_fetch_20250910"}]}
+        with pytest.raises(RouterRateLimitError):
+            router.get_available_deployment(
+                model="mixed-claude",
+                messages=[{"role": "user", "content": "fetch a page"}],
+                request_kwargs=request_kwargs,
+            )
 
 
 def test_invalidate_model_group_info_cache():
@@ -673,12 +709,7 @@ class TestWarnOnProviderCredentialMismatch:
         )
 
     def test_silent_when_no_provider_scoped_credentials_are_set(self):
-        assert (
-            warn_on_provider_credential_mismatch(
-                model_name="gpt-5.5", litellm_params={"model": "gpt-5.5"}
-            )
-            is None
-        )
+        assert warn_on_provider_credential_mismatch(model_name="gpt-5.5", litellm_params={"model": "gpt-5.5"}) is None
 
     def test_vertex_params_name_vertex_not_bedrock(self):
         """The hint must follow the params that were actually set, otherwise it
@@ -728,8 +759,7 @@ class TestWarnOnProviderCredentialMismatch:
 
         mismatch_warnings = [r for r in caplog.records if "resolves to provider" in r.getMessage()]
         assert len(mismatch_warnings) == 1, (
-            "exactly the prefix-less deployment should warn; "
-            f"got {[r.getMessage() for r in mismatch_warnings]}"
+            f"exactly the prefix-less deployment should warn; got {[r.getMessage() for r in mismatch_warnings]}"
         )
         assert "aws_region_name" in mismatch_warnings[0].getMessage()
 

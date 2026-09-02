@@ -12854,20 +12854,25 @@ class Router:
             request_kwargs=request_kwargs,
         )
 
-        if isinstance(healthy_deployments, dict):
-            if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
+        web_capable_deployments: Final = filter_web_search_deployments(
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
+        )
+
+        if isinstance(web_capable_deployments, dict):
+            if (web_capable_deployments.get("model_info") or {}).get("blocked") is True:
                 raise litellm.ServiceUnavailableError(
                     message=f"Model '{model}' is currently paused and cannot accept requests.",
                     model=model,
                     llm_provider="",
                 )
-            return healthy_deployments
+            return web_capable_deployments
 
         parent_otel_span: Final[Span | None] = _get_parent_otel_span_from_kwargs(request_kwargs)
 
         # Health-check-based filtering (before cooldown)
         healthy_deployments = self._filter_health_check_unhealthy_deployments(
-            healthy_deployments=healthy_deployments,
+            healthy_deployments=web_capable_deployments,
             parent_otel_span=parent_otel_span,
         )
 
