@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import Any, Final, NoReturn, cast
+from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, cast
 
 from fastapi import HTTPException, status
 
@@ -35,6 +35,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
+from litellm.types.router import DeploymentTypedDict
 
 
 @dataclass
@@ -46,6 +47,7 @@ class _BudgetCounter:
     entity_id: str
     source_cache_key: str | None = None
     spend_log_entity_id: str | None = None
+    window_duration: str | None = None
     window_start: datetime | None = None
 
 
@@ -171,7 +173,14 @@ async def reserve_budget_for_request(
 ) -> dict | None:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
         return None
-    if route in {"/models", "/v1/models", "/utils/token_counter"}:
+    if route in {
+        "/models",
+        "/v1/models",
+        "/utils/token_counter",
+        "/responses/input_tokens",
+        "/v1/responses/input_tokens",
+        "/openai/v1/responses/input_tokens",
+    }:
         return None
     if get_model_from_request(request_body, route, llm_router=llm_router) is None:
         return None
@@ -689,7 +698,7 @@ def _get_budget_limit_counters(
     for window in budget_limits:
         window_dict = _coerce_window(window)
         budget_duration = window_dict.get("budget_duration")
-        max_budget = window_dict.get("max_budget")
+        max_budget = _to_float(window_dict.get("max_budget"))
         if not budget_duration or max_budget is None or max_budget <= 0:
             continue
         window_start = get_budget_window_start(window_dict)
@@ -709,24 +718,27 @@ def _get_budget_limit_counters(
                 entity_type=entity_type,
                 entity_id=f"{entity_id}:{budget_duration}",
                 spend_log_entity_id=entity_id,
+                window_duration=str(budget_duration),
                 window_start=window_start,
             )
         )
     return counters
 
 
-def _coerce_window(window: Any) -> dict:
-    if isinstance(window, dict):
+def _coerce_window(window: object) -> Mapping[str, object]:
+    if isinstance(window, Mapping):
         return window
     if isinstance(window, str):
         try:
-            parsed: Final = json.loads(window)
-            return parsed if isinstance(parsed, dict) else {}
+            parsed: Final[object] = json.loads(window)
         except Exception:
             return {}
-    if hasattr(window, "model_dump"):
-        return window.model_dump()
-    return {}
+        return parsed if isinstance(parsed, Mapping) else {}
+    model_dump: Final = getattr(window, "model_dump", None)
+    if not callable(model_dump):
+        return {}
+    dumped: Final[object] = model_dump()
+    return dumped if isinstance(dumped, Mapping) else {}
 
 
 async def _reserve_counter(
@@ -752,6 +764,7 @@ async def _reserve_counter(
                 counter_key=counter.counter_key,
                 entity_type=counter.entity_type,
                 entity_id=counter.spend_log_entity_id,
+                window_duration=counter.window_duration,
                 window_start=counter.window_start,
             )
             if initialized is False:
@@ -943,7 +956,7 @@ def _get_entry_reserved_cost(entry: dict, default_reserved_cost: float) -> float
         return default_reserved_cost
 
 
-def get_budget_window_start(window: Any) -> datetime | None:
+def get_budget_window_start(window: object) -> datetime | None:
     window_dict: Final = _coerce_window(window)
     budget_duration: Final = window_dict.get("budget_duration")
     if budget_duration is None:
@@ -961,7 +974,7 @@ def get_budget_window_start(window: Any) -> datetime | None:
     return reset_at - timedelta(seconds=duration_seconds)
 
 
-def _coerce_datetime(value: Any) -> datetime | None:
+def _coerce_datetime(value: object) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -1235,11 +1248,11 @@ def _get_model_cost_infos(
 
 
 def _deployment_tiered_pricing_table(
-    deployment: dict[str, Any],
+    deployment: DeploymentTypedDict,
     llm_router: Router,
-) -> list[dict] | None:
-    model_id: Final = deployment.get("model_info", {}).get("id")
-    backend_model: Final = deployment.get("litellm_params", {}).get("model")
+) -> Sequence[Mapping[str, object]] | None:
+    model_id: Final = _get_value(_get_value(deployment, "model_info"), "id")
+    backend_model: Final = _get_value(_get_value(deployment, "litellm_params"), "model")
     if not isinstance(model_id, str) or not isinstance(backend_model, str):
         return None
     deployment_model_info: Final = llm_router.get_deployment_model_info(model_id=model_id, model_name=backend_model)
@@ -1404,7 +1417,7 @@ def _estimate_output_tokens(
     return min(requested, model_ceiling)
 
 
-def _count_text_tokens(model: str, text: Any) -> int:
+def _count_text_tokens(model: str, text: object) -> int:
     if text is None:
         return 0
 
@@ -1444,8 +1457,8 @@ def _is_input_only_route(route: str) -> bool:
     )
 
 
-def _to_float(value: Any) -> float | None:
-    if value is None:
+def _to_float(value: object) -> float | None:
+    if not isinstance(value, (SupportsFloat, SupportsIndex, str, bytes, bytearray)):
         return None
     try:
         return float(value)
@@ -1453,8 +1466,8 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
-def _to_int(value: Any) -> int | None:
-    if value is None:
+def _to_int(value: object) -> int | None:
+    if not isinstance(value, (SupportsInt, SupportsIndex, str, bytes, bytearray)):
         return None
     try:
         return int(value)
@@ -1462,7 +1475,7 @@ def _to_int(value: Any) -> int | None:
         return None
 
 
-def _get_value(obj: Any, key: str) -> Any:
-    if isinstance(obj, dict):
+def _get_value(obj: object, key: str) -> object:
+    if isinstance(obj, Mapping):
         return obj.get(key)
     return getattr(obj, key, None)

@@ -623,6 +623,7 @@ async def _update_database_and_spend_counters(
             budget_reservation=budget_reservation,
             end_user_id=end_user_id,
             tags=request_tags,
+            request_started_at=start_time,
             model_access_groups=model_access_groups,
         )
     except Exception:

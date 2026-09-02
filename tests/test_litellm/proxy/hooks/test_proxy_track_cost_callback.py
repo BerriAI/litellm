@@ -570,6 +570,7 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
     proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock()
     increment_spend_counters = AsyncMock()
     budget_reservation = {"reserved_cost": 0.5, "entries": []}
+    start_time = datetime.now()
 
     await _update_database_and_spend_counters(
         proxy_logging_obj=proxy_logging_obj,
@@ -581,7 +582,7 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         org_id="test_org_id",
         kwargs={},
         completion_response=None,
-        start_time=datetime.now(),
+        start_time=start_time,
         end_time=datetime.now(),
         response_cost=0.2,
         budget_reservation=budget_reservation,
@@ -599,6 +600,7 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         budget_reservation=budget_reservation,
         end_user_id="test_end_user_id",
         tags=["tag-a"],
+        request_started_at=start_time,
         model_access_groups=("premium",),
     )
 

@@ -88,7 +88,7 @@ class AccessGroupInfo(BaseModel):
     access_group: str
     model_names: list[str]  # List of model names in this access group
     deployment_count: int  # Total number of deployments with this access group
-    spend: float | None = None  # Only populated by /access_group/{access_group}/info
+    spend: float | None = None  # Spend drawn against the group's shared budget
     budget: AccessGroupBudget | None = None
 
 
