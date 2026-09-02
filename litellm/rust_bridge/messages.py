@@ -7,7 +7,7 @@ from typing import Final, Protocol
 
 import httpx
 
-from litellm.rust_bridge.bindings import NativeBinding
+from litellm.rust_bridge.bindings import UNSET, NativeBinding, Unset
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
     FallbackMode,
@@ -51,22 +51,13 @@ _MESSAGES: Final = NativeBinding[RustMessages]("messages")
 _AMESSAGES: Final = NativeBinding[RustAmessages]("amessages")
 
 
-class _Unset:
-    pass
-
-
-_UNSET: Final = _Unset()
-
-
 def set_rust_messages(
     *,
-    messages: RustMessages | None | _Unset = _UNSET,
-    amessages: RustAmessages | None | _Unset = _UNSET,
+    messages: RustMessages | None | Unset = UNSET,
+    amessages: RustAmessages | None | Unset = UNSET,
 ) -> None:
-    if not isinstance(messages, _Unset):
-        _MESSAGES.reset() if messages is None else _MESSAGES.override(messages)
-    if not isinstance(amessages, _Unset):
-        _AMESSAGES.reset() if amessages is None else _AMESSAGES.override(amessages)
+    _MESSAGES.update(messages)
+    _AMESSAGES.update(amessages)
 
 
 def load_rust_messages() -> RustMessages | None:
