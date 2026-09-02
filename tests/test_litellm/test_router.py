@@ -8410,6 +8410,25 @@ class TestClaudeCodeSubagentSessionRouterBinding:
         assert response is None
 
     @pytest.mark.asyncio
+    async def test_redis_cleanup_failure_does_not_reject_a_direct_model_request(self):
+        from litellm.caching.caching import RedisCache
+
+        router = self._router()
+        redis_cache = MagicMock(spec=RedisCache)
+        redis_cache.async_delete_cache = AsyncMock(side_effect=ConnectionError("redis unavailable"))
+
+        await router.async_pre_routing_hook(model="smart-router", request_kwargs=self._request_kwargs())
+        router._update_redis_cache(cache=redis_cache)
+
+        response = await router.async_pre_routing_hook(
+            model="expensive-model",
+            request_kwargs=self._request_kwargs(),
+        )
+
+        assert response is None
+        redis_cache.async_delete_cache.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_background_and_fallback_requests_do_not_clear_the_session_router(self):
         router = self._router()
 
