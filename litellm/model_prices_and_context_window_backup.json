@@ -10177,7 +10177,7 @@
         "cache_read_input_token_cost": 2.8e-08,
         "supports_prompt_caching": true
     },
-    "azure_ai/deepseek-v4-flash-0731": {
+    "azure_ai/DeepSeek-V4-Flash-0731": {
         "cache_read_input_token_cost": 1.4e-08,
         "deprecation_date": "2026-12-03",
         "input_cost_per_token": 4.4e-07,

@@ -4390,13 +4390,15 @@ def _init_custom_logger_compatible_class(
             from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
             if is_otel_v2_enabled():
-                from litellm.integrations.otel.logger import OpenTelemetryV2
+                from litellm.integrations.otel.logger import OpenTelemetryV2, build_otel_v2_logger
+                from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 
                 for callback in _in_memory_loggers:
-                    if type(callback) is OpenTelemetryV2:
+                    if isinstance(callback, OpenTelemetryV2):
                         return callback
-                otel_logger_v2: Final = OpenTelemetryV2(
-                    **_get_custom_logger_settings_from_proxy_server(callback_name=logging_integration)
+                otel_settings: Final = _get_custom_logger_settings_from_proxy_server(callback_name=logging_integration)
+                otel_logger_v2: Final = build_otel_v2_logger(
+                    config=OpenTelemetryV2Config(**otel_settings), settings=otel_settings
                 )
                 _in_memory_loggers.append(otel_logger_v2)
                 _maybe_auto_initialize_arize_phoenix(_in_memory_loggers)
@@ -4759,7 +4761,7 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
 
     if not is_otel_v2_enabled():
         return None
-    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.logger import OpenTelemetryV2, build_otel_v2_logger
     from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
 
     preset_fn: Final = PRESET_BY_CALLBACK.get(callback_name)
@@ -4774,7 +4776,7 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
         # If env vars are missing or the preset raises, defer to the legacy path
         # so customers get the same error story they had before V2 landed.
         return None
-    v2_logger: Final = OpenTelemetryV2(config=config, callback_name=callback_name)
+    v2_logger: Final = build_otel_v2_logger(config=config, callback_name=callback_name)
     _in_memory_loggers.append(v2_logger)
     return v2_logger
 

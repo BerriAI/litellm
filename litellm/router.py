@@ -30,7 +30,7 @@ import anyio
 import httpx
 import openai
 from openai import AsyncOpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import overload
 
 import litellm
@@ -381,6 +381,28 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
         ):
             return True
     return False
+
+
+_NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
+_SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def _with_router_resolved_session_model(session: object, model_name: str) -> Mapping[str, Mapping[str, object]]:
+    """
+    Realtime client-secret requests carry the model inside ``session`` as well, and the caller's copy of it still
+    holds the pre-routing model group name, so it has to follow the deployment the router just picked.
+
+    Returns kwargs to merge into the downstream call, empty when there is no session model to resolve.
+    """
+    try:
+        typed_session: Final = _SESSION_ADAPTER.validate_python(session)
+    except ValidationError:
+        return _NO_SESSION_KWARGS
+    if "model" not in typed_session:
+        return _NO_SESSION_KWARGS
+    return MappingProxyType(
+        {"session": {**typed_session, "model": model_name}}  # mutable-ok: callees deepcopy and JSON-dump session
+    )
 
 
 # Router._aanthropic_messages_streaming_iterator buffers lifecycle chunks
@@ -2360,7 +2382,7 @@ class Router:
     @overload
     async def acompletion(
         self, model: str, messages: list[AllMessageValues], stream: Literal[True, False] = False, **kwargs
-    ) -> CustomStreamWrapper | ModelResponse: 
+    ) -> CustomStreamWrapper | ModelResponse:
         ...
 
     # fmt: on
@@ -4930,6 +4952,7 @@ class Router:
                 "caching": self.cache_responses,
                 **kwargs,
                 "model": model_name,
+                **_with_router_resolved_session_model(kwargs.get("session"), model_name),
             }
             # Only set custom_llm_provider if it's not None
             if custom_llm_provider is not None:
@@ -6410,8 +6433,6 @@ class Router:
             "responses",
             "generate_content",
             "generate_content_stream",
-            "vector_store_search",
-            "vector_store_create",
             "ocr",
             "search",
             "video_generation",
@@ -6435,6 +6456,8 @@ class Router:
             return sync_wrapper
 
         if call_type in (
+            "vector_store_search",
+            "vector_store_create",
             "vector_store_retrieve",
             "vector_store_list",
             "vector_store_update",
@@ -6446,11 +6469,16 @@ class Router:
                 client: object | None = None,
                 **kwargs,
             ):
-                if custom_llm_provider and "custom_llm_provider" not in kwargs:
-                    kwargs["custom_llm_provider"] = custom_llm_provider
-                if kwargs.get("model"):
-                    return self._generic_api_call_with_fallbacks(original_function=original_function, **kwargs)
-                return original_function(**kwargs)
+                provider_kwargs: Final = (
+                    MappingProxyType({**kwargs, "custom_llm_provider": custom_llm_provider})
+                    if custom_llm_provider and "custom_llm_provider" not in kwargs
+                    else MappingProxyType(kwargs)
+                )
+                if provider_kwargs.get("model"):
+                    return self._generic_api_call_with_fallbacks(original_function=original_function, **provider_kwargs)
+                if call_type == "vector_store_search":
+                    return original_function(**MappingProxyType({**provider_kwargs, "router": self}))
+                return original_function(**provider_kwargs)
 
             return vector_store_sync_wrapper
 
@@ -6626,6 +6654,7 @@ class Router:
                 return await self._init_vector_store_api_endpoints(
                     original_function=original_function,
                     custom_llm_provider=custom_llm_provider,
+                    call_type=call_type,
                     **kwargs,
                 )
             elif call_type in ("afile_delete", "afile_content"):
@@ -6666,6 +6695,7 @@ class Router:
         self,
         original_function: Callable,
         custom_llm_provider: str | None = None,
+        call_type: str | None = None,
         **kwargs,
     ):
         """
@@ -6684,6 +6714,13 @@ class Router:
                 **kwargs,
             )
 
+        # For search, pass the router so provider transforms can resolve
+        # router-managed embedding models (e.g. S3 Vectors query embeddings).
+        # The merge also overrides any client-supplied `router` key.
+        if call_type == "avector_store_search":
+            search_kwargs: Final = MappingProxyType({**kwargs, "router": self})
+            return await original_function(**search_kwargs)
+
         # Otherwise, call the original function directly
         return await original_function(**kwargs)
 
@@ -6700,7 +6737,10 @@ class Router:
         metadata. When present, decode the ID, replace ``container_id`` with the
         upstream value, and route through ``_ageneric_api_call_with_fallbacks`` so
         deployment credentials (e.g. regional ``api_base`` for Azure) match
-        :meth:`_init_responses_api_endpoints`. Otherwise call the handler directly.
+        :meth:`_init_responses_api_endpoints`. Create/list calls carry no container ID, so
+        they route through the deployment named by ``model`` when the caller passes one,
+        falling back to the direct call when no deployment matches. Otherwise call the
+        handler directly with global provider credentials.
         """
         if custom_llm_provider and "custom_llm_provider" not in kwargs:
             kwargs["custom_llm_provider"] = custom_llm_provider
@@ -6731,6 +6771,14 @@ class Router:
                     original_function=original_function,
                     **kwargs,
                 )
+
+        requested_model: Final = kwargs.get("model")
+        if isinstance(requested_model, str) and requested_model.strip():
+            return await self._ageneric_api_call_with_fallbacks(
+                original_function=original_function,
+                passthrough_on_no_deployment=True,
+                **kwargs,
+            )
 
         return await original_function(**kwargs)
 
