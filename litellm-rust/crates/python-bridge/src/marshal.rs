@@ -40,12 +40,9 @@ pub(crate) fn optional_timeout(timeout_seconds: Option<f64>) -> Option<Duration>
     })
 }
 
-pub(crate) fn marshal_headers(
-    py: Python<'_>,
-    headers: Option<Py<PyAny>>,
-) -> PyResult<HashMap<String, String>> {
+pub(crate) fn marshal_headers(headers: Option<Value>) -> PyResult<HashMap<String, String>> {
     let value = match headers {
-        Some(headers) => from_py(headers.bind(py))?,
+        Some(headers) => headers,
         None => Value::Object(Map::new()),
     };
     let Value::Object(headers) = value else {

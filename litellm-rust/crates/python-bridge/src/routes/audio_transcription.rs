@@ -9,9 +9,9 @@ use pyo3::prelude::*;
 use serde_json::{Map, Value};
 
 use crate::errors::core_error_to_pyerr;
+use crate::execution::{run_async, run_sync};
+use crate::function_trace::trace_call;
 use crate::marshal::{optional_object, optional_object_to_map, optional_timeout};
-
-use super::{block_on, into_py_future};
 
 struct TranscriptionInputs {
     model: String,
@@ -88,7 +88,7 @@ fn transcription(
         optional_params,
         timeout_seconds,
     )?;
-    block_on(py, call(inputs), trace, core_error_to_pyerr)
+    run_sync(py, trace_call(call(inputs), trace), core_error_to_pyerr)
 }
 
 #[pyfunction]
@@ -117,7 +117,7 @@ fn atranscription(
         optional_params,
         timeout_seconds,
     )?;
-    into_py_future(py, call(inputs), trace, core_error_to_pyerr)
+    run_async(py, trace_call(call(inputs), trace), core_error_to_pyerr)
 }
 
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {

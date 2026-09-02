@@ -20,7 +20,7 @@ litellm-core = { path = "crates/core" }
 litellm-ai-gateway = { path = "crates/ai-gateway", default-features = false }
 litellm-python-interop = { path = "crates/python-interop" }
 axum = "0.7"
-pyo3 = "0.29.0"
+pyo3 = "0.29.2"
 pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"] }
 pythonize = "0.29.0"
 rand = "0.8"
