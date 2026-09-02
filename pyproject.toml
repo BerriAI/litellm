@@ -112,6 +112,12 @@ utils = [
 ]
 caching = ["diskcache>=5.6.3,<6.0"]
 mcp = ["mcp>=1.28.1,<2.0"]
+# Driver for the MongoDB Atlas vector store. Atlas Vector Search has no HTTP query
+# API, so that provider talks to the cluster over the wire protocol. Imported lazily
+# and kept out of the base install, which never needs a MongoDB driver. The floor is
+# 4.17 because that is where dnspython became a core dependency rather than the `srv`
+# extra, and Atlas hands out mongodb+srv:// URIs that do not resolve without it.
+mongodb = ["pymongo>=4.17,<5.0"]
 # SAML SSO for the admin UI. python3-saml pulls in xmlsec/lxml, whose wheels
 # bundle the native libxmlsec1/libxml2 libraries, so no system packages are
 # required. Kept out of the base `proxy` extra so it stays optional.
