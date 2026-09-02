@@ -5792,3 +5792,25 @@ async def test_apply_guardrail_debug_log_masks_signed_request_headers():
     assert header_lines, "expected the signed-request debug line to be logged"
     assert any("X-Amz-Security-Token" in message for message in header_lines)
     assert all(session_token not in message for message in rendered_messages)
+
+
+@pytest.mark.asyncio
+async def test_bearer_token_never_runs_the_sigv4_credential_chain(monkeypatch):
+    """The guardrail's AWS profile does not exist, so resolving SigV4 credentials
+    raises; with a bearer token configured the guardrail must still run, since
+    the bearer token alone signs the request."""
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer-token-12345")
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        aws_profile_name="litellm-no-such-aws-profile",
+    )
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "assessments": []}
+
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, return_value=mock_response) as mock_post:
+        response = await guardrail.make_bedrock_api_request(source="INPUT", messages=[{"role": "user", "content": "hello"}])
+
+    assert response["action"] == "NONE"
+    assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer env-bearer-token-12345"
