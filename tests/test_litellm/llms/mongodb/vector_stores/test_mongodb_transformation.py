@@ -860,3 +860,30 @@ class TestErrorsCarryTheRightHttpStatus:
             translate_mongo_error(original, index_name="idx", database="db", collection="coll")
             is original
         )
+
+
+def test_atlas_rejected_credentials_are_named_even_though_the_code_is_8000():
+    """Atlas answers a wrong password with code 8000 "AtlasError", not the 18 that a
+    self-hosted deployment returns, so a code-only check reports it as a generic
+    rejected search and never tells the caller to look at their connection string."""
+    from pymongo.errors import OperationFailure
+
+    error = OperationFailure(
+        "bad auth : authentication failed",
+        code=8000,
+        details={"ok": 0, "errmsg": "bad auth : authentication failed", "code": 8000, "codeName": "AtlasError"},
+    )
+    translated = translate_mongo_error(error, index_name="idx", database="sample_mflix", collection="embedded_movies")
+
+    assert isinstance(translated, BadRequestError)
+    assert "mongodb_connection_string" in str(translated)
+    assert "sample_mflix.embedded_movies" in str(translated)
+
+
+def test_a_rejected_search_that_is_not_an_auth_failure_keeps_the_generic_message():
+    from pymongo.errors import OperationFailure
+
+    error = OperationFailure("PlanExecutor error", code=8, details={"errmsg": "PlanExecutor error"})
+    translated = translate_mongo_error(error, index_name="idx", database="db", collection="coll")
+
+    assert "mongodb_connection_string" not in str(translated)
