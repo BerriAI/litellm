@@ -90,12 +90,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.responses_api_request: ResponsesAPIOptionalRequestParams = responses_api_request
         self.custom_llm_provider: str | None = custom_llm_provider
         self.litellm_metadata: dict | None = litellm_metadata or {}
-        _wrapper_hidden_params: Final = getattr(litellm_custom_stream_wrapper, "_hidden_params", None)
-        self._hidden_params: dict[str, object] = (  # mutable-ok: downstream response metadata requires a mutable dict
-            dict(_wrapper_hidden_params)  # mutable-ok: downstream response metadata requires a mutable dict
-            if isinstance(_wrapper_hidden_params, dict)
-            else {}  # mutable-ok: downstream response metadata requires a mutable dict
-        )
+        _hp: Final = getattr(litellm_custom_stream_wrapper, "_hidden_params", None)
+        self._hidden_params: dict[str, object] = dict(_hp) if isinstance(_hp, dict) else {}  # mutable-ok: router header
         # Store lightweight dict snapshots for stream_chunk_builder to reduce
         # repeated Pydantic attribute access in end-of-stream assembly.
         self.collected_chat_completion_chunks: list[dict[str, object]] = []
