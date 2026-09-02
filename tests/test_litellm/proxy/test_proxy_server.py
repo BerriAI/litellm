@@ -12302,3 +12302,97 @@ async def test_load_config_router_authorizes_fallback_targets_against_the_callin
     router, _, _ = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
 
     assert router.fallback_access_check is router_fallback_access_check
+
+
+def test_docs_redoc_openapi_are_reachable_by_default():
+    """
+    LIT-6745: the interactive/machine-readable docs surfaces are on by
+    default (the customer-facing production toggle is opt-in, not opt-out).
+    """
+    client = TestClient(app)
+
+    assert client.get("/redoc").status_code == 200
+    openapi_response = client.get("/openapi.json")
+    assert openapi_response.status_code == 200
+    assert "paths" in openapi_response.json()
+
+
+def test_production_app_docs_urls_are_wired_to_the_real_env_helpers():
+    """
+    LIT-6745: pins the actual `FastAPI(docs_url=..., redoc_url=..., openapi_url=...)`
+    construction in proxy_server.py to _get_docs_url/_get_redoc_url/_get_openapi_url,
+    so a hardcoded or drifted value at that call site fails this test even though
+    the helpers themselves are covered separately.
+    """
+    from litellm.proxy import utils as proxy_utils
+
+    assert app.docs_url == proxy_utils._get_docs_url()
+    assert app.redoc_url == proxy_utils._get_redoc_url()
+    assert app.openapi_url == proxy_utils._get_openapi_url()
+
+
+def _build_app_with_docs_env(monkeypatch, *, disabled: bool) -> FastAPI:
+    from litellm.proxy import utils as proxy_utils
+    from litellm.proxy.health_endpoints._health_endpoints import router as health_router
+
+    for flag in ("DOCS_URL", "REDOC_URL", "OPENAPI_URL"):
+        monkeypatch.delenv(flag, raising=False)
+    for flag in ("NO_DOCS", "NO_REDOC", "NO_OPENAPI"):
+        if disabled:
+            monkeypatch.setenv(flag, "True")
+        else:
+            monkeypatch.delenv(flag, raising=False)
+
+    # Mirrors the exact FastAPI() construction in proxy_server.py, so this
+    # exercises the real gating mechanism rather than a reimplementation of it.
+    app_under_test = FastAPI(
+        docs_url=proxy_utils._get_docs_url(),
+        redoc_url=proxy_utils._get_redoc_url(),
+        openapi_url=proxy_utils._get_openapi_url(),
+    )
+    app_under_test.include_router(health_router)
+    return app_under_test
+
+
+def test_docs_endpoints_enabled_when_env_unset(monkeypatch):
+    app_under_test = _build_app_with_docs_env(monkeypatch, disabled=False)
+    assert app_under_test.docs_url == "/"
+    assert app_under_test.redoc_url == "/redoc"
+    assert app_under_test.openapi_url == "/openapi.json"
+
+    client = TestClient(app_under_test)
+    assert client.get(app_under_test.docs_url).status_code == 200
+    assert client.get(app_under_test.redoc_url).status_code == 200
+    assert client.get(app_under_test.openapi_url).status_code == 200
+
+
+def test_no_docs_no_redoc_no_openapi_disable_every_documentation_surface(monkeypatch):
+    """
+    LIT-6745: NO_DOCS, NO_REDOC and NO_OPENAPI must each 404 their surface
+    with no schema in the body, so a production/air-gapped deployment can
+    restrict every doc route consistently.
+    """
+    app_under_test = _build_app_with_docs_env(monkeypatch, disabled=True)
+    assert app_under_test.docs_url is None
+    assert app_under_test.redoc_url is None
+    assert app_under_test.openapi_url is None
+
+    client = TestClient(app_under_test)
+    for route in ("/", "/redoc", "/openapi.json"):
+        response = client.get(route)
+        assert response.status_code == 404
+        assert "openapi" not in response.text.lower()
+        assert "paths" not in response.text.lower()
+
+
+def test_disabling_docs_does_not_disable_other_routes(monkeypatch):
+    """
+    LIT-6745: disabling the doc surfaces must not affect inference/management
+    routes, since NO_DOCS/NO_REDOC/NO_OPENAPI only remove the routes FastAPI
+    itself auto-registers for docs_url/redoc_url/openapi_url.
+    """
+    app_under_test = _build_app_with_docs_env(monkeypatch, disabled=True)
+    client = TestClient(app_under_test)
+
+    assert client.get("/redoc").status_code == 404
+    assert client.get("/health/liveliness").status_code == 200
