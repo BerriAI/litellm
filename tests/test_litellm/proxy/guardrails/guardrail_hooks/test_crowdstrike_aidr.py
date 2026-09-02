@@ -1598,11 +1598,18 @@ def _initialize_from_config(**litellm_params_kwargs: object) -> CrowdStrikeAIDRH
     ("mode", "runs_pre_call", "runs_post_call"),
     [("post_call", False, True), ("pre_call", True, False), (["pre_call", "post_call"], True, True)],
 )
-def test_initialize_guardrail_honors_configured_mode(mode, runs_pre_call: bool, runs_post_call: bool) -> None:
+def test_initialize_guardrail_honors_configured_mode(
+    mode: str | list[str], runs_pre_call: bool, runs_post_call: bool
+) -> None:
     handler = _initialize_from_config(mode=mode)
 
     assert handler.should_run_guardrail({}, GuardrailEventHooks.pre_call) is runs_pre_call
     assert handler.should_run_guardrail({}, GuardrailEventHooks.post_call) is runs_post_call
+
+
+def test_initialize_guardrail_rejects_unsupported_mode_instead_of_running_other_hooks() -> None:
+    with pytest.raises(ValueError, match="during_call is not in the supported event hooks"):
+        _initialize_from_config(mode="during_call")
 
 
 def test_initialize_guardrail_defaults_streaming_params() -> None:
@@ -1619,7 +1626,7 @@ def test_initialize_guardrail_defaults_streaming_params() -> None:
         {"optional_params": {"streaming_end_of_stream_only": True, "streaming_sampling_rate": 50}},
     ],
 )
-def test_initialize_guardrail_forwards_streaming_params(configured: dict) -> None:
+def test_initialize_guardrail_forwards_streaming_params(configured: dict[str, object]) -> None:
     handler = _initialize_from_config(mode="post_call", **configured)
 
     assert handler.streaming_end_of_stream_only is True
@@ -1702,7 +1709,9 @@ async def _guard_calls_for_stream(handler: CrowdStrikeAIDRHandler, chunk_texts: 
         ({"streaming_end_of_stream_only": True, "streaming_sampling_rate": 2}, 1),
     ],
 )
-async def test_streaming_params_from_config_control_output_scan_cadence(configured: dict, expected_calls: int) -> None:
+async def test_streaming_params_from_config_control_output_scan_cadence(
+    configured: dict[str, object], expected_calls: int
+) -> None:
     """10 chunks: default samples at 5 and 10 plus the final pass, rate 2 samples 5 times plus final, end-of-stream scans once."""
     handler = _initialize_from_config(mode="post_call", **configured)
 
