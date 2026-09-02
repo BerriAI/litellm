@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use litellm_core::chat_completions::types::{ChatCompletionsRequest, ChatCompletionsResponse};
+use litellm_core::chat_completions::types::ChatCompletionsRequest;
 use litellm_core::chat_completions::{
     chat_completions as run_chat_completions, chat_completions_decline_reason,
 };
-use litellm_python_interop::{from_py, release_gil, to_py};
+use litellm_python_interop::from_py;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
@@ -12,12 +12,7 @@ use serde_json::{Map, Value};
 use crate::errors::fallback_route_error_to_pyerr;
 use crate::marshal::{optional_object_to_map, optional_timeout};
 
-fn chat_completions_response_to_py(
-    py: Python<'_>,
-    response: ChatCompletionsResponse,
-) -> PyResult<Py<PyAny>> {
-    to_py(py, &response)
-}
+use super::runtime::{run_async, run_sync};
 
 type MarshaledChatCompletionsInputs = (
     Value,
@@ -95,9 +90,10 @@ fn chat_completions(
         timeout_seconds,
     )?;
 
-    let result = release_gil(py, || {
-        pyo3_async_runtimes::tokio::get_runtime().block_on(run_chat_completions(
-            ChatCompletionsRequest {
+    run_sync(
+        py,
+        async move {
+            run_chat_completions(ChatCompletionsRequest {
                 model: &model,
                 messages,
                 optional_params,
@@ -106,14 +102,11 @@ fn chat_completions(
                 custom_llm_provider: custom_llm_provider.as_deref(),
                 extra_headers,
                 timeout,
-            },
-        ))
-    });
-
-    match result {
-        Ok(response) => chat_completions_response_to_py(py, response),
-        Err(err) => Err(fallback_route_error_to_pyerr(err)),
-    }
+            })
+            .await
+        },
+        fallback_route_error_to_pyerr,
+    )
 }
 
 #[pyfunction]
@@ -138,22 +131,23 @@ fn achat_completions(
         timeout_seconds,
     )?;
 
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let response = run_chat_completions(ChatCompletionsRequest {
-            model: &model,
-            messages,
-            optional_params,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            timeout,
-        })
-        .await
-        .map_err(fallback_route_error_to_pyerr)?;
-
-        Python::attach(|py| chat_completions_response_to_py(py, response))
-    })
+    run_async(
+        py,
+        async move {
+            run_chat_completions(ChatCompletionsRequest {
+                model: &model,
+                messages,
+                optional_params,
+                api_key: api_key.as_deref(),
+                api_base: api_base.as_deref(),
+                custom_llm_provider: custom_llm_provider.as_deref(),
+                extra_headers,
+                timeout,
+            })
+            .await
+        },
+        fallback_route_error_to_pyerr,
+    )
 }
 
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {

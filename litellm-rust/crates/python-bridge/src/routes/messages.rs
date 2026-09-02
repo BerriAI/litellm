@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use litellm_core::messages::messages as run_messages;
-use litellm_core::messages::types::{AnthropicMessagesResponse, MessagesRequest};
-use litellm_python_interop::{from_py, release_gil, to_py};
+use litellm_core::messages::types::MessagesRequest;
+use litellm_python_interop::from_py;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
@@ -10,12 +10,7 @@ use serde_json::{Map, Value};
 use crate::errors::fallback_route_error_to_pyerr;
 use crate::marshal::{optional_object_to_map, optional_timeout};
 
-fn messages_response_to_py(
-    py: Python<'_>,
-    response: AnthropicMessagesResponse,
-) -> PyResult<Py<PyAny>> {
-    to_py(py, &response)
-}
+use super::runtime::{run_async, run_sync};
 
 type MarshaledMessagesInputs = (Value, Option<Map<String, Value>>, Option<Duration>);
 
@@ -52,22 +47,22 @@ fn messages(
     let (body, extra_headers, timeout) =
         marshal_messages_inputs(py, body, extra_headers, timeout_seconds)?;
 
-    let result = release_gil(py, || {
-        pyo3_async_runtimes::tokio::get_runtime().block_on(run_messages(MessagesRequest {
-            model: &model,
-            body,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            timeout,
-        }))
-    });
-
-    match result {
-        Ok(response) => messages_response_to_py(py, response),
-        Err(err) => Err(fallback_route_error_to_pyerr(err)),
-    }
+    run_sync(
+        py,
+        async move {
+            run_messages(MessagesRequest {
+                model: &model,
+                body,
+                api_key: api_key.as_deref(),
+                api_base: api_base.as_deref(),
+                custom_llm_provider: custom_llm_provider.as_deref(),
+                extra_headers,
+                timeout,
+            })
+            .await
+        },
+        fallback_route_error_to_pyerr,
+    )
 }
 
 #[pyfunction]
@@ -86,21 +81,22 @@ fn amessages(
     let (body, extra_headers, timeout) =
         marshal_messages_inputs(py, body, extra_headers, timeout_seconds)?;
 
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let response = run_messages(MessagesRequest {
-            model: &model,
-            body,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            timeout,
-        })
-        .await
-        .map_err(fallback_route_error_to_pyerr)?;
-
-        Python::attach(|py| messages_response_to_py(py, response))
-    })
+    run_async(
+        py,
+        async move {
+            run_messages(MessagesRequest {
+                model: &model,
+                body,
+                api_key: api_key.as_deref(),
+                api_base: api_base.as_deref(),
+                custom_llm_provider: custom_llm_provider.as_deref(),
+                extra_headers,
+                timeout,
+            })
+            .await
+        },
+        fallback_route_error_to_pyerr,
+    )
 }
 
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
