@@ -478,6 +478,102 @@ class TestOllamaToolCalling:
         assert result.choices[0].finish_reason == "stop"
         assert result.choices[0].message.tool_calls is None
 
+    def test_finish_reason_tool_calls_streaming_tool_calls_in_earlier_chunk(self):
+        """Streaming: tool_calls streamed before the final done chunk must produce finish_reason='tool_calls'.
+
+        Ollama emits tool_calls in a chunk with done=False, then a separate final
+        chunk with done=True, an empty message, and done_reason='stop'. The final
+        chunk must still report finish_reason='tool_calls' per the OpenAI spec.
+        Regression test for https://github.com/BerriAI/litellm/issues/35663
+        """
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        tool_call_chunk = {
+            "model": "qwen3:14b",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": {"location": "San Francisco"},
+                        }
+                    }
+                ],
+            },
+            "done": False,
+        }
+
+        done_chunk = {
+            "model": "qwen3:14b",
+            "message": {"role": "assistant", "content": ""},
+            "done": True,
+            "done_reason": "stop",
+            "prompt_eval_count": 100,
+            "eval_count": 50,
+        }
+
+        tool_call_result = iterator.chunk_parser(tool_call_chunk)
+        assert tool_call_result.choices[0].delta.tool_calls is not None
+        assert tool_call_result.choices[0].finish_reason is None
+
+        result = iterator.chunk_parser(done_chunk)
+
+        assert (
+            result.choices[0].finish_reason == "tool_calls"
+        ), f"Expected 'tool_calls' when tool calls were streamed in an earlier chunk, got '{result.choices[0].finish_reason}'"
+
+    def test_finish_reason_length_survives_earlier_tool_call_chunk(self):
+        """Streaming: a truncated stream keeps finish_reason='length' after a tool call.
+
+        Ollama emits tool_calls in an earlier chunk and can then terminate with
+        done_reason='length' once num_predict is reached. The tool call arguments may be
+        cut off, so the terminal reason must survive rather than be upgraded to
+        'tool_calls'. Mirrors the guard in litellm's own streaming finalizer, which only
+        upgrades a 'stop' ending.
+        """
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        tool_call_chunk = {
+            "model": "qwen3:14b",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": {"location": "San Francisco"},
+                        }
+                    }
+                ],
+            },
+            "done": False,
+        }
+
+        done_chunk = {
+            "model": "qwen3:14b",
+            "message": {"role": "assistant", "content": ""},
+            "done": True,
+            "done_reason": "length",
+            "prompt_eval_count": 100,
+            "eval_count": 51,
+        }
+
+        iterator.chunk_parser(tool_call_chunk)
+        result = iterator.chunk_parser(done_chunk)
+
+        assert (
+            result.choices[0].finish_reason == "length"
+        ), f"Expected 'length' to survive truncation after a tool call chunk, got '{result.choices[0].finish_reason}'"
+
 
 class TestOllamaFinishReasonLength:
     """Tests for done_reason 'length' → finish_reason 'length' mapping.
