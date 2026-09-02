@@ -1522,7 +1522,7 @@ def test_gpt_5_6_alias_prices_match_sol(local_model_cost_map):
     sol = litellm.model_cost["gpt-5.6-sol"]
 
     cost_fields = sorted(field for field in sol if "cost" in field)
-    assert len(cost_fields) == 23
+    assert len(cost_fields) == 27
 
     for field in cost_fields:
         assert alias.get(field) == sol.get(field), field
@@ -4039,8 +4039,8 @@ def test_fast_service_tier_matches_priority_above_the_context_threshold(_local_m
     )
 
     assert fast == priority
-    assert fast[0] == pytest.approx(300_000 * 8e-06, rel=1e-9)
-    assert fast[1] == pytest.approx(1_000 * 3e-05, rel=1e-9)
+    assert fast[0] == pytest.approx(300_000 * 1.6e-05, rel=1e-9)
+    assert fast[1] == pytest.approx(1_000 * 6e-05, rel=1e-9)
 
 
 def test_priority_reasoning_tokens_bill_at_the_priority_output_rate(_local_model_cost_map):
