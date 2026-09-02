@@ -50,6 +50,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
+    RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
@@ -353,6 +354,13 @@ _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
 
 _ALIAS_PARAMS_NEVER_FORWARDED: Final = frozenset({"model", "api_base", "api_key", "api_version"})
 _ALIAS_MARKER_FORWARDED_PARAMS_KWARG: Final = "_alias_marker_forwarded_params"
+
+_RUNTIME_TOGGLEABLE_PRE_CALL_CHECKS: Final[Mapping[str, type[CustomLogger]]] = MappingProxyType(
+    {
+        "prompt_caching": PromptCachingDeploymentCheck,
+        "enforce_model_rate_limits": ModelRateLimitingCheck,
+    }
+)
 
 
 def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream]) -> bool:
@@ -2072,10 +2080,38 @@ class Router:
             if _callback is None:
                 continue
 
+            if self.optional_callbacks is not None and any(
+                isinstance(callback, type(_callback)) for callback in self.optional_callbacks
+            ):
+                continue
             if self.optional_callbacks is None:
                 self.optional_callbacks = []
             self.optional_callbacks.append(_callback)
             litellm.logging_callback_manager.add_litellm_callback(_callback)
+
+    def set_optional_pre_call_checks(self, optional_pre_call_checks: OptionalPreCallChecks | None) -> None:
+        if optional_pre_call_checks is None:
+            return
+        requested: Final = frozenset(optional_pre_call_checks)
+        for name, callback_cls in _RUNTIME_TOGGLEABLE_PRE_CALL_CHECKS.items():
+            if name not in requested:
+                self._remove_optional_callbacks_of_type(callback_cls)
+        self.add_optional_pre_call_checks(optional_pre_call_checks)
+
+    def _remove_optional_callbacks_of_type(self, callback_cls: type[CustomLogger]) -> None:
+        if self.optional_callbacks is None or not any(type(cb) is callback_cls for cb in self.optional_callbacks):
+            return
+        self.optional_callbacks = [cb for cb in self.optional_callbacks if type(cb) is not callback_cls]
+        if any(
+            router is not self and any(type(cb) is callback_cls for cb in (router.optional_callbacks or []))
+            for router in tuple(_live_routers)
+        ):
+            return
+        for cb in tuple(litellm.callbacks):
+            if type(cb) is callback_cls:
+                litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                    litellm.callbacks, cb, require_self=False
+                )
 
     def print_deployment(self, deployment: dict):
         """
@@ -9746,6 +9782,26 @@ class Router:
             coerce_token_limit(model_info.get("max_output_tokens")),
         )
 
+    def get_configured_display_name(self, model_name: str) -> "str | None":
+        """
+        Return the display_name explicitly configured in a concrete deployment's
+        model_info for model_name, via O(1) index lookup.
+
+        Returns None for wildcard-expanded or unknown names, and treats a
+        non-string or empty configured value as absent rather than failing the
+        listing. Like get_configured_token_limits, this never triggers pattern
+        matching or deep copies, so it is safe to call per listed model on the
+        /v1/models hot path.
+        """
+        deployment: Final = self.get_deployment_by_model_group_name(model_group_name=model_name)
+        if deployment is None:
+            return None
+
+        display_name: Final = deployment.model_info.get("display_name")
+        if isinstance(display_name, str) and display_name.strip():
+            return display_name
+        return None
+
     def get_deployment_credentials_with_provider(
         self, model_id: str, team_id: str | None = None
     ) -> dict[str, Any] | None:
@@ -11331,27 +11387,6 @@ class Router:
         """
         Update the router settings.
         """
-        # only the following settings are allowed to be configured
-        _allowed_settings: Final = [
-            "routing_strategy_args",
-            "routing_strategy",
-            "routing_groups",
-            "allowed_fails",
-            "cooldown_time",
-            "num_retries",
-            "timeout",
-            "max_retries",
-            "retry_after",
-            "fallbacks",
-            "context_window_fallbacks",
-            "retry_policy",
-            "model_group_retry_policy",
-            "model_group_alias",
-            "enable_weighted_failover",
-            "enable_tag_filtering",
-            "tag_routing_prefix",
-        ]
-
         _int_settings: Final = [
             "timeout",
             "num_retries",
@@ -11364,13 +11399,15 @@ class Router:
         rebuild_routing_groups = False
         relink_lar1_from_args = False
         for var in kwargs:
-            if var in _allowed_settings:
+            if var in RUNTIME_UPDATABLE_ROUTER_SETTINGS:
                 if var in _int_settings:
                     _casted_value = int(kwargs[var])
                     setattr(self, var, _casted_value)
                 elif var == "routing_groups":
                     self._routing_groups_input = kwargs[var]
                     rebuild_routing_groups = True
+                elif var == "optional_pre_call_checks":
+                    self.set_optional_pre_call_checks(kwargs[var])
                 elif var == "retry_policy":
                     value = kwargs[var]
                     if isinstance(value, dict):
