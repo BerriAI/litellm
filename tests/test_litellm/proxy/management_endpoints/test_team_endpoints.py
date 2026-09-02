@@ -8478,6 +8478,139 @@ async def test_team_member_delete_persists_deleted_keys(monkeypatch):
     mock_delete_keys.assert_called_once()
 
 
+def _team_key(token: str, metadata: dict, blocked: bool = False):
+    from litellm.proxy.management_endpoints.key_management_endpoints import LiteLLM_VerificationToken
+
+    return LiteLLM_VerificationToken(
+        token=token,
+        user_id="user-123",
+        team_id="team-1",
+        blocked=blocked,
+        metadata=metadata,
+        aliases={},
+        config={},
+        permissions={},
+        model_max_budget={},
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_member_delete_blocks_keys_instead_of_deleting_when_configured(monkeypatch):
+    """With `block_keys_on_team_member_removal`, the removed member's team keys survive as
+    blocked rows tagged with the removal marker, and their cached auth objects are evicted."""
+    from litellm.proxy._types import TeamMemberDeleteRequest
+
+    mock_prisma_client = AsyncMock()
+    team = LiteLLM_TeamTable(team_id="team-1", members_with_roles=[Member(user_id="user-123", role="user")])
+    key = _team_key("hashed-token-1", metadata={"tags": ["a"]})
+
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock()
+    mock_prisma_client.db.litellm_teammembership.delete_many = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[key])
+    mock_update_key = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.update = mock_update_key
+    mock_delete_keys = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.delete_many = mock_delete_keys
+    mock_create_many_deleted = AsyncMock()
+    mock_prisma_client.db.litellm_deletedverificationtoken.create_many = mock_create_many_deleted
+    _wire_member_delete_tx(mock_prisma_client)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"block_keys_on_team_member_removal": True})
+
+    with (
+        patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", None),
+        patch("litellm.proxy.auth.auth_checks.publish_auth_cache_invalidation", new_callable=AsyncMock),
+    ):
+        await team_member_delete(
+            data=TeamMemberDeleteRequest(team_id="team-1", user_id="user-123"),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin-user", user_role=LitellmUserRoles.PROXY_ADMIN.value),
+        )
+
+    mock_delete_keys.assert_not_awaited()
+    mock_create_many_deleted.assert_not_awaited()
+    mock_update_key.assert_awaited_once()
+    update_kwargs = mock_update_key.call_args.kwargs
+    assert update_kwargs["where"] == {"token": "hashed-token-1"}
+    assert update_kwargs["data"]["blocked"] is True
+    assert json.loads(update_kwargs["data"]["metadata"]) == {"tags": ["a"], "blocked_by_team_member_removal": True}
+    mock_cache.delete_cache.assert_called_once_with(key="hashed-token-1")
+
+
+@pytest.mark.asyncio
+async def test_team_member_add_unblocks_only_keys_blocked_by_member_removal(monkeypatch):
+    """Re-adding a member unblocks the keys `/team/member_delete` blocked for that team and
+    leaves a manually blocked key alone."""
+    from litellm.proxy._types import TeamMemberAddRequest
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+
+    mock_prisma_client = AsyncMock()
+    removal_blocked = _team_key("hashed-token-1", metadata={"blocked_by_team_member_removal": True}, blocked=True)
+    manually_blocked = _team_key("hashed-token-2", metadata={}, blocked=True)
+    mock_find_many_keys = AsyncMock(return_value=[removal_blocked, manually_blocked])
+    mock_prisma_client.db.litellm_verificationtoken.find_many = mock_find_many_keys
+    mock_update_key = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.update = mock_update_key
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id")
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"block_keys_on_team_member_removal": True})
+
+    updated_team = MagicMock()
+    updated_team.model_dump.return_value = {"team_id": "team-1", "members_with_roles": []}
+
+    with (
+        patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", None),
+        patch("litellm.proxy.auth.auth_checks.publish_auth_cache_invalidation", new_callable=AsyncMock),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+            new_callable=AsyncMock,
+            return_value=LiteLLM_TeamTable(team_id="team-1", members_with_roles=[]),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._validate_team_member_add_permissions",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._validate_and_populate_member_user_info",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._resolve_existing_member_user_ids",
+            new_callable=AsyncMock,
+            return_value=frozenset({"user-123"}),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._add_team_members_to_team",
+            new_callable=AsyncMock,
+            return_value=(updated_team, [], []),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._create_team_member_add_audit_logs",
+            new_callable=AsyncMock,
+        ),
+    ):
+        await team_member_add(
+            data=TeamMemberAddRequest(team_id="team-1", member=Member(user_id="user-123", role="user")),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1"),
+        )
+
+    mock_find_many_keys.assert_awaited_once_with(
+        where={"user_id": {"in": ["user-123"]}, "team_id": "team-1", "blocked": True}
+    )
+    mock_update_key.assert_awaited_once()
+    update_kwargs = mock_update_key.call_args.kwargs
+    assert update_kwargs["where"] == {"token": "hashed-token-1"}
+    assert update_kwargs["data"]["blocked"] is False
+    assert json.loads(update_kwargs["data"]["metadata"]) == {}
+    mock_cache.delete_cache.assert_called_once_with(key="hashed-token-1")
+
+
 @pytest.mark.asyncio
 async def test_new_team_negative_max_budget():
     """

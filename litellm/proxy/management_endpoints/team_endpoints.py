@@ -1175,6 +1175,76 @@ def _should_auto_add_team_creator(
     return general_settings.get("disable_auto_add_proxy_admin_to_teams") is not True
 
 
+TEAM_MEMBER_REMOVAL_BLOCKED_METADATA_KEY: Final = "blocked_by_team_member_removal"
+
+
+def _blocks_keys_on_member_removal(general_settings: Mapping[str, object]) -> bool:
+    return general_settings.get("block_keys_on_team_member_removal") is True
+
+
+def _key_metadata(metadata: object) -> Mapping[str, object]:
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _was_blocked_by_member_removal(metadata: object) -> bool:
+    return _key_metadata(metadata).get(TEAM_MEMBER_REMOVAL_BLOCKED_METADATA_KEY) is True
+
+
+async def _block_team_keys_of_removed_members(
+    keys: Sequence["prisma_models.LiteLLM_VerificationToken"],
+    tokens_db: "TableActions[prisma_models.LiteLLM_VerificationToken]",
+) -> None:
+    for key_row in keys:
+        await tokens_db.update(
+            where={"token": key_row.token},
+            data={
+                "blocked": True,
+                "metadata": safe_dumps(
+                    {**_key_metadata(key_row.metadata), TEAM_MEMBER_REMOVAL_BLOCKED_METADATA_KEY: True}
+                ),
+            },
+        )
+
+
+async def _unblock_team_keys_of_readded_members(
+    team_id: str,
+    user_ids: AbstractSet[str],
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging | None,
+) -> None:
+    """Reverse `_block_team_keys_of_removed_members` for users who rejoin the team.
+
+    Only keys carrying the removal marker are unblocked, so a key an admin blocked by hand
+    stays blocked.
+    """
+    if not user_ids:
+        return
+    blocked_keys: Final = await _tokens_db(prisma_client).find_many(
+        where={"user_id": {"in": sorted(user_ids)}, "team_id": team_id, "blocked": True}
+    )
+    keys_to_unblock: Final = tuple(k for k in blocked_keys or () if _was_blocked_by_member_removal(k.metadata))
+    for key_row in keys_to_unblock:
+        await _tokens_db(prisma_client).update(
+            where={"token": key_row.token},
+            data={
+                "blocked": False,
+                "metadata": safe_dumps(
+                    {
+                        k: v
+                        for k, v in _key_metadata(key_row.metadata).items()
+                        if k != TEAM_MEMBER_REMOVAL_BLOCKED_METADATA_KEY
+                    }
+                ),
+            },
+        )
+    await delete_cache_key_objects(
+        hashed_tokens=tuple(k.token for k in keys_to_unblock),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
 #### TEAM MANAGEMENT ####
 @router.post(
     "/team/new",
@@ -3074,6 +3144,7 @@ async def team_member_add(
     ```
     """
     from litellm.proxy.proxy_server import (
+        general_settings,
         litellm_proxy_admin_name,
         premium_user,
         prisma_client,
@@ -3167,6 +3238,15 @@ async def team_member_add(
         litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
 
+    if _blocks_keys_on_member_removal(general_settings):
+        await _unblock_team_keys_of_readded_members(
+            team_id=data.team_id,
+            user_ids=frozenset(member.user_id for member in requested_members if member.user_id is not None),
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
     _emit_team_members_metric(complete_team_data)
 
     await _create_team_member_add_audit_logs(
@@ -3240,13 +3320,15 @@ async def team_member_delete(
     }'
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import general_settings, prisma_client, proxy_logging_obj, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
     if data.team_id is None:
         raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
+
+    block_keys: Final = _blocks_keys_on_member_removal(general_settings)
 
     if data.user_id is None and data.user_email is None:
         raise HTTPException(
@@ -3325,7 +3407,7 @@ async def team_member_delete(
             (user.user_id for user in existing_user_rows if user.user_id),
         )
 
-        ## DELETE KEYS CREATED BY USER FOR THIS TEAM
+        ## DELETE (OR BLOCK) KEYS CREATED BY USER FOR THIS TEAM
         # Fetch keys before deletion so their audit records can be persisted alongside the delete.
         # An empty user_ids_to_delete still resolves cleanly: prisma's "in": [] matches no rows.
         keys_to_delete: Final = await member_tx.litellm_verificationtoken.find_many(
@@ -3350,7 +3432,11 @@ async def team_member_delete(
         for _uid in sorted(user_ids_to_delete):
             await tx.litellm_teammembership.delete_many(where={"team_id": data.team_id, "user_id": _uid})
 
-        if user_ids_to_delete:
+        if user_ids_to_delete and block_keys:
+            await _block_team_keys_of_removed_members(
+                keys=keys_to_delete, tokens_db=member_tx.litellm_verificationtoken
+            )
+        elif user_ids_to_delete:
             if keys_to_delete:
                 from litellm.proxy.management_endpoints.key_management_endpoints import (
                     _persist_deleted_verification_tokens,
@@ -3370,6 +3456,13 @@ async def team_member_delete(
                     "team_id": data.team_id,
                 }
             )
+
+    if block_keys:
+        await delete_cache_key_objects(
+            hashed_tokens=tuple(key.token for key in keys_to_delete),
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
 
     _emit_team_members_metric(existing_team_row)
 
