@@ -75,11 +75,9 @@ class BaseAWSLLM:
     # env (``_auth_with_env_vars`` returns ``ttl=None``) uses ``InMemoryCache``'s ``default_ttl``
     # (600 seconds / 10 minutes); web identity STS credentials use
     # ``_get_default_ttl_for_boto3_credentials`` (~59 minutes); AssumeRole STS credentials expire with
-    # the STS session itself (Expiration minus a safety margin). All are keyed on all aws_* credential
-    # args plus ssl_verify, so ``aws_session_name`` scopes an entry to one attributed identity. Profiles
-    # and explicit session-token tuples are not cached — see ``get_credentials`` and
-    # ``_get_or_set_cached_credentials``. The bound is larger than ``InMemoryCache``'s default because
-    # per-user cost attribution puts one entry per attributed identity in this cache.
+    # the STS session itself (Expiration minus a safety margin); AWS profile credentials use the same
+    # default boto3 credential TTL while keeping the live botocore credentials object. All are keyed
+    # on the aws_* credential args plus ssl_verify. Explicit session-token tuples remain uncached.
     _shared_iam_cache: ClassVar[DualCache] = DualCache(
         in_memory_cache=InMemoryCache(max_size_in_memory=BEDROCK_IAM_CACHE_MAX_ENTRIES)
     )
@@ -150,11 +148,14 @@ class BaseAWSLLM:
         Used for static access-key credentials, ambient credentials from
         ``_auth_with_env_vars`` (including when skipping AssumeRole because the runtime identity
         already matches ``aws_role_name``), web identity STS credentials (plain
-        non-refreshable ``Credentials`` cached ~59 min, inside the 3600s STS session), and AssumeRole
-        STS credentials (cached for the lifetime of the STS session minus a safety margin).
+        non-refreshable ``Credentials`` cached ~59 min, inside the 3600s STS session), AssumeRole
+        STS credentials (cached for the lifetime of the STS session minus a safety margin), and AWS
+        profile credentials (cached ~59 min as an outer safety-net TTL).
 
-        Profiles and explicit session-token tuples are not cached here — shared ``Credentials`` /
-        refresh state must not span logical sessions.
+        Profile credentials keep the live botocore credentials object so refresh behavior remains under
+        botocore's control. The cache key includes ``aws_profile_name``, so profiles are isolated.
+
+        Explicit session-token tuples are not cached here.
         """
         cache_key: Final = self.get_cache_key(credential_args)
         with self._credential_fetch_locks[hash(cache_key) % len(self._credential_fetch_locks)]:
@@ -280,8 +281,8 @@ class BaseAWSLLM:
         #   Credentials - boto3.Credentials
         #   cache ttl - Optional[int]. If None, the credentials are not cached. Some auth flows have no expiry time.
         #
-        # iam_cache: static keys, ambient env (including skip-AssumeRole path), web identity, and
-        # AssumeRole. Do not cache profile / explicit session-token paths here.
+        # iam_cache: static keys, ambient env (including skip-AssumeRole path), web identity,
+        # AssumeRole, and AWS profile. Explicit session-token paths remain uncached.
         #########################################################
         if self._is_auth_with_web_identity_token(
             aws_web_identity_token,
@@ -317,8 +318,10 @@ class BaseAWSLLM:
             )
 
         elif self._is_auth_with_aws_profile(aws_profile_name):
-            credentials, _cache_ttl = self._auth_with_aws_profile(cast(str, aws_profile_name))
-            return credentials
+            return self._get_or_set_cached_credentials(
+                args,
+                lambda: self._auth_with_aws_profile(cast(str, aws_profile_name)),
+            )
         elif self._is_auth_with_aws_session_token_tuple(
             aws_access_key_id,
             aws_secret_access_key,
@@ -1264,13 +1267,20 @@ class BaseAWSLLM:
     def _auth_with_aws_profile(self, aws_profile_name: str) -> tuple[Credentials, int | None]:
         """
         Authenticate with AWS profile
+
+        Returns the live ``botocore.credentials.RefreshableCredentials`` (or plain ``Credentials``
+        for a static profile) that the underlying boto3 session's ``get_credentials()`` already
+        hands back — not a frozen snapshot. The caller caches this object directly, so a refreshable
+        profile keeps refreshing itself on botocore's own schedule after the cache serves it back
+        out; the TTL returned here only bounds how long this session object itself is reused before
+        being rebuilt from scratch, mirroring ``_auth_with_access_key_and_secret_key``.
         """
         import boto3
 
         # uses auth values from AWS profile usually stored in ~/.aws/credentials
         with tracer.trace("boto3.Session(profile_name=aws_profile_name)"):
             client: Final = boto3.Session(profile_name=aws_profile_name)
-            return client.get_credentials(), None
+            return client.get_credentials(), self._get_default_ttl_for_boto3_credentials()
 
     @tracer.wrap()
     def _auth_with_aws_session_token(

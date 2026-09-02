@@ -108,7 +108,7 @@ def test_auth_with_aws_profile(mock_session, base_aws_llm, mock_credentials):
     credentials, ttl = base_aws_llm._auth_with_aws_profile("test_profile")
 
     assert credentials == mock_credentials
-    assert ttl is None
+    assert ttl == base_aws_llm._get_default_ttl_for_boto3_credentials()
 
 
 # Test session token authentication

@@ -150,16 +150,82 @@ def test_explicit_session_token_tuple_not_cached_in_iam_cache():
         assert mock_sess.call_count == 2
 
 
-def test_aws_profile_path_not_cached_in_iam_cache():
+def test_aws_profile_path_is_cached_in_iam_cache():
+    """Regression test for #38689."""
     base = BaseAWSLLM()
     with patch.object(
         base,
         "_auth_with_aws_profile",
-        return_value=(Credentials("prof-ak", "prof-sk", None), None),
+        return_value=(Credentials("prof-ak", "prof-sk", None), 3600),
     ) as mock_profile:
         base.get_credentials(aws_profile_name="my-profile")
         base.get_credentials(aws_profile_name="my-profile")
+        assert mock_profile.call_count == 1
+
+
+def test_aws_profile_slow_resolver_only_invoked_once_when_cached():
+    """Regression test for #38689."""
+    base = BaseAWSLLM()
+    live_credentials = MagicMock(name="RefreshableCredentials-like")
+    expensive_resolver = MagicMock(return_value=(live_credentials, 3600))
+    with patch.object(base, "_auth_with_aws_profile", expensive_resolver):
+        first = base.get_credentials(aws_profile_name="saml-pub")
+        second = base.get_credentials(aws_profile_name="saml-pub")
+        third = base.get_credentials(aws_profile_name="saml-pub")
+
+        assert expensive_resolver.call_count == 1
+        assert first is live_credentials
+        assert second is live_credentials
+        assert third is live_credentials
+
+
+def test_aws_profile_isolation_separate_cache_entries():
+    """Profile names must use separate cache entries."""
+    base = BaseAWSLLM()
+    creds_a = MagicMock(name="profile-a-credentials")
+    creds_b = MagicMock(name="profile-b-credentials")
+
+    def fake_auth(aws_profile_name):
+        if aws_profile_name == "profile-a":
+            return creds_a, 3600
+        if aws_profile_name == "profile-b":
+            return creds_b, 3600
+        raise AssertionError(f"unexpected profile name: {aws_profile_name}")
+
+    with patch.object(base, "_auth_with_aws_profile", side_effect=fake_auth) as mock_profile:
+        result_a1 = base.get_credentials(aws_profile_name="profile-a")
+        result_b1 = base.get_credentials(aws_profile_name="profile-b")
+        result_a2 = base.get_credentials(aws_profile_name="profile-a")
+        result_b2 = base.get_credentials(aws_profile_name="profile-b")
+
         assert mock_profile.call_count == 2
+        assert result_a1 is creds_a and result_a2 is creds_a
+        assert result_b1 is creds_b and result_b2 is creds_b
+        assert result_a1 is not result_b1
+
+
+def test_aws_profile_path_boto3_session_constructed_once_when_cached():
+    """The boto3 session is reused for a cached profile."""
+    base_a = BaseAWSLLM()
+    base_b = BaseAWSLLM()
+    real_creds = MagicMock(name="RefreshableCredentials-like")
+    mock_session_instance = MagicMock()
+    mock_session_instance.get_credentials.return_value = real_creds
+    with patch("boto3.Session", return_value=mock_session_instance) as mock_session_cls:
+        base_a.get_credentials(aws_profile_name="saml-pub")
+        base_b.get_credentials(aws_profile_name="saml-pub")
+        mock_session_cls.assert_called_once()
+
+
+def test_auth_with_aws_profile_returns_bounded_ttl():
+    """Profile authentication returns a bounded cache TTL."""
+    base = BaseAWSLLM()
+    mock_session_instance = MagicMock()
+    mock_session_instance.get_credentials.return_value = MagicMock(name="creds")
+    with patch("boto3.Session", return_value=mock_session_instance):
+        _credentials, ttl = base._auth_with_aws_profile("my-profile")
+    assert ttl == base._get_default_ttl_for_boto3_credentials()
+    assert ttl is not None
 
 
 def test_get_credentials_does_not_expand_request_env_reference():
