@@ -634,6 +634,58 @@ class TestUnifiedLLMGuardrails:
                     f"key-scoped users get 403 on this alias"
                 )
 
+    class TestVideoGuardrailE2E:
+        """UnifiedLLMGuardrails must scan the prompt on the video routes the proxy exposes."""
+
+        @pytest.fixture(autouse=True)
+        def _use_real_mappings(self):
+            unified_module.endpoint_guardrail_translation_mappings = load_guardrail_translation_mappings()
+            yield
+            unified_module.endpoint_guardrail_translation_mappings = None
+
+        @pytest.mark.asyncio
+        @pytest.mark.parametrize(
+            "call_type",
+            [
+                "avideo_generation",
+                CallTypes.acreate_video.value,
+                CallTypes.avideo_remix.value,
+                CallTypes.avideo_edit.value,
+                CallTypes.avideo_extension.value,
+            ],
+        )
+        async def test_pre_call_hook_scans_video_prompt(self, call_type: str) -> None:
+            class RewritingGuardrail(RecordingGuardrail):
+                async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+                    await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+                    return {"texts": [f"{text} [GUARDRAILED]" for text in inputs.get("texts", [])]}
+
+            handler = UnifiedLLMGuardrails()
+            guardrail = RewritingGuardrail()
+            data = {
+                "guardrail_to_apply": guardrail,
+                "model": "vertex_ai/veo-3.1-fast-generate-001",
+                "prompt": "A dog surfing",
+                "seconds": "4",
+            }
+
+            result = await handler.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/videos"),
+                cache=DualCache(),
+                data=data,
+                call_type=call_type,
+            )
+
+            assert guardrail.event_history == [GuardrailEventHooks.pre_call]
+            assert guardrail.apply_calls == [
+                {
+                    "inputs": {"texts": ["A dog surfing"], "model": "vertex_ai/veo-3.1-fast-generate-001"},
+                    "input_type": "request",
+                }
+            ]
+            assert result["prompt"] == "A dog surfing [GUARDRAILED]"
+            assert result["seconds"] == "4"
+
     class TestOCRGuardrailE2E:
         """End-to-end tests: UnifiedLLMGuardrails -> OCRHandler."""
 
