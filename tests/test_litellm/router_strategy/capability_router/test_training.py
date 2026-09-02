@@ -65,6 +65,7 @@ def test_training_learns_rule_boundaries_and_improves_held_out_routing() -> None
     small = result.artifact.config.candidates[0]
 
     assert [rule.boundary for rule in small.rules] == ["supported", "unsupported"]
+    assert [rule.observed_success_probability for rule in small.rules] == pytest.approx([21.0 / 22.0, 1.0 / 22.0])
     assert small.probability_calibration[-1].upper_bound == 1.0
     assert result.artifact.records == len(records())
     assert len(result.artifact.records_sha256) == 64

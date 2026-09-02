@@ -250,7 +250,16 @@ def _train_candidate(
         for _, rule, rule_records in learned
     )
     rules: Final = tuple(
-        CapabilityRule(boundary=boundary[0], rule=rule.rule) for (_, rule, _), boundary in zip(learned, boundaries)
+        CapabilityRule(
+            boundary=boundary[0],
+            rule=rule.rule,
+            observed_success_probability=(
+                (sum(record.success for record in rule_records) + 1.0) / (len(rule_records) + 2.0)
+                if rule_records
+                else None
+            ),
+        )
+        for (_, rule, rule_records), boundary in zip(learned, boundaries)
     )
     statistics: Final = tuple(
         CapabilityRuleStatistic(
@@ -317,7 +326,9 @@ def _aggregate_candidate(
     primary_rule: Final = min(rule_counts, key=lambda item: (-item[1], item[0]))[0]
     return _TaskCandidate(
         model=candidate.model,
-        probability=calibrated_probability(candidate, raw_probability) if calibrated else raw_probability,
+        probability=(
+            calibrated_probability(candidate, raw_probability, primary_rule) if calibrated else raw_probability
+        ),
         success=sum(record.success for record in records) / len(records),
         cost=sum(record.estimated_cost for record in records) / len(records),
         boundary=_effective_boundary(candidate, primary_rule),
@@ -424,7 +435,9 @@ def _probability_metrics(
     candidates: Final = MappingProxyType({candidate.model: candidate for candidate in config.candidates})
     rows: Final = tuple(record for record in records if record.split == "test" and record.model in candidates)
     predictions: Final = tuple(
-        calibrated_probability(candidates[record.model], record.raw_p_solve) if calibrated else record.raw_p_solve
+        calibrated_probability(candidates[record.model], record.raw_p_solve, record.primary_rule)
+        if calibrated
+        else record.raw_p_solve
         for record in rows
     )
     outcomes: Final = tuple(record.success for record in rows)

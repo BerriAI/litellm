@@ -29,6 +29,7 @@ class CapabilityRule(BaseModel):
 
     boundary: CapabilityRuleBoundary
     rule: str
+    observed_success_probability: float | None = Field(default=None, ge=0.0, le=1.0)
 
     model_config = ConfigDict(extra="forbid")
 

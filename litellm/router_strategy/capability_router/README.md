@@ -7,6 +7,7 @@ The capability router asks an LLM to forecast each configured candidate's probab
 Capability-card training uses outcomes from the real task harness. It does not replace the LLM classifier. The classifier still reads the task and cards at runtime; the trained artifact improves the evidence and policy around its forecast by:
 
 - assigning each card rule a boundary from observed end-to-end outcomes and a 95% Wilson interval;
+- attaching a smoothed observed success probability to each matched rule;
 - fitting monotonic probability calibration for each candidate;
 - tuning the global probability threshold and boundary step on validation tasks; and
 - reporting raw and calibrated Brier score, log loss, calibration error, solve rate, cost, and quality-cost utility on untouched test tasks
@@ -54,12 +55,20 @@ Report the complete solve-rate versus cost curve rather than one threshold. Tune
 
 Recommended executable public suites are Terminal-Bench 2.1, SWE-bench Verified or Pro, tau2-bench, AppWorld, BFCL, and ToolSandbox. RouterBench is useful as a cheap classifier and calibration smoke test, but it is not evidence of agentic end-to-end performance
 
+### SWE-bench Verified coding run
+
+The coding run used all 500 SWE-bench Verified issues and public per-instance outcomes for Claude 4.5 Haiku, Sonnet, and Opus under the same mini-SWE-agent v2.0.0 harness and reasoning setting. Repository families were held apart: 291 issues across six repositories trained the cards, 97 issues across two repositories selected the operating point, and 112 issues across four different repositories formed the test split. The classifier saw only the repository name and the first 2,000 characters of the issue, matching its runtime context limit
+
+Rule-conditioned calibration improved held-out Brier score from 0.3047 to 0.1974, log loss from 0.9078 to 0.5829, and expected calibration error from 0.2362 to 0.0184. At the quality-first `0.95` objective weight, the validation-selected route matched the original cards at 80.36% test solve rate, while mean recorded cost changed from 0.7839 to 0.8263. A lower-cost point on the learned curve reached 77.68% solve rate at 0.6134 cost
+
+The repository holdout exposed that model-wide calibration alone removed too much task discrimination. Attaching a smoothed outcome probability to the matched capability rule raised the learned `0.9`-weight route from 67.86% to 70.54% solve rate and from 0.7107 to 0.7204 utility. It still did not beat the original cards on test routing utility, so this result supports the calibration and evaluation machinery rather than a coding preset quality claim
+
 ### tau2-bench pipeline run
 
 The pipeline was exercised against public tau2-bench trajectories for `claude-sonnet-4-5` and `claude-opus-4-5`, with four recorded end-to-end attempts aggregated per task. Entire domains were held apart: 50 airline tasks trained the artifact, 113 retail tasks selected the operating point, and 110 telecom tasks were evaluated once. A local `mlx-community/Qwen3-4B-Instruct-2507-4bit` model produced the capability forecasts
 
 At a `0.7` quality weight, the validation-selected configuration reached 85.00% test solve rate at 0.4678 mean recorded cost. The original cards reached 92.27% at 0.7057 cost. This is 33.7% lower cost with a 7.27-point solve-rate loss, and improves the configured normalized utility from 0.6650 to 0.8950. The learned test curve also contains a 91.36% solve-rate point at 0.6743 cost, 4.4% below the original cost with a 0.91-point solve-rate loss
 
-Calibration generalized across the held-out domain. Brier score improved from 0.2207 to 0.0568, log loss from 0.7657 to 0.3994, and expected calibration error from 0.2984 to 0.1224
+Calibration generalized across the held-out domain. Brier score improved from 0.2207 to 0.0687, log loss from 0.7657 to 0.4326, and expected calibration error from 0.2984 to 0.1627
 
 This run validates artifact training, domain-disjoint evaluation, and the quality-cost tradeoff. It does not show a strict raw solve-rate improvement over the original cards, and it is not a direct comparison with a published Switchyard result. Larger cross-benchmark training data and another untouched test family are required before treating these cards as a general preset

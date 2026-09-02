@@ -216,6 +216,43 @@ def test_policy_qualifies_on_calibrated_probability_and_keeps_raw_forecast() -> 
     assert decision.selected_model == "frontier"
 
 
+def test_policy_prefers_matched_rule_probability_over_model_calibration() -> None:
+    configured = config()
+    configured["candidates"][0]["rules"] = [
+        {
+            "boundary": "supported",
+            "rule": "The task has a bounded verifier",
+            "observed_success_probability": 0.85,
+        }
+    ]
+    configured["candidates"][0]["probability_calibration"] = [{"upper_bound": 1.0, "probability": 0.4}]
+    parsed = CapabilityRouterConfig.model_validate(configured)
+    verdict = CapabilityClassifierVerdict.model_validate(
+        {
+            "candidates": [
+                {
+                    "model": "small",
+                    "primary_rule": "R1",
+                    "capability_boundary": "supported",
+                    "p_solve": 0.2,
+                    "reason": "bounded verifier",
+                },
+                {
+                    "model": "frontier",
+                    "capability_boundary": "supported",
+                    "p_solve": 0.95,
+                    "reason": "covered",
+                },
+            ]
+        }
+    )
+
+    decision = select_capability_model(parsed, verdict, {"small": 0.01, "frontier": 0.05})
+
+    assert decision.candidates[0].p_solve == 0.85
+    assert decision.selected_model == "small"
+
+
 def test_boundary_buckets_step_the_effective_threshold() -> None:
     parsed = CapabilityRouterConfig.model_validate(config())
     verdict = CapabilityClassifierVerdict.model_validate(
