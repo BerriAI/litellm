@@ -180,14 +180,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 "user"
             )  # user is not a param supported by all openai-compatible endpoints - e.g. azure ai
         supported_params = base_params + model_specific_params
-        model_for_metadata: Final = (
-            model.split("responses/", 1)[1] if "responses/" in model else model
-        )
+        model_for_metadata: Final = model.split("responses/", 1)[1] if "responses/" in model else model
         model_info = litellm.model_cost.get(model_for_metadata) or {}
-        if (
-            model_info.get("supports_reasoning") is True
-            and "reasoning_effort" not in supported_params
-        ):
+        if model_info.get("supports_reasoning") is True and "reasoning_effort" not in supported_params:
             return supported_params + ["reasoning_effort"]
         return supported_params
 
