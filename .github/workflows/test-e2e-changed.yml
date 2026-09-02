@@ -136,6 +136,7 @@ jobs:
             | uv run --no-sync python .github/e2e-stack/secrets_to_env.py tests/e2e/.env
 
       - name: Boot the stage-mirror stack
+        id: boot
         run: bash .github/e2e-stack/up.sh
 
       - name: Export stack environment
@@ -167,5 +168,5 @@ jobs:
           done
 
       - name: Show stack logs on failure
-        if: failure()
+        if: failure() && steps.boot.conclusion != 'skipped'
         run: tail -n 200 "${RUNNER_TEMP}/litellm-e2e-stack/logs"/*.log
