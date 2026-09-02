@@ -473,7 +473,7 @@ async def create_vector_store_in_db(
     # exposed every env-stored embedding-model credential on the
     # ``/vector_store/{new,info,update,list}`` responses. Keep the user's
     # raw ``litellm_embedding_model`` reference; resolution now happens in
-    # ``_update_request_data_with_litellm_managed_vector_store_registry``
+    # ``build_request_data_from_managed_vector_store``
     # at request-handling time so the cleartext config exists only in
     # per-request memory and never reaches the database.
     if litellm_params:
@@ -867,7 +867,7 @@ async def update_vector_store(
         # embedding-config auto-resolve previously persisted cleartext
         # credentials into the row; resolution now happens at request-
         # handling time in
-        # ``_update_request_data_with_litellm_managed_vector_store_registry``
+        # ``build_request_data_from_managed_vector_store``
         # so this row only ever stores the user-supplied
         # ``litellm_embedding_model`` reference.
         if "litellm_params" in update_data:
