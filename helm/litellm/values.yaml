@@ -75,6 +75,22 @@ serviceAccounts:
 # generate` — the migration engine doesn't need the generated client.
 migrationJob:
   enabled: true
+  # Which controller is responsible for running the Job.
+  #
+  # `helm.enabled` renders the Helm pre-install / pre-upgrade hook, so the Job
+  # runs whenever `helm upgrade` sees a change to apply. `argocd.enabled`
+  # renders an Argo CD PreSync hook instead, which runs the Job on every sync
+  # even when the rendered manifests are unchanged: the way to re-run
+  # migrations on demand from a GitOps pipeline. Turning the Helm hook off
+  # while the Argo CD hook is on leaves the Job out of Helm's own upgrade
+  # path, which is what Argo CD users want since Argo, not Helm, applies the
+  # manifests.
+  hooks:
+    helm:
+      enabled: true
+      weight: "0"
+    argocd:
+      enabled: false
   backoffLimit: 4
   ttlSecondsAfterFinished: 120
   # Wall-clock budget for the whole Job, shared across every `backoffLimit`
@@ -257,6 +273,15 @@ gateway:
     initialDelaySeconds: 5
     periodSeconds: 10
     timeoutSeconds: 10
+  # Rolling update tuning for the gateway Deployment. Empty by default, so
+  # Kubernetes applies its own RollingUpdate defaults (25% maxSurge /
+  # 25% maxUnavailable). Example, for a surge-only rollout behind a load
+  # balancer that must never lose capacity:
+  #   type: RollingUpdate
+  #   rollingUpdate:
+  #     maxUnavailable: 0
+  #     maxSurge: 1
+  strategy: {}
   # Optional startupProbe. Empty by default, so existing installs are unchanged
   # and liveness/readiness apply from container start. Set it to gate
   # liveness/readiness until a slow cold start finishes — a high failureThreshold
@@ -369,6 +394,8 @@ backend:
     initialDelaySeconds: 5
     periodSeconds: 10
     timeoutSeconds: 10
+  # Same shape as gateway.strategy.
+  strategy: {}
   # Optional startupProbe; same shape as gateway.startupProbe. Empty by default.
   startupProbe: {}
   hpa:
@@ -433,6 +460,8 @@ ui:
     httpGet: { path: /, port: http }
     initialDelaySeconds: 2
     periodSeconds: 10
+  # Same shape as gateway.strategy.
+  strategy: {}
   # Optional startupProbe; same shape as gateway.startupProbe. Empty by default.
   startupProbe: {}
   hpa:

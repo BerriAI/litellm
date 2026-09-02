@@ -121,7 +121,8 @@ const chooseProvider = async (user: ReturnType<typeof userEvent.setup>, name: st
   await user.click(await screen.findByText(name));
 };
 
-const rowFor = (upstreamId: string) => within(screen.getByText(upstreamId).closest("tr") as HTMLElement);
+const rowFor = (upstreamId: string) =>
+  within(screen.getByRole("row", { name: (accessibleName) => accessibleName.startsWith(`${upstreamId} `) }));
 
 describe("AddProviderPanel", () => {
   beforeEach(() => {

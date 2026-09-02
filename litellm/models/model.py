@@ -30,8 +30,6 @@ class LiteLLM_ProxyModelTable(LiteLLMPydanticObjectBase):
     @classmethod
     def check_potential_json_str(cls, values):
         if not isinstance(values, dict):
-            # FastAPI validates a response against this model with ``from_attributes``, so an
-            # endpoint returning an already-built instance arrives here as the object itself.
             return values
         if isinstance(values.get("litellm_params"), str):
             try:

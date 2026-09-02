@@ -97,7 +97,7 @@ export default function ModelsAndEndpointsPage() {
 
   const isInternalUser = userRole && internalUserRoles.includes(userRole);
   const canCreate = canCreateModels(
-    { userRole, userID },
+    { userRole, userID, isViewOnly },
     {
       teams: teams ?? null,
       disabledForInternalUsers:
@@ -190,6 +190,7 @@ export default function ModelsAndEndpointsPage() {
             accessToken={accessToken}
             userID={userID}
             userRole={userRole}
+            isViewOnly={isViewOnly}
             onModelUpdate={invalidateModels}
             modelAccessGroups={availableModelAccessGroups}
           />

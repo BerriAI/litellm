@@ -7305,6 +7305,71 @@ def test_get_configured_token_limits_coerces_numeric_strings():
     assert router.get_configured_token_limits("quoted-limits-model") == (32000, 8000)
 
 
+def test_get_configured_display_name_reads_deployment_model_info():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "Kimi K3-claude-compatible",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"display_name": "Kimi K3"},
+            }
+        ]
+    )
+
+    assert router.get_configured_display_name("Kimi K3-claude-compatible") == "Kimi K3"
+
+
+def test_get_configured_display_name_returns_none_for_unset_or_unknown():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "no-display-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+            }
+        ]
+    )
+
+    assert router.get_configured_display_name("no-display-model") is None
+    assert router.get_configured_display_name("not-a-real-model") is None
+
+
+def test_get_configured_display_name_skips_wildcard_pattern_matching():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*"},
+                "model_info": {"display_name": "Bedrock"},
+            }
+        ]
+    )
+
+    with patch.object(
+        router.pattern_router, "route", side_effect=AssertionError("pattern route called")
+    ):
+        assert (
+            router.get_configured_display_name("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0")
+            is None
+        )
+
+
+def test_get_configured_display_name_treats_malformed_values_as_absent():
+    malformed = ["", "   ", 12345, ["Kimi K3"], {"name": "Kimi K3"}, True]
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": f"bad-display-{i}",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"display_name": bad},
+            }
+            for i, bad in enumerate(malformed)
+        ]
+    )
+
+    for i in range(len(malformed)):
+        assert router.get_configured_display_name(f"bad-display-{i}") is None
+
+
 @pytest.mark.asyncio
 async def test_acreate_batch_disable_fallbacks_surfaces_owning_provider_error():
     router = litellm.Router(
@@ -8187,6 +8252,71 @@ class TestUpsertDeploymentRollback:
             previous_deployment=None, model_id="prod-1"
         )
         assert len(router.model_list) == 1
+
+
+class TestUpsertDeploymentRename:
+    """
+    Issue #38360: renaming a model wrote the new `model_name` to the db, but the reload's
+    `upsert_deployment` compared only `litellm_params` and `model_info`. A rename with no
+    other edit therefore compared equal and the router kept the old name until a restart,
+    so `/model/info` and `/v1/models` served the stale name and the new one was unroutable.
+    """
+
+    @staticmethod
+    def _router() -> "litellm.Router":
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "old-name",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"},
+                    "model_info": {"id": "rename-1", "db_model": True},
+                }
+            ]
+        )
+
+    @staticmethod
+    def _deployment(model_name: str, tpm: int | None = None):
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        return Deployment(
+            model_name=model_name,
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o", api_key="sk-test", tpm=tpm),
+            model_info=ModelInfo(id="rename-1", db_model=True),
+        )
+
+    def test_rename_only_updates_the_router(self):
+        router = self._router()
+
+        assert router.upsert_deployment(deployment=self._deployment("new-name")) is not None
+
+        assert [model["model_name"] for model in router.model_list] == ["new-name"]
+        renamed = router.get_deployment(model_id="rename-1")
+        assert renamed is not None
+        assert renamed.model_name == "new-name"
+
+    def test_rename_only_makes_the_new_name_routable(self):
+        router = self._router()
+
+        router.upsert_deployment(deployment=self._deployment("new-name"))
+
+        assert router.get_model_ids(model_name="new-name") == ["rename-1"]
+        assert router.get_model_ids(model_name="old-name") == []
+
+    def test_rename_alongside_another_edit_still_updates(self):
+        router = self._router()
+
+        router.upsert_deployment(deployment=self._deployment("new-name", tpm=1234))
+
+        assert router.get_model_ids(model_name="new-name") == ["rename-1"]
+        renamed = router.get_deployment(model_id="rename-1")
+        assert renamed is not None
+        assert renamed.litellm_params.tpm == 1234
+
+    def test_unchanged_deployment_is_still_a_no_op(self):
+        router = self._router()
+
+        assert router.upsert_deployment(deployment=self._deployment("old-name")) is None
+        assert [model["model_name"] for model in router.model_list] == ["old-name"]
 
 
 class TestConsumedRequestTagsStamp:
@@ -11589,3 +11719,138 @@ def test_router_keeps_wif_secret_pointers_unresolved(monkeypatch):
 
     assert litellm_params["anthropic_federation_rule_id"] == "fdrl_from_env"
     assert litellm_params["anthropic_keycloak_client_secret_ref"] == "os.environ/WIF_TEST_KC_SECRET"
+
+
+class TestPreRoutingTierDrivesFallbacks:
+    """#38832: a complexity/auto router picks a tier behind the router name, but fallback
+    lookup stayed on the router name, so the tier's configured chain never ran and a
+    provider failure on the tier's first hop was returned to the client."""
+
+    class _TierRouter(litellm.Router):
+        async def async_pre_routing_hook(
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+        ):
+            from litellm.types.router import PreRoutingHookResponse
+
+            if model == "smart-router":
+                return PreRoutingHookResponse(model="tier1", messages=messages)
+            return None
+
+    @classmethod
+    def _router(cls, fallbacks) -> "litellm.Router":
+        return cls._TierRouter(
+            model_list=[
+                {
+                    "model_name": "smart-router",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-x"},
+                },
+                {
+                    "model_name": "tier1",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-x",
+                        "mock_response": "litellm.RateLimitError",
+                    },
+                },
+                {
+                    "model_name": "backup-a",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-x",
+                        "mock_response": "from backup-a",
+                    },
+                },
+                {
+                    "model_name": "backup-b",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-x",
+                        "mock_response": "from backup-b",
+                    },
+                },
+                {
+                    "model_name": "failing-backup",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-x",
+                        "mock_response": "litellm.RateLimitError",
+                    },
+                },
+                {
+                    "model_name": "plain",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-x",
+                        "mock_response": "litellm.RateLimitError",
+                    },
+                },
+            ],
+            fallbacks=fallbacks,
+            num_retries=0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_selected_tier_fallback_chain_runs(self):
+        router = self._router([{"tier1": ["backup-a"]}])
+
+        response = await router.acompletion(
+            model="smart-router", messages=[{"role": "user", "content": "hi"}]
+        )
+
+        assert response.choices[0].message.content == "from backup-a"
+
+    @pytest.mark.asyncio
+    async def test_a_chain_keyed_on_the_router_name_is_not_used(self):
+        """The router name has no chain of its own, so nothing should rescue this call."""
+        router = self._router([{"tier2": ["backup-a"]}])
+
+        with pytest.raises(litellm.RateLimitError):
+            await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
+
+    @pytest.mark.asyncio
+    async def test_a_chain_keyed_on_the_router_name_rescues_when_no_tier_chain_exists(self):
+        """The documented contract: configs keyed on the requested name keep working behind auto-routers."""
+        router = self._router([{"smart-router": ["backup-a"]}])
+
+        response = await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
+
+        assert response.choices[0].message.content == "from backup-a"
+
+    @pytest.mark.asyncio
+    async def test_the_tier_chain_wins_over_the_router_name_chain(self):
+        router = self._router([{"tier1": ["backup-a"]}, {"smart-router": ["backup-b"]}])
+
+        response = await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
+
+        assert response.choices[0].message.content == "from backup-a"
+
+    @pytest.mark.asyncio
+    async def test_a_request_without_a_pre_routing_hook_still_uses_its_own_group(self):
+        router = self._router([{"tier1": ["backup-a"]}])
+
+        response = await router.acompletion(
+            model="tier1", messages=[{"role": "user", "content": "hi"}]
+        )
+
+        assert response.choices[0].message.content == "from backup-a"
+
+    @pytest.mark.asyncio
+    async def test_a_caller_cannot_pick_the_chain_by_sending_the_selection(self):
+        """The metadata bucket carries caller-supplied keys, so only the hook may set the tier."""
+        router = self._router([{"tier1": ["backup-a"]}])
+
+        with pytest.raises(litellm.RateLimitError):
+            await router.acompletion(
+                model="plain",
+                messages=[{"role": "user", "content": "hi"}],
+                metadata={"pre_routing_selected_model": "tier1"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_each_fallback_hop_resolves_its_own_chain(self):
+        """The second hop must key off the group it is running, not the tier that failed."""
+        router = self._router([{"tier1": ["failing-backup"]}, {"failing-backup": ["backup-b"]}])
+
+        response = await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
+
+        assert response.choices[0].message.content == "from backup-b"

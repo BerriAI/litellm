@@ -10,6 +10,7 @@ before response.completed, and that every event of a bridged stream carries the 
 spend tracking stores, so a follow-up previous_response_id still finds the conversation.
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -131,7 +132,7 @@ def test_tool_call_delta_is_emitted_as_responses_events():
     evt2 = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
     assert evt2 is not None
     assert evt2.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
-    assert evt2.item_id == "call_1"
+    assert evt2.item_id == "fc_call_1"
     assert evt2.output_index == 1
     # The delta will be a chunk of the arguments, not the full arguments
     assert len(evt2.delta) <= 10  # Chunks are max 10 characters
@@ -196,7 +197,7 @@ def test_tool_calls_present_only_in_final_response_are_emitted_before_completed(
 
     # The last event should be FUNCTION_CALL_ARGUMENTS_DONE
     assert evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE
-    assert evt.item_id == "call_2"
+    assert evt.item_id == "fc_call_2"
     assert evt.output_index == 1
     assert evt.arguments == '{"y":2}'
 
@@ -290,7 +291,7 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
     # Verify each delta is at most 10 characters
     for evt in delta_events:
         assert len(evt.delta) <= 10
-        assert evt.item_id == "call_test"
+        assert evt.item_id == "fc_call_test"
         assert evt.output_index == 1
         assert hasattr(evt, "__dict__") and "sequence_number" in evt.__dict__
 
@@ -348,7 +349,8 @@ def test_tool_call_delta_without_id_uses_index_mapping():
         if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
     ]
     assert len(output_item_added_events) == 1
-    assert output_item_added_events[0].item.id == "call_abc123"
+    assert output_item_added_events[0].item.id == "fc_call_abc123"
+    assert output_item_added_events[0].item.call_id == "call_abc123"
 
 
 def test_parallel_tool_calls_without_ids_use_index_mapping():
@@ -403,8 +405,8 @@ def test_parallel_tool_calls_without_ids_use_index_mapping():
         arguments_by_call_id.setdefault(evt.item_id, "")
         arguments_by_call_id[evt.item_id] += evt.delta
 
-    assert arguments_by_call_id["call_a"] == '{"x":1}'
-    assert arguments_by_call_id["call_b"] == '{"y":2}'
+    assert arguments_by_call_id["fc_call_a"] == '{"x":1}'
+    assert arguments_by_call_id["fc_call_b"] == '{"y":2}'
 
 
 def test_reused_index_with_new_call_id_marks_fallback_ambiguous():
@@ -460,10 +462,10 @@ def test_reused_index_with_new_call_id_marks_fallback_ambiguous():
         arguments_by_call_id.setdefault(evt.item_id, "")
         arguments_by_call_id[evt.item_id] += evt.delta
 
-    assert arguments_by_call_id["call_a"] == '{"a":'
-    assert arguments_by_call_id["call_b"] == '{"b":'
-    assert arguments_by_call_id["call_a"] != '{"a":1}'
-    assert arguments_by_call_id["call_b"] != '{"b":1}'
+    assert arguments_by_call_id["fc_call_a"] == '{"a":'
+    assert arguments_by_call_id["fc_call_b"] == '{"b":'
+    assert arguments_by_call_id["fc_call_a"] != '{"a":1}'
+    assert arguments_by_call_id["fc_call_b"] != '{"b":1}'
 
 
 @pytest.mark.asyncio
@@ -523,3 +525,91 @@ async def test_streaming_response_id_falls_back_when_upstream_yields_nothing():
     assert response_ids
     assert len(set(response_ids)) == 1
     assert response_ids[0].startswith("resp_")
+
+
+def test_object_tool_call_arguments_stream_as_valid_json():
+    """A provider that sends decoded object arguments must still stream valid JSON.
+
+    `str()` on a dict yields a Python repr with single quotes, which clients
+    parsing function_call_arguments reject with errors like
+    "Expecting ',' delimiter".
+    """
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+    iterator._queue_tool_call_delta_events(
+        [
+            {
+                "index": 0,
+                "id": "call_obj",
+                "type": "function",
+                "function": {"name": "shell", "arguments": {"command": "ls", "flags": ["-l"]}},
+            }
+        ]
+    )
+
+    streamed_arguments = "".join(
+        evt.delta
+        for evt in iterator._pending_tool_events
+        if evt.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
+    )
+
+    assert json.loads(streamed_arguments) == {"command": "ls", "flags": ["-l"]}
+
+
+def test_streamed_anthropic_tool_call_events_correlate_on_normalized_item_id():
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+
+    response = ModelResponse(
+        id="resp-anthropic",
+        created=123,
+        model="test-model",
+        object="chat.completion",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "toolu_01AbCdEf",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+                            "index": 0,
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+    iterator.litellm_model_response = response
+
+    events = []
+    while True:
+        evt = iterator.common_done_event_logic(sync_mode=True)
+        events.append(evt)
+        if evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
+            break
+
+    added = [e for e in events if e.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
+    deltas = [e for e in events if e.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA]
+    dones = [e for e in events if e.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE]
+    item_dones = [e for e in events if e.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
+
+    assert len(added) == 1 and len(dones) == 1 and len(item_dones) == 1 and deltas
+    assert added[0].item.id == "fc_toolu_01AbCdEf"
+    assert added[0].item.call_id == "toolu_01AbCdEf"
+    assert item_dones[0].item.id == "fc_toolu_01AbCdEf"
+    assert item_dones[0].item.call_id == "toolu_01AbCdEf"
+    for evt in deltas + dones:
+        assert evt.item_id == added[0].item.id

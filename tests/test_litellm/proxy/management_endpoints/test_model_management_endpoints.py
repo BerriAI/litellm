@@ -19,6 +19,7 @@ from litellm.proxy._types import (
     ReconcileOutcome,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     ModelManagementAuthChecks,
     _get_team_deployments,
@@ -258,6 +259,131 @@ class TestModelManagementAuthChecks:
                 incoming_params=None,
             )
         assert "403" in str(exc_info.value)
+
+    def test_can_user_attach_credential_admin_success(self):
+        result = ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=LiteLLM_Params(model="test_model", litellm_credential_name="shared-credential"),
+            user_api_key_dict=self.admin_user,
+        )
+        assert result is True
+
+    def test_can_user_attach_credential_without_credential_allows_any_role(self):
+        result = ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=LiteLLM_Params(model="test_model"),
+            user_api_key_dict=self.team_admin_user,
+        )
+        assert result is True
+
+    def test_can_user_attach_credential_team_admin_fails(self):
+        with pytest.raises(Exception, match="Only a proxy admin can attach a stored credential") as exc_info:
+            ModelManagementAuthChecks.can_user_attach_credential(
+                litellm_params=LiteLLM_Params(model="test_model", litellm_credential_name="shared-credential"),
+                user_api_key_dict=self.team_admin_user,
+            )
+        assert exc_info.value.code == "403"
+
+    def test_can_user_attach_credential_unchanged_existing_allows_any_role(self):
+        result = ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=LiteLLM_Params(model="test_model", litellm_credential_name="shared-credential"),
+            user_api_key_dict=self.team_admin_user,
+            existing_litellm_params=LiteLLM_Params(model="test_model", litellm_credential_name="shared-credential"),
+        )
+        assert result is True
+
+    def test_can_user_attach_credential_unchanged_encrypted_existing_allows_any_role(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+        encrypted_name = encrypt_value_helper(value="shared-credential")
+        assert encrypted_name != "shared-credential"
+        result = ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=LiteLLM_Params(model="test_model", litellm_credential_name="shared-credential"),
+            user_api_key_dict=self.team_admin_user,
+            existing_litellm_params=LiteLLM_Params(model="test_model", litellm_credential_name=encrypted_name),
+        )
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_add_new_model_rejects_credential_attach_for_non_admin(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+        )
+
+        mock_prisma = MagicMock()
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch(  # test-quality-ok: prior auth check needs a live DB; only the credential check is under test
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await add_new_model(
+                    model_params=Deployment(
+                        model_name="credential-model",
+                        litellm_params=LiteLLM_Params(
+                            model="openai/gpt-4o", litellm_credential_name="shared-credential"
+                        ),
+                        model_info={"id": "credential-create-test"},
+                    ),
+                    user_api_key_dict=self.team_admin_user,
+                )
+            assert exc_info.value.code == "403"
+            mock_prisma.db.litellm_proxymodeltable.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_patch_model_rejects_credential_attach_for_non_admin(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            patch_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        model_id = "credential-patch-test"
+        db_model = Deployment(
+            model_name="credential-model",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o"),
+            model_info={"id": model_id},
+        )
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch(  # test-quality-ok: stubs the DB row fetch; only the credential check is under test
+                "litellm.proxy.management_endpoints.model_management_endpoints.get_db_model",
+                new=AsyncMock(return_value=db_model),
+            ),
+            patch(  # test-quality-ok: prior auth check needs a live DB; only the credential check is under test
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(  # test-quality-ok: asserts the DB write is never reached on rejection
+                "litellm.proxy.management_endpoints.model_management_endpoints._update_team_model_in_db",
+                new=AsyncMock(),
+            ) as mock_update,
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await patch_model(
+                    model_id=model_id,
+                    patch_data=updateDeployment(
+                        litellm_params=updateLiteLLMParams(
+                            model="openai/gpt-4o", litellm_credential_name="shared-credential"
+                        )
+                    ),
+                    user_api_key_dict=self.team_admin_user,
+                )
+            assert exc_info.value.code == "403"
+            mock_update.assert_not_awaited()
+
+    def test_can_user_attach_credential_internal_user_fails(self):
+        with pytest.raises(Exception, match="Only a proxy admin can attach a stored credential") as exc_info:
+            ModelManagementAuthChecks.can_user_attach_credential(
+                litellm_params=LiteLLM_Params(model="test_model", litellm_credential_name="shared-credential"),
+                user_api_key_dict=self.normal_user,
+            )
+        assert exc_info.value.code == "403"
 
 
 class MockModelTable:
@@ -5222,3 +5348,65 @@ class TestEnforceRpmTpmOnModelAdd:
             _raise_if_rate_limits_required_but_missing(litellm_params=params, enforced=True)
         assert expected_missing in str(exc_info.value.message)
         assert exc_info.value.code == "400"
+
+
+class TestBlockModelResponseSerialization:
+    @pytest.mark.parametrize(
+        ("route", "blocked"), [("/model/block", True), ("/model/unblock", False)]
+    )
+    def test_block_routes_serialize_prisma_row_to_200(self, route, blocked):
+        from datetime import datetime, timezone
+
+        from prisma import models as prisma_models
+
+        import litellm.proxy.proxy_server as ps
+        from litellm.proxy.proxy_server import app
+
+        written_at = datetime(2026, 8, 29, tzinfo=timezone.utc)
+        row_fields = {
+            "model_id": "m-block-1",
+            "model_name": "gpt-4o-mini",
+            "litellm_params": json.dumps({"model": "openai/gpt-4o-mini", "api_key": "encrypted-value"}),
+            "model_info": json.dumps({"id": "m-block-1"}),
+            "created_at": written_at,
+            "created_by": "admin",
+            "updated_at": written_at,
+            "updated_by": "admin",
+        }
+        existing_row = prisma_models.LiteLLM_ProxyModelTable(blocked=not blocked, **row_fields)
+        updated_row = prisma_models.LiteLLM_ProxyModelTable(blocked=blocked, **row_fields)
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=existing_row)
+        mock_prisma.db.litellm_proxymodeltable.update = AsyncMock(return_value=updated_row)
+
+        admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        app.dependency_overrides[ps.user_api_key_auth] = lambda: admin
+        try:
+            with (
+                patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+                patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+                patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+                    "litellm.proxy.proxy_server.llm_router",
+                    MagicMock(**{"get_model_ids.return_value": ["m-block-1"]}),
+                ),
+                patch("litellm.proxy.proxy_server.redis_usage_cache", None),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+                patch(  # test-quality-ok: stubs the cache write so the test observes only response serialization
+                    "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
+                    new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
+                ),
+                patch(  # test-quality-ok: audit logging is a background side effect outside this test's contract
+                    "litellm.proxy.management_endpoints.model_management_endpoints.create_object_audit_log",
+                    new=AsyncMock(return_value=None),
+                ),
+            ):
+                client = TestClient(app)
+                response = client.post(route, json={"model_id": "m-block-1"})
+        finally:
+            app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["model_id"] == "m-block-1"
+        assert body["blocked"] is blocked
+        assert body["litellm_params"] == {"model": "openai/gpt-4o-mini", "api_key": "encrypted-value"}
