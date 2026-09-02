@@ -81,6 +81,31 @@ async def test_grant_omits_scope_and_audience_when_not_configured():
     _url, form, _headers = poster.calls[0]
     assert "scope" not in form
     assert "audience" not in form
+    assert "resource" not in form
+
+
+@pytest.mark.asyncio
+async def test_grant_sends_rfc8707_resource_indicator():
+    """HTTP/SSE M2M tool traffic resolves through this v2 arm, so the RFC 8707 resource must ride it
+    too or a strict authorization server keeps answering invalid_target on the primary M2M path."""
+    poster = _FakePoster([_success()])
+    await ClientCredentialsTokenSource(poster).get("s", _config(upstream_resource="api://finance-audience"))
+    _url, form, _headers = poster.calls[0]
+    assert form["resource"] == "api://finance-audience"
+
+
+@pytest.mark.asyncio
+async def test_changing_only_the_resource_mints_a_fresh_token():
+    """The resource is part of the mint identity: retargeting a live M2M server must not keep serving
+    the token minted for the previous audience."""
+    poster = _FakePoster([_success(access_token="tok-a", expires_in=3600), _success(access_token="tok-b", expires_in=3600)])
+    source = ClientCredentialsTokenSource(poster)
+    first = await source.get("s", _config(upstream_resource="api://one"))
+    second = await source.get("s", _config(upstream_resource="api://two"))
+    assert isinstance(first, Ok) and isinstance(second, Ok)
+    assert first.ok.access_token == "tok-a"
+    assert second.ok.access_token == "tok-b"
+    assert len(poster.calls) == 2
 
 
 @pytest.mark.asyncio
@@ -316,7 +341,7 @@ async def test_bearer_auth_sends_the_token_and_leaves_a_success_alone():
     async def refetch(failed: str) -> "str | None":
         raise AssertionError("must not refetch on success")
 
-    auth = ClientCredentialsBearerAuth("m2m-token", refetch)
+    auth = ClientCredentialsBearerAuth("m2m-token", refetch, ClientCredentialsConfig())
     async with httpx.AsyncClient(transport=transport, auth=auth) as client:
         response = await client.get("https://upstream.example.com/mcp")
     assert response.status_code == 200
@@ -332,7 +357,7 @@ async def test_bearer_auth_retries_a_401_once_with_a_fresh_token():
         refetched.append(failed)
         return "fresh-token"
 
-    auth = ClientCredentialsBearerAuth("stale-token", refetch)
+    auth = ClientCredentialsBearerAuth("stale-token", refetch, ClientCredentialsConfig())
     async with httpx.AsyncClient(transport=transport, auth=auth) as client:
         response = await client.get("https://upstream.example.com/mcp")
     assert response.status_code == 200
@@ -352,7 +377,7 @@ async def test_bearer_auth_remembers_the_rotated_token_for_later_requests():
         refetched.append(failed)
         return "fresh-token"
 
-    auth = ClientCredentialsBearerAuth("stale-token", refetch)
+    auth = ClientCredentialsBearerAuth("stale-token", refetch, ClientCredentialsConfig())
     async with httpx.AsyncClient(transport=transport, auth=auth) as client:
         first = await client.get("https://upstream.example.com/mcp")
         second = await client.get("https://upstream.example.com/mcp")
@@ -368,7 +393,7 @@ async def test_bearer_auth_surfaces_the_401_when_the_refetch_fails():
     async def refetch(failed: str) -> "str | None":
         return None
 
-    auth = ClientCredentialsBearerAuth("stale-token", refetch)
+    auth = ClientCredentialsBearerAuth("stale-token", refetch, ClientCredentialsConfig())
     async with httpx.AsyncClient(transport=transport, auth=auth) as client:
         response = await client.get("https://upstream.example.com/mcp")
     assert response.status_code == 401
@@ -384,7 +409,7 @@ async def test_bearer_auth_gives_up_after_a_second_401():
         refetched.append(failed)
         return "fresh-token"
 
-    auth = ClientCredentialsBearerAuth("stale-token", refetch)
+    auth = ClientCredentialsBearerAuth("stale-token", refetch, ClientCredentialsConfig())
     async with httpx.AsyncClient(transport=transport, auth=auth) as client:
         response = await client.get("https://upstream.example.com/mcp")
     assert response.status_code == 401
@@ -396,7 +421,60 @@ def test_bearer_auth_rejects_sync_clients():
     async def refetch(failed: str) -> "str | None":
         return None
 
-    auth = ClientCredentialsBearerAuth("token", refetch)
+    auth = ClientCredentialsBearerAuth("token", refetch, ClientCredentialsConfig())
     with httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200)), auth=auth) as client:
         with pytest.raises(RuntimeError):
             client.get("https://upstream.example.com/mcp")
+
+
+@pytest.mark.asyncio
+async def test_bearer_auth_writes_the_minted_token_to_the_configured_header():
+    seen: "list[dict[str, str]]" = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.headers))
+        return httpx.Response(200)
+
+    async def refetch(failed: str) -> "str | None":
+        raise AssertionError("must not refetch on success")
+
+    auth = ClientCredentialsBearerAuth("m2m-token", refetch, ClientCredentialsConfig(header_name="esb-oauth"))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), auth=auth) as client:
+        await client.get("https://upstream.example.com/mcp")
+    assert seen[0]["esb-oauth"] == "Bearer m2m-token"
+    assert "authorization" not in seen[0]
+
+
+@pytest.mark.asyncio
+async def test_the_401_refetch_retry_also_targets_the_configured_header():
+    # The retry is a SECOND write of the credential. Honoring the carrier only on the first write
+    # would silently send the fresh token to Authorization, so the ESB rejects every recovered
+    # request while the first attempt looked correct.
+    seen: "list[dict[str, str]]" = []
+    responses = [httpx.Response(401), httpx.Response(200)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.headers))
+        return responses[min(len(seen) - 1, len(responses) - 1)]
+
+    async def refetch(failed: str) -> "str | None":
+        return "fresh-token"
+
+    auth = ClientCredentialsBearerAuth("stale-token", refetch, ClientCredentialsConfig(header_name="esb-oauth"))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), auth=auth) as client:
+        response = await client.get("https://upstream.example.com/mcp")
+    assert response.status_code == 200
+    assert [h["esb-oauth"] for h in seen] == ["Bearer stale-token", "Bearer fresh-token"]
+    assert all("authorization" not in h for h in seen)
+
+
+@pytest.mark.asyncio
+async def test_bearer_auth_advertises_the_header_it_will_occupy():
+    # _resolve_v2_auth reads header_name off the auth object to decide which injected header
+    # conflicts; an auth object that lies about its slot would drop the wrong one.
+    async def refetch(failed: str) -> "str | None":
+        return None
+
+    assert ClientCredentialsBearerAuth("t", refetch, ClientCredentialsConfig()).header_name == "Authorization"
+    default_carrier = ClientCredentialsConfig(header_name="esb-oauth")
+    assert ClientCredentialsBearerAuth("t", refetch, default_carrier).header_name == "esb-oauth"

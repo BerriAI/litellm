@@ -7,6 +7,9 @@ warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*
 # Suppress Pydantic 2.11+ deprecation warning about accessing model_fields on instances
 # This warning can accumulate during streaming and cause memory leaks
 warnings.filterwarnings("ignore", message=".*Accessing the.*attribute on the instance is deprecated.*")
+# ReadOnly on TypedDict fields is repo-wide static discipline (LIT012); pydantic warns it
+# cannot enforce it at runtime, which floods proxy boot once such a type is schema-walked
+warnings.filterwarnings("ignore", message=".*`ReadOnly` qualifier.*")
 ### INIT VARIABLES #########################
 import threading
 import os
@@ -26,19 +29,21 @@ def _dev_env_hot_reload_enabled() -> bool:
 if os.getenv("LITELLM_MODE", "DEV") == "DEV":
     _dotenv.load_dotenv(override=_dev_env_hot_reload_enabled())
 
+from collections.abc import Sequence
 from typing import (
-    Callable,
-    List,
-    Optional,
-    Dict,
-    Union,
     Any,
-    Literal,
+    Callable,
+    Dict,
+    Final,
     get_args,
-    TYPE_CHECKING,
-    Tuple,
+    List,
+    Literal,
+    Optional,
     overload,
+    Tuple,
     Type,
+    TYPE_CHECKING,
+    Union,
 )
 from litellm.types.integrations.datadog import DatadogInitParams
 from litellm.types.integrations.newrelic import NewRelicInitParams
@@ -171,6 +176,7 @@ callbacks: List[
 callback_settings: Dict[str, Dict[str, Any]] = {}
 initialized_langfuse_clients: int = 0
 langfuse_default_tags: Optional[List[str]] = None
+langfuse_enable_update_trace_keys: bool = False
 langsmith_batch_size: Optional[int] = None
 prometheus_initialize_budget_metrics: Optional[bool] = False
 prometheus_latency_buckets: Optional[List[float]] = None
@@ -196,6 +202,8 @@ standard_logging_payload_excluded_fields: Optional[List[str]] = (
     None  # Fields to exclude from StandardLoggingPayload before callbacks receive it
 )
 log_raw_request_response: bool = False
+log_client_error_tracebacks: bool = False
+request_correlation_in_logs: bool = False
 redact_messages_in_exceptions: Optional[bool] = False
 redact_user_api_key_info: Optional[bool] = False
 # When True (default — preserves historical behavior), the Router appends
@@ -211,7 +219,13 @@ filter_invalid_headers: Optional[bool] = False
 add_user_information_to_llm_headers: Optional[bool] = (
     None  # adds user_id, team_id, token hash (params from StandardLoggingMetadata) to request headers
 )
-store_audit_logs = False  # Enterprise feature, allow users to see audit logs
+overwrite_user_with_key_hash: bool = (
+    False  # force the outgoing `user` param to the hashed api key, so providers see a stable, tamper-proof id
+)
+bedrock_request_metadata_fields: Optional[Sequence[str]] = (
+    None  # allow-list of `user_api_key_*` fields (+ `spend_logs_metadata`) sent as Bedrock `requestMetadata`
+)
+store_audit_logs: bool | None = None
 skip_system_message_in_guardrail: bool = False
 skip_tool_message_in_guardrail: bool = False
 ### end of callbacks #############
@@ -240,6 +254,8 @@ use_chat_completions_url_for_anthropic_messages: bool = bool(
 # Or via `litellm_settings.strip_anthropic_total_tokens: true` in
 # config.yaml.
 strip_anthropic_total_tokens: bool = False
+anthropic_sse_ping_interval_seconds: float = 15.0
+sse_keepalive_ping_interval_seconds: float | None = None
 route_all_chat_openai_to_responses: bool = (
     os.getenv("LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES", "false").lower() == "true"
 )  # When True, routes all OpenAI /chat/completions requests through the Responses API bridge
@@ -427,8 +443,11 @@ default_team_settings: Optional[List] = None
 max_user_budget: Optional[float] = None
 default_max_internal_user_budget: Optional[float] = None
 max_internal_user_budget: Optional[float] = None
-max_ui_session_budget: Optional[float] = 0.25  # $0.25 USD budgets for UI Chat sessions
+max_ui_session_budget: Optional[float] = (
+    1.0  # USD budget for each dashboard login session (playground, test connection)
+)
 internal_user_budget_duration: Optional[str] = None
+budget_rollover: bool = False  # carry spend beyond max_budget into the next window instead of zeroing it
 tag_budget_config: Optional[Dict[str, "BudgetConfig"]] = None
 max_end_user_budget: Optional[float] = None
 max_end_user_budget_id: Optional[str] = None
@@ -438,13 +457,21 @@ max_end_user_budget_id: Optional[str] = None
 # backwards compatibility — arbitrary client-supplied identifiers still
 # pass through unchanged.
 validate_end_user_id_in_db: bool = False
+block_requests_for_models_without_pricing: bool = False
 disable_end_user_cost_tracking: Optional[bool] = None
 disable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 enable_end_user_cost_tracking_prometheus_only: Optional[bool] = None
 custom_prometheus_metadata_labels: List[str] = []
 custom_prometheus_tags: List[str] = []
 prometheus_metrics_config: Optional[List] = None
+prometheus_exclude_metrics: Optional[List[str]] = None
+prometheus_exclude_labels: Optional[List[str]] = None
 prometheus_emit_stream_label: bool = False
+prometheus_deployment_and_latency_caller_identity: Literal[
+    "api_key_alias",
+    "user_email",
+    "both",
+] = "api_key_alias"
 # Opt-in: emit `rate_limit_category` and `rate_limit_type` labels on
 # `litellm_proxy_failed_requests_metric`. Off by default to preserve the
 # pre-unification label set so existing dashboards / recording rules keyed on
@@ -462,6 +489,7 @@ public_mcp_servers: Optional[List[str]] = None
 public_mcp_hub_strict_whitelist: bool = True
 public_model_groups: Optional[List[str]] = None
 public_agent_groups: Optional[List[str]] = None
+agent_search_embedding_model: Optional[str] = None
 # Supports both old format (Dict[str, str]) and new format (Dict[str, Dict[str, Any]])
 # New format: { "displayName": { "url": "...", "index": 0 } }
 # Old format: { "displayName": "url" } (for backward compatibility)
@@ -631,6 +659,8 @@ aiml_models: Set = set()
 deepgram_models: Set = set()
 elevenlabs_models: Set = set()
 dashscope_models: Set = set()
+qwencloud_models: Set = set()
+qwen_ai_platform_models: Set = set()
 moonshot_models: Set = set()
 publicai_models: Set = set()
 darkbloom_models: Set = set()
@@ -673,12 +703,12 @@ def is_bedrock_pricing_only_model(key: str) -> bool:
         bool: True if the key matches the Bedrock pattern, False otherwise.
     """
     # Regex to match 'bedrock/<region>/<model>'
-    bedrock_pattern = re.compile(r"^bedrock/[a-zA-Z0-9_-]+/.+$")
+    bedrock_pattern: Final = re.compile(r"^bedrock/[a-zA-Z0-9_-]+/.+$")
 
     if "month-commitment" in key:
         return True
 
-    is_match = bedrock_pattern.match(key)
+    is_match: Final = bedrock_pattern.match(key)
     return is_match is not None
 
 
@@ -695,9 +725,8 @@ def is_openai_finetune_model(key: str) -> bool:
     return key.startswith("ft:") and not key.count(":") > 1
 
 
-def add_known_models(model_cost_map: Optional[Dict] = None):
-    _map = model_cost_map if model_cost_map is not None else model_cost
-    for key, value in _map.items():
+def _populate_provider_model_sets(model_cost_map: Dict) -> None:
+    for key, value in model_cost_map.items():
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(key):
             open_ai_chat_completion_models.add(key)
         elif value.get("litellm_provider") == "text-completion-openai":
@@ -776,6 +805,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             nlp_cloud_models.add(key)
         elif value.get("litellm_provider") == "aleph_alpha":
             aleph_alpha_models.add(key)
+        elif value.get("litellm_provider") == "bedrock" and value.get("mode") == "guardrail":
+            pass
         elif value.get("litellm_provider") == "bedrock" and not is_bedrock_pricing_only_model(key):
             bedrock_models.add(key)
         elif value.get("litellm_provider") == "bedrock_converse":
@@ -880,6 +911,10 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             heroku_models.add(key)
         elif value.get("litellm_provider") == "dashscope":
             dashscope_models.add(key)
+        elif value.get("litellm_provider") == "qwencloud":
+            qwencloud_models.add(key)
+        elif value.get("litellm_provider") == "qwen_ai_platform":
+            qwen_ai_platform_models.add(key)
         elif value.get("litellm_provider") == "modelscope":
             modelscope_models.add(key)
         elif value.get("litellm_provider") == "moonshot":
@@ -940,7 +975,16 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             bedrock_mantle_models.add(key)
 
 
-add_known_models()
+def add_known_models(model_cost_map: Optional[Dict] = None):
+    """Fold `model_cost_map` (defaults to `litellm.model_cost`) into the per-provider model sets,
+    then refresh `models_by_provider` from those sets so the additions reach wildcard expansion.
+    The refresh updates the dict in place, so references captured before a reload stay live.
+    """
+    _populate_provider_model_sets(model_cost_map if model_cost_map is not None else model_cost)
+    models_by_provider.update(_build_models_by_provider())
+
+
+_populate_provider_model_sets(model_cost)
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 
 # this is maintained for Exception Mapping
@@ -1034,6 +1078,8 @@ model_list = list(
     | deepgram_models
     | elevenlabs_models
     | dashscope_models
+    | qwencloud_models
+    | qwen_ai_platform_models
     | moonshot_models
     | publicai_models
     | darkbloom_models
@@ -1062,112 +1108,118 @@ model_list_set = set(model_list)
 # provider_list is lazy-loaded via __getattr__ to avoid importing LlmProviders at import time
 
 
-models_by_provider: dict = {
-    "openai": open_ai_chat_completion_models | open_ai_text_completion_models,
-    "text-completion-openai": open_ai_text_completion_models,
-    "cohere": cohere_models | cohere_chat_models,
-    "cohere_chat": cohere_chat_models,
-    "anthropic": anthropic_models,
-    "replicate": replicate_models,
-    "huggingface": huggingface_models,
-    "together_ai": together_ai_models,
-    "baseten": baseten_models,
-    "openrouter": openrouter_models,
-    "vercel_ai_gateway": vercel_ai_gateway_models,
-    "datarobot": datarobot_models,
-    "vertex_ai": vertex_chat_models
-    | vertex_text_models
-    | vertex_anthropic_models
-    | vertex_vision_models
-    | vertex_language_models
-    | vertex_deepseek_models
-    | vertex_minimax_models
-    | vertex_moonshot_models
-    | vertex_zai_models,
-    "ai21": ai21_models,
-    "bedrock": bedrock_models | bedrock_converse_models,
-    "petals": petals_models,
-    "ollama": ollama_models,
-    "ollama_chat": ollama_models,
-    "deepinfra": deepinfra_models,
-    "perplexity": perplexity_models,
-    "maritalk": maritalk_models,
-    "watsonx": watsonx_models,
-    "gemini": gemini_models,
-    "fireworks_ai": fireworks_ai_models | fireworks_ai_embedding_models,
-    "aleph_alpha": aleph_alpha_models,
-    "text-completion-codestral": text_completion_codestral_models,
-    "text-completion-inception": text_completion_inception_models,
-    "xai": xai_models,
-    "zai": zai_models,
-    "fal_ai": fal_ai_models,
-    "deepseek": deepseek_models,
-    "tencent": tencent_models,
-    "runwayml": runwayml_models,
-    "mistral": mistral_chat_models,
-    "azure_ai": azure_ai_models,
-    "voyage": voyage_models,
-    "infinity": infinity_models,
-    "databricks": databricks_models,
-    "cloudflare": cloudflare_models,
-    "codestral": codestral_models,
-    "nlp_cloud": nlp_cloud_models,
-    "friendliai": friendliai_models,
-    "palm": palm_models,
-    "groq": groq_models,
-    "azure": azure_models | azure_text_models,
-    "azure_anthropic": azure_anthropic_models,
-    "azure_text": azure_text_models,
-    "anyscale": anyscale_models,
-    "cerebras": cerebras_models,
-    "galadriel": galadriel_models,
-    "nvidia_nim": nvidia_nim_models,
-    "nvidia_riva": nvidia_riva_models,
-    "soniox": soniox_models,
-    "sambanova": sambanova_models | sambanova_embedding_models,
-    "novita": novita_models,
-    "nebius": nebius_models | nebius_embedding_models,
-    "aiml": aiml_models,
-    "assemblyai": assemblyai_models,
-    "jina_ai": jina_ai_models,
-    "snowflake": snowflake_models,
-    "gradient_ai": gradient_ai_models,
-    "meta_llama": llama_models,
-    "nscale": nscale_models,
-    "featherless_ai": featherless_ai_models,
-    "deepgram": deepgram_models,
-    "elevenlabs": elevenlabs_models,
-    "heroku": heroku_models,
-    "dashscope": dashscope_models,
-    "modelscope": modelscope_models,
-    "moonshot": moonshot_models,
-    "publicai": publicai_models,
-    "darkbloom": darkbloom_models,
-    "v0": v0_models,
-    "morph": morph_models,
-    "lambda_ai": lambda_ai_models,
-    "inception": inception_models,
-    "hyperbolic": hyperbolic_models,
-    "black_forest_labs": black_forest_labs_models,
-    "recraft": recraft_models,
-    "cometapi": cometapi_models,
-    "oci": oci_models,
-    "volcengine": volcengine_models,
-    "wandb": wandb_models,
-    "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
-    "lemonade": lemonade_models,
-    "clarifai": clarifai_models,
-    "amazon_nova": amazon_nova_models,
-    "stability": stability_models,
-    "github_copilot": github_copilot_models,
-    "chatgpt": chatgpt_models,
-    "minimax": minimax_models,
-    "aws_polly": aws_polly_models,
-    "gigachat": gigachat_models,
-    "llamagate": llamagate_models,
-    "reducto": reducto_models,
-    "bedrock_mantle": bedrock_mantle_models,
-}
+def _build_models_by_provider() -> dict:
+    return {
+        "openai": open_ai_chat_completion_models | open_ai_text_completion_models,
+        "text-completion-openai": open_ai_text_completion_models,
+        "cohere": cohere_models | cohere_chat_models,
+        "cohere_chat": cohere_chat_models,
+        "anthropic": anthropic_models,
+        "replicate": replicate_models,
+        "huggingface": huggingface_models,
+        "together_ai": together_ai_models,
+        "baseten": baseten_models,
+        "openrouter": openrouter_models,
+        "vercel_ai_gateway": vercel_ai_gateway_models,
+        "datarobot": datarobot_models,
+        "vertex_ai": vertex_chat_models
+        | vertex_text_models
+        | vertex_anthropic_models
+        | vertex_vision_models
+        | vertex_language_models
+        | vertex_deepseek_models
+        | vertex_minimax_models
+        | vertex_moonshot_models
+        | vertex_zai_models,
+        "ai21": ai21_models,
+        "bedrock": bedrock_models | bedrock_converse_models,
+        "petals": petals_models,
+        "ollama": ollama_models,
+        "ollama_chat": ollama_models,
+        "deepinfra": deepinfra_models,
+        "perplexity": perplexity_models,
+        "maritalk": maritalk_models,
+        "watsonx": watsonx_models,
+        "gemini": gemini_models,
+        "fireworks_ai": fireworks_ai_models | fireworks_ai_embedding_models,
+        "aleph_alpha": aleph_alpha_models,
+        "text-completion-codestral": text_completion_codestral_models,
+        "text-completion-inception": text_completion_inception_models,
+        "xai": xai_models,
+        "zai": zai_models,
+        "fal_ai": fal_ai_models,
+        "deepseek": deepseek_models,
+        "tencent": tencent_models,
+        "runwayml": runwayml_models,
+        "mistral": mistral_chat_models,
+        "azure_ai": azure_ai_models,
+        "voyage": voyage_models,
+        "infinity": infinity_models,
+        "databricks": databricks_models,
+        "cloudflare": cloudflare_models,
+        "codestral": codestral_models,
+        "nlp_cloud": nlp_cloud_models,
+        "friendliai": friendliai_models,
+        "palm": palm_models,
+        "groq": groq_models,
+        "azure": azure_models | azure_text_models,
+        "azure_anthropic": azure_anthropic_models,
+        "azure_text": azure_text_models,
+        "anyscale": anyscale_models,
+        "cerebras": cerebras_models,
+        "galadriel": galadriel_models,
+        "nvidia_nim": nvidia_nim_models,
+        "nvidia_riva": nvidia_riva_models,
+        "soniox": soniox_models,
+        "sambanova": sambanova_models | sambanova_embedding_models,
+        "novita": novita_models,
+        "nebius": nebius_models | nebius_embedding_models,
+        "aiml": aiml_models,
+        "assemblyai": assemblyai_models,
+        "jina_ai": jina_ai_models,
+        "snowflake": snowflake_models,
+        "gradient_ai": gradient_ai_models,
+        "meta_llama": llama_models,
+        "nscale": nscale_models,
+        "featherless_ai": featherless_ai_models,
+        "deepgram": deepgram_models,
+        "elevenlabs": elevenlabs_models,
+        "heroku": heroku_models,
+        "dashscope": dashscope_models,
+        "qwencloud": qwencloud_models,
+        "qwen_ai_platform": qwen_ai_platform_models,
+        "modelscope": modelscope_models,
+        "moonshot": moonshot_models,
+        "publicai": publicai_models,
+        "darkbloom": darkbloom_models,
+        "v0": v0_models,
+        "morph": morph_models,
+        "lambda_ai": lambda_ai_models,
+        "inception": inception_models,
+        "hyperbolic": hyperbolic_models,
+        "black_forest_labs": black_forest_labs_models,
+        "recraft": recraft_models,
+        "cometapi": cometapi_models,
+        "oci": oci_models,
+        "volcengine": volcengine_models,
+        "wandb": wandb_models,
+        "ovhcloud": ovhcloud_models | ovhcloud_embedding_models,
+        "lemonade": lemonade_models,
+        "clarifai": clarifai_models,
+        "amazon_nova": amazon_nova_models,
+        "stability": stability_models,
+        "github_copilot": github_copilot_models,
+        "chatgpt": chatgpt_models,
+        "minimax": minimax_models,
+        "aws_polly": aws_polly_models,
+        "gigachat": gigachat_models,
+        "llamagate": llamagate_models,
+        "reducto": reducto_models,
+        "bedrock_mantle": bedrock_mantle_models,
+    }
+
+
+models_by_provider: dict = _build_models_by_provider()
 
 # mapping for those models which have larger equivalents
 longer_context_model_fallback_dict: dict = {
@@ -1260,8 +1312,8 @@ from .llms.xai.common_utils import XAIModelInfo
 from litellm.types.utils import LlmProviders
 
 ## Lazy loading this is not straightforward, will leave it here for now.
-from .main import *  # type: ignore
-from .compression import compress  # type: ignore[no-redef]
+from .main import *
+from .compression import compress
 
 # Skills API
 from .skills.main import (
@@ -1332,7 +1384,7 @@ from .assistants.main import *
 from .batches.main import *
 from .images.main import *
 from .videos.main import *
-from .batch_completion.main import *  # type: ignore
+from .batch_completion.main import *
 from .rerank_api.main import *
 from .llms.anthropic.experimental_pass_through.messages.handler import *
 from .responses.main import *
@@ -1596,6 +1648,9 @@ if TYPE_CHECKING:
         AmazonMantleMessagesConfig as AmazonMantleMessagesConfig,
     )
     from .llms.together_ai.chat import TogetherAIConfig as TogetherAIConfig
+    from .llms.together_ai.chat.transformation import (
+        TogetherAIChatConfig as TogetherAIChatConfig,
+    )
     from .llms.nlp_cloud.chat.handler import NLPCloudConfig as NLPCloudConfig
     from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig as VertexGeminiConfig,
@@ -1768,6 +1823,9 @@ if TYPE_CHECKING:
     )
     from .llms.gemini.interactions.transformation import (
         GoogleAIStudioInteractionsConfig as GoogleAIStudioInteractionsConfig,
+    )
+    from .llms.vertex_ai.interactions.transformation import (
+        VertexAIInteractionsConfig as VertexAIInteractionsConfig,
     )
     from .llms.openai.chat.o_series_transformation import (
         OpenAIOSeriesConfig as OpenAIOSeriesConfig,
@@ -1966,6 +2024,24 @@ if TYPE_CHECKING:
     from .llms.dashscope.rerank.transformation import (
         DashScopeRerankConfig as DashScopeRerankConfig,
     )
+    from .llms.dashscope.qwencloud import (
+        QwenCloudChatConfig as QwenCloudChatConfig,
+    )
+    from .llms.dashscope.qwencloud import (
+        QwenCloudEmbeddingConfig as QwenCloudEmbeddingConfig,
+    )
+    from .llms.dashscope.qwencloud import (
+        QwenCloudRerankConfig as QwenCloudRerankConfig,
+    )
+    from .llms.dashscope.qwen_ai_platform import (
+        QwenAIPlatformChatConfig as QwenAIPlatformChatConfig,
+    )
+    from .llms.dashscope.qwen_ai_platform import (
+        QwenAIPlatformEmbeddingConfig as QwenAIPlatformEmbeddingConfig,
+    )
+    from .llms.dashscope.qwen_ai_platform import (
+        QwenAIPlatformRerankConfig as QwenAIPlatformRerankConfig,
+    )
     from .llms.modelscope.chat.transformation import (
         ModelScopeChatConfig as ModelScopeChatConfig,
     )
@@ -2045,7 +2121,7 @@ if TYPE_CHECKING:
     supports_reasoning: Callable[..., bool]
     acreate: Callable[..., Any]
     get_max_tokens: Callable[..., int]
-    get_model_info: Callable[..., _ModelInfoType]  # type: ignore[no-redef]
+    get_model_info: Callable[..., _ModelInfoType]
     register_prompt_template: Callable[..., None]
     validate_environment: Callable[..., dict]
     check_valid_key: Callable[..., bool]
@@ -2132,18 +2208,18 @@ def __getattr__(name: str) -> Any:
     # Use cached registry from _lazy_imports instead of importing tuples every time
     from ._lazy_imports import _get_lazy_import_registry
 
-    registry = _get_lazy_import_registry()
+    registry: Final = _get_lazy_import_registry()
 
     # Check if name is in registry and call the cached handler function
     if name in registry:
-        handler_func = registry[name]
+        handler_func: Final = registry[name]
         return handler_func(name)
 
     # Lazy load encoding from main.py to avoid heavy tiktoken import
     if name == "encoding":
-        from ._lazy_imports import _get_litellm_globals
+        from ._lazy_imports import get_litellm_globals
 
-        _globals = _get_litellm_globals()
+        _globals = get_litellm_globals()
         # Check if already cached
         if "encoding" not in _globals:
             from .main import encoding as _encoding
@@ -2153,9 +2229,9 @@ def __getattr__(name: str) -> Any:
 
     # Lazy load bedrock_tool_name_mappings instance
     if name == "bedrock_tool_name_mappings":
-        from ._lazy_imports import _get_litellm_globals
+        from ._lazy_imports import get_litellm_globals
 
-        _globals = _get_litellm_globals()
+        _globals = get_litellm_globals()
         # Check if already cached
         if "bedrock_tool_name_mappings" not in _globals:
             from .llms.bedrock.chat.invoke_handler import (
@@ -2167,9 +2243,9 @@ def __getattr__(name: str) -> Any:
 
     # Lazy load AzureOpenAIError exception class
     if name == "AzureOpenAIError":
-        from ._lazy_imports import _get_litellm_globals
+        from ._lazy_imports import get_litellm_globals
 
-        _globals = _get_litellm_globals()
+        _globals = get_litellm_globals()
         # Check if already cached
         if "AzureOpenAIError" not in _globals:
             from .llms.azure.common_utils import AzureOpenAIError as _AzureOpenAIError
@@ -2179,9 +2255,9 @@ def __getattr__(name: str) -> Any:
 
     # Lazy load openaiOSeriesConfig instance
     if name == "openaiOSeriesConfig":
-        from ._lazy_imports import _get_litellm_globals
+        from ._lazy_imports import get_litellm_globals
 
-        _globals = _get_litellm_globals()
+        _globals = get_litellm_globals()
         if "openaiOSeriesConfig" not in _globals:
             # Import the config class and instantiate it
             config_class = __getattr__("OpenAIOSeriesConfig")
@@ -2189,7 +2265,7 @@ def __getattr__(name: str) -> Any:
         return _globals["openaiOSeriesConfig"]
 
     # Lazy load other config instances
-    _config_instances = {
+    _config_instances: Final = {
         "openAIGPTConfig": "OpenAIGPTConfig",
         "openAIGPTAudioConfig": "OpenAIGPTAudioConfig",
         "openAIGPT5Config": "OpenAIGPT5Config",
@@ -2197,9 +2273,9 @@ def __getattr__(name: str) -> Any:
         "nvidiaNimEmbeddingConfig": "NvidiaNimEmbeddingConfig",
     }
     if name in _config_instances:
-        from ._lazy_imports import _get_litellm_globals
+        from ._lazy_imports import get_litellm_globals
 
-        _globals = _get_litellm_globals()
+        _globals = get_litellm_globals()
         if name not in _globals:
             # Import the config class and instantiate it
             config_class = __getattr__(_config_instances[name])
@@ -2212,9 +2288,9 @@ def __getattr__(name: str) -> Any:
 
     # Lazy load provider_list
     if name == "provider_list":
-        from ._lazy_imports import _get_litellm_globals
+        from ._lazy_imports import get_litellm_globals
 
-        _globals = _get_litellm_globals()
+        _globals = get_litellm_globals()
         # Check if already cached
         if "provider_list" not in _globals:
             # LlmProviders is eagerly imported above, so we can import it directly
@@ -2225,33 +2301,33 @@ def __getattr__(name: str) -> Any:
 
     # Lazy load priority_reservation_settings instance
     if name == "priority_reservation_settings":
-        from ._lazy_imports import _get_litellm_globals
+        from ._lazy_imports import get_litellm_globals
 
-        _globals = _get_litellm_globals()
+        _globals = get_litellm_globals()
         # Check if already cached
         if "priority_reservation_settings" not in _globals:
             # Import the class and instantiate it
-            PriorityReservationSettings = __getattr__("PriorityReservationSettings")
+            PriorityReservationSettings: Final = __getattr__("PriorityReservationSettings")
             _globals["priority_reservation_settings"] = PriorityReservationSettings()
         return _globals["priority_reservation_settings"]
 
     # Lazy load logging_callback_manager instance
     if name == "logging_callback_manager":
-        from ._lazy_imports import _get_litellm_globals
+        from ._lazy_imports import get_litellm_globals
 
-        _globals = _get_litellm_globals()
+        _globals = get_litellm_globals()
         # Check if already cached
         if "logging_callback_manager" not in _globals:
             # Import the class and instantiate it
-            LoggingCallbackManager = __getattr__("LoggingCallbackManager")
+            LoggingCallbackManager: Final = __getattr__("LoggingCallbackManager")
             _globals["logging_callback_manager"] = LoggingCallbackManager()
         return _globals["logging_callback_manager"]
 
     # Lazy load _service_logger module
     if name == "_service_logger":
-        from ._lazy_imports import _get_litellm_globals
+        from ._lazy_imports import get_litellm_globals
 
-        _globals = _get_litellm_globals()
+        _globals = get_litellm_globals()
         # Check if already cached
         if "_service_logger" not in _globals:
             # Import the module lazily

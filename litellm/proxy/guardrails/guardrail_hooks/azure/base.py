@@ -1,5 +1,5 @@
 import re
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -14,7 +14,11 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
 
 # Azure Content Safety APIs have a 10,000 character limit per request.
-AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH = 10000
+AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH: Final = 10000
+
+# Azure Content Safety bills text in 1,000-character "text records"; a submitted
+# chunk of N characters consumes ceil(N / 1000) text records.
+AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH: Final = 1000
 
 
 class AzureGuardrailBase:
@@ -41,7 +45,7 @@ class AzureGuardrailBase:
         self.api_base = api_base
         self.api_version: str = kwargs.get("api_version") or "2024-09-01"
 
-    async def _post_to_content_safety(self, endpoint_path: str, request_body: Dict[str, Any]) -> Dict[str, Any]:
+    async def _post_to_content_safety(self, endpoint_path: str, request_body: dict[str, Any]) -> dict[str, Any]:
         """POST to an Azure Content Safety endpoint with standard auth headers.
 
         Args:
@@ -52,24 +56,24 @@ class AzureGuardrailBase:
         Returns:
             Parsed JSON response dict.
         """
-        url = f"{self.api_base}/contentsafety/{endpoint_path}?api-version={self.api_version}"
-        headers = {
+        url: Final = f"{self.api_base}/contentsafety/{endpoint_path}?api-version={self.api_version}"
+        headers: Final = {
             "Ocp-Apim-Subscription-Key": self.api_key,
             "Content-Type": "application/json",
         }
 
         verbose_proxy_logger.debug("Azure Content Safety request [%s]: %s", endpoint_path, request_body)
-        response = await self.async_handler.post(
+        response: Final = await self.async_handler.post(
             url=url,
             headers=headers,
             json=request_body,
         )
-        response_json: Dict[str, Any] = response.json()
+        response_json: Final[dict[str, Any]] = response.json()
         verbose_proxy_logger.debug("Azure Content Safety response [%s]: %s", endpoint_path, response_json)
         return response_json
 
     @staticmethod
-    def split_text_by_words(text: str, max_length: int) -> List[str]:
+    def split_text_by_words(text: str, max_length: int) -> list[str]:
         """
         Split text into chunks at word boundaries without breaking words.
 
@@ -90,9 +94,9 @@ class AzureGuardrailBase:
         # Tokenize into alternating non-whitespace and whitespace runs so
         # that original newlines, tabs, and multiple spaces are preserved
         # within each chunk.
-        tokens = re.findall(r"\S+|\s+", text)
+        tokens: Final = re.findall(r"\S+|\s+", text)
 
-        chunks: List[str] = []
+        chunks: Final[list[str]] = []
         current_chunk = ""
 
         for token in tokens:
@@ -117,7 +121,7 @@ class AzureGuardrailBase:
 
         return chunks
 
-    def get_user_prompt(self, messages: List["AllMessageValues"]) -> Optional[str]:
+    def get_user_prompt(self, messages: list["AllMessageValues"]) -> str | None:
         """
         Get the last consecutive block of messages from the user.
 

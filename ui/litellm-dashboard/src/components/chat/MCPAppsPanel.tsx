@@ -13,9 +13,9 @@ import {
   getMCPOAuthUserCredentialStatus,
   listMCPTools,
 } from "../networking";
-import { AUTH_TYPE, MCPServer, MCPTool, handleTransport } from "../mcp_tools/types";
+import { AUTH_TYPE, MCPServer, MCPTool, handleTransport, isUnsupportedOnGatewayConnect } from "../mcp_tools/types";
 import { Logo } from "@/components/molecules/logo/Logo";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { useUserMcpOAuthFlow } from "@/hooks/useUserMcpOAuthFlow";
 
 interface OAuth2ConnectButtonProps {
@@ -71,6 +71,7 @@ interface Props {
   accessToken: string;
   selectedServers: string[];
   onChange: (servers: string[]) => void;
+  connectMode?: boolean;
 }
 
 const AVATAR_COLORS = [
@@ -96,21 +97,23 @@ type TabKey = "all" | "connected";
 
 const TOOLS_FETCH_CONCURRENCY = 5;
 
-const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange }) => {
+const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange, connectMode }) => {
   const [servers, setServers] = useState<MCPServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [activeTab, setActiveTab] = useState<TabKey>("all");
   const [togglingOn, setTogglingOn] = useState<Set<string>>(new Set());
-  const [detailServer, setDetailServer] = useState<MCPServer | null>(null);
+  const [detailServerId, setDetailServerId] = useState<string | null>(null);
   const [toolCounts, setToolCounts] = useState<Record<string, number>>({});
   const [loadingCounts, setLoadingCounts] = useState(false);
   const [oauthConnected, setOauthConnected] = useState<Set<string>>(new Set());
+  const [oauthChecking, setOauthChecking] = useState<Set<string>>(new Set());
 
   const serversRef = useRef<MCPServer[]>([]);
-  useEffect(() => {
-    serversRef.current = servers;
-  }, [servers]);
+  const commitServers = useCallback((next: MCPServer[]) => {
+    serversRef.current = next;
+    setServers(next);
+  }, []);
   const selectedServersRef = useRef<string[]>(selectedServers);
   useEffect(() => {
     selectedServersRef.current = selectedServers;
@@ -122,13 +125,30 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
 
   const nameOf = (s: MCPServer) => s.server_name ?? s.alias ?? s.server_id;
 
-  const fetchLoadCancelledRef = useRef(false);
+  const detailServer = servers.find((s) => s.server_id === detailServerId);
+
+  const connectUnavailabilityLabel = useCallback(
+    (s: MCPServer): string | null => {
+      if (!connectMode) return null;
+      if (isUnsupportedOnGatewayConnect(s.auth_type)) return "Not supported on this connection";
+      return null;
+    },
+    [connectMode],
+  );
+
+  const connectableNow = useCallback(
+    (serverId: string): MCPServer | undefined => {
+      const current = serversRef.current.find((s) => s.server_id === serverId);
+      return current !== undefined && connectUnavailabilityLabel(current) === null ? current : undefined;
+    },
+    [connectUnavailabilityLabel],
+  );
 
   const fetchToolCount = useCallback(
-    async (server: MCPServer) => {
+    async (server: MCPServer, isCurrentLoad: () => boolean) => {
       try {
         const toolsData = await listMCPTools(accessToken, server.server_id);
-        if (fetchLoadCancelledRef.current) return;
+        if (!isCurrentLoad()) return;
         const tools: MCPTool[] = Array.isArray(toolsData?.tools) ? toolsData.tools : [];
         setToolCounts((prev) => ({ ...prev, [nameOf(server)]: tools.length }));
       } catch {
@@ -139,89 +159,105 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
   );
 
   const checkOauthCredential = useCallback(
-    async (server: MCPServer) => {
+    async (server: MCPServer, isCurrentLoad: () => boolean) => {
       try {
         const status = await getMCPOAuthUserCredentialStatus(accessToken, server.server_id);
-        if (fetchLoadCancelledRef.current) return;
+        if (!isCurrentLoad()) return;
         if (status.has_credential && !status.is_expired) {
           setOauthConnected((prev) => new Set(prev).add(server.server_id));
         }
       } catch {
         // ignore
+      } finally {
+        if (isCurrentLoad()) {
+          setOauthChecking((prev) => {
+            const next = new Set(prev);
+            next.delete(server.server_id);
+            return next;
+          });
+        }
       }
     },
     [accessToken],
   );
 
   useEffect(() => {
-    fetchLoadCancelledRef.current = false;
+    let current = true;
+    const isCurrentLoad = () => current;
 
-    fetchMCPServers(accessToken)
+    fetchMCPServers(accessToken, undefined, connectMode)
       .then(async (serverData) => {
-        if (fetchLoadCancelledRef.current) return;
+        if (!isCurrentLoad()) return;
         const list: MCPServer[] = Array.isArray(serverData) ? serverData : serverData?.data ?? [];
-        setServers(list);
+        const reachable = connectMode ? list.filter((s) => s.connected_app_reachable !== false) : list;
+        const oauthServers = reachable.filter((s) => s.auth_type === AUTH_TYPE.OAUTH2);
+        commitServers(reachable);
+        setOauthChecking(new Set(oauthServers.map((s) => s.server_id)));
         setLoading(false);
 
+        oauthServers.forEach((s) => checkOauthCredential(s, isCurrentLoad));
+
         setLoadingCounts(true);
-        const chunks = Array.from({ length: Math.ceil(list.length / TOOLS_FETCH_CONCURRENCY) }, (_, i) =>
-          list.slice(i * TOOLS_FETCH_CONCURRENCY, (i + 1) * TOOLS_FETCH_CONCURRENCY),
+        const chunks = Array.from({ length: Math.ceil(reachable.length / TOOLS_FETCH_CONCURRENCY) }, (_, i) =>
+          reachable.slice(i * TOOLS_FETCH_CONCURRENCY, (i + 1) * TOOLS_FETCH_CONCURRENCY),
         );
         for (const chunk of chunks) {
-          if (fetchLoadCancelledRef.current) return;
-          await Promise.allSettled(chunk.map((s) => fetchToolCount(s)));
+          if (!isCurrentLoad()) return;
+          await Promise.allSettled(chunk.map((s) => fetchToolCount(s, isCurrentLoad)));
         }
-        if (!fetchLoadCancelledRef.current) setLoadingCounts(false);
-
-        const oauthServers = list.filter((s) => s.auth_type === AUTH_TYPE.OAUTH2);
-        oauthServers.forEach((s) => checkOauthCredential(s));
+        if (isCurrentLoad()) setLoadingCounts(false);
       })
       .catch(() => {
-        if (!fetchLoadCancelledRef.current) {
-          setServers([]);
+        if (isCurrentLoad()) {
+          commitServers([]);
           setLoading(false);
         }
       });
     return () => {
-      fetchLoadCancelledRef.current = true;
+      current = false;
     };
-  }, [accessToken, fetchToolCount, checkOauthCredential]);
+  }, [accessToken, connectMode, commitServers, fetchToolCount, checkOauthCredential]);
 
   useEffect(() => {
     if (oauthConnected.size === 0) return;
     const namesToAdd = serversRef.current
-      .filter((s) => oauthConnected.has(s.server_id) && !selectedServersRef.current.includes(nameOf(s)))
+      .filter(
+        (s) =>
+          oauthConnected.has(s.server_id) &&
+          !selectedServersRef.current.includes(nameOf(s)) &&
+          connectUnavailabilityLabel(s) === null,
+      )
       .map(nameOf);
     if (namesToAdd.length > 0) {
       onChangeRef.current([...selectedServersRef.current, ...namesToAdd]);
     }
-  }, [oauthConnected]);
+  }, [oauthConnected, connectUnavailabilityLabel]);
 
-  const handleToggle = async (serverName: string, checked: boolean, serverId?: string) => {
+  const handleToggle = async (server: MCPServer, checked: boolean) => {
+    const serverName = nameOf(server);
     if (!checked) {
       onChange(selectedServers.filter((s) => s !== serverName));
-      if (serverId) {
-        setOauthConnected((prev) => {
-          const next = new Set(prev);
-          next.delete(serverId);
-          return next;
-        });
-      }
+      setOauthConnected((prev) => {
+        const next = new Set(prev);
+        next.delete(server.server_id);
+        return next;
+      });
       return;
     }
+    if (connectableNow(server.server_id) === undefined) return;
     setTogglingOn((prev) => new Set(prev).add(serverName));
     try {
-      const idToFetch = serverId ?? serverName;
-      const result = await listMCPTools(accessToken, idToFetch);
+      const result = await listMCPTools(accessToken, server.server_id);
       if (result?.error) {
-        MessageManager.warning(`Could not load tools for ${serverName}`);
+        toast.warning(`Could not load tools for ${serverName}`);
         return;
       }
+      if (connectableNow(server.server_id) === undefined) return;
       if (!selectedServersRef.current.includes(serverName)) {
         onChange([...selectedServersRef.current, serverName]);
       }
     } catch {
-      MessageManager.warning(`Could not load tools for ${serverName}`);
+      toast.warning(`Could not load tools for ${serverName}`);
     } finally {
       setTogglingOn((prev) => {
         const next = new Set(prev);
@@ -229,6 +265,35 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
         return next;
       });
     }
+  };
+
+  const renderConnectionIndicator = (server: MCPServer) => {
+    const unavailabilityLabel = connectUnavailabilityLabel(server);
+    if (unavailabilityLabel !== null) {
+      return (
+        <span className="text-[11px] text-muted-foreground shrink-0 whitespace-nowrap">{unavailabilityLabel}</span>
+      );
+    }
+    if (server.auth_type === AUTH_TYPE.OAUTH2) {
+      if (oauthConnected.has(server.server_id)) {
+        return <CheckCircle className="h-3.5 w-3.5 text-success shrink-0" />;
+      }
+      if (oauthChecking.has(server.server_id)) {
+        return <Skeleton className="h-6 w-16 shrink-0 rounded-md" />;
+      }
+      return (
+        <OAuth2ConnectButton
+          server={server}
+          accessToken={accessToken}
+          onConnect={(id) => setOauthConnected((prev) => new Set(prev).add(id))}
+          variant="badge"
+        />
+      );
+    }
+    if (selectedServers.includes(nameOf(server))) {
+      return <span className="w-[7px] h-[7px] rounded-full bg-success shrink-0" />;
+    }
+    return null;
   };
 
   const { data: detailToolsResult, isLoading: loadingTools } = useQuery({
@@ -244,11 +309,23 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
       !query.trim() ||
       name.toLowerCase().includes(query.toLowerCase()) ||
       (s.description ?? "").toLowerCase().includes(query.toLowerCase());
-    const matchesTab = activeTab === "all" || selectedServers.includes(name);
+    const matchesTab =
+      activeTab === "all" || (selectedServers.includes(name) && connectUnavailabilityLabel(s) === null);
     return matchesQuery && matchesTab;
   });
 
-  const connectedCount = servers.filter((s) => selectedServers.includes(nameOf(s))).length;
+  const connectedCount = servers.filter(
+    (s) => selectedServers.includes(nameOf(s)) && connectUnavailabilityLabel(s) === null,
+  ).length;
+
+  const emptyStateText = () => {
+    if (servers.length === 0) {
+      return connectMode
+        ? "No MCP servers are available to this connection yet. Ask an admin to grant your user or team access."
+        : "No MCP servers configured. Add servers in Tools -> MCP Servers.";
+    }
+    return activeTab === "connected" ? "No servers connected yet." : "No servers match your search.";
+  };
   const totalTools = Object.values(toolCounts).reduce((sum, n) => sum + n, 0);
 
   if (detailServer) {
@@ -257,12 +334,65 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
     const isTogglingOn = togglingOn.has(name);
     const color = getAvatarColor(name);
 
+    const renderDetailAction = () => {
+      const unavailabilityLabel = connectUnavailabilityLabel(detailServer);
+      if (unavailabilityLabel !== null) {
+        return <span className="text-[13px] text-muted-foreground py-2.5 shrink-0">{unavailabilityLabel}</span>;
+      }
+      if (detailServer.auth_type !== AUTH_TYPE.OAUTH2) {
+        return (
+          <Button
+            variant={isConnected ? "outline" : "default"}
+            disabled={isTogglingOn}
+            onClick={() => handleToggle(detailServer, !isConnected)}
+            className="font-semibold h-[38px] min-w-[110px]"
+          >
+            {isTogglingOn && <Loader2 className="h-4 w-4 animate-spin mr-1.5" />}
+            {isConnected ? "Disconnect" : "Connect"}
+          </Button>
+        );
+      }
+      if (oauthConnected.has(detailServer.server_id)) {
+        return (
+          <Button
+            variant="destructive"
+            onClick={async () => {
+              try {
+                await deleteMCPOAuthUserCredential(accessToken, detailServer.server_id);
+              } catch (_) {
+                // Ignore
+              }
+              setOauthConnected((prev) => {
+                const n = new Set(prev);
+                n.delete(detailServer.server_id);
+                return n;
+              });
+              onChangeRef.current(selectedServersRef.current.filter((s) => s !== name));
+            }}
+            className="font-semibold h-[38px] min-w-[110px]"
+          >
+            Disconnect
+          </Button>
+        );
+      }
+      return (
+        <OAuth2ConnectButton
+          server={detailServer}
+          accessToken={accessToken}
+          onConnect={(id) => {
+            setOauthConnected((prev) => new Set(prev).add(id));
+          }}
+          variant="button"
+        />
+      );
+    };
+
     return (
       <div className="w-full">
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => setDetailServer(null)}
+          onClick={() => setDetailServerId(null)}
           className="-ml-3 mb-5 gap-1.5 text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="h-3 w-3" />
@@ -288,48 +418,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
             <h2 className="m-0 mb-1 text-[22px] font-bold text-foreground">{name}</h2>
             <p className="m-0 text-sm text-muted-foreground">{detailServer.description ?? "MCP server"}</p>
           </div>
-          {detailServer.auth_type === AUTH_TYPE.OAUTH2 ? (
-            oauthConnected.has(detailServer.server_id) ? (
-              <Button
-                variant="destructive"
-                onClick={async () => {
-                  try {
-                    await deleteMCPOAuthUserCredential(accessToken, detailServer.server_id);
-                  } catch (_) {
-                    // Ignore
-                  }
-                  setOauthConnected((prev) => {
-                    const n = new Set(prev);
-                    n.delete(detailServer.server_id);
-                    return n;
-                  });
-                  onChangeRef.current(selectedServersRef.current.filter((s) => s !== name));
-                }}
-                className="font-semibold h-[38px] min-w-[110px]"
-              >
-                Disconnect
-              </Button>
-            ) : (
-              <OAuth2ConnectButton
-                server={detailServer}
-                accessToken={accessToken}
-                onConnect={(id) => {
-                  setOauthConnected((prev) => new Set(prev).add(id));
-                }}
-                variant="button"
-              />
-            )
-          ) : (
-            <Button
-              variant={isConnected ? "outline" : "default"}
-              disabled={isTogglingOn}
-              onClick={() => handleToggle(name, !isConnected, detailServer.server_id)}
-              className="font-semibold h-[38px] min-w-[110px]"
-            >
-              {isTogglingOn && <Loader2 className="h-4 w-4 animate-spin mr-1.5" />}
-              {isConnected ? "Disconnect" : "Connect"}
-            </Button>
-          )}
+          {renderDetailAction()}
         </div>
 
         <h3 className="m-0 mb-3 text-[15px] font-semibold text-foreground">Information</h3>
@@ -390,24 +479,30 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
         <div>
           <div className="flex items-center gap-2 mb-1">
             <h2 className="m-0 text-lg font-semibold text-foreground">MCP Servers</h2>
-            <span className="text-[10px] font-semibold text-primary bg-primary/10 rounded px-1.5 py-0.5 uppercase tracking-wider">
-              Beta
-            </span>
-          </div>
-          <div className="flex items-center gap-3">
-            <p className="m-0 text-[13px] text-muted-foreground">Browse tools, authenticate once, use in chat</p>
-            {loadingCounts ? (
-              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Loader2 className="h-3 w-3 animate-spin" />
-                Loading tools...
+            {!connectMode && (
+              <span className="text-[10px] font-semibold text-primary bg-primary/10 rounded px-1.5 py-0.5 uppercase tracking-wider">
+                Beta
               </span>
-            ) : totalTools > 0 ? (
-              <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                <Wrench className="h-3 w-3" />
-                {totalTools} tool{totalTools !== 1 ? "s" : ""} available
-              </span>
-            ) : null}
+            )}
           </div>
+          {connectMode ? (
+            <p className="m-0 text-[13px] text-muted-foreground">Click a server to see its tools and connect</p>
+          ) : (
+            <div className="flex items-center gap-3">
+              <p className="m-0 text-[13px] text-muted-foreground">Browse tools, authenticate once, use in chat</p>
+              {loadingCounts ? (
+                <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Loading tools...
+                </span>
+              ) : totalTools > 0 ? (
+                <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <Wrench className="h-3 w-3" />
+                  {totalTools} tool{totalTools !== 1 ? "s" : ""} available
+                </span>
+              ) : null}
+            </div>
+          )}
         </div>
         <div className="relative w-[220px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
@@ -447,29 +542,25 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
           ))}
         </div>
       ) : filtered.length === 0 ? (
-        <div className="text-center text-muted-foreground text-[13px] py-12 px-3">
-          {servers.length === 0
-            ? "No MCP servers configured. Add servers in Tools -> MCP Servers."
-            : activeTab === "connected"
-              ? "No servers connected yet."
-              : "No servers match your search."}
-        </div>
+        <div className="text-center text-muted-foreground text-[13px] py-12 px-3">{emptyStateText()}</div>
       ) : (
         <div className="grid grid-cols-2 border rounded-lg overflow-hidden">
           {filtered.map((server, idx) => {
             const name = nameOf(server);
-            const isConnected = selectedServers.includes(name);
             const color = getAvatarColor(name);
             const isLeftCol = idx % 2 === 0;
             const count = toolCounts[name];
+            const unavailable = connectUnavailabilityLabel(server) !== null;
 
             return (
               <div
                 key={server.server_id}
-                onClick={() => setDetailServer(server)}
+                onClick={() => setDetailServerId(server.server_id)}
                 className={`flex items-center gap-3 p-4 bg-card cursor-pointer transition-colors hover:bg-accent/30 min-w-0 ${
                   isLeftCol ? "border-r" : ""
-                } ${Math.floor(idx / 2) < Math.floor((filtered.length - 1) / 2) ? "border-b" : ""}`}
+                } ${Math.floor(idx / 2) < Math.floor((filtered.length - 1) / 2) ? "border-b" : ""} ${
+                  unavailable ? "opacity-50" : ""
+                }`}
               >
                 {server.mcp_info?.logo_url ? (
                   <Logo
@@ -500,22 +591,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                     ) : null}
                   </div>
                 </div>
-                {server.auth_type === AUTH_TYPE.OAUTH2 ? (
-                  oauthConnected.has(server.server_id) ? (
-                    <CheckCircle className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
-                  ) : (
-                    <OAuth2ConnectButton
-                      server={server}
-                      accessToken={accessToken}
-                      onConnect={(id) => {
-                        setOauthConnected((prev) => new Set(prev).add(id));
-                      }}
-                      variant="badge"
-                    />
-                  )
-                ) : isConnected ? (
-                  <span className="w-[7px] h-[7px] rounded-full bg-emerald-600 dark:bg-emerald-400 shrink-0" />
-                ) : null}
+                {renderConnectionIndicator(server)}
                 <ChevronRight className="h-3 w-3 text-muted-foreground/40 shrink-0" />
               </div>
             );

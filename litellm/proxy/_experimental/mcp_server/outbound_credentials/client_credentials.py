@@ -19,9 +19,9 @@ Implements the client-credentials behavior contract for the v2 resolver:
   identity.
 
 The token-endpoint POST is injected (``M2MTokenEndpointPost``) so the grant orchestration is
-testable without a live IdP; ``post_client_credentials_grant`` is the httpx edge and the one
-place the untyped response boundary is contained. Failures are values: the source returns
-``Result[OAuthToken, CredError]``; only the httpx edge touches exceptions.
+testable without a live IdP; ``post_client_credentials_grant`` is the httpx edge. Failures are
+values: the source returns ``Result[OAuthToken, CredError]``; only the httpx edge touches
+exceptions.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ import hashlib
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
 from dataclasses import dataclass
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
@@ -50,6 +50,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ClientCredentialsConfig,
     CredError,
+    HeaderCarrier,
 )
 
 
@@ -86,7 +87,7 @@ TokenEndpointOutcome = Annotated[
 M2MTokenEndpointPost = Callable[[str, "dict[str, str]", "dict[str, str]"], Awaitable[TokenEndpointOutcome]]
 
 
-_TOKEN_BODY_ADAPTER: TypeAdapter[dict[str, object]] = TypeAdapter(dict[str, object])
+_TOKEN_BODY_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 
 
 async def post_client_credentials_grant(
@@ -94,29 +95,26 @@ async def post_client_credentials_grant(
 ) -> TokenEndpointOutcome:
     """POST the grant to the token endpoint and classify the transport outcome.
 
-    The httpx edge: litellm's handler is partially typed (and raises ``HTTPStatusError`` itself on
-    a 4xx/5xx), so the untyped boundary is contained here and every field the caller reads comes
-    out of a validated ``TokenEndpointOutcome``.
+    The httpx edge: litellm's handler raises ``HTTPStatusError`` itself on a 4xx/5xx, and every
+    field the caller reads comes out of a validated ``TokenEndpointOutcome``.
     """
     from litellm.llms.custom_httpx.http_handler import (  # noqa: PLC0415  # defer heavy handler import to call time
-        get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # handler is partially typed
+        get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # handler factory params are coarsely typed
     )
     from litellm.types.llms.custom_http import httpxSpecialProvider  # noqa: PLC0415  # deferred with the handler import
 
     try:
-        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
-        response = await client.post(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # handler is partially typed
+        client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
+        response: Final = await client.post(  # pyright: ignore[reportUnknownMemberType]  # handler params are coarsely typed
             url, headers={"Accept": "application/json", **headers}, data=form
         )
     except httpx.HTTPStatusError as status_err:
-        status_code = status_err.response.status_code
+        status_code: Final = status_err.response.status_code
         return TokenEndpointDenied(status_code=status_code, detail=f"token endpoint returned HTTP {status_code}")
     except Exception as exc:  # noqa: BLE001  # any transport failure is the same outcome: unreachable
         return TokenEndpointUnreachable(detail=str(exc))
-    if not isinstance(response, httpx.Response):
-        return TokenEndpointUnreachable(detail="token endpoint returned no response")
     try:
-        body = _TOKEN_BODY_ADAPTER.validate_json(response.content)
+        body: Final = _TOKEN_BODY_ADAPTER.validate_json(response.content)
     except ValidationError:
         return TokenEndpointDenied(
             status_code=response.status_code, detail="token endpoint returned a non-JSON-object body"
@@ -217,7 +215,7 @@ class ClientCredentialsTokenSource:
                 return None
             case Ok(grant):
                 async with self._lock(server_id):
-                    cached = await self._backend.get(grant.identity_key, server_id)
+                    cached: Final = await self._backend.get(grant.identity_key, server_id)
                     if cached is not None and cached.access_token != failed_access_token:
                         return cached.access_token
                     await self._backend.delete(grant.identity_key, server_id)
@@ -228,7 +226,7 @@ class ClientCredentialsTokenSource:
                             return None
 
     async def _fetch_and_cache(self, server_id: str, grant: _PreparedGrant) -> Result[OAuthToken, CredError]:
-        outcome = await self._post(grant.token_url, grant.form, grant.headers)
+        outcome: Final = await self._post(grant.token_url, grant.form, grant.headers)
         match outcome:
             case TokenEndpointUnreachable():
                 return Error(CredError.of_upstream_unavailable(f"OAuth2 token endpoint unreachable: {outcome.detail}"))
@@ -243,11 +241,11 @@ class ClientCredentialsTokenSource:
     async def _cache_token(
         self, server_id: str, grant: _PreparedGrant, body: dict[str, object]
     ) -> Result[OAuthToken, CredError]:
-        access_token = body.get("access_token")
+        access_token: Final = body.get("access_token")
         if not isinstance(access_token, str) or not access_token:
             return Error(CredError.of_misconfigured("OAuth2 token response is missing 'access_token'"))
-        expires_in = _parse_expires_in(body.get("expires_in"))
-        token = OAuthToken(
+        expires_in: Final = _parse_expires_in(body.get("expires_in"))
+        token: Final = OAuthToken(
             access_token=access_token,
             expires_at=self._clock() + expires_in if expires_in is not None else None,
             scopes=_parse_granted_scopes(body.get("scope")) or (),
@@ -255,7 +253,7 @@ class ClientCredentialsTokenSource:
         # The min-cache floor is itself capped at the token's real lifetime, so a token whose
         # expires_in is below the skew is never served past its actual expiry; a non-positive
         # expires_in caches nothing (every request re-fetches, serialized by the per-server lock).
-        ttl = (
+        ttl: Final = (
             max(expires_in - self._expiry_skew_seconds, min(float(expires_in), self._min_cache_seconds), 0.0)
             if expires_in is not None
             else self._default_ttl_seconds
@@ -267,7 +265,7 @@ class ClientCredentialsTokenSource:
 
 def _prepare_grant(config: ClientCredentialsConfig) -> Result[_PreparedGrant, CredError]:
     if not config.client_id or not config.client_secret or not config.token_url:
-        missing = ", ".join(
+        missing: Final = ", ".join(
             name
             for name, present in (
                 ("client_id", bool(config.client_id)),
@@ -282,16 +280,17 @@ def _prepare_grant(config: ClientCredentialsConfig) -> Result[_PreparedGrant, Cr
         build_token_endpoint_client_auth,
     )
 
-    client_auth = build_token_endpoint_client_auth(
+    client_auth: Final = build_token_endpoint_client_auth(
         auth_method=config.token_endpoint_auth_method,
         client_id=config.client_id,
         client_secret=config.client_secret.get_secret_value(),
     )
-    form = {
+    form: Final = {
         "grant_type": "client_credentials",
         **client_auth.body,
         **({"scope": " ".join(config.scopes)} if config.scopes else {}),
         **({"audience": config.audience} if config.audience else {}),
+        **({"resource": config.upstream_resource} if config.upstream_resource else {}),
     }
     return Ok(
         _PreparedGrant(
@@ -305,7 +304,7 @@ def _prepare_grant(config: ClientCredentialsConfig) -> Result[_PreparedGrant, Cr
 
 def _identity_key(config: ClientCredentialsConfig) -> str:
     """Hash of everything that names the client identity; any rotation yields a new key."""
-    material = "\n".join(
+    material: Final = "\n".join(
         (
             config.token_url or "",
             config.client_id or "",
@@ -313,6 +312,7 @@ def _identity_key(config: ClientCredentialsConfig) -> str:
             config.token_endpoint_auth_method or "",
             " ".join(config.scopes),
             config.audience or "",
+            config.upstream_resource or "",
         )
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
@@ -326,22 +326,30 @@ class ClientCredentialsBearerAuth(httpx.Auth):
     refetch fails, or the retried request 401s again, the upstream's response stands.
     """
 
-    def __init__(self, access_token: str, refetch: Callable[[str], Awaitable[str | None]]) -> None:
-        self.header_name = "Authorization"
+    def __init__(
+        self,
+        access_token: str,
+        refetch: Callable[[str], Awaitable[str | None]],
+        carrier: HeaderCarrier,
+    ) -> None:
+        self._carrier = carrier
+        self.header_name = carrier.header_name
         self._access_token = SecretStr(access_token)
         self._refetch = refetch
 
     async def async_auth_flow(self, request: httpx.Request) -> AsyncGenerator[httpx.Request, httpx.Response]:
-        token = self._access_token.get_secret_value()
-        request.headers[self.header_name] = f"Bearer {token}"
-        response = yield request
+        token: Final = self._access_token.get_secret_value()
+        name, value = self._carrier.header(token)
+        request.headers[name] = value
+        response: Final = yield request
         if response.status_code != 401:
             return
-        fresh = await self._refetch(token)
+        fresh: Final = await self._refetch(token)
         if fresh is None:
             return
         self._access_token = SecretStr(fresh)
-        request.headers[self.header_name] = f"Bearer {fresh}"
+        fresh_name, fresh_value = self._carrier.header(fresh)
+        request.headers[fresh_name] = fresh_value
         yield request
 
     def sync_auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:

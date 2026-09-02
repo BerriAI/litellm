@@ -4,9 +4,7 @@ Test OpenAI Moderation Guardrail
 """
 
 import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from unittest.mock import MagicMock, patch
 
@@ -484,22 +482,25 @@ async def test_openai_moderation_guardrail_streaming_harmful_content():
                 "metadata": {"guardrails": ["test-openai-moderation"]},
             }
 
-            # Should raise HTTPException when processing streaming harmful content
-            from fastapi import HTTPException
+            # Chunks have already been flushed by end-of-stream moderation, so
+            # the block surfaces as the in-stream error frame, not a raise.
+            import json as _json
 
-            with pytest.raises(HTTPException) as exc_info:
-                result_chunks = []
-                async for (
-                    chunk
-                ) in unified_guardrail.async_post_call_streaming_iterator_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    response=mock_stream(),
-                    request_data=request_data,
-                ):
-                    result_chunks.append(chunk)
+            result_chunks = []
+            async for chunk in unified_guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_stream(),
+                request_data=request_data,
+            ):
+                result_chunks.append(chunk)
 
-            assert exc_info.value.status_code == 400
-            assert "Violated OpenAI moderation policy" in str(exc_info.value.detail)
+            frame = result_chunks[-1]
+            assert isinstance(frame, bytes)
+            text = frame.decode()
+            assert text.startswith("data: ")
+            assert "Violated OpenAI moderation policy" in text
+            payload = _json.loads(text[len("data: ") :])
+            assert payload["error"]["code"] == "400"
 
 
 @pytest.mark.asyncio
@@ -729,10 +730,15 @@ async def test_openai_moderation_post_call_request_data_passthrough():
 
         mock_make_request.assert_called_once()
 
-        # Guardrail info in the REAL request_data (not a throwaway)
-        guardrail_info_list = request_data["metadata"].get(
-            "standard_logging_guardrail_information"
+        # Guardrail info in the REAL request_data (not a throwaway). The unified hook
+        # seeds litellm_metadata, so read the bucket the resolver names rather than
+        # assuming "metadata"; the spend log reads it the same way.
+        from litellm.litellm_core_utils.core_helpers import (
+            get_metadata_variable_name_from_kwargs,
         )
+
+        bucket = request_data[get_metadata_variable_name_from_kwargs(request_data)]
+        guardrail_info_list = bucket.get("standard_logging_guardrail_information")
         assert guardrail_info_list is not None
         assert isinstance(guardrail_info_list[0]["guardrail_response"], dict)
         assert "results" in guardrail_info_list[0]["guardrail_response"]

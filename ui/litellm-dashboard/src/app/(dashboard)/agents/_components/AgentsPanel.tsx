@@ -1,14 +1,23 @@
 import React, { useState, useEffect } from "react";
-import { Modal, Alert } from "antd";
-import { Plus } from "lucide-react";
+import { Info, Plus } from "lucide-react";
 import { getAgentsList, deleteAgentCall } from "@/components/networking";
 import AddAgentForm from "./add_agent_form";
 import { isAdminRole } from "@/utils/roles";
 import AgentInfoView from "./agent_info";
 import AgentsTable from "./AgentsTable";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Agent } from "@/components/agents/types";
 import { Team } from "@/components/key_team_helpers/key_list";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 
 interface AgentsPanelProps {
@@ -111,11 +120,11 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
     setIsDeleting(true);
     try {
       await deleteAgentCall(accessToken, agentToDelete.id);
-      NotificationsManager.success(`Agent "${agentToDelete.name}" deleted successfully`);
+      toast.success(`Agent "${agentToDelete.name}" deleted successfully`);
       await refetchAgents(healthCheckEnabled);
     } catch (error) {
       console.error("Error deleting agent:", error);
-      NotificationsManager.fromBackend("Failed to delete agent");
+      toast.fromError("Failed to delete agent");
     } finally {
       setIsDeleting(false);
       setAgentToDelete(null);
@@ -130,17 +139,18 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
       <div className="flex flex-col gap-2 mb-4">
         <h1 className="text-2xl font-bold">Agents</h1>
-        <p className="text-sm text-gray-600">
+        <p className="text-sm text-muted-foreground">
           List of A2A-spec agents that are available to be used in your organization. Go to AI Hub, to make agents
           public.
         </p>
-        <Alert
-          message="Why do agents need keys?"
-          description="Keys scope access to an agent and allow it to call MCP tools. Assign a key when creating an agent or from the Virtual Keys page."
-          type="info"
-          showIcon
-          className="mb-3"
-        />
+        <Alert className="mb-3">
+          <Info />
+          <AlertTitle>Why do agents need keys?</AlertTitle>
+          <AlertDescription>
+            Keys scope access to an agent and allow it to call MCP tools. Assign a key when creating an agent or from
+            the Virtual Keys page.
+          </AlertDescription>
+        </Alert>
         {isAdmin && (
           <div className="mt-2 flex items-center gap-4">
             <Button onClick={handleAddAgent} disabled={!accessToken}>
@@ -180,18 +190,27 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
       />
 
       {agentToDelete && (
-        <Modal
-          title="Delete Agent"
-          open={agentToDelete !== null}
-          onOk={handleDeleteConfirm}
-          onCancel={handleDeleteCancel}
-          confirmLoading={isDeleting}
-          okText="Delete"
-          okButtonProps={{ danger: true }}
+        <AlertDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) handleDeleteCancel();
+          }}
         >
-          <p>Are you sure you want to delete agent: {agentToDelete.name}?</p>
-          <p>This action cannot be undone.</p>
-        </Modal>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete Agent</AlertDialogTitle>
+              <AlertDialogDescription>
+                Are you sure you want to delete agent: {agentToDelete.name}? This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <Button variant="destructive" onClick={handleDeleteConfirm} disabled={isDeleting}>
+                Delete
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       )}
     </div>
   );

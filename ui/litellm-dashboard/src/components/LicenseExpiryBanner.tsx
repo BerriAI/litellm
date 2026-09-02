@@ -1,7 +1,9 @@
 "use client";
 
 import React, { useState } from "react";
-import { Alert } from "antd";
+import { CircleAlert, TriangleAlert, X } from "lucide-react";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import { Button } from "@/components/ui/button";
 import { LicenseInfo } from "@/components/networking";
 import { useLicenseInfo } from "@/app/(dashboard)/hooks/license/useLicenseInfo";
 import { formatExpiryDate, getDaysUntilExpiration, getLicenseExpiryTier } from "@/utils/licenseUtils";
@@ -76,16 +78,22 @@ export const LicenseExpiryBannerView: React.FC<LicenseExpiryBannerViewProps> = (
   };
 
   return (
-    <Alert
-      message={message}
-      description={description}
-      type={tier === "warning" ? "warning" : "error"}
-      showIcon
-      banner
-      closable={isDismissible}
-      onClose={handleClose}
-      style={{ marginBottom: 0, borderRadius: 0 }}
-    />
+    <Alert variant={tier === "warning" ? "warning" : "error"} className="rounded-none border-x-0 border-t-0">
+      {tier === "warning" ? (
+        <TriangleAlert className="size-4" aria-hidden />
+      ) : (
+        <CircleAlert className="size-4" aria-hidden />
+      )}
+      <AlertTitle>{message}</AlertTitle>
+      <AlertDescription>{description}</AlertDescription>
+      {isDismissible && (
+        <AlertAction>
+          <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={handleClose}>
+            <X className="size-4" />
+          </Button>
+        </AlertAction>
+      )}
+    </Alert>
   );
 };
 

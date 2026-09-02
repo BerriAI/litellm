@@ -11,7 +11,7 @@ legacy internal names with `general_settings.use_team_public_model_name: false`.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, cast
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -28,14 +28,14 @@ class TeamModelNameTranslator:
         """`(internal_routing_key, public_name)` for a team-scoped row, else None."""
         if not isinstance(model, dict):
             return None
-        model_dict = cast(dict[str, object], model)  # any-ok: checked
-        model_info_raw: object = model_dict.get("model_info")
+        model_dict: Final = cast(dict[str, object], model)  # any-ok: checked
+        model_info_raw: Final[object] = model_dict.get("model_info")
         if not isinstance(model_info_raw, Mapping):
             return None
-        model_info = cast(Mapping[str, object], model_info_raw)  # any-ok: checked
-        team_id = model_info.get("team_id")
-        team_public = model_info.get("team_public_model_name")
-        name = model_dict.get("model_name")
+        model_info: Final = cast(Mapping[str, object], model_info_raw)  # any-ok: checked
+        team_id: Final = model_info.get("team_id")
+        team_public: Final = model_info.get("team_public_model_name")
+        name: Final = model_dict.get("model_name")
         if (
             isinstance(team_id, str)
             and isinstance(team_public, str)
@@ -53,7 +53,7 @@ class TeamModelNameTranslator:
 
     @staticmethod
     def build_internal_to_public_map(
-        llm_router: "Router | None",
+        llm_router: Router | None,
         general_settings: Mapping[str, object],
     ) -> dict[str, str]:
         """Internal team routing key -> public `team_public_model_name`.
@@ -63,7 +63,7 @@ class TeamModelNameTranslator:
         """
         if llm_router is None or not TeamModelNameTranslator._is_enabled(general_settings):
             return {}
-        router_model_list = llm_router.get_model_list()
+        router_model_list: Final = llm_router.get_model_list()
         if not isinstance(router_model_list, list):
             return {}
         return dict(
@@ -84,7 +84,7 @@ class TeamModelNameTranslator:
         the listed entry, and sibling team rows collapse to their first
         occurrence.
         """
-        result: dict[str, str] = {}
+        result: Final[dict[str, str]] = {}
         for name in model_names:
             result.setdefault(internal_to_public.get(name, name), name)
         return result
@@ -92,7 +92,7 @@ class TeamModelNameTranslator:
     @staticmethod
     def listing_entries(
         model_names: list[str],
-        llm_router: "Router | None",
+        llm_router: Router | None,
         general_settings: Mapping[str, object],
     ) -> list[tuple[str, str]]:
         """`(response_id, metadata_lookup_id)` for each listed model, de-duplicated
@@ -106,7 +106,7 @@ class TeamModelNameTranslator:
         internal key. Both ids are identical for unmapped names (globals,
         access-group keys).
         """
-        internal_to_public = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
+        internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
         if not internal_to_public:
             return [(name, name) for name in model_names]
         return list(TeamModelNameTranslator._response_to_lookup_map(model_names, internal_to_public).items())
@@ -114,7 +114,7 @@ class TeamModelNameTranslator:
     @staticmethod
     def translate_listing(
         model_names: list[str],
-        llm_router: "Router | None",
+        llm_router: Router | None,
         general_settings: Mapping[str, object],
     ) -> list[str]:
         """Public-name view of `model_names` (the `response_id` of each listing
@@ -129,7 +129,7 @@ class TeamModelNameTranslator:
     def resolve_public_name(
         model_id: str,
         available_models: list[str],
-        llm_router: "Router | None",
+        llm_router: Router | None,
         general_settings: Mapping[str, object],
     ) -> str:
         """Resolve a public team name back to the internal routing key the router
@@ -143,7 +143,7 @@ class TeamModelNameTranslator:
         unchanged when it is not an accessible public team name (already-internal
         names and globals pass through).
         """
-        internal_to_public = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
+        internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
         if not internal_to_public:
             return model_id
         return TeamModelNameTranslator._response_to_lookup_map(available_models, internal_to_public).get(

@@ -7,6 +7,7 @@ to prevent directory traversal attacks.
 """
 
 import os
+from typing import Final
 
 
 def safe_join(base_dir: str, *parts: str) -> str:
@@ -30,8 +31,8 @@ def safe_join(base_dir: str, *parts: str) -> str:
     for part in parts:
         if "\x00" in part:
             raise ValueError("Path contains null byte")
-    base = os.path.realpath(base_dir)
-    resolved = os.path.realpath(os.path.join(base, *parts))
+    base: Final = os.path.realpath(base_dir)
+    resolved: Final = os.path.realpath(os.path.join(base, *parts))
     if not (resolved.startswith(base + os.sep) or resolved == base):
         raise ValueError(f"Path {resolved!r} escapes base directory {base!r}")
     return resolved
@@ -57,7 +58,7 @@ def safe_filename(filename: str) -> str:
     if "\x00" in filename:
         raise ValueError("Filename contains null byte")
     # Normalize backslash separators for cross-platform safety
-    name = filename.replace("\\", "/").rsplit("/", 1)[-1]
+    name: Final = filename.replace("\\", "/").rsplit("/", 1)[-1]
     if not name or name in (".", ".."):
         raise ValueError("Empty or unsafe filename")
     return name

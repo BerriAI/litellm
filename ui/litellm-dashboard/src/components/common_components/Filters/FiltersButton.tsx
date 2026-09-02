@@ -1,4 +1,5 @@
-import { Badge, Button } from "antd";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/cva.config";
 import { Filter } from "lucide-react";
 import React from "react";
 
@@ -16,10 +17,14 @@ export const FiltersButton: React.FC<FiltersButtonProps> = ({
   label = "Filters",
 }) => {
   return (
-    <Badge color="blue" dot={hasActiveFilters}>
-      <Button type="default" onClick={onClick} icon={<Filter size={16} />} className={active ? "bg-gray-100" : ""}>
+    <span className="relative inline-flex">
+      <Button variant="outline" onClick={onClick} className={cn(active && "bg-muted")}>
+        <Filter className="size-4" />
         {label}
       </Button>
-    </Badge>
+      {hasActiveFilters && (
+        <sup aria-hidden="true" className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-primary" />
+      )}
+    </span>
   );
 };
