@@ -12,9 +12,9 @@ pytest.importorskip("opentelemetry")
 
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter  # noqa: E402
 
+import litellm  # noqa: E402
 from litellm.caching.dual_cache import DualCache  # noqa: E402
-from litellm.integrations.otel.langfuse_logger import LangfuseOpenTelemetryV2  # noqa: E402
-from litellm.integrations.otel.logger import OpenTelemetryV2, build_otel_v2_logger  # noqa: E402
+from litellm.integrations.otel.logger import build_otel_v2_logger  # noqa: E402
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config, is_otel_v2_enabled  # noqa: E402
 from litellm.integrations.otel.model.spans import LITELLM_PROXY_REQUEST_SPAN_NAME, SpanRole  # noqa: E402
 from litellm.integrations.otel.plumbing import context as otel_context  # noqa: E402
@@ -22,6 +22,7 @@ from litellm.integrations.otel.plumbing import providers  # noqa: E402
 from litellm.integrations.otel.plumbing.context import set_request_root_span  # noqa: E402
 from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2  # noqa: E402
 from litellm.proxy._types import UserAPIKeyAuth  # noqa: E402
+from litellm.proxy.utils import ProxyLogging  # noqa: E402
 from litellm.types.llms.openai import (  # noqa: E402
     ResponseCompletedEvent,
     ResponsesAPIResponse,
@@ -294,13 +295,29 @@ def test_unrenderable_output_never_raises_into_the_request():
 def test_factory_keeps_the_base_logger_unless_langfuse_content_capture_is_on(capture, mappers):
     logger, exporter = _logger(capture=capture, mappers=mappers)
 
-    assert type(logger) is OpenTelemetryV2
     _run_request(logger, CHAT_DATA, "acompletion", ModelResponse())
     attrs = _root_attrs(exporter)
     assert INPUT_ATTR not in attrs and OUTPUT_ATTR not in attrs
 
 
-def test_langfuse_otel_preset_builds_the_langfuse_logger(monkeypatch):
+@pytest.mark.parametrize(
+    ("capture", "mappers", "relays_streams"),
+    [
+        ("span_only", ("genai", "langfuse"), True),
+        ("no_content", ("genai", "langfuse"), False),
+        ("span_only", ("genai",), False),
+    ],
+)
+def test_only_langfuse_content_capture_takes_proxy_streams_off_the_fast_path(
+    monkeypatch, capture, mappers, relays_streams
+):
+    logger, _ = _logger(capture=capture, mappers=mappers)
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+
+    assert ProxyLogging._callback_capabilities().has_iterator_override is relays_streams
+
+
+def test_langfuse_otel_preset_builds_a_logger_that_stamps_the_root(monkeypatch):
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
@@ -311,7 +328,10 @@ def test_langfuse_otel_preset_builds_the_langfuse_logger(monkeypatch):
     loggers: list = []
     try:
         built = _maybe_construct_otel_v2("langfuse_otel", loggers)
-        assert isinstance(built, LangfuseOpenTelemetryV2)
+        assert built is not None
         assert _maybe_construct_otel_v2("langfuse_otel", loggers) is built
+        root = _start_root(built)
+        asyncio.run(built.async_pre_call_hook(UserAPIKeyAuth(), DualCache(), CHAT_DATA, "acompletion"))
+        assert INPUT_ATTR in dict(root.attributes or {})
     finally:
         is_otel_v2_enabled.cache_clear()
