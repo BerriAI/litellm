@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
+from openai.types.responses.tool_param import Mcp
 import importlib
 
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
@@ -719,3 +720,144 @@ def test_extract_tool_call_details_still_prefers_openai_arguments():
     assert name == "get_weather"
     assert call_id == "call_123"
     assert arguments == '{"city": "Paris"}'
+
+
+def _registered(
+    server_id: str,
+    name: str,
+    alias: str | None = None,
+    server_name: str | None = None,
+    access_groups: list[str] | None = None,
+):
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    return MCPServer(
+        server_id=server_id,
+        name=name,
+        alias=alias,
+        server_name=server_name,
+        transport=MCPTransport.http,
+        access_groups=access_groups,
+    )
+
+
+async def _no_toolset(_: str) -> bool:
+    return False
+
+
+ZAPIER_TOOL: Mcp = {
+    "type": "mcp",
+    "server_label": "zapier",
+    "server_url": "https://mcp.zapier.com/api/mcp/mcp",
+    "require_approval": "never",
+}
+EXPLICIT_GATEWAY_TOOL = {"type": "mcp", "server_label": "github", "server_url": "litellm_proxy/mcp/github"}
+FUNCTION_TOOL = {"type": "function", "name": "get_weather", "parameters": {}}
+
+
+@pytest.mark.asyncio
+async def test_gateway_served_names_matches_alias_server_name_name_access_group_and_toolset():
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import _gateway_served_names
+
+    servers = (
+        _registered("id-1", "github-name", alias="github", server_name="github-server", access_groups=["prod-group"]),
+        _registered("id-2", "deepwiki"),
+    )
+
+    async def toolset_exists(name: str) -> bool:
+        return name == "my-toolset"
+
+    served = await _gateway_served_names(
+        {"github", "github-server", "github-name", "deepwiki", "prod-group", "my-toolset", "mcp", "nope"},
+        servers=lambda: servers,
+        toolset_exists=toolset_exists,
+    )
+
+    assert served == {"github", "github-server", "github-name", "deepwiki", "prod-group", "my-toolset"}
+
+
+@pytest.mark.asyncio
+async def test_split_mcp_tools_leaves_external_mcp_path_urls_for_the_provider():
+
+    async def served_names(names):
+        assert names == {"mcp"}
+        return frozenset()
+
+    gateway_tools, other_tools = await LiteLLM_Proxy_MCP_Handler._split_mcp_tools(
+        [ZAPIER_TOOL, EXPLICIT_GATEWAY_TOOL, FUNCTION_TOOL], served_names=served_names
+    )
+
+    assert gateway_tools == [EXPLICIT_GATEWAY_TOOL]
+    assert other_tools == [ZAPIER_TOOL, FUNCTION_TOOL]
+
+
+@pytest.mark.asyncio
+async def test_split_mcp_tools_repoints_served_proxy_urls_at_the_gateway():
+    served_tool = {
+        "type": "mcp",
+        "server_label": "toolset",
+        "server_url": "http://localhost:4000/mcp/my-toolset",
+        "require_approval": "never",
+        "allowed_tools": ["get_me"],
+    }
+    unserved_tool = {"type": "mcp", "server_label": "typo", "server_url": "http://localhost:4000/mcp/githb"}
+
+    async def served_names(names):
+        return frozenset({"my-toolset"})
+
+    gateway_tools, other_tools = await LiteLLM_Proxy_MCP_Handler._split_mcp_tools(
+        [served_tool, unserved_tool], served_names=served_names
+    )
+
+    assert gateway_tools == [{**served_tool, "server_url": "litellm_proxy/mcp/my-toolset"}]
+    assert other_tools == [unserved_tool]
+
+
+@pytest.mark.asyncio
+async def test_split_mcp_tools_skips_resolution_when_nothing_points_at_the_proxy():
+    async def served_names(names):
+        raise AssertionError("no lookup expected")
+
+    gateway_tools, other_tools = await LiteLLM_Proxy_MCP_Handler._split_mcp_tools(
+        [EXPLICIT_GATEWAY_TOOL, FUNCTION_TOOL], served_names=served_names
+    )
+
+    assert gateway_tools == [EXPLICIT_GATEWAY_TOOL]
+    assert other_tools == [FUNCTION_TOOL]
+
+
+def test_should_use_gateway_still_triggers_on_http_mcp_path():
+    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway([ZAPIER_TOOL]) is True
+    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway([EXPLICIT_GATEWAY_TOOL]) is True
+    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway([FUNCTION_TOOL]) is False
+    assert LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(None) is False
+
+
+@pytest.mark.asyncio
+async def test_aresponses_api_with_mcp_forwards_unserved_external_mcp_tool_to_the_provider(monkeypatch):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.responses import main as responses_main
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", types.SimpleNamespace(prisma_client=None))
+    monkeypatch.setattr(global_mcp_server_manager, "get_registry", lambda: {})
+    provider_tools: list[object] = []
+
+    def fake_provider(**kwargs: object) -> object:
+        request_params = cast(dict[str, object], kwargs["response_api_optional_request_params"])
+        provider_tools.append(request_params.get("tools"))
+
+        async def respond() -> ResponsesAPIResponse:
+            return ResponsesAPIResponse(id="resp_zapier", created_at=0, output=[])
+
+        return respond()
+
+    monkeypatch.setattr(responses_main.base_llm_http_handler, "response_api_handler", fake_provider)
+
+    response = await responses_main.aresponses_api_with_mcp(
+        input="Reply with the single word ok.", model="openai/gpt-4.1", tools=[ZAPIER_TOOL]
+    )
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert provider_tools == [[ZAPIER_TOOL]]

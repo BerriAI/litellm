@@ -104,7 +104,7 @@ class SemanticToolFilterHook(CustomLogger):
         )
 
         # Parse to separate MCP tools from other tools
-        mcp_tools, _ = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(tools)
+        mcp_tools, _ = await LiteLLM_Proxy_MCP_Handler._split_mcp_tools(tools)
 
         if not mcp_tools:
             return []
