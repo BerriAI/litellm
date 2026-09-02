@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any, Final
 
 import orjson
@@ -57,6 +58,19 @@ def _hidden_param(response: object, key: str) -> str | None:
         return None
     value: Final = params.get(key)
     return value if isinstance(value, str) else None
+
+
+def deployment_id_for_encoding(response: object, data: Mapping[str, Any]) -> str | None:
+    """The deployment the request actually routed to, not the public model group.
+
+    The router leaves ``model_id`` out of ``_hidden_params`` on the generic path and
+    records the selected deployment under ``litellm_metadata.model_info.id`` instead.
+    Encoding ``data["model"]`` there would embed the group, so a later status or
+    content call could load-balance to a different deployment and fail to resolve.
+    """
+    litellm_metadata: Final = data.get("litellm_metadata") or {}
+    model_info: Final = litellm_metadata.get("model_info") or {}
+    return _hidden_param(response, "model_id") or model_info.get("id") or data.get("model")
 
 
 def encode_video_id_in_response(response: object, fallback_model: str | None) -> object:
