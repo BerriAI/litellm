@@ -5009,3 +5009,93 @@ class TestAzureRouterModelStreamingDispatch:
         assert result.status_code == 200
         body = b"".join([chunk async for chunk in result.body_iterator])
         assert body == upstream_body
+
+
+class TestAzureRouterModelStreamingKeepalive:
+    async def _dispatch(self, monkeypatch, interval, headers_delay=0.0, body_delay=0.0) -> StreamingResponse:
+        import asyncio
+
+        import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.passthrough.main import AsyncPassthroughStreamingResponse
+
+        monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", interval)
+
+        class _StallingBody(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                await asyncio.sleep(body_delay)
+                yield b"data: hello\n\n"
+
+        async def _upstream_response() -> httpx.Response:
+            await asyncio.sleep(headers_delay)
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream", "x-upstream": "kept"},
+                stream=_StallingBody(),
+                request=httpx.Request("POST", "https://my-azure.openai.azure.com/openai/deployments/gpt-5/x"),
+            )
+
+        logging_obj = MagicMock()
+        logging_obj.async_flush_passthrough_collected_chunks = AsyncMock()
+
+        class StreamingRouter:
+            async def allm_passthrough_route(self, **kwargs):
+                return await AsyncPassthroughStreamingResponse(
+                    response=_upstream_response(),
+                    litellm_logging_obj=logging_obj,
+                    provider_config=MagicMock(),
+                )
+
+        async def fake_get_request_body(_request):
+            return {"model": "gpt-5", "stream": True}
+
+        monkeypatch.setattr(proxy_server, "llm_router", StreamingRouter())
+        monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
+        monkeypatch.setattr(ep, "is_passthrough_request_using_router_model", lambda *a, **k: True)
+
+        request = MagicMock(spec=Request)
+        request.method = "POST"
+        request.headers = {"content-type": "application/json"}
+        request.query_params = {}
+
+        result = await azure_proxy_route(
+            endpoint="openai/deployments/gpt-5/chat/completions",
+            request=request,
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+        assert isinstance(result, StreamingResponse)
+        return result
+
+    @pytest.mark.asyncio
+    async def test_pings_while_upstream_headers_are_still_pending(self, monkeypatch):
+        result = await self._dispatch(monkeypatch, interval=0.05, headers_delay=0.3)
+
+        chunks = [chunk async for chunk in result.body_iterator]
+
+        assert result.status_code == 200
+        assert result.headers["x-accel-buffering"] == "no"
+        assert chunks[0] == b": ping\n\n"
+        assert chunks.count(b": ping\n\n") >= 3
+        assert b"".join(chunks).endswith(b"data: hello\n\n")
+
+    @pytest.mark.asyncio
+    async def test_pings_while_upstream_body_is_still_pending(self, monkeypatch):
+        result = await self._dispatch(monkeypatch, interval=0.05, body_delay=0.3)
+
+        chunks = [chunk async for chunk in result.body_iterator]
+
+        assert result.status_code == 200
+        assert result.headers["x-upstream"] == "kept"
+        assert chunks[0] == b": ping\n\n"
+        assert chunks.count(b": ping\n\n") >= 3
+        assert chunks[-1] == b"data: hello\n\n"
+
+    @pytest.mark.asyncio
+    async def test_relays_upstream_bytes_untouched_while_keepalives_are_unconfigured(self, monkeypatch):
+        result = await self._dispatch(monkeypatch, interval=None, headers_delay=0.15, body_delay=0.15)
+
+        chunks = [chunk async for chunk in result.body_iterator]
+
+        assert result.headers["x-upstream"] == "kept"
+        assert chunks == [b"data: hello\n\n"]

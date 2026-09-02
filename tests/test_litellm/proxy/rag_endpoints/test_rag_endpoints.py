@@ -324,6 +324,100 @@ def test_rag_query_stream_returns_event_stream(client_internal_user):
     assert "data: [DONE]" in response.text
 
 
+def test_rag_query_stream_pings_while_retrieval_is_still_running(client_internal_user, monkeypatch):
+    import asyncio
+
+    import litellm as litellm_module
+
+    monkeypatch.setattr(litellm_module, "sse_keepalive_ping_interval_seconds", 0.05)
+
+    async def slow_aquery(**kwargs):
+        await asyncio.sleep(0.3)
+        return await litellm_module.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "What is the codename?"}],
+            mock_response="The codename is AZURE-FALCON-42.",
+            stream=True,
+            api_key="test-key",
+        )
+
+    with (
+        patch(  # test-quality-ok: the handler calls the module-level litellm.aquery directly; no injection seam
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+            new=AsyncMock(side_effect=slow_aquery),
+        ),
+        patch("litellm.vector_store_registry", None),  # test-quality-ok: proxy module global, no injection seam
+        patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: proxy module global, no injection seam
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/query",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "What is the codename?"}],
+                "retrieval_config": {
+                    "vector_store_id": "vs_test_123",
+                    "custom_llm_provider": "openai",
+                },
+                "stream": True,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.headers.get("content-type", "").startswith("text/event-stream")
+    assert response.headers["x-accel-buffering"] == "no"
+    assert response.text.startswith(": ping\n\n")
+    assert response.text.count(": ping\n\n") >= 3
+    assert '"object":"chat.completion.chunk"' in response.text
+    assert response.text.endswith("data: [DONE]\n\n")
+
+
+def test_rag_query_stream_keeps_response_headers_when_retrieval_beats_the_keepalive(
+    client_internal_user, monkeypatch
+):
+    import litellm as litellm_module
+
+    monkeypatch.setattr(litellm_module, "sse_keepalive_ping_interval_seconds", 5)
+
+    async def fast_aquery(**kwargs):
+        response = await litellm_module.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "What is the codename?"}],
+            mock_response="The codename is AZURE-FALCON-42.",
+            stream=True,
+            api_key="test-key",
+        )
+        response._hidden_params["response_cost"] = 3.45e-06
+        return response
+
+    with (
+        patch(  # test-quality-ok: the handler calls the module-level litellm.aquery directly; no injection seam
+            "litellm.proxy.rag_endpoints.endpoints.litellm.aquery",
+            new=AsyncMock(side_effect=fast_aquery),
+        ),
+        patch("litellm.vector_store_registry", None),  # test-quality-ok: proxy module global, no injection seam
+        patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: proxy module global, no injection seam
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/query",
+            json={
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "What is the codename?"}],
+                "retrieval_config": {
+                    "vector_store_id": "vs_test_123",
+                    "custom_llm_provider": "openai",
+                },
+                "stream": True,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.headers.get("content-type", "").startswith("text/event-stream")
+    assert response.headers.get("x-litellm-response-cost") == "3.45e-06"
+    assert not response.text.startswith(": ping")
+    assert '"object":"chat.completion.chunk"' in response.text
+    assert response.text.endswith("data: [DONE]\n\n")
+
+
 EICAR = r"X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
 INGEST_REQUEST = '{"ingest_options":{"vector_store":{"custom_llm_provider":"openai"}}}'
 

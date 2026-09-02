@@ -9,10 +9,11 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 from __future__ import annotations
 
 import hmac
+import inspect
 import json
 import os
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, cast
 
@@ -32,6 +33,7 @@ from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.passthrough.main import AsyncPassthroughStreamingResponse
 from litellm.proxy._types import *
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -40,12 +42,16 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth,
     user_api_key_auth_websocket,
 )
+from litellm.proxy.common_request_processing import open_sse_before_first_byte
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
     _safe_set_request_parsed_body,
     get_form_data,
     get_request_body,
+)
+from litellm.proxy.common_utils.sse_keepalive import (
+    wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
 from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
@@ -1478,6 +1484,74 @@ def is_azure_ai_search_service_level_index_create(method: str, endpoint: str) ->
     return path == "indexes" or path.endswith("/indexes")
 
 
+async def _relay_upstream_bytes(upstream: AsyncGenerator[bytes, bytes]) -> AsyncGenerator[bytes, None]:
+    try:
+        async for chunk in upstream:
+            yield chunk
+    finally:
+        await upstream.aclose()
+
+
+async def _relay_azure_router_model(
+    llm_router: litellm.Router,
+    model: str,
+    endpoint: str,
+    request: Request,
+    request_body: Mapping[str, object],
+    is_streaming_request: bool,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Response:
+    result: Final = await llm_router.allm_passthrough_route(
+        model=model,
+        method=request.method,
+        endpoint=endpoint,
+        request_query_params=request.query_params,
+        request_headers=_safe_get_request_headers(request),
+        stream=is_streaming_request,
+        content=None,
+        data=None,
+        files=None,
+        json=(request_body if request.headers.get("content-type") == "application/json" else None),
+        params=None,
+        headers=None,
+        cookies=None,
+        litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict),
+    )
+
+    if not is_streaming_request:
+        upstream: Final = cast(httpx.Response, result)
+        return Response(
+            content=await upstream.aread(),
+            status_code=upstream.status_code,
+            headers=HttpPassThroughEndpointHelpers.get_response_headers(headers=upstream.headers, custom_headers=None),
+        )
+
+    if inspect.isasyncgen(result):
+        sse_headers: Final = {"content-type": "text/event-stream"}
+        return StreamingResponse(
+            content=wrap_passthrough_sse_bytes_with_keepalive_pings(
+                stream=_relay_upstream_bytes(result),
+                ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
+                upstream_headers=sse_headers,
+            ),
+            status_code=200,
+            headers=sse_headers,
+        )
+
+    upstream_stream: Final = cast(AsyncPassthroughStreamingResponse, result)
+    return StreamingResponse(
+        content=wrap_passthrough_sse_bytes_with_keepalive_pings(
+            stream=_relay_upstream_bytes(upstream_stream),
+            ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
+            upstream_headers=upstream_stream.headers,
+        ),
+        status_code=upstream_stream.status_code,
+        headers=HttpPassThroughEndpointHelpers.get_response_headers(
+            headers=upstream_stream.headers, custom_headers=None
+        ),
+    )
+
+
 @router.api_route(
     "/azure_ai/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -1528,55 +1602,18 @@ async def azure_proxy_route(
             if is_router_model:
                 request_body = await get_request_body(request)
                 is_streaming_request = is_passthrough_request_streaming(request_body)
-                result = await llm_router.allm_passthrough_route(
-                    model=part,
-                    method=request.method,
-                    endpoint=endpoint,
-                    request_query_params=request.query_params,
-                    request_headers=_safe_get_request_headers(request),
-                    stream=is_streaming_request,
-                    content=None,
-                    data=None,
-                    files=None,
-                    json=(request_body if request.headers.get("content-type") == "application/json" else None),
-                    params=None,
-                    headers=None,
-                    cookies=None,
-                    litellm_metadata=get_passthrough_router_request_metadata(user_api_key_dict),
-                )
-
-                if is_streaming_request:
-                    # Check if result is an async generator (from _async_streaming)
-                    import inspect
-
-                    if inspect.isasyncgen(result):
-                        # Result is already an async generator, use it directly
-                        return StreamingResponse(
-                            content=result,
-                            status_code=200,
-                            headers={"content-type": "text/event-stream"},
-                        )
-                    else:
-                        # Result is an httpx.Response, use aiter_bytes()
-                        result = cast(httpx.Response, result)
-                        return StreamingResponse(
-                            content=result.aiter_bytes(),
-                            status_code=result.status_code,
-                            headers=HttpPassThroughEndpointHelpers.get_response_headers(
-                                headers=result.headers,
-                                custom_headers=None,
-                            ),
-                        )
-
-                # Non-streaming response
-                result = cast(httpx.Response, result)
-                content = await result.aread()
-                return Response(
-                    content=content,
-                    status_code=result.status_code,
-                    headers=HttpPassThroughEndpointHelpers.get_response_headers(
-                        headers=result.headers,
-                        custom_headers=None,
+                return await open_sse_before_first_byte(
+                    _relay_azure_router_model(
+                        llm_router=llm_router,
+                        model=part,
+                        endpoint=endpoint,
+                        request=request,
+                        request_body=request_body,
+                        is_streaming_request=is_streaming_request,
+                        user_api_key_dict=user_api_key_dict,
+                    ),
+                    ping_interval_seconds=(
+                        litellm.sse_keepalive_ping_interval_seconds if is_streaming_request else None
                     ),
                 )
             elif is_vector_store_index:
