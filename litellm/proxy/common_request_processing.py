@@ -1496,6 +1496,35 @@ class ProxyBaseLLMRequestProcessing:
         self.data = data
 
     @staticmethod
+    def _merge_passthrough_streaming_headers(
+        response_headers: httpx.Headers | dict | None,
+        custom_headers: dict,
+    ) -> dict:
+        """
+        Merge upstream passthrough headers with proxy/custom headers.
+
+        Proxy/custom headers win on key collisions.
+        """
+        excluded_headers: Final = {  # mutable-ok: set of header names to exclude from forwarding
+            "transfer-encoding",
+            "content-encoding",
+            "set-cookie",
+            "connection",
+            "keep-alive",
+            "proxy-authenticate",
+            "proxy-authorization",
+            "te",
+            "trailer",
+            "upgrade",
+        }
+
+        merged_headers: Final = {  # mutable-ok: dict comprehension for merged headers forwarded to httpx
+            key: value for key, value in dict(response_headers or {}).items() if key.lower() not in excluded_headers
+        }
+        merged_headers.update(custom_headers)
+        return merged_headers
+
+    @staticmethod
     def get_custom_headers(
         *,
         user_api_key_dict: UserAPIKeyAuth,
@@ -2389,6 +2418,16 @@ class ProxyBaseLLMRequestProcessing:
                     )
 
                 if route_type == "allm_passthrough_route":
+                    upstream_response_headers: Final = getattr(response, "headers", None)
+                    streaming_headers: Final = (
+                        ProxyBaseLLMRequestProcessing._merge_passthrough_streaming_headers(
+                            response_headers=upstream_response_headers,
+                            custom_headers=custom_headers,
+                        )
+                        if upstream_response_headers is not None
+                        else custom_headers
+                    )
+
                     # Check if response is an async generator
                     if self._is_streaming_response(response):
                         if asyncio.iscoroutine(response):
@@ -2418,11 +2457,11 @@ class ProxyBaseLLMRequestProcessing:
 
                         # For passthrough routes, stream directly without error parsing
                         # since we're dealing with raw binary data (e.g., AWS event streams)
-                        return StreamingResponse(
-                            content=generator,
-                            status_code=status.HTTP_200_OK,
+                        return _UpstreamClosingStreamingResponse(
+                            content=generator,  # pyright: ignore[reportArgumentType]  # generator-configured StreamingResponse
+                            status_code=getattr(response, "status_code", status.HTTP_200_OK),
                             media_type=self._passthrough_event_stream_media_type(),
-                            headers=custom_headers,
+                            headers=streaming_headers,
                         )
                     else:
                         _early = await self._handle_non_streaming_allm_passthrough_route(
@@ -2437,7 +2476,7 @@ class ProxyBaseLLMRequestProcessing:
                         return StreamingResponse(
                             content=response.aiter_bytes(),
                             status_code=response.status_code,
-                            headers=custom_headers,
+                            headers=streaming_headers,
                         )
                 elif route_type == "anthropic_messages":
                     # Check if response is actually a streaming response (async generator)
