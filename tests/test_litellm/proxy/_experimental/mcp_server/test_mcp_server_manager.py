@@ -2599,11 +2599,12 @@ class TestMCPServerManager:
             StaticHeaderAuth,
         )
         from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError, ServerSpec, Subject
 
         resolved: Final[list[str | None]] = []
 
         class _FakeProvider:
-            async def resolve_credentials(self, subject, server):
+            async def resolve_credentials(self, subject: Subject, server: ServerSpec) -> Ok[StaticHeaderAuth, CredError]:
                 resolved.append(subject.inbound_token.get_secret_value() if subject.inbound_token else None)
                 return Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
 
@@ -2624,11 +2625,12 @@ class TestMCPServerManager:
             StaticHeaderAuth,
         )
         from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError, ServerSpec, Subject
 
         resolved: Final[list[str | None]] = []
 
         class _FakeProvider:
-            async def resolve_credentials(self, subject, server):
+            async def resolve_credentials(self, subject: Subject, server: ServerSpec) -> Ok[StaticHeaderAuth, CredError]:
                 resolved.append(subject.inbound_token.get_secret_value() if subject.inbound_token else None)
                 return Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
 
