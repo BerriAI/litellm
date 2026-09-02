@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
+use litellm_core::Error;
 use litellm_core::constants::ANTHROPIC_MESSAGES_PROVIDER;
 use litellm_core::messages::types::MessagesRequest;
 use litellm_core::messages::{messages, messages_stream};
 use litellm_core::router::Router;
-use litellm_core::{CoreError, CoreResult};
 use serde_json::{Map, Value};
 
 pub(crate) enum MessagesResponse {
@@ -16,16 +16,16 @@ pub async fn run(
     router: &Arc<Router>,
     body: Value,
     extra_headers: Option<Map<String, Value>>,
-) -> CoreResult<MessagesResponse> {
+) -> Result<MessagesResponse, Error> {
     let model = body
         .get("model")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|model| !model.is_empty())
-        .ok_or_else(|| CoreError::InvalidRequest("messages body requires a model".to_string()))?;
-    let deployment = router.get_available_deployment(model).ok_or_else(|| {
-        CoreError::Routing(format!("no deployment available for model '{model}'"))
-    })?;
+        .ok_or_else(|| Error::InvalidRequest("messages body requires a model".to_string()))?;
+    let deployment = router
+        .get_available_deployment(model)
+        .ok_or_else(|| Error::Routing(format!("no deployment available for model '{model}'")))?;
     let provider_model = deployment.litellm_params.model.as_str();
     let upstream_model = provider_model
         .split_once('/')
@@ -37,7 +37,7 @@ pub async fn run(
     };
     let mut body = body;
     body.as_object_mut()
-        .ok_or_else(|| CoreError::InvalidRequest("messages body must be an object".to_string()))?
+        .ok_or_else(|| Error::InvalidRequest("messages body must be an object".to_string()))?
         .insert(
             "model".to_string(),
             Value::String(upstream_model.to_string()),
@@ -60,6 +60,6 @@ pub async fn run(
     serde_json::to_value(response)
         .map(MessagesResponse::Json)
         .map_err(|err| {
-            CoreError::InvalidResponse(format!("failed to serialize messages response: {err}"))
+            Error::InvalidResponse(format!("failed to serialize messages response: {err}"))
         })
 }

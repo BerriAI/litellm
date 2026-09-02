@@ -212,10 +212,9 @@ async def create_vector_store_in_db(
     # (``api_key``, ``api_base``, ``api_version``) into this row. That
     # exposed every env-stored embedding-model credential on the
     # ``/vector_store/{new,info,update,list}`` responses. Keep the user's
-    # raw ``litellm_embedding_model`` reference; resolution now happens in
-    # ``_update_request_data_with_litellm_managed_vector_store_registry``
-    # at request-handling time so the cleartext config exists only in
-    # per-request memory and never reaches the database.
+    # raw ``litellm_embedding_model`` reference; each search embeds the
+    # query through the router at request time, so the credentials stay
+    # on the deployment and never reach the database.
     if litellm_params:
         litellm_params_dict: Final = GenericLiteLLMParams(**litellm_params).model_dump(exclude_none=True)
         data_to_create["litellm_params"] = safe_dumps(litellm_params_dict)
@@ -605,11 +604,9 @@ async def update_vector_store(
 
         # Handle litellm_params if provided. As with the create path, the
         # embedding-config auto-resolve previously persisted cleartext
-        # credentials into the row; resolution now happens at request-
-        # handling time in
-        # ``_update_request_data_with_litellm_managed_vector_store_registry``
-        # so this row only ever stores the user-supplied
-        # ``litellm_embedding_model`` reference.
+        # credentials into the row; each search now embeds the query
+        # through the router at request time, so this row only ever stores
+        # the user-supplied ``litellm_embedding_model`` reference.
         if "litellm_params" in update_data:
             _input_litellm_params: Final[dict] = update_data.get("litellm_params", {}) or {}
             litellm_params_dict: Final = GenericLiteLLMParams(**_input_litellm_params).model_dump(exclude_none=True)
