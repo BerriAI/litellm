@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
@@ -19,7 +19,7 @@ from email.mime.text import MIMEText
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, TypeVar, Union, cast, overload
 
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import (
@@ -139,6 +139,7 @@ from litellm.proxy.db.token_auth import (
 )
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
+    resolve_endpoint_translation,
 )
 from litellm.proxy.hooks import PROXY_HOOKS, get_proxy_hook
 from litellm.proxy.hooks.cache_control_check import _PROXY_CacheControlCheck
@@ -154,7 +155,7 @@ from litellm.proxy.hooks.sensitive_data_routing import (
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
-from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
+from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor, UndeliverableStreamRewrite
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import (
@@ -446,13 +447,179 @@ def _policy_pipelines(data: Mapping[str, object]) -> tuple[tuple[str, "Guardrail
     )
 
 
-def _pipeline_managed_guardrail_names(data: Mapping[str, object]) -> frozenset[str]:
-    managed: Final = _policy_state_metadata(data).get("_pipeline_managed_guardrails")
-    return (
-        frozenset(cast("Collection[str]", managed))  # cast-ok: the policy engine wrote these guardrail names
-        if managed
-        else frozenset()
+def _pipeline_managed_guardrail_names(
+    data: Mapping[str, object], mode: Literal["pre_call", "post_call"]
+) -> frozenset[str]:
+    return frozenset(
+        step.guardrail
+        for _policy_name, pipeline in _policy_pipelines(data)
+        if pipeline.mode == mode
+        for step in pipeline.steps
     )
+
+
+def _partition_post_call_callbacks() -> tuple[tuple[CustomGuardrail, ...], tuple[CustomLogger, ...]]:
+    resolved: Final = tuple(
+        litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+            cast(  # cast-ok: the resolver returns None for unknown names, filtered below
+                _custom_logger_compatible_callbacks_literal, callback
+            )
+        )
+        if isinstance(callback, str)
+        else callback
+        for callback in litellm.callbacks
+    )
+    present: Final = tuple(callback for callback in resolved if callback is not None)
+    guardrails: Final = tuple(callback for callback in present if isinstance(callback, CustomGuardrail))
+    others: Final = cast(  # cast-ok: mirrors the legacy loop, which treated every non-guardrail entry as a CustomLogger
+        "tuple[CustomLogger, ...]",
+        tuple(callback for callback in present if not isinstance(callback, CustomGuardrail)),
+    )
+    return (guardrails, others)
+
+
+def _merge_pipeline_metadata_bucket(
+    data: dict, bucket_key: str, modified_bucket_value: object
+) -> None:  # mutable-ok: request payload dict, written in place
+    if not isinstance(modified_bucket_value, dict):
+        return
+    modified_bucket: Final = cast("dict[str, object]", modified_bucket_value)  # cast-ok: metadata buckets are str-keyed
+    surviving_writes: Final = {
+        key: value for key, value in modified_bucket.items() if key != "guardrails"
+    }  # mutable-ok: merged into the live request metadata bucket in place
+    existing_bucket: Final = data.get(bucket_key)
+    if isinstance(existing_bucket, dict):
+        cast("dict[str, object]", existing_bucket).update(surviving_writes)  # cast-ok: metadata buckets are str-keyed
+    else:
+        data[bucket_key] = surviving_writes
+
+
+def _merge_pipeline_metadata_writes(
+    data: dict, modified_data: Mapping[str, object]
+) -> None:  # mutable-ok: request payload dict, written in place
+    """
+    Copy metadata-bucket writes from a pipeline's working copy back onto the request.
+
+    Post_call pipelines run step hooks against a copied request dict so the payload
+    already sent upstream stays untouched, but hooks record proxy-internal logging
+    state in the metadata buckets (``applied_guardrails`` for response headers,
+    ``standard_logging_guardrail_information`` for spend logs), and those writes
+    must reach the request dict the proxy keeps reading after the pipeline returns.
+
+    The ``guardrails`` key is the executor's per-step activation flag for
+    ``should_run_guardrail``, not a hook write, so it stays in the working copy.
+    """
+    for bucket_key in ("metadata", "litellm_metadata"):
+        _merge_pipeline_metadata_bucket(data, bucket_key, modified_data.get(bucket_key))
+
+
+def _pipeline_step_supports_unified_streaming(guardrail_name: str) -> bool:
+    callback: Final = PipelineExecutor.find_guardrail_callback(guardrail_name)
+    return callback is not None and PipelineExecutor.supports_unified_execution(callback)
+
+
+class _PipelineErrorBody(TypedDict):
+    message: ReadOnly[str]
+    type: ReadOnly[str]
+    policies: ReadOnly[tuple[str, ...]]
+    guardrails: NotRequired[ReadOnly[tuple[str, ...]]]
+
+
+class _PipelineErrorDetail(TypedDict):
+    error: ReadOnly[_PipelineErrorBody]
+
+
+def _undeliverable_stream_rewrite_error(policy_name: str, guardrail_name: str) -> HTTPException:
+    detail: Final[_PipelineErrorDetail] = {
+        "error": {
+            "message": (
+                f"Streaming response withheld by policy pipeline '{policy_name}' because guardrail "
+                f"'{guardrail_name}' rewrote the streamed output in a way this endpoint's streaming "
+                "pipeline cannot deliver (a tool-call rewrite, or a text rewrite on a route without "
+                "stream write-back). Retry with stream=false, or drop it from the pipeline steps so "
+                "guardrails.add applies it to streamed output."
+            ),
+            "type": "guardrail_pipeline_error",
+            "policies": (policy_name,),
+            "guardrails": (guardrail_name,),
+        }
+    }
+    return HTTPException(status_code=400, detail=detail)
+
+
+def _raise_for_streaming_post_call_pipelines(data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth) -> None:
+    """
+    Reject up front the requests whose post_call pipelines could never run.
+
+    Background responses skip the post_call hooks entirely, so a pipeline
+    governing one would silently never execute. Streaming responses execute
+    pipelines against the buffered stream through the endpoint guardrail
+    translation of the request route, releasing the buffered chunks on allow
+    (rewritten in place when a guardrail rewrote text and the translation
+    delivers ended-stream rewrites; a rewrite the translation cannot deliver
+    fails closed at runtime instead). That needs every step's guardrail to
+    support the unified apply_guardrail interface, and needs the route to have
+    a translation at all; anything else keeps the 400 rather than letting
+    ungoverned output stream through.
+    """
+    is_stream: Final = data.get("stream") is True
+    is_background: Final = data.get("background") is True
+    if not is_stream and not is_background:
+        return
+    post_call_pipelines: Final = tuple(
+        (policy_name, pipeline) for policy_name, pipeline in _policy_pipelines(data) if pipeline.mode == "post_call"
+    )
+    if not post_call_pipelines:
+        return
+    post_call_policies: Final = tuple(policy_name for policy_name, _pipeline in post_call_pipelines)
+    if is_background:
+        background_detail: Final[_PipelineErrorDetail] = {
+            "error": {
+                "message": (
+                    "Policies with post_call guardrail pipelines cannot govern background "
+                    f"responses: {', '.join(post_call_policies)}. Retry with background=false."
+                ),
+                "type": "guardrail_pipeline_error",
+                "policies": post_call_policies,
+            }
+        }
+        raise HTTPException(status_code=400, detail=background_detail)
+    step_guardrails: Final = tuple(
+        dict.fromkeys(step.guardrail for _policy_name, pipeline in post_call_pipelines for step in pipeline.steps)
+    )
+    unsupported_guardrails: Final = tuple(
+        guardrail for guardrail in step_guardrails if not _pipeline_step_supports_unified_streaming(guardrail)
+    )
+    if unsupported_guardrails:
+        unsupported_detail: Final[_PipelineErrorDetail] = {
+            "error": {
+                "message": (
+                    "Policies with post_call guardrail pipelines cannot govern streaming responses "
+                    "because these pipeline guardrails do not support the unified apply_guardrail "
+                    f"interface: {', '.join(unsupported_guardrails)}. Retry with stream=false, or drop "
+                    "them from the pipeline steps so guardrails.add scans them on streamed output."
+                ),
+                "type": "guardrail_pipeline_error",
+                "policies": post_call_policies,
+                "guardrails": unsupported_guardrails,
+            }
+        }
+        raise HTTPException(status_code=400, detail=unsupported_detail)
+    route: Final = user_api_key_dict.request_route
+    if not route or resolve_endpoint_translation(user_api_key_dict, None) is not None:
+        return
+    route_detail: Final[_PipelineErrorDetail] = {
+        "error": {
+            "message": (
+                "Policies with post_call guardrail pipelines cannot govern streaming responses on "
+                f"route {route} because it has no endpoint guardrail translation to scan the stream "
+                f"through: {', '.join(post_call_policies)}. Retry with stream=false."
+            ),
+            "type": "guardrail_pipeline_error",
+            "policies": post_call_policies,
+        }
+    }
+    raise HTTPException(status_code=400, detail=route_detail)
 
 
 def _prompt_block_text(block: object) -> str:
@@ -1578,7 +1745,8 @@ class ProxyLogging:
         call_type: str,
         event_hook: str,
         raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
-    ) -> dict:
+        response: LLMResponseTypes | None = None,
+    ) -> tuple[dict, LLMResponseTypes | None]:  # mutable-ok: returns the request-payload dict onward
         """
         Execute guardrail pipelines if any are configured for this request.
 
@@ -1590,20 +1758,27 @@ class ProxyLogging:
         ``scan_raw_request`` evaluates the pristine request, not whatever an
         earlier ``pass_data`` step in the same pipeline already rewrote.
 
-        Returns the (possibly modified) data dict.
+        Returns the (possibly modified) data dict, plus the replacement
+        response when a post_call pipeline step returned one (None when the
+        response is unchanged), matching the flat callback-loop contract.
         """
         pipelines: Final = _policy_pipelines(data)
         if not pipelines:
-            return data
+            return data, None
 
+        current_response = response  # rebind-ok: chains each pipeline's replacement response into the next
         for policy_name, pipeline in pipelines:
             if pipeline.mode != event_hook:
                 continue
 
+            step_input: dict = (
+                {**data, "response": current_response} if current_response is not None else data
+            )  # mutable-ok: same request-payload shape as data
+
             result: PipelineExecutionResult = await PipelineExecutor.execute_steps(
                 steps=pipeline.steps,
                 mode=pipeline.mode,
-                data=data,
+                data=step_input,
                 user_api_key_dict=user_api_key_dict,
                 call_type=call_type,
                 policy_name=policy_name,
@@ -1614,25 +1789,45 @@ class ProxyLogging:
                 result=result,
                 data=data,
                 policy_name=policy_name,
+                original_response=current_response,
             )
 
-        return data
+            if current_response is not None and result.modified_data is not None:
+                current_response = result.modified_data.get("response", current_response)
+
+        return data, current_response if current_response is not response else None
 
     @staticmethod
     def _handle_pipeline_result(
         result: PipelineExecutionResult,
         data: dict,
         policy_name: str,
+        original_response: "LLMResponseTypes | Sequence[object] | None" = None,
     ) -> dict:
         """
         Handle a PipelineExecutionResult — allow, block, or modify_response.
 
         Returns data dict if allowed, raises on block/modify_response.
+        ``original_response`` is set on the post_call path, where the request
+        payload (already sent upstream) must stay untouched; a replacement
+        response carried in ``modified_data`` is adopted by the caller, and
+        metadata-bucket writes (applied guardrails, guardrail logging info)
+        are merged back so headers and spend logs still see them, on block
+        and modify_response too, so failure spend records keep guardrail
+        cost and status. On the
+        streaming path it is the buffered chunk list, carried into
+        ``ModifyResponseException.original_response`` for usage reporting.
         """
         if result.terminal_action == "allow":
             if result.modified_data is not None:
-                data.update(result.modified_data)
+                if original_response is None:
+                    data.update(result.modified_data)
+                else:
+                    _merge_pipeline_metadata_writes(data, result.modified_data)
             return data
+
+        if result.modified_data is not None:
+            _merge_pipeline_metadata_writes(data, result.modified_data)
 
         if result.terminal_action == "block":
             original_exception: Final = result.original_exception
@@ -1671,6 +1866,7 @@ class ProxyLogging:
                 request_data=data,
                 guardrail_name=f"pipeline:{policy_name}",
                 detection_info=None,
+                original_response=original_response,
             )
 
         return data
@@ -1786,8 +1982,10 @@ class ProxyLogging:
         )
 
         try:
+            _raise_for_streaming_post_call_pipelines(data, user_api_key_dict)
+
             # Execute guardrail pipelines before the normal callback loop
-            data = await self._maybe_execute_pipelines(
+            data, _ = await self._maybe_execute_pipelines(  # rebind-ok: pipeline edits feed the callback loop below
                 data=data,
                 user_api_key_dict=user_api_key_dict,
                 call_type=call_type,
@@ -1796,7 +1994,7 @@ class ProxyLogging:
             )
 
             # Get pipeline-managed guardrails to skip in normal loop
-            pipeline_managed: Final = _pipeline_managed_guardrail_names(data)
+            pipeline_managed: Final = _pipeline_managed_guardrail_names(data, "pre_call")
 
             caps: Final = ProxyLogging._callback_capabilities()
             # Skip the per-request callback walk entirely when nothing in
@@ -2772,35 +2970,34 @@ class ProxyLogging:
         from litellm.proxy.proxy_server import llm_router
         from litellm.types.guardrails import GuardrailEventHooks
 
-        guardrail_callbacks: Final[list[CustomGuardrail]] = []
-        other_callbacks: Final[list[CustomLogger]] = []
+        _, pipeline_response = await self._maybe_execute_pipelines(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            call_type=getattr(data.get("litellm_logging_obj"), "call_type", None) or "acompletion",
+            event_hook="post_call",
+            response=response,
+        )
+        if pipeline_response is not None:
+            response = pipeline_response  # rebind-ok: adopt the pipeline's replacement response, same contract as the callback loops below
+
+        pipeline_managed: Final = _pipeline_managed_guardrail_names(data, "post_call")
+        guardrail_callbacks, other_callbacks = _partition_post_call_callbacks()
         try:
-            for callback in litellm.callbacks:
-                _callback: CustomLogger | None = None
-                if isinstance(callback, str):
-                    _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        cast(_custom_logger_compatible_callbacks_literal, callback)
-                    )
-                else:
-                    _callback = callback
-
-                if _callback is not None:
-                    if isinstance(_callback, CustomGuardrail):
-                        guardrail_callbacks.append(_callback)
-                    else:
-                        other_callbacks.append(_callback)
-                    ############## Handle Guardrails ########################################
-                    #############################################################################
-
             # Merge model-level guardrails before checking which guardrails to run
             guardrail_data: Final = _check_and_merge_model_level_guardrails(data=data, llm_router=llm_router)
 
             parallel_guardrails: Final[tuple[CustomGuardrail, ...]] = tuple(
-                callback for callback in guardrail_callbacks if getattr(callback, "run_in_parallel", False)
+                callback
+                for callback in guardrail_callbacks
+                if getattr(callback, "run_in_parallel", False)
+                and not (callback.guardrail_name and callback.guardrail_name in pipeline_managed)
             )
 
             for callback in guardrail_callbacks:
                 # Main - V2 Guardrails implementation
+
+                if callback.guardrail_name and callback.guardrail_name in pipeline_managed:
+                    continue
 
                 if getattr(callback, "run_in_parallel", False):
                     continue
@@ -3098,11 +3295,16 @@ class ProxyLogging:
             # dict lookups + llm_router.get_deployment() per callback per chunk.
             _cached_guardrail_data: dict | None = None
             _guardrail_data_computed = False
+            pipeline_managed: Final = (
+                _pipeline_managed_guardrail_names(data, "post_call") if caps.has_guardrail else frozenset()
+            )
 
             for callback in litellm.callbacks:
                 try:
                     _callback: CustomLogger | None = None
                     if isinstance(callback, CustomGuardrail):
+                        if callback.guardrail_name in pipeline_managed:
+                            continue
                         # Main - V2 Guardrails implementation
                         from litellm.types.guardrails import GuardrailEventHooks
 
@@ -3159,12 +3361,17 @@ class ProxyLogging:
         1. /chat/completions
         """
         caps: Final = ProxyLogging._callback_capabilities()
+        post_call_pipelines: Final = tuple(
+            (policy_name, pipeline)
+            for policy_name, pipeline in _policy_pipelines(request_data)
+            if pipeline.mode == "post_call"
+        )
         # Fast path: no real overrides. Internal proxy CustomLogger callbacks
         # (e.g. _PROXY_MaxBudgetLimiter, ManagedFiles) inherit the default
         # ``async for chunk: yield chunk`` body, so wrapping the iterator
         # through each of them adds N pass-through trampolines per chunk for
         # zero behavior change. Skip the chain entirely and stream through.
-        if not caps.iterator_overrides:
+        if not caps.iterator_overrides and not post_call_pipelines:
             try:
                 async for chunk in response:
                     yield chunk
@@ -3184,8 +3391,11 @@ class ProxyLogging:
         current_response = response
         stream_needs_translation: Final = ProxyLogging._stream_requires_guardrail_translation(user_api_key_dict)
 
+        pipeline_managed_names: Final = _pipeline_managed_guardrail_names(request_data, "post_call")
         for resolved_callback, kind in caps.iterator_overrides:
             if isinstance(resolved_callback, CustomGuardrail):
+                if resolved_callback.guardrail_name in pipeline_managed_names:
+                    continue
                 if (
                     resolved_callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call)
                     is not True
@@ -3225,6 +3435,14 @@ class ProxyLogging:
                     ),
                 )
 
+        if post_call_pipelines:
+            current_response = self._pipeline_gated_stream(
+                response=current_response,
+                user_api_key_dict=user_api_key_dict,
+                request_data=request_data,
+                pipelines=post_call_pipelines,
+            )
+
         try:
             async for chunk in current_response:
                 yield chunk
@@ -3239,6 +3457,91 @@ class ProxyLogging:
         # its end-of-stream block (inside current_response), so by the time
         # we reach this point the metadata is fully populated.
         ProxyLogging._fire_deferred_stream_logging(request_data)
+
+    async def _pipeline_gated_stream(
+        self,
+        response: "AsyncGenerator[object, None]",
+        user_api_key_dict: UserAPIKeyAuth,
+        request_data: dict,  # mutable-ok: same request-payload shape the hooks mutate
+        pipelines: "tuple[tuple[str, GuardrailPipeline], ...]",
+    ) -> "AsyncGenerator[Any, None]":
+        """
+        Execute post_call policy pipelines against a streamed response.
+
+        Buffers the whole stream (nothing reaches the client until every
+        pipeline allows it), then runs each pipeline's steps against the
+        assembled output through the endpoint guardrail translation, the same
+        machinery flat post_call guardrails use at end of stream. An allow
+        releases the buffered chunks: verbatim when no guardrail rewrote the
+        output, rewritten in place when one rewrote text and the translation
+        delivers ended-stream rewrites (later steps then re-scan the rewritten
+        chunks, so rewrites chain). A rewrite the translation cannot deliver
+        (a tool-call rewrite, or a text rewrite on a route without write-back)
+        withholds the stream with a 400; a block or modify_response terminates
+        with the translation's block chunks or the raised error.
+        """
+        buffered: Final[list[object]] = []  # mutable-ok: accumulates the stream before the pipeline verdict
+        async for item in response:
+            buffered.append(item)
+        if not buffered:
+            return
+
+        resolved: Final = resolve_endpoint_translation(user_api_key_dict, buffered[0])
+        if resolved is None:
+            policy_names: Final = tuple(policy_name for policy_name, _pipeline in pipelines)
+            raise ProxyException(
+                message=(
+                    "Policy pipelines could not govern this streaming response shape; "
+                    f"the response was withheld: {', '.join(policy_names)}."
+                ),
+                type="guardrail_pipeline_error",
+                param=None,
+                code=500,
+            )
+        call_type, endpoint_translation = resolved
+
+        for policy_name, pipeline in pipelines:
+            try:
+                result: PipelineExecutionResult = await PipelineExecutor.execute_steps(
+                    steps=pipeline.steps,
+                    mode="post_call",
+                    data=request_data,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=call_type,
+                    policy_name=policy_name,
+                    streaming_chunks=buffered,
+                    endpoint_translation=endpoint_translation,
+                )
+            except UndeliverableStreamRewrite as rewrite:
+                async for error_chunk in unified_guardrail.emit_streaming_http_error(
+                    _undeliverable_stream_rewrite_error(policy_name, rewrite.guardrail_name),
+                    call_type,
+                    buffered,
+                    request_data,
+                ):
+                    yield error_chunk
+                return
+            try:
+                ProxyLogging._handle_pipeline_result(
+                    result, data=request_data, policy_name=policy_name, original_response=buffered
+                )
+            except ModifyResponseException as e:
+                if e.original_response is None:
+                    e.original_response = buffered
+                async for block_chunk in unified_guardrail.handle_streaming_block(
+                    e, endpoint_translation, stream_started=False, responses_so_far=()
+                ):
+                    yield block_chunk
+                return
+            except HTTPException as e:
+                async for error_chunk in unified_guardrail.emit_streaming_http_error(
+                    e, call_type, buffered, request_data
+                ):
+                    yield error_chunk
+                return
+
+        for buffered_item in buffered:
+            yield buffered_item
 
     @staticmethod
     def _fire_deferred_stream_logging(request_data: dict) -> None:

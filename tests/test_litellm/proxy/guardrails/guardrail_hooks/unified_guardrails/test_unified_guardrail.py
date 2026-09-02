@@ -1031,7 +1031,7 @@ class TestStreamingTransform:
         )
 
         emitted = []
-        async for item in handler._emit_streaming_http_error(
+        async for item in handler.emit_streaming_http_error(
             exc,
             call_type=CallTypes.asend_message.value,
             responses_so_far=[{"id": "req-1"}],

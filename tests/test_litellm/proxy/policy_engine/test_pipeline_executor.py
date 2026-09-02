@@ -13,7 +13,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
     CustomCodeGuardrail,
 )
-from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
+from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor, UndeliverableStreamRewrite
 from litellm.types.proxy.policy_engine.pipeline_types import (
     GuardrailPipeline,
     PipelineStep,
@@ -911,3 +911,88 @@ async def test_pipeline_step_keeps_native_hook_when_opted_out(monkeypatch):
     assert outcome == "pass"
     assert guardrail.native_pre_call_ran is True
     assert "guardrail_to_apply" not in data
+
+
+class _TextReturningGuardrail(CustomGuardrail):
+    def __init__(self, returned_texts):
+        super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
+        self.returned_texts = returned_texts
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        return {**inputs, "texts": self.returned_texts}
+
+
+class _TextTranslation:
+    delivers_ended_stream_text_rewrites = False
+
+    def __init__(self):
+        self.seen_guardrail_names = []
+
+    async def process_output_streaming_response(
+        self, responses_so_far, guardrail_to_apply, litellm_logging_obj=None, user_api_key_dict=None, request_data=None
+    ):
+        self.seen_guardrail_names.append(guardrail_to_apply.guardrail_name)
+        await guardrail_to_apply.apply_guardrail(
+            inputs={"texts": ["hello world"]},
+            request_data=request_data or {},
+            input_type="response",
+            logging_obj=litellm_logging_obj,
+        )
+        return responses_so_far
+
+
+async def _run_streaming_step(returned_texts, translation):
+    return await PipelineExecutor.execute_steps(
+        steps=[PipelineStep(guardrail="masker", on_pass="allow", on_fail="next", on_error="next")],
+        mode="post_call",
+        data={"model": "m"},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="p",
+        streaming_chunks=[object()],
+        endpoint_translation=translation,
+    )
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_rewrite_escapes_execute_steps_regardless_of_step_actions(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [_TextReturningGuardrail(["hello [MASKED]"])])
+    translation = _TextTranslation()
+
+    with pytest.raises(UndeliverableStreamRewrite) as info:
+        await _run_streaming_step(["hello [MASKED]"], translation)
+
+    assert info.value.guardrail_name == "masker"
+    assert translation.seen_guardrail_names == ["masker"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_unchanged_texts_in_another_container_allow(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [_TextReturningGuardrail(("hello world",))])
+
+    result = await _run_streaming_step(("hello world",), _TextTranslation())
+
+    assert result.terminal_action == "allow"
+    assert [step.outcome for step in result.step_results] == ["pass"]
+
+
+class _InPlaceMutatingGuardrail(CustomGuardrail):
+    """Rewrites like bedrock/presidio do: rebinds inputs["texts"] on the dict it was handed
+    and returns that same dict, so a post-call comparison against inputs sees no change."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        inputs["texts"] = ["hello [MASKED]"]
+        return inputs
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_in_place_rewrite_still_withholds_stream(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [_InPlaceMutatingGuardrail()])
+
+    with pytest.raises(UndeliverableStreamRewrite) as info:
+        await _run_streaming_step(["hello [MASKED]"], _TextTranslation())
+
+    assert info.value.guardrail_name == "masker"
