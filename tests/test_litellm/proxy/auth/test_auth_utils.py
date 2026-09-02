@@ -3079,7 +3079,7 @@ class TestIsRequestBodySafeChecksBracketNotationMetadata:
 
 
 class TestHasUserSetupSso:
-    """_has_user_setup_sso must treat SAML IdP metadata as SSO configured.
+    """has_user_setup_sso must treat SAML IdP metadata as SSO configured.
 
     Regression: UI discovery used this helper for sso_configured, but it only
     checked OAuth client IDs, so SAML-only setups left the login button gray.
@@ -3097,27 +3097,167 @@ class TestHasUserSetupSso:
             monkeypatch.delenv(key, raising=False)
 
     def test_false_when_no_sso_env(self):
-        from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+        from litellm.proxy.auth.auth_utils import has_user_setup_sso
 
-        assert _has_user_setup_sso() is False
+        assert has_user_setup_sso() is False
 
     def test_true_for_oauth_client_ids(self, monkeypatch):
-        from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+        from litellm.proxy.auth.auth_utils import has_user_setup_sso
 
         monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-client")
-        assert _has_user_setup_sso() is True
+        assert has_user_setup_sso() is True
 
     def test_true_for_saml_metadata_url(self, monkeypatch):
-        from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+        from litellm.proxy.auth.auth_utils import has_user_setup_sso
 
-        monkeypatch.setenv("SAML_IDP_METADATA_URL", "https://idp.example.com/metadata.xml")
+        monkeypatch.setenv(
+            "SAML_IDP_METADATA_URL", "https://idp.example.com/metadata.xml"
+        )
         assert _has_user_setup_sso() is True
 
     def test_true_for_saml_metadata_xml(self, monkeypatch):
-        from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+        from litellm.proxy.auth.auth_utils import has_user_setup_sso
 
         monkeypatch.setenv("SAML_IDP_METADATA_XML", "<EntityDescriptor/>")
-        assert _has_user_setup_sso() is True
+        assert has_user_setup_sso() is True
+
+
+class TestIsSsoProviderFullyConfigured:
+    """A lone client id must not read as ready: `has_user_setup_sso()` only
+    checks the client id (correct for a UI-discovery "show the login button"
+    decision), but a gate that BLOCKS the password fallback needs every
+    companion setting the provider requires, or an incomplete setup locks
+    every admin out with no working login path at all."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_sso_env(self, monkeypatch):
+        for key in (
+            "GOOGLE_CLIENT_ID",
+            "GOOGLE_CLIENT_SECRET",
+            "MICROSOFT_CLIENT_ID",
+            "MICROSOFT_CLIENT_SECRET",
+            "MICROSOFT_TENANT",
+            "GENERIC_CLIENT_ID",
+            "GENERIC_CLIENT_SECRET",
+            "GENERIC_AUTHORIZATION_ENDPOINT",
+            "GENERIC_TOKEN_ENDPOINT",
+            "GENERIC_USERINFO_ENDPOINT",
+            "SAML_IDP_METADATA_URL",
+            "SAML_IDP_METADATA_XML",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
+    def test_false_when_nothing_configured(self):
+        from litellm.proxy.auth.auth_utils import is_sso_provider_fully_configured
+
+        assert is_sso_provider_fully_configured() is False
+
+    def test_google_client_id_alone_is_not_ready(self, monkeypatch):
+        from litellm.proxy.auth.auth_utils import is_sso_provider_fully_configured
+
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-client")
+        assert is_sso_provider_fully_configured() is False
+
+    def test_google_with_secret_is_ready(self, monkeypatch):
+        from litellm.proxy.auth.auth_utils import is_sso_provider_fully_configured
+
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-client")
+        monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "google-secret")
+        assert is_sso_provider_fully_configured() is True
+
+    def test_microsoft_client_id_alone_is_not_ready(self, monkeypatch):
+        from litellm.proxy.auth.auth_utils import is_sso_provider_fully_configured
+
+        monkeypatch.setenv("MICROSOFT_CLIENT_ID", "ms-client")
+        assert is_sso_provider_fully_configured() is False
+
+    def test_microsoft_missing_tenant_is_not_ready(self, monkeypatch):
+        from litellm.proxy.auth.auth_utils import is_sso_provider_fully_configured
+
+        monkeypatch.setenv("MICROSOFT_CLIENT_ID", "ms-client")
+        monkeypatch.setenv("MICROSOFT_CLIENT_SECRET", "ms-secret")
+        assert is_sso_provider_fully_configured() is False
+
+    def test_microsoft_with_secret_and_tenant_is_ready(self, monkeypatch):
+        from litellm.proxy.auth.auth_utils import is_sso_provider_fully_configured
+
+        monkeypatch.setenv("MICROSOFT_CLIENT_ID", "ms-client")
+        monkeypatch.setenv("MICROSOFT_CLIENT_SECRET", "ms-secret")
+        monkeypatch.setenv("MICROSOFT_TENANT", "ms-tenant")
+        assert is_sso_provider_fully_configured() is True
+
+    def test_generic_client_id_alone_is_not_ready(self, monkeypatch):
+        from litellm.proxy.auth.auth_utils import is_sso_provider_fully_configured
+
+        monkeypatch.setenv("GENERIC_CLIENT_ID", "generic-client")
+        assert is_sso_provider_fully_configured() is False
+
+    def test_generic_missing_one_endpoint_is_not_ready(self, monkeypatch):
+        from litellm.proxy.auth.auth_utils import is_sso_provider_fully_configured
+
+        monkeypatch.setenv("GENERIC_CLIENT_ID", "generic-client")
+        monkeypatch.setenv("GENERIC_CLIENT_SECRET", "generic-secret")
+        monkeypatch.setenv("GENERIC_AUTHORIZATION_ENDPOINT", "https://idp.example.com/authorize")
+        monkeypatch.setenv("GENERIC_TOKEN_ENDPOINT", "https://idp.example.com/token")
+        # GENERIC_USERINFO_ENDPOINT deliberately left unset.
+        assert is_sso_provider_fully_configured() is False
+
+    def test_generic_with_every_endpoint_is_ready(self, monkeypatch):
+        from litellm.proxy.auth.auth_utils import is_sso_provider_fully_configured
+
+        monkeypatch.setenv("GENERIC_CLIENT_ID", "generic-client")
+        monkeypatch.setenv("GENERIC_CLIENT_SECRET", "generic-secret")
+        monkeypatch.setenv("GENERIC_AUTHORIZATION_ENDPOINT", "https://idp.example.com/authorize")
+        monkeypatch.setenv("GENERIC_TOKEN_ENDPOINT", "https://idp.example.com/token")
+        monkeypatch.setenv("GENERIC_USERINFO_ENDPOINT", "https://idp.example.com/userinfo")
+        assert is_sso_provider_fully_configured() is True
+
+    def test_saml_metadata_url_is_ready_when_runtime_installed(self, monkeypatch):
+        from litellm.proxy.auth import auth_utils
+
+        monkeypatch.setenv("SAML_IDP_METADATA_URL", "https://idp.example.com/metadata.xml")
+        monkeypatch.setattr(auth_utils.importlib.util, "find_spec", lambda name: object())
+        assert auth_utils.is_sso_provider_fully_configured() is True
+
+    def test_saml_metadata_url_is_not_ready_without_runtime(self, monkeypatch):
+        """Regression: python3-saml (``onelogin.saml2``) is an optional
+        dependency; SAMLAuthHandler fails closed on every request when it is
+        not installed, so IdP metadata alone must not read as ready."""
+        from litellm.proxy.auth import auth_utils
+
+        monkeypatch.setenv("SAML_IDP_METADATA_URL", "https://idp.example.com/metadata.xml")
+        monkeypatch.setattr(auth_utils.importlib.util, "find_spec", lambda name: None)
+        assert auth_utils.is_sso_provider_fully_configured() is False
+
+    def test_saml_check_does_not_raise_when_package_entirely_absent(self, monkeypatch):
+        """Regression: `importlib.util.find_spec("onelogin.saml2.auth")`
+        raises ModuleNotFoundError (not merely returns None) when the
+        TOP-LEVEL `onelogin` package is not installed at all, which is
+        exactly the real-world "optional extra not installed" case. If the
+        gate does not catch this, every password login 500s instead of
+        falling back, on a deployment that configured SAML metadata but
+        skipped the extra."""
+        from litellm.proxy.auth import auth_utils
+
+        def _raise(name: str):
+            raise ModuleNotFoundError("No module named 'onelogin'")
+
+        monkeypatch.setenv("SAML_IDP_METADATA_URL", "https://idp.example.com/metadata.xml")
+        monkeypatch.setattr(auth_utils.importlib.util, "find_spec", _raise)
+        assert auth_utils.is_sso_provider_fully_configured() is False
+
+    def test_incomplete_earlier_provider_does_not_mask_a_ready_later_one(self, monkeypatch):
+        """Regression: a stray GOOGLE_CLIENT_ID with no secret (e.g. a
+        leftover from a migration) must not stop the check from reaching a
+        fully configured Microsoft provider set alongside it — every
+        provider is evaluated independently, not in a first-match order."""
+        from litellm.proxy.auth.auth_utils import is_sso_provider_fully_configured
+
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-client")
+        monkeypatch.setenv("MICROSOFT_CLIENT_ID", "ms-client")
+        monkeypatch.setenv("MICROSOFT_CLIENT_SECRET", "ms-secret")
+        monkeypatch.setenv("MICROSOFT_TENANT", "ms-tenant")
+        assert is_sso_provider_fully_configured() is True
 
 
 class TestIsRequestBodySafeBlocksAwsIdentitySelectors:

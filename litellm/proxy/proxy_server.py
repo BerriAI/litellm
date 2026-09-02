@@ -39,7 +39,7 @@ from typing import (
 import anyio
 import websockets
 import websockets.exceptions
-from pydantic import BaseModel, Json, JsonValue, ValidationError
+from pydantic import BaseModel, Json, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, assert_never
 
 from litellm._uuid import uuid
@@ -60,6 +60,7 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
     LITELLM_UI_ALLOW_HEADERS,
     LITELLM_UI_SESSION_DURATION,
+    RUNTIME_UPDATABLE_ROUTER_SETTINGS,
 )
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
@@ -253,6 +254,7 @@ from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
+    ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG,
     USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
 )
@@ -308,6 +310,7 @@ from litellm.proxy.auth.model_checks import (
     get_mcp_server_ids,
     get_team_models,
 )
+from litellm.proxy.auth.password_policy import validate_password_policy
 from litellm.proxy.auth.user_api_key_auth import (
     _fetch_global_spend_with_event_coordination,
     user_api_key_auth,
@@ -2279,7 +2282,7 @@ user_api_key_cache: UserApiKeyCache = UserApiKeyCache(
 )
 spend_counter_cache: Final = DualCache(default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value)
 cli_sso_session_cache: Final = DualCache(default_in_memory_ttl=CLI_SSO_SESSION_TTL_SECONDS)
-model_max_budget_limiter: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=user_api_key_cache)
+model_max_budget_limiter: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=spend_counter_cache)
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
 redis_usage_cache: RedisCache | None = None  # redis cache used for tracking spend, tpm/rpm limits
 polling_via_cache_enabled: Literal["all"] | list[str] | bool = False
@@ -4742,6 +4745,63 @@ class ProxyConfig:
         )
         return coordination_redis_cache
 
+    @staticmethod
+    async def _init_coordination_redis_env_fallback(litellm_settings: Mapping[str, object]) -> RedisCache | None:
+        """
+        Last-resort coordination Redis, tried after an explicit
+        `general_settings.coordination_redis` block and `litellm_settings.cache`
+        have both had a chance to resolve one. Without this, a deployment that
+        only exports REDIS_HOST/REDIS_PORT (no cache block, no coordination_redis
+        block) gets NO cross-pod coordination at all: spend counters, budget-window
+        enforcement, and the reset_spend cache-eviction broadcast all silently stay
+        per-pod local, so a key reset on one pod never clears another pod's stale
+        enforcement.
+
+        Unlike the explicit block and cache-backend paths (a deliberate opt-in, so a
+        bad connection target or a malformed REDIS_CLUSTER_NODES/REDIS_SENTINEL_NODES
+        value should fail loudly), this one is inferred from bare env vars that may be
+        set for an unrelated reason -- e.g. a REDIS_HOST left over from a different
+        job/service, or a REDIS_CLUSTER_NODES value nothing here ever asked to be
+        parsed. Wrongly guessing "coordination available" must not turn a previously
+        harmless in-memory-only proxy into one that fails to boot or raises on every
+        cache write, so a malformed value or a failed/slow ping are both treated the
+        same as no REDIS_* vars at all.
+        """
+        try:
+            env_coordination_redis_cache: Final = _build_redis_usage_cache_from_environment()
+        except Exception as e:  # noqa: BLE001  # a malformed inferred Redis env var must not block startup
+            verbose_proxy_logger.warning(
+                "coordination_redis: could not build a Redis client from REDIS_* environment variables "
+                "(%s); cross-pod coordination stays in-memory. Set general_settings.coordination_redis "
+                "explicitly to require it.",
+                e,
+            )
+            return None
+        if env_coordination_redis_cache is None:
+            return None
+        try:
+            reachable: Final = await asyncio.wait_for(env_coordination_redis_cache.ping(), timeout=2.0)
+        except Exception as e:  # noqa: BLE001  # an unreachable inferred Redis must not block startup or writes
+            verbose_proxy_logger.warning(
+                "coordination_redis: REDIS_* environment variables named a Redis that is not reachable "
+                "(%s); cross-pod coordination stays in-memory. Set general_settings.coordination_redis "
+                "explicitly to require it.",
+                e,
+            )
+            return None
+        if not reachable:
+            return None
+        _attach_redis_usage_cache(
+            env_coordination_redis_cache,
+            enable_redis_auth_cache=litellm_settings.get("enable_redis_auth_cache", False) is True,
+        )
+        verbose_proxy_logger.info(
+            "coordination_redis: using a standalone Redis built from REDIS_* "
+            "environment variables for usage tracking, rate limiting, and "
+            "cross-pod coordination."
+        )
+        return env_coordination_redis_cache
+
     def _init_cache(
         self,
         cache_params: dict,
@@ -5410,6 +5470,13 @@ class ProxyConfig:
                         reset_audit_log_callback_cache()
                         _in_memory_loggers[:] = [cb for cb in _in_memory_loggers if not isinstance(cb, S3V2Logger)]
 
+        if redis_usage_cache is None:
+            env_coordination_redis_cache: Final = await self._init_coordination_redis_env_fallback(
+                litellm_settings=litellm_settings
+            )
+            if env_coordination_redis_cache is not None:
+                _set_redis_usage_cache(env_coordination_redis_cache)
+
         ## GENERAL SERVER SETTINGS (e.g. master key,..) # do this after initializing litellm, to ensure sentry logging works for proxylogging
         general_settings = config.get("general_settings", {})
         if general_settings is None:
@@ -5714,13 +5781,9 @@ class ProxyConfig:
         router_settings: Final = config.get("router_settings", None)
 
         if router_settings and isinstance(router_settings, dict):
-            # model list and search_tools already set
-            exclude_args: Final = {
-                "model_list",
-                "search_tools",
-            }
-
-            available_args: Final = [x for x in litellm.Router.get_valid_args() if x not in exclude_args]
+            available_args: Final = [
+                x for x in litellm.Router.get_valid_args() if x not in ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG
+            ]
 
             for k, v in router_settings.items():
                 if k in available_args:
@@ -6650,6 +6713,12 @@ class ProxyConfig:
 
         if "max_batch_file_size_mb" not in self._yaml_general_settings_keys:
             general_settings["max_batch_file_size_mb"] = _general_settings.get("max_batch_file_size_mb")
+
+        if "max_file_size_mb" not in self._yaml_general_settings_keys:
+            general_settings["max_file_size_mb"] = _general_settings.get("max_file_size_mb")
+
+        if "blocked_file_extensions" not in self._yaml_general_settings_keys:
+            general_settings["blocked_file_extensions"] = _general_settings.get("blocked_file_extensions")
 
         ## ALERTING ARGS ##
         if "alerting_args" in _general_settings:
@@ -15243,6 +15312,7 @@ async def login(request: Request):
         password=password,
         master_key=master_key,
         prisma_client=prisma_client,
+        general_settings=general_settings,
     )
 
     # Create UI token object
@@ -15317,6 +15387,7 @@ async def login_v2(request: Request):
             password=password,
             master_key=master_key,
             prisma_client=prisma_client,
+            general_settings=general_settings,
         )
 
         returned_ui_token_object: Final = create_ui_token_object(
@@ -15387,6 +15458,7 @@ async def login_v3(request: Request):
             password=password,
             master_key=master_key,
             prisma_client=prisma_client,
+            general_settings=general_settings,
         )
 
         returned_ui_token_object: Final = create_ui_token_object(
@@ -15756,6 +15828,7 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
             detail={"error": "Invalid onboarding session for invitation link."},
         )
 
+    validate_password_policy(data.password, general_settings)
     hashed_pw: Final = hash_password(data.password)
     current_time = litellm.utils.get_utc_datetime()
     async with prisma_client.db.tx() as tx:
@@ -16223,6 +16296,7 @@ async def invitation_delete(
 )
 async def update_config(
     config_info: ConfigYAML,
+    request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -16237,6 +16311,26 @@ async def update_config(
     try:
         if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
             raise HTTPException(status_code=403, detail="Only proxy admins can update config")
+
+        request_body: Final[Mapping[str, JsonValue]] = TypeAdapter(Mapping[str, JsonValue]).validate_python(
+            await request.json()
+        )
+        raw_router_settings: Final = request_body.get("router_settings")
+        if isinstance(raw_router_settings, dict):
+            supported_router_settings: Final = RUNTIME_UPDATABLE_ROUTER_SETTINGS | (
+                frozenset(litellm.Router.get_valid_args()) - ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG
+            )
+            unsupported_router_settings: Final = sorted(set(raw_router_settings) - supported_router_settings)
+            if unsupported_router_settings:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": (
+                            f"Unsupported router settings: {', '.join(unsupported_router_settings)} "
+                            "are not valid router settings"
+                        )
+                    },
+                )
 
         if prisma_client is None:
             raise Exception("No DB Connected")
@@ -16339,11 +16433,19 @@ async def update_config(
             )
 
         # router_settings: merge existing + request, request wins.
-        if config_info.router_settings is not None:
+        if isinstance(raw_router_settings, dict):
             existing = await _read_section("router_settings")
             before_router_settings: Final = copy.deepcopy(existing)
-            updates = config_info.router_settings.dict(exclude_none=True)
-            new_router_settings: Final = {**existing, **updates}
+            typed_router_settings: Final = (
+                config_info.router_settings.dict(exclude_none=True) if config_info.router_settings is not None else {}
+            )
+            raw_router_settings_without_none: Final = {
+                key: value
+                for key, value in raw_router_settings.items()
+                if key not in typed_router_settings and value is not None
+            }
+            router_settings_updates: Final = {**typed_router_settings, **raw_router_settings_without_none}
+            new_router_settings: Final = {**existing, **router_settings_updates}
             await _upsert_section("router_settings", new_router_settings)
             asyncio.create_task(
                 create_config_audit_log(
@@ -16390,6 +16492,8 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "global_max_parallel_requests": "Integer",
         "max_request_size_mb": "Integer",
         "max_batch_file_size_mb": "Integer",
+        "max_file_size_mb": "Integer",
+        "blocked_file_extensions": "List",
         "max_response_size_mb": "Integer",
         "proxy_config_reload_interval_seconds": "Integer",
         "pass_through_endpoints": "PydanticModel",
