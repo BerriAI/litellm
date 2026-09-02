@@ -8512,8 +8512,8 @@ async def test_team_member_delete_blocks_keys_instead_of_deleting_when_configure
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock()
     mock_prisma_client.db.litellm_teammembership.delete_many = AsyncMock()
     mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[key, admin_blocked_key])
-    mock_update_key = AsyncMock()
-    mock_prisma_client.db.litellm_verificationtoken.update = mock_update_key
+    mock_update_key = AsyncMock(return_value=1)
+    mock_prisma_client.db.litellm_verificationtoken.update_many = mock_update_key
     mock_delete_keys = AsyncMock()
     mock_prisma_client.db.litellm_verificationtoken.delete_many = mock_delete_keys
     mock_create_many_deleted = AsyncMock()
@@ -8537,7 +8537,7 @@ async def test_team_member_delete_blocks_keys_instead_of_deleting_when_configure
     mock_create_many_deleted.assert_not_awaited()
     mock_update_key.assert_awaited_once()
     update_kwargs = mock_update_key.call_args.kwargs
-    assert update_kwargs["where"] == {"token": "hashed-token-1"}
+    assert update_kwargs["where"] == {"token": "hashed-token-1", "OR": [{"blocked": False}, {"blocked": None}]}
     assert update_kwargs["data"]["blocked"] is True
     assert json.loads(update_kwargs["data"]["metadata"]) == {"tags": ["a"], "blocked_by_team_member_removal": True}
     assert cache.get_cache(key="hashed-token-1") is None
@@ -8555,8 +8555,8 @@ async def test_unblock_team_keys_of_readded_members_skips_manually_blocked_keys(
     manually_blocked = _team_key("hashed-token-2", metadata={}, blocked=True)
     mock_find_many_keys = AsyncMock(return_value=[removal_blocked, manually_blocked])
     mock_prisma_client.db.litellm_verificationtoken.find_many = mock_find_many_keys
-    mock_update_key = AsyncMock()
-    mock_prisma_client.db.litellm_verificationtoken.update = mock_update_key
+    mock_update_key = AsyncMock(return_value=1)
+    mock_prisma_client.db.litellm_verificationtoken.update_many = mock_update_key
     cache = UserApiKeyCache()
     cache.set_cache(key="hashed-token-1", value=UserAPIKeyAuth(token="hashed-token-1", blocked=True))
     cache.set_cache(key="hashed-token-2", value=UserAPIKeyAuth(token="hashed-token-2", blocked=True))
@@ -8574,7 +8574,7 @@ async def test_unblock_team_keys_of_readded_members_skips_manually_blocked_keys(
     )
     mock_update_key.assert_awaited_once()
     update_kwargs = mock_update_key.call_args.kwargs
-    assert update_kwargs["where"] == {"token": "hashed-token-1"}
+    assert update_kwargs["where"] == {"token": "hashed-token-1", "blocked": True}
     assert update_kwargs["data"]["blocked"] is False
     assert json.loads(update_kwargs["data"]["metadata"]) == {}
     assert cache.get_cache(key="hashed-token-1") is None

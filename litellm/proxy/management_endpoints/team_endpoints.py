@@ -1202,8 +1202,12 @@ async def _set_member_removal_block(
     metadata: Final = _key_metadata(key_row.metadata)
     unmarked: Final = {k: v for k, v in metadata.items() if k != marker}  # mutable-ok: safe_dumps needs a dict
     new_metadata: Final = {**unmarked, marker: True} if blocked else unmarked  # mutable-ok: safe_dumps needs a dict
-    await tokens_db.update(
-        where={"token": key_row.token},
+    await tokens_db.update_many(
+        where=(
+            {"token": key_row.token, "OR": [{"blocked": False}, {"blocked": None}]}
+            if blocked
+            else {"token": key_row.token, "blocked": True}
+        ),
         data={"blocked": blocked, "metadata": safe_dumps(new_metadata)},
     )
 
