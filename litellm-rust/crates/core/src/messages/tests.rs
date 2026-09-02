@@ -437,5 +437,8 @@ async fn messages_rejects_unsupported_provider() {
     .await
     .expect_err("unsupported provider errors");
 
-    assert!(matches!(err, CoreError::InvalidProvider(provider) if provider == "openai"));
+    assert!(matches!(
+        err,
+        CoreError::Unsupported("messages provider is not registered in the Rust bridge")
+    ));
 }

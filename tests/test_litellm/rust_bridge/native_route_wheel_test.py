@@ -4,6 +4,7 @@ import asyncio
 import importlib.util
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -170,6 +171,19 @@ def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
     raise AssertionError(f"unknown route: {route}")
 
 
+def messages_wrapper_kwargs(api_base: str, outcome: str) -> dict[str, object]:
+    native_kwargs: Final = route_kwargs("messages", api_base, outcome)
+    return {
+        "model": native_kwargs["model"],
+        "body": native_kwargs["body"],
+        "api_key": native_kwargs["api_key"],
+        "api_base": native_kwargs["api_base"],
+        "custom_llm_provider": native_kwargs["custom_llm_provider"],
+        "extra_headers": native_kwargs["extra_headers"],
+        "timeout": native_kwargs["timeout_seconds"],
+    }
+
+
 def assert_success(route: str, response: object) -> None:
     if not isinstance(response, dict):
         raise TypeError(f"{route} returned {type(response).__name__}, expected dict")
@@ -247,6 +261,86 @@ def exercise_routes(native_path: Path, api_base: str) -> object:
     return native
 
 
+def assert_packaged_native_loaded(wheel_root: Path) -> None:
+    from litellm.rust_bridge import get_native_bridge
+
+    native: Final = get_native_bridge()
+    if native is None:
+        raise AssertionError("packaged native bridge was not loaded")
+    native_file: Final = getattr(native, "__file__", None)
+    if not isinstance(native_file, str):
+        raise AssertionError("packaged native bridge has no module path")
+    if wheel_root.resolve() not in Path(native_file).resolve().parents:
+        raise AssertionError(f"native bridge loaded outside the wheel: {native_file}")
+
+
+async def exercise_packaged_messages(api_base: str) -> None:
+    from litellm.exceptions import APIError
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+    from litellm.rust_bridge import messages as messages_bridge
+    from litellm.types.router import GenericLiteLLMParams
+
+    response: Final = messages_bridge.messages(**messages_wrapper_kwargs(api_base, "success"))
+    assert_success("messages", response)
+
+    responses: Final = await asyncio.wait_for(
+        asyncio.gather(
+            *(
+                messages_bridge.amessages(**messages_wrapper_kwargs(api_base, "success"))
+                for _ in range(32)
+            )
+        ),
+        timeout=15,
+    )
+    for concurrent_response in responses:
+        assert_success("messages", concurrent_response)
+
+    declined_kwargs: Final = messages_wrapper_kwargs(api_base, "success")
+    declined_kwargs["custom_llm_provider"] = "openai"
+    if await messages_bridge.amessages(**declined_kwargs) is not None:
+        raise AssertionError("unsupported Messages request did not decline")
+
+    params: Final = GenericLiteLLMParams(api_key="sk-native", rust=True)
+    success_kwargs: Final = route_kwargs("messages", api_base, "success")
+    gate_response: Final = await BaseLLMHTTPHandler._maybe_rust_anthropic_messages(
+        custom_llm_provider="anthropic",
+        litellm_params=params,
+        has_agentic_hook=False,
+        model=str(success_kwargs["model"]),
+        api_key="sk-native",
+        api_base=api_base,
+        headers=dict(success_kwargs["extra_headers"]),
+        request_body=dict(success_kwargs["body"]),
+        timeout=3.0,
+    )
+    assert_success("messages", gate_response)
+
+    rate_limit_kwargs: Final = route_kwargs("messages", api_base, "429")
+    try:
+        await BaseLLMHTTPHandler._maybe_rust_anthropic_messages(
+            custom_llm_provider="anthropic",
+            litellm_params=params,
+            has_agentic_hook=False,
+            model=str(rate_limit_kwargs["model"]),
+            api_key="sk-native",
+            api_base=api_base,
+            headers=dict(rate_limit_kwargs["extra_headers"]),
+            request_body=dict(rate_limit_kwargs["body"]),
+            timeout=3.0,
+        )
+    except APIError as error:
+        if error.status_code != 429 or "native-rate-limit" not in str(error):
+            raise AssertionError(f"Messages gate returned the wrong upstream error: {error!r}") from error
+    else:
+        raise AssertionError("Messages gate retried or swallowed the native upstream error")
+
+
+def exercise_packaged_python_bridge(wheel_root: Path, api_base: str) -> int:
+    assert_packaged_native_loaded(wheel_root)
+    asyncio.run(exercise_packaged_messages(api_base))
+    return 0
+
+
 def exercise_signal(native: object, api_base: str) -> int:
     try:
         native.messages(
@@ -293,6 +387,40 @@ def verify_sigint(native_path: Path, api_base: str) -> None:
             process.wait(timeout=5)
 
 
+def verify_packaged_python_bridge(wheel: Path, wheel_root: Path, api_base: str) -> None:
+    uv: Final = shutil.which("uv")
+    if uv is None:
+        raise AssertionError("uv is required to test the packaged Python bridge")
+    environment: Final = {key: value for key, value in os.environ.items() if key != "ANTHROPIC_API_KEY"} | {
+        "PYTHONPATH": str(wheel_root)
+    }
+    result: Final = subprocess.run(
+        (
+            uv,
+            "run",
+            "--isolated",
+            "--with",
+            str(wheel.resolve()),
+            "python",
+            __file__,
+            "bridge-child",
+            str(wheel_root),
+            api_base,
+        ),
+        cwd=wheel_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise AssertionError(
+            f"packaged Python bridge failed with status {result.returncode}"
+            f"\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+
+
 def verify_wheel(wheel: Path) -> int:
     with tempfile.TemporaryDirectory() as temporary_directory, zipfile.ZipFile(wheel) as archive:
         wheel_root: Final = Path(temporary_directory)
@@ -318,6 +446,7 @@ def verify_wheel(wheel: Path) -> int:
         api_base: Final = f"http://127.0.0.1:{server.server_address[1]}"
         try:
             verify_sigint(native_path, api_base)
+            verify_packaged_python_bridge(wheel, wheel_root, api_base)
         finally:
             server.shutdown()
             server.server_close()
@@ -331,6 +460,8 @@ def main() -> int:
     if len(sys.argv) == 4 and sys.argv[1] == "child":
         native: Final = exercise_routes(Path(sys.argv[2]), sys.argv[3])
         return exercise_signal(native, sys.argv[3])
+    if len(sys.argv) == 4 and sys.argv[1] == "bridge-child":
+        return exercise_packaged_python_bridge(Path(sys.argv[2]), sys.argv[3])
     sys.stderr.write(f"usage: {Path(sys.argv[0]).name} WHEEL\n")
     return 2
 

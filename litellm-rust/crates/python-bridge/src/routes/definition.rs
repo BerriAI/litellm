@@ -403,6 +403,35 @@ asyncio.run(exercise())
     }
 
     #[test]
+    fn messages_routes_only_decline_unsupported_requests() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "routes").expect("module should be created");
+            crate::routes::register(&module).expect("routes should register");
+            let body = PyDict::new(py);
+            let kwargs = PyDict::new(py);
+            kwargs
+                .set_item("custom_llm_provider", "openai")
+                .expect("kwargs should accept provider");
+
+            let error = module
+                .getattr("messages")
+                .and_then(|function| function.call(("model", &body), Some(&kwargs)))
+                .expect_err("unsupported provider should decline");
+            assert!(error.is_instance_of::<crate::errors::RustBridgeDeclined>(py));
+
+            kwargs
+                .set_item("custom_llm_provider", "anthropic")
+                .expect("kwargs should accept provider");
+            let error = module
+                .getattr("messages")
+                .and_then(|function| function.call(("model", &body), Some(&kwargs)))
+                .expect_err("missing credentials should fail");
+            assert!(error.is_instance_of::<crate::errors::RustUpstreamError>(py));
+        });
+    }
+
+    #[test]
     fn route_registration_rejects_duplicate_python_names() {
         Python::initialize();
         Python::attach(|py| {

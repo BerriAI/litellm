@@ -25,8 +25,9 @@ pub(super) fn prepare_messages_call(
     let model = provider_info.model.to_string();
     let provider = provider_info.custom_llm_provider;
 
-    let config = messages_provider_config(provider)
-        .ok_or_else(|| CoreError::InvalidProvider(provider.to_string()))?;
+    let config = messages_provider_config(provider).ok_or(CoreError::Unsupported(
+        "messages provider is not registered in the Rust bridge",
+    ))?;
     let env_lookup = |key: &str| std::env::var(key).ok();
 
     let mut headers = string_headers(request.extra_headers)?;

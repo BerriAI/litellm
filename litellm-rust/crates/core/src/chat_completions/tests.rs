@@ -769,11 +769,7 @@ mod round_trip {
     }
 
     #[tokio::test]
-    async fn a_connection_that_is_never_established_declines_instead_of_failing() {
-        // Nothing was sent, so nothing was billed and the host can still serve
-        // the request. Classing this with the post-send failures would turn a
-        // recoverable fallback into a user-facing error on exactly the
-        // deployments whose transport is configured only on the Python client.
+    async fn a_connection_that_is_never_established_is_still_terminal() {
         let port = {
             let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
             listener.local_addr().expect("has an address").port()
@@ -787,34 +783,8 @@ mod round_trip {
         .await
         .expect_err("nothing is listening");
         assert!(
-            matches!(err, CoreError::Connect(_)),
-            "expected a pre-send connect failure, got {err:?}"
+            matches!(err, CoreError::Network(_)),
+            "expected a terminal network failure, got {err:?}"
         );
-    }
-
-    #[test]
-    fn response_errors_collapse_to_one_variant_that_can_only_mean_already_sent() {
-        use crate::chat_completions::handler::as_response_error;
-
-        for original in [
-            CoreError::MissingField("usage"),
-            CoreError::Unsupported("non-text response content block"),
-            CoreError::InvalidRequest("whatever".to_string()),
-            CoreError::Auth("whatever".to_string()),
-        ] {
-            let label = format!("{original:?}");
-            assert!(
-                matches!(as_response_error(original), CoreError::InvalidResponse(_)),
-                "{label} must not stay retryable once the provider has answered"
-            );
-        }
-        // An upstream status is already unambiguous, so it survives intact.
-        assert!(matches!(
-            as_response_error(CoreError::Http {
-                status: 500,
-                body: "boom".to_string()
-            }),
-            CoreError::Http { status: 500, .. }
-        ));
     }
 }

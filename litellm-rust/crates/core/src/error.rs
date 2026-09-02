@@ -21,13 +21,6 @@ pub enum Error {
     Http { status: u16, body: String },
     #[error("upstream network error: {0}")]
     Network(String),
-    /// The provider was never reached: DNS, TCP, TLS or proxy setup failed
-    /// before any byte of the request went out. Nothing was billed, so a host
-    /// that keeps a reference implementation can serve the request itself.
-    /// A timeout is deliberately not this, since the provider may have received
-    /// and answered the request already.
-    #[error("could not reach the provider: {0}")]
-    Connect(String),
     #[error("routing error: {0}")]
     Routing(String),
     /// The request is outside the surface this route covers in Rust. Hosts that
@@ -39,6 +32,14 @@ pub enum Error {
 pub type CoreError = Error;
 pub type CoreResult<T> = Result<T, Error>;
 
+/// Re-tag an error raised after the provider has already returned a response.
+pub(crate) fn as_response_error(err: CoreError) -> CoreError {
+    match err {
+        already @ (CoreError::InvalidResponse(_) | CoreError::Http { .. }) => already,
+        other => CoreError::InvalidResponse(other.to_string()),
+    }
+}
+
 pub fn json_type_name(value: &serde_json::Value) -> &'static str {
     match value {
         serde_json::Value::Null => "null",
@@ -47,5 +48,36 @@ pub fn json_type_name(value: &serde_json::Value) -> &'static str {
         serde_json::Value::String(_) => "string",
         serde_json::Value::Array(_) => "array",
         serde_json::Value::Object(_) => "object",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn response_errors_collapse_to_one_non_retryable_variant() {
+        for original in [
+            CoreError::MissingField("usage"),
+            CoreError::Unsupported("non-text response content block"),
+            CoreError::InvalidRequest("whatever".to_string()),
+            CoreError::Auth("whatever".to_string()),
+        ] {
+            assert!(matches!(
+                as_response_error(original),
+                CoreError::InvalidResponse(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn response_errors_preserve_an_upstream_status() {
+        assert!(matches!(
+            as_response_error(CoreError::Http {
+                status: 500,
+                body: "boom".to_string()
+            }),
+            CoreError::Http { status: 500, .. }
+        ));
     }
 }
