@@ -7,18 +7,22 @@
 
 import os
 import sys
+from typing import TYPE_CHECKING, Literal, Optional
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import tempfile
-from typing import Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails._content_utils import walk_user_text
+from litellm.types.utils import GenericGuardrailAPIInputs
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 GUARDRAIL_NAME = "hide_secrets"
 
@@ -422,7 +426,7 @@ _default_detect_secrets_config = {
 
 
 class _ENTERPRISE_SecretDetection(CustomGuardrail):
-    def __init__(self, detect_secrets_config: Optional[dict] = None, **kwargs):
+    def __init__(self, detect_secrets_config: dict | None = None, **kwargs):
         self.user_defined_detect_secrets_config = detect_secrets_config
         super().__init__(**kwargs)
 
@@ -455,6 +459,29 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
 
         return detected_secrets
 
+    def redact_text(self, text: str) -> str:
+        detected_secrets = self.scan_message_for_secrets(text)
+        for secret in detected_secrets:
+            text = text.replace(secret["value"], "[REDACTED]")
+        if detected_secrets:
+            secret_types = [secret["type"] for secret in detected_secrets]
+            verbose_proxy_logger.warning(
+                f"Detected and redacted secrets in message: {secret_types}"
+            )
+        return text
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> GenericGuardrailAPIInputs:
+        texts = inputs.get("texts")
+        if not texts:
+            return inputs
+        return {**inputs, "texts": [self.redact_text(text) for text in texts]}
+
     async def should_run_check(self, user_api_key_dict: UserAPIKeyAuth) -> bool:
         if user_api_key_dict.permissions is not None:
             if GUARDRAIL_NAME in user_api_key_dict.permissions:
@@ -474,19 +501,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         if await self.should_run_check(user_api_key_dict) is False:
             return
 
-        # Covers multimodal list content + Responses-API input.
-        def _redact_message_text(text: str) -> str:
-            detected_secrets = self.scan_message_for_secrets(text)
-            for secret in detected_secrets:
-                text = text.replace(secret["value"], "[REDACTED]")
-            if detected_secrets:
-                secret_types = [secret["type"] for secret in detected_secrets]
-                verbose_proxy_logger.warning(
-                    f"Detected and redacted secrets in message: {secret_types}"
-                )
-            return text
-
-        walk_user_text(data, _redact_message_text)
+        walk_user_text(data, self.redact_text)
 
         if "prompt" in data:
             if isinstance(data["prompt"], str):
