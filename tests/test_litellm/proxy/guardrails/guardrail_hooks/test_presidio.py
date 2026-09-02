@@ -3129,6 +3129,18 @@ def test_update_in_memory_applies_analyze_chunk_size():
     assert guardrail.presidio_analyze_chunk_size_bytes == 99_000
 
 
+def test_update_in_memory_keeps_output_masker_from_unmasking():
+    masker = _OPTIONAL_PresidioPIIMasking(mock_testing=True, apply_to_output=True, output_parse_pii=False)
+    unmasker = _OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    params = LitellmParams(guardrail="presidio", mode="pre_call", output_parse_pii=True)
+
+    masker.update_in_memory_litellm_params(params)
+    unmasker.update_in_memory_litellm_params(params)
+
+    assert (masker.apply_to_output, masker.output_parse_pii) == (True, False)
+    assert (unmasker.apply_to_output, unmasker.output_parse_pii) == (False, True)
+
+
 def test_merge_drops_truncated_same_type_fragment_from_overlap():
     """A boundary entity seen truncated by chunk 1 and whole by chunk 2 must
     merge to the single full span; keeping both overlapping spans corrupts the
