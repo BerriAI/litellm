@@ -178,6 +178,7 @@ if TYPE_CHECKING:
         AnthropicMessagesStreamingResponse,
     )
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+    from litellm.router import Router
     from litellm.types.llms.openai_evals import (
         CancelEvalResponse,
         CancelRunResponse,
@@ -2872,6 +2873,7 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     timeout=timeout or float(response_api_optional_request_params.get("timeout", 0)),
                     stream=stream,
+                    logging_obj=logging_obj,
                     **body_kwargs,
                 )
 
@@ -2903,6 +2905,7 @@ class BaseLLMHTTPHandler:
                     url=api_base,
                     headers=headers,
                     timeout=timeout or float(response_api_optional_request_params.get("timeout", 0)),
+                    logging_obj=logging_obj,
                     **body_kwargs,
                 )
 
@@ -2921,7 +2924,7 @@ class BaseLLMHTTPHandler:
         final_response: Final = await self._call_agentic_completion_hooks(
             response=initial_response,
             model=model,
-            messages=(input if isinstance(input, list) else [{"role": "user", "content": input}]),
+            messages=(input if isinstance(input, list) else [{"role": "user", "content": input}]),  # pyright: ignore[reportArgumentType]  # pre-existing mismatch surfaced by the Router import; the hook accepts response input items at runtime
             anthropic_messages_provider_config=responses_api_provider_config,
             anthropic_messages_optional_request_params=response_api_optional_request_params,
             logging_obj=logging_obj,
@@ -5413,7 +5416,7 @@ class BaseLLMHTTPHandler:
         try:
             response: ResponsesAPIResponse | BaseResponsesAPIStreamingIterator = await litellm.aresponses(
                 model=patch.model or model,
-                input=patch.messages,
+                input=patch.messages,  # pyright: ignore[reportArgumentType]  # pre-existing mismatch surfaced by the Router import; patch messages are valid response input at runtime
                 **optional_params,
                 **kwargs_for_followup,
             )
@@ -9686,6 +9689,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
+        router: "Router | None" = None,
     ) -> VectorStoreSearchResponse:
         if isinstance(vector_store_provider_config, BaseDirectVectorStoreConfig):
             self._pre_call_direct_vector_store_search(
@@ -9736,6 +9740,7 @@ class BaseLLMHTTPHandler:
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),
                 extra_body=extra_body,
+                router=router,
             )
         else:
             (
@@ -9749,6 +9754,7 @@ class BaseLLMHTTPHandler:
                 litellm_logging_obj=logging_obj,
                 litellm_params=dict(litellm_params),
                 extra_body=extra_body,
+                router=router,
             )
         all_optional_params: Final[dict[str, object]] = dict(litellm_params)
         all_optional_params.update(vector_store_search_optional_params or {})
@@ -9800,6 +9806,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
+        router: "Router | None" = None,
     ) -> VectorStoreSearchResponse | Coroutine[object, object, VectorStoreSearchResponse]:
         if _is_async:
             return self.async_vector_store_search_handler(
@@ -9814,6 +9821,7 @@ class BaseLLMHTTPHandler:
                 extra_body=extra_body,
                 timeout=timeout,
                 client=client,
+                router=router,
             )
 
         if isinstance(vector_store_provider_config, BaseDirectVectorStoreConfig):
@@ -9860,6 +9868,7 @@ class BaseLLMHTTPHandler:
             litellm_logging_obj=logging_obj,
             litellm_params=dict(litellm_params),
             extra_body=extra_body,
+            router=router,
         )
 
         all_optional_params: Final[dict[str, object]] = dict(litellm_params)

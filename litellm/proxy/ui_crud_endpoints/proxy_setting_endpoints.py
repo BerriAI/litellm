@@ -3,10 +3,11 @@ import asyncio
 import json
 import os
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import (
-    Any,
     Final,
+    NamedTuple,
     Protocol,
     cast,  # noqa: TID251  # prisma types Json columns as fields.Json but de-serializes them to plain python on read
 )
@@ -15,6 +16,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
 from pydantic import ConfigDict, JsonValue, ValidationError, create_model
 from pydantic.fields import FieldInfo
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -42,6 +44,31 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 )
 
 router: Final = APIRouter()
+
+
+JsonSchemaItems: Final = TypedDict(
+    "JsonSchemaItems",
+    {"$ref": ReadOnly[str], "enum": ReadOnly[Sequence[JsonValue]]},
+    total=False,
+)
+
+
+class JsonSchemaNode(TypedDict, total=False):
+    type: ReadOnly[str]
+    description: ReadOnly[str]
+    enum: ReadOnly[Sequence[JsonValue]]
+    anyOf: ReadOnly[Sequence["JsonSchemaNode"]]
+    items: ReadOnly["JsonSchemaItems"]
+    properties: ReadOnly[Mapping[str, "JsonSchemaNode"]]
+
+
+_EMPTY_SCHEMA_DEFS: Final[Mapping[str, "JsonSchemaNode"]] = MappingProxyType({})
+
+
+class JsonSchemaPropertyEntry(TypedDict):
+    description: ReadOnly[str]
+    type: ReadOnly[str]
+    items: NotRequired[ReadOnly["JsonSchemaItems"]]
 
 
 class _SsoSettingsMappingRow(Protocol):
@@ -157,10 +184,10 @@ class UIThemeConfig(BaseModel):
 class SettingsResponse(BaseModel):
     """Base response model for settings with values and schema information"""
 
-    values: dict[str, Any]
+    values: dict[str, object]
     """The current configuration values"""
 
-    field_schema: dict[str, Any]
+    field_schema: dict[str, object]
     """Schema information including descriptions and property types for UI display"""
 
 
@@ -548,6 +575,62 @@ async def delete_allowed_ip(
     return {"message": f"IP {ip_address.ip} deleted successfully", "status": "success"}
 
 
+def _resolve_non_null_variant(field_info: JsonSchemaNode) -> JsonSchemaNode:
+    """Pydantic v2 renders Optional fields as ``anyOf: [actual_type, null]``."""
+    if "anyOf" not in field_info:
+        return field_info
+    return next((variant for variant in field_info["anyOf"] if variant.get("type") != "null"), field_info)
+
+
+def _schema_items_entry(resolved: JsonSchemaNode, defs: Mapping[str, JsonSchemaNode]) -> "JsonSchemaItems | None":
+    """Items info (including enum values) for array fields, so the UI can render a multi-select dropdown."""
+    if "items" not in resolved:
+        return None
+    items: Final = resolved["items"]
+    if "$ref" not in items:
+        return items
+    ref_def: Final = defs.get(items["$ref"].split("/")[-1])
+    if ref_def is None or "enum" not in ref_def:
+        return None
+    enum_items: Final[JsonSchemaItems] = {"enum": ref_def["enum"]}
+    return enum_items
+
+
+def _schema_property_entry(field_info: JsonSchemaNode, defs: Mapping[str, JsonSchemaNode]) -> JsonSchemaPropertyEntry:
+    resolved: Final = _resolve_non_null_variant(field_info)
+    items_entry: Final = _schema_items_entry(resolved, defs)
+    description: Final = field_info.get("description", "")
+    type_name: Final = resolved.get("type", "string")
+    if items_entry is None:
+        entry: Final[JsonSchemaPropertyEntry] = {"description": description, "type": type_name}
+        return entry
+    entry_with_items: Final[JsonSchemaPropertyEntry] = {
+        "description": description,
+        "type": type_name,
+        "items": items_entry,
+    }
+    return entry_with_items
+
+
+class _RootSchema(NamedTuple):
+    description: str
+    properties: Mapping[str, JsonSchemaNode]
+    nested_defs: Mapping[str, JsonSchemaNode]
+    defs: Mapping[str, JsonSchemaNode]
+
+
+def _root_schema(settings_class: type[BaseModel]) -> _RootSchema:
+    from pydantic import TypeAdapter
+
+    raw_schema: Final = TypeAdapter(settings_class).json_schema(by_alias=True)
+    return _RootSchema(
+        description=raw_schema.get("description", ""),
+        properties=raw_schema["properties"],
+        nested_defs=raw_schema.get("definitions", _EMPTY_SCHEMA_DEFS),
+        defs=raw_schema["$defs"] if "$defs" in raw_schema else raw_schema.get("definitions", _EMPTY_SCHEMA_DEFS),
+    )
+
+
 async def _get_settings_with_schema(
     settings_key: str,
     settings_class: type[BaseModel],
@@ -561,69 +644,43 @@ async def _get_settings_with_schema(
         settings_class: The Pydantic class to use for schema
         config: The config dictionary
     """
-    from pydantic import TypeAdapter
-
     litellm_settings: Final = config.get("litellm_settings", {}) or {}
     settings_data: Final = litellm_settings.get(settings_key, {}) or {}
 
     # Create the settings object
     settings: Final = settings_class(**(settings_data))
     # Get the schema
-    schema: Final = TypeAdapter(settings_class).json_schema(by_alias=True)
+    root_schema: Final = _root_schema(settings_class)
 
     # Convert to dict for response
     settings_dict: Final = settings.model_dump()
 
     # Add descriptions to the response
-    result: Final = {
-        "values": settings_dict,
-        "field_schema": {
-            "description": schema.get("description", ""),
-            "properties": {},
-        },
+    schema_properties_out: Final[Mapping[str, JsonSchemaPropertyEntry]] = {
+        field_name: _schema_property_entry(field_info, root_schema.defs)
+        for field_name, field_info in root_schema.properties.items()
     }
 
-    # Add property descriptions
-    defs: Final = schema.get("$defs", schema.get("definitions", {}))
-    for field_name, field_info in schema["properties"].items():
-        # For Optional fields, Pydantic v2 uses anyOf with [actual_type, null].
-        # Resolve the non-null variant to get the real type and items.
-        resolved = field_info
-        if "anyOf" in field_info:
-            for variant in field_info["anyOf"]:
-                if variant.get("type") != "null":
-                    resolved = variant
-                    break
-
-        prop_entry: dict = {
-            "description": field_info.get("description", ""),
-            "type": resolved.get("type", "string"),
-        }
-        # Pass through items info (including enum values) for array fields
-        # so the UI can render a multi-select dropdown
-        if "items" in resolved:
-            items = resolved["items"]
-            # Resolve $ref to enum definitions if needed
-            if "$ref" in items:
-                ref_name = items["$ref"].split("/")[-1]
-                ref_def = defs.get(ref_name, {})
-                if "enum" in ref_def:
-                    prop_entry["items"] = {"enum": ref_def["enum"]}
-            else:
-                prop_entry["items"] = items
-        result["field_schema"]["properties"][field_name] = prop_entry
-
     # Add nested object descriptions
-    for def_name, def_schema in schema.get("definitions", {}).items():
-        result["field_schema"][def_name] = {
+    nested_defs_out: Final[Mapping[str, Mapping[str, object]]] = {
+        def_name: {
             "description": def_schema.get("description", ""),
             "properties": {
                 prop_name: {"description": prop_info.get("description", "")}
                 for prop_name, prop_info in def_schema.get("properties", {}).items()
             },
         }
+        for def_name, def_schema in root_schema.nested_defs.items()
+    }
 
-    return result
+    return {
+        "values": settings_dict,
+        "field_schema": {
+            "description": root_schema.description,
+            "properties": schema_properties_out,
+            **nested_defs_out,
+        },
+    }
 
 
 @router.get(
@@ -930,32 +987,29 @@ async def get_sso_settings():
     resolved: Final = resolve_sso_config(sso_db_settings, os.environ)
 
     # Get the schema for UI display
-    from pydantic import TypeAdapter
-
-    schema: Final = TypeAdapter(SSOConfig).json_schema(by_alias=True)
+    root_schema: Final = _root_schema(SSOConfig)
 
     # Convert to dict for response, masking OAuth client secrets so plaintext
     # is never sent to the UI.
     sso_dict: Final = mask_sensitive_keys(resolved.config.model_dump(), set(SSO_SECRET_FIELDS))
 
     # Add descriptions to the response
-    result: Final = {
-        "values": sso_dict,
-        "provenance": resolved.provenance,
-        "field_schema": {
-            "description": schema.get("description", ""),
-            "properties": {},
-        },
-    }
-
-    # Add property descriptions
-    for field_name, field_info in schema["properties"].items():
-        result["field_schema"]["properties"][field_name] = {
+    schema_properties_out: Final[Mapping[str, Mapping[str, str]]] = {
+        field_name: {
             "description": field_info.get("description", ""),
             "type": field_info.get("type", "string"),
         }
+        for field_name, field_info in root_schema.properties.items()
+    }
 
-    return result
+    return {
+        "values": sso_dict,
+        "provenance": resolved.provenance,
+        "field_schema": {
+            "description": root_schema.description,
+            "properties": schema_properties_out,
+        },
+    }
 
 
 @router.patch(
@@ -1309,7 +1363,7 @@ UI_SETTINGS_CACHE_KEY: Final = "ui_settings:settings_dict"
 UI_SETTINGS_CACHE_TTL: Final = 600  # 10 minutes
 
 
-async def get_ui_settings_cached() -> dict[str, Any]:
+async def get_ui_settings_cached() -> dict[str, JsonValue]:
     """
     Return the persisted UI settings dict, using DualCache for reads.
 

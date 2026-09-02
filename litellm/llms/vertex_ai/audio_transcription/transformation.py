@@ -35,6 +35,19 @@ SUPPORTED_RESPONSE_FORMATS: Final = ("json", "text")
 _URL_UNSAFE_PROJECT_CHARS: Final = ("/", "?", "#", "\\", ":", " ", "\t", "\n", "\r")
 
 
+def validate_vertex_transcription_location(location: str | None, default_location: str) -> str:
+    try:
+        return validate_vertex_location(location or default_location)
+    except ValueError as e:
+        raise VertexAIError(status_code=400, message=str(e)) from e
+
+
+def validate_vertex_transcription_project_id(project_id: str) -> str:
+    if not project_id or ".." in project_id or any(c in project_id for c in _URL_UNSAFE_PROJECT_CHARS):
+        raise VertexAIError(status_code=400, message=f"Invalid vertex_project format: {project_id!r}")
+    return project_id
+
+
 class VertexAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase):
     def __init__(self) -> None:
         BaseAudioTranscriptionConfig.__init__(self)
@@ -103,26 +116,15 @@ class VertexAIAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexBase)
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        location: Final = self._validate_location(self.safe_get_vertex_ai_location(litellm_params))
-        project_id: Final = self._validate_project_id(
+        location: Final = validate_vertex_transcription_location(
+            self.safe_get_vertex_ai_location(litellm_params), default_location=DEFAULT_SPEECH_TO_TEXT_LOCATION
+        )
+        project_id: Final = validate_vertex_transcription_project_id(
             self.safe_get_vertex_ai_project(litellm_params) or self._resolve_project_id_from_credentials(litellm_params)
         )
         host: Final = "speech.googleapis.com" if location == "global" else f"{location}-speech.googleapis.com"
         base_url: Final = (api_base or f"https://{host}").rstrip("/")
         return f"{base_url}/v2/projects/{project_id}/locations/{location}/recognizers/_:recognize"
-
-    @staticmethod
-    def _validate_location(location: str | None) -> str:
-        try:
-            return validate_vertex_location(location or DEFAULT_SPEECH_TO_TEXT_LOCATION)
-        except ValueError as e:
-            raise VertexAIError(status_code=400, message=str(e)) from e
-
-    @staticmethod
-    def _validate_project_id(project_id: str) -> str:
-        if not project_id or ".." in project_id or any(c in project_id for c in _URL_UNSAFE_PROJECT_CHARS):
-            raise VertexAIError(status_code=400, message=f"Invalid vertex_project format: {project_id!r}")
-        return project_id
 
     def _resolve_project_id_from_credentials(self, litellm_params: dict) -> str:
         _, project_id = self._ensure_access_token(

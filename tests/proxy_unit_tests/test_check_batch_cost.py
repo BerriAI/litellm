@@ -9,14 +9,38 @@ ARN unified_object_id) batches with no managed unified id.
 import asyncio
 import json
 from contextlib import contextmanager
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
+if TYPE_CHECKING:
+    from litellm.batches.batch_utils import BatchCostUsageResult
+
 _IS_B64 = "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id"
 _CLAIM_UNIFIED_BATCH_ID = "dW5pZmllZF9iYXRjaF9pZA=="
 _CLAIM_OUTPUT_FILE_ID = "file-output-123"
+
+
+def _batch_cost_result(
+    cost: float,
+    usage: dict,
+    models: list[str],
+    successful_requests: int = 1,
+    failed_requests: int = 0,
+) -> "BatchCostUsageResult":
+    """Build the BatchCostUsageResult calculate_batch_cost_and_usage now returns,
+    for mocking it in tests that only care about cost/usage/models."""
+    from litellm.batches.batch_utils import BatchCostUsageResult
+
+    return BatchCostUsageResult(
+        cost=cost,
+        usage=usage,
+        models=models,
+        successful_requests=successful_requests,
+        failed_requests=failed_requests,
+    )
 
 
 def _unmanaged_vertex_file_object(
@@ -327,7 +351,7 @@ class TestCheckBatchCost:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=(
+                return_value=_batch_cost_result(
                     0.01,
                     {"prompt_tokens": 10, "completion_tokens": 5},
                     ["gpt-4"],
@@ -432,7 +456,7 @@ class TestCheckBatchCost:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=(0.01, {"prompt_tokens": 10, "completion_tokens": 5}, ["claude-haiku-4-5"]),
+                return_value=_batch_cost_result(0.01, {"prompt_tokens": 10, "completion_tokens": 5}, ["claude-haiku-4-5"]),
             ),
             patch(
                 "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
@@ -535,7 +559,9 @@ class TestCheckBatchCost:
                 patch(
                     "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                     new_callable=AsyncMock,
-                    return_value=(0.0052, {"prompt_tokens": 1400, "completion_tokens": 600}, ["claude-haiku-4-5"]),
+                    return_value=_batch_cost_result(
+                        0.0052, {"prompt_tokens": 1400, "completion_tokens": 600}, ["claude-haiku-4-5"]
+                    ),
                 ) as mock_calculate,
                 patch(
                     "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
@@ -634,7 +660,7 @@ class TestCheckBatchCost:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=(
+                return_value=_batch_cost_result(
                     0.01,
                     {"prompt_tokens": 10, "completion_tokens": 5},
                     ["gpt-4"],
@@ -764,7 +790,7 @@ class TestCheckBatchCost:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=(
+                return_value=_batch_cost_result(
                     0.01,
                     {"prompt_tokens": 10, "completion_tokens": 5},
                     ["gpt-4"],
@@ -1312,7 +1338,7 @@ class TestCheckBatchCost:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=(
+                return_value=_batch_cost_result(
                     0.01,
                     {"prompt_tokens": 10, "completion_tokens": 5},
                     ["gpt-4"],
@@ -1346,6 +1372,114 @@ class TestCheckBatchCost:
         assert (
             update_data["status"] == terminal_status
         ), f"billed {terminal_status} batch must keep its real terminal status in the DB"
+
+    @pytest.mark.asyncio
+    async def test_error_file_failures_add_to_failed_request_count(
+        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """OpenAI-shaped providers report per-request failures only in a separate
+        error file. The poller prices from the output file, so without also counting
+        the error file's lines, batch_failed_requests on the spend log undercounts:
+        regression test for the poller path merging error-file failures.
+        """
+        import base64
+        from unittest.mock import patch
+
+        import httpx
+        import respx
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+
+        mock_job = MagicMock()
+        mock_job.id = "job-error-file-1"
+        mock_job.unified_object_id = base64.urlsafe_b64encode(
+            b"litellm_proxy;model_id:model-123;llm_batch_id:batch-456"
+        ).decode()
+        mock_job.created_by = "user-1"
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output_file_id = "file-output-123"
+        mock_response.error_file_id = "file-error-456"
+        mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
+        mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
+        mock_llm_router.get_deployment_credentials_with_provider = MagicMock(return_value={"api_key": "sk-test"})
+
+        mock_deployment = MagicMock()
+        mock_deployment.litellm_params.custom_llm_provider = "openai"
+        mock_deployment.litellm_params.model = "gpt-4"
+        mock_deployment.model_info.model_dump.return_value = {}
+        mock_llm_router.get_deployment = MagicMock(return_value=mock_deployment)
+
+        succeeded_line = json.dumps(
+            {
+                "custom_id": "req-1",
+                "response": {
+                    "status_code": 200,
+                    "body": {
+                        "id": "chatcmpl-1",
+                        "object": "chat.completion",
+                        "model": "gpt-4",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {"role": "assistant", "content": "hi"},
+                                "finish_reason": "stop",
+                            }
+                        ],
+                        "usage": {
+                            "prompt_tokens": 10,
+                            "completion_tokens": 5,
+                            "total_tokens": 15,
+                        },
+                    },
+                },
+                "error": None,
+            }
+        )
+        rejected_line = json.dumps(
+            {
+                "custom_id": "req-2",
+                "response": {
+                    "status_code": 400,
+                    "body": {"error": {"message": "bad request"}},
+                },
+                "error": None,
+            }
+        )
+        error_file_lines = "\n".join(
+            json.dumps({"custom_id": custom_id, "error": {"message": "rejected"}}) for custom_id in ("req-3", "req-4")
+        )
+
+        with (
+            respx.mock(assert_all_called=True) as provider,
+            patch.object(  # test-quality-ok: the poller builds Logging inline, the only seam to its handler kwargs
+                Logging, "async_success_handler", new_callable=AsyncMock
+            ) as success_handler,
+        ):
+            provider.get("https://api.openai.com/v1/files/file-output-123/content").mock(
+                return_value=httpx.Response(200, content=f"{succeeded_line}\n{rejected_line}\n".encode())
+            )
+            provider.get("https://api.openai.com/v1/files/file-error-456/content").mock(
+                return_value=httpx.Response(200, content=f"{error_file_lines}\n\n".encode())
+            )
+            await check_batch_cost_instance.check_batch_cost()
+
+        spend_log_calls = [call.kwargs for call in success_handler.await_args_list if "batch_cost" in call.kwargs]
+        assert len(spend_log_calls) == 1
+        handler_kwargs = spend_log_calls[0]
+        assert handler_kwargs["batch_successful_requests"] == 1
+        assert handler_kwargs["batch_failed_requests"] == 3, (
+            "2 error-file lines must add to the output file's 1 rejected request"
+        )
+        assert handler_kwargs["batch_models"] == ["gpt-4"]
+        assert handler_kwargs["batch_usage"].total_tokens == 15
+        assert handler_kwargs["batch_cost"] > 0
 
     @pytest.mark.asyncio
     async def test_terminal_batch_with_missing_output_file_is_retired_unbilled(
@@ -1518,7 +1652,7 @@ class TestCheckBatchCost:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=(
+                return_value=_batch_cost_result(
                     0.01,
                     {"prompt_tokens": 10, "completion_tokens": 5},
                     ["gpt-4"],
@@ -1776,7 +1910,7 @@ class TestUnmanagedVertexRouting:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=(
+                return_value=_batch_cost_result(
                     0.01,
                     {"prompt_tokens": 10, "completion_tokens": 5},
                     ["gemini-2.5-flash"],
@@ -2006,7 +2140,7 @@ class TestUnmanagedBedrockRouting:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=(
+                return_value=_batch_cost_result(
                     0.02,
                     {"prompt_tokens": 10, "completion_tokens": 5},
                     ["claude-sonnet-4"],
@@ -2198,7 +2332,7 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=(0.01, {"prompt_tokens": 10}, ["gpt-5.5"]),
+                return_value=_batch_cost_result(0.01, {"prompt_tokens": 10}, ["gpt-5.5"]),
             ),
             patch("litellm.litellm_core_utils.litellm_logging.Logging") as logging_cls,
         ):
@@ -2826,7 +2960,7 @@ class TestMultiPodBatchCostClaim:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=(0.01, {"prompt_tokens": 10, "completion_tokens": 5}, ["gpt-4"]),
+                return_value=_batch_cost_result(0.01, {"prompt_tokens": 10, "completion_tokens": 5}, ["gpt-4"]),
             ),
             patch(
                 "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
