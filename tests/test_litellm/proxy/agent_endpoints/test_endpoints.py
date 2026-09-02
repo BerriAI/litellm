@@ -544,7 +544,7 @@ class TestAgentRBACProxyAdminViewOnly:
 
     def test_should_still_redact_secrets_for_view_only_admin(self):
         """An unrestricted viewer sees the same agents as an admin but with keys
-        stripped and litellm_params masked."""
+        stripped. litellm_params secrets are masked for both roles."""
         self.allowed_agents_spy.return_value = UnrestrictedAgentAccess()
         viewer_resp = self._list_agents(self.viewer_client)
         admin_resp = self._list_agents(self.admin_client)
@@ -557,10 +557,9 @@ class TestAgentRBACProxyAdminViewOnly:
 
         admin_by_id = {agent["agent_id"]: agent for agent in admin_resp.json()}
         assert admin_by_id["agent-1"]["keys"][0]["token"] == "hash-aaa"
-        assert (
-            admin_by_id["agent-1"]["litellm_params"]["api_key"]
-            == "sk-super-secret-agent-key"
-        )
+        assert admin_by_id["agent-1"]["litellm_params"]["api_key"] == "sk****ey"
+        assert "sk-super-secret-agent-key" not in admin_resp.text
+        assert self.agents[0].litellm_params["api_key"] == "sk-super-secret-agent-key"
 
 
 class TestAgentRBACProxyAdmin:
@@ -632,6 +631,180 @@ class TestAgentRBACProxyAdmin:
                 "/v1/agents/agent-123", headers={"Authorization": "Bearer k"}
             )
             assert resp.status_code == 200
+
+
+SENTINEL_SECRET = "SENTINEL_SECRET_abcdef1234"
+MASKED_SENTINEL = "SE****34"
+
+
+def _agentcore_litellm_params(secret: str = SENTINEL_SECRET) -> dict:
+    return {
+        "model": "bedrock/agentcore/arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/demo",
+        "aws_region_name": "us-east-1",
+        "aws_access_key_id": "AKIAFAKEKEYID0001",
+        "aws_secret_access_key": secret,
+    }
+
+
+def _databricks_oauth_params(secret: str = SENTINEL_SECRET) -> dict:
+    return {
+        "client_id": "client-id-0001",
+        "client_secret": secret,
+        "workspace_url": "https://dbc-abc123.example.com",
+    }
+
+
+class TestAgentSecretsNeverReturned:
+    """Credential-like litellm_params are write-only: every /v1/agents response
+    masks them, for full proxy admins too, and an update that omits a secret or
+    echoes the masked form keeps the stored value."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch):
+        self.admin_client = _make_app_with_role(LitellmUserRoles.PROXY_ADMIN)
+        self.mock_registry = MagicMock()
+        self.mock_registry.register_agent = MagicMock()
+        self.mock_registry.deregister_agent = MagicMock()
+        monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", self.mock_registry)
+        self.stored_agent = AgentResponse(
+            agent_id="agent-123",
+            agent_name="agentcore",
+            agent_card_params=_sample_agent_card_params(),
+            litellm_params=_agentcore_litellm_params(),
+        )
+        self.existing_row = {
+            "agent_id": "agent-123",
+            "agent_name": "agentcore",
+            "agent_card_params": _sample_agent_card_params(),
+            "litellm_params": _agentcore_litellm_params(),
+        }
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(side_effect=lambda **_: self.existing_row)
+        mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    def _request(self, method: str, path: str, **kwargs):
+        return self.admin_client.request(method, path, headers={"Authorization": "Bearer k"}, **kwargs)
+
+    def test_create_response_masks_secret_but_stores_and_registers_it_raw(self):
+        self.mock_registry.get_agent_by_name = MagicMock(return_value=None)
+        self.mock_registry.add_agent_to_db = AsyncMock(return_value=self.stored_agent)
+
+        resp = self._request(
+            "POST",
+            "/v1/agents",
+            json={**_sample_agent_config(), "litellm_params": _agentcore_litellm_params()},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["litellm_params"]["aws_secret_access_key"] == MASKED_SENTINEL
+        assert resp.json()["litellm_params"]["aws_region_name"] == "us-east-1"
+        assert SENTINEL_SECRET not in resp.text
+        stored = self.mock_registry.add_agent_to_db.await_args.kwargs["agent"]["litellm_params"]
+        assert stored["aws_secret_access_key"] == SENTINEL_SECRET
+        registered = self.mock_registry.register_agent.call_args.kwargs["agent_config"]
+        assert registered.litellm_params["aws_secret_access_key"] == SENTINEL_SECRET
+
+    def test_get_by_id_masks_secret_for_admin_without_mutating_registry_object(self):
+        self.mock_registry.get_agent_by_id = MagicMock(return_value=self.stored_agent)
+        self.existing_row = MagicMock(spend=0.0)
+
+        resp = self._request("GET", "/v1/agents/agent-123")
+
+        assert resp.status_code == 200
+        assert resp.json()["litellm_params"]["aws_secret_access_key"] == MASKED_SENTINEL
+        assert SENTINEL_SECRET not in resp.text
+        assert self.stored_agent.litellm_params["aws_secret_access_key"] == SENTINEL_SECRET
+
+    def test_put_echoing_masked_secret_keeps_stored_value_and_masks_response(self):
+        self.mock_registry.update_agent_in_db = AsyncMock(return_value=self.stored_agent)
+        echoed = {**_agentcore_litellm_params(MASKED_SENTINEL), "aws_region_name": "us-west-2"}
+
+        resp = self._request(
+            "PUT",
+            "/v1/agents/agent-123",
+            json={**_sample_agent_config(), "agent_name": "agentcore", "litellm_params": echoed},
+        )
+
+        assert resp.status_code == 200
+        written = self.mock_registry.update_agent_in_db.await_args.kwargs["agent"]["litellm_params"]
+        assert written["aws_secret_access_key"] == SENTINEL_SECRET
+        assert written["aws_region_name"] == "us-west-2"
+        assert SENTINEL_SECRET not in resp.text
+
+    def test_patch_omitting_secret_keeps_stored_value(self):
+        self.mock_registry.patch_agent_in_db = AsyncMock(return_value=self.stored_agent)
+        without_secret = {k: v for k, v in _agentcore_litellm_params().items() if k != "aws_secret_access_key"}
+
+        resp = self._request(
+            "PATCH",
+            "/v1/agents/agent-123",
+            json={"litellm_params": {**without_secret, "aws_region_name": "eu-west-1"}},
+        )
+
+        assert resp.status_code == 200
+        written = self.mock_registry.patch_agent_in_db.await_args.kwargs["agent"]["litellm_params"]
+        assert written["aws_secret_access_key"] == SENTINEL_SECRET
+        assert written["aws_region_name"] == "eu-west-1"
+        assert SENTINEL_SECRET not in resp.text
+
+    def test_patch_with_new_secret_rotates_it(self):
+        self.mock_registry.patch_agent_in_db = AsyncMock(return_value=self.stored_agent)
+
+        self._request(
+            "PATCH",
+            "/v1/agents/agent-123",
+            json={"litellm_params": _agentcore_litellm_params("ROTATED_SECRET_zyxwvu9876")},
+        )
+
+        written = self.mock_registry.patch_agent_in_db.await_args.kwargs["agent"]["litellm_params"]
+        assert written["aws_secret_access_key"] == "ROTATED_SECRET_zyxwvu9876"
+
+    def test_patch_without_litellm_params_does_not_touch_them(self):
+        self.mock_registry.patch_agent_in_db = AsyncMock(return_value=self.stored_agent)
+
+        self._request("PATCH", "/v1/agents/agent-123", json={"agent_name": "renamed"})
+
+        written = self.mock_registry.patch_agent_in_db.await_args.kwargs["agent"]
+        assert "litellm_params" not in written
+        assert written["agent_name"] == "renamed"
+
+    def test_get_by_id_masks_secret_nested_under_non_secret_key(self):
+        self.stored_agent.litellm_params = {"databricks_oauth": _databricks_oauth_params()}
+        self.mock_registry.get_agent_by_id = MagicMock(return_value=self.stored_agent)
+        self.existing_row = MagicMock(spend=0.0)
+
+        resp = self._request("GET", "/v1/agents/agent-123")
+
+        assert resp.status_code == 200
+        assert resp.json()["litellm_params"]["databricks_oauth"]["client_secret"] == MASKED_SENTINEL
+        assert resp.json()["litellm_params"]["databricks_oauth"]["workspace_url"] == "https://dbc-abc123.example.com"
+        assert SENTINEL_SECRET not in resp.text
+
+    def test_patch_editing_nested_block_around_masked_secret_keeps_stored_value(self):
+        self.existing_row["litellm_params"] = {"databricks_oauth": _databricks_oauth_params()}
+        self.mock_registry.patch_agent_in_db = AsyncMock(return_value=self.stored_agent)
+        edited = {**_databricks_oauth_params(MASKED_SENTINEL), "workspace_url": "https://dbc-new.example.com"}
+
+        self._request("PATCH", "/v1/agents/agent-123", json={"litellm_params": {"databricks_oauth": edited}})
+
+        written = self.mock_registry.patch_agent_in_db.await_args.kwargs["agent"]["litellm_params"]
+        assert written["databricks_oauth"]["client_secret"] == SENTINEL_SECRET
+        assert written["databricks_oauth"]["workspace_url"] == "https://dbc-new.example.com"
+
+    def test_get_by_id_masks_everything_past_the_nesting_cap(self):
+        deep = {"workspace_url": "https://dbc-abc123.example.com", "client_secret": SENTINEL_SECRET}
+        for _ in range(12):
+            deep = {"level": deep}
+        self.stored_agent.litellm_params = deep
+        self.mock_registry.get_agent_by_id = MagicMock(return_value=self.stored_agent)
+        self.existing_row = MagicMock(spend=0.0)
+
+        resp = self._request("GET", "/v1/agents/agent-123")
+
+        assert resp.status_code == 200
+        assert SENTINEL_SECRET not in resp.text
+        assert "https://dbc-abc123.example.com" not in resp.text
 
 
 class TestAgentProtocolVersionValidation:
