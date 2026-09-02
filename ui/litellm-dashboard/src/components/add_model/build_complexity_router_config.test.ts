@@ -111,6 +111,21 @@ describe("buildComplexityRouterConfig", () => {
     expect(config.classifier_llm_config).toBeUndefined();
   });
 
+  it("emits heuristic_v2 without classifier-only fields", () => {
+    const trainedParams: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      classifierType: "heuristic_v2",
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
+      classifierContextWindowSize: 5,
+      classifierFallback: "heuristic",
+    };
+    const config = buildComplexityRouterConfig(trainedParams);
+    expect(config.classifier_type).toBe("heuristic_v2");
+    expect(config.classifier_llm_config).toBeUndefined();
+    expect(config.classifier_context_window_size).toBeUndefined();
+    expect(config.classifier_fallback).toBeUndefined();
+  });
+
   it("includes classifier_context_window_size and classifier_context_budget_chars only when classifier_type is llm", () => {
     const params: BuildComplexityRouterConfigParams = {
       ...baseParams,
@@ -713,6 +728,10 @@ describe("getClassifierModelError", () => {
     expect(getClassifierModelError({ classifier_type: "heuristic" })).toBeNull();
   });
 
+  it("stays quiet for a heuristic v2 router, which runs locally", () => {
+    expect(getClassifierModelError({ classifier_type: "heuristic_v2" })).toBeNull();
+  });
+
   it("blocks an LLM classifier with no model, which the router cannot start without", () => {
     expect(getClassifierModelError({ classifier_type: "llm" })).toBe(
       "Please select a classifier model, or switch back to Heuristic",
@@ -791,7 +810,7 @@ describe("heuristic_first", () => {
   });
 
   it("omits heuristic_first_max_tier on every other classifier type, which the backend rejects it on", () => {
-    for (const classifierType of ["heuristic", "llm"] as const) {
+    for (const classifierType of ["heuristic", "heuristic_v2", "llm"] as const) {
       const config = buildComplexityRouterConfig({ ...heuristicFirstParams, classifierType });
       expect(config.heuristic_first_max_tier).toBeUndefined();
     }

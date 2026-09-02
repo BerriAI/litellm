@@ -8,6 +8,7 @@ import pytest
 
 import litellm
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.rust_bridge import configuration
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -109,10 +110,12 @@ class RaisingAsyncMessages:
 
 @pytest.fixture(autouse=True)
 def _reset_rust_flag():
-    litellm.use_litellm_rust(False, messages=None, amessages=None)
+    rust_messages.set_rust_messages(messages=None, amessages=None)
+    configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
     yield
-    litellm.use_litellm_rust(False, messages=None, amessages=None)
+    rust_messages.set_rust_messages(messages=None, amessages=None)
+    configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
 
 
@@ -120,17 +123,6 @@ def test_load_rust_messages_returns_injected_impl():
     bridge = RecordingMessages()
     litellm.use_litellm_rust(True, messages=bridge)
     assert rust_messages.load_rust_messages() is bridge
-
-
-def test_configuring_messages_does_not_enable_ocr():
-    from litellm.rust_bridge.ocr import rust_ocr_enabled
-
-    litellm.use_litellm_rust(False)
-    assert rust_ocr_enabled() is False
-
-    litellm.use_litellm_rust(True, messages=RecordingMessages())
-
-    assert rust_ocr_enabled() is False
 
 
 def test_bare_use_litellm_rust_still_toggles_ocr():
@@ -264,12 +256,24 @@ async def test_gate_falls_back_to_python_when_bridge_raises():
 @pytest.mark.asyncio
 async def test_gate_skips_rust_when_flag_absent():
     bridge = ExplodingAsyncMessages()
-    litellm.use_litellm_rust(True, amessages=bridge)
+    rust_messages.set_rust_messages(amessages=bridge)
 
     response = await _gate(litellm_params=GenericLiteLLMParams(api_key="sk-azure"))
 
     assert response is None
     assert bridge.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_gate_uses_process_enable_without_request_override():
+    bridge = RecordingAsyncMessages()
+    rust_messages.set_rust_messages(amessages=bridge)
+    litellm.use_litellm_rust(True)
+
+    response = await _gate(litellm_params=GenericLiteLLMParams(api_key="sk-azure"))
+
+    assert response is not None
+    assert bridge.calls[0]["custom_llm_provider"] == "azure_ai"
 
 
 @pytest.mark.asyncio
@@ -305,7 +309,7 @@ async def test_gate_invokes_rust_for_native_anthropic_provider():
 @pytest.mark.asyncio
 async def test_gate_invokes_rust_when_env_var_set(monkeypatch):
     bridge = RecordingAsyncMessages()
-    litellm.use_litellm_rust(True, amessages=bridge)
+    rust_messages.set_rust_messages(amessages=bridge)
     monkeypatch.setenv("LITELLM_RUST", "1")
 
     response = await _gate(
@@ -320,7 +324,7 @@ async def test_gate_invokes_rust_when_env_var_set(monkeypatch):
 @pytest.mark.asyncio
 async def test_gate_env_var_falsey_does_not_enable(monkeypatch):
     bridge = ExplodingAsyncMessages()
-    litellm.use_litellm_rust(True, amessages=bridge)
+    rust_messages.set_rust_messages(amessages=bridge)
     monkeypatch.setenv("LITELLM_RUST", "0")
 
     response = await _gate(

@@ -12,7 +12,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-
 import litellm
 from litellm import Router
 from litellm._logging import verbose_router_logger
@@ -34,16 +33,30 @@ from litellm.router_strategy.complexity_router.config import (
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     DEFAULT_COMPLEXITY_CONFIG,
     DEFAULT_TECHNICAL_KEYWORDS,
+    ClassificationRubric,
     ClassifierLLMConfig,
     ComplexityRouterConfig,
     ComplexityTier,
-    ClassificationRubric,
+)
+from litellm.router_strategy.complexity_router.tier_predictor import (
+    TierGlobalStatistic,
+    TrainedTierArtifact,
 )
 from litellm.types.router import (
     Deployment,
     LiteLLM_Params,
     TaggedPreRoutingStrategy,
 )
+
+
+def _heuristic_v2_artifact() -> TrainedTierArtifact:
+    return TrainedTierArtifact(
+        global_statistics=tuple(
+            TierGlobalStatistic(tier=tier, successes=successes, observations=100)
+            for tier, successes in enumerate((10, 20, 90, 99), start=1)
+        ),
+        routing_threshold=0.8,
+    )
 
 
 @pytest.fixture
@@ -1695,6 +1708,59 @@ class TestLLMClassifier:
         assert outcome.tier == ComplexityTier.SIMPLE
         assert outcome.cause == "heuristic_scorer"
         assert outcome.score is not None
+
+    @pytest.mark.asyncio
+    async def test_heuristic_v2_routes_directly_to_predicted_builtin_tier(self, mock_router_instance):
+        router = ComplexityRouter(
+            model_name="tier-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "classifier_type": "heuristic_v2",
+                "heuristic_v2_artifact": _heuristic_v2_artifact(),
+                "tiers": {
+                    "SIMPLE": "simple-model",
+                    "MEDIUM": "medium-model",
+                    "COMPLEX": "complex-model",
+                    "REASONING": "reasoning-model",
+                },
+            },
+        )
+
+        response = await router.async_pre_routing_hook(
+            model="tier-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Handle this new request"}],
+        )
+
+        assert response is not None
+        assert response.model == "complex-model"
+        assert response.routing_decision["tier"] == "COMPLEX"
+        assert response.routing_decision["cause"] == "heuristic_v2"
+        assert response.routing_decision["signals"] == [
+            "request-type:general",
+            "tier-probability:simple=0.107843",
+            "tier-probability:medium=0.205882",
+            "tier-probability:complex=0.892157",
+            "tier-probability:reasoning=0.980392",
+        ]
+
+    def test_heuristic_v2_needs_no_classifier_model(self):
+        config = ComplexityRouterConfig(classifier_type="heuristic_v2")
+
+        assert config.classifier_llm_config is None
+        assert config.heuristic_v2_artifact == "ultrafeedback"
+
+    def test_heuristic_v2_rejects_custom_tier_definitions(self):
+        with pytest.raises(ValidationError, match="as does heuristic_v2"):
+            ComplexityRouterConfig(
+                classifier_type="heuristic_v2",
+                tier_definitions=(
+                    {"name": "low", "description": "easy work"},
+                    {"name": "high", "description": "hard work"},
+                ),
+                tiers={"low": "cheap", "high": "expensive"},
+                fallback_tier="high",
+            )
 
     @pytest.mark.asyncio
     async def test_aclassify_llm_success_routes_by_llm_verdict(self, llm_complexity_router, mock_router_instance):

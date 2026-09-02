@@ -29322,6 +29322,8 @@ export interface components {
             regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
+            /** Rust */
+            rust?: boolean | null;
             /** S3 Bucket Name */
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
@@ -34573,11 +34575,11 @@ export interface components {
             classifier_plugin_timeout_ms: number;
             /**
              * Classifier Type
-             * @description Classification strategy: local regex/keyword scoring, an LLM call, a custom classifier plugin, or 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier
+             * @description Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, an LLM call, a custom classifier plugin, or 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier
              * @default heuristic
              * @enum {string}
              */
-            classifier_type: "heuristic" | "llm" | "custom" | "heuristic_first";
+            classifier_type: "heuristic" | "heuristic_v2" | "llm" | "custom" | "heuristic_first";
             /**
              * Code Keywords
              * @description Keywords indicating code-related content
@@ -34638,6 +34640,12 @@ export interface components {
              * @description The highest tier the local scorer may decide on its own; required when classifier_type is 'heuristic_first' and rejected otherwise. A request whose heuristic tier is at or below this one skips the LLM classifier and routes straight to that heuristic tier, so the classifier call is only paid for on traffic the scorer could not place cheaply. The scorer must also have produced at least one signal: a prompt where no dimension fired scores 0.0 and would otherwise land SIMPLE by default rather than by evidence, which is how a chained router would silently send unclassified traffic to the cheapest model. Names a built-in tier, and may not name the highest one, since that would make the LLM classifier unreachable.
              */
             heuristic_first_max_tier?: string | null;
+            /**
+             * Heuristic V2 Artifact
+             * @description Success-probability artifact used by classifier_type 'heuristic_v2'. The bundled UltraFeedback artifact is selected by default; an inline trained artifact may replace it
+             * @default ultrafeedback
+             */
+            heuristic_v2_artifact: components["schemas"]["TrainedTierArtifact"] | "ultrafeedback";
             /**
              * Housekeeping Patterns
              * @description Additional case-sensitive literal sentinels that mark a request as client housekeeping, on top of the built-in conversation-title ones. For clients whose wording the built-ins don't cover, or after a client release changes its strings.
@@ -34776,6 +34784,12 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /**
+         * RequestType
+         * @description Fixed v0 taxonomy. User-extensible types come in v1.
+         * @enum {string}
+         */
+        RequestType: "code_generation" | "code_understanding" | "technical_design" | "analytical_reasoning" | "writing" | "factual_lookup" | "general";
         /** ResetSpendRequest */
         ResetSpendRequest: {
             /** Reset To */
@@ -35853,7 +35867,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
@@ -36736,6 +36750,33 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** TierCohortStatistic */
+        TierCohortStatistic: {
+            /** Cohort */
+            cohort: string;
+            /** Observations */
+            observations: number;
+            /** Successes */
+            successes: number;
+            /** Tier */
+            tier: number;
+        };
+        /** TierDataset */
+        TierDataset: {
+            /** License */
+            license: string;
+            /** Name */
+            name: string;
+            /** Rows */
+            rows: number;
+            /**
+             * Success Definition
+             * @default quality score meets the dataset success threshold
+             */
+            success_definition: string;
+            /** Url */
+            url: string;
+        };
         /**
          * TierDefinition
          * @description An operator-defined tier: the name the LLM classifier must return and its rubric description.
@@ -36751,6 +36792,25 @@ export interface components {
              * @description Tier name; becomes a value the LLM classifier can return and a key of `tiers`
              */
             name: string;
+        };
+        /** TierDomainStatistic */
+        TierDomainStatistic: {
+            /** Observations */
+            observations: number;
+            request_type: components["schemas"]["RequestType"];
+            /** Successes */
+            successes: number;
+            /** Tier */
+            tier: number;
+        };
+        /** TierGlobalStatistic */
+        TierGlobalStatistic: {
+            /** Observations */
+            observations: number;
+            /** Successes */
+            successes: number;
+            /** Tier */
+            tier: number;
         };
         /**
          * TokenCountDetailsResponse
@@ -37020,6 +37080,57 @@ export interface components {
             token: string;
         } & {
             [key: string]: unknown;
+        };
+        /** TrainedTierArtifact */
+        TrainedTierArtifact: {
+            /**
+             * Cohort Prior Mass
+             * @default 20
+             */
+            cohort_prior_mass: number;
+            /**
+             * Cohort Statistics
+             * @default []
+             */
+            cohort_statistics: components["schemas"]["TierCohortStatistic"][];
+            /**
+             * Datasets
+             * @default []
+             */
+            datasets: components["schemas"]["TierDataset"][];
+            /**
+             * Domain Prior Mass
+             * @default 200
+             */
+            domain_prior_mass: number;
+            /**
+             * Domain Statistics
+             * @default []
+             */
+            domain_statistics: components["schemas"]["TierDomainStatistic"][];
+            /** Global Statistics */
+            global_statistics: components["schemas"]["TierGlobalStatistic"][];
+            /**
+             * Routing Threshold
+             * @default 0.75
+             */
+            routing_threshold: number;
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: 1;
+            /**
+             * Split Method
+             * @default sha256(prompt): 70% train, 15% validation, 15% test
+             */
+            split_method: string;
+            /**
+             * Success Definition
+             * @default quality score meets the dataset success threshold
+             */
+            success_definition: string;
         };
         /** TransformRequestBody */
         TransformRequestBody: {
@@ -39196,6 +39307,8 @@ export interface components {
             regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
+            /** Rust */
+            rust?: boolean | null;
             /** S3 Bucket Name */
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
