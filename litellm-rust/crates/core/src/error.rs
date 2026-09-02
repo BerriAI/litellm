@@ -1,9 +1,7 @@
-use thiserror::Error;
+use thiserror::Error as ThisError;
 
-pub type CoreResult<T> = Result<T, CoreError>;
-
-#[derive(Debug, Error, PartialEq, Eq)]
-pub enum CoreError {
+#[derive(Debug, ThisError, PartialEq, Eq)]
+pub enum Error {
     #[error("expected {expected}, got {actual}")]
     InvalidType {
         expected: &'static str,
@@ -37,6 +35,9 @@ pub enum CoreError {
     #[error("unsupported by the rust path: {0}")]
     Unsupported(&'static str),
 }
+
+pub type CoreError = Error;
+pub type CoreResult<T> = Result<T, Error>;
 
 pub fn json_type_name(value: &serde_json::Value) -> &'static str {
     match value {
