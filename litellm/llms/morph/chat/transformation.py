@@ -25,14 +25,31 @@ class MorphChatConfig(OpenAILikeChatConfig):
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
         api_base = (
-            api_base or get_secret_str("MORPH_API_BASE") or "https://api.morphllm.com/v1"  # default api base
+            api_base
+            or get_secret_str("MORPH_API_BASE")
+            or "https://api.morphllm.com/v1"  # default api base
         )
         dynamic_api_key: Final = api_key or get_secret_str("MORPH_API_KEY")
         return api_base, dynamic_api_key
 
     def get_supported_openai_params(self, model: str) -> list:
         return [
+            "extra_headers",
+            "frequency_penalty",
+            "logit_bias",
+            "max_completion_tokens",
+            "max_retries",
+            "max_tokens",
             "messages",
             "model",
+            "presence_penalty",
+            "response_format",
+            "seed",
+            "stop",
             "stream",
+            "stream_options",
+            "temperature",
+            "tool_choice",
+            "tools",
+            "top_p",
         ]
