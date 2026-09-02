@@ -33,6 +33,11 @@ from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal
 from litellm.litellm_core_utils.prompt_templates.common_utils import request_contains_image_content
 from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
+from litellm.router_strategy.adaptive_router.classifier import classify_prompt
+from litellm.router_strategy.adaptive_router.tier_predictor import (
+    TierSuccessPredictor,
+    resolve_tier_artifact,
+)
 from litellm.types.utils import (
     AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
     ModelResponse,
@@ -790,6 +795,7 @@ class ClassificationOutcome(NamedTuple):
     signals: tuple[str, ...]
     cause: Literal[
         "heuristic_scorer",
+        "trained_heuristic",
         "reasoning_override",
         "llm_classifier",
         "heuristic_first_short_circuit",
@@ -976,6 +982,11 @@ class ComplexityRouter(CustomLogger):
         self._classifier_response_format: Mapping[str, object] | None = (
             type_to_response_format_param(_tier_classification_model(self.config.classifier_wire_labels()))
             if llm_classifier_configured
+            else None
+        )
+        self._tier_success_predictor: TierSuccessPredictor | None = (
+            TierSuccessPredictor(resolve_tier_artifact(self.config.trained_heuristic_artifact))
+            if self.config.classifier_type == "trained_heuristic"
             else None
         )
 
@@ -1350,6 +1361,8 @@ class ComplexityRouter(CustomLogger):
         custom tier set, and classifier_fallback otherwise decides between the heuristic scorer and
         default_model. The outcome's `cause` reports which path actually ran.
         """
+        if self.config.classifier_type == "trained_heuristic":
+            return self._classify_with_trained_heuristic(prompt)
         if self.config.classifier_type == "custom":
             return await self._classify_with_plugin(prompt, system_prompt, request_kwargs, raw_messages)
         if self.config.classifier_type == "heuristic_first" and self.config.classifier_llm_config is not None:
@@ -1358,6 +1371,24 @@ class ComplexityRouter(CustomLogger):
             tier, score, signals, cause = self._score_and_classify(prompt, system_prompt)
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
+
+    def _classify_with_trained_heuristic(self, prompt: str) -> ClassificationOutcome:
+        predictor: Final = self._tier_success_predictor
+        if predictor is None:
+            raise ValueError("trained heuristic predictor is not configured")
+        request_type: Final = classify_prompt(prompt)
+        prediction: Final = predictor.predict(prompt, request_type)
+        tier: Final = TIER_SEVERITY_ORDER[prediction.required_tier - 1]
+        probability_signals: Final = tuple(
+            f"tier-probability:{candidate.value.lower()}={prediction.probabilities[index]:.6f}"
+            for index, candidate in enumerate(TIER_SEVERITY_ORDER, start=1)
+        )
+        return ClassificationOutcome(
+            tier=tier,
+            score=None,
+            signals=(f"request-type:{request_type.value}", *probability_signals),
+            cause="trained_heuristic",
+        )
 
     async def _classify_heuristic_first(
         self,
