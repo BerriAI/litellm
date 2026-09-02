@@ -87,6 +87,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
 )
 from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
+    vector_store_request_metadata,
 )
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -6697,15 +6698,7 @@ class Router:
 
     @staticmethod
     def _vector_store_request_metadata(kwargs: Mapping[str, object]) -> Mapping[str, object]:
-        litellm_metadata: Final = kwargs.get("litellm_metadata")
-        if isinstance(litellm_metadata, dict):
-            return cast(  # cast-ok: isinstance validates the runtime dict boundary
-                "dict[str, object]", litellm_metadata
-            )
-        metadata: Final = kwargs.get("metadata")
-        if isinstance(metadata, dict):
-            return cast("dict[str, object]", metadata)  # cast-ok: isinstance validates the runtime dict boundary
-        return MappingProxyType({})
+        return vector_store_request_metadata(kwargs)
 
     async def _init_vector_store_api_endpoints(
         self,

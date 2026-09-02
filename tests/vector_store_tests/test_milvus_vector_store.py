@@ -601,6 +601,52 @@ async def test_sdk_search_with_router_kwarg_resolves_bare_embedding_alias_async(
     _assert_alias_resolved(embedding_route, search_route, response)
 
 
+def _team_alias_router():
+    return Router(
+        model_list=[
+            {
+                "model_name": "team-a-embedder",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_key": "deployment-key",
+                },
+                "model_info": {"team_id": "team-a", "team_public_model_name": "multilingual-e5-large"},
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_sdk_search_with_router_kwarg_resolves_team_alias_from_request_metadata(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    embedding_route = _mock_embedding_route(respx_mock)
+    search_route = _mock_search_route(respx_mock)
+
+    response = await litellm.vector_stores.asearch(
+        router=_team_alias_router(), metadata={"user_api_key_team_id": "team-a"}, **ALIAS_SEARCH_KWARGS
+    )
+
+    _assert_alias_resolved(embedding_route, search_route, response)
+
+
+@pytest.mark.asyncio
+async def test_sdk_search_with_router_kwarg_rejects_team_alias_without_team_metadata(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    embedding_route = _mock_embedding_route(respx_mock)
+    _mock_search_route(respx_mock)
+
+    with pytest.raises(litellm.APIConnectionError):
+        await litellm.vector_stores.asearch(router=_team_alias_router(), **ALIAS_SEARCH_KWARGS)
+
+    assert embedding_route.call_count == 0
+
+
 @pytest.mark.asyncio
 async def test_transform_uses_injected_executor_without_embedding_config(respx_mock: respx.MockRouter):
     executor = RecordingEmbeddingExecutor(ALIAS_EMBEDDING_RESPONSE)
