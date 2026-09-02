@@ -2913,6 +2913,15 @@ _CACHE_PRICING_FIELDS: Final = (
     "cache_read_input_token_cost_above_200k_tokens",
 )
 
+_PROVIDERS_WITH_RESPONSE_REPORTED_COST: Final = frozenset({"openrouter", "perplexity"})
+
+
+def _has_response_reported_cost(key: str, provider: object) -> bool:
+    provider_name: Final = provider.lower() if isinstance(provider, str) else ""
+    if provider_name in _PROVIDERS_WITH_RESPONSE_REPORTED_COST:
+        return True
+    return key.partition("/")[0].lower() in _PROVIDERS_WITH_RESPONSE_REPORTED_COST
+
 
 def _resolve_builtin_model_cost_entry(key: str, provider: str) -> dict[str, object] | None:
     """Best-effort lookup of a built-in ``model_cost`` entry for a custom key
@@ -3060,11 +3069,13 @@ def register_model(
             _runtime_registered_model_cost[_registered_key] = dict(_registered_value)  # mutable-ok: caller-owned
 
     _skip_get_model_info_providers: Final = PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO
+    warned_model_names: set[str] = set()
 
     for key, value in loaded_model_cost.items():
         ## get model info ##
         provider = value.get("litellm_provider", "")
         _key_str = str(key)
+        warning_model_name: Final = str(warning_display_name or key)
         if provider in _skip_get_model_info_providers or any(
             _key_str.startswith(f"{p}/") for p in _skip_get_model_info_providers
         ):
@@ -3090,11 +3101,17 @@ def register_model(
                     and (
                         value.get("input_cost_per_token") is not None or value.get("output_cost_per_token") is not None
                     )
+                    and "*" not in _key_str
+                    and "*" not in warning_model_name
+                    and not _has_response_reported_cost(key=_key_str, provider=provider)
+                    and not _has_response_reported_cost(key=warning_model_name, provider=provider)
                 ):
-                    verbose_logger.warning(
-                        "register_model: model=%s has custom pricing but not in built-in cost map and no prefix/region variant matched; cache_creation_input_token_cost and cache_read_input_token_cost will default to 0 for this model (input/output cost tracking is unaffected). To track cache cost, add them to model_info",
-                        warning_display_name or key,
-                    )
+                    if warning_model_name not in warned_model_names:
+                        verbose_logger.warning(
+                            "register_model: model=%s has custom pricing but not in built-in cost map and no prefix/region variant matched; cache_creation_input_token_cost and cache_read_input_token_cost will default to 0 for this model (input/output cost tracking is unaffected). To track cache cost, add them to model_info",
+                            warning_model_name,
+                        )
+                        warned_model_names.add(warning_model_name)
         # ``get_model_info`` returns ``litellm_provider: None`` when the
         # provider is unknown (e.g. custom deployments registered via
         # ``Router.add_deployment``). Persisting that None into

@@ -14,7 +14,6 @@ import os
 
 import pytest
 
-
 import litellm
 from litellm.main import _build_custom_pricing_entry
 from litellm.utils import _invalidate_model_cost_lowercase_map
@@ -433,6 +432,120 @@ def test_register_model_warns_when_no_builtin_match_for_cache_pricing(caplog):
         ), "expected a warning naming the unmapped key and the cache cost fields"
     finally:
         litellm.model_cost.pop(registered_key, None)
+
+
+def test_register_model_does_not_warn_for_wildcard_models(caplog):
+    import logging
+
+    from litellm._logging import verbose_logger
+
+    registered_key = "lit39169-wildcard/*"
+    litellm.model_cost.pop(registered_key, None)
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            litellm.register_model(
+                {
+                    registered_key: {
+                        "input_cost_per_token": 0.001,
+                        "output_cost_per_token": 0.002,
+                        "litellm_provider": "custom",
+                    }
+                }
+            )
+
+        assert not any("register_model" in record.message for record in caplog.records)
+    finally:
+        litellm.model_cost.pop(registered_key, None)
+
+
+def test_router_openrouter_wildcard_does_not_warn(caplog):
+    import logging
+
+    from litellm import Router
+    from litellm._logging import verbose_logger
+
+    deployment_model = "openrouter/*"
+    deployment_id = "lit39169-openrouter-wildcard"
+    snapshot = _snapshot_model_cost_entries([deployment_model, deployment_id])
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            router = Router(
+                model_list=[
+                    {
+                        "model_name": "all-openrouter",
+                        "litellm_params": {
+                            "model": deployment_model,
+                            "api_key": "fake-key",
+                            "input_cost_per_token": 0.0,
+                            "output_cost_per_token": 0.0,
+                        },
+                        "model_info": {"id": deployment_id},
+                    }
+                ]
+            )
+
+        assert not any("register_model" in record.message for record in caplog.records)
+    finally:
+        _restore_model_cost_entries(snapshot)
+        del router
+
+
+def test_register_model_does_not_warn_for_response_priced_providers(caplog):
+    import logging
+
+    from litellm._logging import verbose_logger
+
+    registered_key = "openrouter/lit39169-unmapped-model"
+    litellm.model_cost.pop(registered_key, None)
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            litellm.register_model(
+                {
+                    registered_key: {
+                        "input_cost_per_token": 0.001,
+                        "output_cost_per_token": 0.002,
+                        "litellm_provider": "openrouter",
+                    }
+                }
+            )
+
+        assert not any("register_model" in record.message for record in caplog.records)
+    finally:
+        litellm.model_cost.pop(registered_key, None)
+
+
+def test_register_model_warns_once_for_duplicate_model_aliases(caplog):
+    import logging
+
+    from litellm._logging import verbose_logger
+
+    registered_keys = ["lit39169-deployment-id", "bedrock/lit39169-unmapped-model"]
+    for key in registered_keys:
+        litellm.model_cost.pop(key, None)
+
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            litellm.register_model(
+                {
+                    key: {
+                        "input_cost_per_token": 0.001,
+                        "output_cost_per_token": 0.002,
+                        "litellm_provider": "bedrock",
+                    }
+                    for key in registered_keys
+                },
+                warning_display_name=registered_keys[1],
+            )
+
+        warnings = [record.message for record in caplog.records if "register_model" in record.message]
+        assert len(warnings) == 1
+        assert registered_keys[1] in warnings[0]
+    finally:
+        for key in registered_keys:
+            litellm.model_cost.pop(key, None)
 
 
 def test_register_model_no_warning_without_custom_pricing(caplog):
