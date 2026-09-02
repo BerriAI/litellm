@@ -110,6 +110,57 @@ describe("buildVectorStoreLitellmParams", () => {
     });
   });
 
+  it("renames embedding_model to litellm_embedding_model for mongodb", () => {
+    const params = buildVectorStoreLitellmParams("mongodb", {
+      mongodb_connection_string: "mongodb+srv://user:pass@cluster0.mongodb.net",
+      mongodb_database: "sample_mflix",
+      mongodb_collection: "embedded_movies",
+      mongodb_embedding_field: "plot_embedding",
+      mongodb_text_field: "plot",
+      mongodb_num_candidates: "200",
+      embedding_model: "text-embedding-ada-002",
+    });
+
+    expect(params).toEqual({
+      mongodb_connection_string: "mongodb+srv://user:pass@cluster0.mongodb.net",
+      mongodb_database: "sample_mflix",
+      mongodb_collection: "embedded_movies",
+      mongodb_embedding_field: "plot_embedding",
+      mongodb_text_field: "plot",
+      mongodb_num_candidates: "200",
+      litellm_embedding_model: "text-embedding-ada-002",
+    });
+  });
+
+  it("sends only mongodb fields when an earlier provider left values in the form", () => {
+    const params = buildVectorStoreLitellmParams("mongodb", {
+      mongodb_connection_string: "mongodb+srv://user:pass@cluster0.mongodb.net",
+      mongodb_database: "sample_mflix",
+      mongodb_collection: "embedded_movies",
+      embedding_model: "text-embedding-ada-002",
+      valkey_host: "left-over-from-valkey.example.com",
+      valkey_port: "6379",
+      aws_region_name: "us-west-2",
+    });
+
+    expect(params).not.toHaveProperty("valkey_host");
+    expect(params).not.toHaveProperty("valkey_port");
+    expect(params).not.toHaveProperty("aws_region_name");
+    expect(params.mongodb_connection_string).toBe("mongodb+srv://user:pass@cluster0.mongodb.net");
+  });
+
+  it("omits a blank mongodb_num_candidates so litellm picks its own candidate count", () => {
+    const params = buildVectorStoreLitellmParams("mongodb", {
+      mongodb_connection_string: "mongodb+srv://user:pass@cluster0.mongodb.net",
+      mongodb_database: "sample_mflix",
+      mongodb_collection: "embedded_movies",
+      embedding_model: "text-embedding-ada-002",
+    });
+
+    expect(params.mongodb_num_candidates).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(params))).not.toHaveProperty("mongodb_num_candidates");
+  });
+
   it("keeps embedding_model as-is for providers outside the rename set", () => {
     const params = buildVectorStoreLitellmParams("s3_vectors", {
       vector_bucket_name: "my-vector-bucket",

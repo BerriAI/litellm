@@ -34,7 +34,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useZodForm } from "@/lib/forms/useZodForm";
 
-const EMBEDDING_MODEL_RENAME_PROVIDERS = new Set(["milvus", "valkey"]);
+const EMBEDDING_MODEL_RENAME_PROVIDERS = new Set(["milvus", "valkey", "mongodb"]);
 
 export const buildVectorStoreLitellmParams = (
   provider: string,
@@ -70,6 +70,12 @@ const PROVIDER_FIELD_NAMES = [
   "vector_bucket_name",
   "index_name",
   "aws_region_name",
+  "mongodb_connection_string",
+  "mongodb_database",
+  "mongodb_collection",
+  "mongodb_embedding_field",
+  "mongodb_text_field",
+  "mongodb_num_candidates",
   "valkey_host",
   "valkey_port",
   "valkey_password",
@@ -101,6 +107,12 @@ const vectorStoreShape = {
   vector_bucket_name: optionalText,
   index_name: optionalText,
   aws_region_name: optionalText,
+  mongodb_connection_string: optionalText,
+  mongodb_database: optionalText,
+  mongodb_collection: optionalText,
+  mongodb_embedding_field: optionalText,
+  mongodb_text_field: optionalText,
+  mongodb_num_candidates: optionalText,
   valkey_host: optionalText,
   valkey_port: optionalText,
   valkey_password: optionalText,
@@ -130,6 +142,8 @@ const EMPTY_VALUES: VectorStoreFormValues = {
   custom_llm_provider: "bedrock",
   vector_store_id: "",
   vertex_location: "global",
+  mongodb_embedding_field: "embedding",
+  mongodb_text_field: "text",
   valkey_port: "6379",
   valkey_ssl: "false",
   valkey_text_field: "text",
@@ -262,7 +276,9 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
           : 'my-datastore_1234567890 (data store ID from Vertex AI / "Agent Search" console)'
         : selectedProvider === "valkey"
           ? "my-search-index (FT index name in Valkey)"
-          : "Enter vector store ID from your provider";
+          : selectedProvider === "mongodb"
+            ? "my-vector-index (Atlas Vector Search index name)"
+            : "Enter vector store ID from your provider";
 
   return (
     <Dialog open={isVisible} onOpenChange={(open) => !open && handleCancel()}>
