@@ -45,7 +45,14 @@ class _NodeClassWithoutPerConnectionRecovery:
 class _FakeClusterNode:
     def __init__(self, name: str, raises: Exception | None = None, response: object = None) -> None:
         self.name = name
-        self.execute_command = AsyncMock(side_effect=raises, return_value=response)
+
+        async def execute_command(*args: object, **kwargs: object) -> object:
+            await asyncio.sleep(0)
+            if raises is not None:
+                raise raises
+            return response
+
+        self.execute_command = AsyncMock(side_effect=execute_command)
         self.disconnect = AsyncMock()
 
 
@@ -245,6 +252,22 @@ async def test_tolerated_timeout_does_not_erase_concurrent_connection_error_rein
     assert isinstance(results[0], RedisConnectionError)
     assert isinstance(results[1], RedisTimeoutError)
     assert instance._initialize is True
+
+
+@pytest.mark.asyncio
+async def test_overlapping_tolerated_timeouts_do_not_request_topology_reinit() -> None:
+    instance = _build_8x_cluster_instance()
+    node_a = _FakeClusterNode("node-a", raises=RedisTimeoutError("slow-a"))
+    node_b = _FakeClusterNode("node-b", raises=RedisTimeoutError("slow-b"))
+
+    results = await asyncio.gather(
+        instance._execute_command(node_a, "GET", "a"),
+        instance._execute_command(node_b, "GET", "b"),
+        return_exceptions=True,
+    )
+
+    assert all(isinstance(result, RedisTimeoutError) for result in results)
+    assert instance._initialize is False
 
 
 @pytest.mark.asyncio

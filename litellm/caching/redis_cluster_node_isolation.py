@@ -140,6 +140,7 @@ def get_litellm_async_redis_cluster_class(  # noqa: C901  # supports redis-py ve
             ) -> None:
                 self._litellm_initialize = False
                 self._litellm_reinit_requests = 0
+                self._litellm_tolerated_timeouts = 0
                 super().__init__(*args, **kwargs)
                 self._litellm_consecutive_timeouts: dict[  # mutable-ok: per-node counter updated on the command hot path
                     str, int
@@ -161,7 +162,7 @@ def get_litellm_async_redis_cluster_class(  # noqa: C901  # supports redis-py ve
                 *args: object,
                 **kwargs: object,  # kwargs-ok: matches redis-py's own command dispatch signature
             ) -> object:
-                requests_before: Final = self._litellm_reinit_requests
+                outstanding_before: Final = self._litellm_reinit_requests - self._litellm_tolerated_timeouts
                 pending_before: Final = self._litellm_initialize
                 try:
                     result: Final = await super()._execute_command(target_node, *args, **kwargs)
@@ -171,7 +172,11 @@ def get_litellm_async_redis_cluster_class(  # noqa: C901  # supports redis-py ve
                         self._litellm_consecutive_timeouts.pop(target_node.name, None)
                         raise
                     self._litellm_consecutive_timeouts[target_node.name] = timeouts
-                    if not pending_before and self._litellm_reinit_requests == requests_before + 1:
+                    self._litellm_tolerated_timeouts += 1
+                    if (
+                        not pending_before
+                        and self._litellm_reinit_requests - self._litellm_tolerated_timeouts == outstanding_before
+                    ):
                         self._initialize = False
                     raise
                 if self._litellm_consecutive_timeouts:
