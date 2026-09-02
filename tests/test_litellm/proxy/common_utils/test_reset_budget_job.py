@@ -379,6 +379,88 @@ def test_reset_budget_for_team(reset_budget_job, mock_prisma_client):
     assert set(write["data"].keys()) == {"spend", "budget_reset_at"}
 
 
+def test_reset_budget_for_team_null_duration_self_heals(reset_budget_job, mock_prisma_client):
+    """If a team row has budget_duration=None but a stale budget_reset_at in the past,
+    the reset job must self-heal by setting budget_reset_at=None WITHOUT wiping spend."""
+    now = datetime.now(timezone.utc)
+    test_team = type(
+        "LiteLLM_TeamTable",
+        (),
+        {
+            "spend": 500.0,
+            "budget_duration": None,
+            "budget_reset_at": now - timedelta(days=1),
+            "id": "test-team-null-dur",
+            "team_id": "tid-null",
+        },
+    )
+
+    mock_prisma_client.data["team"] = [test_team]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_teams())
+
+    team_writes = [c for c in mock_prisma_client.db.batch_calls if c["table"] == "team"]
+    assert len(team_writes) == 1
+    write = team_writes[0]
+    assert write["where"] == {"team_id": "tid-null"}
+    assert "spend" not in write["data"]
+    assert write["data"]["budget_reset_at"] is None
+
+
+def test_reset_budget_for_user_null_duration_self_heals(reset_budget_job, mock_prisma_client):
+    """If a user row has budget_duration=None but a stale budget_reset_at in the past,
+    the reset job must self-heal by setting budget_reset_at=None WITHOUT wiping spend."""
+    now = datetime.now(timezone.utc)
+    test_user = type(
+        "LiteLLM_UserTable",
+        (),
+        {
+            "spend": 300.0,
+            "budget_duration": None,
+            "budget_reset_at": now - timedelta(days=1),
+            "user_id": "uid-null",
+        },
+    )
+
+    mock_prisma_client.data["user"] = [test_user]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_users())
+
+    user_writes = [c for c in mock_prisma_client.db.batch_calls if c["table"] == "user"]
+    assert len(user_writes) == 1
+    write = user_writes[0]
+    assert write["where"] == {"user_id": "uid-null"}
+    assert "spend" not in write["data"]
+    assert write["data"]["budget_reset_at"] is None
+
+
+def test_reset_budget_for_key_null_duration_self_heals(reset_budget_job, mock_prisma_client):
+    """If a key row has budget_duration=None but a stale budget_reset_at in the past,
+    the reset job must self-heal by setting budget_reset_at=None WITHOUT wiping spend."""
+    now = datetime.now(timezone.utc)
+    test_key = type(
+        "LiteLLM_VerificationToken",
+        (),
+        {
+            "spend": 100.0,
+            "budget_duration": None,
+            "budget_reset_at": now - timedelta(days=1),
+            "token": "tok-null",
+        },
+    )
+
+    mock_prisma_client.data["key"] = [test_key]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
+
+    key_writes = [c for c in mock_prisma_client.db.batch_calls if c["table"] == "key"]
+    assert len(key_writes) == 1
+    write = key_writes[0]
+    assert write["where"] == {"token": "tok-null"}
+    assert "spend" not in write["data"]
+    assert write["data"]["budget_reset_at"] is None
+
+
 def test_reset_budget_for_enduser(reset_budget_job, mock_prisma_client):
     """End-user spend is zeroed and the tier's window advances, in one batch."""
     now = datetime.now(timezone.utc)

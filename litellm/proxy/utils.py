@@ -4045,12 +4045,21 @@ class PrismaClient:
                     response = await VerificationTokenRepository(self).table.find_many(
                         take=limit,
                         where={
-                            "OR": [
-                                {"expires": None},
-                                {"expires": {"gt": expires}},
-                            ],
-                            "budget_reset_at": {"lt": reset_at},
                             "NOT": {"budget_duration": None},
+                            "AND": [
+                                {
+                                    "OR": [
+                                        {"expires": None},
+                                        {"expires": {"gt": expires}},
+                                    ]
+                                },
+                                {
+                                    "OR": [
+                                        {"budget_reset_at": None},
+                                        {"budget_reset_at": {"lt": reset_at}},
+                                    ]
+                                },
+                            ],
                         },
                     )
                     if response is not None and len(response) > 0:

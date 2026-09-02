@@ -45,6 +45,12 @@ class KeySpendResetWrites:
             data=_spend_reset_data(budget_reset_at, spend_decrement),
         )
 
+    def queue_clear_budget_reset_at(self, token: str) -> None:
+        self.table.update(
+            where={"token": token},  # mutable-ok: prisma where filter must be a dict
+            data={"budget_reset_at": None},
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class UserSpendResetWrites:
@@ -58,6 +64,12 @@ class UserSpendResetWrites:
             data=_spend_reset_data(budget_reset_at, spend_decrement),
         )
 
+    def queue_clear_budget_reset_at(self, user_id: str) -> None:
+        self.table.update(
+            where={"user_id": user_id},  # mutable-ok: prisma where filter must be a dict
+            data={"budget_reset_at": None},
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class TeamSpendResetWrites:
@@ -69,6 +81,12 @@ class TeamSpendResetWrites:
         self.table.update(
             where={"team_id": team_id},  # mutable-ok: prisma where filter must be a dict
             data=_spend_reset_data(budget_reset_at, spend_decrement),
+        )
+
+    def queue_clear_budget_reset_at(self, team_id: str) -> None:
+        self.table.update(
+            where={"team_id": team_id},  # mutable-ok: prisma where filter must be a dict
+            data={"budget_reset_at": None},
         )
 
 
