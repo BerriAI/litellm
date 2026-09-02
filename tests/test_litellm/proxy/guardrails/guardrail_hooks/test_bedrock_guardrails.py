@@ -5551,6 +5551,40 @@ class TestBedrockGuardrailImageInput:
 
         assert "could not be read" in str(exc_info.value.detail) or "not a png/jpeg" in str(exc_info.value.detail)
 
+    @pytest.mark.asyncio
+    async def test_a_remote_image_url_is_rejected_without_being_fetched(self):
+        """A remote url is named as its own rejection rather than left to the decoder.
+
+        Fetching one safely (size cap, SSRF/redirect validation) is separate work; this
+        PR only scans inline images, so a url has to fail closed rather than be ignored
+        or silently forwarded to the model unscanned.
+        """
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": "https://example.com/pic.png"}}],
+            }
+        ]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+
+        assert "remote image URLs are not supported" in str(exc_info.value.detail)
+
+    def test_file_backed_part_counting_skips_non_mapping_entries(self):
+        """A content list may mix plain strings in with typed parts.
+
+        `_file_backed_image_count` walks the raw request rather than a normalized
+        shape, so a non-dict entry must be skipped rather than raise or be miscounted.
+        """
+        content = [
+            "just a string",
+            {"type": "text", "text": "hi"},
+            {"type": "image", "source": {"type": "file", "file_id": "file_abc"}},
+        ]
+
+        assert BedrockGuardrail._file_backed_parts(content) == 1
+
     def test_the_url_helper_guards_its_own_inputs(self):
         """Exercised directly so the guards are not dropped in a later refactor."""
         assert BedrockGuardrail._get_image_url(item={"type": "image_url"}) is None

@@ -20,7 +20,7 @@ from collections.abc import AsyncGenerator, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import accumulate, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Optional, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, NoReturn, Optional, cast
 
 import httpx
 from fastapi import HTTPException
@@ -492,7 +492,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
         return count
 
-    def _handle_unscannable_image(self, reason: str) -> None:
+    def _handle_unscannable_image(self, reason: str) -> NoReturn:
         """Block an image part ApplyGuardrail cannot scan.
 
         The image reaches the model either way, so skipping it silently would let a
@@ -594,7 +594,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 found += 1
         return found
 
-    async def _build_image_content_item(self, image_url: str) -> BedrockContentItem | None:
+    async def _build_image_content_item(self, image_url: str) -> BedrockContentItem:
         """Decode an inline image into an ApplyGuardrail image block.
 
         A remote url is named as its own rejection rather than left to the decoder:
@@ -605,13 +605,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         if image_url.startswith(("http://", "https://")):
             self._handle_unscannable_image(reason="remote image URLs are not supported")
-            return None
 
         try:
             block: Final = await BedrockImageProcessor.process_image_async(image_url=image_url, format=None)
         except (ValueError, TypeError, KeyError, binascii.Error) as e:
             self._handle_unscannable_image(reason=f"image content could not be read: {e}")
-            return None
 
         image_block: Final = block.get("image")
         image_format: Final = (
@@ -621,7 +619,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         image_bytes: Final = image_source.get("bytes") if image_source else None
         if image_format is None or not image_bytes:
             self._handle_unscannable_image(reason="attachment is not a png/jpeg image")
-            return None
 
         # base64 decodes to roughly 3/4 of its length; estimate rather than decode the
         # whole image a second time just to measure it.
@@ -630,7 +627,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             self._handle_unscannable_image(
                 reason=f"image is {decoded_size / 1024 / 1024:.1f} MB, over ApplyGuardrail's 4 MB limit"
             )
-            return None
 
         return BedrockContentItem(
             image=BedrockImageContent(
