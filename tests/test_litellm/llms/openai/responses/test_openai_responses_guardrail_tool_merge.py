@@ -132,6 +132,19 @@ def test_namespace_keeps_a_non_function_member_when_a_function_member_is_edited(
     assert merged[0]["tools"][1] == custom_member
 
 
+def test_namespace_keeps_its_non_function_members_when_every_function_member_is_dropped():
+    custom_member = {"type": "custom", "name": "grep", "description": "Grep", "format": {"type": "text"}}
+    original = [
+        {"type": "namespace", "name": "ns", "description": "NS", "tools": [_function("read"), custom_member]},
+        _function("a"),
+    ]
+    groups = _groups(original)
+
+    merged = merge_guardrailed_tools(original, groups, [groups[1][0]])
+
+    assert list(merged) == [{"type": "namespace", "name": "ns", "description": "NS", "tools": [custom_member]}, _function("a")]
+
+
 def test_member_extras_edited_by_the_guardrail_land_on_that_member():
     original = [{"type": "namespace", "name": "ns", "tools": [_function("read")]}]
     groups = _groups(original)
