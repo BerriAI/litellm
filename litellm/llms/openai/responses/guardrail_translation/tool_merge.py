@@ -147,11 +147,11 @@ def _merged_original(
     guardrailed_group: Final = tuple(guardrailed_by_key[key] for key in group_keys if key in guardrailed_by_key)
     if guardrailed_group == tuple(flattened_group):
         return (original,)
-    if not guardrailed_group:
-        return ()
     members: Final = _namespace_members(original) if original.get("type") == "namespace" else ()
     if members and sum(map(_is_function, members)) == len(flattened_group):
         return _rebuilt_namespace(original, members, flattened_group, group_keys, guardrailed_by_key)
+    if not guardrailed_group:
+        return ()
     return tuple(
         LiteLLMCompletionResponsesConfig.transform_chat_completion_tool_params_to_responses_api_tools(guardrailed_group)
     )
