@@ -18,6 +18,8 @@ Routes are `chat_completions`, `audio_transcription`, `messages`, and `ocr`; omi
 
 The listing reads source declarations and direct call sites, including conditional branches. It covers SDK entrypoints, shared handlers and bases, and selected provider paths. It reports missing selected functions as `NOT FOUND`; it does not execute calls or claim runtime ordering
 
+OCR includes Mistral, Azure AI Mistral, Azure Document Intelligence, Vertex Mistral, and Vertex DeepSeek. See [the OCR comparison](ocr-comparison.md) for confirmed differences in the current implementations
+
 For the equivalent Rust listing:
 
 ```bash
