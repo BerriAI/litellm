@@ -10334,7 +10334,8 @@ class TestContextWindowEscalation:
             litellm_router_instance=_windowed_router(_SMALL, _BIG),
             complexity_router_config=_tier_config(session_affinity=True),
         )
-        session_kwargs = lambda: {"metadata": {"session_id": "s-1", "user_api_key_hash": "k-1"}}  # noqa: E731
+        def session_kwargs() -> dict[str, object]:
+            return {"metadata": {"session_id": "s-1", "user_api_key_hash": "k-1"}}
 
         first = await router.async_pre_routing_hook(
             model="test-router", request_kwargs=session_kwargs(), messages=_OVERSIZED_TURNS
@@ -10357,7 +10358,8 @@ class TestContextWindowEscalation:
             litellm_router_instance=_windowed_router(_SMALL, _BIG),
             complexity_router_config=_tier_config(session_affinity=True),
         )
-        session_kwargs = lambda: {"metadata": {"session_id": "s-2", "user_api_key_hash": "k-2"}}  # noqa: E731
+        def session_kwargs() -> dict[str, object]:
+            return {"metadata": {"session_id": "s-2", "user_api_key_hash": "k-2"}}
 
         pinned = await router.async_pre_routing_hook(
             model="test-router", request_kwargs=session_kwargs(), messages=[{"role": "user", "content": "ok continue"}]

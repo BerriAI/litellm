@@ -92,6 +92,9 @@ def _connection_error_message(exc: BaseException) -> str:
 
 
 if MCP_AVAILABLE:
+    from mcp.types import Tool as MCPTool
+
+    from litellm.experimental_mcp_client.client import MCPClient
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
         global_mcp_server_manager,
@@ -876,7 +879,6 @@ if MCP_AVAILABLE:
                         return (), classify_list_exception(e)
                     return tools_result, ServerListOk(tool_count=len(tools_result))
 
-                # Query all servers the user has access to
                 queried_servers: Final = tuple(
                     server
                     for server in map(global_mcp_server_manager.get_mcp_server_by_id, allowed_server_ids)
@@ -1140,6 +1142,11 @@ if MCP_AVAILABLE:
         scopes_raw: Final = creds.get("scopes")
         scopes: Final[list[str] | None] = scopes_raw if isinstance(scopes_raw, list) else None
         return client_id, client_secret, scopes
+
+    async def _list_tools_within(client: MCPClient, deadline: float) -> list[MCPTool] | None:
+        with anyio.move_on_after(deadline):
+            return await client.list_tools(raise_on_error=True)
+        return None
 
     async def _execute_with_mcp_client(
         request: NewMCPServerRequest,
@@ -1422,9 +1429,7 @@ if MCP_AVAILABLE:
                 getattr(client, "timeout", MCP_CLIENT_TIMEOUT) or MCP_CLIENT_TIMEOUT,
                 MCP_TOOL_LISTING_TIMEOUT,
             )
-            list_tools_result = None  # rebind-ok: set inside the timeout scope below
-            with anyio.move_on_after(listing_deadline):
-                list_tools_result = await client.list_tools(raise_on_error=True)  # rebind-ok: fills the init above
+            list_tools_result: Final = await _list_tools_within(client, listing_deadline)
             if list_tools_result is None:
                 verbose_logger.warning(
                     "MCP tools/list preview timed out after %s seconds while paginating upstream tools",
