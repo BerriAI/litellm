@@ -3,11 +3,52 @@
 from datetime import datetime, timedelta
 from typing import Final
 
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import TypedDict
+
 import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+
+
+class _ModelCostInfo(TypedDict, total=False):
+    input_cost_per_token: float | None
+    output_cost_per_token: float | None
+    litellm_provider: str | None
+
+
+_MODEL_COST_INFO_ADAPTER: Final = TypeAdapter(_ModelCostInfo)
+
+
+def _get_validated_model_cost_info(model_name: str) -> _ModelCostInfo | None:
+    raw_model_cost_info: Final[object] = litellm.model_cost.get(model_name)
+    if raw_model_cost_info is None:
+        return None
+
+    try:
+        return _MODEL_COST_INFO_ADAPTER.validate_python(raw_model_cost_info)
+    except ValidationError:
+        return None
+
+
+def _get_model_cost_info(model_name: str | None) -> _ModelCostInfo:
+    if model_name is None:
+        return {}  # mutable-ok: each unresolved model gets an independent cost map
+
+    exact_model_cost: Final = _get_validated_model_cost_info(model_name)
+    if exact_model_cost is not None:
+        return exact_model_cost
+
+    provider_name, separator, unprefixed_model_name = model_name.partition("/")
+    if separator == "":
+        return {}  # mutable-ok: each unresolved model gets an independent cost map
+
+    unprefixed_model_cost: Final = _get_validated_model_cost_info(unprefixed_model_name)
+    if unprefixed_model_cost is None or unprefixed_model_cost.get("litellm_provider") != provider_name:
+        return {}
+    return unprefixed_model_cost
 
 
 class LowestCostLoggingHandler(CustomLogger):
@@ -245,7 +286,7 @@ class LowestCostLoggingHandler(CustomLogger):
                 or float("inf")
             )
             item_litellm_model_name = _deployment.get("litellm_params", {}).get("model")
-            item_litellm_model_cost_map = litellm.model_cost.get(item_litellm_model_name, {})
+            item_litellm_model_cost_map = _get_model_cost_info(item_litellm_model_name)
 
             # check if user provided input_cost_per_token and output_cost_per_token in litellm_params
             item_input_cost = None
@@ -257,10 +298,12 @@ class LowestCostLoggingHandler(CustomLogger):
                 item_output_cost = _deployment.get("litellm_params", {}).get("output_cost_per_token")
 
             if item_input_cost is None:
-                item_input_cost = item_litellm_model_cost_map.get("input_cost_per_token", 5.0)
+                model_input_cost = item_litellm_model_cost_map.get("input_cost_per_token")
+                item_input_cost = model_input_cost if model_input_cost is not None else 5.0
 
             if item_output_cost is None:
-                item_output_cost = item_litellm_model_cost_map.get("output_cost_per_token", 5.0)
+                model_output_cost = item_litellm_model_cost_map.get("output_cost_per_token")
+                item_output_cost = model_output_cost if model_output_cost is not None else 5.0
 
             # if litellm["model"] is not in model_cost map -> use item_cost = $10
 
