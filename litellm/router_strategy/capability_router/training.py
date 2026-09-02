@@ -4,11 +4,11 @@ import argparse
 import hashlib
 import json
 import math
-from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import groupby
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -249,32 +249,34 @@ def _train_candidate(
         for _, rule, rule_records in learned
     )
     rules: Final = tuple(
-        CapabilityRule(boundary=boundary[0], rule=rule.rule)
-        for (_, rule, _), boundary in zip(learned, boundaries)
+        CapabilityRule(boundary=boundary[0], rule=rule.rule) for (_, rule, _), boundary in zip(learned, boundaries)
     )
     statistics: Final = tuple(
         CapabilityRuleStatistic(
             model=candidate.model,
             rule_id=rule_id,
             observations=len(rule_records),
-            success_rate=(
-                sum(record.success for record in rule_records) / len(rule_records) if rule_records else 0.0
-            ),
+            success_rate=(sum(record.success for record in rule_records) / len(rule_records) if rule_records else 0.0),
             interval_low=boundary[1],
             interval_high=boundary[2],
             learned_boundary=boundary[0],
         )
         for (rule_id, _, rule_records), boundary in zip(learned, boundaries)
     )
-    return candidate.model_copy(update={"rules": rules, "probability_calibration": calibration}), statistics
+    return (
+        candidate.model_copy(
+            update={"rules": rules, "probability_calibration": calibration}  # mutable-ok: Pydantic requires dict
+        ),
+        statistics,
+    )
 
 
 def _effective_boundary(candidate: CapabilityRouterCandidate, primary_rule: str) -> CapabilityBoundary:
     if not candidate.rules:
         return "unmatched"
-    boundaries: Final[dict[str, CapabilityBoundary]] = {
-        rule_id: rule.boundary for rule_id, rule in indexed_rules(candidate)
-    }
+    boundaries: Final[Mapping[str, CapabilityBoundary]] = MappingProxyType(
+        {rule_id: rule.boundary for rule_id, rule in indexed_rules(candidate)}
+    )
     return boundaries.get(primary_rule, "unmatched")
 
 
@@ -284,14 +286,13 @@ def _task_candidates(
     config: CapabilityRouterConfig,
     calibrated: bool,
 ) -> tuple[tuple[_TaskCandidate, ...], ...]:
-    candidates: Final = {candidate.model: candidate for candidate in config.candidates}
+    candidates: Final = MappingProxyType({candidate.model: candidate for candidate in config.candidates})
     selected: Final = sorted(
         (record for record in records if record.split == split and record.model in candidates),
         key=lambda record: (record.benchmark, record.task_id, record.model),
     )
     grouped_tasks: Final = tuple(
-        tuple(group)
-        for _, group in groupby(selected, key=lambda record: (record.benchmark, record.task_id))
+        tuple(group) for _, group in groupby(selected, key=lambda record: (record.benchmark, record.task_id))
     )
     return tuple(
         tuple(
@@ -309,7 +310,10 @@ def _aggregate_candidate(
     calibrated: bool,
 ) -> _TaskCandidate:
     raw_probability: Final = sum(record.raw_p_solve for record in records) / len(records)
-    primary_rule: Final = min(Counter(record.primary_rule for record in records).items(), key=lambda item: (-item[1], item[0]))[0]
+    rule_counts: Final = tuple(
+        (rule_id, len(tuple(group))) for rule_id, group in groupby(sorted(record.primary_rule for record in records))
+    )
+    primary_rule: Final = min(rule_counts, key=lambda item: (-item[1], item[0]))[0]
     return _TaskCandidate(
         model=candidate.model,
         probability=calibrated_probability(candidate, raw_probability) if calibrated else raw_probability,
@@ -329,7 +333,7 @@ def _route_metrics(
     tasks: Final = _task_candidates(records, split, config, calibrated)
     if not tasks:
         raise ValueError(f"{split} has no tasks with outcomes for every configured candidate")
-    order: Final = {candidate.model: index for index, candidate in enumerate(config.candidates)}
+    order: Final = MappingProxyType({candidate.model: index for index, candidate in enumerate(config.candidates)})
     selected: Final = tuple(_select_task_candidate(task, config, order) for task in tasks)
     return _summarize_routes(tasks, selected, quality_weight)
 
@@ -357,14 +361,16 @@ def _always_candidate_metrics(
     quality_weight: float,
 ) -> Mapping[str, CapabilityRouteMetrics]:
     tasks: Final = _task_candidates(records, "test", config, True)
-    return {
-        model: _summarize_routes(
-            tasks,
-            tuple(next(candidate for candidate in task if candidate.model == model) for task in tasks),
-            quality_weight,
-        )
-        for model in (candidate.model for candidate in config.candidates)
-    }
+    return MappingProxyType(
+        {
+            model: _summarize_routes(
+                tasks,
+                tuple(next(candidate for candidate in task if candidate.model == model) for task in tasks),
+                quality_weight,
+            )
+            for model in (candidate.model for candidate in config.candidates)
+        }
+    )
 
 
 def _oracle_metrics(
@@ -388,15 +394,14 @@ def _oracle_metrics(
 
 
 def _select_task_candidate(
-    task: tuple[_TaskCandidate, ...], config: CapabilityRouterConfig, order: dict[str, int]
+    task: tuple[_TaskCandidate, ...], config: CapabilityRouterConfig, order: Mapping[str, int]
 ) -> _TaskCandidate:
     qualified: Final = tuple(
         candidate
         for candidate in task
         if candidate.probability
         > round(
-            config.probability_threshold
-            + BOUNDARY_THRESHOLD_STEPS[candidate.boundary] * config.threshold_step,
+            config.probability_threshold + BOUNDARY_THRESHOLD_STEPS[candidate.boundary] * config.threshold_step,
             9,
         )
     )
@@ -415,7 +420,7 @@ def _probability_metrics(
     config: CapabilityRouterConfig,
     calibrated: bool,
 ) -> CapabilityProbabilityMetrics:
-    candidates: Final = {candidate.model: candidate for candidate in config.candidates}
+    candidates: Final = MappingProxyType({candidate.model: candidate for candidate in config.candidates})
     rows: Final = tuple(record for record in records if record.split == "test" and record.model in candidates)
     predictions: Final = tuple(
         calibrated_probability(candidates[record.model], record.raw_p_solve) if calibrated else record.raw_p_solve
@@ -426,8 +431,7 @@ def _probability_metrics(
         observations=len(rows),
         brier=sum((prediction - outcome) ** 2 for prediction, outcome in zip(predictions, outcomes)) / len(rows),
         log_loss=-sum(
-            outcome * math.log(max(1e-9, prediction))
-            + (1.0 - outcome) * math.log(max(1e-9, 1.0 - prediction))
+            outcome * math.log(max(1e-9, prediction)) + (1.0 - outcome) * math.log(max(1e-9, 1.0 - prediction))
             for prediction, outcome in zip(predictions, outcomes)
         )
         / len(rows),
@@ -477,16 +481,22 @@ def train_capability_artifact(
     )
     trained_candidates: Final = tuple(candidate for candidate, _ in trained_rows)
     rule_statistics: Final = tuple(statistic for _, statistics in trained_rows for statistic in statistics)
-    calibrated_config: Final = config.model_copy(update={"candidates": trained_candidates})
+    calibrated_config: Final = config.model_copy(
+        update={"candidates": trained_candidates}  # mutable-ok: Pydantic requires dict
+    )
     candidates: Final = tuple(
-        calibrated_config.model_copy(update={"probability_threshold": threshold, "threshold_step": step})
+        calibrated_config.model_copy(
+            update={  # mutable-ok: Pydantic requires dict
+                "probability_threshold": threshold,
+                "threshold_step": step,
+            }
+        )
         for threshold in _THRESHOLDS
         for step in _THRESHOLD_STEPS
         if threshold + 2.0 * step <= 1.0
     )
     scored: Final = tuple(
-        (_route_metrics(records, "validation", candidate, quality_weight, True), candidate)
-        for candidate in candidates
+        (_route_metrics(records, "validation", candidate, quality_weight, True), candidate) for candidate in candidates
     )
     validation, trained_config = max(
         scored,
@@ -502,7 +512,9 @@ def train_capability_artifact(
         rule_statistics=rule_statistics,
         datasets=datasets,
         records=len(records),
-        split_counts={split: sum(record.split == split for record in records) for split in sorted(required_splits)},
+        split_counts=MappingProxyType(
+            {split: sum(record.split == split for record in records) for split in sorted(required_splits)}
+        ),
         records_sha256=hashlib.sha256(
             "\n".join(
                 record.model_dump_json()
@@ -526,9 +538,7 @@ def train_capability_artifact(
     return CapabilityTrainingResult(
         artifact=artifact,
         report=CapabilityTrainingReport(
-            objective=(
-                f"{quality_weight:g} * observed success + {1.0 - quality_weight:g} * normalized cost score"
-            ),
+            objective=(f"{quality_weight:g} * observed success + {1.0 - quality_weight:g} * normalized cost score"),
             validation=validation,
             test=_route_metrics(records, "test", trained_config, quality_weight, True),
             test_untrained=_route_metrics(records, "test", config, quality_weight, False),

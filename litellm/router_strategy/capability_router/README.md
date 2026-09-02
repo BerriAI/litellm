@@ -53,3 +53,13 @@ Use the same candidate model revisions, agent, tools, task budget, provider sett
 Report the complete solve-rate versus cost curve rather than one threshold. Tune cards, calibration, and thresholds on training and validation tasks only. Run the final configuration once on the test split and keep that result unchanged
 
 Recommended executable public suites are Terminal-Bench 2.1, SWE-bench Verified or Pro, tau2-bench, AppWorld, BFCL, and ToolSandbox. RouterBench is useful as a cheap classifier and calibration smoke test, but it is not evidence of agentic end-to-end performance
+
+### tau2-bench pipeline run
+
+The pipeline was exercised against public tau2-bench trajectories for `claude-sonnet-4-5` and `claude-opus-4-5`, with four recorded end-to-end attempts aggregated per task. Entire domains were held apart: 50 airline tasks trained the artifact, 113 retail tasks selected the operating point, and 110 telecom tasks were evaluated once. A local `mlx-community/Qwen3-4B-Instruct-2507-4bit` model produced the capability forecasts
+
+At a `0.7` quality weight, the validation-selected configuration reached 85.00% test solve rate at 0.4678 mean recorded cost. The original cards reached 92.27% at 0.7057 cost. This is 33.7% lower cost with a 7.27-point solve-rate loss, and improves the configured normalized utility from 0.6650 to 0.8950. The learned test curve also contains a 91.36% solve-rate point at 0.6743 cost, 4.4% below the original cost with a 0.91-point solve-rate loss
+
+Calibration generalized across the held-out domain. Brier score improved from 0.2207 to 0.0568, log loss from 0.7657 to 0.3994, and expected calibration error from 0.2984 to 0.1224
+
+This run validates artifact training, domain-disjoint evaluation, and the quality-cost tradeoff. It does not show a strict raw solve-rate improvement over the original cards, and it is not a direct comparison with a published Switchyard result. Larger cross-benchmark training data and another untouched test family are required before treating these cards as a general preset
