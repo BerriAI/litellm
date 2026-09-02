@@ -18,6 +18,14 @@ use crate::integrations::custom_logger::{
 };
 use crate::integrations::types::RequestMetadata;
 
+type LifecycleEvents = Arc<Mutex<Vec<&'static str>>>;
+
+fn record_lifecycle_event(events: Option<&LifecycleEvents>, event: &'static str) {
+    if let Some(events) = events {
+        events.lock().unwrap().push(event);
+    }
+}
+
 async fn read_http_headers(socket: &mut TcpStream) -> String {
     let mut request = Vec::new();
     let mut buffer = [0_u8; 1024];
@@ -80,9 +88,17 @@ struct RecordedLogEvent {
 #[derive(Default)]
 struct RecordingOcrLogger {
     events: Mutex<Vec<RecordedLogEvent>>,
+    lifecycle_events: Option<LifecycleEvents>,
 }
 
 impl RecordingOcrLogger {
+    fn with_lifecycle_events(lifecycle_events: LifecycleEvents) -> Self {
+        Self {
+            events: Mutex::new(Vec::new()),
+            lifecycle_events: Some(lifecycle_events),
+        }
+    }
+
     fn events(&self) -> Vec<RecordedLogEvent> {
         self.events.lock().unwrap().clone()
     }
@@ -96,6 +112,7 @@ impl CustomLogger for RecordingOcrLogger {
         _timing: CallbackTiming,
     ) -> LogFuture<'a> {
         Box::pin(async move {
+            record_lifecycle_event(self.lifecycle_events.as_ref(), "async_log_success_event");
             self.events.lock().unwrap().push(RecordedLogEvent {
                 hook: "async_log_success_event",
                 model: model_call_details.model.clone(),
@@ -115,6 +132,7 @@ impl CustomLogger for RecordingOcrLogger {
         _timing: CallbackTiming,
     ) -> LogFuture<'a> {
         Box::pin(async move {
+            record_lifecycle_event(self.lifecycle_events.as_ref(), "async_log_failure_event");
             self.events.lock().unwrap().push(RecordedLogEvent {
                 hook: "async_log_failure_event",
                 model: model_call_details.model.clone(),
@@ -135,22 +153,41 @@ struct RecordingOcrGuardrail {
     hooks: Vec<GuardrailEventHook>,
     events: Mutex<Vec<&'static str>>,
     block_pre_call: bool,
+    block_during_call: bool,
+    lifecycle_events: Option<LifecycleEvents>,
 }
 
 impl RecordingOcrGuardrail {
-    fn new(hooks: Vec<GuardrailEventHook>) -> Self {
+    fn with_lifecycle_events(
+        hooks: Vec<GuardrailEventHook>,
+        lifecycle_events: LifecycleEvents,
+    ) -> Self {
         Self {
             hooks,
             events: Mutex::new(Vec::new()),
             block_pre_call: false,
+            block_during_call: false,
+            lifecycle_events: Some(lifecycle_events),
         }
     }
 
-    fn blocking_pre_call() -> Self {
+    fn blocking_pre_call(lifecycle_events: LifecycleEvents) -> Self {
         Self {
             hooks: vec![GuardrailEventHook::PreCall],
             events: Mutex::new(Vec::new()),
             block_pre_call: true,
+            block_during_call: false,
+            lifecycle_events: Some(lifecycle_events),
+        }
+    }
+
+    fn blocking_during_call(lifecycle_events: LifecycleEvents) -> Self {
+        Self {
+            hooks: vec![GuardrailEventHook::PreCall, GuardrailEventHook::DuringCall],
+            events: Mutex::new(Vec::new()),
+            block_pre_call: false,
+            block_during_call: true,
+            lifecycle_events: Some(lifecycle_events),
         }
     }
 
@@ -174,6 +211,7 @@ impl CustomGuardrail for RecordingOcrGuardrail {
         mut request: GuardrailRequest,
     ) -> GuardrailFuture<'a> {
         Box::pin(async move {
+            record_lifecycle_event(self.lifecycle_events.as_ref(), "async_pre_call_hook");
             self.events.lock().unwrap().push("async_pre_call_hook");
             if self.block_pre_call {
                 return Ok(GuardrailDecision::Block(GuardrailError::blocked(
@@ -191,7 +229,13 @@ impl CustomGuardrail for RecordingOcrGuardrail {
         mut request: GuardrailRequest,
     ) -> GuardrailFuture<'a> {
         Box::pin(async move {
+            record_lifecycle_event(self.lifecycle_events.as_ref(), "async_moderation_hook");
             self.events.lock().unwrap().push("async_moderation_hook");
+            if self.block_during_call {
+                return Ok(GuardrailDecision::Block(GuardrailError::blocked(
+                    "blocked during provider preparation",
+                )));
+            }
             request.data["body"]["guarded_during"] = json!(true);
             Ok(GuardrailDecision::Mask(request))
         })
@@ -242,7 +286,7 @@ fn ocr_dispatch_supports_migrated_providers() {
     assert!(
         ocr_provider_config("vertex_ai", "deepseek-ocr-maas")
             .expect("vertex deepseek config resolves")
-            .supported_ocr_params()
+            .get_supported_ocr_params()
             .contains(&"temperature")
     );
     assert!(ocr_provider_config("openai", "gpt-4o").is_none());
@@ -281,14 +325,17 @@ fn auth_header_detection_is_case_insensitive() {
 
 #[tokio::test]
 async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
+    let lifecycle_events: LifecycleEvents = Arc::new(Mutex::new(Vec::new()));
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("test listener binds");
     let addr = listener.local_addr().expect("listener has local addr");
 
+    let provider_events = lifecycle_events.clone();
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("accepts one request");
         let request = read_http_request(&mut socket).await;
+        record_lifecycle_event(Some(&provider_events), "provider_request_received");
         let response_body = r#"{"pages":[{"index":0,"markdown":"ok"}],"model":"mistral-ocr-latest","usage_info":{"pages_processed":1}}"#;
         let response = format!(
             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
@@ -302,11 +349,13 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
         request
     });
 
-    let logger = Arc::new(RecordingOcrLogger::default());
-    let guardrail = Arc::new(RecordingOcrGuardrail::new(vec![
-        GuardrailEventHook::PreCall,
-        GuardrailEventHook::DuringCall,
-    ]));
+    let logger = Arc::new(RecordingOcrLogger::with_lifecycle_events(
+        lifecycle_events.clone(),
+    ));
+    let guardrail = Arc::new(RecordingOcrGuardrail::with_lifecycle_events(
+        vec![GuardrailEventHook::PreCall, GuardrailEventHook::DuringCall],
+        lifecycle_events.clone(),
+    ));
     let response = ocr(OcrRequest {
         model: "mistral-ocr-latest",
         document: json!({
@@ -346,6 +395,15 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
             error_kind: None,
         }]
     );
+    assert_eq!(
+        lifecycle_events.lock().unwrap().as_slice(),
+        [
+            "async_pre_call_hook",
+            "async_moderation_hook",
+            "provider_request_received",
+            "async_log_success_event",
+        ]
+    );
 
     let request = server.await.expect("server task completes");
     assert!(request.contains(r#""guarded_pre":true"#), "{request}");
@@ -353,15 +411,65 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
 }
 
 #[tokio::test]
+async fn ocr_lifecycle_during_call_block_skips_provider_and_runs_failure_callback() {
+    let lifecycle_events: LifecycleEvents = Arc::new(Mutex::new(Vec::new()));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test listener binds");
+    let addr = listener.local_addr().expect("listener has local addr");
+    let logger = Arc::new(RecordingOcrLogger::with_lifecycle_events(
+        lifecycle_events.clone(),
+    ));
+    let guardrail = Arc::new(RecordingOcrGuardrail::blocking_during_call(
+        lifecycle_events.clone(),
+    ));
+
+    let error = ocr(OcrRequest {
+        model: "mistral-ocr-latest",
+        document: json!({
+            "type": "document_url",
+            "document_url": "https://example.com/doc.pdf"
+        }),
+        api_key: Some("sk-test"),
+        api_base: Some(&format!("http://{addr}")),
+        custom_llm_provider: Some("mistral"),
+        extra_headers: None,
+        optional_params: Map::new(),
+        timeout: Some(Duration::from_millis(100)),
+        callbacks: vec![logger],
+        guardrails: vec![guardrail],
+        request_metadata: RequestMetadata::default(),
+        litellm_call_id: Some("ocr-call-during-block"),
+    })
+    .await
+    .expect_err("during-call guardrail blocks request");
+
+    assert!(matches!(error, Error::InvalidRequest(_)));
+    assert_eq!(
+        lifecycle_events.lock().unwrap().as_slice(),
+        [
+            "async_pre_call_hook",
+            "async_moderation_hook",
+            "async_log_failure_event",
+        ]
+    );
+    let accepted = tokio::time::timeout(Duration::from_millis(100), listener.accept()).await;
+    assert!(accepted.is_err(), "provider socket should not be touched");
+}
+
+#[tokio::test]
 async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
+    let lifecycle_events: LifecycleEvents = Arc::new(Mutex::new(Vec::new()));
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("test listener binds");
     let addr = listener.local_addr().expect("listener has local addr");
 
+    let provider_events = lifecycle_events.clone();
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("accepts one request");
         let _request = read_http_request(&mut socket).await;
+        record_lifecycle_event(Some(&provider_events), "provider_request_received");
         let response_body = "provider failed";
         let response = format!(
             "HTTP/1.1 500 Internal Server Error\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
@@ -374,7 +482,9 @@ async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
             .expect("writes response");
     });
 
-    let logger = Arc::new(RecordingOcrLogger::default());
+    let logger = Arc::new(RecordingOcrLogger::with_lifecycle_events(
+        lifecycle_events.clone(),
+    ));
     let err = ocr(OcrRequest {
         model: "mistral-ocr-latest",
         document: json!({
@@ -408,16 +518,25 @@ async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
             error_kind: Some("HttpError".to_string()),
         }]
     );
+    assert_eq!(
+        lifecycle_events.lock().unwrap().as_slice(),
+        ["provider_request_received", "async_log_failure_event"]
+    );
 }
 
 #[tokio::test]
 async fn ocr_lifecycle_pre_call_block_skips_provider_socket() {
+    let lifecycle_events: LifecycleEvents = Arc::new(Mutex::new(Vec::new()));
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("test listener binds");
     let addr = listener.local_addr().expect("listener has local addr");
-    let logger = Arc::new(RecordingOcrLogger::default());
-    let guardrail = Arc::new(RecordingOcrGuardrail::blocking_pre_call());
+    let logger = Arc::new(RecordingOcrLogger::with_lifecycle_events(
+        lifecycle_events.clone(),
+    ));
+    let guardrail = Arc::new(RecordingOcrGuardrail::blocking_pre_call(
+        lifecycle_events.clone(),
+    ));
 
     let err = ocr(OcrRequest {
         model: "mistral-ocr-latest",
@@ -451,6 +570,10 @@ async fn ocr_lifecycle_pre_call_block_skips_provider_socket() {
             response_object: Some("error".to_string()),
             error_kind: Some("InvalidRequest".to_string()),
         }]
+    );
+    assert_eq!(
+        lifecycle_events.lock().unwrap().as_slice(),
+        ["async_pre_call_hook", "async_log_failure_event"]
     );
     let accepted = tokio::time::timeout(Duration::from_millis(100), listener.accept()).await;
     assert!(accepted.is_err(), "provider socket should not be touched");

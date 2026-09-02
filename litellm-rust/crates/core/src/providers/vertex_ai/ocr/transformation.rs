@@ -208,8 +208,8 @@ fn ocr_data_from_content(content: Value, usage: Option<Value>, model: &str) -> V
 }
 
 impl OcrProviderConfig for VertexAiOcrConfig {
-    fn supported_ocr_params(&self) -> &'static [&'static str] {
-        MISTRAL_OCR_CONFIG.supported_ocr_params()
+    fn get_supported_ocr_params(&self) -> &'static [&'static str] {
+        MISTRAL_OCR_CONFIG.get_supported_ocr_params()
     }
 
     fn transform_ocr_request(
@@ -253,7 +253,7 @@ impl OcrProviderConfig for VertexAiOcrConfig {
 }
 
 impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
-    fn supported_ocr_params(&self) -> &'static [&'static str] {
+    fn get_supported_ocr_params(&self) -> &'static [&'static str] {
         DEEPSEEK_SUPPORTED_OCR_PARAMS
     }
 

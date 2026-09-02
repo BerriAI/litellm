@@ -87,7 +87,14 @@ impl OcrLifecycleHooks {
             &request.optional_params,
             &env_lookup,
         )?;
-        let filtered_params = config.map_ocr_params(&request.optional_params);
+        let supported_params = config.get_supported_ocr_params();
+        let non_default_params = request
+            .optional_params
+            .iter()
+            .filter(|(param, _)| supported_params.contains(&param.as_str()))
+            .map(|(param, value)| (param.clone(), value.clone()))
+            .collect();
+        let filtered_params = config.map_ocr_params(&non_default_params);
         let model = request.model.clone();
         let custom_llm_provider = request.custom_llm_provider.clone();
         let document = if config.requires_data_uri_document() {
