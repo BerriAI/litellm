@@ -10,6 +10,41 @@ import litellm
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 
 
+@pytest.mark.parametrize("stream", (False, True))
+def test_completion_response_reasoning_summary_round_trip(stream: bool) -> None:
+    from typing import Final
+
+    from litellm.types.llms.openai import (
+        ChatCompletionReasoningItem,
+        ChatCompletionReasoningSummaryTextBlock,
+    )
+    from litellm.types.utils import (
+        Choices,
+        Delta,
+        Message,
+        ModelResponse,
+        ModelResponseStream,
+        StreamingChoices,
+    )
+
+    reasoning_item: Final = ChatCompletionReasoningItem(
+        type="reasoning",
+        id="rs_123",
+        encrypted_content="encrypted",
+        summary=[ChatCompletionReasoningSummaryTextBlock(type="summary_text", text="Reasoning summary")],
+    )
+    response: Final = (
+        ModelResponseStream(choices=[StreamingChoices(delta=Delta(reasoning_items=[reasoning_item]))])
+        if stream
+        else ModelResponse(choices=[Choices(message=Message(reasoning_items=[reasoning_item]))])
+    )
+    message_key: Final = "delta" if stream else "message"
+    assert response.model_dump()["choices"][0][message_key]["reasoning_items"] == [reasoning_item]
+
+    restored: Final = type(response).model_validate_json(response.model_dump_json())
+    assert restored.model_dump()["choices"][0][message_key]["reasoning_items"] == [reasoning_item]
+
+
 def test_generic_event():
     from litellm.types.llms.openai import GenericEvent
 
