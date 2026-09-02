@@ -47,7 +47,7 @@ from litellm.constants import (
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth, strip_auth_scheme
+from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth, strip_auth_scheme, to_basic_credentials
 from litellm.integrations.custom_guardrail import (
     _sync_guardrail_info_to_logging_obj,  # pyright: ignore[reportPrivateUsage] - the same bridge @log_guardrail_information uses; reimplementing it here would fork the metadata-key logic
 )
@@ -2272,13 +2272,13 @@ class MCPServerManager:
                 from litellm.types.mcp import MCPAuth
 
                 if server.auth_type == MCPAuth.bearer_token:
-                    headers["Authorization"] = f"Bearer {server.authentication_token}"
+                    headers["Authorization"] = f"Bearer {strip_auth_scheme(server.authentication_token, 'Bearer')}"
                 elif server.auth_type == MCPAuth.api_key:
-                    headers["Authorization"] = f"ApiKey {server.authentication_token}"
+                    headers["Authorization"] = f"ApiKey {strip_auth_scheme(server.authentication_token, 'ApiKey')}"
                 elif server.auth_type == MCPAuth.basic:
-                    headers["Authorization"] = f"Basic {server.authentication_token}"
+                    headers["Authorization"] = f"Basic {to_basic_credentials(server.authentication_token)}"
                 elif server.auth_type == MCPAuth.token:
-                    headers["Authorization"] = f"token {server.authentication_token}"
+                    headers["Authorization"] = f"token {strip_auth_scheme(server.authentication_token, 'token')}"
 
             # Add any static headers from server config.
             #

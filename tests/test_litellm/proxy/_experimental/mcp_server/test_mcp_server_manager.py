@@ -4534,6 +4534,81 @@ class TestMCPServerManager:
         assert captured["relays_upstream_auth"] is False
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "auth_type, authentication_token, expected_authorization",
+        [
+            (MCPAuth.bearer_token, "Bearer abc", "Bearer abc"),
+            (MCPAuth.bearer_token, "abc", "Bearer abc"),
+            (MCPAuth.api_key, "ApiKey abc", "ApiKey abc"),
+            (MCPAuth.token, "token abc", "token abc"),
+            (MCPAuth.basic, "user:pass", "Basic dXNlcjpwYXNz"),
+            (MCPAuth.basic, "Basic dXNlcjpwYXNz", "Basic dXNlcjpwYXNz"),
+            (MCPAuth.basic, "Basic user:pass", "Basic dXNlcjpwYXNz"),
+        ],
+    )
+    async def test_register_openapi_tools_normalizes_authentication_token(
+        self, tmp_path, monkeypatch, auth_type, authentication_token, expected_authorization
+    ):
+        manager = MCPServerManager()
+        spec_path = tmp_path / "openapi.json"
+        spec_path.write_text(
+            json.dumps(
+                {
+                    "openapi": "3.0.0",
+                    "info": {"title": "Demo", "version": "1.0.0"},
+                    "paths": {
+                        "/health": {
+                            "get": {
+                                "operationId": "health_check",
+                                "summary": "health",
+                            }
+                        }
+                    },
+                }
+            )
+        )
+        server = MCPServer(
+            server_id="openapi-server",
+            name="openapi-server",
+            server_name="openapi-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=auth_type,
+            authentication_token=authentication_token,
+        )
+        captured: dict = {}
+
+        def fake_create_tool_function(
+            path, method, operation, base_url, headers=None, server_label=None, relays_upstream_auth=False
+        ):
+            captured["headers"] = headers
+
+            async def tool_func(**kwargs):
+                return "ok"
+
+            return tool_func
+
+        monkeypatch.setattr(
+            "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.create_tool_function",
+            fake_create_tool_function,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.build_input_schema",
+            lambda *args, **kwargs: {"type": "object", "properties": {}, "required": []},
+        )
+        monkeypatch.setattr(
+            "litellm.proxy._experimental.mcp_server.tool_registry.global_mcp_tool_registry.register_tool",
+            lambda *args, **kwargs: None,
+        )
+        await manager._register_openapi_tools(
+            spec_path=str(spec_path),
+            server=server,
+            base_url="https://example.com",
+        )
+
+        assert captured["headers"]["Authorization"] == expected_authorization
+
+    @pytest.mark.asyncio
     async def test_pre_call_tool_check_allowed_tools_list_allows_tool(self):
         """Test pre_call_tool_check allows tool when it's in allowed_tools list"""
         manager = MCPServerManager()
