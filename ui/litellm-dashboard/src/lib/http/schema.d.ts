@@ -24730,6 +24730,11 @@ export interface components {
             description: string;
             /** Model */
             model: string;
+            /**
+             * Rules
+             * @default []
+             */
+            rules: components["schemas"]["CapabilityRule"][];
         };
         /**
          * CapabilityRouterConfig
@@ -24780,6 +24785,19 @@ export interface components {
             error?: string | null;
             /** Valid */
             valid: boolean;
+        };
+        /**
+         * CapabilityRule
+         * @description One operator-declared condition and the coverage it implies when it matches the task.
+         */
+        CapabilityRule: {
+            /**
+             * Boundary
+             * @enum {string}
+             */
+            boundary: "supported" | "uncertain" | "unsupported";
+            /** Rule */
+            rule: string;
         };
         /** ChatCompletionAnnotation */
         ChatCompletionAnnotation: {
