@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { toast } from "@/lib/toast";
 import {
   guardrail_provider_map,
   populateGuardrailProviders,
@@ -138,6 +139,34 @@ const ProviderFieldInput: React.FC<ProviderFieldInputProps> = ({ descriptor, fie
           <span>100%</span>
         </div>
       </div>
+    );
+  }
+
+  if (descriptor.type === "object") {
+    const objectValue = typeof value === "object" && value !== null ? JSON.stringify(value, null, 2) : asText(value);
+    return (
+      <Textarea
+        id={id}
+        name={name}
+        ref={ref}
+        placeholder={descriptor.description}
+        value={objectValue}
+        onChange={(event) => onChange(event.target.value)}
+        onBlur={(event) => {
+          const next = event.target.value.trim();
+          if (next === "") {
+            onChange(undefined);
+          } else {
+            try {
+              onChange(JSON.parse(next));
+            } catch {
+              toast.error("Enter valid JSON for this configuration");
+            }
+          }
+          onBlur();
+        }}
+        {...aria}
+      />
     );
   }
 
