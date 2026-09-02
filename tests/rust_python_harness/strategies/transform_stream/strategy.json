@@ -1,0 +1,12 @@
+{
+  "order": 40,
+  "id": "transform_stream",
+  "label": "2c · transform_stream chaos split",
+  "description": "Re-cut recorded SSE bytes and compare emitted chunks and final assembly.",
+  "functions": {
+    "ocr": {"coverage": "not_applicable", "selectors": [], "note": "OCR is not streaming."},
+    "messages": {"coverage": "planned", "selectors": []},
+    "responses": {"coverage": "planned", "selectors": []},
+    "count_tokens": {"coverage": "not_applicable", "selectors": [], "note": "count_tokens is not streaming."}
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "order": 80,
+  "id": "dual_build_suite",
+  "label": "6a · Existing suite under both builds",
+  "description": "Compare pass, fail, and skip outcomes from the established suite under both flags.",
+  "functions": {
+    "ocr": {"coverage": "planned", "selectors": []},
+    "messages": {"coverage": "planned", "selectors": []},
+    "responses": {"coverage": "planned", "selectors": []},
+    "count_tokens": {"coverage": "planned", "selectors": []}
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "order": 50,
+  "id": "cassettes",
+  "label": "3 · Recorded provider cassettes",
+  "description": "Validate checked-in provider-byte recordings used by both implementations.",
+  "functions": {
+    "ocr": {"coverage": "planned", "selectors": []},
+    "messages": {"coverage": "planned", "selectors": []},
+    "responses": {"coverage": "planned", "selectors": []},
+    "count_tokens": {"coverage": "planned", "selectors": []}
+  }
+}

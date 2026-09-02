@@ -1,0 +1,12 @@
+{
+  "order": 90,
+  "id": "shadow_mode",
+  "label": "6b · Production shadow comparison",
+  "description": "Exercise shadow-mode mismatch metrics and redacted parity artifacts.",
+  "functions": {
+    "ocr": {"coverage": "planned", "selectors": []},
+    "messages": {"coverage": "planned", "selectors": []},
+    "responses": {"coverage": "planned", "selectors": []},
+    "count_tokens": {"coverage": "planned", "selectors": []}
+  }
+}

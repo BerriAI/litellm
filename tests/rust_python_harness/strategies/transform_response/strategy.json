@@ -1,0 +1,12 @@
+{
+  "order": 30,
+  "id": "transform_response",
+  "label": "2b · transform_response cassette diff",
+  "description": "Feed identical recorded status, headers, and body bytes into both transforms.",
+  "functions": {
+    "ocr": {"coverage": "planned", "selectors": []},
+    "messages": {"coverage": "planned", "selectors": []},
+    "responses": {"coverage": "planned", "selectors": []},
+    "count_tokens": {"coverage": "planned", "selectors": []}
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "order": 70,
+  "id": "manifest_coverage",
+  "label": "5 · Python trace → Rust symbol manifest",
+  "description": "Require every traced Python call to map to a compiled Rust symbol and a parity test.",
+  "functions": {
+    "ocr": {"coverage": "planned", "selectors": []},
+    "messages": {"coverage": "planned", "selectors": []},
+    "responses": {"coverage": "planned", "selectors": []},
+    "count_tokens": {"coverage": "planned", "selectors": []}
+  }
+}
