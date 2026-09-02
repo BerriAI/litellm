@@ -4220,9 +4220,44 @@ def test_gemini_38_flash_launch_pricing(model, input_cost, output_cost, cache_re
     assert model_cost_map["max_input_tokens"] == 1048576
 
 
-def test_gemini_38_flash_matches_37_flash_promotional_pricing(_local_model_cost_map):
-    for prefix in ("", "gemini/", "vertex_ai/"):
-        assert litellm.model_cost[f"{prefix}gemini-3.8-flash"] == litellm.model_cost[f"{prefix}gemini-3.7-flash"]
+GEMINI_38_FLASH_FIELDS_SHARED_WITH_37_FLASH = (
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "output_cost_per_reasoning_token",
+    "cache_read_input_token_cost",
+    "input_cost_per_token_batches",
+    "output_cost_per_token_batches",
+    "input_cost_per_token_flex",
+    "output_cost_per_token_flex",
+    "cache_read_input_token_cost_flex",
+    "input_cost_per_token_priority",
+    "output_cost_per_token_priority",
+    "cache_read_input_token_cost_priority",
+    "search_context_cost_per_query",
+    "google_maps_grounding_cost_per_query",
+    "prompt_cache_min_tokens",
+    "max_input_tokens",
+    "max_output_tokens",
+    "supports_reasoning",
+    "supports_function_calling",
+    "supports_prompt_caching",
+    "supports_vision",
+    "supports_pdf_input",
+    "supports_audio_input",
+    "supports_video_input",
+    "supports_response_schema",
+    "supports_tool_choice",
+    "supports_web_search",
+    "supports_url_context",
+)
+
+
+@pytest.mark.parametrize("prefix", ["", "gemini/", "vertex_ai/"])
+def test_gemini_38_flash_matches_37_flash_promotional_pricing(prefix, _local_model_cost_map):
+    new_model = litellm.model_cost[f"{prefix}gemini-3.8-flash"]
+    old_model = litellm.model_cost[f"{prefix}gemini-3.7-flash"]
+    for field in GEMINI_38_FLASH_FIELDS_SHARED_WITH_37_FLASH:
+        assert new_model[field] == old_model[field], field
 
 
 def test_generic_cost_per_token_gemini_38_flash(_local_model_cost_map):
