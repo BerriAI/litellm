@@ -352,6 +352,25 @@ class TestFilterWebSearchDeployments:
         # Should return the dict unchanged, not filter it
         assert result == deployment
 
+    def test_anthropic_versioned_web_search_filters_unsupported(self, sample_deployments):
+        """Anthropic versioned web_search tool types (e.g. web_search_20250305) should filter unsupported deployments"""
+        request_kwargs = {"tools": [{"type": "web_search_20250305", "name": "web_search"}]}
+        result = filter_web_search_deployments(sample_deployments, request_kwargs)
+        assert len(result) == 2
+        result_ids = [d["model_info"]["id"] for d in result]
+        assert "deployment-3" not in result_ids
+
+    def test_anthropic_web_fetch_filters_unsupported(self):
+        """Anthropic web_fetch tool types (e.g. web_fetch_20250910) should filter out supports_web_fetch=False deployments"""
+        deployments = [
+            {"model_info": {"id": "d1", "supports_web_fetch": True}},
+            {"model_info": {"id": "d2", "supports_web_fetch": False}},
+        ]
+        request_kwargs = {"tools": [{"type": "web_fetch_20250910", "name": "web_fetch"}]}
+        result = filter_web_search_deployments(deployments, request_kwargs)
+        assert len(result) == 1
+        assert result[0]["model_info"]["id"] == "d1"
+
 
 def test_invalidate_model_group_info_cache():
     """Test that _invalidate_model_group_info_cache clears the LRU cache."""
