@@ -913,14 +913,13 @@ class ProxyInitializationHelpers:
     envvar="ENFORCE_PRISMA_MIGRATION_CHECK",
 )
 @click.option(
-    "--use_v2_migration_resolver/--use_legacy_migration_resolver",
-    default=True,
+    "--use_v2_migration_resolver",
+    is_flag=True,
+    default=False,
     help=(
-        "Which database migration resolver to run at startup. The default v2 "
-        "resolver avoids the diff-and-force recovery path that can cause schema "
-        "thrashing during rolling deploys where two LiteLLM versions contend for "
-        "the same DB. Pass --use_legacy_migration_resolver, or set "
-        "USE_V2_MIGRATION_RESOLVER=false, to fall back to v1."
+        "Opt into the v2 migration resolver. Avoids the diff-and-force recovery "
+        "path that can cause schema thrashing during rolling deploys where two "
+        "LiteLLM versions contend for the same DB. Default is the v1 resolver."
     ),
     envvar="USE_V2_MIGRATION_RESOLVER",
 )
@@ -1226,6 +1225,7 @@ def run_server(
         if os.getenv("DATABASE_URL", None) is not None or os.getenv("DIRECT_URL", None) is not None:
             from litellm.proxy.db.db_url_settings import (
                 add_missing_query_params,
+                idle_lifetime_params,
                 reader_shareable_params,
                 unsupported_db_scheme,
                 unsupported_db_scheme_message,
@@ -1254,6 +1254,9 @@ def run_server(
                     disable_prepared_statements=db_disable_prepared_statements,
                     extra_params=db_extra_connection_params,
                 )
+                lifetime_params: Final = idle_lifetime_params(
+                    general_settings.get("database_max_idle_connection_lifetime")
+                )
                 if os.getenv("DATABASE_URL", None) is not None:
                     database_url = get_secret("DATABASE_URL", default_value=None)
                     resolved_url: Final[str | None] = str(database_url) if database_url else None
@@ -1271,11 +1274,11 @@ def run_server(
                         writer_url,
                         connection_url_params,
                     )
-                    os.environ["DATABASE_URL"] = modified_url
+                    os.environ["DATABASE_URL"] = add_missing_query_params(modified_url, lifetime_params)
                 if os.getenv("DIRECT_URL", None) is not None:
                     database_url = os.getenv("DIRECT_URL")
                     modified_url = append_query_params(database_url, connection_url_params)
-                    os.environ["DIRECT_URL"] = modified_url
+                    os.environ["DIRECT_URL"] = add_missing_query_params(modified_url, lifetime_params)
                 # The reader pool is a real pool against the same configured cap, so it
                 # gets the allowlisted pool params. Schema-affecting ones, including any
                 # the operator smuggled in through database_extra_connection_params, stay
@@ -1289,10 +1292,13 @@ def run_server(
                         db_lock_timeout,
                     )
                     os.environ["DATABASE_URL_READ_REPLICA"] = add_missing_query_params(
-                        _with_query_value(read_replica_url, "options", reader_options)
-                        if reader_options
-                        else read_replica_url,
-                        reader_shareable_params(connection_url_params),
+                        add_missing_query_params(
+                            _with_query_value(read_replica_url, "options", reader_options)
+                            if reader_options
+                            else read_replica_url,
+                            reader_shareable_params(connection_url_params),
+                        ),
+                        lifetime_params,
                     )
                 subprocess.run(["prisma"], capture_output=True)
                 is_prisma_runnable = True
@@ -1311,11 +1317,10 @@ def run_server(
                 else:
                     if not use_v2_migration_resolver:
                         print(
-                            "\033[1;33mLiteLLM Proxy: Using the legacy (v1) migration resolver. "
-                            "The default v2 resolver is safer: it avoids the diff-and-force "
-                            "recovery that caused schema thrashing during rolling deploys. "
-                            "Remove --use_legacy_migration_resolver / "
-                            "USE_V2_MIGRATION_RESOLVER=false to switch back to it.\033[0m"
+                            "\033[1;33mLiteLLM Proxy: Using default (v1) migration resolver. "
+                            "If your deployment has seen schema thrashing during rolling "
+                            "deploys, try --use_v2_migration_resolver (safer: avoids the "
+                            "diff-and-force recovery that caused the thrash).\033[0m"
                         )
                     try:
                         setup_ok: Final = PrismaManager.setup_database(
@@ -1323,10 +1328,10 @@ def run_server(
                             use_v2_resolver=use_v2_migration_resolver,
                         )
                     except RuntimeError as e:
-                        # Raised on unrecoverable migration errors: permission
-                        # failures from either resolver, the v2 resolver's
-                        # non-idempotent failures, and any `prisma db push`
-                        # against a partitioned LiteLLM_SpendLogs.
+                        # Raised on unrecoverable migration errors: the v2
+                        # resolver's non-idempotent failures and permission
+                        # issues, and any `prisma db push` against a
+                        # partitioned LiteLLM_SpendLogs.
                         print(
                             f"\033[1;31mLiteLLM Proxy: Database migration cannot proceed. {e}\033[0m",
                             file=sys.stderr,

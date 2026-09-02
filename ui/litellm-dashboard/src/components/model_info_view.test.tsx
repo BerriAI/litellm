@@ -87,6 +87,7 @@ describe("ModelInfoView", () => {
     accessToken: "test-token",
     userID: "123",
     userRole: "Admin",
+    isViewOnly: false,
     onModelUpdate: vi.fn(),
     modelAccessGroups: ["group1", "group2"],
   };
@@ -326,6 +327,16 @@ describe("ModelInfoView", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /delete model/i })).toBeInTheDocument();
     });
+  });
+
+  // A proxy_admin_viewer session reads "Admin" through effectiveSessionRole, but the update
+  // and delete endpoints 403 it, so the write buttons must not be offered.
+  it("should disable delete and update buttons for a view-only admin session", async () => {
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} isViewOnly={true} />, { wrapper });
+    await waitFor(() => {
+      expect(screen.getByTestId("delete-model-button")).toBeDisabled();
+    });
+    expect(screen.getByTestId("update-api-key-button")).toBeDisabled();
   });
 
   it("should disable delete button when model is not a DB model", async () => {

@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { DataTable } from "./DataTable";
 import { DataTableMultiSortHeader, DataTableSortHeader } from "./DataTableSortHeader";
 import { DataTableViewOptions } from "./DataTableViewOptions";
+import { chooseSelectOption } from "../../../../tests/test-utils";
 
 interface Person {
   id: string;
@@ -176,16 +177,13 @@ describe("DataTable sorting", () => {
     const user = userEvent.setup();
     render(<DataTable data={CHARLIE_ALICE_BOB} columns={dropdownSortColumns} sortingMode="client" />);
 
-    await user.click(screen.getByTestId("sort-trigger-name"));
-    await user.click(await screen.findByText("Ascending"));
+    await chooseSelectOption(user, screen.getByTestId("sort-trigger-name"), "Ascending", "menuitem");
     expect(names()).toEqual(["Alice", "Bob", "Charlie"]);
 
-    await user.click(screen.getByTestId("sort-trigger-name"));
-    await user.click(await screen.findByText("Descending"));
+    await chooseSelectOption(user, screen.getByTestId("sort-trigger-name"), "Descending", "menuitem");
     expect(names()).toEqual(["Charlie", "Bob", "Alice"]);
 
-    await user.click(screen.getByTestId("sort-trigger-name"));
-    await user.click(await screen.findByText("Reset"));
+    await chooseSelectOption(user, screen.getByTestId("sort-trigger-name"), "Reset", "menuitem");
     expect(names()).toEqual(["Charlie", "Alice", "Bob"]);
   });
 
@@ -202,12 +200,10 @@ describe("DataTable sorting", () => {
       />,
     );
 
-    await user.click(screen.getByTestId("sort-trigger-spend"));
-    await user.click(await screen.findByText("Budget descending"));
+    await chooseSelectOption(user, screen.getByTestId("sort-trigger-spend"), "Budget descending", "menuitem");
     expect(onSortingChange).toHaveBeenLastCalledWith([{ id: "max_budget", desc: true }]);
 
-    await user.click(screen.getByTestId("sort-trigger-spend"));
-    await user.click(await screen.findByText("Spend ascending"));
+    await chooseSelectOption(user, screen.getByTestId("sort-trigger-spend"), "Spend ascending", "menuitem");
     expect(onSortingChange).toHaveBeenLastCalledWith([{ id: "spend", desc: false }]);
   });
 
