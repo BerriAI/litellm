@@ -26,28 +26,26 @@ vi.mock("@/app/(dashboard)/hooks/models/useModels", async (importOriginal) => {
   return { ...actual, fetchAllModelDeployments: mockFetchAllModelDeployments };
 });
 vi.mock("./handle_add_auto_router_submit", () => ({ handleAddAutoRouterSubmit: vi.fn() }));
-vi.mock("./CapabilityRouterConfig", () => ({
-  default: ({ onChange }: { onChange: (value: unknown) => void }) => (
-    <button
-      type="button"
-      onClick={() =>
-        onChange({
-          candidates: [
-            { model: "small", description: "Bounded extraction" },
-            { model: "frontier", description: "Ambiguous multi-step work" },
-          ],
-          classifier: { model: "classifier", timeout_ms: 3000, max_output_tokens: 1024 },
-          probability_threshold: 0.75,
-          fallback_model: "frontier",
-          estimated_output_tokens: 1000,
-          cache_ttl_seconds: 3600,
-        })
-      }
-    >
-      Fill capability config
-    </button>
-  ),
-}));
+vi.mock("./CapabilityRouterConfig", () => {
+  const filledConfig = {
+    candidates: [
+      { model: "small", description: "Bounded extraction" },
+      { model: "frontier", description: "Ambiguous multi-step work" },
+    ],
+    classifier: { model: "classifier", timeout_ms: 3000, max_output_tokens: 1024 },
+    probability_threshold: 0.75,
+    fallback_model: "frontier",
+    estimated_output_tokens: 1000,
+    cache_ttl_seconds: 3600,
+  };
+  return {
+    default: ({ onChange }: { onChange: (value: unknown) => void }) => (
+      <button type="button" onClick={() => onChange(filledConfig)}>
+        Fill capability config
+      </button>
+    ),
+  };
+});
 
 describe("AddAutoRouterTab capability flow", () => {
   beforeEach(() => {
