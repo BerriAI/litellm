@@ -425,7 +425,7 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
     ) -> NoReturn:
-        raise NotImplementedError(_SEARCH_ONLY_MESSAGE)
+        raise config_error(_SEARCH_ONLY_MESSAGE)
 
     def transform_create_vector_store_response(self, response: httpx.Response) -> NoReturn:
-        raise NotImplementedError(_SEARCH_ONLY_MESSAGE)
+        raise config_error(_SEARCH_ONLY_MESSAGE)

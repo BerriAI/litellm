@@ -515,13 +515,25 @@ def test_validation_runs_before_any_connection_is_opened():
 
 
 def test_create_vector_store_is_not_supported_and_says_why():
+    """litellm.exception_type only passes its own exception types through untouched, so a
+    NotImplementedError here reaches the caller as APIConnectionError, which the proxy serves
+    as a 500 with a traceback. Refusing an unsupported operation is a client error."""
     config = MongoDBVectorStoreConfig()
 
-    with pytest.raises(NotImplementedError, match="search-only"):
+    with pytest.raises(BadRequestError, match="search-only"):
         config.transform_create_vector_store_request({}, "https://example.test")
 
-    with pytest.raises(NotImplementedError, match="search-only"):
+    with pytest.raises(BadRequestError, match="search-only"):
         config.transform_create_vector_store_response(httpx.Response(200))
+
+
+def test_the_create_refusal_survives_the_public_sdk_error_wrapper():
+    import litellm
+
+    with pytest.raises(BadRequestError) as raised:
+        litellm.vector_stores.create(custom_llm_provider="mongodb", name="anything")
+
+    assert "search-only" in str(raised.value)
 
 
 def test_provider_config_manager_returns_the_mongodb_config():
