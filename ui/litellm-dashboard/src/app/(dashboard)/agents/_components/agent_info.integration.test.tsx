@@ -75,6 +75,34 @@ const langgraphInfo: AgentCreateInfo = {
   ],
 };
 
+const AGENTCORE_ARN = "arn:aws:bedrock-agentcore:eu-central-1:123456789012:runtime/hosted_agent_4vm3i-BaTdfOELAs";
+
+const AGENTCORE_AGENT = {
+  agent_id: "agent-3",
+  agent_name: "ac-agent",
+  agent_card_params: { name: "AC", description: "agentcore agent", url: "", version: "1.0.0", skills: [] },
+  litellm_params: { custom_llm_provider: "bedrock", model: `bedrock/agentcore/${AGENTCORE_ARN}` },
+};
+
+const agentcoreInfo: AgentCreateInfo = {
+  agent_type: "bedrock_agentcore",
+  agent_type_display_name: "Bedrock AgentCore",
+  description: "AgentCore runtimes",
+  logo_url: "/b.png",
+  use_a2a_form_fields: false,
+  litellm_params_template: { custom_llm_provider: "bedrock" },
+  model_template: "bedrock/agentcore/{agent_runtime_arn}",
+  credential_fields: [
+    {
+      key: "agent_runtime_arn",
+      label: "Agent Runtime ARN",
+      field_type: "text",
+      required: true,
+      include_in_litellm_params: false,
+    },
+  ],
+};
+
 const setup = () => userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
 
 const renderView = () => render(<AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="tok" isAdmin={true} />);
@@ -94,7 +122,7 @@ const save = async (user: ReturnType<typeof setup>) => {
 
 describe("AgentInfoView update payload", () => {
   beforeEach(() => {
-    vi.mocked(networking.getAgentCreateMetadata).mockReset().mockResolvedValue([langgraphInfo]);
+    vi.mocked(networking.getAgentCreateMetadata).mockReset().mockResolvedValue([langgraphInfo, agentcoreInfo]);
     vi.mocked(networking.getAgentInfo)
       .mockReset()
       .mockResolvedValue(A2A_AGENT as never);
@@ -244,6 +272,22 @@ describe("AgentInfoView update payload", () => {
         api_base: "https://other.example.com",
         model: "langgraph/asst_1",
       },
+    });
+  });
+
+  it("shows the full AgentCore runtime ARN and saves it unchanged when the ARN contains a slash", async () => {
+    vi.mocked(networking.getAgentInfo).mockResolvedValue(AGENTCORE_AGENT as never);
+    const user = setup();
+    renderView();
+    await openEditor(user);
+
+    expect(screen.getByLabelText("Agent Runtime ARN")).toHaveValue(AGENTCORE_ARN);
+
+    await save(user);
+
+    expect(patchedPayload().litellm_params).toEqual({
+      custom_llm_provider: "bedrock",
+      model: `bedrock/agentcore/${AGENTCORE_ARN}`,
     });
   });
 

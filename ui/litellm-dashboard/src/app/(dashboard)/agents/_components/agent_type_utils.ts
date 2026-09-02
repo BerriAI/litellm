@@ -49,7 +49,7 @@ export const parseDynamicAgentForForm = (agent: Agent, agentTypeInfo: AgentCreat
         // Find the placeholder position and extract the value
         templateParts.forEach((part, index) => {
           if (part === `{${field.key}}` && modelParts[index]) {
-            values[field.key] = modelParts[index];
+            values[field.key] = modelParts.slice(index).join("/");
           }
         });
       }
