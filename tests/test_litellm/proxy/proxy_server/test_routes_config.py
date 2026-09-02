@@ -124,6 +124,42 @@ def test_config_update_persists_disable_cooldowns(client, auth_as, mock_prisma, 
     assert persisted["disable_cooldowns"] is True
 
 
+def test_config_update_rejects_assistants_config(client, auth_as, mock_prisma, monkeypatch):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post(
+            "/config/update",
+            json={"router_settings": {"assistants_config": {"enabled": True}}},
+        )
+
+    assert response.status_code == 400
+    assert "assistants_config" in response.json()["error"]["message"]
+    table.upsert.assert_not_called()
+
+
+def test_config_update_rejects_router_general_settings(client, auth_as, mock_prisma, monkeypatch):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post(
+            "/config/update",
+            json={"router_settings": {"router_general_settings": {"async_only_mode": True}}},
+        )
+
+    assert response.status_code == 400
+    assert "router_general_settings" in response.json()["error"]["message"]
+    table.upsert.assert_not_called()
+
+
 def test_config_update_rejects_unknown_router_setting(client, auth_as, mock_prisma, monkeypatch):
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
