@@ -133,11 +133,15 @@ def get_litellm_async_redis_cluster_class(  # noqa: C901  # supports redis-py ve
             base_class  # pyright: ignore[reportGeneralTypeIssues, reportUntypedBaseClass]  # the injected base class is selected at runtime
         ):
             def __init__(
-                self, *args: object, **kwargs: object  # kwargs-ok: passes redis-py's constructor kwargs through untouched
+                self,
+                *args: object,
+                **kwargs: object,  # kwargs-ok: passes redis-py's constructor kwargs through untouched
             ) -> None:
                 super().__init__(*args, **kwargs)
                 self._litellm_topology_reinit_requests = 0
-                self._litellm_consecutive_timeouts: dict[str, int] = {}  # mutable-ok: per-node counter updated on the command hot path
+                self._litellm_consecutive_timeouts: dict[  # mutable-ok: per-node counter updated on the command hot path
+                    str, int
+                ] = {}
 
             async def aclose(self) -> None:
                 self._litellm_topology_reinit_requests += 1
