@@ -1,5 +1,9 @@
 pub mod canonical;
+pub mod compiler;
+pub mod plan;
 pub mod policy;
+pub mod profile;
 pub mod response;
 pub mod transformation;
 pub mod types;
+pub mod wire;
