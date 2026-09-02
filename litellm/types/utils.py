@@ -3636,6 +3636,8 @@ all_litellm_params = (
         "client",
         "rpm",
         "tpm",
+        "default_api_key_rpm_limit",
+        "default_api_key_tpm_limit",
         "itpm",
         "otpm",
         "max_parallel_requests",

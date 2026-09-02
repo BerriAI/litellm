@@ -155,8 +155,8 @@ class BaseTranslation(ABC):
         self,
         exc: "ModifyResponseException",
         stream_started: bool = False,
-        responses_so_far: list[Any] | None = None,
-    ) -> list[bytes] | None:
+        responses_so_far: Sequence[Any] | None = None,
+    ) -> Sequence[bytes] | None:
         """
         Build the streaming chunks that deliver a guardrail block message and
         cleanly terminate the stream in this provider's wire format.
