@@ -8316,6 +8316,135 @@ class TestConsumedRequestTagsStamp:
         assert CONSUMED_REQUEST_TAGS_METADATA_KEY not in request_kwargs["metadata"]
 
 
+class TestClaudeCodeSubagentSessionRouterBinding:
+    class _RewriteStrategy:
+        async def async_pre_routing_hook(
+            self, model, request_kwargs, messages=None, input=None, specific_deployment=False
+        ):
+            from litellm.types.router import PreRoutingHookResponse
+
+            return PreRoutingHookResponse(
+                model="cheap-model",
+                messages=messages,
+                routing_decision={
+                    "router_model_name": "smart-router",
+                    "router_type": "complexity",
+                    "routed_model": "cheap-model",
+                    "cause": "heuristic_scorer",
+                },
+            )
+
+    @classmethod
+    def _router(cls) -> "litellm.Router":
+        from litellm.types.router import TaggedPreRoutingStrategy
+
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "cheap-model",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "mock_response": "cheap response"},
+                },
+                {
+                    "model_name": "expensive-model",
+                    "litellm_params": {"model": "openai/gpt-4o", "mock_response": "expensive response"},
+                },
+            ]
+        )
+        router.complexity_routers = {
+            "smart-router": [TaggedPreRoutingStrategy(tags=(), strategy=cls._RewriteStrategy())]
+        }
+        return router
+
+    @staticmethod
+    def _request_kwargs(
+        *,
+        key_hash: str = "key-hash-a",
+        app: str = "cli",
+        agent_id: str | None = None,
+        fallback_depth: int | None = None,
+    ) -> dict:
+        headers = {
+            "X-Claude-Code-Session-Id": "session-1234",
+            "x-app": app,
+            **({"x-claude-code-agent-id": agent_id} if agent_id is not None else {}),
+        }
+        return {
+            "metadata": {"user_api_key_hash": key_hash},
+            "proxy_server_request": {"headers": headers},
+            **({"fallback_depth": fallback_depth} if fallback_depth is not None else {}),
+        }
+
+    @pytest.mark.asyncio
+    async def test_subagent_concrete_model_uses_the_main_sessions_router(self):
+        router = self._router()
+
+        await router.acompletion(
+            model="smart-router",
+            messages=[{"role": "user", "content": "main turn"}],
+            **self._request_kwargs(),
+        )
+        subagent_kwargs = self._request_kwargs(agent_id="agent-1234")
+
+        response = await router.acompletion(
+            model="expensive-model",
+            messages=[{"role": "user", "content": "subagent turn"}],
+            **subagent_kwargs,
+        )
+
+        assert response.choices[0].message.content == "cheap response"
+        assert subagent_kwargs["metadata"]["model_group"] == "smart-router"
+        assert subagent_kwargs["metadata"]["routing_decision"]["router_model_name"] == "smart-router"
+
+    @pytest.mark.asyncio
+    async def test_main_direct_model_clears_the_session_router(self):
+        router = self._router()
+
+        await router.async_pre_routing_hook(model="smart-router", request_kwargs=self._request_kwargs())
+        await router.async_pre_routing_hook(model="expensive-model", request_kwargs=self._request_kwargs())
+
+        response = await router.async_pre_routing_hook(
+            model="expensive-model",
+            request_kwargs=self._request_kwargs(agent_id="agent-1234"),
+        )
+
+        assert response is None
+
+    @pytest.mark.asyncio
+    async def test_background_and_fallback_requests_do_not_clear_the_session_router(self):
+        router = self._router()
+
+        await router.async_pre_routing_hook(model="smart-router", request_kwargs=self._request_kwargs())
+        await router.async_pre_routing_hook(
+            model="expensive-model",
+            request_kwargs=self._request_kwargs(app="cli-bg"),
+        )
+        await router.async_pre_routing_hook(
+            model="expensive-model",
+            request_kwargs=self._request_kwargs(fallback_depth=1),
+        )
+
+        response = await router.async_pre_routing_hook(
+            model="expensive-model",
+            request_kwargs=self._request_kwargs(agent_id="agent-1234"),
+        )
+
+        assert response is not None
+        assert response.model == "cheap-model"
+
+    @pytest.mark.asyncio
+    async def test_session_router_binding_is_scoped_to_the_authenticated_key(self):
+        router = self._router()
+
+        await router.async_pre_routing_hook(model="smart-router", request_kwargs=self._request_kwargs())
+
+        response = await router.async_pre_routing_hook(
+            model="expensive-model",
+            request_kwargs=self._request_kwargs(key_hash="key-hash-b", agent_id="agent-1234"),
+        )
+
+        assert response is None
+
+
 class TestAutoRouterMaxInputCharsWiring:
     """`auto_router_max_input_chars` on the deployment has to reach the AutoRouter that embeds prompts.
 
