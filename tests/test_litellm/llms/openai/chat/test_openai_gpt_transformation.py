@@ -163,12 +163,20 @@ class TestGetOptionalParamsIntegration:
         gpt4o_entry = litellm.model_cost.get("gpt-4o")
         if isinstance(gpt4o_entry, dict) and gpt4o_entry.get("supports_reasoning"):
             litellm.model_cost["gpt-4o"] = {**gpt4o_entry, "supports_reasoning": False}
-
-        config = OpenAIConfig()
-        assert "reasoning_effort" not in config.get_supported_openai_params("gpt-4o")
-        assert "reasoning_effort" not in config.get_supported_openai_params(
-            "responses/gpt-4.1-mini"
-        )
+            try:
+                config = OpenAIConfig()
+                assert "reasoning_effort" not in config.get_supported_openai_params("gpt-4o")
+                assert "reasoning_effort" not in config.get_supported_openai_params(
+                    "responses/gpt-4.1-mini"
+                )
+            finally:
+                litellm.model_cost["gpt-4o"] = gpt4o_entry
+        else:
+            config = OpenAIConfig()
+            assert "reasoning_effort" not in config.get_supported_openai_params("gpt-4o")
+            assert "reasoning_effort" not in config.get_supported_openai_params(
+                "responses/gpt-4.1-mini"
+            )
 
     def test_reasoning_effort_not_inherited_by_openai_compatible_subclasses(self):
         """Providers subclassing either openai config keep their own reasoning_effort gating
@@ -210,13 +218,22 @@ class TestGetOptionalParamsIntegration:
         gpt4o_entry = litellm.model_cost.get("gpt-4o")
         if isinstance(gpt4o_entry, dict) and gpt4o_entry.get("supports_reasoning"):
             litellm.model_cost["gpt-4o"] = {**gpt4o_entry, "supports_reasoning": False}
-
-        with pytest.raises(litellm.utils.UnsupportedParamsError):
-            get_optional_params(
-                model="gpt-4o",
-                custom_llm_provider="openai",
-                reasoning_effort="low",
-            )
+            try:
+                with pytest.raises(litellm.utils.UnsupportedParamsError):
+                    get_optional_params(
+                        model="gpt-4o",
+                        custom_llm_provider="openai",
+                        reasoning_effort="low",
+                    )
+            finally:
+                litellm.model_cost["gpt-4o"] = gpt4o_entry
+        else:
+            with pytest.raises(litellm.utils.UnsupportedParamsError):
+                get_optional_params(
+                    model="gpt-4o",
+                    custom_llm_provider="openai",
+                    reasoning_effort="low",
+                )
 
     def test_reasoning_effort_allowed_when_catalog_model_declares_supports_reasoning(
         self,
