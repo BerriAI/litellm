@@ -6,6 +6,7 @@ import sys
 from datetime import datetime
 from logging import Formatter
 from typing import Any, Final, TextIO
+from urllib.parse import unquote
 
 import litellm
 from litellm.constants import (
@@ -148,6 +149,30 @@ _secret_filter: Final = SecretRedactionFilter()
 
 _MAX_SCRUBBED_ACCESS_ARG: Final = 512
 
+_REDACTION_PLACEHOLDER: Final = "REDACTED"
+
+
+def _hides_a_credential(value: str) -> bool:
+    """Whether *value* only looks clean until it is percent-decoded."""
+    decoded: Final = unquote(value)
+    return _redact_string(decoded) != decoded
+
+
+def _drop_encoded_credential(scrubbed: str) -> str:
+    """Drop the part of a request target that only decoding shows to be a secret.
+
+    The request parser decodes query names and values, so `?k%65y=sk%2D...` is a
+    working credential that the patterns, which match literal text, do not see.
+    The decoded text is never logged back: it can carry a newline, and forging
+    log lines is not a trade worth making for a readable request target.
+    """
+    path, separator, _query = scrubbed.partition("?")
+    if _hides_a_credential(path):
+        return _REDACTION_PLACEHOLDER
+    if separator and _hides_a_credential(scrubbed):
+        return f"{path}?{_REDACTION_PLACEHOLDER}"
+    return scrubbed
+
 
 def _scrub_access_arg(value: str) -> str:
     """Redact one access-log positional arg, bounding the scanned length.
@@ -158,10 +183,11 @@ def _scrub_access_arg(value: str) -> str:
     pattern and would then be logged raw.
     """
     if len(value) <= _MAX_SCRUBBED_ACCESS_ARG:
-        return _redact_string(value)
+        return _drop_encoded_credential(_redact_string(value))
     head: Final = value[:_MAX_SCRUBBED_ACCESS_ARG]
     kept: Final = head[: max(head.rfind("?"), head.rfind("&"))] if "?" in head else head
-    return f"{_redact_string(kept)}... ({len(value) - len(kept)} more chars truncated) ..."
+    scrubbed: Final = _drop_encoded_credential(_redact_string(kept))
+    return f"{scrubbed}... ({len(value) - len(kept)} more chars truncated) ..."
 
 
 class AccessLogRedactionFilter(logging.Filter):

@@ -7496,8 +7496,12 @@ async def test_key_budget_error_does_not_carry_a_raw_key_name(key_name):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("key_name", ["sk-...5LuA", "sk-..."])
+@pytest.mark.parametrize("key_name", ["sk-...5LuA", "sk-...", "sk-...ke.!", "sk-...café"])
 async def test_key_budget_error_keeps_the_masked_key_name(key_name):
-    """The masked form is the whole point of naming the key, so it must survive."""
+    """The masked form is the whole point of naming the key, so it must survive.
+
+    abbreviate_api_key takes the last four characters of the key verbatim, and a
+    custom key may end in punctuation or a non-ASCII character, so those masked
+    names are just as valid as the alphanumeric ones."""
     message = await _run_key_budget_check(key_name)
     assert f"Key=prod-key ({key_name}) Current cost" in message

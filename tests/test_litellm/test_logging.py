@@ -1048,6 +1048,40 @@ def test_access_log_filter_keeps_the_query_delimiter(full_path, want):
     assert record.args[2] == want
 
 
+@pytest.mark.parametrize(
+    "full_path, want",
+    [
+        # Both the param name and the value are encoded, so neither is literal text
+        # the patterns can see, yet the request parser decodes it into a working key.
+        (f"/key/info?k%65y=sk%2D{_LEAKED_KEY[3:]}", "/key/info?REDACTED"),
+        (f"/key/info?k%65y=sk%2D{_LEAKED_KEY[3:]}&page=2", "/key/info?REDACTED"),
+        (f"/v1/models/sk%2D{_LEAKED_KEY[3:]}", "REDACTED"),
+        # A decoded credential must never be echoed back: it can carry a newline and
+        # forge a following log line.
+        (f"/v1/models?k%65y=sk%2D{_LEAKED_KEY[3:]}%0AINFO:%20forged", "/v1/models?REDACTED"),
+    ],
+)
+def test_access_log_filter_redacts_a_percent_encoded_credential(full_path, want):
+    record = _access_record(full_path)
+    AccessLogRedactionFilter().filter(record)
+    assert record.args[2] == want
+
+
+@pytest.mark.parametrize(
+    "full_path",
+    [
+        "/v1/models?filter=gpt%2D4o&page=2",
+        "/gemini/v1beta/models/gemini-2.0-flash%3AgenerateContent",
+    ],
+)
+def test_access_log_filter_leaves_harmless_percent_encoding_alone(full_path):
+    """Decoding is a detector, not a rewrite, so a request line with no credential
+    in it survives encoded exactly as the client sent it."""
+    record = _access_record(full_path)
+    AccessLogRedactionFilter().filter(record)
+    assert record.args[2] == full_path
+
+
 def test_access_log_filter_caps_how_much_of_a_request_target_it_scans():
     """The request target is the only input to the secret regex an unauthenticated
     caller controls end to end, so it is bounded before it is scanned, and the
