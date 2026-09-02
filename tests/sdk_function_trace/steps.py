@@ -30,8 +30,8 @@ STEPS: Final[dict[str, tuple[Step, ...]]] = {
         _step("get_provider_ocr_config", r"ProviderConfigManager\.get_provider_ocr_config$", "ocr_provider_config"),
         _step("supported_ocr_params", r"get_supported_ocr_params$", "supported_ocr_params"),
         _step("map_ocr_params", r"(?<!async_)map_ocr_params$", "map_ocr_params"),
-        _step("validate_environment", r"(?<!_)validate_environment$"),
-        _step("complete_url", r"get_complete_url$"),
+        _step("validate_environment", r"(?<!_)validate_environment$", "validate_environment"),
+        _step("complete_url", r"get_complete_url$", "complete_url"),
         _step("transform_ocr_request", r"(?<!async_)transform_ocr_request$", "transform_ocr_request"),
         _step("execute_ocr_provider_call", r"BaseLLMHTTPHandler\.(?:async_)?ocr$", "execute_ocr_provider_call"),
         _step("http_request", _POST, "http_request"),
@@ -39,14 +39,13 @@ STEPS: Final[dict[str, tuple[Step, ...]]] = {
     ),
     "chat_completions": (
         _step("chat_completions", r"main\.py:\d+ a?completion$", "chat_completions"),
-        _step("prepare_chat_completions_call", rust="prepare_chat_completions_call"),
         _step(
             "get_provider_chat_config",
             r"ProviderConfigManager\.get_provider_chat_config$",
             "chat_completions_provider_config",
         ),
-        _step("supported_openai_params", r"get_supported_openai_params$"),
-        _step("validate_environment", r"(?<!_)validate_environment$"),
+        _step("supported_openai_params", r"get_supported_openai_params$", "supported_openai_params"),
+        _step("validate_environment", r"(?<!_)validate_environment$", "validate_environment"),
         _step("transform_request", r"(?<!async_)transform_request$", "transform_request"),
         _step(
             "execute_chat_completions_provider_call",
@@ -58,15 +57,14 @@ STEPS: Final[dict[str, tuple[Step, ...]]] = {
     ),
     "messages": (
         _step("messages", r"anthropic_interface/messages/__init__\.py:\d+ a?create$", "messages"),
-        _step("prepare_messages_call", rust="prepare_messages_call"),
         _step(
             "get_provider_messages_config",
             r"ProviderConfigManager\.get_provider_anthropic_messages_config$",
             "messages_provider_config",
         ),
-        _step("validate_environment", r"validate_anthropic_messages_environment$"),
+        _step("validate_environment", r"validate_anthropic_messages_environment$", "validate_environment"),
         _step("transform_request", r"(?<!async_)transform_anthropic_messages_request$", "transform_request"),
-        _step("complete_url", r"get_complete_url$"),
+        _step("complete_url", r"get_complete_url$", "complete_url"),
         _step(
             "execute_messages_provider_call",
             r"(?:async_)?anthropic_messages_handler$",

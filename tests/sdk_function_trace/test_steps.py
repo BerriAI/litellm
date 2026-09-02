@@ -114,6 +114,7 @@ def test_trace_diff_reports_no_difference_for_identical_steps() -> None:
     assert diff.python_only == ()
     assert diff.rust_only == ()
     assert diff.shared_order_matches
+    assert diff.matches
 
 
 def test_trace_diff_reports_exclusive_steps_and_reordered_shared_steps() -> None:
@@ -135,6 +136,7 @@ def test_trace_diff_reports_exclusive_steps_and_reordered_shared_steps() -> None
     assert diff.python_only == ("http_request",)
     assert diff.rust_only == ("transform_ocr_response",)
     assert not diff.shared_order_matches
+    assert not diff.matches
 
 
 def test_trace_diff_does_not_claim_empty_or_disjoint_traces_match() -> None:
@@ -176,10 +178,11 @@ def test_projection_does_not_nest_siblings_under_a_returned_config_lookup() -> N
 
 CHAT_RUST_STEPS: Final = (
     "chat_completions",
-    "prepare_chat_completions_call",
     "get_provider_chat_config",
-    "transform_request",
+    "supported_openai_params",
     "execute_chat_completions_provider_call",
+    "validate_environment",
+    "transform_request",
     "http_request",
     "transform_response",
 )
@@ -197,9 +200,10 @@ def test_pipeline_check_rejects_http_before_request_transformation() -> None:
         FunctionTraceEvent(name, 0)
         for name in (
             "chat_completions",
-            "prepare_chat_completions_call",
             "get_provider_chat_config",
+            "supported_openai_params",
             "execute_chat_completions_provider_call",
+            "validate_environment",
             "http_request",
             "transform_request",
             "transform_response",
@@ -209,7 +213,7 @@ def test_pipeline_check_rejects_http_before_request_transformation() -> None:
     assert "transform_request must precede http_request" in pipeline_issues("chat_completions", "rust", steps)
 
 
-def test_pipeline_check_accepts_different_handler_boundaries() -> None:
+def test_step_parity_rejects_different_handler_boundaries_even_with_valid_stages() -> None:
     rust: Final = tuple(FunctionTraceEvent(name, 0) for name in CHAT_RUST_STEPS)
     python: Final = tuple(
         FunctionTraceEvent(name, 0)
@@ -217,14 +221,24 @@ def test_pipeline_check_accepts_different_handler_boundaries() -> None:
             "chat_completions",
             "get_provider_chat_config",
             "supported_openai_params",
-            "execute_chat_completions_provider_call",
             "validate_environment",
             "transform_request",
+            "execute_chat_completions_provider_call",
             "http_request",
             "transform_response",
         )
     )
 
     assert not trace_diff(python, rust).shared_order_matches
+    assert not trace_diff(python, rust).matches
     assert pipeline_issues("chat_completions", "python", python) == ()
     assert pipeline_issues("chat_completions", "rust", rust) == ()
+
+
+def test_step_parity_rejects_an_exclusive_helper_with_matching_shared_order() -> None:
+    rust: Final = tuple(FunctionTraceEvent(name, 0) for name in CHAT_RUST_STEPS)
+    python: Final = (*rust, FunctionTraceEvent("unmatched_helper", 0))
+    diff: Final = trace_diff(python, rust)
+
+    assert diff.shared_order_matches
+    assert not diff.matches

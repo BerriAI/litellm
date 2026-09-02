@@ -207,6 +207,10 @@ class TraceDiff:
     rust_only: tuple[str, ...]
     shared_order_matches: bool
 
+    @property
+    def matches(self) -> bool:
+        return not self.python_only and not self.rust_only and self.shared_order_matches
+
 
 @dataclass(frozen=True, slots=True)
 class TraceRun:
@@ -263,6 +267,7 @@ def report(route: str, *, asynchronous: bool, full: bool) -> bool:
     python_steps: Final = pipeline_steps(route, "python", python.events)
     rust_steps: Final = pipeline_steps(route, "rust", rust.events)
     diff: Final = trace_diff(python_steps, rust_steps)
+    comparable: Final = route != "audio_transcription" and not python.error and not rust.error
     sys.stdout.write(f"route: {route}    provider: {case.label}    mode: {'async' if asynchronous else 'sync'}\n\n")
     colorize: Final = sys.stdout.isatty() and "NO_COLOR" not in os.environ
     cases: Final[tuple[tuple[Engine, TraceRun, tuple[FunctionTraceEvent, ...]], ...]] = (
@@ -282,18 +287,23 @@ def report(route: str, *, asynchronous: bool, full: bool) -> bool:
         sys.stdout.write(f"{engine} ({len(shown)} steps)\n\n")
         _print_tree(
             shown,
-            frozenset() if full or python.error or rust.error else frozenset(only),
+            frozenset() if full or not comparable else frozenset(only),
             f"<- {engine} only",
             color,
             colorize=colorize,
         )
         sys.stdout.write("\n")
-    if not python.error and not rust.error:
+    if comparable:
         order: Final = "the same" if diff.shared_order_matches else "a different"
         sys.stdout.write("diff\n\n")
         sys.stdout.write(f"shared steps appear in {order} order\n")
         sys.stdout.write(f"python-only: {', '.join(diff.python_only) or 'none'}\n")
         sys.stdout.write(f"rust-only: {', '.join(diff.rust_only) or 'none'}\n\n")
+        sys.stdout.write(f"step parity: {'PASS' if diff.matches else 'FAIL'}\n")
+    elif route == "audio_transcription":
+        sys.stdout.write("step parity: UNAVAILABLE (Bedrock transcription has no independent Python implementation)\n")
+    else:
+        sys.stdout.write("step parity: UNAVAILABLE (both engines must complete)\n")
     for (checked_engine, checked_result, _), (_, problems) in zip(cases, issues):
         if checked_result.error:
             continue
@@ -303,8 +313,10 @@ def report(route: str, *, asynchronous: bool, full: bool) -> bool:
             f"{'FAIL: ' + '; '.join(problems) if problems else 'PASS'}\n"
         )
     sys.stdout.write("Each successful invocation issued exactly one local provider request\n\n")
-    return not any(problems for _, problems in issues) and all(
-        result.error is None or result.skipped for result in (python, rust)
+    return (
+        (not comparable or diff.matches)
+        and not any(problems for _, problems in issues)
+        and all(result.error is None or result.skipped for result in (python, rust))
     )
 
 
@@ -315,7 +327,9 @@ def main() -> None:
     mode.add_argument("--async", dest="asynchronous", action="store_true", default=True)
     mode.add_argument("--sync", dest="asynchronous", action="store_false")
     mode.add_argument("--both", action="store_true", help="run async and sync for every selected route")
-    parser.add_argument("--check", action="store_true", help="exit nonzero for missing or misordered pipeline steps")
+    parser.add_argument(
+        "--check", action="store_true", help="exit nonzero for missing, extra, or reordered comparable steps"
+    )
     parser.add_argument(
         "--full", action="store_true", help="print every captured runtime event instead of pipeline steps"
     )

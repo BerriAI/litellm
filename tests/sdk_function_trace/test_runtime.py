@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Final
 
-from tests.sdk_function_trace.runtime import attempt_trace
+import pytest
+
+from tests.sdk_function_trace.runtime import attempt_trace, run_trace, trace_diff
+from tests.sdk_function_trace.steps import pipeline_issues, pipeline_steps
 
 
 def test_sync_messages_records_the_known_python_limitation() -> None:
@@ -19,3 +22,22 @@ def test_unexpected_call_failure_is_not_skipped() -> None:
     assert not result.skipped
     assert result.error == "ValueError: Unknown route: unknown"
     assert result.events == ()
+
+
+@pytest.mark.parametrize(
+    ("route", "asynchronous"),
+    (("chat_completions", False), ("chat_completions", True), ("messages", True), ("ocr", False), ("ocr", True)),
+)
+def test_compiled_routes_match_python_steps(route: str, asynchronous: bool) -> None:
+    from litellm.rust_bridge import get_native_bridge
+
+    if get_native_bridge() is None:
+        pytest.skip("build the native bridge to run executed route parity")
+    python: Final = pipeline_steps(route, "python", run_trace(route, rust=False, asynchronous=asynchronous))
+    rust: Final = pipeline_steps(route, "rust", run_trace(route, rust=True, asynchronous=asynchronous))
+
+    assert pipeline_issues(route, "python", python) == ()
+    assert pipeline_issues(route, "rust", rust) == ()
+    assert trace_diff(python, rust).matches
+    if route != "messages":
+        assert python == rust
