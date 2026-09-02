@@ -7271,6 +7271,71 @@ def test_get_configured_token_limits_coerces_numeric_strings():
     assert router.get_configured_token_limits("quoted-limits-model") == (32000, 8000)
 
 
+def test_get_configured_display_name_reads_deployment_model_info():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "Kimi K3-claude-compatible",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"display_name": "Kimi K3"},
+            }
+        ]
+    )
+
+    assert router.get_configured_display_name("Kimi K3-claude-compatible") == "Kimi K3"
+
+
+def test_get_configured_display_name_returns_none_for_unset_or_unknown():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "no-display-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+            }
+        ]
+    )
+
+    assert router.get_configured_display_name("no-display-model") is None
+    assert router.get_configured_display_name("not-a-real-model") is None
+
+
+def test_get_configured_display_name_skips_wildcard_pattern_matching():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*"},
+                "model_info": {"display_name": "Bedrock"},
+            }
+        ]
+    )
+
+    with patch.object(
+        router.pattern_router, "route", side_effect=AssertionError("pattern route called")
+    ):
+        assert (
+            router.get_configured_display_name("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0")
+            is None
+        )
+
+
+def test_get_configured_display_name_treats_malformed_values_as_absent():
+    malformed = ["", "   ", 12345, ["Kimi K3"], {"name": "Kimi K3"}, True]
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": f"bad-display-{i}",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"display_name": bad},
+            }
+            for i, bad in enumerate(malformed)
+        ]
+    )
+
+    for i in range(len(malformed)):
+        assert router.get_configured_display_name(f"bad-display-{i}") is None
+
+
 @pytest.mark.asyncio
 async def test_acreate_batch_disable_fallbacks_surfaces_owning_provider_error():
     router = litellm.Router(
