@@ -2261,7 +2261,7 @@ class TestUpdateInMemoryLitellmParams:
             LitellmParams(guardrail="update-test", mode="post_call", default_on=True)
         )
 
-        assert guardrail.event_hook is GuardrailEventHooks.post_call
+        assert guardrail.event_hook == "post_call"
         assert guardrail.should_run_guardrail(data={}, event_type=GuardrailEventHooks.post_call) is True
         assert guardrail.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is False
 
@@ -2277,9 +2277,39 @@ class TestUpdateInMemoryLitellmParams:
             }
         )
 
-        assert guardrail.event_hook is GuardrailEventHooks.post_call
+        assert guardrail.event_hook == "post_call"
         assert getattr(guardrail, "api_base", None) == "https://guardrail.example.com"
         assert guardrail.should_run_guardrail(data={}, event_type=GuardrailEventHooks.post_call) is True
+
+    @pytest.mark.parametrize(
+        "mode",
+        [
+            "post_call",
+            ["pre_call", "post_call"],
+            {"default": "post_call", "tags": {"team-a": ["pre_call", "post_call"]}},
+        ],
+        ids=["str", "list", "mode"],
+    )
+    def test_resynced_event_hook_has_the_shape_a_fresh_worker_constructs(self, mode):
+        """Other workers rebuild the guardrail from the same DB row through
+        LitellmParams, which coerces enum members to plain strings; the serving
+        worker's in-place resync must land on that exact shape, or type-sensitive
+        readers such as str(self.event_hook) disagree across workers."""
+        updated = self._guardrail()
+        updated.update_in_memory_litellm_params({"guardrail": "update-test", "mode": mode, "default_on": True})
+
+        constructed = CustomGuardrail(
+            guardrail_name="update-test",
+            event_hook=LitellmParams(guardrail="update-test", mode=mode).mode,
+            default_on=True,
+            supported_event_hooks=[GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call],
+        )
+
+        assert updated.event_hook == constructed.event_hook
+        assert type(updated.event_hook) is type(constructed.event_hook)
+        assert str(updated.event_hook) == str(constructed.event_hook)
+        if isinstance(updated.event_hook, list):
+            assert [type(hook) for hook in updated.event_hook] == [type(hook) for hook in constructed.event_hook]
 
     def test_none_values_do_not_clobber_constructor_state(self):
         guardrail = self._guardrail()
@@ -2297,7 +2327,7 @@ class TestUpdateInMemoryLitellmParams:
 
         assert guardrail.additional_provider_specific_params == {"team": "security"}
         assert guardrail.api_base == "https://guardrail.example.com"
-        assert guardrail.event_hook is GuardrailEventHooks.post_call
+        assert guardrail.event_hook == "post_call"
 
     def test_strict_mode_rejects_unsupported_mode_without_mutating(self, monkeypatch):
         monkeypatch.delenv("LITELLM_STRICT_GUARDRAIL_MODES", raising=False)
@@ -2317,7 +2347,7 @@ class TestUpdateInMemoryLitellmParams:
 
         guardrail.update_in_memory_litellm_params({"mode": "during_call", "api_base": "https://guardrail.example.com"})
 
-        assert guardrail.event_hook is GuardrailEventHooks.during_call
+        assert guardrail.event_hook == "during_call"
         assert getattr(guardrail, "api_base", None) == "https://guardrail.example.com"
 
 

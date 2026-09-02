@@ -432,6 +432,21 @@ async def test_context_mode_omitted_when_event_hook_absent():
 
 
 @pytest.mark.asyncio
+async def test_context_mode_follows_an_in_memory_mode_update():
+    g = _make_guardrail(event_hook="pre_call")
+    g.update_in_memory_litellm_params({"guardrail": "straiker", "mode": "post_call", "default_on": True})
+    g.async_handler.post.return_value = _mock_response("NONE")
+    await g.apply_guardrail(
+        inputs={"texts": ["x"]},
+        request_data={"model": "m"},
+        input_type="response",
+        logging_obj=_logging_obj(),
+    )
+    assert g.configured_modes == ["post_call"]
+    assert _posted_payload(g)["context"]["mode"] == ["post_call"]
+
+
+@pytest.mark.asyncio
 async def test_identity_key_and_team_coalesce_alias_over_id():
     g = _make_guardrail()
     g.async_handler.post.return_value = _mock_response("NONE")
