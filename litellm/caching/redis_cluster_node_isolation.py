@@ -19,13 +19,11 @@ connections untouched. Every other branch (MOVED, ASK, CLUSTERDOWN, slot-not-cov
 retry-exhaustion) is unchanged from upstream, since those already carry real evidence the
 topology changed.
 
-redis-py 8.x fixed this upstream with gentler machinery than this override's
-``node.disconnect()`` (which also kills connections other coroutines are mid-operation
-on, so one timeout cascades into a reconnect storm and, with TLS, a fresh handshake per
-killed connection): it marks in-use connections for reconnect only after their current
-operation completes, disconnects only the idle pooled ones, and defers reinitialization
-to the outer retry loop. When the installed ``ClusterNode`` has that per-connection
-recovery API, the factory returns the base ``RedisCluster`` unmodified.
+redis-py 8.x recovers connections per-connection, so the copied override is not used. Upstream
+still flips the shared ``_initialize`` flag on any node's timeout, funneling every concurrent
+caller through the reinit lock and, if ``CLUSTER SLOTS`` lands on the slow node, into a full
+teardown. For those versions, the factory returns the thin timeout-tolerant wrapper described
+above.
 """
 
 import asyncio
@@ -43,6 +41,8 @@ class _ClusterNodeAttrs(Protocol):
     so a plain attribute access resolves every downstream use to ``Unknown`` under strict
     mode; typing ``target_node`` as this Protocol at the one boundary keeps the override's
     own logic fully typed without a banned ``typing.cast``."""
+
+    name: str
 
     async def execute_command(
         self,
@@ -78,18 +78,20 @@ class _ClusterAttrs(Protocol):
 #: this override can't see (Python won't error -- it'll just run our now-stale copy), so
 #: construction logs a loud warning rather than silently trusting an unverified copy.
 _VERIFIED_REDIS_VERSIONS: Final = frozenset({"5.3.1"})
+_CONSECUTIVE_TIMEOUTS_BEFORE_REINIT: Final = 3
 
 
-def get_litellm_async_redis_cluster_class(
+def get_litellm_async_redis_cluster_class(  # noqa: C901  # supports redis-py version-specific cluster implementations
     cluster_node_class: type | None = None,
+    base_cluster_class: type | None = None,
 ) -> type["_AsyncRedisClusterType"]:
-    """Returns the base ``RedisCluster`` when the installed redis-py already recovers a
-    node-level connection error per-connection (8.x+), else builds the ``RedisCluster``
-    subclass with the per-node isolation fix for older versions whose upstream branch
-    tears down the whole cluster client.
+    """Returns a timeout-tolerant ``RedisCluster`` subclass when installed redis-py already
+    recovers node-level connections per-connection (8.x+), else builds the ``RedisCluster``
+    subclass with the per-node isolation fix for older versions whose upstream branch tears
+    down the whole cluster client.
 
-    ``cluster_node_class`` exists for dependency injection in tests; production callers
-    leave it unset and the installed ``ClusterNode`` is used.
+    ``cluster_node_class`` and ``base_cluster_class`` exist for dependency injection in tests;
+    production callers leave them unset and the installed redis-py classes are used.
 
     Imported lazily because this module is reachable from a base ``import litellm`` while
     redis is not a base dependency. Cheap to call repeatedly: the underlying redis
@@ -118,13 +120,51 @@ def get_litellm_async_redis_cluster_class(
     from redis.exceptions import TimeoutError as _RedisTimeoutError
 
     node_class: Final = cluster_node_class if cluster_node_class is not None else _AsyncClusterNode
+    base_class: Final = base_cluster_class if base_cluster_class is not None else _BaseAsyncRedisCluster
     if hasattr(node_class, "update_active_connections_for_reconnect"):
         verbose_logger.debug(
-            "redis-py %s recovers a node-level connection error per-connection upstream; "
-            "using the base RedisCluster without litellm's node-isolation override.",
+            "redis-py %s recovers node connections per-connection upstream; using "
+            "LiteLLM's timeout-tolerant RedisCluster wrapper.",
             redis.__version__,
         )
-        return _BaseAsyncRedisCluster
+
+        class LiteLLMAsyncRedisClusterTimeoutTolerant(
+            base_class  # pyright: ignore[reportGeneralTypeIssues, reportUntypedBaseClass]  # the injected base class is selected at runtime
+        ):
+            def __init__(
+                self, *args: object, **kwargs: object  # kwargs-ok: passes redis-py's constructor kwargs through untouched
+            ) -> None:
+                super().__init__(*args, **kwargs)
+                self._litellm_topology_reinit_requests = 0
+                self._litellm_consecutive_timeouts: dict[str, int] = {}  # mutable-ok: per-node counter updated on the command hot path
+
+            async def aclose(self) -> None:
+                self._litellm_topology_reinit_requests += 1
+                await super().aclose()
+
+            async def _execute_command(
+                self,
+                target_node: _ClusterNodeAttrs,
+                *args: object,
+                **kwargs: object,  # kwargs-ok: matches redis-py's own command dispatch signature
+            ) -> object:
+                reinit_requests_before: Final = self._litellm_topology_reinit_requests
+                try:
+                    result: Final = await super()._execute_command(target_node, *args, **kwargs)
+                except _RedisTimeoutError:
+                    timeouts: Final = self._litellm_consecutive_timeouts.get(target_node.name, 0) + 1
+                    if timeouts >= _CONSECUTIVE_TIMEOUTS_BEFORE_REINIT:
+                        self._litellm_consecutive_timeouts.pop(target_node.name, None)
+                        raise
+                    self._litellm_consecutive_timeouts[target_node.name] = timeouts
+                    if self._litellm_topology_reinit_requests == reinit_requests_before:
+                        self._initialize = False
+                    raise
+                if self._litellm_consecutive_timeouts:
+                    self._litellm_consecutive_timeouts.pop(target_node.name, None)
+                return result
+
+        return LiteLLMAsyncRedisClusterTimeoutTolerant
 
     if redis.__version__ not in _VERIFIED_REDIS_VERSIONS:
         verbose_logger.warning(
