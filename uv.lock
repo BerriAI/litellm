@@ -10,7 +10,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-08-30T17:51:25.171404Z"
+exclude-newer = "2026-08-31T09:46:06.3307294Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -4371,6 +4371,7 @@ proxy-runtime = [
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp" },
     { name = "opentelemetry-instrumentation-fastapi" },
+    { name = "opentelemetry-propagator-b3" },
     { name = "opentelemetry-sdk" },
     { name = "prometheus-client" },
     { name = "pypdf" },
@@ -4436,6 +4437,7 @@ dev = [
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp" },
     { name = "opentelemetry-instrumentation-fastapi" },
+    { name = "opentelemetry-propagator-b3" },
     { name = "opentelemetry-sdk" },
     { name = "parameterized" },
     { name = "psycopg" },
@@ -4477,6 +4479,7 @@ proxy-dev = [
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp" },
     { name = "opentelemetry-instrumentation-fastapi" },
+    { name = "opentelemetry-propagator-b3" },
     { name = "opentelemetry-sdk" },
     { name = "prisma" },
     { name = "prometheus-client" },
@@ -4541,6 +4544,7 @@ requires-dist = [
     { name = "opentelemetry-api", marker = "extra == 'proxy-runtime'", specifier = "==1.28.0" },
     { name = "opentelemetry-exporter-otlp", marker = "extra == 'proxy-runtime'", specifier = "==1.28.0" },
     { name = "opentelemetry-instrumentation-fastapi", marker = "extra == 'proxy-runtime'", specifier = "==0.49b0" },
+    { name = "opentelemetry-propagator-b3", marker = "extra == 'proxy-runtime'", specifier = "==1.28.0" },
     { name = "opentelemetry-sdk", marker = "extra == 'proxy-runtime'", specifier = "==1.28.0" },
     { name = "orjson", marker = "extra == 'proxy'", specifier = ">=3.11.6,<4.0" },
     { name = "polars", marker = "extra == 'proxy'", specifier = ">=1.38.1,<2.0" },
@@ -4621,6 +4625,7 @@ dev = [
     { name = "opentelemetry-api", specifier = "==1.28.0" },
     { name = "opentelemetry-exporter-otlp", specifier = "==1.28.0" },
     { name = "opentelemetry-instrumentation-fastapi", specifier = "==0.49b0" },
+    { name = "opentelemetry-propagator-b3", specifier = "==1.28.0" },
     { name = "opentelemetry-sdk", specifier = "==1.28.0" },
     { name = "parameterized", specifier = "==0.9.0" },
     { name = "psycopg", specifier = "==3.3.3" },
@@ -4662,6 +4667,7 @@ proxy-dev = [
     { name = "opentelemetry-api", specifier = "==1.28.0" },
     { name = "opentelemetry-exporter-otlp", specifier = "==1.28.0" },
     { name = "opentelemetry-instrumentation-fastapi", specifier = "==0.49b0" },
+    { name = "opentelemetry-propagator-b3", specifier = "==1.28.0" },
     { name = "opentelemetry-sdk", specifier = "==1.28.0" },
     { name = "prisma", specifier = "==0.11.0" },
     { name = "prometheus-client", specifier = "==0.20.0" },
@@ -6360,6 +6366,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/1d/50/38b46f295c4f28301d6aea15aeddcbc9550bb51a005da95045310549191f/opentelemetry_instrumentation_weaviate-0.33.12.tar.gz", hash = "sha256:1d14949e2123e5a2bd0eb149d8281713b33623d3f09f7aa587d4fca130d11b70", size = 4635, upload-time = "2024-11-13T20:28:27.189Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/28/e7/16d9a936d716af84546045fa62e593079069e14c667d049602b6e19d6e31/opentelemetry_instrumentation_weaviate-0.33.12-py3-none-any.whl", hash = "sha256:afa500e59bd7059495c6190decb1dd57dc620e17181c9543bd91e26afce74dcd", size = 6428, upload-time = "2024-11-13T20:27:48.71Z" },
+]
+
+[[package]]
+name = "opentelemetry-propagator-b3"
+version = "1.28.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "deprecated" },
+    { name = "opentelemetry-api" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6f/1d/225ea036785119964509e92f4e1bc0313ba6ec790fbf51bd363abafeafae/opentelemetry_propagator_b3-1.28.0.tar.gz", hash = "sha256:cf6f0d2a1881c4858898be47e8a94b11bc5b16fc73b6c37ebfa2121c4825adc6", size = 9592, upload-time = "2024-11-05T19:14:57.193Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4e/fa/438d53d73a6c45df5d416b56dc371a65d0b07859bc107ab632349a079d4a/opentelemetry_propagator_b3-1.28.0-py3-none-any.whl", hash = "sha256:9f6923a5da56d7da6724e4fdd758a67ede2a2732efb929e538cf6fea337700c5", size = 8917, upload-time = "2024-11-05T19:14:37.317Z" },
 ]
 
 [[package]]
