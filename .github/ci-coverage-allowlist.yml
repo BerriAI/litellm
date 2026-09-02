@@ -75,6 +75,11 @@ test_paths:
       - tests/load_tests/test_vertex_embeddings_load_test.py
       - tests/load_tests/test_vertex_load_tests.py
   - reason: >-
+      Env-gated saturation benchmark requires a live proxy and provider credentials, so it is run
+      locally rather than in pull-request jobs
+    paths:
+      - tests/load_tests/test_granian_admission_saturation.py
+  - reason: >-
       A local-only agent rig: test_a2a_completion_bridge.py needs a LangGraph server on
       localhost:2024 and test_a2a.py drives a live A2A endpoint, so neither can run in a
       pull request job. Until 2026-08-20 the CircleCI agent job hid them behind a grep -v
