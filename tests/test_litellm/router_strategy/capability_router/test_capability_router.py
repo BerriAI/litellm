@@ -11,6 +11,7 @@ from litellm.router_strategy.capability_router.config import (
 )
 from litellm.router_strategy.capability_router.policy import select_capability_model
 from litellm.router_strategy.capability_router.prompts import build_classifier_response_schema
+from litellm.types.router import Deployment, LiteLLM_Params
 
 
 def config() -> dict:
@@ -117,6 +118,23 @@ def test_router_registers_capability_strategy() -> None:
             },
         ]
     )
+
+    assert len(router.capability_routers["cost-router"]) == 1
+
+
+def test_router_explicitly_initializes_capability_strategy() -> None:
+    router = Router(model_list=[])
+    deployment = Deployment(
+        model_name="cost-router",
+        litellm_params=LiteLLM_Params(
+            model="auto_router/capability_router",
+            capability_router_config=config(),
+        ),
+    )
+
+    assert router._is_capability_router_deployment(deployment.litellm_params)
+
+    router.init_capability_router_deployment(deployment)
 
     assert len(router.capability_routers["cost-router"]) == 1
 
