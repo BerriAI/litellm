@@ -4051,6 +4051,28 @@ async def test_apply_guardrail_unrecoverable_failure_logs_exactly_once_as_failed
     assert mock_log.call_args.kwargs["guardrail_status"] == "guardrail_failed_to_respond"
 
 
+def test_masking_preserves_non_text_content_parts():
+    """Masking text must not remove image parts from the model request."""
+    guardrail = _bedrock_guardrail_for_chunk_tests()
+    image_part = {
+        "type": "image_url",
+        "image_url": {"url": "https://example.com/image.png"},
+    }
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "my ssn is 123-45-6789"}, image_part],
+        }
+    ]
+
+    updated = guardrail._apply_masking_to_messages(messages=messages, masked_texts=["my ssn is {SSN}"])
+
+    assert updated[0]["content"] == [
+        {"type": "text", "text": "my ssn is {SSN}"},
+        image_part,
+    ]
+
+
 @pytest.mark.asyncio
 async def test_apply_guardrail_chunk_merge_preserves_masking_position():
     """An earlier chunk that comes back clean (empty `outputs`) must not

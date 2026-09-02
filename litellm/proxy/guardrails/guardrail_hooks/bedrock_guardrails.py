@@ -2954,6 +2954,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     new_item["text"] = masked_texts[masking_index]
                     masking_index += 1
                 new_content.append(new_item)
+            elif isinstance(item, dict):
+                new_content.append(item)
             elif isinstance(item, str):
                 if masking_index < len(masked_texts):
                     item = masked_texts[masking_index]
