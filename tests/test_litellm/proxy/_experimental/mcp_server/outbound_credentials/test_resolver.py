@@ -150,6 +150,9 @@ class _FakeTokenStore:
     async def fetch(self, user_id: str, server_id: str):
         return self._by_user.get((user_id, server_id))
 
+    async def invalidate(self, user_id: str, server_id: str) -> None:
+        self._by_user.pop((user_id, server_id), None)
+
 
 @pytest.mark.asyncio
 async def test_authorization_code_emits_bearer_for_a_stored_token():
@@ -180,6 +183,9 @@ async def test_authorization_code_store_unavailable_is_unauthorized():
         async def fetch(self, user_id: str, server_id: str):
             raise TokenStoreUnavailable("down")
 
+        async def invalidate(self, user_id: str, server_id: str) -> None:
+            return None
+
     result = await UpstreamCredentialProvider(oauth_token_store=_Unavailable()).resolve_credentials(
         Subject(tenant_id="", subject_id="alice"), _spec(AuthorizationCodeConfig())
     )
@@ -207,6 +213,22 @@ async def test_authorization_code_isolates_by_subject():
     assert isinstance(alice, Ok) and _emitted(alice.ok)["Authorization"] == "Bearer at-alice"
     assert isinstance(bob, Error) and bob.error.tag == "unauthorized"
 
+
+@pytest.mark.asyncio
+async def test_invalidate_credentials_evicts_authorization_code_token():
+    store = _FakeTokenStore({("alice", "s"): OAuthToken(access_token="at-alice")})
+    provider = UpstreamCredentialProvider(oauth_token_store=store)
+    subject = Subject(tenant_id="", subject_id="alice")
+    server = _spec(AuthorizationCodeConfig())
+
+    before = await provider.resolve_credentials(subject, server)
+    assert isinstance(before, Ok)
+
+    await provider.invalidate_credentials(subject, server)
+
+    after = await provider.resolve_credentials(subject, server)
+    assert isinstance(after, Error)
+    assert after.error.tag == "unauthorized"
 
 @pytest.mark.asyncio
 async def test_authorization_code_isolates_by_server_id_even_when_servers_share_a_url():

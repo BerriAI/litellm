@@ -24,3 +24,7 @@ class PresentedOAuthTokenStore:
 
     async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
         return self.token
+
+    async def invalidate(self, user_id: str, server_id: str) -> None:
+        # One-shot preview store: nothing is cached, so there is nothing to evict.
+        return None

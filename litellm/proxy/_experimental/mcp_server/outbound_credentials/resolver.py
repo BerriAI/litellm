@@ -37,8 +37,8 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth impo
     StaticHeaderAuth,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
+    InvalidatableOAuthTokenStore,
     OAuthToken,
-    OAuthTokenStore,
     TokenStoreUnavailable,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
@@ -91,6 +91,9 @@ class _NullOAuthTokenStore:
     async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
         return None
 
+    async def invalidate(self, user_id: str, server_id: str) -> None:
+        return None
+
 
 class _NullTokenExchanger:
     """Fail-closed default: with no exchanger wired, token_exchange cannot produce a credential."""
@@ -117,14 +120,14 @@ class UpstreamCredentialProvider:
 
     def __init__(
         self,
-        oauth_token_store: OAuthTokenStore | None = None,
+        oauth_token_store: InvalidatableOAuthTokenStore | None = None,
         token_exchanger: TokenExchanger | None = None,
         token_endpoint: TokenEndpointClient | None = None,
         exchanged_tokens: ExchangedTokenCache | None = None,
         client_credentials_source: ClientCredentialsTokenSource | None = None,
         sso_assertion_store: SSOAssertionStore | None = None,
     ) -> None:
-        self._oauth_token_store: OAuthTokenStore = oauth_token_store or _NullOAuthTokenStore()
+        self._oauth_token_store: InvalidatableOAuthTokenStore = oauth_token_store or _NullOAuthTokenStore()
         self._token_exchanger: TokenExchanger = token_exchanger or _NullTokenExchanger()
         self._token_endpoint: TokenEndpointClient = token_endpoint or TokenEndpointClient()
         self._exchanged_tokens: ExchangedTokenCache = exchanged_tokens or ExchangedTokenCache()
@@ -340,10 +343,10 @@ class UpstreamCredentialProvider:
         """Drop any cached credential the resolver owns for this `(subject, server)`.
 
         Used after an upstream rejects the injected credential, so the next resolve re-mints rather
-        than serving the same rejected token until TTL. `token_exchange` and `id_jag` hold a
-        re-mintable cached credential here; `client_credentials` recovers inside its own auth flow
-        (`ClientCredentialsBearerAuth` retries the 401'd request once with a fresh token), and
-        other modes are a no-op.
+        than serving the same rejected token until TTL. `authorization_code`, `token_exchange`, and
+        `id_jag` hold a re-mintable cached credential here; `client_credentials` recovers inside its
+        own auth flow (`ClientCredentialsBearerAuth` retries the 401'd request once with a fresh
+        token), and other modes are a no-op.
 
         `id_jag` evicts by a slot key derived from the principal, so it needs no lookup against the
         assertion store on this path; the fingerprint stored beside the entry is what keeps a slot
@@ -351,6 +354,8 @@ class UpstreamCredentialProvider:
         """
         if isinstance(server.config, IdJagConfig):
             self._invalidate_id_jag(subject, server)
+        elif isinstance(server.config, AuthorizationCodeConfig):
+            await self._oauth_token_store.invalidate(subject.subject_id, server.server_id)
         elif isinstance(server.config, TokenExchangeConfig) and subject.inbound_token is not None:
             await self._token_exchanger.invalidate(
                 subject.inbound_token.get_secret_value(), server, server.config, tenant_id=subject.tenant_id
