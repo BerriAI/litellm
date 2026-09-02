@@ -151,8 +151,45 @@ def test_remove_optional_pre_call_check_removes_local_and_global_callbacks():
     router.set_optional_pre_call_checks(["prompt_caching"])
     router._remove_optional_callbacks_of_type(PromptCachingDeploymentCheck)
 
-    assert not any(isinstance(callback, PromptCachingDeploymentCheck) for callback in (router.optional_callbacks or []))
-    assert not any(isinstance(callback, PromptCachingDeploymentCheck) for callback in litellm.callbacks)
+    assert not any(type(callback) is PromptCachingDeploymentCheck for callback in (router.optional_callbacks or []))
+    assert not any(type(callback) is PromptCachingDeploymentCheck for callback in litellm.callbacks)
+
+
+def test_remove_optional_pre_call_check_keeps_global_callback_for_another_router():
+    router_a = _build_router()
+    router_b = _build_router()
+
+    router_a.update_settings(optional_pre_call_checks=["prompt_caching"])
+    router_b.update_settings(optional_pre_call_checks=["prompt_caching"])
+
+    router_a.update_settings(optional_pre_call_checks=[])
+
+    assert not any(type(callback) is PromptCachingDeploymentCheck for callback in (router_a.optional_callbacks or []))
+    assert any(type(callback) is PromptCachingDeploymentCheck for callback in (router_b.optional_callbacks or []))
+    assert any(type(callback) is PromptCachingDeploymentCheck for callback in litellm.callbacks)
+
+    router_b.update_settings(optional_pre_call_checks=[])
+
+    assert not any(type(callback) is PromptCachingDeploymentCheck for callback in (router_b.optional_callbacks or []))
+    assert not any(type(callback) is PromptCachingDeploymentCheck for callback in litellm.callbacks)
+
+
+def test_remove_optional_pre_call_check_keeps_global_callback_when_second_router_clears_first():
+    router_a = _build_router()
+    router_b = _build_router()
+
+    router_a.update_settings(optional_pre_call_checks=["prompt_caching"])
+    router_b.update_settings(optional_pre_call_checks=["prompt_caching"])
+
+    router_b.update_settings(optional_pre_call_checks=[])
+
+    assert any(type(callback) is PromptCachingDeploymentCheck for callback in (router_a.optional_callbacks or []))
+    assert not any(type(callback) is PromptCachingDeploymentCheck for callback in (router_b.optional_callbacks or []))
+    assert any(type(callback) is PromptCachingDeploymentCheck for callback in litellm.callbacks)
+
+    router_a.update_settings(optional_pre_call_checks=[])
+
+    assert not any(type(callback) is PromptCachingDeploymentCheck for callback in litellm.callbacks)
 
 
 def test_update_settings_replaces_toggleable_pre_call_checks():
