@@ -719,7 +719,7 @@ class _UpstreamClosingStreamingResponse(StreamingResponse):
         content: AsyncGenerator[str, None],
         *,
         media_type: str | None = None,
-        headers: dict | None = None,
+        headers: Mapping[str, str] | None = None,
         status_code: int = status.HTTP_200_OK,
         upstream_generator: AsyncGenerator[str, None] | None = None,
     ) -> None:
@@ -857,22 +857,23 @@ def _sse_error_frames(error_obj: Mapping[str, object]) -> tuple[str, str]:
 async def create_response(
     generator: AsyncGenerator[str, None],
     media_type: str,
-    headers: dict,
+    headers: Mapping[str, str],
     default_status_code: int = status.HTTP_200_OK,
     request: Request | None = None,
+    refresh_headers: Callable[[], Awaitable[Mapping[str, str]]] | None = None,
 ) -> StreamingResponse | JSONResponse:
     """
     Create streaming response, checking if the first chunk is an error.
     If the first chunk is an error, return a standard JSON error response.
     Otherwise, return StreamingResponse and stream all content.
     """
+
     # Tell buffering reverse proxies (nginx, ingress-nginx, Envoy) to flush SSE
     # immediately instead of releasing the whole stream in one batch (issue #28384).
-    streaming_headers: Final = {
-        **headers,
-        "Cache-Control": "no-cache",
-        "X-Accel-Buffering": "no",
-    }
+    async def streaming_headers() -> Mapping[str, str]:
+        current_headers: Final = await refresh_headers() if refresh_headers is not None else headers
+        return MappingProxyType({**current_headers, "Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
     first_chunk_value: str | None = None
     final_status_code = default_status_code
 
@@ -909,7 +910,7 @@ async def create_response(
                     return JSONResponse(
                         status_code=final_status_code,
                         content={"error": error_dict},
-                        headers=headers,
+                        headers=await refresh_headers() if refresh_headers is not None else headers,
                     )
             except Exception as e:
                 verbose_proxy_logger.debug("Error parsing first chunk value: %s", e)
@@ -938,7 +939,7 @@ async def create_response(
         return StreamingResponse(
             empty_gen(),
             media_type=media_type,
-            headers=streaming_headers,
+            headers=await streaming_headers(),
             status_code=default_status_code,
         )
     except Exception as e:
@@ -954,7 +955,7 @@ async def create_response(
         return StreamingResponse(
             error_gen_message(),
             media_type=media_type,
-            headers=streaming_headers,
+            headers=await streaming_headers(),
             status_code=error_status,
         )
 
@@ -976,7 +977,7 @@ async def create_response(
     return _UpstreamClosingStreamingResponse(
         combined_generator(),
         media_type=media_type,
-        headers=streaming_headers,
+        headers=await streaming_headers(),
         status_code=final_status_code,
         upstream_generator=generator,
     )
@@ -2379,28 +2380,46 @@ class ProxyBaseLLMRequestProcessing:
             if self._is_streaming_request(
                 data=self.data, is_streaming_request=is_streaming_request
             ) or self._is_streaming_response(response):  # use generate_responses to stream responses
-                custom_headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
-                    user_api_key_dict=user_api_key_dict,
-                    call_id=logging_obj.litellm_call_id,
-                    model_id=model_id,
-                    cache_key=cache_key,
-                    api_base=api_base,
-                    version=version,
-                    response_cost=response_cost,
-                    model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
-                    fastest_response_batch_completion=fastest_response_batch_completion,
-                    request_data=self.data,
-                    hidden_params=hidden_params,
-                    litellm_logging_obj=logging_obj,
-                    **additional_headers,
-                )
+
+                def get_stream_headers() -> dict[str, str]:
+                    current_hidden: Final = get_hidden_params_dict(response)
+                    return ProxyBaseLLMRequestProcessing.get_custom_headers(
+                        user_api_key_dict=user_api_key_dict,
+                        call_id=logging_obj.litellm_call_id,
+                        model_id=self._get_model_id_from_response(current_hidden, self.data),
+                        cache_key=current_hidden.get("cache_key") or "",
+                        api_base=current_hidden.get("api_base") or "",
+                        version=version,
+                        response_cost=current_hidden.get("response_cost") or "",
+                        model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+                        fastest_response_batch_completion=current_hidden.get("fastest_response_batch_completion"),
+                        request_data=self.data,
+                        hidden_params=current_hidden,
+                        litellm_logging_obj=logging_obj,
+                        **(current_hidden.get("additional_headers") or MappingProxyType({})),
+                    )
+
+                custom_headers: Final = get_stream_headers()
+                request_headers: Final = dict(request.headers)
+
+                async def refresh_stream_headers() -> Mapping[str, str]:
+                    if get_hidden_params_dict(response) is hidden_params:
+                        return custom_headers
+                    refreshed: Final = get_stream_headers()
+                    updated_callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
+                        data=self.data,
+                        user_api_key_dict=user_api_key_dict,
+                        response=response,
+                        request_headers=request_headers,
+                    )
+                    return MappingProxyType({**refreshed, **(updated_callback_headers or MappingProxyType({}))})
 
                 # Call response headers hook for streaming success
                 callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
                     data=self.data,
                     user_api_key_dict=user_api_key_dict,
                     response=response,
-                    request_headers=dict(request.headers),
+                    request_headers=request_headers,
                 )
                 if callback_headers:
                     custom_headers.update(callback_headers)
@@ -2508,6 +2527,8 @@ class ProxyBaseLLMRequestProcessing:
                         )
                     # Non-streaming response - fall through to normal response handling
                 elif select_data_generator:
+                    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
                     selected_data_generator = select_data_generator(
                         response=response,
                         user_api_key_dict=user_api_key_dict,
@@ -2536,6 +2557,7 @@ class ProxyBaseLLMRequestProcessing:
                         media_type="text/event-stream",
                         headers=custom_headers,
                         request=request,
+                        refresh_headers=refresh_stream_headers if isinstance(response, CustomStreamWrapper) else None,
                     )
 
             ### CALL HOOKS ### - modify outgoing data

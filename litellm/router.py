@@ -2499,6 +2499,10 @@ class Router:
                 if hasattr(model_response, "_hidden_params"):
                     self._hidden_params = model_response._hidden_params.copy()
 
+            def update_headers(self, source: object) -> None:
+                self._response_headers = getattr(source, "_response_headers", None)
+                self._hidden_params = get_hidden_params_dict(source).copy()
+
             def __aiter__(self):
                 return self
 
@@ -2552,8 +2556,10 @@ class Router:
 
                     # If fallback returns a streaming response, iterate over it
                     if hasattr(fallback_response, "__aiter__"):
-                        prepared_fallback_hidden_params = Router._prepare_fallback_hidden_params(fallback_response)
+                        wrapped_response.update_headers(fallback_response)
                         async for fallback_item in fallback_response:
+                            wrapped_response.update_headers(fallback_response)
+                            prepared_fallback_hidden_params = Router._prepare_fallback_hidden_params(fallback_response)
                             Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                             if (
                                 fallback_item
@@ -2601,7 +2607,8 @@ class Router:
                                 e,
                             )
 
-        return FallbackStreamWrapper(stream_with_fallbacks())
+        wrapped_response: Final = FallbackStreamWrapper(stream_with_fallbacks())
+        return wrapped_response
 
     @staticmethod
     def _extract_partial_responses_usage(
@@ -3043,6 +3050,10 @@ class Router:
                 if hasattr(model_response, "_hidden_params"):
                     self._hidden_params = model_response._hidden_params.copy()
 
+            def update_headers(self, source: object) -> None:
+                self._response_headers = getattr(source, "_response_headers", None)
+                self._hidden_params = get_hidden_params_dict(source).copy()
+
             def __iter__(self):
                 return self
 
@@ -3093,8 +3104,10 @@ class Router:
                     )
 
                     if hasattr(fallback_response, "__iter__"):
-                        prepared_fallback_hidden_params = Router._prepare_fallback_hidden_params(fallback_response)
+                        wrapped_response.update_headers(fallback_response)
                         for fallback_item in fallback_response:
+                            wrapped_response.update_headers(fallback_response)
+                            prepared_fallback_hidden_params = Router._prepare_fallback_hidden_params(fallback_response)
                             Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                             if (
                                 fallback_item
@@ -3132,7 +3145,8 @@ class Router:
                             close_err,
                         )
 
-        return SyncFallbackStreamWrapper(stream_with_fallbacks())
+        wrapped_response: Final = SyncFallbackStreamWrapper(stream_with_fallbacks())
+        return wrapped_response
 
     async def _silent_experiment_acompletion(self, silent_model: str, messages: Sequence[Mapping[str, str]], **kwargs):
         """

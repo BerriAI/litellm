@@ -7665,3 +7665,35 @@ def test_log_llm_api_exception_traceback_only_for_unexpected_errors(exc, expect_
     records = [r for r in caplog.records if "_handle_llm_api_exception(): Exception occured" in r.getMessage()]
     assert len(records) == 1
     assert (records[0].exc_info is not None) is expect_traceback
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream_kind", ["success", "empty", "error"])
+async def test_create_response_refreshes_headers_before_committing(stream_kind: str):
+    from typing import Final
+
+    headers: Final = {"llm_provider-x-request-id": "failed", "llm_provider-x-failed-only": "remove"}
+
+    async def stream():
+        if stream_kind == "error":
+            yield 'data: {"error":{"message":"failed","code":429}}\n\n'
+        elif stream_kind == "success":
+            yield 'data: {"id":"winner","choices":[]}\n\n'
+
+    async def refresh_headers():
+        return {"llm_provider-x-request-id": "winner", "x-litellm-model-group": "fallback"}
+
+    response: Final = await create_response(
+        stream(),
+        "text/event-stream",
+        headers,
+        refresh_headers=refresh_headers,
+    )
+    assert response.headers["llm_provider-x-request-id"] == "winner"
+    assert response.headers["x-litellm-model-group"] == "fallback"
+    assert "llm_provider-x-failed-only" not in response.headers
+    if stream_kind == "error":
+        assert response.status_code == 429
+    else:
+        assert response.headers["cache-control"] == "no-cache"
+        assert response.headers["x-accel-buffering"] == "no"

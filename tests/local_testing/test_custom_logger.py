@@ -565,3 +565,96 @@ def test_redis_cache_completion_stream():
 
 
 # test_redis_cache_completion_stream()
+
+
+@pytest.mark.asyncio
+async def test_response_header_logger_preserves_headers_on_headerless_stream_failure():
+    from types import SimpleNamespace
+    from typing import Final
+
+    from cookbook.logging_observability.response_header_logger import ResponseHeaderLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    logger: Final = ResponseHeaderLogger()
+    auth: Final = UserAPIKeyAuth()
+    data: Final = {"metadata": {"spend_logs_metadata": {"existing_field": "keep"}}}
+    response: Final = SimpleNamespace(
+        _response_headers={
+            "x-generation-id": "stream-request",
+            "x-litellm-attempted-fallbacks": "spoofed",
+        }
+    )
+    await logger.async_post_call_response_headers_hook(data, auth, response)
+    await logger.async_post_call_failure_hook(data, RuntimeError("stream failed"), auth)
+
+    assert data["metadata"]["spend_logs_metadata"] == {
+        "existing_field": "keep",
+        "upstream_response_headers": {
+            "llm_provider-x-generation-id": "stream-request",
+            "llm_provider-x-litellm-attempted-fallbacks": "spoofed",
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+async def test_response_header_logger_success_preserves_capture_and_metadata(metadata_key: str):
+    from types import SimpleNamespace
+    from typing import Final
+
+    from cookbook.logging_observability.response_header_logger import ResponseHeaderLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    logger: Final = ResponseHeaderLogger()
+    metadata: Final = {"spend_logs_metadata": {"existing_field": "keep"}}
+    await logger.async_post_call_response_headers_hook(
+        {"metadata": metadata},
+        UserAPIKeyAuth(),
+        SimpleNamespace(_response_headers={"x-generation-id": "stream-request"}),
+    )
+    kwargs: Final = {
+        "litellm_params": {metadata_key: metadata},
+        "standard_logging_object": {
+            "hidden_params": {
+                "additional_headers": {
+                    "llm_provider-x-litellm-response-cost": 0.01,
+                }
+            }
+        },
+    }
+    await logger.async_logging_hook(kwargs, None, "acompletion")
+
+    assert metadata["spend_logs_metadata"] == {
+        "existing_field": "keep",
+        "upstream_response_headers": {
+            "llm_provider-x-generation-id": "stream-request",
+            "llm_provider-x-litellm-response-cost": 0.01,
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback_headers", [None, {"x-request-id": "winner"}])
+async def test_response_header_logger_replaces_headers_after_fallback(fallback_headers: dict[str, str] | None):
+    from types import SimpleNamespace
+    from typing import Final
+
+    from cookbook.logging_observability.response_header_logger import ResponseHeaderLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    logger: Final = ResponseHeaderLogger()
+    auth: Final = UserAPIKeyAuth()
+    data: Final = {"metadata": {"spend_logs_metadata": {"existing_field": "keep"}}}
+    await logger.async_post_call_response_headers_hook(
+        data,
+        auth,
+        SimpleNamespace(_response_headers={"x-request-id": "failed", "x-failed-only": "remove"}),
+    )
+    await logger.async_post_call_response_headers_hook(data, auth, SimpleNamespace(_response_headers=fallback_headers))
+    await logger.async_post_call_failure_hook(data, RuntimeError("stream failed"), auth)
+    assert data["metadata"]["spend_logs_metadata"] == {
+        "existing_field": "keep",
+        "upstream_response_headers": {
+            f"llm_provider-{name}": value for name, value in (fallback_headers or {}).items()
+        },
+    }
