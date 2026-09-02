@@ -782,6 +782,10 @@ class Router:
         self.cache = DualCache(
             redis_cache=redis_cache, in_memory_cache=InMemoryCache()
         )  # use a dual cache (Redis+In-Memory) for tracking cooldowns, usage, etc.
+        self._claude_code_session_router_cache: DualCache = DualCache(
+            redis_cache=redis_cache,
+            in_memory_cache=InMemoryCache(),
+        )
 
         ### SCHEDULER ###
         self.scheduler = Scheduler(polling_interval=polling_interval, redis_cache=redis_cache)
@@ -1102,8 +1106,8 @@ class Router:
         ```
         and caching to just work.
         """
-        if self.cache.redis_cache is None:
-            self.cache.redis_cache = cache
+        self.cache.attach_redis_cache(cache)
+        self._claude_code_session_router_cache.attach_redis_cache(cache)
 
     # Maps a routing strategy string to the attribute on `self` that holds
     # the default group's strategy selector for that strategy. (The selectors
@@ -12580,7 +12584,7 @@ class Router:
 
     async def _delete_claude_code_session_router_binding(self, cache_key: str) -> None:
         try:
-            await self.cache.async_delete_cache(key=cache_key)
+            await self._claude_code_session_router_cache.async_delete_cache(key=cache_key)
         except Exception as e:  # noqa: BLE001  # cache cleanup must not fail an otherwise routable request
             verbose_router_logger.warning(
                 "Failed to delete Claude Code session router binding; "
@@ -12600,14 +12604,14 @@ class Router:
 
         agent_id: Final = self._request_header(request_kwargs, "x-claude-code-agent-id")
         if agent_id is not None:
-            bound_model: Final = await self.cache.async_get_cache(key=cache_key)
+            bound_model: Final = await self._claude_code_session_router_cache.async_get_cache(key=cache_key)
             if not isinstance(bound_model, str):
                 return registered_model_name
             bound_registered_model: Final = self._get_model_from_alias(model=bound_model) or bound_model
             if self._select_pre_routing_strategy(bound_registered_model, request_kwargs) is None:
                 await self._delete_claude_code_session_router_binding(cache_key)
                 return registered_model_name
-            await self.cache.async_set_cache(
+            await self._claude_code_session_router_cache.async_set_cache(
                 key=cache_key,
                 value=bound_model,
                 ttl=_CLAUDE_CODE_SESSION_ROUTER_TTL_SECONDS,
@@ -12622,7 +12626,7 @@ class Router:
         if self._select_pre_routing_strategy(registered_model_name, request_kwargs) is None:
             await self._delete_claude_code_session_router_binding(cache_key)
             return registered_model_name
-        await self.cache.async_set_cache(
+        await self._claude_code_session_router_cache.async_set_cache(
             key=cache_key,
             value=model,
             ttl=_CLAUDE_CODE_SESSION_ROUTER_TTL_SECONDS,
@@ -13450,6 +13454,9 @@ class Router:
     def flush_cache(self):
         litellm.cache = None
         self.cache.flush_cache()
+        session_in_memory_cache: Final = self._claude_code_session_router_cache.in_memory_cache
+        if session_in_memory_cache is not None:
+            session_in_memory_cache.flush_cache()
 
     def reset(self):
         ## clean up on close
