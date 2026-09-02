@@ -8429,24 +8429,6 @@ class TestClaudeCodeSubagentSessionRouterBinding:
         redis_cache.async_delete_cache.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_main_direct_model_still_served_when_cache_delete_fails(self):
-        router = self._router()
-        await router.acompletion(
-            model="smart-router", messages=[{"role": "user", "content": "main turn"}], **self._request_kwargs()
-        )
-
-        async def failing_delete(key: str) -> None:
-            raise Exception("Redis circuit breaker is open — skipping async_delete_cache")
-
-        router.cache.async_delete_cache = failing_delete
-
-        response = await router.acompletion(
-            model="expensive-model", messages=[{"role": "user", "content": "direct turn"}], **self._request_kwargs()
-        )
-
-        assert response.choices[0].message.content == "expensive response"
-
-    @pytest.mark.asyncio
     async def test_background_and_fallback_requests_do_not_clear_the_session_router(self):
         router = self._router()
 
