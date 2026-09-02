@@ -1903,10 +1903,6 @@ class LiteLLMCompletionResponsesConfig:
             converted: Final = convert_custom_tool_to_function_tool(tool)
             return ResponsesToolChatForm(chat_tools=() if converted is None else (converted,), web_search_options=None)
         if tool_type in ("computer_use", "image_generation", "shell"):
-            # Drop unsupported Responses-API-only tool types that have no
-            # Chat Completions equivalent. Passing them through verbatim
-            # causes providers to reject the request with "'function' is a
-            # required property".
             verbose_logger.warning(
                 "Dropping Responses API tool of type '%s': it has no Chat Completions "
                 "equivalent and the target provider would reject the request.",

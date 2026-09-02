@@ -1,5 +1,5 @@
 from collections.abc import Iterable, Mapping, Sequence
-from itertools import accumulate, chain
+from itertools import accumulate, chain, groupby
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -47,7 +47,11 @@ def _chat_tool_key(tool: Tool) -> str:
 
 def _indexed_keys(tools: Sequence[Tool]) -> tuple[IndexedKey, ...]:
     keys: Final = tuple(_chat_tool_key(tool) for tool in tools)
-    return tuple((key, keys[:position].count(key)) for position, key in enumerate(keys))
+    positions_by_key: Final = groupby(sorted(range(len(keys)), key=keys.__getitem__), key=keys.__getitem__)
+    ordinal_by_position: Final = MappingProxyType(
+        {position: ordinal for _, positions in positions_by_key for ordinal, position in enumerate(positions)}
+    )
+    return tuple((key, ordinal_by_position[position]) for position, key in enumerate(keys))
 
 
 def _namespace_members(namespace: Tool) -> tuple[Tool, ...]:
