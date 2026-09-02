@@ -6253,3 +6253,106 @@ def test_passthrough_embeddings_result_swapped_for_callbacks():
 
     assert isinstance(swapped_result, EmbeddingResponse)
     assert swapped_result.data[0]["embedding"] == [0.1, 0.2, 0.3]
+
+
+class _FailurePayloadRecorder(CustomLogger):
+    """Records the kwargs a failure callback is handed, so tests can inspect them."""
+
+    def __init__(self, turn_off_message_logging: bool):
+        super().__init__()
+        self.turn_off_message_logging = turn_off_message_logging
+        self.received_kwargs = None
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.received_kwargs = kwargs
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.received_kwargs = kwargs
+
+
+def _failure_logging_obj(messages, sync_callbacks=None, async_callbacks=None):
+    logging_obj = LitellmLogging(
+        model="gpt-4o",
+        messages=messages,
+        stream=False,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="failure-redaction-call-id",
+        function_id="failure-redaction-function-id",
+        dynamic_failure_callbacks=sync_callbacks,
+        dynamic_async_failure_callbacks=async_callbacks,
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-4o",
+        user="test-user",
+        optional_params={},
+        litellm_params={},
+    )
+    return logging_obj
+
+
+def _recorded_messages(recorder):
+    assert recorder.received_kwargs is not None
+    return recorder.received_kwargs["standard_logging_object"]["messages"]
+
+
+@pytest.mark.asyncio
+async def test_async_failure_handler_applies_per_callback_message_redaction(monkeypatch):
+    """A callback that opted out of message logging must not receive prompts when a request fails.
+
+    The success path routes every custom logger through
+    ``redact_standard_logging_payload_from_model_call_details``. Without the same call on the
+    failure path, a callback with ``turn_off_message_logging=True`` is handed the full prompt
+    whenever a request fails, while a second callback on the same request must still get the
+    real messages.
+    """
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    messages = [{"role": "user", "content": "user prompt"}]
+    opted_out = _FailurePayloadRecorder(turn_off_message_logging=True)
+    opted_in = _FailurePayloadRecorder(turn_off_message_logging=False)
+
+    logging_obj = _failure_logging_obj(messages, async_callbacks=[opted_out, opted_in])
+    await logging_obj._async_failure_handler_body(ValueError("boom"), "traceback")
+
+    assert [message["content"] for message in _recorded_messages(opted_out)] == ["redacted-by-litellm"]
+    assert _recorded_messages(opted_in) == messages
+    assert logging_obj.model_call_details["standard_logging_object"]["messages"] == messages
+
+
+def test_failure_handler_applies_per_callback_message_redaction(monkeypatch):
+    """Sync failure path equivalent of the async per-callback redaction test."""
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    messages = [{"role": "user", "content": "user prompt"}]
+    opted_out = _FailurePayloadRecorder(turn_off_message_logging=True)
+    opted_in = _FailurePayloadRecorder(turn_off_message_logging=False)
+
+    logging_obj = _failure_logging_obj(messages, sync_callbacks=[opted_out, opted_in])
+    logging_obj._failure_handler_body(ValueError("boom"), "traceback")
+
+    assert [message["content"] for message in _recorded_messages(opted_out)] == ["redacted-by-litellm"]
+    assert _recorded_messages(opted_in) == messages
+    assert logging_obj.model_call_details["standard_logging_object"]["messages"] == messages
+
+
+@pytest.mark.asyncio
+async def test_failure_handlers_pass_through_model_call_details_when_no_callback_opts_out(
+    monkeypatch,
+):
+    """With nobody opting out, both failure paths hand over the shared dict itself, untouched.
+
+    The redaction hook early-returns its argument in that case, so the default configuration
+    keeps handing callbacks the very same object it handed them before.
+    """
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    messages = [{"role": "user", "content": "user prompt"}]
+    async_recorder = _FailurePayloadRecorder(turn_off_message_logging=False)
+    sync_recorder = _FailurePayloadRecorder(turn_off_message_logging=False)
+
+    async_logging_obj = _failure_logging_obj(messages, async_callbacks=[async_recorder])
+    await async_logging_obj._async_failure_handler_body(ValueError("boom"), "traceback")
+
+    sync_logging_obj = _failure_logging_obj(messages, sync_callbacks=[sync_recorder])
+    sync_logging_obj._failure_handler_body(ValueError("boom"), "traceback")
+
+    assert async_recorder.received_kwargs is async_logging_obj.model_call_details
+    assert sync_recorder.received_kwargs is sync_logging_obj.model_call_details

@@ -3398,11 +3398,14 @@ class Logging(LiteLLMLoggingBaseClass):
                         and is_sync_request
                         and self.call_type != CallTypes.pass_through.value
                     ):  # custom logger class
+                        model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
+                            model_call_details=self.model_call_details
+                        )
                         callback.log_failure_event(
                             start_time=start_time,
                             end_time=end_time,
                             response_obj=result,
-                            kwargs=self.model_call_details,
+                            kwargs=model_call_details,
                         )
                     if callback == "langfuse":
                         global langFuseLogger
@@ -3532,8 +3535,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 if not should_run:
                     continue
                 if isinstance(callback, CustomLogger):  # custom logger class
+                    model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
+                        model_call_details=self.model_call_details
+                    )
                     await callback.async_log_failure_event(
-                        kwargs=self.model_call_details,
+                        kwargs=model_call_details,
                         response_obj=result,
                         start_time=start_time,
                         end_time=end_time,
