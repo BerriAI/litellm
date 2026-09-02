@@ -1,7 +1,7 @@
 #### What this does ####
 #   identifies lowest tpm deployment
 import random
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Sequence
 
 import httpx
 
@@ -350,9 +350,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         model_group: str,
         healthy_deployments: list,
         tpm_keys: list,
-        tpm_values: list | None,
+        tpm_values: Sequence | None,
         rpm_keys: list,
-        rpm_values: list | None,
+        rpm_values: Sequence | None,
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
     ) -> dict | None:

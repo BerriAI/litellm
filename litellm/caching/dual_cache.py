@@ -11,7 +11,7 @@ Has 4 primary methods:
 import time
 import traceback
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Sequence
 
 if TYPE_CHECKING:
     from litellm.types.caching import RedisPipelineIncrementOperation
@@ -254,7 +254,7 @@ class DualCache(BaseCache):
         self,
         current_time: float,
         keys: list[str],
-        result: list[Any],
+        result: Sequence[Any],
     ) -> tuple[list[str], dict[str, float | None]]:
         """
         Atomically choose keys to fetch from Redis and reserve their access time.
