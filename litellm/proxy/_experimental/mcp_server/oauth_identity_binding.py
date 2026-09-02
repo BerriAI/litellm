@@ -234,7 +234,7 @@ async def _evaluate_binding(
                         description="the presented refresh_token is not the caller's stored credential for this server",
                     )
                 return None
-        assert_never(refresh_ownership)
+        assert_never(refresh_ownership)  # pragma: no cover
     if not litellm_user_id:
         return _BindingRejection(
             code="oauth_identity_binding_failed",
