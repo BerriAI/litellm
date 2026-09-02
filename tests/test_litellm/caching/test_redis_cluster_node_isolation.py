@@ -7,19 +7,24 @@ the same behavior at the unit level so it can run without a live Redis Cluster."
 
 import asyncio
 from typing import TYPE_CHECKING
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from redis.exceptions import (
+    AskError,
     BusyLoadingError,
     ClusterDownError,
+    ClusterError,
     MaxConnectionsError,
     MovedError,
+    TryAgainError,
 )
 from redis.exceptions import (
     ConnectionError as RedisConnectionError,
 )
-from redis.exceptions import TimeoutError as RedisTimeoutError
+from redis.exceptions import (
+    TimeoutError as RedisTimeoutError,
+)
 
 from litellm.caching.redis_cluster_node_isolation import (
     get_litellm_async_redis_cluster_class,
@@ -93,6 +98,15 @@ def _build_8x_cluster_instance() -> _Fake8xRedisCluster:
         base_cluster_class=_Fake8xRedisCluster,
     )
     return cluster_cls()
+
+
+def test_unverified_redis_version_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
+    import redis
+
+    with patch.object(redis, "__version__", "8.0.1"):
+        get_litellm_async_redis_cluster_class(cluster_node_class=_NodeClassWithoutPerConnectionRecovery)
+
+    assert "not in the set this cluster-teardown-storm fix was verified against" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -269,6 +283,48 @@ async def test_node_level_error_resets_only_that_node_not_the_whole_client(error
 
     target_node.disconnect.assert_awaited_once()
     instance.aclose.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_moved_error_retries_without_full_reinit_before_threshold() -> None:
+    moved_error = MovedError("1 127.0.0.1:7001")
+    target_node = _FakeClusterNode("node-a")
+    target_node.execute_command = AsyncMock(side_effect=[moved_error, b"value"])
+    instance = _build_cluster_instance()
+    instance.RedisClusterRequestTTL = 2
+    instance.nodes_manager = _FakeNodesManager(node_to_return=target_node)
+    instance._determine_slot = AsyncMock(return_value=0)
+
+    result = await instance._execute_command(target_node, "GET", "k")
+
+    assert result == b"value"
+    assert instance.nodes_manager._moved_exception is moved_error
+    instance.aclose.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ask_error_sends_asking_and_retries_on_redirected_node() -> None:
+    ask_error = AskError("0 127.0.0.1:7001")
+    target_node = _FakeClusterNode("node-a")
+    target_node.execute_command = AsyncMock(side_effect=[ask_error, None, b"value"])
+    instance = _build_cluster_instance()
+    instance.RedisClusterRequestTTL = 2
+    instance.get_node = Mock(return_value=target_node)
+
+    result = await instance._execute_command(target_node, "GET", "k")
+
+    assert result == b"value"
+    instance.get_node.assert_called_once_with(node_name="127.0.0.1:7001")
+
+
+@pytest.mark.asyncio
+async def test_try_again_error_exhausts_ttl() -> None:
+    target_node = _FakeClusterNode("node-a", raises=TryAgainError("try again"))
+    instance = _build_cluster_instance()
+    instance.RedisClusterRequestTTL = 2
+
+    with pytest.raises(ClusterError):
+        await instance._execute_command(target_node, "GET", "k")
 
 
 @pytest.mark.asyncio
