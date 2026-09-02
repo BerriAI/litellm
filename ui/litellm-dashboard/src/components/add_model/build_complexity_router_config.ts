@@ -19,10 +19,12 @@ import {
 import {
   AdaptiveEligible,
   AdaptiveRouterWeights,
+  ClassificationMode,
   ClassifierFallback,
   ClassifierLLMConfig,
   ClassifierType,
   ComplexityTierLabels,
+  DEFAULT_CLASSIFICATION_MODE,
   ComplexityRouterConfigValue,
   ComplexityTiers,
   DimensionWeights,
@@ -105,7 +107,9 @@ export interface BuildComplexityRouterConfigParams {
   classifierFallback: ClassifierFallback | undefined;
   classificationPrompt: string | undefined;
   heuristicFirstMaxTier: string | undefined;
+  classificationMode: ClassificationMode | undefined;
   sessionAffinity: boolean;
+  modalityRouting?: boolean;
   deploymentAffinity: boolean;
   customTechnicalKeywords: string[];
   keywordTierRules: KeywordTierRule[];
@@ -159,8 +163,10 @@ export interface ComplexityRouterConfigPayload {
   classifier_fallback?: ClassifierFallback;
   classification_prompt?: string;
   heuristic_first_max_tier?: string;
+  classification_mode: ClassificationMode;
   session_affinity: boolean;
   deployment_affinity: boolean;
+  modality_routing: boolean;
   custom_technical_keywords?: string[];
   keyword_tier_rules?: { keywords: string[]; tier: KeywordTierRule["tier"] }[];
   semantic_keyword_matching?: boolean;
@@ -393,7 +399,9 @@ export const buildComplexityRouterConfig = ({
   classifierFallback,
   classificationPrompt,
   heuristicFirstMaxTier,
+  classificationMode,
   sessionAffinity,
+  modalityRouting,
   deploymentAffinity,
   customTechnicalKeywords,
   keywordTierRules,
@@ -452,8 +460,10 @@ export const buildComplexityRouterConfig = ({
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
     ...classifierWireFields(effectiveType, classifierInputs),
+    classification_mode: classificationMode ?? DEFAULT_CLASSIFICATION_MODE,
     session_affinity: sessionAffinity,
     deployment_affinity: deploymentAffinity,
+    modality_routing: modalityRouting ?? false,
     ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
     ...(cleanedKeywordTierRules.length > 0 && { keyword_tier_rules: cleanedKeywordTierRules }),
     escalation_keywords: cleanedEscalationKeywords,

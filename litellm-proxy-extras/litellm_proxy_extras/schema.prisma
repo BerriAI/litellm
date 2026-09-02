@@ -1533,7 +1533,8 @@ model LiteLLM_ShadowEvalJob {
   group_id          String   // legs of one job share this; the API's job id
   target_type       String   @default("key") // key | team | user
   target_id         String   // hashed virtual key, team_id, or user_id whose traffic this leg shadows
-  router_name       String   // the auto-router under evaluation, in either direction
+  router_name       String   // first (often only) auto-router under evaluation; router_names is the full set
+  router_names      String[] @default([]) // all routers this job runs as shadow arms; empty on legacy rows, whose set is (router_name)
   direction         String   @default("forward") // forward | reverse
   baseline_model    String?  // reverse only: the fixed model the router is judged against
   judge_model       String
@@ -1557,6 +1558,7 @@ model LiteLLM_ShadowEvalAttempt {
   job_id       String
   request_id   String   // the judged real request
   outcome      String   // real | shadow | tie | error
+  router_name  String?  // the arm this verdict scores; NULL on legacy rows, meaning the job's own router
   tier         String?  // router's tier for the prompt, when classified
   real_model   String?
   shadow_model String?

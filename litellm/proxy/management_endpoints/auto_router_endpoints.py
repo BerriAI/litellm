@@ -833,7 +833,7 @@ def _judge_collisions_for_team(
     return tuple(
         (role, model)
         for role, model in (
-            *_router_arm_models(llm_router, data.router_name),
+            *(arm for name in data.router_names for arm in _router_arm_models(llm_router, name)),
             *((("baseline", data.baseline_model),) if data.baseline_model is not None else ()),
         )
         if judge & judge_target(llm_router, model, team_id).models
@@ -904,7 +904,7 @@ class _AttemptAggRow(BaseModel):
 
 _ATTEMPT_AGG_ROWS: Final = TypeAdapter(list[_AttemptAggRow])
 
-_ATTEMPT_AGG_SELECT: Final = """
+_ATTEMPT_AGG_COLUMNS: Final = """
     COUNT(*)::int AS turn_count,
     COUNT(*) FILTER (WHERE outcome = 'real')::int AS real_wins,
     COUNT(*) FILTER (WHERE outcome = 'shadow')::int AS shadow_wins,
@@ -913,14 +913,33 @@ _ATTEMPT_AGG_SELECT: Final = """
     COALESCE(SUM(real_cost + real_classifier_cost) FILTER (WHERE real_cost IS NOT NULL AND NOT real_cache_hit), 0)::float AS real_spend,
     COALESCE(SUM(shadow_cost + shadow_classifier_cost) FILTER (WHERE real_cost IS NOT NULL AND NOT real_cache_hit), 0)::float AS shadow_spend,
     COUNT(*) FILTER (WHERE real_cache_hit)::int AS cache_hit_turns
+"""
+
+_ATTEMPT_AGG_SELECT: Final = (
+    _ATTEMPT_AGG_COLUMNS
+    + """
 FROM "LiteLLM_ShadowEvalAttempt"
 WHERE job_id = ANY($1::text[]) AND outcome != 'error'
 GROUP BY 1
 """
+)
 
 _ATTEMPT_AGG_BY_TIER_SQL: Final = "SELECT COALESCE(tier, 'UNCLASSIFIED') AS grp," + _ATTEMPT_AGG_SELECT
 _ATTEMPT_AGG_BY_MODEL_SQL: Final = "SELECT COALESCE(real_model, 'unknown') AS grp," + _ATTEMPT_AGG_SELECT
 _ATTEMPT_AGG_BY_LEG_SQL: Final = "SELECT job_id AS grp," + _ATTEMPT_AGG_SELECT
+
+# Attempt rows from before arm stamping carry no router_name; they belong to the job's
+# own router, which the join reads off the leg.
+_ATTEMPT_AGG_BY_ROUTER_SQL: Final = (
+    "SELECT COALESCE(a.router_name, j.router_name) AS grp,"
+    + _ATTEMPT_AGG_COLUMNS
+    + """
+FROM "LiteLLM_ShadowEvalAttempt" a
+JOIN "LiteLLM_ShadowEvalJob" j ON j.id = a.job_id
+WHERE a.job_id = ANY($1::text[]) AND a.outcome != 'error'
+GROUP BY 1
+"""
+)
 
 # These guards derive spend from attempt rows, the cross-pod authority; the sampler also
 # reads the live counter, so admission can stop before a row-based guard would fire (safe
@@ -1060,6 +1079,7 @@ class _LegRow(BaseModel):
     target_type: ShadowEvalTargetType
     target_id: str
     router_name: str
+    router_names: tuple[str, ...] = ()
     direction: ShadowEvalDirection
     baseline_model: str | None = None
     judge_model: str
@@ -1070,6 +1090,12 @@ class _LegRow(BaseModel):
     ends_at: datetime
     stopped_at: datetime | None = None
     stopped_by: str | None = None
+
+    @property
+    def arm_router_names(self) -> tuple[str, ...]:
+        """The job's full router set; rows from before router_names existed hold it in
+        router_name alone. The one place that reading lives on the endpoint side."""
+        return self.router_names or (self.router_name,)
 
     @field_validator("created_at", "ends_at", "stopped_at")
     @classmethod
@@ -1123,7 +1149,7 @@ def _group_response(
             )
             for leg in sorted(legs, key=lambda leg: (leg.target_type, leg.target_id))
         ),
-        router_name=first.router_name,
+        router_names=first.arm_router_names,
         direction=first.direction,
         baseline_model=first.baseline_model,
         judge_model=first.judge_model,
@@ -1252,6 +1278,9 @@ async def _shadow_eval_results(
             for slice in _slices(by_leg)
         }
     )
+    by_router: Final = _ATTEMPT_AGG_ROWS.validate_python(
+        await _query_raw(prisma_client, _ATTEMPT_AGG_BY_ROUTER_SQL, leg_ids) or ()
+    )
     total_turns: Final = sum(r.turn_count for r in by_tier)
     funnel_rows: Final = await _query_raw(prisma_client, _FUNNEL_TOTALS_SQL, leg_ids)
     counted: Final = _FunnelTotalsRow.model_validate(funnel_rows[0]) if funnel_rows else None
@@ -1261,6 +1290,7 @@ async def _shadow_eval_results(
     result: Final = ShadowEvalResult(
         by_tier=_slices(by_tier),
         by_current_model=_slices(by_model),
+        by_router=_slices(by_router),
         overall_shadow_win_rate_pct=_pct_of(sum(r.shadow_wins for r in by_tier), total_turns),
         overall_tie_rate_pct=_pct_of(sum(r.ties for r in by_tier), total_turns),
         sampled_real_spend=sum(r.real_spend for r in by_tier),
@@ -1314,8 +1344,15 @@ async def start_shadow_eval(
     _require_admin_writer(user_api_key_dict, "start a shadow eval")
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
-    if llm_router is None or not _is_configured_pre_routing_strategy(llm_router, data.router_name):
-        raise HTTPException(status_code=400, detail=f"'{data.router_name}' is not a configured auto-router")
+    unconfigured: Final = tuple(
+        name
+        for name in data.router_names
+        if llm_router is None or not _is_configured_pre_routing_strategy(llm_router, name)
+    )
+    if unconfigured:
+        raise HTTPException(
+            status_code=400, detail=f"Not a configured auto-router: {', '.join(repr(n) for n in unconfigured)}"
+        )
     token_rows: Final = (
         await _verification_tokens(prisma_client).find_many(
             where={"token": {"in": list(data.api_key_ids)}}  # mutable-ok: Prisma filter
@@ -1416,7 +1453,9 @@ async def start_shadow_eval(
     ends_at: Final = now + timedelta(days=data.duration_days)
     shared_config: Final = {  # mutable-ok: Prisma payload
         "group_id": group_id,
-        "router_name": data.router_name,
+        # a pre-router_names pod samples router_name alone, so it must be a real arm
+        "router_name": data.router_names[0],
+        "router_names": list(data.router_names),  # mutable-ok: Prisma payload
         "direction": data.direction,
         "baseline_model": data.baseline_model,
         "judge_model": data.judge_model,
@@ -1477,7 +1516,7 @@ async def start_shadow_eval(
             )
             for target_type, target_id in sorted(requested_targets)
         ),
-        router_name=data.router_name,
+        router_names=data.router_names,
         direction=data.direction,
         baseline_model=data.baseline_model,
         judge_model=data.judge_model,

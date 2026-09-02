@@ -176,6 +176,9 @@ if TYPE_CHECKING:
     ProxyConfig = _ProxyConfig
 else:
     ProxyConfig = Any
+from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
+    AnthropicStreamModelRestamper,
+)
 from litellm.proxy.litellm_pre_call_utils import (
     add_litellm_data_to_request,
     refresh_proxy_server_request_body_snapshot,
@@ -2490,6 +2493,9 @@ class ProxyBaseLLMRequestProcessing:
                             request_data=self.data,
                             proxy_logging_obj=proxy_logging_obj,
                             request=request,
+                            restamp_model=(
+                                None if _should_return_raw_model_name(self.data) else requested_model_from_client
+                            ),
                         )
                         return await create_response(
                             generator=wrap_sse_stream_with_keepalive_pings(
@@ -3443,6 +3449,16 @@ class ProxyBaseLLMRequestProcessing:
             return chunk
 
     @staticmethod
+    def _sse_chunk_serializer(restamper: AnthropicStreamModelRestamper | None) -> StreamChunkSerializer:
+        if restamper is None:
+            return ProxyBaseLLMRequestProcessing.return_sse_chunk
+
+        def serialize(chunk: object) -> str:
+            return ProxyBaseLLMRequestProcessing.return_sse_chunk(restamper.process(chunk))
+
+        return serialize
+
+    @staticmethod
     async def _finalize_streaming_generator_cleanup(
         request: Request | None,
         request_data: dict,
@@ -3502,11 +3518,16 @@ class ProxyBaseLLMRequestProcessing:
         serialize_chunk: StreamChunkSerializer,
         serialize_error: StreamErrorSerializer,
         request: Request | None = None,
+        flush_tail: Callable[[], bytes] | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Shared streaming data generator: runs proxy iterator hook, per-chunk hook,
         cost injection, then yields chunks via serialize_chunk; on exception runs
         failure hook and yields via serialize_error. Use for SSE or NDJSON.
+
+        ``flush_tail`` runs once after the upstream iterator completes cleanly and
+        its non-empty result is yielded, so a serializer that buffers bytes across
+        chunks can emit anything still held at end of stream.
         """
         verbose_proxy_logger.debug("inside generator")
         # Resolve per-stream (not per-chunk) whether the heavy per-chunk path
@@ -3569,6 +3590,9 @@ class ProxyBaseLLMRequestProcessing:
                 # so it must not suppress that refund.
                 delivered_chunk = delivered_chunk or chunk != STREAM_SSE_KEEPALIVE_PING_BYTES
                 yield serialize_chunk(chunk)
+            held_tail: Final = flush_tail() if flush_tail is not None else b""
+            if held_tail:
+                yield serialize_chunk(held_tail)
             stream_completed = True
         except (asyncio.CancelledError, GeneratorExit):
             # Client disconnected mid-stream. CancelledError / GeneratorExit
@@ -3579,8 +3603,7 @@ class ProxyBaseLLMRequestProcessing:
             # billing and release exactly once. This is the outermost generator
             # Starlette closes on disconnect, so the nested iterator hook (which
             # only sees GeneratorExit on GC) cannot own the refund.
-            if not stream_completed:
-                client_disconnected = True
+            client_disconnected = not stream_completed
             if not delivered_chunk and not _withheld_provider_output(response):
                 from litellm.proxy.spend_tracking.budget_reservation import (
                     release_budget_reservation_on_cancel,
@@ -3634,6 +3657,7 @@ class ProxyBaseLLMRequestProcessing:
         request_data: dict,
         proxy_logging_obj: ProxyLogging,
         request: Request | None = None,
+        restamp_model: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Anthropic /messages and Google /generateContent streaming data generator require SSE events.
@@ -3642,17 +3666,23 @@ class ProxyBaseLLMRequestProcessing:
         SSE serializers directly (rather than re-wrapping it in another
         ``async for: yield`` trampoline), so a streamed chunk traverses one
         fewer async-generator layer / coroutine resume on the hot path.
+
+        ``restamp_model`` publishes that name on the Anthropic ``message_start``
+        event in place of the provider's model, matching what the non-streaming
+        response reports.
         """
+        restamper: Final = AnthropicStreamModelRestamper(restamp_model) if restamp_model else None
         return ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
             response=response,
             user_api_key_dict=user_api_key_dict,
             request_data=request_data,
             proxy_logging_obj=proxy_logging_obj,
-            serialize_chunk=ProxyBaseLLMRequestProcessing.return_sse_chunk,
+            serialize_chunk=ProxyBaseLLMRequestProcessing._sse_chunk_serializer(restamper),
             serialize_error=lambda proxy_exc: (
                 f"{STREAM_SSE_DATA_PREFIX}{json.dumps({'error': proxy_exc.to_dict()})}\n\n"
             ),
             request=request,
+            flush_tail=None if restamper is None else restamper.flush,
         )
 
     @overload
