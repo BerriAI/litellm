@@ -1208,11 +1208,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/vector-stores/_components/VectorStoreForm.tsx": {
-    "no-nested-ternary": {
-      "count": 2
-    }
-  },
   "src/app/(dashboard)/vector-stores/_components/index.tsx": {
     "local/filename-pascal-case": {
       "count": 1
