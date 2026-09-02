@@ -1,12 +1,10 @@
 import json
 import os
 import stat
-import sys
 import time
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 
 import pytest
@@ -1375,6 +1373,7 @@ class TestLoginConfigClaude:
         assert result.exit_code == 0
         written = json.loads(settings_path.read_text())
         assert written["env"]["ANTHROPIC_BASE_URL"] == "https://test.example.com"
+        assert written["env"]["ENABLE_TOOL_SEARCH"] == "true"
         assert written["apiKeyHelper"] == "/usr/local/bin/lite --base-url https://test.example.com auth print-token"
         assert "Configured Claude Code" in result.output
 

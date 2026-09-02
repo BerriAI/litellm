@@ -1,11 +1,9 @@
 import os
-import sys
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 import litellm
 from litellm.llms.azure.azure import AzureChatCompletion

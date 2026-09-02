@@ -1,14 +1,10 @@
 import json
 import os
-import sys
 import time
 from datetime import datetime
 from unittest.mock import AsyncMock, patch, MagicMock
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager

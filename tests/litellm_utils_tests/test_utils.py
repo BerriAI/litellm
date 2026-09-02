@@ -1,6 +1,5 @@
 import copy
 import logging
-import sys
 import time
 from datetime import datetime
 from unittest import mock
@@ -12,9 +11,6 @@ from litellm.types.utils import StandardCallbackDynamicParams
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 import pytest
 
 import litellm
@@ -332,34 +328,23 @@ def test_trimming_with_untokenizable_field(caplog: pytest.LogCaptureFixture) -> 
 
 
 def test_aget_valid_models():
-    old_environ = os.environ
-    os.environ = {"OPENAI_API_KEY": "temp"}  # mock set only openai key in environ
+    with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "temp"}, clear=True):
+        valid_models = get_valid_models()
+        print(valid_models)
 
-    valid_models = get_valid_models()
-    print(valid_models)
+        # list of openai supported llms on litellm
+        expected_models = (
+            litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
+        )
 
-    # list of openai supported llms on litellm
-    expected_models = (
-        litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
-    )
-
-    assert set(valid_models) == set(expected_models)
-
-    # reset replicate env key
-    os.environ = old_environ
+        assert set(valid_models) == set(expected_models)
 
     # GEMINI
-    expected_models = litellm.gemini_models
-    old_environ = os.environ
-    os.environ = {"GEMINI_API_KEY": "temp"}  # mock set only openai key in environ
+    with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "temp"}, clear=True):
+        valid_models = get_valid_models()
 
-    valid_models = get_valid_models()
-
-    print(valid_models)
-    assert set(valid_models) == set(expected_models)
-
-    # reset replicate env key
-    os.environ = old_environ
+        print(valid_models)
+        assert set(valid_models) == set(litellm.gemini_models)
 
 
 @pytest.mark.parametrize("custom_llm_provider", ["anthropic", "xai"])

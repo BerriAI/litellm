@@ -16,6 +16,7 @@ import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
 from litellm.types.files import get_file_extension_from_mime_type
@@ -640,49 +641,6 @@ def claude_2_1_pt(
     if messages[-1]["role"] != "assistant":
         prompt += f"{AnthropicConstants.AI_PROMPT.value}"  # prompt must end with \"\n\nAssistant: " turn
     return prompt
-
-
-### TOGETHER AI
-
-
-def get_model_info(token, model):
-    try:
-        headers: Final = {"Authorization": f"Bearer {token}"}
-        client: Final = HTTPHandler(concurrent_limit=1)
-        response: Final = client.get("https://api.together.xyz/models/info", headers=headers)
-        if response.status_code == 200:
-            model_info: Final = response.json()
-            for m in model_info:
-                if m["name"].lower().strip() == model.strip():
-                    return m["config"].get("prompt_format", None), m["config"].get("chat_template", None)
-            return None, None
-        else:
-            return None, None
-    except Exception:  # safely fail a prompt template request
-        return None, None
-
-
-## OLD TOGETHER AI FLOW
-# def format_prompt_togetherai(messages, prompt_format, chat_template):
-#     if prompt_format is None:
-#         return default_pt(messages)
-
-#     human_prompt, assistant_prompt = prompt_format.split("{prompt}")
-
-#     if chat_template is not None:
-#         prompt = hf_chat_template(
-#             model=None, messages=messages, chat_template=chat_template
-#         )
-#     elif prompt_format is not None:
-#         prompt = custom_prompt(
-#             role_dict={},
-#             messages=messages,
-#             initial_prompt_value=human_prompt,
-#             final_prompt_value=assistant_prompt,
-#         )
-#     else:
-#         prompt = default_pt(messages)
-#     return prompt
 
 
 ### IBM Granite
@@ -1454,7 +1412,7 @@ def convert_to_gemini_tool_call_result(
                             )
                         except Exception as e:
                             verbose_logger.warning("Failed to process image in tool response: %s", e)
-                elif content_type in ("file", "input_file"):
+                elif content_type in ("file", "input_file"):  # pyright: ignore[reportUnnecessaryContains]  # loose runtime dict
                     # Extract file for inline_data (for tool results with PDF, audio, video, etc.)
                     file_data = content.get("file_data", "")
                     if not file_data:
@@ -1606,14 +1564,23 @@ def convert_to_anthropic_tool_result(
     }
     """
     anthropic_content: (
-        str | list[AnthropicMessagesToolResultContent | AnthropicMessagesImageParam | AnthropicMessagesDocumentParam]
+        str
+        | list[
+            AnthropicMessagesToolResultContent
+            | AnthropicMessagesImageParam
+            | AnthropicMessagesDocumentParam
+            | ToolReference
+        ]
     ) = ""
     if isinstance(message["content"], str):
         anthropic_content = message["content"]
     elif isinstance(message["content"], list):
         content_list: Final = message["content"]
         anthropic_content_list: list[
-            AnthropicMessagesToolResultContent | AnthropicMessagesImageParam | AnthropicMessagesDocumentParam
+            AnthropicMessagesToolResultContent
+            | AnthropicMessagesImageParam
+            | AnthropicMessagesDocumentParam
+            | ToolReference
         ] = []
         for content in content_list:
             if content["type"] == "text":
@@ -1656,6 +1623,8 @@ def convert_to_anthropic_tool_result(
                         original_content_element=content,
                     )
                     anthropic_content_list.append(cast(AnthropicMessagesImageParam, _anthropic_image_param))
+            elif content["type"] == "tool_reference":
+                anthropic_content_list.append(ToolReference(type="tool_reference", tool_name=content["tool_name"]))
             elif content["type"] == "file":
                 file_content = cast(ChatCompletionFileObject, content)
                 _file_block = anthropic_process_openai_file_message(file_content)
@@ -1725,6 +1694,18 @@ def convert_function_to_anthropic_tool_invoke(
         raise e
 
 
+def _find_server_tool_result(
+    tool_id: str,
+    web_search_results: Sequence[object] | None,
+    tool_results: Sequence[object] | None,
+) -> dict[str, object] | None:
+    candidates: Final = (*(web_search_results or ()), *(tool_results or ()))
+    return next(
+        (result for result in candidates if isinstance(result, dict) and result.get("tool_use_id") == tool_id),
+        None,
+    )
+
+
 def convert_to_anthropic_tool_invoke(
     tool_calls: list[ChatCompletionAssistantToolCall],
     web_search_results: list[Any] | None = None,
@@ -1789,32 +1770,22 @@ def convert_to_anthropic_tool_invoke(
             context="Anthropic tool invoke",
         )
 
-        # Check if this is a server-side tool (web_search, tool_search, etc.)
-        # Server tool IDs start with "srvtoolu_"
-        if tool_id.startswith("srvtoolu_"):
-            # Create server_tool_use block instead of tool_use
-            _anthropic_server_tool_use: dict[str, object] = {
-                "type": "server_tool_use",
-                "id": tool_id,
-                "name": tool_name,
-                "input": tool_input,
-            }
-            anthropic_tool_invoke.append(_anthropic_server_tool_use)
-
-            # Add corresponding tool result if available.
-            # Check both web_search_results (web_search_tool_result / web_fetch_tool_result)
-            # and tool_results (bash_code_execution_tool_result, etc.)
-            _all_tool_results: list[Any] = []
-            if web_search_results:
-                _all_tool_results.extend(web_search_results)
-            if tool_results:
-                _all_tool_results.extend(tool_results)
-            for result in _all_tool_results:
-                if result.get("tool_use_id") == tool_id:
-                    anthropic_tool_invoke.append(result)
-                    break
+        server_tool_result = (
+            _find_server_tool_result(tool_id, web_search_results, tool_results)
+            if tool_id.startswith("srvtoolu_")
+            else None
+        )
+        if server_tool_result is not None:
+            anthropic_tool_invoke.append(
+                {
+                    "type": "server_tool_use",
+                    "id": tool_id,
+                    "name": tool_name,
+                    "input": tool_input,
+                }
+            )
+            anthropic_tool_invoke.append(server_tool_result)
         else:
-            # Regular tool_use
             sanitized_tool_id = _sanitize_anthropic_tool_use_id(tool_id)
             _anthropic_tool_use_param = AnthropicMessagesToolUseParam(
                 type="tool_use",
@@ -5383,12 +5354,13 @@ def _parse_tool_call_arguments(raw: Any, tool_name: str | None, context: str) ->
         return raw
     if not isinstance(raw, str):
         return {}
+    normalized_raw: Final = "{}" if raw == REDACTED_BY_LITELLM else raw
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         parse_tool_call_arguments,
     )
 
     try:
-        parsed: Final = parse_tool_call_arguments(raw, tool_name=tool_name, context=context)
+        parsed: Final = parse_tool_call_arguments(normalized_raw, tool_name=tool_name, context=context)
     except ValueError as e:
         verbose_logger.warning("Failed to parse tool call arguments: %s", e)
         return {}

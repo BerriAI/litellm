@@ -2,9 +2,7 @@
 #    This tests the router's ability to identify the least busy deployment
 
 import asyncio
-import os
 import random
-import sys
 import time
 import traceback
 
@@ -12,9 +10,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 
 import litellm

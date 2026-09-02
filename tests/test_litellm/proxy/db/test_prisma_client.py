@@ -8,9 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 
 from litellm.proxy.db.prisma_client import PrismaWrapper, should_update_prisma_schema
@@ -216,6 +213,44 @@ def test_db_push_applies_replica_identity_full_when_requested(monkeypatch):
 
     assert mock_run.call_args[0][0][:3] == ["prisma", "db", "push"]
     assert applied == [True]
+
+
+def test_db_push_is_rejected_when_spend_logs_is_partitioned(monkeypatch):
+    """A doc-partitioned LiteLLM_SpendLogs makes `prisma db push` rewrite the
+    primary key back to ("request_id"), which Postgres rejects; the guard must
+    fail fast with guidance instead of running the push."""
+    from litellm.proxy.db.prisma_client import PrismaManager
+    from litellm_proxy_extras.utils import (
+        PARTITIONED_SPEND_LOGS_PUSH_ERROR,
+        ProxyExtrasDBManager,
+    )
+
+    monkeypatch.setattr(
+        ProxyExtrasDBManager, "spend_logs_is_partitioned", staticmethod(lambda: True)
+    )
+    with patch(  # test-quality-ok: subprocess.run is the external prisma CLI boundary, asserted never reached
+        "litellm.proxy.db.prisma_client.subprocess.run"
+    ) as mock_run:
+        with pytest.raises(RuntimeError) as err:
+            PrismaManager.setup_database(use_migrate=False)
+
+    assert str(err.value) == PARTITIONED_SPEND_LOGS_PUSH_ERROR
+    mock_run.assert_not_called()
+
+
+def test_db_push_proceeds_when_spend_logs_is_not_partitioned(monkeypatch):
+    from litellm.proxy.db.prisma_client import PrismaManager
+    from litellm_proxy_extras.utils import ProxyExtrasDBManager
+
+    monkeypatch.setattr(
+        ProxyExtrasDBManager, "spend_logs_is_partitioned", staticmethod(lambda: False)
+    )
+    with patch(  # test-quality-ok: subprocess.run is the external prisma CLI boundary, not SDK logic
+        "litellm.proxy.db.prisma_client.subprocess.run"
+    ) as mock_run:
+        assert PrismaManager.setup_database(use_migrate=False) is True
+
+    assert mock_run.call_args[0][0][:3] == ["prisma", "db", "push"]
 
 
 def _entra_jwt(expires_in_seconds: int) -> str:

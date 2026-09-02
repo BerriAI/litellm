@@ -1,16 +1,14 @@
 import os
-import sys
 import traceback
 from litellm._uuid import uuid
 from unittest import mock
 
 from dotenv import load_dotenv
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 load_dotenv()
 import time
 
-sys.path.insert(0, os.path.abspath("../.."))
 import logging
 
 import pytest
@@ -42,6 +40,7 @@ from litellm.proxy._types import (
     DeleteProjectRequest,
     NewTeamRequest,
     UserAPIKeyAuth,
+    ProxyException,
 )
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
@@ -1042,6 +1041,190 @@ async def test_project_eviction_publishes_cross_worker_invalidation(monkeypatch)
     mock_publish.assert_awaited_once_with(cache_key=f"project_id:{project_id}")
 
 
+def test_enforce_project_model_quota_missing_both_raises():
+    """A model added to a project without rpm/tpm is rejected."""
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        _raise_on_missing_project_model_quota,
+    )
+
+    data = NewProjectRequest(team_id="test-team", models=["gpt-5.5"])
+    with pytest.raises(HTTPException) as exc_info:
+        _raise_on_missing_project_model_quota(data)
+    assert "gpt-5.5" in str(exc_info.value.detail)
+    assert "rpm/tpm quota" in str(exc_info.value.detail)
+
+
+def test_enforce_project_model_quota_missing_tpm_raises():
+    """A model with rpm but no tpm is rejected."""
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        _raise_on_missing_project_model_quota,
+    )
+
+    data = NewProjectRequest(
+        team_id="test-team",
+        models=["gpt-5.5"],
+        model_rpm_limit={"gpt-5.5": 100},
+    )
+    with pytest.raises(HTTPException):
+        _raise_on_missing_project_model_quota(data)
+
+
+def test_enforce_project_model_quota_all_present_passes():
+    """A model with both rpm and tpm set passes."""
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        _raise_on_missing_project_model_quota,
+    )
+
+    data = NewProjectRequest(
+        team_id="test-team",
+        models=["gpt-5.5"],
+        model_rpm_limit={"gpt-5.5": 100},
+        model_tpm_limit={"gpt-5.5": 1000},
+    )
+    assert _raise_on_missing_project_model_quota(data) is None
+
+
+def test_enforce_project_model_quota_no_models_passes():
+    """A project with no models has nothing to enforce."""
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        _raise_on_missing_project_model_quota,
+    )
+
+    data = NewProjectRequest(team_id="test-team")
+    assert _raise_on_missing_project_model_quota(data) is None
+
+
+def test_enforce_project_model_quota_zero_rejected():
+    """A zero quota is non-positive -> rejected (downstream treats it as exhausted)."""
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        _raise_on_missing_project_model_quota,
+    )
+
+    data = NewProjectRequest(
+        team_id="test-team",
+        models=["gpt-5.5"],
+        model_rpm_limit={"gpt-5.5": 0},
+        model_tpm_limit={"gpt-5.5": 1000},
+    )
+    with pytest.raises(HTTPException):
+        _raise_on_missing_project_model_quota(data)
+
+
+def test_enforce_project_model_quota_negative_rejected():
+    """A negative quota is non-positive -> rejected."""
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        _raise_on_missing_project_model_quota,
+    )
+
+    data = NewProjectRequest(
+        team_id="test-team",
+        models=["gpt-5.5"],
+        model_rpm_limit={"gpt-5.5": 100},
+        model_tpm_limit={"gpt-5.5": -1},
+    )
+    with pytest.raises(HTTPException):
+        _raise_on_missing_project_model_quota(data)
+
+
+def test_update_quota_adds_model_without_quota_rejected():
+    """Adding a model via /project/update without quota is rejected (the bypass)."""
+    import types
+
+    from litellm.proxy._types import UpdateProjectRequest
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        _raise_on_missing_project_model_quota_on_update,
+    )
+
+    existing = types.SimpleNamespace(models=[], metadata={})
+    data = UpdateProjectRequest(project_id="p", models=["gpt-5.5"])  # adds model, no quota
+    with pytest.raises(HTTPException):
+        _raise_on_missing_project_model_quota_on_update(data, existing)
+
+
+def test_update_quota_adds_model_with_quota_passes():
+    """Adding a model with a positive quota via update passes."""
+    import types
+
+    from litellm.proxy._types import UpdateProjectRequest
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        _raise_on_missing_project_model_quota_on_update,
+    )
+
+    existing = types.SimpleNamespace(models=[], metadata={})
+    data = UpdateProjectRequest(
+        project_id="p",
+        models=["gpt-5.5"],
+        model_rpm_limit={"gpt-5.5": 100},
+        model_tpm_limit={"gpt-5.5": 1000},
+    )
+    assert _raise_on_missing_project_model_quota_on_update(data, existing) is None
+
+
+def test_update_quota_partial_update_keeps_existing_valid_passes():
+    """A partial update that doesn't touch models/quota keeps existing valid quota -> passes."""
+    import types
+
+    from litellm.proxy._types import UpdateProjectRequest
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        _raise_on_missing_project_model_quota_on_update,
+    )
+
+    existing = types.SimpleNamespace(
+        models=["gpt-5.5"],
+        metadata={"model_rpm_limit": {"gpt-5.5": 100}, "model_tpm_limit": {"gpt-5.5": 1000}},
+    )
+    data = UpdateProjectRequest(project_id="p", description="unrelated change")
+    assert _raise_on_missing_project_model_quota_on_update(data, existing) is None
+
+
+def test_update_quota_existing_quotaless_model_rejected():
+    """A project already holding a quota-less model is rejected on any update (fail-closed)."""
+    import types
+
+    from litellm.proxy._types import UpdateProjectRequest
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        _raise_on_missing_project_model_quota_on_update,
+    )
+
+    existing = types.SimpleNamespace(models=["gpt-5.5"], metadata={})
+    data = UpdateProjectRequest(project_id="p", description="unrelated change")
+    with pytest.raises(HTTPException):
+        _raise_on_missing_project_model_quota_on_update(data, existing)
+
+
+def _enforced_new_project_mocks(monkeypatch, team_models: list[str], llm_router: mock.MagicMock | None) -> None:
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm_enterprise.proxy.management_endpoints import project_endpoints as pe
+
+    team = LiteLLM_TeamTable(team_id="test-team", models=team_models)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock.MagicMock())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {"enforce_project_model_quota": True})
+    monkeypatch.setattr(pe, "_validate_team_exists", mock.AsyncMock(return_value=team))
+    monkeypatch.setattr(pe, "_check_user_permission_for_project", mock.AsyncMock(return_value=True))
+
+
+async def _run_new_project(data: NewProjectRequest) -> None:
+    await new_project(
+        data=data,
+        http_request=Request(scope={"type": "http"}),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", user_id="1234"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_new_project_flag_on_missing_rpm_tpm_returns_400(monkeypatch):
+    """End-to-end: with the flag on, POST /project/new rejects a model added without rpm/tpm."""
+    _enforced_new_project_mocks(monkeypatch, team_models=["gpt-5.5"], llm_router=None)
+
+    with pytest.raises(ProxyException, match="rpm/tpm quota") as exc_info:
+        await _run_new_project(NewProjectRequest(team_id="test-team", models=["gpt-5.5"]))
+
+    # new_project re-wraps the HTTPException, so assert on the string form.
+    assert "rpm/tpm quota" in str(exc_info.value)
+
+
 def _project_update_mocks(monkeypatch, stored_metadata: dict) -> mock.MagicMock:
     existing_row = mock.MagicMock(
         team_id=None, budget_id=None, object_permission_id=None, metadata=stored_metadata
@@ -1107,3 +1290,81 @@ async def test_update_project_leaves_metadata_untouched_when_no_limit_is_sent(mo
     await _run_project_update(project_id, description="renamed only")
 
     assert "metadata" not in _written_project_data(mock_prisma)
+
+
+@pytest.mark.parametrize("entry", ["all-proxy-models", "*", "azure/*"])
+def test_enforce_project_model_quota_rejects_entries_that_expand_at_request_time(entry):
+    """A quota keyed on a wildcard entry is never applied by the limiter, so it fails loudly."""
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        _raise_on_missing_project_model_quota,
+    )
+
+    data = NewProjectRequest(
+        team_id="test-team",
+        models=[entry],
+        model_rpm_limit={entry: 10},
+        model_tpm_limit={entry: 1000},
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        _raise_on_missing_project_model_quota(data)
+    assert exc_info.value.status_code == 400
+    assert entry in str(exc_info.value.detail)
+    assert "expand to multiple models at request time" in str(exc_info.value.detail)
+
+
+def test_enforce_project_model_quota_rejects_access_group_only_when_router_defines_it():
+    """A plain model name passes; the same name is rejected once the router reports it as an access group."""
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        _raise_on_missing_project_model_quota,
+    )
+
+    data = NewProjectRequest(
+        team_id="test-team",
+        models=["prod-models"],
+        model_rpm_limit={"prod-models": 10},
+        model_tpm_limit={"prod-models": 1000},
+    )
+    assert _raise_on_missing_project_model_quota(data, access_group_names=frozenset()) is None
+    with pytest.raises(HTTPException) as exc_info:
+        _raise_on_missing_project_model_quota(data, access_group_names=frozenset({"prod-models"}))
+    assert "prod-models" in str(exc_info.value.detail)
+    assert "expand to multiple models at request time" in str(exc_info.value.detail)
+
+
+def test_update_quota_rejects_wildcard_left_on_project():
+    """An update that leaves a wildcard entry on the project is rejected even when it carries a quota."""
+    import types
+
+    from litellm_enterprise.proxy.management_endpoints.project_endpoints import (
+        _raise_on_missing_project_model_quota_on_update,
+    )
+
+    existing = types.SimpleNamespace(
+        models=["all-proxy-models"],
+        metadata={"model_rpm_limit": {"all-proxy-models": 10}, "model_tpm_limit": {"all-proxy-models": 1000}},
+    )
+    data = UpdateProjectRequest(project_id="p", description="unrelated change")
+    with pytest.raises(HTTPException) as exc_info:
+        _raise_on_missing_project_model_quota_on_update(data, existing)
+    assert "all-proxy-models" in str(exc_info.value.detail)
+    assert "expand to multiple models at request time" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_new_project_flag_on_access_group_model_returns_400(monkeypatch):
+    """End-to-end: the router's access groups reach the check, so an access-group entry is rejected."""
+    llm_router = mock.MagicMock()
+    llm_router.get_model_access_groups.return_value = {"prod-models": ["gpt-5.5"]}
+    _enforced_new_project_mocks(monkeypatch, team_models=["prod-models"], llm_router=llm_router)
+    data = NewProjectRequest(
+        team_id="test-team",
+        models=["prod-models"],
+        model_rpm_limit={"prod-models": 10},
+        model_tpm_limit={"prod-models": 1000},
+    )
+
+    with pytest.raises(ProxyException, match="expand to multiple models at request time") as exc_info:
+        await _run_new_project(data)
+
+    assert "prod-models" in str(exc_info.value)
+    assert "expand to multiple models at request time" in str(exc_info.value)

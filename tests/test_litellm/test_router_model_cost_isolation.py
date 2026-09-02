@@ -8,14 +8,13 @@ should still use the built-in pricing.
 """
 
 import copy
+import logging
 import os
 import re
-import sys
 from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm import Router
@@ -537,6 +536,157 @@ def test_inherit_builtin_cache_pricing_noop_for_unknown_backend():
     )
 
     assert model_info == {"input_cost_per_token": 0.000003}
+
+
+def test_inherit_builtin_base_rates_for_off_peak_fills_missing_rates():
+    """Direct unit test of the helper: an entry carrying only an
+    off_peak_pricing block inherits the backend model's built-in base token
+    rates, so cost lookup via the deployment id can bill standard rates
+    outside the windows.
+    """
+    backend_model = "gpt-4o-mini"
+    builtin_info = litellm.get_model_info(model=backend_model, custom_llm_provider="openai")
+    off_peak_block = {
+        "hours_utc": "00:00-00:00",
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 1e-06,
+    }
+    model_info = {"off_peak_pricing": off_peak_block}
+
+    Router._inherit_builtin_base_rates_for_off_peak(
+        model_info=model_info,
+        backend_model=backend_model,
+        custom_llm_provider="openai",
+    )
+
+    assert model_info["input_cost_per_token"] == builtin_info["input_cost_per_token"]
+    assert model_info["output_cost_per_token"] == builtin_info["output_cost_per_token"]
+    assert model_info["off_peak_pricing"] == off_peak_block
+
+
+def test_inherit_builtin_base_rates_for_off_peak_carries_threshold_rates():
+    """A backend with above-threshold pricing hands the whole rate structure to
+    the deployment entry, so peak-hour billing of large prompts through that
+    entry matches the shared backend entry instead of flattening to the base
+    rate.
+    """
+    backend_model = "gemini/gemini-2.5-pro"
+    builtin_info = litellm.get_model_info(model=backend_model)
+    assert builtin_info["input_cost_per_token_above_200k_tokens"] is not None
+
+    model_info = {
+        "off_peak_pricing": {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-07},
+    }
+
+    Router._inherit_builtin_base_rates_for_off_peak(
+        model_info=model_info,
+        backend_model=backend_model,
+        custom_llm_provider="gemini",
+    )
+
+    assert model_info["input_cost_per_token"] == builtin_info["input_cost_per_token"]
+    assert (
+        model_info["input_cost_per_token_above_200k_tokens"]
+        == builtin_info["input_cost_per_token_above_200k_tokens"]
+    )
+    assert (
+        model_info["output_cost_per_token_above_200k_tokens"]
+        == builtin_info["output_cost_per_token_above_200k_tokens"]
+    )
+
+
+def test_inherit_builtin_base_rates_for_off_peak_carries_companion_billing_fields():
+    """Billing rules that are not literal cost rates, like the web search
+    billing unit, must ride along, or grounding and regional uplifts would
+    bill differently through the deployment entry than through the shared
+    backend entry.
+    """
+    backend_model = "gemini-3-pro-image"
+    raw_entry = litellm.model_cost[backend_model]
+    assert raw_entry.get("web_search_billing_unit") is not None
+
+    model_info = {
+        "off_peak_pricing": {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-07},
+    }
+
+    Router._inherit_builtin_base_rates_for_off_peak(
+        model_info=model_info,
+        backend_model=backend_model,
+        custom_llm_provider=None,
+    )
+
+    assert model_info["web_search_billing_unit"] == raw_entry["web_search_billing_unit"]
+    assert model_info["input_cost_per_token"] == raw_entry["input_cost_per_token"]
+
+
+def test_inherit_builtin_base_rates_for_off_peak_tiered_only_backend_stores_no_zero():
+    """A tiered-only backend has no flat token rates; get_model_info synthesizes
+    zeros for them, and storing those would mark the deployment explicitly
+    priced free. The tier table itself must carry over as an isolated copy so
+    mutating the deployment entry never touches the shared cost map.
+    """
+    backend_model = "dashscope/qwen-flash"
+    raw_tiers = litellm.model_cost[backend_model]["tiered_pricing"]
+
+    model_info = {
+        "off_peak_pricing": {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-07},
+    }
+
+    Router._inherit_builtin_base_rates_for_off_peak(
+        model_info=model_info,
+        backend_model=backend_model,
+        custom_llm_provider="dashscope",
+    )
+
+    assert model_info.get("input_cost_per_token") != 0
+    assert model_info.get("output_cost_per_token") != 0
+    assert model_info["tiered_pricing"] == raw_tiers
+    assert model_info["tiered_pricing"] is not raw_tiers
+    assert model_info["tiered_pricing"][0] is not raw_tiers[0]
+
+    original_first_tier = copy.deepcopy(raw_tiers[0])
+    model_info["tiered_pricing"][0]["input_cost_per_token"] = 123.0
+    assert raw_tiers[0] == original_first_tier
+
+
+def test_inherit_builtin_base_rates_for_off_peak_leaves_explicit_rates_alone():
+    """An entry that sets its own base rate beside the block already counts as
+    a full custom pricing entry; the helper must not mix builtin rates into it.
+    """
+    model_info = {
+        "off_peak_pricing": {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-07},
+        "input_cost_per_token": 3e-06,
+    }
+
+    Router._inherit_builtin_base_rates_for_off_peak(
+        model_info=model_info,
+        backend_model="gpt-4o-mini",
+        custom_llm_provider="openai",
+    )
+
+    assert model_info["input_cost_per_token"] == 3e-06
+    assert "output_cost_per_token" not in model_info
+
+
+def test_inherit_builtin_base_rates_for_off_peak_noop_without_block_or_backend():
+    """Nothing happens without an off_peak_pricing block, and an unmapped
+    backend model leaves the entry unchanged rather than raising.
+    """
+    plain_info = {"id": "dep-1"}
+    Router._inherit_builtin_base_rates_for_off_peak(
+        model_info=plain_info,
+        backend_model="gpt-4o-mini",
+        custom_llm_provider="openai",
+    )
+    assert plain_info == {"id": "dep-1"}
+
+    off_peak_info = {"off_peak_pricing": {"hours_utc": "00:00-00:00", "input_cost_per_token": 5e-07}}
+    Router._inherit_builtin_base_rates_for_off_peak(
+        model_info=off_peak_info,
+        backend_model="this-backend-model-does-not-exist-x9y8z7",
+        custom_llm_provider=None,
+    )
+    assert "input_cost_per_token" not in off_peak_info
 
 
 def test_custom_pricing_field_denylist_covers_all_builtin_pricing_fields():
@@ -2007,3 +2157,127 @@ def test_a_falsy_id_is_still_scanned_for_collisions():
                     },
                 ]
             )
+
+
+# --- a reservation declared while the feature is off says so ------------------------
+
+
+def _ptu_warnings(caplog):
+    return tuple(
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "LiteLLM Router" and record.levelno == logging.WARNING and "PTU" in record.getMessage()
+    )
+
+
+def test_a_reservation_declared_while_the_feature_is_off_is_warned_about(caplog):
+    """The deployment serves and bills per token, so without this the operator believes they
+    reserved capacity and sees no signal anywhere that nothing accrues."""
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        _ptu_router(ptu_enabled=False)
+
+    warnings = _ptu_warnings(caplog)
+
+    assert len(warnings) == 1
+    assert "gpt-4o-ptu" in warnings[0]
+    assert "LITELLM_ENABLE_PTU_COST_ATTRIBUTION" in warnings[0]
+
+
+def test_a_reservation_is_not_warned_about_while_the_feature_is_on(caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        _ptu_router()
+
+    assert _ptu_warnings(caplog) == ()
+
+
+def test_a_deployment_carrying_no_ptu_field_is_not_warned_about(caplog):
+    """Most of every config.yaml, so warning here would fire on proxies that never asked."""
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        _ptu_router(model_info={"team_id": "team-alpha"}, ptu_enabled=False)
+
+    assert _ptu_warnings(caplog) == ()
+
+
+def test_a_half_written_reservation_is_warned_about(caplog):
+    """A count with no rate is not a chargeable reservation, but the operator still meant to
+    declare one, so what they wrote is what decides whether they hear about it."""
+    half_written = {k: v for k, v in _PTU_MODEL_INFO.items() if k != "cost_per_ptu_per_hour"}
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        _ptu_router(model_info=half_written, ptu_enabled=False)
+
+    assert len(_ptu_warnings(caplog)) == 1
+
+
+@pytest.mark.parametrize(
+    "typo",
+    [
+        {"ptu_count": 0},
+        {"ptu_count": 0, "cost_per_ptu_per_hour": 0, "ptu_effective_from": None},
+    ],
+    ids=["count out of range", "every value still a zero placeholder"],
+)
+def test_a_reservation_dropped_by_a_typo_is_warned_about(caplog, typo):
+    """An out-of-range value fails ModelInfo before the flag is ever consulted, so the
+    deployment stops serving on a proxy that never enabled PTU. The warning is what tells the
+    operator which feature the entry that vanished belonged to.
+
+    Built the way proxy_server builds it, since dropping rather than raising is what
+    ``ignore_invalid_deployments`` does and config.yaml is loaded with it on.
+    """
+    with patch.dict(os.environ, {"LITELLM_ENABLE_PTU_COST_ATTRIBUTION": ""}, clear=False):
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+            router = Router(
+                ignore_invalid_deployments=True,
+                model_list=[
+                    {
+                        "model_name": "gpt-4o-ptu",
+                        "litellm_params": {"model": "azure/gpt-4o", "api_key": "k", "api_base": "https://e.azure.com"},
+                        "model_info": {**_PTU_MODEL_INFO, **typo},
+                    }
+                ],
+            )
+
+    assert router.model_list == []
+    assert len(_ptu_warnings(caplog)) == 1
+
+
+def test_a_db_backed_reservation_is_not_warned_about(caplog):
+    """/model/new already answered the caller with a 400, so repeating it on every reload
+    would report the operator's own rejected write back to them as a standing problem."""
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        _ptu_router(model_info={**_PTU_MODEL_INFO, "db_model": True}, ptu_enabled=False)
+
+    assert _ptu_warnings(caplog) == ()
+
+
+def test_every_declaring_deployment_is_named(caplog):
+    """One line naming all of them, so a reload does not bury the config in repeats."""
+    with patch.dict(os.environ, {"LITELLM_ENABLE_PTU_COST_ATTRIBUTION": ""}, clear=False):
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+            Router(
+                model_list=[
+                    {
+                        "model_name": "azure-ptu-east",
+                        "litellm_params": {"model": "azure/gpt-4o", "api_key": "k", "api_base": "https://e.azure.com"},
+                        "model_info": dict(_PTU_MODEL_INFO),
+                    },
+                    {
+                        "model_name": "azure-ptu-west",
+                        "litellm_params": {"model": "azure/gpt-4o", "api_key": "k", "api_base": "https://w.azure.com"},
+                        "model_info": {**_PTU_MODEL_INFO, "id": "ptu-alpha-westus"},
+                    },
+                    {
+                        "model_name": "plain-gpt-4o",
+                        "litellm_params": {"model": "azure/gpt-4o", "api_key": "k", "api_base": "https://p.azure.com"},
+                        "model_info": {"id": "plain"},
+                    },
+                ]
+            )
+
+    warnings = _ptu_warnings(caplog)
+
+    assert len(warnings) == 1
+    assert "azure-ptu-east" in warnings[0]
+    assert "azure-ptu-west" in warnings[0]
+    assert "plain-gpt-4o" not in warnings[0]

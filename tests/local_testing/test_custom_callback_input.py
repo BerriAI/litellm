@@ -3,7 +3,6 @@
 import asyncio
 import inspect
 import os
-import sys
 import traceback
 from litellm._uuid import uuid
 from datetime import datetime
@@ -11,7 +10,6 @@ from datetime import datetime
 import pytest
 from pydantic import BaseModel
 
-sys.path.insert(0, os.path.abspath("../.."))
 from typing import List, Literal, Optional, Union
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1238,10 +1236,11 @@ def test_standard_logging_payload_audio(turn_off_message_logging, stream):
             assert "redacted-by-litellm" == slobject["messages"][0]["content"]
             response = slobject["response"]
             if "choices" in response:
-                assert (
-                    response["choices"][0]["message"]["content"]
-                    == "redacted-by-litellm"
-                )
+                redacted_content = response["choices"][0]["message"]["content"]
+                if stream:
+                    assert redacted_content == "redacted-by-litellm"
+                else:
+                    assert redacted_content is None
                 assert response["choices"][0]["message"].get("audio") is None
             else:
                 assert response["text"] == "redacted-by-litellm"

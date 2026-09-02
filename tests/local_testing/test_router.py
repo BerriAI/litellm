@@ -3,7 +3,6 @@
 
 import asyncio
 import os
-import sys
 import time
 import traceback
 
@@ -13,10 +12,6 @@ import pytest
 import litellm.types
 import litellm.types.router
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
-import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -2037,8 +2032,8 @@ def test_router_dynamic_cooldown_correct_retry_after_time():
         raise exception
 
     with patch.object(
-        openai_client.embeddings.with_raw_response,
-        "create",
+        openai_client,
+        "post",
         side_effect=_return_exception,
     ):
         new_retry_after_mock_client = MagicMock(return_value=-1)

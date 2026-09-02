@@ -2,7 +2,6 @@
 
 import json
 import os
-import sys
 from unittest import mock
 
 from dotenv import load_dotenv
@@ -11,9 +10,6 @@ load_dotenv()
 import asyncio
 import io
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import openai
 import pytest
 from fastapi import Response

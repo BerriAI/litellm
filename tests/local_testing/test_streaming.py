@@ -4,7 +4,6 @@
 import asyncio
 import json
 import os
-import sys
 import time
 import traceback
 from litellm._uuid import uuid
@@ -19,9 +18,6 @@ import litellm.litellm_core_utils.litellm_logging
 from litellm.utils import ModelResponseListIterator
 from litellm.types.utils import ModelResponseStream
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from dotenv import load_dotenv
 
 load_dotenv()

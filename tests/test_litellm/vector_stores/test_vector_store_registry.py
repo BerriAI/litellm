@@ -1,6 +1,4 @@
 import json
-import os
-import sys
 from unittest.mock import patch
 
 import httpx
@@ -8,9 +6,6 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 from datetime import datetime, timezone
 from unittest.mock import MagicMock

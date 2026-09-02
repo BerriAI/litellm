@@ -1,16 +1,12 @@
 # What is this?
 ## Unit testing for the 'get_model_info()' function
 import os
-import sys
 import traceback
 import json
 
 
 from typing import List, Dict, Any
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 import pytest
 
 import litellm

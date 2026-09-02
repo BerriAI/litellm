@@ -29,6 +29,7 @@ from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import GuardrailsRepository
 from litellm.types.guardrails import (
     PII_ENTITY_CATEGORIES_MAP,
@@ -65,29 +66,12 @@ router: Final = APIRouter()
 GUARDRAIL_REGISTRY: Final = GuardrailRegistry()
 
 
-class _GuardrailsTableActions(Protocol):
-    async def create(self, data: Mapping[str, object]) -> "LiteLLM_GuardrailsTable": ...
-
-    async def delete(self, where: Mapping[str, object]) -> "LiteLLM_GuardrailsTable | None": ...
-
-    async def find_unique(self, where: Mapping[str, object]) -> "LiteLLM_GuardrailsTable | None": ...
-
-    async def find_many(
-        self, where: Mapping[str, object], order: Mapping[str, str]
-    ) -> "Sequence[LiteLLM_GuardrailsTable]": ...
-
-    async def update(
-        self, where: Mapping[str, object], data: Mapping[str, object]
-    ) -> "LiteLLM_GuardrailsTable | None": ...
-
-
 def _as_str_object_mapping(mapping: Mapping[str, object]) -> Mapping[str, object]:
     return mapping
 
 
-def _guardrails_table(prisma_client: "PrismaClient") -> _GuardrailsTableActions:
-    table: Final[_GuardrailsTableActions] = GuardrailsRepository(prisma_client).table
-    return table
+def _guardrails_table(prisma_client: "PrismaClient") -> "TableActions[LiteLLM_GuardrailsTable]":
+    return GuardrailsRepository(prisma_client).table
 
 
 async def _create_guardrail_row(prisma_client: "PrismaClient", data: Mapping[str, object]) -> "LiteLLM_GuardrailsTable":
@@ -1234,6 +1218,30 @@ async def patch_guardrail(
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully updated guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
+        except (ValueError, TypeError) as update_error:
+            # The new config is invalid (e.g. an unsupported on_flagged combination):
+            # reinitialize_guardrail already restored the previous live instance, but
+            # update_guardrail_in_db above already persisted the rejected config to
+            # the DB. Roll that back too, so the DB and the live guardrail never
+            # disagree about what's actually enforcing, and surface the rejection to
+            # the caller instead of a misleading 200.
+            await GUARDRAIL_REGISTRY.update_guardrail_in_db(
+                guardrail_id=guardrail_id,
+                guardrail=Guardrail(
+                    guardrail_id=guardrail_id,
+                    guardrail_name=existing_guardrail.get("guardrail_name") or "",
+                    litellm_params=LitellmParams(**existing_litellm_params),
+                    guardrail_info=existing_guardrail.get(
+                        "guardrail_info",
+                        {},  # mutable-ok: Guardrail's own constructor takes a plain dict
+                    ),
+                ),
+                prisma_client=prisma_client,
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid guardrail configuration, update rejected: {update_error}",
+            ) from update_error
         except Exception as update_error:
             verbose_proxy_logger.warning(
                 "Immediate sync: Failed to update '%s' (ID: %s) in memory: %s",

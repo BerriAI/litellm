@@ -17,7 +17,6 @@ from litellm.proxy.management_endpoints import (
     mcp_management_endpoints as mgmt_endpoints,
 )
 
-sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -1574,6 +1573,7 @@ class TestTemporaryMCPSessionEndpoints:
         existing_server.aws_region_name = None
         existing_server.aws_service_name = None
         existing_server.upstream_resource = None
+        existing_server.upstream_token_header = None
 
         mock_manager = MagicMock()
         mock_manager.get_mcp_server_by_id.return_value = existing_server
@@ -1609,6 +1609,7 @@ class TestTemporaryMCPSessionEndpoints:
         existing_server.aws_region_name = None
         existing_server.aws_service_name = None
         existing_server.upstream_resource = None
+        existing_server.upstream_token_header = None
         for key, value in server_overrides.items():
             setattr(existing_server, key, value)
 
@@ -1639,6 +1640,23 @@ class TestTemporaryMCPSessionEndpoints:
 
         assert updated.credentials["client_id"] == "client-123"
         assert updated.credentials["client_secret"] == "secret-xyz"
+
+    def test_upstream_token_header_is_inherited_like_other_admin_config(self):
+        """It is admin config rather than a credential, so a session server derived from an existing
+        one must carry it. Miss it and the derived server silently sends its token to Authorization
+        while the original sends it to the gateway's header."""
+        updated = self._inherit_with({}, upstream_token_header="esb-oauth")
+
+        assert updated.credentials["upstream_token_header"] == "esb-oauth"
+
+    def test_a_supplied_upstream_token_header_does_not_read_as_a_credential(self):
+        """It is in the admin-config key set, so submitting only it must still inherit the declared
+        app rather than reading as "the caller supplied real credentials"."""
+        updated = self._inherit_with({"upstream_token_header": "esb-oauth"})
+
+        assert updated.credentials["client_id"] == "client-123"
+        assert updated.credentials["client_secret"] == "secret-xyz"
+        assert updated.credentials["upstream_token_header"] == "esb-oauth"
 
     def test_supplied_credential_still_wins_over_inheritance(self):
         """A caller that supplies a real credential keeps it; inheritance must not overwrite it."""
@@ -1941,6 +1959,20 @@ class TestTemporaryMCPSessionEndpoints:
 
         where = find_rows.await_args.args[1]
         assert where == {"OR": [{"approval_status": None}, {"approval_status": {"not": "draft"}}]}
+
+    @pytest.mark.asyncio
+    async def test_get_all_mcp_servers_propagates_read_failures(self):
+        """Regression: a swallowed read failure returned [] and silently disabled the bulk-import
+        dedupe, so a flaky DB read turned a re-import into duplicate servers."""
+        from litellm.proxy._experimental.mcp_server.db import get_all_mcp_servers
+
+        find_rows = AsyncMock(side_effect=RuntimeError("db down"))
+        with patch(  # test-quality-ok: the helper takes its row reader from module scope, matching the suite's pattern
+            "litellm.proxy._experimental.mcp_server.db._db_find_mcp_server_rows",
+            find_rows,
+        ):
+            with pytest.raises(RuntimeError, match="db down"):
+                await get_all_mcp_servers(MagicMock())
 
     @pytest.mark.asyncio
     async def test_resolve_session_server_id_refuses_an_unknown_caller_supplied_id(self):
@@ -2257,6 +2289,7 @@ class TestTemporaryMCPSessionEndpoints:
             aws_region_name=None,
             aws_service_name=None,
             upstream_resource=None,
+            upstream_token_header=None,
         )
         built_server = generate_mock_mcp_server_config_record(server_id="temp-server")
         mock_manager = MagicMock()
@@ -6482,7 +6515,6 @@ def test_bundled_openapi_registry_parses_and_entries_are_well_formed():
     authorization_url would recreate the exact 400 ("authorization url is not set") the catalog
     exists to prevent for spec-only servers, which never run OAuth endpoint discovery."""
     import json
-    import os
 
     registry_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
@@ -6768,3 +6800,174 @@ class TestConnectedAppViewAnnotation:
 
         assert all(server.connected_app_reachable is None for server in result)
         reload_mock.assert_not_awaited()
+
+
+class TestImportMCPServers:
+    """Bulk connector import must be admin-only and report per-entry outcomes."""
+
+    @staticmethod
+    def _import_patches(existing_servers, create_mock, mock_manager):
+        return (
+            patch(  # test-quality-ok: endpoint takes collaborators from module scope, matching the suite's pattern
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(  # test-quality-ok: endpoint takes collaborators from module scope, matching the suite's pattern
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_all_mcp_servers",
+                AsyncMock(return_value=existing_servers),
+            ),
+            patch(  # test-quality-ok: endpoint takes collaborators from module scope, matching the suite's pattern
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server",
+                create_mock,
+            ),
+            patch(  # test-quality-ok: endpoint takes collaborators from module scope, matching the suite's pattern
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_admin_is_rejected(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            MCPConnectorImportRequest,
+            import_mcp_servers,
+        )
+
+        payload = MCPConnectorImportRequest.model_validate(
+            {"mcpServers": {"srv": {"url": "https://x.example/mcp"}}}
+        )
+        caller = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.INTERNAL_USER)
+
+        with patch(  # test-quality-ok: endpoint takes collaborators from module scope, matching the suite's pattern
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=MagicMock(),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await import_mcp_servers(payload=payload, user_api_key_dict=caller)
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_import_reports_imported_skipped_and_errors(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            MCPConnectorImportRequest,
+            import_mcp_servers,
+        )
+
+        payload = MCPConnectorImportRequest.model_validate(
+            {
+                "mcpServers": {
+                    "new-server": {"url": "https://new.example/mcp", "authorization_token": "tok"},
+                    "existing": {"url": "https://existing.example/mcp"},
+                    "broken": {"type": "websocket", "url": "wss://x.example"},
+                }
+            }
+        )
+        admin = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user")
+        existing = generate_mock_mcp_server_db_record(server_id="existing-1", alias="existing")
+        created = generate_mock_mcp_server_db_record(server_id="created-1", alias="new_server")
+        create_mock = AsyncMock(return_value=created)
+        mock_manager = MagicMock()
+        mock_manager.reload_servers_from_database = AsyncMock()
+        mock_manager.add_server = AsyncMock()
+
+        with ExitStack() as stack:
+            for p in self._import_patches([existing], create_mock, mock_manager):
+                stack.enter_context(p)
+            result = await import_mcp_servers(payload=payload, user_api_key_dict=admin)
+
+        assert [entry.name for entry in result.imported] == ["new-server"]
+        assert result.imported[0].server_id == "created-1"
+        assert [entry.name for entry in result.skipped] == ["existing"]
+        assert "already exists" in result.skipped[0].reason
+        assert [entry.name for entry in result.errors] == ["broken"]
+        create_mock.assert_awaited_once()
+        sent_request = create_mock.await_args[0][1]
+        assert sent_request.credentials == {"auth_value": "tok"}
+        mock_manager.add_server.assert_awaited_once_with(created)
+        mock_manager.reload_servers_from_database.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_duplicate_names_within_payload_are_skipped(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            MCPConnectorImportRequest,
+            import_mcp_servers,
+        )
+
+        payload = MCPConnectorImportRequest.model_validate(
+            {
+                "mcp_servers": [
+                    {"type": "url", "url": "https://a.example/mcp", "name": "dup srv"},
+                    {"type": "url", "url": "https://b.example/mcp", "name": "dup-srv"},
+                ]
+            }
+        )
+        admin = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user")
+        created = generate_mock_mcp_server_db_record(server_id="created-1", alias="dup_srv")
+        create_mock = AsyncMock(return_value=created)
+        mock_manager = MagicMock()
+        mock_manager.reload_servers_from_database = AsyncMock()
+        mock_manager.add_server = AsyncMock()
+
+        with ExitStack() as stack:
+            for p in self._import_patches([], create_mock, mock_manager):
+                stack.enter_context(p)
+            result = await import_mcp_servers(payload=payload, user_api_key_dict=admin)
+
+        assert len(result.imported) == 1
+        assert len(result.skipped) == 1
+        assert "Duplicate connector name" in result.skipped[0].reason
+        create_mock.assert_awaited_once()
+        mock_manager.add_server.assert_awaited_once_with(created)
+
+    @pytest.mark.asyncio
+    async def test_no_imports_skips_registry_refresh(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            MCPConnectorImportRequest,
+            import_mcp_servers,
+        )
+
+        payload = MCPConnectorImportRequest.model_validate(
+            {"mcpServers": {"existing": {"url": "https://existing.example/mcp"}}}
+        )
+        admin = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user")
+        existing = generate_mock_mcp_server_db_record(server_id="existing-1", alias="existing")
+        create_mock = AsyncMock()
+        mock_manager = MagicMock()
+        mock_manager.reload_servers_from_database = AsyncMock()
+        mock_manager.add_server = AsyncMock()
+
+        with ExitStack() as stack:
+            for p in self._import_patches([existing], create_mock, mock_manager):
+                stack.enter_context(p)
+            result = await import_mcp_servers(payload=payload, user_api_key_dict=admin)
+
+        assert result.imported == ()
+        create_mock.assert_not_awaited()
+        mock_manager.add_server.assert_not_awaited()
+        mock_manager.reload_servers_from_database.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_registration_failure_keeps_the_import_result(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            MCPConnectorImportRequest,
+            import_mcp_servers,
+        )
+
+        payload = MCPConnectorImportRequest.model_validate(
+            {"mcpServers": {"new-server": {"url": "https://new.example/mcp"}}}
+        )
+        admin = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user")
+        created = generate_mock_mcp_server_db_record(server_id="created-1", alias="new_server")
+        create_mock = AsyncMock(return_value=created)
+        mock_manager = MagicMock()
+        mock_manager.reload_servers_from_database = AsyncMock()
+        mock_manager.add_server = AsyncMock(side_effect=RuntimeError("registration boom"))
+
+        with ExitStack() as stack:
+            for p in self._import_patches([], create_mock, mock_manager):
+                stack.enter_context(p)
+            result = await import_mcp_servers(payload=payload, user_api_key_dict=admin)
+
+        assert [entry.name for entry in result.imported] == ["new-server"]
+        mock_manager.reload_servers_from_database.assert_awaited_once()

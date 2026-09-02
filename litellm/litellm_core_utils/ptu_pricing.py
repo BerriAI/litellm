@@ -28,6 +28,7 @@ PTU_ZEROED_PRICING_FIELDS: Final = tuple(f for f in MirroredPricingParams.model_
     "cache_creation_input_token_cost_above_1hr",
     "cache_creation_input_token_cost_above_200k_tokens",
     "cache_read_input_token_cost_above_200k_tokens",
+    "google_maps_grounding_cost_per_query",
 )
 # tiered_pricing is emptied rather than zeroed: its tiers outrank the zeros written beside
 # them, so a zero here would leave the cost map's tiers billing the traffic the reserved
@@ -122,6 +123,14 @@ def ptu_identity_error(
             model_name,
         )
     return None
+
+
+PTU_MODEL_INFO_FIELDS: Final = ("ptu_count", "cost_per_ptu_per_hour", "ptu_effective_from", "ptu_effective_to")
+
+
+def declares_ptu(model_info: Mapping[str, object]) -> bool:
+    """Whether any PTU field is set here, including one too malformed to charge."""
+    return any(model_info.get(field) is not None for field in PTU_MODEL_INFO_FIELDS)
 
 
 def ptu_config_error(model_info: Mapping[str, object], *, model_name: str | None = None) -> str | None:

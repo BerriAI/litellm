@@ -6,12 +6,10 @@ failed when master_key was None. [https://github.com/BerriAI/litellm/issues/1642
 """
 
 import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.proxy.proxy_server import ProxyConfig

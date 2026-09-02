@@ -1,6 +1,8 @@
 import base64
 import json
+import logging
 import os
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -3309,6 +3311,66 @@ def test_get_tool_calls_from_response_include_all_choices_reads_every_choice():
     assert names == ["tool_alpha", "tool_beta"]
 
 
+def test_get_tool_calls_from_response_silences_redacted_arguments(caplog):
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        get_tool_calls_from_response,
+    )
+
+    response: Final = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": "Read",
+                                "arguments": "redacted-by-litellm",
+                            },
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        tool_calls: Final = get_tool_calls_from_response(response)
+
+    assert tool_calls == [{"id": "call_1", "name": "Read", "arguments": {}}]
+    assert "Failed to parse tool call arguments" not in caplog.text
+
+
+def test_get_tool_calls_from_response_warns_for_malformed_arguments(caplog):
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        get_tool_calls_from_response,
+    )
+
+    response: Final = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {
+                                "name": "Read",
+                                "arguments": "not-json",
+                            },
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        tool_calls: Final = get_tool_calls_from_response(response)
+
+    assert tool_calls == [{"id": "call_1", "name": "Read", "arguments": {}}]
+    assert "Failed to parse tool call arguments" in caplog.text
+
+
 def test_group_tool_exchanges_pairs_assistant_with_its_tool_rows():
     from litellm.litellm_core_utils.prompt_templates.factory import group_tool_exchanges
 
@@ -3516,3 +3578,116 @@ async def test_bedrock_converse_pdf_only_user_message_gets_text_block_async():
     assert len(result) == 1
     assert any("document" in block for block in result[0]["content"])
     assert _text_blocks(result[0]) == [BEDROCK_DOCUMENT_PLACEHOLDER_TEXT]
+
+
+def test_convert_to_anthropic_tool_result_keeps_tool_reference_blocks():
+    from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_tool_result
+
+    result = convert_to_anthropic_tool_result(
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01",
+            "content": [
+                {"type": "text", "text": "loaded"},
+                {"type": "tool_reference", "tool_name": "WebFetch"},
+            ],
+        }
+    )
+
+    assert result == {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01",
+        "content": [
+            {"type": "text", "text": "loaded"},
+            {"type": "tool_reference", "tool_name": "WebFetch"},
+        ],
+    }
+
+
+def test_convert_gemini_tool_call_result_answers_tool_reference_only_result():
+    """Every Gemini function call needs a function response, even when the tool result carries no text.
+    Fixes: https://github.com/BerriAI/litellm/issues/37462
+    """
+    result = convert_to_gemini_tool_call_result(
+        message=ChatCompletionToolMessage(
+            role="tool",
+            tool_call_id="toolu_01",
+            content=[{"type": "tool_reference", "tool_name": "WebFetch"}],
+        ),
+        last_message_with_tool_calls={
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "toolu_01",
+                    "type": "function",
+                    "function": {"name": "ToolSearch", "arguments": '{"query": "select:WebFetch"}'},
+                }
+            ],
+        },
+    )
+
+    assert result == {"function_response": {"name": "ToolSearch", "response": {"content": ""}}}
+
+
+def test_convert_to_anthropic_tool_invoke_degrades_unpaired_server_tool_use():
+    """A replayed srvtoolu_ call whose server tool result is not available
+    (e.g. the Responses bridge replays items without provider_specific_fields)
+    must become a plain client tool_use so the client's tool_result can pair
+    with it. A dangling server_tool_use makes Anthropic 400 the request with
+    "unexpected `tool_use_id` found in `tool_result` blocks"."""
+    from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_tool_invoke
+
+    result = convert_to_anthropic_tool_invoke(
+        tool_calls=[
+            {
+                "id": "srvtoolu_01Unpaired",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "zig version"}'},
+            }
+        ],
+        web_search_results=None,
+        tool_results=None,
+    )
+
+    assert result == [
+        {
+            "type": "tool_use",
+            "id": "srvtoolu_01Unpaired",
+            "name": "web_search",
+            "input": {"query": "zig version"},
+        }
+    ]
+
+
+def test_convert_to_anthropic_tool_invoke_keeps_paired_server_tool_use():
+    """When the paired server tool result is available, the srvtoolu_ call is
+    still reconstructed as server_tool_use followed by its result block."""
+    from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_tool_invoke
+
+    server_result = {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu_01Paired",
+        "content": [{"type": "web_search_result", "url": "https://ziglang.org", "title": "Zig"}],
+    }
+
+    result = convert_to_anthropic_tool_invoke(
+        tool_calls=[
+            {
+                "id": "srvtoolu_01Paired",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "zig version"}'},
+            }
+        ],
+        web_search_results=[server_result],
+        tool_results=None,
+    )
+
+    assert result == [
+        {
+            "type": "server_tool_use",
+            "id": "srvtoolu_01Paired",
+            "name": "web_search",
+            "input": {"query": "zig version"},
+        },
+        server_result,
+    ]
