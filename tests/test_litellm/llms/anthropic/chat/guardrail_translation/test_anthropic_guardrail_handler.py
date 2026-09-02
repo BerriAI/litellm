@@ -263,6 +263,117 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
             # Should return the responses unchanged
             assert result == responses_so_far
 
+    @staticmethod
+    def _ended_sse_chunks() -> list:
+        events = [
+            ("message_start", {"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-4-5", "content": [], "stop_reason": None, "usage": {"input_tokens": 1, "output_tokens": 0}}}),
+            ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hello "}}),
+            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "world"}}),
+            ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+            ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 2}}),
+            ("message_stop", {"type": "message_stop"}),
+        ]
+        return [f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in events]
+
+    @staticmethod
+    def _masking_guardrail() -> CustomGuardrail:
+        class MaskWorld(CustomGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                return {**inputs, "texts": [text.replace("world", "[MASKED]") for text in inputs.get("texts", [])]}
+
+        return MaskWorld(guardrail_name="test")
+
+    @staticmethod
+    def _delta_texts(chunks: list) -> list:
+        texts = []
+        for chunk in chunks:
+            for line in chunk.decode().split("\n"):
+                if not line.startswith("data:"):
+                    continue
+                data = json.loads(line[len("data:") :].strip())
+                if data.get("type") == "content_block_delta":
+                    texts.append(data["delta"]["text"])
+        return texts
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_writes_text_back_into_sse_chunks(self):
+        handler = AnthropicMessagesHandler()
+        chunks = self._ended_sse_chunks()
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is chunks
+        assert self._delta_texts(chunks) == ["hello [MASKED]", ""]
+        raw = b"".join(chunks).decode()
+        assert "event: message_start" in raw and "event: message_stop" in raw
+        assert '"stop_reason": "end_turn"' in raw
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_rewrite_leaves_chunks_untouched_by_default(self):
+        handler = AnthropicMessagesHandler()
+        chunks = self._ended_sse_chunks()
+        original = [bytes(chunk) for chunk in chunks]
+
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert chunks == original
+
+    @pytest.mark.asyncio
+    async def test_unended_stream_rewrite_with_delivery_expected_fails_closed(self):
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        handler = AnthropicMessagesHandler()
+        chunks = self._ended_sse_chunks()[:-2]
+
+        with pytest.raises(UndeliverableStreamRewrite):
+            await handler.process_output_streaming_response(
+                responses_so_far=chunks,
+                guardrail_to_apply=self._masking_guardrail(),
+                litellm_logging_obj=MagicMock(),
+                deliver_ended_stream_rewrites=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_unended_stream_without_rewrite_is_released_with_delivery_expected(self):
+        handler = AnthropicMessagesHandler()
+        chunks = self._ended_sse_chunks()[:-2]
+        original = [bytes(chunk) for chunk in chunks]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=MockPassThroughGuardrail(guardrail_name="test"),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is chunks
+        assert chunks == original
+
+    @pytest.mark.asyncio
+    async def test_unended_stream_rewrite_without_delivery_expected_does_not_raise(self):
+        handler = AnthropicMessagesHandler()
+        chunks = self._ended_sse_chunks()[:-2]
+        original = [bytes(chunk) for chunk in chunks]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert result is chunks
+        assert chunks == original
+
 
 class TestAnthropicMessagesHandlerInputProcessing:
     """Test input processing preserves litellm_metadata for dynamic guardrails."""
