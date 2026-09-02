@@ -305,6 +305,43 @@ class TestUser:
         assert not user_with_models.has_model_access("gpt-3")
         assert user_no_models.has_model_access("any-model")
 
+    def test_user_from_object_with_attributes(self):
+        class MockPrismaUser:
+            def __init__(
+                self,
+                user_id: str,
+                spend: float | None = None,
+                models: list[str] | None = None,
+                teams: list[str] | None = None,
+            ) -> None:
+                self.user_id = user_id
+                self.spend = spend
+                self.models = models
+                self.teams = teams
+
+        row = MockPrismaUser(user_id="object-user")
+        user = LiteLLM_UserTable.model_validate(row)
+
+        assert user.user_id == "object-user"
+        assert user.spend == 0.0
+        assert user.models == []
+        assert user.teams == []
+
+    def test_user_from_pydantic_model(self):
+        class MockPydanticUser(BaseModel):
+            user_id: str
+            spend: float | None = None
+            models: list[str] | None = None
+            teams: list[str] | None = None
+
+        row = MockPydanticUser(user_id="pydantic-user")
+        user = LiteLLM_UserTable.model_validate(row)
+
+        assert user.user_id == "pydantic-user"
+        assert user.spend == 0.0
+        assert user.models == []
+        assert user.teams == []
+
     def test_password_hash_excluded_from_serialization(self):
         from litellm.proxy._types import LiteLLM_UserTableWithKeyCount
 
