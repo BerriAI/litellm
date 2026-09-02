@@ -16,6 +16,20 @@ uv run python -m tests.test_litellm.ocr.fixtures.record --examples 4 --concurren
 `--concurrency` caps provider calls across all targets. Independent jobs finish after a failure, then the command exits
 nonzero if any job failed
 
+New recordings are VCR YAML cassettes. The committed corpus contains 31 migrated cassettes: 18 Mistral, 9 Reducto v3,
+and 4 Reducto legacy. Their original response bytes, statuses, headers, and recording timestamps are preserved
+
+To migrate an existing JSON fixture directory locally:
+
+```shell
+uv run python -m tests.test_litellm.ocr.fixtures.migrate --fixture-dir tests/test_litellm/ocr/fixtures/data
+```
+
+The migration replays each old response through the Python SDK to reconstruct missing requests, writes and validates
+the YAML cassette, then removes its JSON predecessor. It calls only local recording/replay servers and needs no provider
+credentials. Reconstructed requests are labeled `python_replay`; they are not historical wire captures. Filenames use
+the current normalized SDK input hash, including the fixture contract
+
 OCR strategies generate public `litellm.ocr()` and `litellm.aocr()` inputs. Every case contains the normalized model,
 document, optional provider override, and LiteLLM keyword arguments. The fixture-only `contract` literal selects the
 input schema and is removed before calling the SDK. Strategies never build provider wire payloads

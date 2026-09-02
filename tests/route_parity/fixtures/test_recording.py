@@ -14,7 +14,11 @@ from hypothesis import strategies as st
 from pydantic import BaseModel, ConfigDict
 
 from tests.route_parity.fixtures.pipeline import RecordingTarget, record_fixtures
-from tests.route_parity.fixtures.recording import UpstreamEndpoint, record_upstream_responses
+from tests.route_parity.fixtures.recording import (
+    UpstreamEndpoint,
+    record_upstream_interactions,
+    record_upstream_responses,
+)
 from tests.route_parity.fixtures.store import (
     FIXTURE_SCHEMA_VERSION,
     fixture_path,
@@ -96,6 +100,10 @@ class _ControlledUpstreamHandler(BaseHTTPRequestHandler):
         assert isinstance(upstream, _ControlledUpstream)
         length: Final = int(self.headers.get("content-length") or "0")
         self.rfile.read(length)
+        if self.path == "/credentials?api_key=query-secret&api-version=1":
+            authorized: Final = self.headers.get("authorization") == "Bearer header-secret"
+            self._send_json(200 if authorized else 401, b"{}")
+            return
         if self.path == "/upload":
             self._send_json(200, b'{"file_id":"fixture://document.pdf"}')
             return
@@ -247,17 +255,17 @@ def test_recording_deduplicates_per_target_and_caps_global_concurrency(tmp_path:
     assert upstream.request_count == 2
     assert upstream.max_active_requests == 2
     assert len(recorded_fixtures(tmp_path, _ParityCase)) == 2
-    for path in tmp_path.rglob("*.json"):
+    for path in tmp_path.rglob("*.yaml"):
         contents = path.read_text(encoding="utf-8")
-        assert f'"schema_version": {FIXTURE_SCHEMA_VERSION}' in contents
-        assert '"recorded_at":' in contents
+        assert f"schema_version: {FIXTURE_SCHEMA_VERSION}" in contents
+        assert "recorded_at:" in contents
 
 
 def test_pipeline_rejects_stale_fixture_before_provider_call(tmp_path: Path) -> None:
     case_input: Final = _case("stale")
     directory: Final = tmp_path / "stale-target"
     directory.mkdir()
-    path: Final = fixture_path(directory, case_input)
+    path: Final = fixture_path(directory, case_input).with_suffix(".json")
     path.write_text('{"schema_version": 0}\n', encoding="utf-8")
     target: Final = RecordingTarget(
         name="stale-target",
@@ -343,6 +351,34 @@ def test_sensitive_response_headers_are_not_recorded() -> None:
         )
 
     assert all(header.name.lower() != "set-cookie" for header in responses[0].headers)
+
+
+def test_recorded_requests_strip_credentials_without_changing_the_live_request() -> None:
+    def sdk_call(api_base: str, case_input: _FixtureInput) -> object:
+        return httpx.post(
+            f"{api_base}/credentials?api_key=query-secret&api-version=1",
+            headers={
+                "Authorization": "Bearer header-secret",
+                "Ocp-Apim-Subscription-Key": "azure-secret",
+                "Cookie": "session=cookie-secret",
+                "X-Test": case_input.identifier,
+            },
+            content=b"\xffdocument",
+        )
+
+    with _controlled_upstream() as upstream:
+        interactions: Final = record_upstream_interactions(
+            UpstreamEndpoint(upstream.url), _case("credentials"), sdk_call
+        )
+
+    interaction: Final = interactions[0]
+    assert interaction.response.status_code == 200
+    assert interaction.request.uri == "http://parity-provider.invalid/credentials?api-version=1"
+    assert interaction.request.body == b"\xffdocument"
+    assert interaction.request.headers["x-test"] == "credentials"
+    assert all(
+        header not in interaction.request.headers for header in ("authorization", "ocp-apim-subscription-key", "cookie")
+    )
 
 
 @pytest.mark.parametrize("method", ("PUT", "PATCH", "DELETE"))

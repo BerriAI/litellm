@@ -10,6 +10,8 @@ from typing import Final, TypeVar, cast
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
+from vcr.filters import remove_query_parameters
+from vcr.request import Request
 
 from tests.provider_record_replay.http import (
     dropped_request_headers,
@@ -25,6 +27,21 @@ from tests.route_parity.recorded_http import (
 )
 
 _PARITY_PROVIDER_HOST: Final = "parity-provider.invalid"
+_SECRET_HEADERS: Final = frozenset(
+    {
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "x-api-key",
+        "api-key",
+        "anthropic-api-key",
+        "openai-api-key",
+        "azure-api-key",
+        "x-goog-api-key",
+        "ocp-apim-subscription-key",
+        "x-amz-security-token",
+    }
+)
 
 InputT = TypeVar("InputT")
 
@@ -32,6 +49,12 @@ InputT = TypeVar("InputT")
 @dataclass(frozen=True, slots=True)
 class UpstreamEndpoint:
     base_url: str
+
+
+@dataclass(frozen=True, slots=True)
+class RecordedInteraction:
+    request: Request
+    response: RecordedResponse
 
 
 def _end_to_end_headers(headers: httpx.Headers) -> tuple[HttpHeader, ...]:
@@ -68,18 +91,18 @@ class _RecordingProvider(ThreadingHTTPServer):
     def __init__(self, spec: UpstreamEndpoint) -> None:
         super().__init__(("127.0.0.1", 0), _RecordingHandler)
         self.spec: Final = spec
-        self.responses: queue.Queue[RecordedResponse] = queue.Queue()
+        self.interactions: queue.Queue[RecordedInteraction] = queue.Queue()
 
     @property
     def url(self) -> str:
         return f"http://127.0.0.1:{self.server_address[1]}"
 
-    def take_responses(self) -> tuple[RecordedResponse, ...]:
+    def take_interactions(self) -> tuple[RecordedInteraction, ...]:
         try:
-            first: Final = self.responses.get(timeout=5)
+            first: Final = self.interactions.get(timeout=5)
         except queue.Empty as error:
             raise RuntimeError("successful SDK call did not produce a recorded response") from error
-        remaining: Final = tuple(self.responses.get_nowait() for _ in range(self.responses.qsize()))
+        remaining: Final = tuple(self.interactions.get_nowait() for _ in range(self.interactions.qsize()))
         return (first, *remaining)
 
 
@@ -125,7 +148,16 @@ class _RecordingHandler(BaseHTTPRequestHandler):
             self._send_response(502, (), str(error).encode("utf-8"))
             return
 
-        provider.responses.put(recorded_response)
+        recorded_request: Final = remove_query_parameters(
+            Request(
+                self.command,
+                f"http://{_PARITY_PROVIDER_HOST}{self.path}",
+                request_body,
+                {name: value for name, value in forwarded_headers if name.lower() not in _SECRET_HEADERS},
+            ),
+            ("api_key", "api-key", "key", "access_token", "subscription-key"),
+        )
+        provider.interactions.put(RecordedInteraction(recorded_request, recorded_response))
         if isinstance(recorded_response, RecordedHttpResponse):
             self._send_response(
                 recorded_response.status_code, recorded_response.headers, recorded_response.body_bytes()
@@ -203,19 +235,28 @@ def _recording_provider(spec: UpstreamEndpoint) -> Generator[_RecordingProvider]
         thread.join(timeout=5)
 
 
-def _invoke_and_take_responses(
+def _invoke_and_take_interactions(
     recorder: _RecordingProvider,
     case_input: InputT,
     sdk_call: Callable[[str, InputT], object],
-) -> tuple[RecordedResponse, ...]:
+) -> tuple[RecordedInteraction, ...]:
     try:
         sdk_call(recorder.url, case_input)
     except Exception as invocation_error:
         try:
-            return recorder.take_responses()
+            return recorder.take_interactions()
         except RuntimeError:
             raise invocation_error
-    return recorder.take_responses()
+    return recorder.take_interactions()
+
+
+def record_upstream_interactions(
+    spec: UpstreamEndpoint,
+    case_input: InputT,
+    sdk_call: Callable[[str, InputT], object],
+) -> tuple[RecordedInteraction, ...]:
+    with _recording_provider(spec) as recorder:
+        return _invoke_and_take_interactions(recorder, case_input, sdk_call)
 
 
 def record_upstream_responses(
@@ -223,5 +264,4 @@ def record_upstream_responses(
     case_input: InputT,
     sdk_call: Callable[[str, InputT], object],
 ) -> tuple[RecordedResponse, ...]:
-    with _recording_provider(spec) as recorder:
-        return _invoke_and_take_responses(recorder, case_input, sdk_call)
+    return tuple(item.response for item in record_upstream_interactions(spec, case_input, sdk_call))

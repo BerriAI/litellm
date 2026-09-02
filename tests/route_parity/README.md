@@ -40,6 +40,27 @@ The shared package owns recording, replay, persistence, execution, comparison, a
 Each API package owns its input models, explicit strategies, provider targets, route-specific assets, fixture directory,
 and regeneration command. See the API package documentation for its configured contracts and recording command
 
+## VCR cassettes
+
+Fixtures use VCR's YAML `version: 1` format with ordered request/response `interactions`. VCR handles text and binary
+body serialization. Each cassette also contains `recorded_at`, `ttl_seconds: 0` (committed fixtures never expire), and
+`x-litellm` metadata holding the SDK input and request provenance. Streaming responses carry
+`x-litellm-chunk-lengths` so local replay preserves the original byte boundaries
+
+The recording server captures requests before forwarding their responses. Saved requests use the stable
+`http://parity-provider.invalid` origin and strip authentication headers and credential query parameters. The upstream
+request keeps its credentials. Provider response bytes and non-success statuses are preserved
+
+Standard VCR can load these files and replay their interactions. Parity tests keep using the local HTTP server because
+Rust HTTP calls do not pass through VCR's Python patches. The harness still compares the two implementations' requests
+against each other; the saved request is available for inspection and VCR playback, not a new parity assertion
+
+Refresh parity cassettes through the API's recording command. Generic VCR writers do not preserve the SDK metadata
+
+Legacy JSON fixtures remain readable. Migrated cassettes mark reconstructed requests as `python_replay`; fresh
+recordings use `recorded`. The metadata extensions follow the filesystem cassette layout proposed in
+[PR #39338](https://github.com/BerriAI/litellm/pull/39338), without depending on its unmerged persistence backend
+
 ## References
 
 - [Hypothesis documentation](https://hypothesis.readthedocs.io/en/latest/)

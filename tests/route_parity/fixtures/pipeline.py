@@ -11,7 +11,7 @@ from hypothesis.strategies import SearchStrategy
 from pydantic import BaseModel
 
 from tests.route_parity.fixtures.inputs import generate_case_inputs
-from tests.route_parity.fixtures.recording import UpstreamEndpoint, record_upstream_responses
+from tests.route_parity.fixtures.recording import UpstreamEndpoint, record_upstream_interactions
 from tests.route_parity.fixtures.store import (
     FixtureInput,
     canonical_json,
@@ -121,19 +121,25 @@ def build_recording_jobs(
 def _record_job(job: RecordingJob[InputT], case_type: type[CaseT]) -> RecordedFixture | CachedFixture:
     cached: Final = load_fixture(job.directory, job.case_input, case_type)
     if cached is not None:
+        path: Final = fixture_path(job.directory, job.case_input)
         return CachedFixture(
             target_name=job.target_name,
             case_id=job.case_id,
-            path=fixture_path(job.directory, job.case_input),
+            path=path if path.is_file() else path.with_suffix(".json"),
         )
-    provider_responses: Final = record_upstream_responses(
+    interactions: Final = record_upstream_interactions(
         job.upstream,
         job.case_input,
         job.invocation.execute,
     )
-    case: Final = case_type.model_validate({"litellm_input": job.case_input, "provider_responses": provider_responses})
-    path: Final = save_fixture(job.directory, job.case_input, case)
-    return RecordedFixture(target_name=job.target_name, case_id=job.case_id, path=path)
+    case: Final = case_type.model_validate(
+        {
+            "litellm_input": job.case_input,
+            "provider_responses": tuple(item.response for item in interactions),
+        }
+    )
+    saved_path: Final = save_fixture(job.directory, job.case_input, case, interactions)
+    return RecordedFixture(target_name=job.target_name, case_id=job.case_id, path=saved_path)
 
 
 def _completed_outcome(

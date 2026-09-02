@@ -174,7 +174,9 @@ def test_failure_does_not_stop_independent_recordings(tmp_path: Path) -> None:
     stale_input: Final = _FixtureInput(identifier="stale")
     stale_directory: Final = tmp_path / "stale"
     stale_directory.mkdir()
-    fixture_path(stale_directory, stale_input).write_text('{"schema_version": 0}\n', encoding="utf-8")
+    fixture_path(stale_directory, stale_input).with_suffix(".json").write_text(
+        '{"schema_version": 0}\n', encoding="utf-8"
+    )
     with _upstream() as upstream:
         targets: Final = (
             _target("stale", upstream.url, stale_input, _Invocation()),
