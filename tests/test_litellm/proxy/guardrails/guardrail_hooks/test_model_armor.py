@@ -4666,6 +4666,83 @@ async def test_streaming_responses_mcp_argument_deltas_are_scanned_when_the_body
     assert "Streaming response blocked by Model Armor" in rendered
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "with_output_text_delta",
+    [True, False],
+    ids=["summary-and-text-deltas", "summary-delta-only"],
+)
+async def test_streaming_responses_reasoning_summary_deltas_are_scanned_alongside_the_body(with_output_text_delta):
+    """A reasoning turn streams its summary in deltas the terminal body never repeats.
+
+    Reading only the body scans the visible answer and hands the client every summary delta
+    unscanned, so the body and the deltas are scanned together.
+    """
+    from litellm.types.llms.openai import (
+        OutputTextDeltaEvent,
+        ReasoningSummaryTextDeltaEvent,
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    answer = "the weather is fine"
+    summary_delta = ReasoningSummaryTextDeltaEvent(
+        type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
+        item_id="rs_1",
+        output_index=0,
+        delta="the user said my card is 4111-1111-1111-1111",
+    )
+    text_deltas = (
+        (
+            OutputTextDeltaEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+                item_id="msg_1",
+                output_index=1,
+                content_index=0,
+                delta=answer,
+            ),
+        )
+        if with_output_text_delta
+        else ()
+    )
+    completed = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=ResponsesAPIResponse(
+            id="resp_1",
+            created_at=0,
+            model="gpt-5-mini",
+            object="response",
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": answer, "annotations": []}],
+                }
+            ],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+        ),
+    )
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_BLOCK)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, (summary_delta, *text_deltas, completed))
+
+    post.assert_called_once()
+    scanned = post.call_args.kwargs["json"]["modelResponseData"]["text"]
+    assert "4111-1111-1111-1111" in scanned
+    assert answer in scanned
+    assert scanned.count(answer) == 1
+    rendered = "".join(str(item) for item in delivered)
+    assert "4111-1111-1111-1111" not in rendered
+    assert "Streaming response blocked by Model Armor" in rendered
+
+
 def test_every_responses_delta_event_is_in_the_scanned_set():
     """Every ``.delta`` the Responses event enum defines is model output on its way to the client."""
     from litellm.proxy.guardrails.guardrail_hooks.model_armor.model_armor import (

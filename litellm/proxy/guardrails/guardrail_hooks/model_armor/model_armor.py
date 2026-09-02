@@ -990,17 +990,20 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         all_chunks: Sequence[object],
         surface: _StreamSurface,
     ) -> str:
-        """Text to scan for a buffered stream, which is whatever the client is about to receive.
+        """Text to scan for a buffered stream, which is everything the client is about to receive.
 
-        ``response.failed`` and ``response.incomplete`` are terminal like ``response.completed`` but
-        report a turn that broke mid-generation, so their body can be empty while the deltas ahead of
-        them already spelled the answer out. Reading the body alone finds nothing to scan there and
-        releases those deltas untouched, so an empty body falls back to the deltas themselves.
+        A ``/v1/responses`` stream also spells out reasoning summaries and tool-call arguments in
+        delta events that its terminal body never repeats, so body and deltas are scanned together.
         """
         content: Final = self._extract_streaming_content(assembled_response)
-        if content or surface is not _StreamSurface.RESPONSES:
+        if surface is not _StreamSurface.RESPONSES:
             return content
-        return self._responses_delta_text(all_chunks)
+        delta_text: Final = self._responses_delta_text(all_chunks)
+        if delta_text in content:
+            return content
+        if content in delta_text:
+            return delta_text
+        return f"{content}\n{delta_text}"
 
     @staticmethod
     def _apply_sanitized_content(assembled_response: ModelResponse, sanitized_content: str) -> None:
