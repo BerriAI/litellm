@@ -8,7 +8,7 @@ secrets_adapter: TypeAdapter[dict[str, str]] = TypeAdapter(dict[str, str])
 
 def main() -> int:
     env_path = Path(sys.argv[1])
-    secrets = secrets_adapter.validate_json(sys.stdin.read())
+    secrets = {key: value.rstrip("\r\n") for key, value in secrets_adapter.validate_json(sys.stdin.read()).items()}
     unwritable = tuple(
         key for key, value in secrets.items() if "'" in value or "\n" in value or "\r" in value
     )
