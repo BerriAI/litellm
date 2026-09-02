@@ -25,6 +25,7 @@ from litellm.types.vector_stores import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.router import Router
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -245,6 +246,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         extra_body: Mapping[str, object] | None = None,
+        router: "Router | None" = None,
     ) -> tuple[str, dict[str, object]]:
         """
         Transform a search request for the Vertex AI Search (Discovery Engine) API.

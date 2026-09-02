@@ -137,6 +137,7 @@ class BaseVectorStoreConfig:
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         extra_body: dict[str, Any] | None = None,
+        router: Router | None = None,
     ) -> tuple[str, dict]:
         pass
 
@@ -149,6 +150,7 @@ class BaseVectorStoreConfig:
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         extra_body: dict[str, Any] | None = None,
+        router: Router | None = None,
     ) -> tuple[str, dict]:
         """
         Optional async version of transform_search_vector_store_request.
@@ -164,6 +166,7 @@ class BaseVectorStoreConfig:
             litellm_logging_obj=litellm_logging_obj,
             litellm_params=litellm_params,
             extra_body=extra_body,
+            router=router,
         )
 
     @abstractmethod
@@ -252,6 +255,7 @@ class BaseQueryEmbeddingVectorStoreConfig(BaseVectorStoreConfig):
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: Mapping[str, object],
         extra_body: Mapping[str, object] | None = None,
+        router: Router | None = None,
         embedding_executor: VectorStoreEmbeddingExecutor | None = None,
     ) -> tuple[str, dict[str, object]]:
         pass
@@ -265,6 +269,7 @@ class BaseQueryEmbeddingVectorStoreConfig(BaseVectorStoreConfig):
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: Mapping[str, object],
         extra_body: Mapping[str, object] | None = None,
+        router: Router | None = None,
         embedding_executor: VectorStoreEmbeddingExecutor | None = None,
     ) -> tuple[str, dict[str, object]]:
         return self.transform_search_vector_store_request(
@@ -275,6 +280,7 @@ class BaseQueryEmbeddingVectorStoreConfig(BaseVectorStoreConfig):
             litellm_logging_obj=litellm_logging_obj,
             litellm_params=litellm_params,
             extra_body=extra_body,
+            router=router,
             embedding_executor=embedding_executor,
         )
 
@@ -299,17 +305,27 @@ class BaseQueryEmbeddingVectorStoreConfig(BaseVectorStoreConfig):
             return {str(key): value for key, value in configuration.items()}  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # litellm_params is an untyped dict, keys are re-validated as str here
         return _EMPTY_EMBEDDING_CONFIGURATION
 
+    @staticmethod
+    def query_embedding_executor(
+        embedding_executor: VectorStoreEmbeddingExecutor | None,
+        router: Router | None,
+    ) -> VectorStoreEmbeddingExecutor:
+        if embedding_executor is not None:
+            return embedding_executor
+        if router is not None:
+            return RouterVectorStoreEmbeddingExecutor(router=router, metadata=MappingProxyType({}))
+        return LiteLLMVectorStoreEmbeddingExecutor()
+
     def embed_query(
         self,
         query_text: str,
         litellm_params: Mapping[str, object],
         embedding_executor: VectorStoreEmbeddingExecutor | None,
+        router: Router | None = None,
     ) -> Sequence[float]:
         model: Final = self.query_embedding_model(litellm_params)
         configuration: Final = self.query_embedding_configuration(litellm_params)
-        executor: Final = (
-            embedding_executor if embedding_executor is not None else LiteLLMVectorStoreEmbeddingExecutor()
-        )
+        executor: Final = self.query_embedding_executor(embedding_executor, router)
         try:
             response: Final = executor.embed(model, query_text, configuration)
         except Exception as e:
@@ -321,12 +337,11 @@ class BaseQueryEmbeddingVectorStoreConfig(BaseVectorStoreConfig):
         query_text: str,
         litellm_params: Mapping[str, object],
         embedding_executor: VectorStoreEmbeddingExecutor | None,
+        router: Router | None = None,
     ) -> Sequence[float]:
         model: Final = self.query_embedding_model(litellm_params)
         configuration: Final = self.query_embedding_configuration(litellm_params)
-        executor: Final = (
-            embedding_executor if embedding_executor is not None else LiteLLMVectorStoreEmbeddingExecutor()
-        )
+        executor: Final = self.query_embedding_executor(embedding_executor, router)
         try:
             response: Final = await executor.aembed(model, query_text, configuration)
         except Exception as e:
@@ -376,6 +391,7 @@ class BaseDirectVectorStoreConfig(BaseVectorStoreConfig):
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: Mapping[str, object],
         extra_body: Mapping[str, object] | None = None,
+        router: Router | None = None,
     ) -> NoReturn:
         raise NotImplementedError("Direct vector store providers execute the search themselves; no HTTP request shape")
 
