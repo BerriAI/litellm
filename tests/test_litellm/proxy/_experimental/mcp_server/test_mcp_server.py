@@ -1336,11 +1336,13 @@ def _denied_scope_manager(known_server_names_to_ids: dict[str, str]) -> MagicMoc
     return manager
 
 
-def _scope_resolver(resolved_without_agent: list[str]) -> AsyncMock:
+def _scope_resolver(resolved_without_agent: list[str], access_groups: tuple[str, ...] = ()) -> AsyncMock:
     async def resolve(user_api_key_auth, mcp_servers, client_ip=None):
         if user_api_key_auth is not None and user_api_key_auth.agent_id:
             return []
-        return [MagicMock(server_id=server_id) for server_id in resolved_without_agent]
+        return [
+            MagicMock(server_id=server_id, access_groups=list(access_groups)) for server_id in resolved_without_agent
+        ]
 
     return AsyncMock(side_effect=resolve)
 
@@ -1450,7 +1452,7 @@ async def test_scoped_list_access_group_vetoed_by_agent_names_agent_and_group():
         user_api_key_auth,
         ["prod-group"],
         _denied_scope_manager({}),
-        _scope_resolver(resolved_without_agent=["srv-github"]),
+        _scope_resolver(resolved_without_agent=["srv-github"], access_groups=("prod-group",)),
     )
 
     assert denial.status_code == 403
@@ -1458,6 +1460,29 @@ async def test_scoped_list_access_group_vetoed_by_agent_names_agent_and_group():
     assert "access group 'prod-group'" in message
     assert "agent 'agent-123'" in message
     assert "mcp_access_groups" in message
+
+
+@pytest.mark.asyncio
+async def test_scoped_list_mixed_unknown_and_vetoed_group_names_the_group_that_resolved():
+    """With an unknown name ahead of the agent-vetoed group in the scope, the 403 must name the group
+    whose servers the key can reach, never the unknown name, or the admin is told to grant a group
+    that does not exist."""
+    pytest.importorskip("litellm.proxy._experimental.mcp_server.server")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user", agent_id="agent-123")
+
+    denial = await _denied_scoped_list(
+        user_api_key_auth,
+        ["no-such-group", "prod-group"],
+        _denied_scope_manager({}),
+        _scope_resolver(resolved_without_agent=["srv-github"], access_groups=("prod-group",)),
+    )
+
+    assert denial.status_code == 403
+    message = denial.detail["error"]
+    assert "access group 'prod-group'" in message
+    assert "no-such-group" not in message
+    assert "agent 'agent-123'" in message
 
 
 @pytest.mark.asyncio
