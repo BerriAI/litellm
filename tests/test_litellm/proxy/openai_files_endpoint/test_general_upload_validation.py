@@ -54,6 +54,11 @@ def test_blocked_extension_match_is_case_insensitive():
     assert check_blocked_extension("payload.EXE", (".exe",)) == UploadedFileBlockedExtension(extension=".exe")
 
 
+def test_blocked_extension_match_is_case_insensitive_for_configured_value():
+    """A config entry like blocked_file_extensions: ['.EXE'] must still catch a lowercase upload."""
+    assert check_blocked_extension("payload.exe", (".EXE",)) == UploadedFileBlockedExtension(extension=".exe")
+
+
 def test_extension_not_in_blocklist_allowed():
     assert check_blocked_extension("report.pdf", (".exe", ".sh")) is None
 

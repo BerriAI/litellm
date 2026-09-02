@@ -88,7 +88,11 @@ def check_blocked_extension(
         extension: Final = Path(safe_filename(filename)).suffix.lower()
     except ValueError:
         return None
-    if extension and extension in blocked_extensions:
+    # The uploaded name's extension is normalized above; blocked_extensions comes
+    # straight from config.yaml or the DB and is normalized here too, so a
+    # differently-cased entry (".EXE") still catches a lowercase upload.
+    normalized_blocked: Final = frozenset(item.lower() for item in blocked_extensions)
+    if extension and extension in normalized_blocked:
         return UploadedFileBlockedExtension(extension=extension)
     return None
 
