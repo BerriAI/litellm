@@ -2004,6 +2004,113 @@ class TestToolTransformation:
             == "string"
         )
 
+    def test_transform_namespace_tool_expands_nested_function_tools(self):
+        """
+        Regression for issue 2 of #35878: a namespace tool is a grouping container whose
+        nested tools are ordinary function tools. Dropping the container dropped every
+        nested tool with it, so a bridged client lost the sub-agent tools it declared.
+        """
+        namespace_tool = {
+            "type": "namespace",
+            "name": "collaboration",
+            "description": "sub-agent management",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "spawn_agent",
+                    "description": "start a sub-agent",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"task": {"type": "string"}},
+                        "required": ["task"],
+                    },
+                },
+                {
+                    "type": "function",
+                    "name": "close_agent",
+                    "description": "stop a sub-agent",
+                },
+            ],
+        }
+
+        (
+            result_tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[namespace_tool]
+        )
+
+        assert [tool["type"] for tool in result_tools] == ["function", "function"]
+        assert [tool["function"]["name"] for tool in result_tools] == [
+            "spawn_agent",
+            "close_agent",
+        ]
+        assert result_tools[0]["function"]["parameters"]["properties"] == {
+            "task": {"type": "string"}
+        }
+        assert result_tools[1]["function"]["parameters"] == {"type": "object"}
+        assert not any(tool.get("type") == "namespace" for tool in result_tools)
+        assert web_search_options is None
+
+    def test_transform_namespace_tool_alongside_top_level_tools(self):
+        """Nested tools land in the flat list next to top-level tools, and unsupported
+        built-ins inside the namespace are still dropped rather than passed through."""
+        tools = [
+            {
+                "type": "function",
+                "name": "shell_command",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "type": "namespace",
+                "name": "codex_app",
+                "tools": [
+                    {"type": "function", "name": "read_file"},
+                    {"type": "image_generation", "output_format": "png"},
+                ],
+            },
+        ]
+
+        (
+            result_tools,
+            _,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+
+        assert [tool["function"]["name"] for tool in result_tools] == [
+            "shell_command",
+            "read_file",
+        ]
+
+    def test_transform_nested_namespace_container_is_dropped(self):
+        """A namespace inside a namespace is not something clients send, but its inner
+        container must never reach the provider as a tool without a function schema."""
+        tools = [
+            {
+                "type": "namespace",
+                "name": "outer",
+                "tools": [
+                    {"type": "function", "name": "outer_tool"},
+                    {
+                        "type": "namespace",
+                        "name": "inner",
+                        "tools": [{"type": "function", "name": "inner_tool"}],
+                    },
+                ],
+            }
+        ]
+
+        (
+            result_tools,
+            _,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+
+        assert [tool["function"]["name"] for tool in result_tools] == ["outer_tool"]
+        assert not any(tool.get("type") == "namespace" for tool in result_tools)
+
     def test_bedrock_anthropic_drops_derived_web_search_options(self):
         """
         Regression for LIT-3858: a Responses web_search tool becomes a derived

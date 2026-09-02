@@ -98,6 +98,7 @@ from .custom_tools import (
     unwrap_custom_tool_arguments,
     validated_allowed_callers,
 )
+from .namespace_tools import flatten_namespace_tools
 
 NamespaceNameMap: TypeAlias = Mapping[str, tuple[str, str]]
 NamespaceTool: TypeAlias = Mapping[str, object]
@@ -1852,7 +1853,7 @@ class LiteLLMCompletionResponsesConfig:
         LiteLLMCompletionResponsesConfig._validate_namespace_name_collisions(tools)
         chat_completion_tools: Final[list[ChatCompletionToolParam | OpenAIMcpServerTool]] = []
         web_search_options: OpenAIWebSearchOptions | None = None
-        for tool in tools:
+        for tool in flatten_namespace_tools(tools):
             if tool.get("type") == "mcp":
                 chat_completion_tools.append(cast(OpenAIMcpServerTool, tool))
             elif tool.get("type") == "web_search_preview" or tool.get("type") == "web_search":
