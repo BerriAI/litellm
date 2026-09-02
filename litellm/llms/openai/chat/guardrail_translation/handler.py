@@ -989,12 +989,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             return
         await self._apply_guardrail_responses_to_output_streaming(
             responses=responses_so_far,
-            guardrailed_texts=[
-                after for _choice_idx, after in changed
-            ],  # mutable-ok: the callee's signature predates this change and takes lists
-            task_mappings=[
-                (choice_idx, None) for choice_idx, _after in changed
-            ],  # mutable-ok: the callee's signature predates this change and takes lists
+            guardrailed_texts=[after for _choice_idx, after in changed],  # mutable-ok: callee takes lists
+            task_mappings=[(choice_idx, None) for choice_idx, _after in changed],  # mutable-ok: callee takes lists
         )
 
     async def _apply_guardrail_responses_to_output_streaming(
