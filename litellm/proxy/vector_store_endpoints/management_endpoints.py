@@ -62,7 +62,7 @@ def _row_to_vector_store(row: "_VectorStoreRow") -> LiteLLM_ManagedVectorStore:
 # "connection" covers wire-protocol providers whose whole credential is a URI
 # (mongodb_connection_string embeds the username and password), which the
 # default api_key/secret/token patterns do not match.
-_LITELLM_PARAMS_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns={"connection"})
+_LITELLM_PARAMS_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=frozenset(("connection",)))
 
 
 _REDACT_LITELLM_PARAMS_MAX_DEPTH: Final = 10

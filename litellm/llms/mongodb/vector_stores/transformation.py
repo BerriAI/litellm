@@ -143,10 +143,18 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
         async_client_factory: Callable[[MongoClientKey], object] | None = None,
     ) -> None:
         super().__init__()
-        self.embedding_fn = embedding_fn if embedding_fn is not None else litellm.embedding
-        self.aembedding_fn = aembedding_fn if aembedding_fn is not None else litellm.aembedding
-        self.sync_client_factory = sync_client_factory if sync_client_factory is not None else get_sync_client
-        self.async_client_factory = async_client_factory if async_client_factory is not None else get_async_client
+        self.embedding_fn: Final[Callable[..., EmbeddingResponse]] = (
+            embedding_fn if embedding_fn is not None else litellm.embedding
+        )
+        self.aembedding_fn: Final[Callable[..., Awaitable[EmbeddingResponse]]] = (
+            aembedding_fn if aembedding_fn is not None else litellm.aembedding
+        )
+        self.sync_client_factory: Final[Callable[[MongoClientKey], object]] = (
+            sync_client_factory if sync_client_factory is not None else get_sync_client
+        )
+        self.async_client_factory: Final[Callable[[MongoClientKey], object]] = (
+            async_client_factory if async_client_factory is not None else get_async_client
+        )
 
     @staticmethod
     def _reject_unknown_params(litellm_params: Mapping[str, object]) -> None:
@@ -154,9 +162,7 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
         which would otherwise turn a mistyped mongodb_collection into 'mongodb_collection is
         required' pointing at a key the reader can see they have set."""
         unknown: Final = sorted(
-            key
-            for key in litellm_params
-            if key.startswith(_MONGODB_PARAM_PREFIX) and key not in _KNOWN_MONGODB_PARAMS
+            key for key in litellm_params if key.startswith(_MONGODB_PARAM_PREFIX) and key not in _KNOWN_MONGODB_PARAMS
         )
         if unknown:
             raise config_error(
@@ -196,16 +202,20 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
         return min(max(limit * NUM_CANDIDATES_MULTIPLIER, MIN_NUM_CANDIDATES), MAX_NUM_CANDIDATES)
 
     @staticmethod
-    def _client_key(params: _MongoDBSearchParams, timeout: float | httpx.Timeout | None) -> MongoClientKey:
+    def _timeout_ms(timeout: float | httpx.Timeout | None) -> tuple[int, int]:
+        """The connect and socket budgets pymongo is built with, in that order."""
         if isinstance(timeout, httpx.Timeout):
-            connect_ms: Final = int((timeout.connect or DEFAULT_CONNECT_TIMEOUT_MS / 1000) * 1000)
-            socket_ms: Final = int((timeout.read or DEFAULT_SOCKET_TIMEOUT_MS / 1000) * 1000)
-        elif timeout is not None:
-            connect_ms = min(int(float(timeout) * 1000), DEFAULT_CONNECT_TIMEOUT_MS)
-            socket_ms = int(float(timeout) * 1000)
-        else:
-            connect_ms = DEFAULT_CONNECT_TIMEOUT_MS
-            socket_ms = DEFAULT_SOCKET_TIMEOUT_MS
+            return (
+                int((timeout.connect or DEFAULT_CONNECT_TIMEOUT_MS / 1000) * 1000),
+                int((timeout.read or DEFAULT_SOCKET_TIMEOUT_MS / 1000) * 1000),
+            )
+        if timeout is None:
+            return DEFAULT_CONNECT_TIMEOUT_MS, DEFAULT_SOCKET_TIMEOUT_MS
+        return min(int(float(timeout) * 1000), DEFAULT_CONNECT_TIMEOUT_MS), int(float(timeout) * 1000)
+
+    @classmethod
+    def _client_key(cls, params: _MongoDBSearchParams, timeout: float | httpx.Timeout | None) -> MongoClientKey:
+        connect_ms, socket_ms = cls._timeout_ms(timeout)
         return MongoClientKey(
             connection_string=params.require_connection_string(),
             connect_timeout_ms=connect_ms,
@@ -220,36 +230,41 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
         query_vector: Sequence[float],
         params: _MongoDBSearchParams,
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
-    ) -> list[dict[str, object]]:
+    ) -> Sequence[Mapping[str, object]]:
         if vector_store_search_optional_params.get("filters") is not None:
             raise config_error(
                 "MongoDB vector store does not support the filters parameter yet. "
                 "Restrict the collection or the Atlas Vector Search index definition instead."
             )
         limit: Final = cls._limit(vector_store_search_optional_params)
-        return [  # mutable-ok: pymongo's aggregate contract is a list of stage dicts
+        search: Final = MappingProxyType(
             {
-                "$vectorSearch": {
-                    "index": vector_store_id,
-                    "path": params.embedding_field,
-                    "queryVector": list(query_vector),
-                    "numCandidates": cls._num_candidates(limit, params.mongodb_num_candidates),
-                    "limit": limit,
-                }
-            },
-            {"$project": {params.text_field: 1, SCORE_FIELD_NAME: {"$meta": "vectorSearchScore"}}},
+                "index": vector_store_id,
+                "path": params.embedding_field,
+                "queryVector": tuple(query_vector),
+                "numCandidates": cls._num_candidates(limit, params.mongodb_num_candidates),
+                "limit": limit,
+            }
+        )
+        projection: Final = MappingProxyType(
+            {params.text_field: 1, SCORE_FIELD_NAME: MappingProxyType({"$meta": "vectorSearchScore"})}
+        )
+        return [  # mutable-ok: pymongo rejects any non-list pipeline in common.validate_list
+            MappingProxyType({"$vectorSearch": search}),
+            MappingProxyType({"$project": projection}),
         ]
 
-    @staticmethod
-    def _field_value(document: Mapping[str, object], dotted_path: str) -> str | None:
+    @classmethod
+    def _field_value(cls, document: Mapping[str, object], dotted_path: str) -> str | None:
         """None means the path is absent from the document, which is what separates a
         mistyped mongodb_text_field from a document whose text is genuinely empty."""
-        current: object = document
-        for segment in dotted_path.split("."):
-            if not isinstance(current, Mapping) or segment not in current:
-                return None
-            current = current[segment]
-        return None if current is None else str(current)
+        head, _, rest = dotted_path.partition(".")
+        if head not in document:
+            return None
+        value: Final = document[head]
+        if not rest:
+            return None if value is None else str(value)
+        return cls._field_value(value, rest) if isinstance(value, Mapping) else None
 
     @classmethod
     def _to_result(cls, document: Mapping[str, object], text_field: str) -> VectorStoreSearchResult:
@@ -287,7 +302,9 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
         return VectorStoreSearchResponse(
             object="vector_store.search_results.page",
             search_query=query_text,
-            data=[cls._to_result(document, text_field) for document in documents],
+            data=[  # mutable-ok: VectorStoreSearchResponse declares data as a list
+                cls._to_result(document, text_field) for document in documents
+            ],
         )
 
     @staticmethod
@@ -341,14 +358,12 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
         try:
             client: Final = self.sync_client_factory(key)
             target: Final = client[database][collection]  # pyright: ignore[reportIndexIssue]  # factory is typed as returning object so injected doubles are accepted
-            documents: Final = list(target.aggregate(pipeline))
+            documents: Final = tuple(target.aggregate(pipeline))
         except Exception as e:
-            raise translate_mongo_error(
-                e, index_name=vector_store_id, database=database, collection=collection
-            ) from e
+            raise translate_mongo_error(e, index_name=vector_store_id, database=database, collection=collection) from e
         if not documents:
             try:
-                catalogue: Final = list(target.list_search_indexes(vector_store_id))
+                catalogue: Final = tuple(target.list_search_indexes(vector_store_id))
             except Exception as e:
                 raise translate_mongo_error(
                     e, index_name=vector_store_id, database=database, collection=collection
@@ -386,15 +401,17 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
             client: Final = self.async_client_factory(key)
             target: Final = client[database][collection]  # pyright: ignore[reportIndexIssue]  # factory is typed as returning object so injected doubles are accepted
             cursor: Final = await target.aggregate(pipeline)
-            documents: Final = [document async for document in cursor]
+            documents: Final = [  # mutable-ok: an async comprehension cannot build a tuple directly
+                document async for document in cursor
+            ]
         except Exception as e:
-            raise translate_mongo_error(
-                e, index_name=vector_store_id, database=database, collection=collection
-            ) from e
+            raise translate_mongo_error(e, index_name=vector_store_id, database=database, collection=collection) from e
         if not documents:
             try:
                 index_cursor: Final = await target.list_search_indexes(vector_store_id)
-                catalogue: Final = [entry async for entry in index_cursor]
+                catalogue: Final = [  # mutable-ok: an async comprehension cannot build a tuple directly
+                    entry async for entry in index_cursor
+                ]
             except Exception as e:
                 raise translate_mongo_error(
                     e, index_name=vector_store_id, database=database, collection=collection

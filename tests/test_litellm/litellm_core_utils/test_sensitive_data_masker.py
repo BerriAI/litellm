@@ -331,3 +331,15 @@ def test_extra_sensitive_patterns_do_not_leak_into_other_maskers():
     SensitiveDataMasker(extra_sensitive_patterns={"connection"})
 
     assert SensitiveDataMasker().is_sensitive_key("mongodb_connection_string") is False
+
+
+def test_the_second_positional_argument_is_still_the_override_set():
+    """SensitiveDataMasker is public SDK surface, so adding a keyword must not shift what an
+    existing positional call means. Putting extra_sensitive_patterns second would silently turn
+    an override set into an extra sensitive set and start masking the caller's pricing fields."""
+    from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+
+    masker = SensitiveDataMasker({"token"}, {"session"})
+
+    assert masker.is_sensitive_key("session_token") is False
+    assert masker.is_sensitive_key("auth_token") is True
