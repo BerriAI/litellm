@@ -147,8 +147,8 @@ lint-install:
 # Diff-scoped format check, mirroring test-linting.yml's "Check ruff format" step:
 # only the litellm Python files changed vs the base are checked, so a pre-existing
 # format issue elsewhere doesn't block an unrelated commit. Git pathspecs match
-# recursively, so 'litellm/*.py' covers nested modules and the top-level files that
-# CI's 'litellm/**/*.py' skips, which makes this target a superset of the CI step.
+# recursively, so 'litellm/*.py' covers top-level files and nested modules alike,
+# the same set CI's ':(glob)litellm/**/*.py' selects.
 lint-format-check-changed: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	@files=$$(git diff --name-only --diff-filter=ACMR origin/litellm_internal_staging...HEAD -- 'litellm/*.py' | grep -v '^litellm/enterprise/' || true); \
 	if [ -z "$$files" ]; then \
