@@ -252,12 +252,12 @@ ORDER BY 1
 
 def _sum_spend_by(
     rows: Sequence[_SpendDailySummaryRow], column: Literal["api_key", "user", "model"]
-) -> dict[str | None, float]:
+) -> Mapping[str | None, float]:
     keys: Final = frozenset(row[column] for row in rows)
     return {key: sum(float(row["spend"]) for row in rows if row[column] == key) for key in keys}
 
 
-def _daily_summary_item(summary_date: date, rows: Sequence[_SpendDailySummaryRow]) -> dict[str, object]:
+def _daily_summary_item(summary_date: date, rows: Sequence[_SpendDailySummaryRow]) -> Mapping[str, object]:
     api_key_spend: Final = {key: value for key, value in _sum_spend_by(rows, "api_key").items() if key is not None}
     return {
         **api_key_spend,
@@ -2975,7 +2975,7 @@ async def view_spend_logs(
         description="When start_date and end_date are provided, summarize=true returns aggregated data by date (legacy behavior), summarize=false returns filtered individual logs",
     ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> Sequence[object] | None:
+):
     """
     [DEPRECATED] This endpoint is not paginated and can cause performance issues.
     Please use `/spend/logs/v2` instead for paginated access to spend logs.
@@ -3046,7 +3046,9 @@ async def view_spend_logs(
             start_date_iso: Final = start_date_obj.isoformat()
             end_date_iso: Final = end_date_obj.isoformat()
 
-            filter_query: Final[dict[str, object]] = {
+            filter_query: Final[
+                dict[str, object]
+            ] = {  # mutable-ok: legacy filters are extended for optional parameters
                 "startTime": {
                     "gte": start_date_iso,  # Greater than or equal to Start Date
                     "lte": end_date_iso,  # Less than or equal to End Date
@@ -3088,7 +3090,7 @@ async def view_spend_logs(
             sql_query, params = summary_sql_and_params
             rows: Final[Sequence[_SpendDailySummaryRow]] = await _query_raw(prisma_client, sql_query, *params)
             if len(rows) == 0:
-                return []
+                return []  # pyright: ignore[reportUnknownVariableType]  # empty summary has no element type
 
             summary_items: Final = tuple(
                 _daily_summary_item(date.fromisoformat(day), tuple(day_rows))
@@ -3096,7 +3098,7 @@ async def view_spend_logs(
             )
             final_date: Final = date.fromisoformat(rows[-1]["day"])
             end_date_date: Final = end_date_obj.date()
-            padding: Final[tuple[dict[str, object], ...]] = tuple(
+            padding: Final[tuple[Mapping[str, object], ...]] = tuple(
                 {
                     "startTime": final_date + timedelta(days=offset),
                     "spend": 0,
