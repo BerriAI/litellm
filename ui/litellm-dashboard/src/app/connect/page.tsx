@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import MCPAppsPanel from "@/components/chat/MCPAppsPanel";
+import ConnectFlowBanner from "@/components/chat/ConnectFlowBanner";
 
 function ConnectPageContent() {
   const { accessToken } = useAuthorized();
@@ -11,6 +12,8 @@ function ConnectPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const oauthReturn = searchParams.get("mcpOauthReturn");
+  const connectFlow = searchParams.get("connect_flow");
+  const connectClient = searchParams.get("connect_client");
 
   useEffect(() => {
     if (oauthReturn) {
@@ -22,7 +25,13 @@ function ConnectPageContent() {
 
   return (
     <div className="mx-auto w-full max-w-5xl px-8 py-8">
-      <MCPAppsPanel accessToken={accessToken ?? ""} selectedServers={selectedServers} onChange={setSelectedServers} />
+      {connectFlow && <ConnectFlowBanner flowHandle={connectFlow} clientOrigin={connectClient} />}
+      <MCPAppsPanel
+        accessToken={accessToken ?? ""}
+        selectedServers={selectedServers}
+        onChange={setSelectedServers}
+        connectMode={!!connectFlow}
+      />
     </div>
   );
 }

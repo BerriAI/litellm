@@ -9,7 +9,7 @@ this preset registers a custom exporter (``kind="agentops"``) that mints the JWT
 worker thread, off any event loop — and caches it for the process lifetime.
 """
 
-from typing import Any
+from typing import Any, Final
 
 import httpx
 from pydantic import Field
@@ -23,9 +23,9 @@ from litellm.integrations.otel.model.config import (
 )
 from litellm.integrations.otel.plumbing.providers import register_exporter_factory
 
-_AGENTOPS_ENDPOINT = "https://otlp.agentops.ai/v1/traces"
-_AGENTOPS_AUTH_ENDPOINT = "https://api.agentops.ai/v3/auth/token"
-_AGENTOPS_EXPORTER_KIND = "agentops"
+_AGENTOPS_ENDPOINT: Final = "https://otlp.agentops.ai/v1/traces"
+_AGENTOPS_AUTH_ENDPOINT: Final = "https://api.agentops.ai/v3/auth/token"
+_AGENTOPS_EXPORTER_KIND: Final = "agentops"
 
 
 class _AgentOpsSettings(BaseSettings):
@@ -47,8 +47,8 @@ def agentops_preset(
     resource attribute — it is encoded in the JWT, which AgentOps uses to route
     the trace to the right project.
     """
-    settings = _AgentOpsSettings()
-    base = config_overrides or OpenTelemetryV2Config()
+    settings: Final = _AgentOpsSettings()
+    base: Final = config_overrides or OpenTelemetryV2Config()
     return base.model_copy(
         update={
             "exporters": [
@@ -96,7 +96,7 @@ def _build_agentops_exporter(spec: ExporterSpec) -> Any:
             if not self._agentops_api_key:
                 return
             try:
-                token = _fetch_agentops_jwt(self._agentops_api_key).get("token")
+                token: Final = _fetch_agentops_jwt(self._agentops_api_key).get("token")
                 if token:
                     # ``_session`` is the requests.Session the base exporter
                     # POSTs through; updating its Authorization header is how the
@@ -109,7 +109,7 @@ def _build_agentops_exporter(spec: ExporterSpec) -> Any:
             self._ensure_authenticated()
             return super().export(spans)
 
-    options = spec.options or {}
+    options: Final = spec.options or {}
     return _LazyAuthAgentOpsExporter(endpoint=spec.endpoint, api_key=options.get("api_key"))
 
 
@@ -119,7 +119,7 @@ def _fetch_agentops_jwt(api_key: str) -> dict[str, Any]:
     # every caller, so closing it here would break concurrent/subsequent
     # requests. This one-shot auth call gets its own client to close.
     with httpx.Client(timeout=10) as client:
-        response = client.post(
+        response: Final = client.post(
             url=_AGENTOPS_AUTH_ENDPOINT,
             headers={"Content-Type": "application/json", "Connection": "keep-alive"},
             json={"api_key": api_key},

@@ -11,7 +11,10 @@ A2A Protocol Format:
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Final, Optional
+
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -21,6 +24,13 @@ if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
+
+
+class _A2ATextPart(TypedDict, total=False):
+    """The subset of an A2A message part this handler reads text from."""
+
+    kind: ReadOnly[str]
+    text: ReadOnly[str]
 
 
 class A2AGuardrailHandler(BaseTranslation):
@@ -41,7 +51,7 @@ class A2AGuardrailHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> Any:
+    ) -> dict:
         """
         Process A2A input messages by applying guardrails to text content.
 
@@ -56,16 +66,16 @@ class A2AGuardrailHandler(BaseTranslation):
             Modified data with guardrails applied to text content
         """
         # A2A request format: { "params": { "message": { "parts": [...] } } }
-        params = data.get("params", {})
-        message = params.get("message", {})
-        parts = message.get("parts", [])
+        params: Final = data.get("params", {})
+        message: Final = params.get("message", {})
+        parts: Final = message.get("parts", [])
 
         if not parts:
             verbose_proxy_logger.debug("A2A: No parts in message, skipping guardrail")
             return data
 
-        texts_to_check: List[str] = []
-        text_part_indices: List[int] = []  # Track which parts contain text
+        texts_to_check: Final[list[str]] = []
+        text_part_indices: Final[list[int]] = []  # Track which parts contain text
 
         # Step 1: Extract text from all text parts
         for part_idx, part in enumerate(parts):
@@ -77,24 +87,24 @@ class A2AGuardrailHandler(BaseTranslation):
 
         # Step 2: Apply guardrail to all texts in batch
         if texts_to_check:
-            inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
+            inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
 
             # Pass the structured A2A message to guardrails
             inputs["structured_messages"] = [message]
 
             # Include agent model info if available
-            model = data.get("model")
+            model: Final = data.get("model")
             if model:
                 inputs["model"] = model
 
-            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+            guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=data,
                 input_type="request",
                 logging_obj=litellm_logging_obj,
             )
 
-            guardrailed_texts = guardrailed_inputs.get("texts", [])
+            guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
 
             # Step 3: Apply guardrailed text back to original parts
             if guardrailed_texts and len(guardrailed_texts) == len(text_part_indices):
@@ -111,7 +121,7 @@ class A2AGuardrailHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        request_data: Optional[dict] = None,
+        request_data: dict | None = None,
     ) -> Any:
         """
         Process A2A output response by applying guardrails to text content.
@@ -142,16 +152,16 @@ class A2AGuardrailHandler(BaseTranslation):
             verbose_proxy_logger.warning("A2A: Unknown response type %s, skipping guardrail", type(response))
             return response
 
-        result = response_dict.get("result", {})
+        result: Final = response_dict.get("result", {})
         if not result or not isinstance(result, dict):
             verbose_proxy_logger.debug("A2A: No result in response, skipping guardrail")
             return response
 
         # Find all text-containing parts in the response
-        texts_to_check: List[str] = []
+        texts_to_check: Final[list[str]] = []
         # Each mapping is (path_to_parts_list, part_index)
         # path_to_parts_list is a tuple of keys to navigate to the parts list
-        task_mappings: List[Tuple[Tuple[str, ...], int]] = []
+        task_mappings: Final[list[tuple[tuple[str, ...], int]]] = []
 
         # Extract texts from all possible locations
         self._extract_texts_from_result(
@@ -175,20 +185,20 @@ class A2AGuardrailHandler(BaseTranslation):
 
         # Add user API key metadata with prefixed keys
         if "litellm_metadata" not in request_data:
-            user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
+            user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
             if user_metadata:
                 request_data["litellm_metadata"] = user_metadata
 
-        inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
+        inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
 
-        guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+        guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
             request_data=request_data,
             input_type="response",
             logging_obj=litellm_logging_obj,
         )
 
-        guardrailed_texts = guardrailed_inputs.get("texts", [])
+        guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
 
         # Step 3: Apply guardrailed text back to original response
         if guardrailed_texts and len(guardrailed_texts) == len(task_mappings):
@@ -214,12 +224,12 @@ class A2AGuardrailHandler(BaseTranslation):
 
     async def process_output_streaming_response(
         self,
-        responses_so_far: List[Any],
+        responses_so_far: list[object],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        request_data: Optional[dict] = None,
-    ) -> List[Any]:
+        request_data: dict | None = None,
+    ) -> list[object]:
         """
         Process A2A streaming output by applying guardrails to accumulated text.
 
@@ -245,31 +255,31 @@ class A2AGuardrailHandler(BaseTranslation):
                 request_data["responses_so_far"] = responses_so_far
 
         if "litellm_metadata" not in request_data:
-            user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
+            user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
             if user_metadata:
                 request_data["litellm_metadata"] = user_metadata
 
-        inputs = GenericGuardrailAPIInputs(texts=[combined_text])
-        guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+        inputs: Final = GenericGuardrailAPIInputs(texts=[combined_text])
+        guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
             request_data=request_data,
             input_type="response",
             logging_obj=litellm_logging_obj,
         )
-        guardrailed_texts = guardrailed_inputs.get("texts", [])
+        guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
         if not guardrailed_texts:
             return responses_so_far
-        guardrailed_text = guardrailed_texts[0]
+        guardrailed_text: Final = guardrailed_texts[0]
 
         # Find first chunk (by original index) that has text; put full guardrailed text there and clear rest
-        first_chunk_with_text: Optional[int] = chunk_indices_with_text[0] if chunk_indices_with_text else None
+        first_chunk_with_text: Final[int | None] = chunk_indices_with_text[0] if chunk_indices_with_text else None
 
         for orig_i, obj in valid_parsed:
             result = obj.get("result", {})
             if not isinstance(result, dict):
                 continue
-            texts_in_chunk: List[str] = []
-            mappings: List[Tuple[Tuple[str, ...], int]] = []
+            texts_in_chunk: list[str] = []
+            mappings: list[tuple[tuple[str, ...], int]] = []
             self._extract_texts_from_result(
                 result=result,
                 texts_to_check=texts_in_chunk,
@@ -305,11 +315,12 @@ class A2AGuardrailHandler(BaseTranslation):
 
     def _parse_streaming_responses(
         self,
-        responses_so_far: List[Any],
-    ) -> Tuple[List[Optional[Dict[str, Any]]], List[Tuple[int, Dict[str, Any]]]]:
+        responses_so_far: list[object],
+    ) -> tuple[list[dict[str, object] | None], list[tuple[int, dict[str, object]]]]:
         """Parse JSON-RPC items, returning aligned parsed list and valid entries."""
-        parsed: List[Optional[Dict[str, Any]]] = [None] * len(responses_so_far)
+        parsed: Final[list[dict[str, object] | None]] = [None] * len(responses_so_far)
         for i, item in enumerate(responses_so_far):
+            obj: dict[str, object]
             if isinstance(item, dict):
                 obj = item
             elif isinstance(item, str):
@@ -321,18 +332,18 @@ class A2AGuardrailHandler(BaseTranslation):
                 continue
             if isinstance(obj.get("result"), dict):
                 parsed[i] = obj
-        valid_parsed = [(i, obj) for i, obj in enumerate(parsed) if obj is not None]
+        valid_parsed: Final = [(i, obj) for i, obj in enumerate(parsed) if obj is not None]
         return parsed, valid_parsed
 
     def _collect_text_from_parsed_chunks(
         self,
-        valid_parsed: List[Tuple[int, Dict[str, Any]]],
-    ) -> Tuple[str, List[int]]:
+        valid_parsed: list[tuple[int, dict[str, object]]],
+    ) -> tuple[str, list[int]]:
         """Collect text from parsed chunks, returning combined text and indices."""
         from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
 
-        text_parts: List[str] = []
-        chunk_indices_with_text: List[int] = []
+        text_parts: Final[list[str]] = []
+        chunk_indices_with_text: Final[list[int]] = []
         for _idx, (orig_i, obj) in enumerate(valid_parsed):
             t = extract_text_from_a2a_response(obj)
             if t:
@@ -342,9 +353,9 @@ class A2AGuardrailHandler(BaseTranslation):
 
     def _extract_texts_from_result(
         self,
-        result: Dict[str, Any],
-        texts_to_check: List[str],
-        task_mappings: List[Tuple[Tuple[str, ...], int]],
+        result: dict[str, Any],
+        texts_to_check: list[str],
+        task_mappings: list[tuple[tuple[str, ...], int]],
     ) -> None:
         """
         Extract text from all possible locations in an A2A result.
@@ -366,7 +377,7 @@ class A2AGuardrailHandler(BaseTranslation):
             )
 
         # Case 2: Nested message
-        message = result.get("message")
+        message: Final = result.get("message")
         if message and isinstance(message, dict) and "parts" in message:
             self._extract_texts_from_parts(
                 parts=message["parts"],
@@ -376,7 +387,7 @@ class A2AGuardrailHandler(BaseTranslation):
             )
 
         # Case 3: Streaming artifact-update (singular artifact)
-        artifact = result.get("artifact")
+        artifact: Final = result.get("artifact")
         if artifact and isinstance(artifact, dict) and "parts" in artifact:
             self._extract_texts_from_parts(
                 parts=artifact["parts"],
@@ -386,9 +397,9 @@ class A2AGuardrailHandler(BaseTranslation):
             )
 
         # Case 4: Task with status message
-        status = result.get("status", {})
+        status: Final = result.get("status", {})
         if isinstance(status, dict):
-            status_message = status.get("message")
+            status_message: Final = status.get("message")
             if status_message and isinstance(status_message, dict) and "parts" in status_message:
                 self._extract_texts_from_parts(
                     parts=status_message["parts"],
@@ -398,7 +409,7 @@ class A2AGuardrailHandler(BaseTranslation):
                 )
 
         # Case 5: Task with artifacts (plural, array)
-        artifacts = result.get("artifacts", [])
+        artifacts: Final = result.get("artifacts", [])
         if artifacts and isinstance(artifacts, list):
             for artifact_idx, art in enumerate(artifacts):
                 if isinstance(art, dict) and "parts" in art:
@@ -411,10 +422,10 @@ class A2AGuardrailHandler(BaseTranslation):
 
     def _extract_texts_from_parts(
         self,
-        parts: List[Dict[str, Any]],
-        path: Tuple[str, ...],
-        texts_to_check: List[str],
-        task_mappings: List[Tuple[Tuple[str, ...], int]],
+        parts: Sequence[_A2ATextPart],
+        path: tuple[str, ...],
+        texts_to_check: list[str],
+        task_mappings: list[tuple[tuple[str, ...], int]],
     ) -> None:
         """Extract text from message parts."""
         for part_idx, part in enumerate(parts):
@@ -426,8 +437,8 @@ class A2AGuardrailHandler(BaseTranslation):
 
     def _apply_text_to_path(
         self,
-        result: Dict[Union[str, int], Any],
-        path: Tuple[str, ...],
+        result: dict[str | int, Any],
+        path: tuple[str, ...],
         part_idx: int,
         text: str,
     ) -> None:

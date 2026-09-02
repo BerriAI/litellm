@@ -1,6 +1,6 @@
 # What is this?
 ## Handler file for calling claude-3 on vertex ai
-from typing import Any, List, Optional
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -11,6 +11,9 @@ from litellm.types.utils import ModelResponse
 
 from ....anthropic.chat.transformation import AnthropicConfig
 from .output_params_utils import sanitize_vertex_anthropic_output_params
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 class VertexAIError(Exception):
@@ -45,7 +48,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
     """
 
     @property
-    def custom_llm_provider(self) -> Optional[str]:
+    def custom_llm_provider(self) -> str | None:
         return "vertex_ai"
 
     def should_strip_billing_metadata(self) -> bool:
@@ -64,7 +67,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         """
         from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 
-        edits = context_management.get("edits", [])
+        edits: Final = context_management.get("edits", [])
         has_compact = False
         has_other = False
 
@@ -86,12 +89,12 @@ class VertexAIAnthropicConfig(AnthropicConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        data = super().transform_request(
+        data: Final = super().transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -103,9 +106,9 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         sanitize_vertex_anthropic_output_params(data, model)
 
-        tools = optional_params.get("tools")
-        tool_search_used = self.is_tool_search_used(tools)
-        auto_betas = self.get_anthropic_beta_list(
+        tools: Final = optional_params.get("tools")
+        tool_search_used: Final = self.is_tool_search_used(tools)
+        auto_betas: Final = self.get_anthropic_beta_list(
             model=model,
             optional_params=optional_params,
             computer_tool_used=self.is_computer_tool_used(tools),
@@ -115,17 +118,17 @@ class VertexAIAnthropicConfig(AnthropicConfig):
             custom_llm_provider="vertex_ai",
         )
 
-        beta_set = set(auto_betas)
+        beta_set: Final = set(auto_betas)
         if tool_search_used:
             beta_set.add("tool-search-tool-2025-10-19")  # Vertex requires this header for tool search
 
         # Add context_management beta headers (compact and/or context-management)
-        context_management = optional_params.get("context_management")
+        context_management: Final = optional_params.get("context_management")
         if context_management:
             self._add_context_management_beta_headers(beta_set, context_management)
 
-        extra_headers = optional_params.get("extra_headers") or {}
-        anthropic_beta_value = extra_headers.get("anthropic-beta", "")
+        extra_headers: Final = optional_params.get("extra_headers") or {}
+        anthropic_beta_value: Final = extra_headers.get("anthropic-beta", "")
         if isinstance(anthropic_beta_value, str) and anthropic_beta_value:
             for beta in anthropic_beta_value.split(","):
                 beta = beta.strip()
@@ -150,14 +153,17 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         drop_params: bool,
     ) -> dict:
         """
-        Override parent method to ensure VertexAI always uses tool-based structured outputs.
-        VertexAI doesn't support the output_format parameter, so we force all models
-        to use the tool-based approach for structured outputs.
+        Override parent method so VertexAI uses tool-based structured outputs
+        unless the vertex map entry advertises native structured output
+        (``output_format``, which Vertex AI Claude forwards for those models).
         """
-        # Temporarily override model name to force tool-based approach
-        # This ensures Claude Sonnet 4.5 uses tools instead of output_format
-        original_model = model
-        if "response_format" in non_default_params:
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        original_model: Final = model
+        native_structured_output: Final = AnthropicModelInfo._get_provider_resolved_capability(
+            model, "supports_native_structured_output", "vertex_ai"
+        )
+        if "response_format" in non_default_params and native_structured_output is not True:
             model = "claude-3-sonnet-20240229"  # Use a model that will use tool-based approach
 
         # Call parent method with potentially modified model name
@@ -180,14 +186,14 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        encoding: "tiktoken.Encoding | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
-        response = super().transform_response(
+        response: Final = super().transform_response(
             model,
             raw_response,
             model_response,
@@ -211,8 +217,6 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         """
         if custom_llm_provider != "vertex_ai" and custom_llm_provider != "vertex_ai_beta":
             return False
-        if "claude" in model.lower():
-            return True
-        elif model in litellm.vertex_anthropic_models:
+        if "claude" in model.lower() or model in litellm.vertex_anthropic_models:
             return True
         return False

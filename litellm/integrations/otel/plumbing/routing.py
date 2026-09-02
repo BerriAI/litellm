@@ -1,29 +1,49 @@
 """Per-request multi-tenant tracer routing.
 
 When a request carries team/key vendor credentials in
-``standard_callback_dynamic_params``, its spans must export through a
-``TracerProvider`` whose OTLP headers carry those credentials.
-``TenantTracerCache`` builds and caches one provider per distinct credential
-set, and otherwise hands back the logger's default tracer. This lets a single
-logger fan requests out to many tenants without needing a logger per tenant.
+``standard_callback_dynamic_params``, or the key/team config resolved at auth
+names a destination project or a service name, its spans must export through a
+``TracerProvider`` whose OTLP headers carry those credentials / that project,
+or whose Resource carries that ``service.name``. ``TenantTracerCache`` builds
+and caches one provider per distinct (credentials, project, service name)
+tuple, and otherwise hands back the logger's default tracer. This lets a
+single logger fan requests out to many tenants without needing a logger per
+tenant.
 """
 
+import threading
 from collections import OrderedDict
-from typing import Any, Mapping
+from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Final, TypeAlias
+from urllib.parse import quote
 
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Tracer
 
 from litellm._logging import verbose_logger
-from litellm.integrations.otel.model.config import OpenTelemetryV2Config
-from litellm.integrations.otel.presets import dynamic_otlp_headers
+from litellm.constants import OTEL_SERVICE_NAME_METADATA_KEYS
+from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
 from litellm.integrations.otel.plumbing.providers import (
     build_tracer_provider,
+    exporter_transport,
     get_tracer,
 )
+from litellm.integrations.otel.presets import (
+    dynamic_otlp_endpoint,
+    dynamic_otlp_headers,
+    project_routing_headers,
+)
+from litellm.types.utils import StandardCallbackDynamicParams
 
 # Exporter kinds that ignore headers — never rewritten with dynamic credentials.
-_NON_OTLP_KINDS = ("console", "in_memory", "inmemory", "memory")
+_NON_OTLP_KINDS: Final = ("console", "in_memory", "inmemory", "memory")
+
+# gRPC exporters still take dynamic credentials (as gRPC metadata) but not
+# project headers: the routing headers backends read (Phoenix's
+# ``x-project-name``) are only honored on the OTLP/HTTP endpoint.
+_GRPC_KINDS: Final = ("otlp_grpc", "grpc")
 
 # Cap on distinct credential-scoped providers held at once. ``dynamic_params``
 # can be populated from request metadata, so an unbounded cache lets a caller
@@ -31,7 +51,46 @@ _NON_OTLP_KINDS = ("console", "in_memory", "inmemory", "memory")
 # thread) per unique credential set and exhaust the proxy. The LRU bound keeps
 # the working set of active tenants resident while flushing and shutting down
 # evicted providers so their threads are reclaimed.
-_MAX_CACHED_PROVIDERS = 256
+_MAX_CACHED_PROVIDERS: Final = 256
+
+# Cap on providers evicted from the cache while still holding open spans, which
+# are kept alive to drain instead of being shut down under them. Their only
+# other bound is the logger's open-call map (10k), so without this a caller
+# cycling unique credential sets across long-lived calls could pin far more
+# live providers, and exporter threads, than the cache cap allows. Past this
+# many, the stalest retiree is shut down and whatever it was draining is
+# dropped (a shut-down ``BatchSpanProcessor`` discards spans handed to it after
+# the fact), which by then means a span on a route evicted long ago. A quarter
+# of the cache cap: enough that a burst of tenant churn during long-lived calls
+# still drains normally, small enough that the worst case is a bounded 320
+# providers rather than one per concurrent call.
+_MAX_RETIRED_PROVIDERS: Final = 64
+
+_HeaderItems: TypeAlias = tuple[tuple[str, str], ...]
+
+_RouteKey: TypeAlias = tuple[_HeaderItems, _HeaderItems, str | None, str | None]
+
+_NO_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
+
+#: Key/team config fields naming the Resource ``service.name``, highest
+#: precedence first. Read only from ``user_api_key_auth_metadata`` (the config
+#: the proxy resolved at auth), never from client-supplied request metadata:
+#: the service name picks the dataset/service traces land in (Honeycomb routes
+#: datasets by it), so a caller must not be able to choose one.
+_SERVICE_NAME_KEYS: Final = OTEL_SERVICE_NAME_METADATA_KEYS
+
+
+def tenant_service_name(auth_metadata: Mapping[str, str] | None) -> str | None:
+    """The per-request ``service.name`` override for this key/team, if any.
+
+    ``None`` keeps the env-configured default (``OTEL_SERVICE_NAME``).
+    """
+    if not auth_metadata:
+        return None
+    return next(
+        (stripped for key in _SERVICE_NAME_KEYS if (stripped := (auth_metadata.get(key) or "").strip())),
+        None,
+    )
 
 
 def _shutdown_provider(provider: TracerProvider) -> None:
@@ -48,8 +107,55 @@ def _shutdown_provider(provider: TracerProvider) -> None:
         verbose_logger.debug("OTel V2: error shutting down evicted provider: %s", e)
 
 
+def _plain_header_string(headers: Mapping[str, str]) -> str:
+    return ",".join(f"{key}={value}" for key, value in headers.items())
+
+
+def _encoded_header_string(headers: Mapping[str, str]) -> str:
+    """Percent-encode values so one containing the ``k=v,k=v`` separators (e.g.
+    a project name with a comma) survives; ``parse_env_headers`` decodes it back.
+    """
+    return ",".join(f"{key}={quote(value, safe='')}" for key, value in headers.items())
+
+
+@dataclass(frozen=True, slots=True)
+class TenantRoute:
+    """The tracer to create a span on, plus whether it must root its own trace.
+
+    ``detached`` is True when the routed span exports to a DIFFERENT backend
+    than the request's root span, which always exports through the default
+    tracer. A detached span roots a fresh trace with a link back to the request
+    trace for correlation, so the destination account is not left holding a
+    child whose parent it never received. It is driven by whether routing
+    headers were actually applied to an owned exporter, not merely requested:
+    a credential or project route whose callback owns no exporter those headers
+    can reach exports through the default backend unchanged, so it stays
+    parented like an unrouted span.
+
+    Credential routing (a team/key's own vendor account) is one detaching case:
+    the root, auth, and db spans stay on the operator's default backend while
+    the LLM-call span exports to the tenant's account, so parenting it into the
+    request trace makes the tenant account show a fragmented span with a missing
+    parent. Project routing (Phoenix) is the other: Phoenix assigns a whole
+    trace to one project by whichever of its spans arrives first, so a
+    project-routed span parented into the request trace gets dragged into the
+    project of the default-exported request spans and the header does nothing.
+    Both mirror the v1 loggers, which exported each request under its own
+    backend-local root. Service-name routing does NOT detach: it relabels
+    ``service.name`` on the SAME operator backend, where the parent is present.
+    """
+
+    tracer: Tracer
+    detached: bool
+    #: The provider ``tracer`` came from, or ``None`` on the default route. It
+    #: is returned already held (counted as an open span, atomically with the
+    #: cache update), so LRU eviction can't shut it down before the caller's
+    #: span lands; the caller must ``release`` it exactly once when done.
+    provider: TracerProvider | None = None
+
+
 class TenantTracerCache:
-    """Credential-scoped ``TracerProvider`` cache keyed by the dynamic headers."""
+    """Tenant-scoped ``TracerProvider`` cache keyed by routing headers and service name."""
 
     def __init__(
         self,
@@ -60,49 +166,227 @@ class TenantTracerCache:
         self._config = config
         self._callback_name = callback_name
         self._tracer_name = tracer_name
-        self._providers: "OrderedDict[tuple[tuple[str, str], ...], TracerProvider]" = OrderedDict()
+        # Guards the three mutable structures below: ``pre_call`` can run on
+        # thread-pool workers concurrently with the event loop, so cache
+        # updates, span counts, and retirement must be atomic.
+        self._lock: Final = threading.Lock()
+        self._providers: OrderedDict[_RouteKey, TracerProvider] = (
+            OrderedDict()  # mutable-ok: bounded LRU; eviction needs in-place ordered mutation
+        )
+        self._open_span_counts: dict[TracerProvider, int] = {}  # mutable-ok: live refcount state
+        # Oldest-first so an overflow of draining providers sheds the stalest.
+        self._retired: OrderedDict[TracerProvider, None] = OrderedDict()  # mutable-ok: draining evicted providers
+        # An owned exporter is routable only when its kind actually resolves to a
+        # header-carrying OTLP exporter. A denylist would accept a typo'd or
+        # unavailable kind, which ``_exporter_from_spec`` falls back to a
+        # header-ignoring console exporter: detaching such a span would strand it
+        # on the operator's console, never reaching the tenant backend. Project
+        # headers are HTTP-only; credentials ride gRPC metadata too (Arize's
+        # default exporter is gRPC), so they accept either OTLP transport.
+        owned_transports: Final = tuple(
+            exporter_transport(spec.kind) for spec in config.exporters if spec.owner == callback_name
+        )
+        self._project_routable = "http" in owned_transports
+        self._credential_routable = "http" in owned_transports or "grpc" in owned_transports
+        self._warned_project_unroutable = False
+        self._warned_credential_unroutable = False
 
-    def tracer_for(self, default: Tracer, dynamic_params: Any) -> Tracer:
-        """Return the tracer for this request.
+    def release(self, provider: TracerProvider | None) -> None:
+        """Drop one open-span count; shut a retired provider down once drained.
 
-        Use ``default`` unless the request's dynamic credentials require a
-        credential-scoped tracer, in which case build (or reuse) one. The cache
-        is a bounded LRU: the least-recently-used provider is flushed and shut
-        down on overflow so its exporter threads don't accumulate.
+        ``None`` (the default route) is a no-op so callers can release a
+        ``TenantRoute.provider`` unconditionally. The shutdown itself runs
+        outside the lock: it force-flushes over the network and must not stall
+        every concurrently routing request.
         """
-        headers = dynamic_otlp_headers(self._callback_name, dynamic_params)
-        if not headers:
-            return default
-        cache_key = tuple(sorted(headers.items()))
-        provider = self._providers.get(cache_key)
-        if provider is not None:
-            self._providers.move_to_end(cache_key)
-        else:
-            provider = build_tracer_provider(self._config_with_headers(headers))
-            self._providers[cache_key] = provider
-            if len(self._providers) > _MAX_CACHED_PROVIDERS:
-                _, evicted = self._providers.popitem(last=False)
-                _shutdown_provider(evicted)
-        return get_tracer(provider, self._tracer_name)
+        if provider is None:
+            return
+        with self._lock:
+            remaining: Final = self._open_span_counts.get(provider, 0) - 1
+            if remaining > 0:
+                self._open_span_counts[provider] = remaining
+                return
+            self._open_span_counts.pop(provider, None)
+            drained: Final = provider in self._retired
+            self._retired.pop(provider, None)
+        if drained:
+            _shutdown_provider(provider)
 
-    def _config_with_headers(self, headers: Mapping[str, str]) -> OpenTelemetryV2Config:
-        """Clone the config, stamping ``headers`` onto the credential's own exporter.
+    def route_for(
+        self,
+        default: Tracer,
+        dynamic_params: StandardCallbackDynamicParams | None,
+        auth_metadata: Mapping[str, str] | None = None,
+    ) -> TenantRoute:
+        """Return the tracer (and trace-detachment flag) for this request.
 
-        ``headers`` are the per-request credentials of ``self._callback_name`` (the
-        integration that built this cache), so they apply only to the exporter that
-        integration contributed (``spec.owner``). A request that carries one
-        tenant's Arize key must never rewrite the headers of a co-configured
-        Langfuse or self-hosted collector exporter, which would leak that key to a
-        different backend.
+        Use ``default`` unless the request's dynamic credentials, its key/team
+        project, or its key/team service name require a scoped tracer, in
+        which case build (or reuse) one. The cache is a bounded LRU: the
+        least-recently-used provider is flushed and shut down on overflow so
+        its exporter threads don't accumulate.
+
+        A routed provider is returned already held — its open-span count is
+        incremented in the same critical section as the cache update — so a
+        concurrent overflow eviction can't shut it down between selection and
+        the caller's span start. The caller must ``release`` it exactly once.
         """
-        header_str = ",".join(f"{key}={value}" for key, value in headers.items())
-        header_update: dict[str, str] = {"headers": header_str}
-        exporters = [
-            (
-                spec.model_copy(update=header_update)
-                if spec.owner == self._callback_name and spec.kind.lower() not in _NON_OTLP_KINDS
-                else spec
+        credential_headers: Final = self._credential_headers(dynamic_params)
+        project_headers: Final = self._project_headers(auth_metadata)
+        service_name: Final = tenant_service_name(auth_metadata)
+        if not credential_headers and not project_headers and service_name is None:
+            return TenantRoute(tracer=default, detached=False)
+        # A fixed per-integration region endpoint (New Relic us/eu), never a
+        # caller-supplied host; ``None`` keeps the preset's own endpoint.
+        endpoint: Final = dynamic_otlp_endpoint(self._callback_name, dynamic_params)
+        cache_key: Final = (
+            tuple(sorted(credential_headers.items())),
+            tuple(sorted(project_headers.items())),
+            endpoint,
+            service_name,
+        )
+        with self._lock:
+            provider: Final = self._cached_provider_locked(
+                cache_key, credential_headers, project_headers, endpoint, service_name
             )
+            self._open_span_counts[provider] = self._open_span_counts.get(provider, 0) + 1
+            evicted: Final = self._evicted_on_overflow_locked()
+        if evicted is not None:
+            _shutdown_provider(evicted)
+        return TenantRoute(
+            tracer=get_tracer(provider, self._tracer_name),
+            detached=bool(project_headers) or bool(credential_headers),
+            provider=provider,
+        )
+
+    def _cached_provider_locked(
+        self,
+        cache_key: _RouteKey,
+        credential_headers: Mapping[str, str],
+        project_headers: Mapping[str, str],
+        endpoint: str | None,
+        service_name: str | None,
+    ) -> TracerProvider:
+        cached: Final = self._providers.get(cache_key)
+        if cached is not None:
+            self._providers.move_to_end(cache_key)
+            return cached
+        built: Final = build_tracer_provider(
+            self._routed_config(credential_headers, project_headers, endpoint, service_name)
+        )
+        self._providers[cache_key] = built
+        return built
+
+    def _evicted_on_overflow_locked(self) -> TracerProvider | None:
+        """Pop the LRU provider past the cap; return it if the caller must shut it down.
+
+        A provider with open spans is retired to drain instead: stopping its
+        processors while a span opened at ``pre_call`` is still live would
+        silently drop that span at end instead of exporting it. Retirees are
+        themselves capped, so the stalest one is shut down (and its open-span
+        count dropped, making its eventual ``release`` a no-op) once too many
+        pile up rather than letting them accumulate a thread each.
+        """
+        if len(self._providers) <= _MAX_CACHED_PROVIDERS:
+            return None
+        _, evicted = self._providers.popitem(last=False)
+        if self._open_span_counts.get(evicted, 0) == 0:
+            return evicted
+        self._retired[evicted] = None
+        if len(self._retired) <= _MAX_RETIRED_PROVIDERS:
+            return None
+        overflowed, _ = self._retired.popitem(last=False)
+        self._open_span_counts.pop(overflowed, None)
+        return overflowed
+
+    def _credential_headers(self, dynamic_params: StandardCallbackDynamicParams | None) -> Mapping[str, str]:
+        """The per-request dynamic OTLP credentials, if this cache can apply them.
+
+        A callback owning only a console/in_memory exporter has nowhere to stamp
+        them, so the span would export to the operator's default backend
+        unchanged; routing there and detaching would orphan it on the very
+        backend that holds its parent. Warn once and keep the default tracer.
+        """
+        requested: Final = dynamic_otlp_headers(self._callback_name, dynamic_params) or _NO_HEADERS
+        if not requested or self._credential_routable:
+            return requested
+        if not self._warned_credential_unroutable:
+            self._warned_credential_unroutable = True
+            verbose_logger.warning(
+                "OTel V2: %s request carries dynamic credentials, but the callback owns no "
+                "OTLP exporter to stamp them onto; spans export to the default backend.",
+                self._callback_name,
+            )
+        return _NO_HEADERS
+
+    def _project_headers(self, auth_metadata: Mapping[str, str] | None) -> Mapping[str, str]:
+        """The per-request project-routing headers, if this cache can apply them.
+
+        A gRPC-only exporter can't (the project header route is HTTP-only), so
+        the request warns once and stays on the env-configured default project.
+        """
+        requested: Final = project_routing_headers(self._callback_name, auth_metadata)
+        if not requested or self._project_routable:
+            return requested
+        if not self._warned_project_unroutable:
+            self._warned_project_unroutable = True
+            verbose_logger.warning(
+                "OTel V2: %s key/team config names a per-request project, but its exporter "
+                "is not OTLP/HTTP and the project header is HTTP-only; spans stay in the "
+                "default project.",
+                self._callback_name,
+            )
+        return _NO_HEADERS
+
+    def _routed_config(
+        self,
+        credential_headers: Mapping[str, str],
+        project_headers: Mapping[str, str],
+        endpoint: str | None = None,
+        service_name: str | None = None,
+    ) -> OpenTelemetryV2Config:
+        """Clone the config, rewriting headers on the callback's own exporter.
+
+        Both header sets apply only to the exporter ``self._callback_name``
+        contributed (``spec.owner``). A request that carries one tenant's Arize
+        key must never rewrite the headers of a co-configured Langfuse or
+        self-hosted collector exporter, which would leak that key to a
+        different backend.
+
+        Dynamic credentials REPLACE the exporter's headers — they are the
+        tenant's complete credential set. Project headers APPEND instead: the
+        preset's static headers carry the backend auth (Phoenix's
+        ``Authorization``), which must survive routing to a project.
+        """
+        exporters: Final = [
+            self._routed_exporter(spec, credential_headers, project_headers, endpoint)
             for spec in self._config.exporters
         ]
-        return self._config.model_copy(update={"exporters": exporters})
+        update: Final = (
+            {"exporters": exporters} if service_name is None else {"exporters": exporters, "service_name": service_name}
+        )
+        return self._config.model_copy(update=update)
+
+    def _routed_exporter(
+        self,
+        spec: ExporterSpec,
+        credential_headers: Mapping[str, str],
+        project_headers: Mapping[str, str],
+        endpoint: str | None = None,
+    ) -> ExporterSpec:
+        kind: Final = spec.kind.lower()
+        if spec.owner != self._callback_name or kind in _NON_OTLP_KINDS:
+            return spec
+        base: Final = _plain_header_string(credential_headers) if credential_headers else spec.headers
+        routed: Final = (
+            ",".join(part for part in (base, _encoded_header_string(project_headers)) if part)
+            if project_headers and kind not in _GRPC_KINDS
+            else base
+        )
+        update: Final = {  # mutable-ok: model_copy(update=...) requires a plain dict
+            field: value
+            for field, value in (("headers", routed), ("endpoint", endpoint))
+            if (field == "headers" and routed != spec.headers)
+            or (field == "endpoint" and endpoint is not None and endpoint != spec.endpoint)
+        }
+        return spec if not update else spec.model_copy(update=update)

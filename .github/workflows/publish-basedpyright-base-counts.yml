@@ -1,0 +1,66 @@
+name: Publish basedpyright base counts
+
+# Every commit on litellm_internal_staging is some branch's future merge-base.
+# Publishing its per-rule basedpyright counts as an artifact lets
+# scripts/type_check_gate.py download them in seconds instead of paying a
+# 60-110s second basedpyright pass on every fresh worktree or moved merge-base.
+# No concurrency group on purpose: runs must never cancel each other, because
+# every sha's artifact matters (any of them can become a merge-base).
+
+on:
+  push:
+    branches:
+      - litellm_internal_staging
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Ref to compute and publish base counts for"
+        required: false
+        default: litellm_internal_staging
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          clean: true
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Cache the Rust build
+        uses: ./.github/actions/cache-cargo-build
+
+      - name: Cache Prisma binaries
+        uses: ./.github/actions/cache-prisma-binaries
+
+      # The gate provisions its own measurement env (.venv-typecheck: a frozen
+      # uv sync of its canonical dependency groups plus a generated Prisma
+      # client), so no install step here can drift from what local runs measure.
+      - name: Emit basedpyright counts for HEAD
+        run: |
+          python scripts/type_check_gate.py --emit-counts-dir "$RUNNER_TEMP/basedpyright-counts"
+          counts_file=$(ls "$RUNNER_TEMP"/basedpyright-counts/basedpyright-counts-*.json)
+          echo "COUNTS_ARTIFACT_NAME=$(basename "$counts_file" .json)" >> "$GITHUB_ENV"
+
+      - name: Upload counts artifact
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: ${{ env.COUNTS_ARTIFACT_NAME }}
+          path: ${{ runner.temp }}/basedpyright-counts/
+          if-no-files-found: error

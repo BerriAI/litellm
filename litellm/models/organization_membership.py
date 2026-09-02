@@ -6,7 +6,7 @@ Canonical definition for ``litellm_organizationmembership``. Re-exported from
 """
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import ConfigDict, model_validator
 
@@ -19,14 +19,14 @@ class LiteLLM_OrganizationMembershipTable(LiteLLMPydanticObjectBase):
 
     user_id: str
     organization_id: str
-    user_role: Optional[str] = None
+    user_role: str | None = None
     spend: float = 0.0
-    budget_id: Optional[str] = None
+    budget_id: str | None = None
     created_at: datetime
     updated_at: datetime
-    user: Optional[Any] = None
-    litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
-    user_email: Optional[str] = None
+    user: Any | None = None
+    litellm_budget_table: LiteLLM_BudgetTable | None = None
+    user_email: str | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 

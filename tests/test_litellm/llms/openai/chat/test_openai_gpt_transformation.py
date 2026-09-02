@@ -2,20 +2,17 @@
 Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation.py)
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
-from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 
 
 class TestOpenAIGPTConfig:
@@ -147,6 +144,69 @@ class TestGetOptionalParamsIntegration:
         # Both should include user
         assert regular_params.get("user") == "my-end-user"
         assert responses_params.get("user") == "my-end-user"
+
+    def test_reasoning_effort_supported_for_unknown_model_alias(self):
+        """An openai/-routed model litellm doesn't recognize is likely a proxy alias:
+        reasoning_effort must be forwarded so the server decides support."""
+        from litellm.llms.openai.openai import OpenAIConfig
+
+        supported_params = OpenAIConfig().get_supported_openai_params(
+            "my-claude-alias"
+        )
+        assert "reasoning_effort" in supported_params
+
+    def test_reasoning_effort_not_supported_for_known_non_reasoning_models(self):
+        """Known OpenAI models keep failing closed client-side."""
+        from litellm.llms.openai.openai import OpenAIConfig
+
+        config = OpenAIConfig()
+        assert "reasoning_effort" not in config.get_supported_openai_params("gpt-4o")
+        assert "reasoning_effort" not in config.get_supported_openai_params(
+            "responses/gpt-4.1-mini"
+        )
+
+    def test_reasoning_effort_not_inherited_by_openai_compatible_subclasses(self):
+        """Providers subclassing either openai config keep their own reasoning_effort gating
+        for their models, which are all unknown to the openai catalog."""
+        from litellm.llms.openai.openai import OpenAIConfig
+
+        class InheritingDispatcherConfig(OpenAIConfig):
+            pass
+
+        class InheritingGPTConfig(OpenAIGPTConfig):
+            pass
+
+        assert "reasoning_effort" not in InheritingDispatcherConfig().get_supported_openai_params(
+            "some-unknown-model"
+        )
+        assert "reasoning_effort" not in InheritingGPTConfig().get_supported_openai_params(
+            "some-unknown-model"
+        )
+
+    def test_reasoning_effort_forwarded_in_optional_params_for_unknown_model_alias(
+        self,
+    ):
+        """Regression test for reasoning_effort raising UnsupportedParamsError
+        client-side for openai/-prefixed proxy aliases before any HTTP request."""
+        from litellm.utils import get_optional_params
+
+        optional_params = get_optional_params(
+            model="my-claude-alias",
+            custom_llm_provider="openai",
+            reasoning_effort="low",
+        )
+        assert optional_params.get("reasoning_effort") == "low"
+
+    def test_reasoning_effort_still_rejected_for_known_non_reasoning_model(self):
+        """A real OpenAI model that doesn't reason still rejects the param client-side."""
+        from litellm.utils import get_optional_params
+
+        with pytest.raises(litellm.utils.UnsupportedParamsError):
+            get_optional_params(
+                model="gpt-4o",
+                custom_llm_provider="openai",
+                reasoning_effort="low",
+            )
 
 
 class TestOpenAIChatCompletionStreamingHandler:
@@ -809,3 +869,415 @@ class TestCacheControlPreservationForCustomEndpoint:
             headers={},
         )
         assert all("cache_control" not in m for m in body["messages"])
+
+
+class TestToolChoiceWithoutToolsDropped:
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    @staticmethod
+    def _pi_compact_summarization_messages():
+        return [
+            {
+                "role": "system",
+                "content": "You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.",
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "<conversation>\n[User]: Reply with exactly: ok-1\n\n[Assistant]: ok-1\n</conversation>\n\nThe messages above are a conversation to summarize.",
+                    }
+                ],
+            },
+        ]
+
+    def _transform(self, optional_params, config=None, model="gpt-5.6-sol"):
+        return (config or self.config).transform_request(
+            model=model,
+            messages=self._pi_compact_summarization_messages(),
+            optional_params=optional_params,
+            litellm_params={"custom_llm_provider": "openai", "api_base": None},
+            headers={},
+        )
+
+    def test_pi_compact_shape_drops_tool_choice_none_without_tools(self):
+        body = self._transform(
+            {
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                "store": False,
+                "max_completion_tokens": 13107,
+                "tool_choice": "none",
+            }
+        )
+        assert "tool_choice" not in body
+        assert "tools" not in body
+        assert body["model"] == "gpt-5.6-sol"
+        assert body["stream"] is True
+        assert body["stream_options"] == {"include_usage": True}
+        assert body["store"] is False
+        assert body["max_completion_tokens"] == 13107
+
+    def test_drops_tool_choice_auto_without_tools(self):
+        body = self._transform({"tool_choice": "auto"})
+        assert "tool_choice" not in body
+
+    def test_drops_named_function_tool_choice_without_tools(self):
+        body = self._transform(
+            {"tool_choice": {"type": "function", "function": {"name": "get_weather"}}}
+        )
+        assert "tool_choice" not in body
+
+    def test_drops_tool_choice_but_keeps_empty_tools_array(self):
+        body = self._transform({"tools": [], "tool_choice": "none"})
+        assert "tool_choice" not in body
+        assert body["tools"] == []
+
+    def test_gpt5_config_drops_tool_choice_without_tools(self):
+        body = self._transform({"tool_choice": "none"}, config=OpenAIGPT5Config())
+        assert "tool_choice" not in body
+
+    @pytest.mark.parametrize(
+        "tool_choice",
+        [
+            "none",
+            "auto",
+            "required",
+            {"type": "function", "function": {"name": "get_weather"}},
+        ],
+    )
+    def test_preserves_tool_choice_when_tools_present(self, tool_choice):
+        tools = [
+            {
+                "type": "function",
+                "function": {"name": "get_weather", "parameters": {}},
+            }
+        ]
+        body = self._transform({"tools": tools, "tool_choice": tool_choice})
+        assert body["tool_choice"] == tool_choice
+        assert body["tools"] == tools
+
+    def test_preserves_tool_choice_with_legacy_functions(self):
+        functions = [{"name": "get_weather", "parameters": {}}]
+        body = self._transform({"functions": functions, "tool_choice": "auto"})
+        assert body["tool_choice"] == "auto"
+        assert body["functions"] == functions
+
+    def test_preserves_function_call_without_functions(self):
+        body = self._transform({"function_call": "none"})
+        assert body["function_call"] == "none"
+
+    @pytest.mark.asyncio
+    async def test_async_transform_drops_tool_choice_without_tools(self):
+        body = await self.config.async_transform_request(
+            model="gpt-5.6-sol",
+            messages=self._pi_compact_summarization_messages(),
+            optional_params={"stream": True, "tool_choice": "none"},
+            litellm_params={"custom_llm_provider": "openai", "api_base": None},
+            headers={},
+        )
+        assert "tool_choice" not in body
+
+    @pytest.mark.asyncio
+    async def test_async_transform_preserves_tool_choice_when_tools_present(self):
+        tools = [
+            {
+                "type": "function",
+                "function": {"name": "get_weather", "parameters": {}},
+            }
+        ]
+        body = await self.config.async_transform_request(
+            model="gpt-5.6-sol",
+            messages=self._pi_compact_summarization_messages(),
+            optional_params={"tools": tools, "tool_choice": "auto"},
+            litellm_params={"custom_llm_provider": "openai", "api_base": None},
+            headers={},
+        )
+        assert body["tool_choice"] == "auto"
+        assert body["tools"] == tools
+
+
+class TestToolMessageImageHoisting:
+    """transform_request moves tool-message images into a following user message
+    (OpenAI-compatible APIs only accept text in role:"tool" messages)."""
+
+    DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+    HOISTED_USER_CONTENT = [
+        {"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+        {"type": "image_url", "image_url": {"url": DATA_URI}},
+    ]
+
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    def _messages_with_image_part_in_tool(self):
+        return [
+            {"role": "user", "content": "read the screenshot"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [{"type": "image_url", "image_url": {"url": self.DATA_URI}}],
+            },
+        ]
+
+    def test_transform_request_hoists_image_part_from_tool_message(self):
+        request = self.config.transform_request(
+            model="gpt-5.4-mini",
+            messages=self._messages_with_image_part_in_tool(),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        result = request["messages"]
+        assert [m.get("role") for m in result] == ["user", "assistant", "tool", "user"]
+        tool_message = result[2]
+        assert isinstance(tool_message["content"], str)
+        assert "image" in tool_message["content"]
+        assert result[3]["content"] == self.HOISTED_USER_CONTENT
+
+    @pytest.mark.asyncio
+    async def test_async_transform_request_hoists_image_part_from_tool_message(self):
+        request = await self.config.async_transform_request(
+            model="gpt-5.4-mini",
+            messages=self._messages_with_image_part_in_tool(),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        result = request["messages"]
+        assert [m.get("role") for m in result] == ["user", "assistant", "tool", "user"]
+        assert result[3]["content"] == self.HOISTED_USER_CONTENT
+
+
+class TestToolReferenceStripping:
+    """transform_request drops tool_reference parts from tool messages: OpenAI's
+    chat API rejects them, and the reference names an already-declared tool
+    rather than carrying content (#37462 round trip)."""
+
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    def _messages_with_tool_reference(self, extra_parts=()):
+        return [
+            {"role": "user", "content": "load the WebFetch tool"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "ToolSearch", "arguments": "{}"}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [*extra_parts, {"type": "tool_reference", "tool_name": "WebFetch"}],
+            },
+        ]
+
+    def test_transform_request_keeps_text_and_drops_reference(self):
+        request = self.config.transform_request(
+            model="gpt-4.1",
+            messages=self._messages_with_tool_reference(extra_parts=({"type": "text", "text": "loaded"},)),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        tool_message = request["messages"][2]
+        assert tool_message["content"] == [{"type": "text", "text": "loaded"}]
+        assert tool_message["tool_call_id"] == "call_1"
+
+    def test_transform_request_reference_only_keeps_tool_message_with_empty_text(self):
+        request = self.config.transform_request(
+            model="gpt-4.1",
+            messages=self._messages_with_tool_reference(),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert [m.get("role") for m in request["messages"]] == ["user", "assistant", "tool"]
+        assert request["messages"][2]["content"] == ""
+
+    @pytest.mark.asyncio
+    async def test_async_transform_request_drops_reference(self):
+        request = await self.config.async_transform_request(
+            model="gpt-4.1",
+            messages=self._messages_with_tool_reference(),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert request["messages"][2]["content"] == ""
+
+
+class TestOpenAIPromptCacheBreakpointChatPath:
+    """Chat-path shape for OpenAI explicit prompt caching (#37509)."""
+
+    EXPLICIT = {"mode": "explicit"}
+
+    def test_prompt_cache_options_travels_in_extra_body(self):
+        optional_params = litellm.get_optional_params(
+            model="gpt-5.6", custom_llm_provider="openai", prompt_cache_options=self.EXPLICIT
+        )
+        assert optional_params["extra_body"]["prompt_cache_options"] == self.EXPLICIT
+        assert "prompt_cache_options" not in optional_params
+
+    def test_prompt_cache_options_is_not_a_supported_chat_param(self):
+        assert "prompt_cache_options" not in OpenAIGPT5Config().get_supported_openai_params("gpt-5.6")
+        assert "prompt_cache_options" not in OpenAIGPTConfig().get_supported_openai_params("gpt-4.1")
+
+    def test_block_breakpoint_survives_transform_request(self):
+        request = OpenAIGPT5Config().transform_request(
+            model="gpt-5.6",
+            messages=[
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "sys",
+                            "prompt_cache_breakpoint": self.EXPLICIT,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                },
+                {"role": "user", "content": [{"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}]},
+            ],
+            optional_params={"extra_body": {"prompt_cache_options": self.EXPLICIT}},
+            litellm_params={},
+            headers={},
+        )
+        assert request["messages"][0]["content"] == [
+            {"type": "text", "text": "sys", "prompt_cache_breakpoint": self.EXPLICIT}
+        ]
+        assert request["messages"][1]["content"] == [{"type": "text", "text": "hi", "prompt_cache_breakpoint": self.EXPLICIT}]
+        assert request["extra_body"] == {"prompt_cache_options": self.EXPLICIT}
+        assert "prompt_cache_options" not in request
+
+
+class TestToolSchemaCombinatorFlatteningForOpenAI:
+    """
+    Regression tests for LIT-6488: OpenAI's chat completions validator rejects
+    tool parameters carrying a top-level anyOf/oneOf/allOf for every model
+    family, GPT-5 included, unlike the Responses API.
+    """
+
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    @pytest.fixture(autouse=True)
+    def _clean_openai_base_env(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+        monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+        monkeypatch.setattr(litellm, "api_base", None, raising=False)
+
+    @staticmethod
+    def _anyof_tool():
+        return {
+            "type": "function",
+            "function": {
+                "name": "automation_update",
+                "description": "Update an automation",
+                "parameters": {
+                    "type": "object",
+                    "anyOf": [
+                        {
+                            "properties": {"id": {"type": "string"}, "enabled": {"type": "boolean"}},
+                            "required": ["id", "enabled"],
+                        },
+                        {
+                            "properties": {"id": {"type": "string"}, "schedule": {"type": "string"}},
+                            "required": ["id", "schedule"],
+                        },
+                    ],
+                    "properties": {"id": {"type": "string"}},
+                    "required": ["id"],
+                },
+            },
+        }
+
+    def _transform(self, config, model, litellm_params, tools):
+        return config.transform_request(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"tools": tools},
+            litellm_params=litellm_params,
+            headers={},
+        )
+
+    def test_flattens_top_level_anyof_for_hosted_openai(self):
+        request = self._transform(
+            self.config, "gpt-4o", {"custom_llm_provider": "openai", "api_base": None}, [self._anyof_tool()]
+        )
+        parameters = request["tools"][0]["function"]["parameters"]
+        assert "anyOf" not in parameters
+        assert parameters["type"] == "object"
+        assert set(parameters["properties"]) == {"id", "enabled", "schedule"}
+        assert parameters["required"] == ["id"]
+        assert request["tools"][0]["function"]["name"] == "automation_update"
+
+    def test_gpt5_family_flattens_on_chat_completions(self):
+        request = self._transform(
+            OpenAIGPT5Config(), "gpt-5.6", {"custom_llm_provider": "openai", "api_base": None}, [self._anyof_tool()]
+        )
+        assert "anyOf" not in request["tools"][0]["function"]["parameters"]
+
+    def test_custom_api_base_keeps_union(self):
+        tool = self._anyof_tool()
+        request = self._transform(
+            self.config,
+            "gpt-4o",
+            {"custom_llm_provider": "openai", "api_base": "http://localhost:8000/v1"},
+            [tool],
+        )
+        assert request["tools"][0]["function"]["parameters"] == self._anyof_tool()["function"]["parameters"]
+
+    def test_non_openai_provider_keeps_union(self):
+        request = self._transform(
+            self.config, "some-oss-model", {"custom_llm_provider": "groq", "api_base": None}, [self._anyof_tool()]
+        )
+        assert request["tools"][0]["function"]["parameters"] == self._anyof_tool()["function"]["parameters"]
+
+    def test_caller_tool_dict_is_not_mutated(self):
+        tool = self._anyof_tool()
+        self._transform(self.config, "gpt-4o", {"custom_llm_provider": "openai", "api_base": None}, [tool])
+        assert tool == self._anyof_tool()
+
+    def test_clean_object_schema_passes_through_as_same_object(self):
+        tool = {
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "parameters": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
+            },
+        }
+        request = self._transform(
+            self.config, "gpt-4o", {"custom_llm_provider": "openai", "api_base": None}, [tool]
+        )
+        assert request["tools"][0] is tool
+
+    @pytest.mark.asyncio
+    async def test_async_transform_request_flattens_for_hosted_openai(self):
+        request = await self.config.async_transform_request(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"tools": [self._anyof_tool()]},
+            litellm_params={"custom_llm_provider": "openai", "api_base": None},
+            headers={},
+        )
+        parameters = request["tools"][0]["function"]["parameters"]
+        assert "anyOf" not in parameters
+        assert set(parameters["properties"]) == {"id", "enabled", "schedule"}

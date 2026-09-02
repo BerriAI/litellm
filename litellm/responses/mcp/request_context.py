@@ -8,28 +8,40 @@ surface from silently dropping a field: omitting the auth headers, for instance,
 still executes the tool, just with no credentials.
 """
 
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping, Sequence, Union
+from typing import TYPE_CHECKING, Any, Final
+
+from typing_extensions import NotRequired, ReadOnly, TypedDict
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
+
+
+class _AuthCarryingMetadata(TypedDict):
+    """The one key this module reads out of a request's ``metadata`` / ``litellm_metadata``."""
+
+    user_api_key_auth: ReadOnly[NotRequired["UserAPIKeyAuth | None"]]
 
 
 @dataclass(frozen=True, slots=True)
 class MCPRequestContext:
     """Everything a gateway handler must forward to MCP tool listing and execution."""
 
-    user_api_key_auth: Any  # any-ok: UserAPIKeyAuth is proxy-only; importing it here would create a cycle
-    mcp_auth_header: Union[str, None] = None
-    mcp_server_auth_headers: Union[Mapping[str, Mapping[str, str]], None] = None
-    oauth2_headers: Union[Mapping[str, str], None] = None
-    raw_headers: Union[Mapping[str, str], None] = None
-    request_tags: Union[Sequence[str], None] = None
-    litellm_trace_id: Union[str, None] = None
-    litellm_call_id: Union[str, None] = None
+    user_api_key_auth: "UserAPIKeyAuth | None"
+    mcp_auth_header: str | None = None
+    mcp_server_auth_headers: Mapping[str, Mapping[str, str]] | None = None
+    oauth2_headers: Mapping[str, str] | None = None
+    raw_headers: Mapping[str, str] | None = None
+    request_tags: Sequence[str] | None = None
+    litellm_trace_id: str | None = None
+    litellm_call_id: str | None = None
 
     @classmethod
     def resolve(
         cls,
         kwargs: Mapping[str, Any],
-        tools: Union[Iterable[Any], None],
+        tools: Iterable[object] | None,
     ) -> "MCPRequestContext":
         """
         Build the context from a gateway handler's kwargs.
@@ -43,9 +55,9 @@ class MCPRequestContext:
         )
         from litellm.responses.utils import ResponsesAPIRequestUtils
 
-        litellm_metadata = kwargs.get("litellm_metadata") or {}
-        metadata = kwargs.get("metadata") or {}
-        user_api_key_auth = (
+        litellm_metadata: Final[_AuthCarryingMetadata] = kwargs.get("litellm_metadata") or {}
+        metadata: Final[_AuthCarryingMetadata] = kwargs.get("metadata") or {}
+        user_api_key_auth: Final[UserAPIKeyAuth | None] = (
             kwargs.get("user_api_key_auth")
             or litellm_metadata.get("user_api_key_auth")
             or metadata.get("user_api_key_auth")
