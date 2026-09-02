@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 from unittest.mock import Mock
@@ -14,9 +13,6 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.utils import _get_docs_url, _get_openapi_url, _get_redoc_url
 from litellm.types.guardrails import GuardrailEventHooks
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
@@ -1319,6 +1315,62 @@ def test_proxy_config_state_post_init_callback_call(monkeypatch):
 
     config = pc.get_config_state()
     assert config["litellm_settings"]["default_team_settings"][0]["team_id"] == "test"
+
+
+@pytest.mark.asyncio
+async def test_default_team_settings_newrelic_resolves_traces_and_metrics():
+    """Static `default_team_settings` is the config-file twin of POST /team/callback.
+
+    A team pinned to New Relic through `default_team_settings` must reach the
+    same two loggers the dynamic path does: the per-team metrics logger (cost
+    and usage) and the trace logger (LLM/agent spans). This proves the static
+    path resolves both, not just one, so the config-file customer gets the
+    same per-team routing as the API customer.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    pc = ProxyConfig()
+    pc.config = {
+        "litellm_settings": {
+            "default_team_settings": [
+                {
+                    "team_id": "team-a",
+                    "success_callback": ["newrelic"],
+                    "newrelic_api_key": "team-a-ingest-key",
+                    "newrelic_region": "eu",
+                }
+            ]
+        }
+    }
+
+    callback_metadata = LiteLLMProxyRequestSetup.add_team_based_callbacks_from_config(
+        team_id="team-a",
+        proxy_config=pc,
+    )
+
+    assert callback_metadata is not None
+    assert callback_metadata.success_callback == ["newrelic"]
+    assert callback_metadata.callback_vars == {
+        "newrelic_api_key": "team-a-ingest-key",
+        "newrelic_region": "eu",
+    }
+
+    logging_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="static-nr-1",
+        function_id="static-nr-1",
+    )
+    logging_obj._trusted_callback_vars = tuple(callback_metadata.callback_vars.items())
+
+    resolved = logging_obj._resolve_dynamic_callback_string("newrelic")
+    resolved_names = {type(logger).__name__ for logger in resolved}
+    assert resolved_names == {"NewRelicMetricsLogger", "NewRelicLogger"}
 
 
 def test_proxy_config_state_get_config_state_error():

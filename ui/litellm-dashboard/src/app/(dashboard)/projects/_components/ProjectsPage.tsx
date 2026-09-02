@@ -1,9 +1,9 @@
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
-import { Plus, SearchIcon, X } from "lucide-react";
+import { Folder, Plus, SearchIcon, X } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
 import { useMemo, useState } from "react";
-import { LegacyPageHeader } from "@/components/shared/LegacyPageHeader";
+import { PageHeader } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { CreateProjectModal } from "./ProjectModals/CreateProjectModal";
@@ -54,21 +54,20 @@ export function ProjectsPage() {
   }
 
   return (
-    <div className="p-6 px-12">
-      <div className="mb-4">
-        <LegacyPageHeader
-          title="Projects"
-          subtitle="Manage projects within your teams"
-          actions={
-            <Button onClick={() => setIsCreateModalVisible(true)}>
-              <Plus className="size-4" />
-              Create Project
-            </Button>
-          }
-        />
-      </div>
+    <div className="p-8">
+      <PageHeader
+        icon={<Folder />}
+        title="Projects"
+        subtitle="Manage projects within your teams"
+        primaryAction={
+          <Button onClick={() => setIsCreateModalVisible(true)}>
+            <Plus className="size-4" />
+            Create Project
+          </Button>
+        }
+      />
 
-      <div className="mb-3 flex items-center">
+      <div className="mt-6 mb-3 flex items-center">
         <InputGroup className="max-w-[400px]">
           <InputGroupAddon>
             <SearchIcon className="size-4 text-muted-foreground" />

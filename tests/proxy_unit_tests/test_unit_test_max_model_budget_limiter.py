@@ -1,8 +1,5 @@
-import os
-import sys
 from unittest.mock import AsyncMock, patch
 
-sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system-path
 
 import pytest
 
@@ -1210,18 +1207,19 @@ async def test_a_pre_upgrade_counter_keyed_on_the_request_model_still_enforces(e
     model_max_budget = {"gpt-4": {"budget_limit": 10.0, "time_period": "1d"}}
     await limiter.dual_cache.async_set_cache(key=f"{prefix}:entity-1:openai/gpt-4:1d", value=25.0, ttl=86400)
 
+    if entity_type == Litellm_EntityType.KEY:
+        budget_check = limiter.is_key_within_model_budget(
+            user_api_key_dict=UserAPIKeyAuth(token="entity-1", model_max_budget=model_max_budget),
+            model="openai/gpt-4",
+        )
+    else:
+        budget_check = limiter.is_end_user_within_model_budget(
+            end_user_id="entity-1",
+            end_user_model_max_budget=model_max_budget,
+            model="openai/gpt-4",
+        )
     with pytest.raises(litellm.BudgetExceededError) as exc_info:
-        if entity_type == Litellm_EntityType.KEY:
-            await limiter.is_key_within_model_budget(
-                user_api_key_dict=UserAPIKeyAuth(token="entity-1", model_max_budget=model_max_budget),
-                model="openai/gpt-4",
-            )
-        else:
-            await limiter.is_end_user_within_model_budget(
-                end_user_id="entity-1",
-                end_user_model_max_budget=model_max_budget,
-                model="openai/gpt-4",
-            )
+        await budget_check
     assert exc_info.value.current_cost == 25.0
 
 

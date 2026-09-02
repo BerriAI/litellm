@@ -55,7 +55,7 @@ jobs:
             workers: 2
             reruns: 1
             timeout-minutes: 20
-            job-timeout-minutes: 55
+            job-timeout-minutes: 60
 
           - shard: enterprise-routing
             artifact-name: enterprise-routing
@@ -67,7 +67,7 @@ jobs:
             workers: 2
             reruns: 2
             timeout-minutes: 20
-            job-timeout-minutes: 55
+            job-timeout-minutes: 60
 
           - shard: integrations
             artifact-name: integrations
@@ -75,7 +75,7 @@ jobs:
             workers: 2
             reruns: 3
             timeout-minutes: 20
-            job-timeout-minutes: 55
+            job-timeout-minutes: 60
 
           - shard: Vertex AI
             artifact-name: llm-vertex-ai
@@ -83,7 +83,7 @@ jobs:
             workers: 1
             reruns: 2
             timeout-minutes: 20
-            job-timeout-minutes: 55
+            job-timeout-minutes: 60
 
           - shard: All Other Providers
             artifact-name: llm-other-providers
@@ -91,7 +91,7 @@ jobs:
             workers: 2
             reruns: 2
             timeout-minutes: 20
-            job-timeout-minutes: 55
+            job-timeout-minutes: 60
 
           - shard: misc
             artifact-name: misc
@@ -103,6 +103,7 @@ jobs:
               tests/test_litellm/completion_extras
               tests/test_litellm/compression
               tests/test_litellm/containers
+              tests/test_litellm/endpoints
               tests/test_litellm/experimental_mcp_client
               tests/test_litellm/models
               tests/test_litellm/repositories
@@ -122,7 +123,7 @@ jobs:
             workers: 2
             reruns: 2
             timeout-minutes: 20
-            job-timeout-minutes: 55
+            job-timeout-minutes: 60
 
           - shard: proxy-auth
             artifact-name: proxy-auth
@@ -134,13 +135,14 @@ jobs:
             workers: 2
             reruns: 2
             timeout-minutes: 20
-            job-timeout-minutes: 55
+            job-timeout-minutes: 60
 
           - shard: proxy-endpoints
             artifact-name: proxy-endpoints
             test-path: >-
               tests/test_litellm/proxy/analytics_endpoints
               tests/test_litellm/proxy/management_endpoints
+              tests/test_litellm/proxy/list_api
               tests/test_litellm/proxy/memory
               tests/test_litellm/proxy/guardrails
               tests/test_litellm/proxy/management_helpers
@@ -164,14 +166,15 @@ jobs:
               tests/test_litellm/proxy/public_endpoints
               tests/test_litellm/proxy/prompts
               tests/test_litellm/proxy/rag_endpoints
+              tests/test_litellm/proxy/rerank_endpoints
               tests/test_litellm/proxy/realtime_endpoints
               tests/test_litellm/proxy/ui_crud_endpoints
               tests/test_litellm/proxy/config_resolvers
               tests/test_litellm/proxy/utils
-            workers: 2
+            workers: 4
             reruns: 2
             timeout-minutes: 20
-            job-timeout-minutes: 55
+            job-timeout-minutes: 60
 
           - shard: proxy-server
             artifact-name: proxy-server
@@ -179,7 +182,7 @@ jobs:
             workers: 4
             reruns: 2
             timeout-minutes: 60
-            job-timeout-minutes: 95
+            job-timeout-minutes: 100
 
           - shard: proxy-infra
             artifact-name: proxy-infra
@@ -195,10 +198,39 @@ jobs:
               tests/test_litellm/proxy/types_utils
               tests/test_litellm/proxy/logging_endpoints
               tests/test_litellm/proxy/test_*.py
+            workers: 4
+            reruns: 2
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+
+          - shard: caching-local
+            artifact-name: caching-local
+            test-path: >-
+              tests/local_testing/test_cache_preset_key.py
+              tests/local_testing/test_caching_handler.py
+              tests/local_testing/test_prompt_caching.py
+              tests/local_testing/test_responses_stream_cache_keys.py
+              tests/local_testing/test_unit_test_caching.py
             workers: 2
             reruns: 2
             timeout-minutes: 20
-            job-timeout-minutes: 55
+            job-timeout-minutes: 60
+
+          - shard: proxy-extras
+            artifact-name: proxy-extras
+            test-path: "tests/litellm-proxy-extras"
+            workers: 2
+            reruns: 2
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+
+          - shard: enterprise-package
+            artifact-name: enterprise-package
+            test-path: "tests/enterprise"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 20
+            job-timeout-minutes: 60
 
           - shard: responses-caching-types
             artifact-name: responses-caching-types
@@ -209,7 +241,7 @@ jobs:
             workers: 2
             reruns: 2
             timeout-minutes: 20
-            job-timeout-minutes: 55
+            job-timeout-minutes: 60
     uses: ./.github/workflows/_test-unit-base.yml
     with:
       test-path: ${{ matrix.test-path }}

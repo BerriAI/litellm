@@ -1,5 +1,3 @@
-import os
-import sys
 import traceback
 from dotenv import load_dotenv
 import litellm.types
@@ -9,9 +7,7 @@ import json
 
 load_dotenv()
 import io
-import os
 
-sys.path.insert(0, os.path.abspath("../.."))
 from unittest.mock import AsyncMock, Mock, patch
 
 

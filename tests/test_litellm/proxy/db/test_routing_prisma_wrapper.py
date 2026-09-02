@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 
 # NOTE: do NOT patch sys.modules["prisma"] file-wide via an autouse fixture.
@@ -100,6 +99,49 @@ def test_per_model_reads_route_to_reader_writes_to_writer():
     assert actions.delete is writer_inner.litellm_usertable.delete
     assert actions.update_many is writer_inner.litellm_usertable.update_many
     assert actions.delete_many is writer_inner.litellm_usertable.delete_many
+
+
+def test_writer_pinned_client_bypasses_reader_routing():
+    """Regression for #38556: read-after-write reconciles must see the writer's
+    just-committed rows, so WriterPinnedClient must resolve reads to the writer
+    even when a read replica is configured."""
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper, WriterPinnedClient
+
+    writer, writer_inner, reader, reader_inner = _make_wrappers()
+    writer_inner.litellm_proxymodeltable = _model_actions_mock("writer_models")
+    reader_inner.litellm_proxymodeltable = _model_actions_mock("reader_models")
+    routing = RoutingPrismaWrapper(writer=writer, reader=reader)
+
+    pinned = WriterPinnedClient(routing)
+
+    assert pinned.db is writer
+    assert pinned.db.litellm_proxymodeltable.find_many is writer_inner.litellm_proxymodeltable.find_many
+
+
+def test_writer_pinned_client_passes_through_single_db():
+    from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+
+    writer, _, _, _ = _make_wrappers()
+
+    assert WriterPinnedClient(writer).db is writer
+
+
+def test_writer_pinned_client_yields_to_routed_reads_when_writer_down():
+    """The pin must not break reader-only degraded mode: a proxy that starts
+    during a primary outage still loads DB-backed models from the replica, so
+    while the writer is degraded the pin resolves to the routed wrapper."""
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper, WriterPinnedClient
+
+    writer, writer_inner, reader, reader_inner = _make_wrappers()
+    writer_inner.litellm_proxymodeltable = _model_actions_mock("writer_models")
+    reader_inner.litellm_proxymodeltable = _model_actions_mock("reader_models")
+    routing = RoutingPrismaWrapper(writer=writer, reader=reader)
+    routing._writer_unavailable = True
+
+    pinned = WriterPinnedClient(routing)
+
+    assert pinned.db is routing
+    assert pinned.db.litellm_proxymodeltable.find_many is reader_inner.litellm_proxymodeltable.find_many
 
 
 @pytest.mark.asyncio

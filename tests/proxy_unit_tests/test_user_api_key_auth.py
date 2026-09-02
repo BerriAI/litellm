@@ -1,13 +1,10 @@
 # What is this?
 ## Unit tests for user_api_key_auth helper functions
 
-import os
-import sys
 
 import litellm.proxy
 import litellm.proxy.proxy_server
 
-sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 from typing import Dict, List, Optional
 from unittest.mock import MagicMock, patch, AsyncMock
 
@@ -157,6 +154,7 @@ async def test_team_object_has_object_permission_id():
         token=hashed_key,
         last_refreshed_at=time.time(),
         team_object_permission_id=permission_id,
+        team_models=["gpt-4o"],
     )
     user_api_key_cache.set_cache(key=hashed_key, value=valid_token)
 
@@ -245,6 +243,7 @@ async def test_aaauser_personal_budgets(key_ownership):
             user_id=_user_id,
             team_id="my-special-team",
             team_max_budget=100,
+            team_models=["gpt-4o"],
             spend=20,
         )
 
@@ -295,13 +294,11 @@ async def test_user_api_key_auth_fails_with_prohibited_params(prohibited_param):
         return bytes(json.dumps(body), "utf-8")
 
     request.body = return_body
-    try:
-        response = await user_api_key_auth(request=request, api_key="Bearer " + user_key)
-    except Exception as e:
-        print("error str=", str(e))
-        error_message = str(e.message)
-        print("error message=", error_message)
-        assert "is not allowed in request body" in error_message
+    with pytest.raises(Exception, match="is not allowed in request body") as exc_info:
+        await user_api_key_auth(request=request, api_key="Bearer " + user_key)
+    error_message = str(exc_info.value.message)
+    print("error message=", error_message)
+    assert "is not allowed in request body" in error_message
 
 
 @pytest.mark.asyncio()
@@ -540,7 +537,6 @@ def test_get_api_key_from_custom_header_different_casing():
     )
 
 
-from litellm.proxy._types import LitellmUserRoles
 
 
 @pytest.mark.parametrize(
@@ -1121,12 +1117,9 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
             return_value=mock_jwt_response,
         ),
     ):
-        try:
+        with pytest.raises(ProxyException) as exc_info:
             await user_api_key_auth(request=request, api_key="Bearer fake.jwt.token")
-            pytest.fail("Expected this call to fail. Non-admin user should not access team routes.")
-        except ProxyException as e:
-            print("e", e)
-            assert "Only proxy admin can be used to generate" in str(e.message)
+        assert "Only proxy admin can be used to generate" in str(exc_info.value.message)
 
 
 @pytest.mark.asyncio
@@ -1357,9 +1350,8 @@ async def test_user_model_budget_is_enforced_through_user_api_key_auth(over_budg
         new=fake_get_user_object,
     ):
         if expect_refusal:
-            with pytest.raises(Exception) as exc:
+            with pytest.raises(Exception, match=r"(?i)budget") as exc:
                 await user_api_key_auth(request=request, api_key="Bearer " + key)
-            assert "budget" in str(exc.value).lower()
             assert user_id in str(exc.value)
         else:
             result = await user_api_key_auth(request=request, api_key="Bearer " + key)

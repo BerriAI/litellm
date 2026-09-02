@@ -1,14 +1,10 @@
 #### What this tests ####
 # This tests litellm router
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import logging
-import os
 
 
 import litellm
@@ -256,20 +252,17 @@ async def test_error_from_tag_routing():
         enable_tag_filtering=True,
     )
 
-    try:
+    from litellm.types.router import RouterErrors
+
+    with pytest.raises(
+        Exception, match=RouterErrors.no_deployments_with_tag_routing.value
+    ):
         await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "Tell me a joke."}],
             metadata={"tags": ["paid"]},
             mock_response="Tell me a joke.",
         )
-
-        pytest.fail("this should have failed - expected it to fail")
-    except Exception as e:
-        from litellm.types.router import RouterErrors
-
-        assert RouterErrors.no_deployments_with_tag_routing.value in str(e)
-        pass
 
 
 def test_tag_routing_with_list_of_tags():
@@ -3079,3 +3072,78 @@ async def test_non_router_tags_still_pick_the_matching_tier_deployment():
     )
 
     assert response._hidden_params["model_id"] == "tier-gemini-flash-us"
+
+
+def _chat_completions_request_mock():
+    from unittest.mock import MagicMock
+
+    from fastapi import Request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    return request_mock
+
+
+def _team_a_and_default_router():
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.4-mini",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "mock", "tags": ["team-a"]},
+                "model_info": {"id": "team-a-deployment"},
+            },
+            {
+                "model_name": "gpt-5.4-mini",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "mock", "tags": ["default"]},
+                "model_info": {"id": "default-deployment"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+
+@pytest.mark.asyncio()
+@pytest.mark.parametrize(
+    "team_metadata,body_extra",
+    [
+        ({"tags": ["team-a"]}, {}),
+        ({}, {"tags": ["team-a"]}),
+    ],
+    ids=["team-tags", "body-tags"],
+)
+async def test_chat_request_carrying_litellm_metadata_still_routes_on_proxy_merged_tags(team_metadata, body_extra):
+    from unittest.mock import MagicMock
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    router = _team_a_and_default_router()
+    data = {
+        "model": "gpt-5.4-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "litellm_metadata": {"trace_id": "abc"},
+        **body_extra,
+    }
+
+    request_kwargs = await add_litellm_data_to_request(
+        data=data,
+        request=_chat_completions_request_mock(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", metadata={}, team_metadata=team_metadata),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    deployment = await router.async_get_available_deployment(
+        model="gpt-5.4-mini",
+        request_kwargs=request_kwargs,
+        messages=request_kwargs["messages"],
+    )
+
+    assert deployment["model_info"]["id"] == "team-a-deployment"

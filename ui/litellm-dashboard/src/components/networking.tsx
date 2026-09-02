@@ -48,6 +48,27 @@ export const getAutoRouterClassifierDefaultPromptCall = async (
   }
 };
 
+export const getAutoRouterCustomTierPromptCall = async (
+  accessToken: string,
+  contextWindowSize: number,
+  tierDefinitions: { name: string; description?: string }[],
+  classificationPrompt?: string,
+): Promise<string> => {
+  /**
+   * Assembled by the proxy, because a built-in name with no description inherits criteria that live
+   * only in the backend. POSTed so the operator's prompt does not reach access logs through a URL.
+   */
+  const response = await apiClient.post<{ system_prompt: string }>(`/auto_router/classifier/default_prompt`, {
+    accessToken,
+    body: {
+      context_window_size: contextWindowSize,
+      tier_definitions: tierDefinitions,
+      ...(classificationPrompt?.trim() ? { classification_prompt: classificationPrompt } : {}),
+    },
+  });
+  return response.system_prompt;
+};
+
 /**
  * Helper file for calls being made to proxy
  */
@@ -1410,6 +1431,7 @@ export const userDailyActivityCall = async (
   page: number = 1,
   userId: string | null = null,
   includeCurrentUtcDay: boolean = false,
+  apiKey: string | null = null,
 ) => {
   /**
    * Get daily user activity on proxy
@@ -1423,6 +1445,7 @@ export const userDailyActivityCall = async (
     extraQueryParams: {
       user_id: userId,
       include_current_utc_day: includeCurrentUtcDay ? "true" : undefined,
+      api_key: apiKey,
     },
   });
 };
@@ -1654,6 +1677,7 @@ export const modelInfoCall = async (
   sortBy?: string,
   sortOrder?: string,
   excludeAutoRouters?: boolean,
+  modelName?: string,
 ) => {
   /**
    * Get all models on proxy
@@ -1666,6 +1690,9 @@ export const modelInfoCall = async (
     params.append("size", size.toString());
     if (search && search.trim()) {
       params.append("search", search.trim());
+    }
+    if (modelName && modelName.trim()) {
+      params.append("model", modelName.trim());
     }
     if (modelId && modelId.trim()) {
       params.append("modelId", modelId.trim());
@@ -2000,6 +2027,7 @@ interface UiSpendLogsParams {
   user_id?: string;
   end_user?: string;
   status_filter?: string;
+  cache_hit_filter?: string;
   /** Filter by model name (e.g. "gpt-4") */
   model?: string;
   /** Filter by model ID (litellm model deployment id) */
@@ -2011,6 +2039,7 @@ interface UiSpendLogsParams {
   sort_order?: "asc" | "desc";
   min_spend?: number;
   max_spend?: number;
+  exclude_internal_health_checks?: boolean;
 }
 
 interface UiSpendLogsCallOptions {
@@ -2045,6 +2074,8 @@ export const uiSpendLogsCall = async ({
       if (value == null) continue;
       if (key === "min_spend" || key === "max_spend") {
         queryParams.append(key, value.toString());
+      } else if (typeof value === "boolean") {
+        if (value) queryParams.append(key, "true");
       } else if (typeof value === "string" && value !== "") {
         queryParams.append(key, String(value));
       }
@@ -2392,6 +2423,30 @@ export const testAutoRouterRouting = async (
   }
 };
 
+export interface ComplexityRouterConfigValidation {
+  valid: boolean;
+  error?: string | null;
+}
+
+// Dry-runs the same write gate /model/new and /model/update apply, so a save that would come back
+// as a raw 400 shows the backend's own message inline first. Transport failures fail open: the
+// write gate stays authoritative.
+export const validateAutoRouterConfig = async (
+  accessToken: string,
+  complexityRouterConfig: Record<string, unknown>,
+  teamId?: string,
+): Promise<ComplexityRouterConfigValidation> => {
+  try {
+    return await apiClient.post<ComplexityRouterConfigValidation>("/auto_router/validate_complexity_router_config", {
+      accessToken,
+      body: { complexity_router_config: complexityRouterConfig, ...(teamId && { team_id: teamId }) },
+    });
+  } catch (error) {
+    console.warn("Could not dry-run the complexity router config; the save will be validated server side", error);
+    return { valid: true };
+  }
+};
+
 // ... existing code ...
 export const keyInfoV1Call = async (accessToken: string, key: string) => {
   try {
@@ -2505,12 +2560,12 @@ export const userDailyActivityAggregatedCall = async (
   accessToken: string,
   startTime: Date,
   endTime: Date,
-  ...options: [userId?: string | null, includeCurrentUtcDay?: boolean]
+  ...options: [userId?: string | null, includeCurrentUtcDay?: boolean, apiKey?: string | null]
 ) => {
   /**
    * Get aggregated daily user activity (no pagination)
    */
-  const [userId = null, includeCurrentUtcDay = false] = options;
+  const [userId = null, includeCurrentUtcDay = false, apiKey = null] = options;
   try {
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
@@ -2524,8 +2579,12 @@ export const userDailyActivityAggregatedCall = async (
         start_date: formatDate(startTime),
         end_date: formatDate(endTime),
         timezone: new Date().getTimezoneOffset().toString(),
-        user_id: userId || undefined,
+        // Passed raw, matching the paginated caller: both serializers drop null and undefined,
+        // and both keep "". An empty filter must not vanish, or a request scoped to one user or
+        // key would silently widen into an unscoped, proxy-wide read.
+        user_id: userId,
         include_current_utc_day: includeCurrentUtcDay ? "true" : undefined,
+        api_key: apiKey,
       },
     });
   } catch (error) {
@@ -4928,6 +4987,15 @@ export const createMCPServer = async (
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
+    throw error;
+  }
+};
+
+export const importMCPServers = async (accessToken: string, payload: Record<string, unknown>) => {
+  try {
+    return await apiClient.post(`/v1/mcp/server/import`, { accessToken, body: payload });
+  } catch (error) {
+    console.error("Failed to import MCP servers:", error);
     throw error;
   }
 };

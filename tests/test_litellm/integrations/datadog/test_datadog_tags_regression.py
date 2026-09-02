@@ -1,11 +1,9 @@
 import datetime
 import os
-import sys
 from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../"))
 
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.datadog.datadog_handler import get_datadog_tags, normalize_datadog_tag_value

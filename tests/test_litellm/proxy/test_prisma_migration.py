@@ -34,24 +34,22 @@ class TestPrismaMigration:
 
         mock_run_server.assert_called_once_with(("--skip_server_startup",), standalone_mode=False)
 
+    @pytest.mark.parametrize("env", [{}, {"ENFORCE_PRISMA_MIGRATION_CHECK": "false"}])
     @patch("litellm.proxy.prisma_migration.subprocess.run")
     @patch("litellm.proxy.prisma_migration.run_server")
-    def test_main_returns_prisma_generate_exit_code_when_enforced(
-        self, mock_run_server: MagicMock, mock_subprocess_run: MagicMock
+    def test_main_exits_zero_when_only_prisma_generate_fails(
+        self,
+        mock_run_server: MagicMock,
+        mock_subprocess_run: MagicMock,
+        env: dict[str, str],
     ) -> None:
-        mock_subprocess_run.return_value = MagicMock(returncode=7, stdout="", stderr="")
+        mock_subprocess_run.return_value = MagicMock(
+            returncode=1,
+            stdout="",
+            stderr="PermissionError: [Errno 13] Permission denied: '/app/.venv/lib/python3.13/site-packages/prisma/schema.prisma'",
+        )
 
-        with patch.dict(os.environ, {}, clear=True):
-            assert prisma_migration.main() == 7
-
-    @patch("litellm.proxy.prisma_migration.subprocess.run")
-    @patch("litellm.proxy.prisma_migration.run_server")
-    def test_main_ignores_prisma_generate_exit_code_when_disabled(
-        self, mock_run_server: MagicMock, mock_subprocess_run: MagicMock
-    ) -> None:
-        mock_subprocess_run.return_value = MagicMock(returncode=7, stdout="", stderr="")
-
-        with patch.dict(os.environ, {"ENFORCE_PRISMA_MIGRATION_CHECK": "false"}, clear=True):
+        with patch.dict(os.environ, env, clear=True):
             assert prisma_migration.main() == 0
 
     @patch("litellm.proxy.prisma_migration.subprocess.run")

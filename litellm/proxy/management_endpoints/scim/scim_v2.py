@@ -6,6 +6,7 @@ This is an enterprise feature and requires a premium license.
 
 import re
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from functools import partial
 from itertools import chain
@@ -28,6 +29,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.models.user import SCIMPlaceholder
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -176,6 +178,10 @@ class UserProvisionerHelpers:
         is persisted too, so re-upserting an existing email demotes a user who is no
         longer in the admin group instead of leaving the stale role.
 
+        IdPs like Entra manage membership exclusively through /Groups and never send
+        ``groups`` on POST /Users, so a request without teams means "unspecified",
+        not "remove from every team": existing memberships are preserved then.
+
         Args:
             prisma_client: Database client
             new_user_request: New user request data
@@ -194,7 +200,8 @@ class UserProvisionerHelpers:
         if not existing_user:
             return None
 
-        new_teams: Final = list(dict.fromkeys(new_user_request.teams or []))
+        requested_teams: Final = list(dict.fromkeys(new_user_request.teams or []))
+        new_teams: Final = requested_teams if requested_teams else list(existing_user.teams or [])
 
         if new_user_request.user_id != existing_user.user_id:
             verbose_proxy_logger.info(
@@ -579,6 +586,37 @@ async def _users_named_by_member_value(
     return tuple(dict.fromkeys(row.user_id for row in rows))
 
 
+async def _accounts_named_by_member_value(value: str, prisma_client: PrismaClient) -> tuple[str, ...]:
+    """Every user id this member value names, by user id, SSO identity or email.
+
+    Classification needs to know whether the value is one account's ``user_id`` and
+    whether it names any other account, so all three fields are read in one pass. The
+    id is compared exactly and unstripped, as a primary key lookup would; the
+    identities compare as ``_users_named_by_member_value`` describes. Two rows are
+    enough to tell one account from several, so the read stops there. Only a full
+    read that lacks the row keyed by the value leaves that row's existence open, and
+    only then is the id read on its own.
+    """
+    subject: Final = value.strip()
+    email: Final[_CaseInsensitiveMatch] = {"equals": subject, "mode": "insensitive"}
+    users: Final = _table(UserRepository(prisma_client))
+    rows: Final = await users.find_many(
+        where={  # mutable-ok: Prisma filter
+            "OR": [  # mutable-ok: Prisma filter
+                {"user_id": value},  # mutable-ok: Prisma filter
+                {"sso_user_id": subject},  # mutable-ok: Prisma filter
+                {"user_email": email},  # mutable-ok: Prisma filter
+            ],
+        },
+        take=2,
+    )
+    named: Final = tuple(dict.fromkeys(row.user_id for row in rows))
+    if len(named) < 2 or value in named:
+        return named
+    keyed: Final = await users.find_unique(where={"user_id": value})
+    return named if keyed is None else (value, *named)
+
+
 async def _classify_group_member(member: SCIMMember, prisma_client: PrismaClient) -> _ClassifiedGroupMember:
     """
     Decide what a single SCIM group member refers to.
@@ -621,11 +659,9 @@ async def _classify_group_member(member: SCIMMember, prisma_client: PrismaClient
     if member_type == "group":
         return _SkippedGroupMember(value=value, reason="nested_group")
 
-    user: Final = await _table(UserRepository(prisma_client)).find_unique(where={"user_id": value})
-    if user is not None:
-        shared_with: Final = tuple(
-            other for other in await _users_named_by_member_value(value, prisma_client) if other != value
-        )
+    named: Final = await _accounts_named_by_member_value(value, prisma_client)
+    if value in named:
+        shared_with: Final = tuple(other for other in named if other != value)
         if shared_with:
             verbose_proxy_logger.warning(
                 "SCIM: group member '%s' is one account's user id and is also account '%s' by SSO identity or email, "
@@ -645,7 +681,6 @@ async def _classify_group_member(member: SCIMMember, prisma_client: PrismaClient
         if team is not None and _team_metadata_has_scim_provenance(team.metadata):
             return _SkippedGroupMember(value=value, reason="existing_team")
 
-    named: Final = await _users_named_by_member_value(value, prisma_client)
     if len(named) == 1:
         verbose_proxy_logger.info(
             "SCIM: group member '%s' matched user_id '%s' by SSO identity or email",
@@ -1828,6 +1863,89 @@ async def delete_user(
         raise handle_exception_on_proxy(e)
 
 
+@scim_router.get(
+    "/placeholders",
+    response_model=tuple[SCIMPlaceholder, ...],
+    dependencies=(Depends(user_api_key_auth),),
+)
+async def list_placeholders() -> tuple[SCIMPlaceholder, ...]:
+    """
+    List user rows whose id is another account's SSO identity or email.
+
+    An earlier release provisioned a group member it could not match as a user keyed
+    by the raw member value, and that row now shadows the account the value really
+    names, so every push of that member is refused. This lists those rows so an
+    operator can fold each one into the account it shadows with
+    ``POST /scim/v2/placeholders/{user_id}/merge``. A row that has an SSO identity of
+    its own or owns virtual keys is left out: someone uses that account.
+    """
+    try:
+        prisma_client: Final = await _get_prisma_client_or_raise_exception()
+        async with prisma_client.tx() as tx:
+            return await UserRepository(prisma_client).find_shadowing_placeholders(tx)
+    except Exception as e:
+        raise handle_exception_on_proxy(e)
+
+
+def _placeholder_rejection(placeholder: LiteLLM_UserTable, resolved: tuple[str, ...], key_count: int) -> str | None:
+    if placeholder.sso_user_id is not None:
+        return f"User '{placeholder.user_id}' has an SSO identity of its own, so it is an account someone signs in to"
+    if key_count:
+        return f"User '{placeholder.user_id}' owns {key_count} virtual keys. Move or delete them before merging it"
+    if not resolved:
+        return f"User '{placeholder.user_id}' shadows no account: no other user has that id as SSO identity or email"
+    if len(resolved) > 1:
+        return (
+            f"User '{placeholder.user_id}' names {len(resolved)} accounts ({', '.join(resolved)}). Resolve that first"
+        )
+    return None
+
+
+@scim_router.post(
+    "/placeholders/{user_id}/merge",
+    response_model=SCIMPlaceholderMergeResult,
+    dependencies=(Depends(user_api_key_auth),),
+)
+async def merge_placeholder(
+    user_id: str = Path(..., title="User ID"),
+) -> SCIMPlaceholderMergeResult:
+    """
+    Fold a placeholder user into the one account its id names by SSO identity or email.
+
+    The account is added to every team the placeholder is on, then the placeholder is
+    deleted the way ``DELETE /scim/v2/Users/{id}`` deletes a user, so the next group
+    push resolves the member value to the real account. Refused with 409 when the row
+    has an SSO identity of its own, owns virtual keys, or names no account or several.
+    """
+    try:
+        prisma_client: Final = await _get_prisma_client_or_raise_exception()
+        placeholder: Final = await _check_user_exists(user_id)
+        resolved: Final = tuple(
+            other for other in await _users_named_by_member_value(user_id, prisma_client, take=None) if other != user_id
+        )
+        owned_keys: Final[_UserIdWhere] = {"user_id": user_id}
+        keys: Final = await _table(VerificationTokenRepository(prisma_client)).find_many(where=owned_keys)
+        rejection: Final = _placeholder_rejection(placeholder, resolved, len(keys))
+        if rejection is not None:
+            detail: Final[_ScimErrorDetail] = {"error": rejection}
+            raise HTTPException(status_code=409, detail=detail)
+
+        target_user_id: Final = resolved[0]
+        team_ids: Final = tuple(placeholder.teams)
+        for team_id in team_ids:
+            await _add_user_to_team(user_id=target_user_id, team_id=team_id)
+        await delete_user(user_id=user_id)
+        await _recompute_scim_member_roles(prisma_client, (target_user_id,))
+        verbose_proxy_logger.info(
+            "SCIM: merged placeholder user '%s' into '%s', moving teams %s", user_id, target_user_id, team_ids
+        )
+        return SCIMPlaceholderMergeResult(
+            placeholder_user_id=user_id, merged_into_user_id=target_user_id, team_ids=team_ids
+        )
+    except Exception as e:
+        raise handle_exception_on_proxy(e)
+
+
 def _parse_member_entry(entry: object) -> SCIMMember | None:
     """Parse one entry of a SCIM patch value, or None when it carries no id."""
     if isinstance(entry, str):
@@ -2370,6 +2488,37 @@ async def get_group(
         raise handle_exception_on_proxy(e)
 
 
+def _new_team_request_with_defaults(
+    team_id: str,
+    team_alias: str | None,
+    members_with_roles: Sequence[Member],
+) -> NewTeamRequest:
+    """Build the SCIM group's team request, applying litellm.default_team_params
+    (including models) the same way SSO auto-created teams do."""
+    default_params: Final = litellm.default_team_params
+    defaults: Final[Mapping[str, object]] = (
+        deepcopy(default_params)
+        if isinstance(default_params, dict)
+        else default_params.model_dump(exclude_none=True)
+        if default_params is not None
+        else {}
+    )
+    default_metadata: Final = defaults.get("metadata")
+    metadata: Final = {
+        **(default_metadata if isinstance(default_metadata, dict) else {}),
+        SCIM_MANAGED_TEAM_METADATA_KEY: True,
+    }
+    return NewTeamRequest.model_validate(
+        {
+            **defaults,
+            "team_id": team_id,
+            "team_alias": team_alias,
+            "members_with_roles": members_with_roles,
+            "metadata": metadata,
+        }
+    )
+
+
 @scim_router.post(
     "/Groups",
     response_model=SCIMGroup,
@@ -2407,11 +2556,10 @@ async def create_group(
 
         # Create team in database
         created_team: Final = await new_team(
-            data=NewTeamRequest(
+            data=_new_team_request_with_defaults(
                 team_id=team_id,
                 team_alias=group.displayName,
                 members_with_roles=members_with_roles,
-                metadata={SCIM_MANAGED_TEAM_METADATA_KEY: True},
             ),
             http_request=Request(scope={"type": "http", "path": "/scim/v2/Groups"}),
             user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
@@ -2760,6 +2908,12 @@ async def patch_group(
         final_team: Final = await _table(TeamRepository(prisma_client)).find_unique(where={"team_id": group_id})
         if final_team:
             updated_team = final_team
+
+        if updated_team is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Group not found with ID: {group_id}"},  # mutable-ok: FastAPI detail contract
+            )
 
         # Convert to SCIM format and return
         scim_group: Final = await ScimTransformations.transform_litellm_team_to_scim_group(
