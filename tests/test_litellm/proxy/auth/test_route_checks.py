@@ -1,6 +1,7 @@
 import os
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 import pytest
@@ -55,6 +56,43 @@ def test_non_admin_config_update_route_rejected():
     )
     assert "Route=/config/update" in str(exc_info.value)
     assert "Your role=internal_user" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "route",
+    ["/policies/list", "/prompts/list", "/in_product_nudges", "/config/update"],
+)
+def test_admin_only_route_denial_is_forbidden_and_carries_status(route):
+    """A valid non-admin key denied an admin-only route is an authorization
+    failure, so it must surface as 403 and carry the status code the metrics
+    layer reads, not an unlabelled 401.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/37108
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+
+    assert exc_info.value.status_code == 403
+    assert f"Route={route}" in str(exc_info.value.detail)
 
 
 @pytest.mark.parametrize(
@@ -3544,3 +3582,46 @@ def test_agent_registry_route_gate_open_to_non_admin_roles(user_role, method, ro
         valid_token=valid_token,
         request_data={},
     )
+
+
+@pytest.mark.parametrize("route", ["/policies/list", "/prompts/list"])
+def test_admin_only_denial_reaches_the_client_as_403(route):
+    """Drives a real request so the status the caller sees is asserted, not just the
+    status the check raises. A regression that swallowed it and re-raised 401 would
+    leave the direct-call tests above green.
+    """
+    from fastapi.testclient import TestClient
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.proxy_server import app
+
+    key: Final = "sk-non-admin-1234"
+    valid_token: Final = UserAPIKeyAuth(
+        token=key, key_name=key, user_id="test_user", user_role=LitellmUserRoles.INTERNAL_USER.value
+    )
+    user_obj: Final = LiteLLM_UserTable(
+        user_id="test_user", user_email="test@example.com", user_role=LitellmUserRoles.INTERNAL_USER.value
+    )
+
+    class _StubIdentityStore:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def resolve(self, *args, **kwargs):
+            return MagicMock(source_key=valid_token)
+
+        @staticmethod
+        def key_from_principal(principal):
+            return valid_token
+
+    with (
+        patch.object(ps, "master_key", "sk-master-1234"),
+        patch.object(ps, "prisma_client", MagicMock()),
+        patch("litellm.proxy.auth.user_api_key_auth.IdentityStore", _StubIdentityStore),
+        patch("litellm.proxy.auth.user_api_key_auth.get_user_object", new=AsyncMock(return_value=user_obj)),
+    ):
+        response: Final = TestClient(app, raise_server_exceptions=False).get(
+            route, headers={"Authorization": f"Bearer {key}"}
+        )
+
+    assert response.status_code == 403, f"{route} returned {response.status_code}: {response.text[:200]}"
