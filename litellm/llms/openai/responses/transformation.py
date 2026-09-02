@@ -633,6 +633,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         """
         Transform the delete response API response into a DeleteResponseResult
         """
+        if not raw_response.is_success:
+            raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
         try:
             raw_response_json: Final = _delete_response_body(raw_response)
         except Exception:
