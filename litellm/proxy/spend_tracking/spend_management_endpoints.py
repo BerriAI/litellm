@@ -148,17 +148,10 @@ class _DailyTagSpendRow(TypedDict):
     total_spend: float
 
 
-class _SessionCountAggregate(TypedDict):
-    session_id: int
-
-
-class _SessionCountRow(TypedDict):
-    session_id: str
-    _count: _SessionCountAggregate
-
-
 class _SessionSpendRow(TypedDict):
     session_id: str
+    api_key: ReadOnly[str]
+    session_total_count: ReadOnly[int]
     session_total_spend: float
     mcp_tool_call_count: int
     mcp_tool_call_spend: float
@@ -246,18 +239,6 @@ async def _find_spend_log_row(prisma_client: PrismaClient, request_id: str) -> _
 async def _count_spend_logs(prisma_client: PrismaClient, where: Mapping[str, object]) -> int:
     """Count the spend log rows matching ``where``."""
     return await _spend_logs_table(prisma_client).count(where=where)
-
-
-async def _count_logs_per_session(
-    prisma_client: PrismaClient, session_ids: Sequence[str | None]
-) -> Sequence[_SessionCountRow]:
-    """Count spend log rows per session for the given session ids."""
-    rows: Final = await _spend_logs_table(prisma_client).group_by(
-        by=["session_id"],
-        where={"session_id": {"in": session_ids}},
-        count={"session_id": True},
-    )
-    return cast(Sequence[_SessionCountRow], rows)  # cast-ok: group_by(count=) shape is fixed by the by/count args
 
 
 async def _find_team_row(prisma_client: PrismaClient, team_id: str) -> _SupportsModelDump | None:
@@ -4097,11 +4078,12 @@ async def _build_ui_spend_logs_response(
     Build the paginated response for the UI spend-logs endpoint.
 
     When ``enrich_session_counts`` is ``True`` (the default for the v1/UI
-    endpoint), each row is enriched with ``session_total_count`` so the
-    frontend knows which sessions are expandable (multi-call sessions).
-    For every row that carries a ``session_id``, a single ``GROUP BY`` query
-    fetches the total number of logs in each referenced session.  Rows without
-    a ``session_id`` default to ``1``.
+    endpoint), each row is enriched with ``session_total_count`` plus spend
+    and call-type aggregates so the frontend knows which sessions are
+    expandable (multi-call sessions).  One ``GROUP BY (session_id, api_key)``
+    query serves every referenced session, keyed per api key so two callers
+    reusing a session id never see each other's totals.  Rows without a
+    ``session_id`` default to ``1``.
 
     When ``enrich_session_counts`` is ``False`` (v2 endpoint), rows are
     serialised without the extra query.
@@ -4123,7 +4105,6 @@ async def _build_ui_spend_logs_response(
         A dict with ``data`` (enriched rows), ``total``, ``page``,
         ``page_size``, ``total_pages``, and ``total_is_capped``.
     """
-    count_map: dict[str, int] = {}
     if enrich_session_counts:
         session_ids: Final[Sequence[str | None]] = list(
             {
@@ -4132,15 +4113,8 @@ async def _build_ui_spend_logs_response(
                 if (row.get("session_id") if isinstance(row, dict) else getattr(row, "session_id", None))
             }
         )
-        if session_ids:
-            # NOTE: This GROUP BY runs on every v1/UI page load. The IN clause
-            # is bounded by page_size (typically 25-50 distinct session IDs).
-            # If performance degrades at scale, consider short-lived caching or
-            # folding the count into the main query via a window function.
-            counts: Final = await _count_logs_per_session(prisma_client, session_ids)
-            count_map = {r["session_id"]: r["_count"]["session_id"] for r in counts if r.get("session_id")}
 
-    session_spend_map: dict[str, dict[str, int | float]] = {}
+    session_spend_map: dict[tuple[str, str], dict[str, int | float]] = {}
     if enrich_session_counts and session_ids:
         from prisma.errors import PrismaError
 
@@ -4158,7 +4132,8 @@ async def _build_ui_spend_logs_response(
             rows: Final[Sequence[_SessionSpendRow]] = await _query_raw(
                 prisma_client,
                 f"""
-                SELECT session_id,
+                SELECT session_id, api_key,
+                       COUNT(*)::int AS session_total_count,
                        COALESCE(SUM(spend), 0)::double precision AS session_total_spend,
                        COUNT(*) FILTER (
                            WHERE call_type IN {_MCP_CALL_TYPES_SQL}
@@ -4174,13 +4149,14 @@ async def _build_ui_spend_logs_response(
                 FROM "LiteLLM_SpendLogs"
                 WHERE session_id = ANY($1::text[])
                   AND api_key = ANY($2::text[])
-                GROUP BY session_id
+                GROUP BY session_id, api_key
                 """,
                 session_ids,
                 authorized_api_keys,
             )
             session_spend_map = {
-                row["session_id"]: {
+                (row["session_id"], row["api_key"]): {
+                    "session_total_count": int(row.get("session_total_count") or 0),
                     "session_total_spend": float(row.get("session_total_spend") or 0.0),
                     "mcp_tool_call_count": int(row.get("mcp_tool_call_count") or 0),
                     "mcp_tool_call_spend": float(row.get("mcp_tool_call_spend") or 0.0),
@@ -4189,7 +4165,7 @@ async def _build_ui_spend_logs_response(
                     "session_agent_count": int(row.get("session_agent_count") or 0),
                 }
                 for row in rows
-                if row.get("session_id")
+                if row.get("session_id") and row.get("api_key")
             }
         except PrismaError:
             verbose_proxy_logger.debug(
@@ -4202,8 +4178,9 @@ async def _build_ui_spend_logs_response(
         for row in data:
             row_dict = dict(row) if isinstance(row, dict) else row.model_dump()
             sid = row_dict.get("session_id")
-            row_dict["session_total_count"] = count_map.get(sid, 1) if sid else 1
-            session_stats = session_spend_map.get(sid) if sid else None
+            row_api_key = row_dict.get("api_key")
+            session_stats = session_spend_map.get((sid, row_api_key)) if sid and row_api_key else None
+            row_dict["session_total_count"] = int(session_stats["session_total_count"]) if session_stats else 1
             if session_stats:
                 row_dict["session_total_spend"] = session_stats["session_total_spend"]
                 if session_stats["mcp_tool_call_count"]:

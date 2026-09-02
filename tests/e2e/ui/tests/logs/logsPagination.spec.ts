@@ -137,5 +137,14 @@ test.describe("Logs page session-grouped pagination", () => {
 
     // One row per caller: reusing a session id must not merge two keys' activity into one row.
     await expect(requestLogsRows(page).filter({ hasText: sharedSession })).toHaveCount(2, { timeout: 30_000 });
+
+    // And each row carries ITS key's totals: two calls badge the first key's row,
+    // while the other key's single call renders as a plain LLM row.
+    const mineRow = requestLogsRows(page).filter({ hasText: sharedSession }).filter({ hasText: mine.token });
+    const theirsRow = requestLogsRows(page).filter({ hasText: sharedSession }).filter({ hasText: theirs.token });
+    await expect(mineRow).toHaveCount(1);
+    await expect(theirsRow).toHaveCount(1);
+    await expect(mineRow.getByText("2", { exact: true })).toBeVisible();
+    await expect(theirsRow.getByText("LLM", { exact: true })).toBeVisible();
   });
 });
