@@ -171,7 +171,7 @@ def blocked_responses_stream_usage(original_response: object) -> ResponseAPIUsag
         (
             response
             for item in reversed(original_response)
-            if str(stream_item_field(item, "type") or "") == "response.completed"
+            if stream_item_field(item, "type") == "response.completed"
             and (response := stream_item_field(item, "response")) is not None
         ),
         None,
