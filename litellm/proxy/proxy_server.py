@@ -12986,7 +12986,7 @@ def _enrich_model_info_with_litellm_data(
             except Exception:
                 litellm_model_info = {}
     for k, v in litellm_model_info.items():
-        if k not in model_info:
+        if model_info.get(k) is None:
             model_info[k] = v
     model["model_info"] = model_info
     # don't return the api key / vertex credentials
