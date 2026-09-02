@@ -139,11 +139,12 @@ describe("RequestLogsPanel", () => {
   });
 
   describe("server-grouped session pagination (#38060)", () => {
-    it("requests session-grouped pages for the table query", async () => {
+    it("requests session-grouped pages of 10 rows by default", async () => {
       renderPanel();
 
       await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
       expect(lastCall()?.params?.group_by_session).toBe(true);
+      expect(lastCall()?.page_size).toBe(10);
     });
 
     it("renders every row the server returns without client-side collapsing", async () => {

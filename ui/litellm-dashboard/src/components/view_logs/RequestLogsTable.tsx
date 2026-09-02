@@ -8,6 +8,7 @@ import { DataTable, DataTableFilterDrawer, DataTableToolbar } from "@/components
 
 import type { Team } from "../key_team_helpers/key_list";
 import type { LogEntry } from "./columns";
+import { LOGS_PAGE_SIZE_OPTIONS } from "./constants";
 import { LOG_FILTER_LABELS, type LogsWindow } from "./log_filter_logic";
 import { RequestLogsFilters } from "./RequestLogsFilters";
 import { getRequestLogsTableColumns } from "./RequestLogsTableColumns";
@@ -91,6 +92,7 @@ export function RequestLogsTable({
       paginationMode="server"
       pagination={pagination}
       onPaginationChange={onPaginationChange}
+      pageSizeOptions={LOGS_PAGE_SIZE_OPTIONS}
       rowCount={rowCount}
       filterMode="server"
       columnFilters={columnFilters}
