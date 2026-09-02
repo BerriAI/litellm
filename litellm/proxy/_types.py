@@ -1216,9 +1216,9 @@ class GenerateKeyRequest(KeyRequestBase):
     organization_id: str | None = None
     project_id: str | None = None
 
-    @field_validator("team_id", mode="before")
+    @field_validator("team_id", "organization_id", "project_id", mode="before")
     @classmethod
-    def treat_cleared_team_id_as_unset(cls, v: object) -> object:
+    def treat_cleared_scope_id_as_unset(cls, v: object) -> object:
         if v == "":
             return None
         return v
