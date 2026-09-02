@@ -24,6 +24,18 @@ vi.mock("./agent_form_fields", () => ({
   unmountedA2AFieldNames: () => [],
 }));
 
+vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({
+  useMCPServers: () => ({ data: [{ server_id: "srv-1", server_name: "github" }] }),
+}));
+
+vi.mock("@/components/mcp_server_management/MCPServerSelector", () => ({
+  default: () => <div data-testid="mcp-server-selector" />,
+}));
+
+vi.mock("@/components/mcp_server_management/MCPToolPermissions", () => ({
+  default: () => <div data-testid="mcp-tool-permissions" />,
+}));
+
 const agent = {
   agent_id: "agent-1",
   agent_name: "support-agent",
@@ -62,5 +74,17 @@ describe("AgentInfoView settings", () => {
     expect(token).toBe("sk-test");
     expect(agentId).toBe("agent-1");
     expect(payload.tpm_limit).toBe(42);
+    expect(payload.object_permission).toEqual({ mcp_servers: [], mcp_access_groups: [], mcp_tool_permissions: {} });
+  });
+
+  it("shows MCP grants with server names on the overview tab", async () => {
+    vi.mocked(networking.getAgentInfo).mockResolvedValue({
+      ...agent,
+      object_permission: { mcp_servers: ["srv-1"] },
+    } as unknown as Agent);
+
+    render(<AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />);
+
+    expect(await screen.findByText("github (srv-1)")).toBeInTheDocument();
   });
 });
