@@ -32,6 +32,8 @@ from proxy_client import ProxyClient
 from pydantic import BaseModel
 
 GuardrailMode = Literal["pre_call", "post_call", "during_call", "logging_only"]
+PiiEntity = Literal["EMAIL_ADDRESS", "PHONE_NUMBER", "PERSON", "CREDIT_CARD", "US_SSN"]
+PiiAction = Literal["MASK", "BLOCK"]
 BlockedWordAction = Literal["BLOCK", "MASK"]
 
 
@@ -82,6 +84,7 @@ class PresidioParamsBody(GuardrailParamsBase):
     presidio_filter_scope: Literal["input", "output", "both"] | None = None
     presidio_language: str | None = None
     output_parse_pii: bool | None = None
+    pii_entities_config: dict[PiiEntity, PiiAction] | None = None
 
 
 class ToolPermissionRuleBody(BaseModel):

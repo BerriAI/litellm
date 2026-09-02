@@ -33,7 +33,7 @@ from pydantic import BaseModel
 
 from e2e_config import unique_marker
 from e2e_http import Result, Success
-from guardrails_client import GuardrailMode, GuardrailsClient, PresidioParamsBody
+from guardrails_client import GuardrailMode, GuardrailsClient, PiiAction, PiiEntity, PresidioParamsBody
 from lifecycle import ResourceManager
 from models import AnthropicMessagesResponse, ChatResponse
 
@@ -76,6 +76,7 @@ def _register_presidio(
     name: str,
     mode: GuardrailMode = "pre_call",
     filter_scope: Literal["input", "output", "both"] = "input",
+    entities: dict[PiiEntity, PiiAction] | None = None,
 ) -> None:
     analyzer, anonymizer = _presidio_bases()
     guardrail_id = client.register(
@@ -86,6 +87,7 @@ def _register_presidio(
             presidio_analyzer_api_base=analyzer,
             presidio_anonymizer_api_base=anonymizer,
             presidio_filter_scope=filter_scope,
+            pii_entities_config=entities,
         ),
     )
     resources.defer(lambda: client.delete_guardrail(guardrail_id))
@@ -199,6 +201,12 @@ class TestPresidioPreCallMasking:
 #: truncates the response before the address it is supposed to mask.
 _POST_CALL_MAX_TOKENS = 512
 
+#: The post_call scenario masks these two entities and nothing else. Left
+#: unscoped, Presidio's broader recognizers claim the local part too (a random
+#: marker reads as an NRP), which would erase the very token that tells output
+#: masking apart from input masking.
+_POST_CALL_ENTITIES: dict[PiiEntity, PiiAction] = {"EMAIL_ADDRESS": "MASK", "PHONE_NUMBER": "MASK"}
+
 
 def _post_call_prompt(marker: str, local_part: str) -> str:
     """Ask for the local part and the full address in one answer. Presidio masks
@@ -230,7 +238,14 @@ class TestPresidioPostCallMasking:
         itself comes back as <EMAIL_ADDRESS> in the same answer.
         """
         name = f"e2e-presidio-post-chat-{unique_marker()}"
-        _register_presidio(client, resources, name=name, mode="post_call", filter_scope="output")
+        _register_presidio(
+            client,
+            resources,
+            name=name,
+            mode="post_call",
+            filter_scope="output",
+            entities=_POST_CALL_ENTITIES,
+        )
 
         local_part = f"e2euser{unique_marker()}"
         email = f"{local_part}@example.com"
