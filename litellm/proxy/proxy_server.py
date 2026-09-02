@@ -310,6 +310,7 @@ from litellm.proxy.auth.model_checks import (
     get_mcp_server_ids,
     get_team_models,
 )
+from litellm.proxy.auth.password_policy import validate_password_policy
 from litellm.proxy.auth.user_api_key_auth import (
     _fetch_global_spend_with_event_coordination,
     user_api_key_auth,
@@ -15236,6 +15237,7 @@ async def login(request: Request):
         password=password,
         master_key=master_key,
         prisma_client=prisma_client,
+        general_settings=general_settings,
     )
 
     # Create UI token object
@@ -15310,6 +15312,7 @@ async def login_v2(request: Request):
             password=password,
             master_key=master_key,
             prisma_client=prisma_client,
+            general_settings=general_settings,
         )
 
         returned_ui_token_object: Final = create_ui_token_object(
@@ -15380,6 +15383,7 @@ async def login_v3(request: Request):
             password=password,
             master_key=master_key,
             prisma_client=prisma_client,
+            general_settings=general_settings,
         )
 
         returned_ui_token_object: Final = create_ui_token_object(
@@ -15749,6 +15753,7 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
             detail={"error": "Invalid onboarding session for invitation link."},
         )
 
+    validate_password_policy(data.password, general_settings)
     hashed_pw: Final = hash_password(data.password)
     current_time = litellm.utils.get_utc_datetime()
     async with prisma_client.db.tx() as tx:
