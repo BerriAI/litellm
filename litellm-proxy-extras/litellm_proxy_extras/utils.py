@@ -905,6 +905,15 @@ class ProxyExtrasDBManager:
                         time.sleep(random.randrange(5, 15))
                         continue
 
+                    if "P1002" in stderr and "advisory lock" in stderr:
+                        logger.info(
+                            "prisma migrate deploy attempt %s timed out waiting for "
+                            "the advisory lock a concurrent migrate deploy holds, retrying",
+                            attempt + 1,
+                        )
+                        time.sleep(random.randrange(5, 15))
+                        continue
+
                     raise RuntimeError(
                         "Database migration failed and cannot be auto-recovered. "
                         f"Manual intervention required.\n\nPrisma error:\n{stderr}"
