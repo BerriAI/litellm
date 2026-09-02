@@ -19,11 +19,13 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.datadog.datadog_handler import (
     get_datadog_base_url_from_env,
     get_datadog_service,
     get_datadog_tags,
+    normalize_datadog_tag_value,
 )
 from litellm.integrations.datadog.datadog_mock_client import (
     create_mock_datadog_client,
@@ -34,6 +36,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
     handle_any_messages_to_chat_completion_str_messages_conversion,
 )
+from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.llms.custom_httpx.http_handler import (
@@ -43,6 +46,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy.spend_tracking.savings import extract_cache_creation_tokens, extract_cache_read_tokens
 from litellm.types.integrations.datadog_llm_obs import *
 from litellm.types.utils import (
+    PROMPT_QUOTING_ROUTING_DECISION_FIELDS,
     CallTypes,
     StandardLoggingGuardrailInformation,
     StandardLoggingPayload,
@@ -52,6 +56,110 @@ from litellm.types.utils import (
 _EMPTY_MAPPING: Final[Mapping[str, Any]] = MappingProxyType({})
 _EMPTY_MESSAGE: Final[Message] = {"role": "", "content": ""}
 _MAX_PARSED_TOOL_ARGUMENT_CHARS: Final = 256 * 1024
+
+_PROMPT_CARRYING_METADATA_FIELDS: Final = frozenset(
+    {
+        "routing_decision",
+        "requester_metadata",
+        "prompt_management_metadata",
+        "mcp_tool_call_metadata",
+        "vector_store_request_metadata",
+    }
+)
+
+_ROUTER_SPAN_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "tier": "router_tier",
+        "cause": "router_cause",
+        "score": "router_score",
+        "escalated": "router_escalated",
+        "signals": "router_signals",
+        "routed_model": "routed_model",
+    }
+)
+_ROUTER_DIMENSIONS: Final[tuple[str, ...]] = ("router_tier", "router_cause", "router_escalated", "routed_model")
+_COST_DIMENSIONS: Final[tuple[str, ...]] = ("team", "user", "key_alias", "model_group", *_ROUTER_DIMENSIONS)
+
+
+def _metadata_of(standard_logging_payload: StandardLoggingPayload) -> Mapping[str, Any]:
+    metadata: Final = standard_logging_payload.get("metadata")
+    return metadata or _EMPTY_MAPPING
+
+
+def _router_span_fields(
+    standard_logging_payload: StandardLoggingPayload, redact_prompt_text: bool
+) -> Mapping[str, object]:
+    """Flatten the auto-router decision, omitting prompt-quoting fields when redaction is enabled."""
+    routing_decision: Final = _mapping_field(_metadata_of(standard_logging_payload), "routing_decision")
+    if not routing_decision:
+        return _EMPTY_MAPPING
+    escalated: Final = bool(routing_decision.get("escalated") or routing_decision.get("context_escalated"))
+    return MappingProxyType(
+        {
+            _ROUTER_SPAN_FIELDS[record_field]: value
+            for record_field, value in (*routing_decision.items(), ("escalated", escalated))
+            if record_field in _ROUTER_SPAN_FIELDS
+            and value is not None
+            and not (redact_prompt_text and record_field in PROMPT_QUOTING_ROUTING_DECISION_FIELDS)
+        }
+    )
+
+
+def _metadata_without_prompt_carriers(standard_logging_metadata: Mapping[str, Any]) -> Mapping[str, Any]:
+    """The metadata minus the records that quote prompts, tool arguments, tool results, or retrieved text."""
+    return MappingProxyType(
+        {
+            field: value
+            for field, value in standard_logging_metadata.items()
+            if field not in _PROMPT_CARRYING_METADATA_FIELDS
+        }
+    )
+
+
+def _redact_messages(messages: Sequence[Message]) -> tuple[Message, ...]:
+    """Each message's shape with its content replaced and tool payloads dropped; no message is invented."""
+    return tuple({"role": message.get("role", ""), "content": REDACTED_BY_LITELLM} for message in messages)
+
+
+def _cost_dimension_tags(
+    standard_logging_payload: StandardLoggingPayload, router_fields: Mapping[str, object]
+) -> tuple[str, ...]:
+    """The dimensions LLM Obs breaks token and cost metrics down by, as span tags."""
+    metadata: Final = _metadata_of(standard_logging_payload)
+    dimensions: Final = (
+        ("user", metadata.get("user_api_key_user_id")),
+        ("key_alias", metadata.get("user_api_key_alias")),
+        ("model_group", standard_logging_payload.get("model_group")),
+        *((dimension, router_fields.get(dimension)) for dimension in _ROUTER_DIMENSIONS),
+    )
+    return tuple(
+        f"{key}:{normalized}"
+        for key, value in dimensions
+        if value is not None and (normalized := normalize_datadog_tag_value(value)) != ""
+    )
+
+
+def _declared_cost_tags(span_tags: Sequence[str]) -> tuple[str, ...]:
+    """Declare only cost dimensions carrying a value on this span."""
+    present: Final = frozenset(key for tag in span_tags if (key := tag.partition(":")[0]) and tag.partition(":")[2])
+    return tuple(dimension for dimension in _COST_DIMENSIONS if dimension in present)
+
+
+def _reasoning_output_tokens(usage_object: Mapping[str, Any] | None) -> float:
+    """The provider's reasoning-token count, from either the chat or the responses spelling."""
+    if usage_object is None:
+        return 0.0
+    return next(
+        (
+            float(reasoning_tokens)
+            for details_field in ("completion_tokens_details", "output_tokens_details")
+            if isinstance(
+                reasoning_tokens := _mapping_field(usage_object, details_field).get("reasoning_tokens"), (int, float)
+            )
+            and not isinstance(reasoning_tokens, bool)
+        ),
+        0.0,
+    )
 
 
 def _mapping_field(source: Mapping[str, Any], key: str) -> Mapping[str, Any]:
@@ -316,12 +424,12 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         dict_datadog_llm_obs_params: dict = {}
         if litellm.datadog_llm_observability_params is not None:
             if isinstance(litellm.datadog_llm_observability_params, DatadogLLMObsInitParams):
-                dict_datadog_llm_obs_params = litellm.datadog_llm_observability_params.model_dump()
+                dict_datadog_llm_obs_params = litellm.datadog_llm_observability_params.model_dump(exclude_unset=True)
             elif isinstance(litellm.datadog_llm_observability_params, dict):
                 # only allow params that are of DatadogLLMObsInitParams
                 dict_datadog_llm_obs_params = DatadogLLMObsInitParams(
                     **litellm.datadog_llm_observability_params
-                ).model_dump()
+                ).model_dump(exclude_unset=True)
         return dict_datadog_llm_obs_params
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -410,25 +518,40 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         if standard_logging_payload is None:
             raise Exception("DataDogLLMObs: standard_logging_object is not set")
 
-        metadata: Final = kwargs.get("litellm_params", {}).get("metadata", {})
+        raw_metadata: Final = kwargs.get("litellm_params", {}).get("metadata", {})
+        metadata: Final = raw_metadata if isinstance(raw_metadata, dict) else {}
+        redact_payload: Final = self._payload_logging_is_off(kwargs)
 
-        input_meta: Final = InputMeta(messages=_to_dd_messages(standard_logging_payload["messages"]))
+        input_messages: Final = _to_dd_messages(standard_logging_payload.get("messages"))
+        output_messages: Final = self._get_response_messages(
+            standard_logging_payload=standard_logging_payload,
+            call_type=standard_logging_payload.get("call_type"),
+        )
+        input_meta: Final = InputMeta(messages=_redact_messages(input_messages) if redact_payload else input_messages)
         output_meta: Final = OutputMeta(
-            messages=self._get_response_messages(
-                standard_logging_payload=standard_logging_payload,
-                call_type=standard_logging_payload.get("call_type"),
-            )
+            messages=_redact_messages(output_messages) if redact_payload else output_messages
         )
 
         error_info: Final = self._assemble_error_info(standard_logging_payload)
 
-        metadata_parent_id: str | None = None
-        if isinstance(metadata, dict):
-            metadata_parent_id = metadata.get("parent_id")
+        raw_parent_id: Final = metadata.get("parent_id")
+        metadata_parent_id: Final[str | None] = raw_parent_id if isinstance(raw_parent_id, str) else None
 
-        tool_definitions: Final = _to_dd_tool_definitions(standard_logging_payload.get("model_parameters"))
+        tool_definitions: Final = (
+            () if redact_payload else _to_dd_tool_definitions(standard_logging_payload.get("model_parameters"))
+        )
         span_kind: Final = self._get_datadog_span_kind(standard_logging_payload.get("call_type"), metadata_parent_id)
-        payload_metadata: Final = self._get_dd_llm_obs_payload_metadata(standard_logging_payload)
+        router_fields: Final = _router_span_fields(standard_logging_payload, redact_prompt_text=redact_payload)
+        span_tags: Final = [
+            *get_datadog_tags(standard_logging_object=standard_logging_payload),
+            *_cost_dimension_tags(standard_logging_payload, router_fields),
+        ]
+        payload_metadata: Final = self._get_dd_llm_obs_payload_metadata(
+            standard_logging_payload,
+            router_fields=router_fields,
+            cost_tags=_declared_cost_tags(span_tags),
+            redact_prompt_text=redact_payload,
+        )
 
         meta: Final[Meta] = {
             "kind": span_kind,
@@ -451,7 +574,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             duration=int((end_time - start_time).total_seconds() * 1e9),
             metrics=metrics,
             status="error" if error_info else "ok",
-            tags=get_datadog_tags(standard_logging_object=standard_logging_payload),
+            tags=span_tags,
         )
 
         apm_trace_id: Final = self._get_apm_trace_id()
@@ -497,6 +620,13 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                 )
         return error_info
 
+    def _payload_logging_is_off(self, kwargs: Mapping[str, Any]) -> bool:
+        return (
+            bool(self.turn_off_message_logging)
+            or self.message_logging is not True
+            or should_redact_message_logging(dict(kwargs))
+        )
+
     def _assemble_metrics(self, standard_logging_payload: StandardLoggingPayload) -> LLMMetrics:
         """
         Build the span metrics, including the prompt-cache counts LLM Obs charts cache savings from.
@@ -513,10 +643,11 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         total_cost: Final = float(standard_logging_payload.get("response_cost", 0))
         time_to_first_token: Final = self._get_time_to_first_token_seconds(standard_logging_payload)
 
-        raw_usage: Final = (standard_logging_payload.get("metadata") or {}).get("usage_object")
+        raw_usage: Final = _metadata_of(standard_logging_payload).get("usage_object")
         usage_object: Final = raw_usage if isinstance(raw_usage, dict) else None
         cache_read: Final = float(extract_cache_read_tokens(usage_object))
         cache_write: Final = float(extract_cache_creation_tokens(usage_object))
+        reasoning_output_tokens: Final = _reasoning_output_tokens(usage_object)
 
         metrics: Final[LLMMetrics] = {
             "input_tokens": prompt_tokens,
@@ -533,6 +664,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                 if cache_read or cache_write
                 else {}
             ),
+            **({"reasoning_output_tokens": reasoning_output_tokens} if reasoning_output_tokens else {}),
         }
         return metrics
 
@@ -707,11 +839,21 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         # Default fallback for unknown or passthrough operations
         return "llm"
 
-    def _get_dd_llm_obs_payload_metadata(self, standard_logging_payload: StandardLoggingPayload) -> dict[str, object]:
+    def _get_dd_llm_obs_payload_metadata(
+        self,
+        standard_logging_payload: StandardLoggingPayload,
+        router_fields: Mapping[str, object] | None = None,
+        cost_tags: Sequence[str] = (),
+        redact_prompt_text: bool = False,
+    ) -> dict[str, object]:
         """
         Fields to track in DD LLM Observability metadata from litellm standard logging payload
         """
-        _metadata: Final[dict[str, object]] = {
+        raw_metadata: Final = _metadata_of(standard_logging_payload)
+        standard_logging_metadata: Final = (
+            _metadata_without_prompt_carriers(raw_metadata) if redact_prompt_text else raw_metadata
+        )
+        return {
             "model_name": standard_logging_payload.get("model", "unknown"),
             "model_provider": standard_logging_payload.get("custom_llm_provider", "unknown"),
             "id": standard_logging_payload.get("id", "unknown"),
@@ -719,25 +861,20 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             "cache_hit": standard_logging_payload.get("cache_hit", "unknown"),
             "cache_key": standard_logging_payload.get("cache_key", "unknown"),
             "saved_cache_cost": standard_logging_payload.get("saved_cache_cost", 0),
-            "guardrail_information": standard_logging_payload.get("guardrail_information", None),
+            "guardrail_information": (
+                None if redact_prompt_text else standard_logging_payload.get("guardrail_information", None)
+            ),
             "is_streamed_request": self._get_stream_value_from_payload(standard_logging_payload),
+            "latency_metrics": dict(self._get_latency_metrics(standard_logging_payload)),
+            "spend_metrics": dict(self._get_spend_metrics(standard_logging_payload)),
+            **standard_logging_metadata,
+            **(router_fields or _EMPTY_MAPPING),
+            **(
+                {"_dd": {**_mapping_field(standard_logging_metadata, "_dd"), "cost_tags": list(cost_tags)}}
+                if cost_tags
+                else _EMPTY_MAPPING
+            ),
         }
-
-        #########################################################
-        # Add latency metrics to metadata
-        #########################################################
-        latency_metrics: Final = self._get_latency_metrics(standard_logging_payload)
-        _metadata.update({"latency_metrics": dict(latency_metrics)})
-
-        #########################################################
-        # Add spend metrics to metadata
-        #########################################################
-        spend_metrics: Final = self._get_spend_metrics(standard_logging_payload)
-        _metadata.update({"spend_metrics": dict(spend_metrics)})
-
-        _standard_logging_metadata: Final[dict] = dict(standard_logging_payload.get("metadata", {})) or {}
-        _metadata.update(_standard_logging_metadata)
-        return _metadata
 
     def _get_latency_metrics(self, standard_logging_payload: StandardLoggingPayload) -> DDLLMObsLatencyMetrics:
         """
@@ -808,7 +945,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         spend_metrics["response_cost"] = standard_logging_payload.get("response_cost", 0.0)
 
         # Get budget information from metadata
-        metadata: Final = standard_logging_payload.get("metadata", {})
+        metadata: Final = _metadata_of(standard_logging_payload)
 
         # API key max budget
         user_api_key_max_budget: Final = metadata.get("user_api_key_max_budget")
