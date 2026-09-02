@@ -17,6 +17,7 @@ from typing_extensions import TypeIs
 
 import litellm
 from litellm.constants import (
+    EMPTY_MAPPING,
     LITELLM_MAX_STREAMING_DURATION_SECONDS,
     STREAM_SSE_DONE_STRING,
 )
@@ -273,7 +274,9 @@ class BaseResponsesAPIStreamingIterator:
         self._hidden_params["additional_headers"] = process_response_headers(
             self.response.headers or {}
         )  # GUARANTEE OPENAI HEADERS IN RESPONSE
-        self._raw_response_headers: Mapping[str, str] = dict(self.response.headers or {})
+        self._raw_response_headers: Mapping[str, str] = MappingProxyType(
+            dict(self.response.headers or {})  # mutable-ok: immediately frozen by MappingProxyType
+        )
 
     def _check_max_streaming_duration(self) -> None:
         """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
@@ -500,17 +503,21 @@ class BaseResponsesAPIStreamingIterator:
         source_hidden: Final[object] = getattr(
             getattr(self.completed_response, "response", None), "_hidden_params", None
         )
-        source: Final[Mapping[str, object]] = source_hidden if isinstance(source_hidden, Mapping) else {}
+        source: Final[Mapping[str, object]] = source_hidden if isinstance(source_hidden, Mapping) else EMPTY_MAPPING
         processed: Final[object] = source.get("additional_headers") or self._hidden_params.get("additional_headers")
         raw: Final[object] = source.get("headers") or self._raw_response_headers
-        headers: Final[Mapping[str, object]] = processed if isinstance(processed, Mapping) else {}
-        raw_headers: Final[Mapping[str, object]] = raw if isinstance(raw, Mapping) else {}
+        headers: Final[Mapping[str, object]] = processed if isinstance(processed, Mapping) else EMPTY_MAPPING
+        raw_headers: Final[Mapping[str, object]] = raw if isinstance(raw, Mapping) else EMPTY_MAPPING
         # rebuild by value and let existing keys win: sharing the source dicts would alias what the proxy
         # splats into the client's HTTP headers, and copying non-header keys would carry response_cost
         setattr(  # noqa: B010  # target is typed object here, so a plain attribute store does not type check
             target,
             "_hidden_params",
-            {"additional_headers": {**headers}, "headers": {**raw_headers}, **existing},
+            {  # mutable-ok: the cost calculator writes optional_params into _hidden_params
+                "additional_headers": {**headers},  # mutable-ok: fresh copy, logging callbacks may mutate it
+                "headers": {**raw_headers},  # mutable-ok: fresh copy, logging callbacks may mutate it
+                **existing,
+            },
         )
 
     def _handle_logging_completed_response(self):
