@@ -7,8 +7,10 @@ from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
+from pydantic import ValidationError
 
 from litellm._uuid import uuid
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
@@ -34,6 +36,13 @@ class HostedVLLMRerankError(BaseLLMException):
         headers: dict | httpx.Headers | None = None,
     ):
         super().__init__(status_code=status_code, message=message, headers=headers)
+
+
+def validated_truncation_params(non_default_params: Mapping[str, object] | None) -> HostedVLLMRerankTruncationParams:
+    try:
+        return HostedVLLMRerankTruncationParams.model_validate(non_default_params or MappingProxyType({}))
+    except ValidationError as error:
+        raise UnsupportedParamsError(status_code=400, message=f"hosted_vllm rerank: {error}") from error
 
 
 class HostedVLLMRerankConfig(BaseRerankConfig):
@@ -106,7 +115,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         if instruction is not None:
             mapped_params["instruction"] = instruction
 
-        truncation: Final = HostedVLLMRerankTruncationParams.model_validate(non_default_params or MappingProxyType({}))
+        truncation: Final = validated_truncation_params(non_default_params)
         forwarded: Final[OptionalRerankParams] = {
             **mapped_params,
             "max_tokens_per_doc": max_tokens_per_doc,
