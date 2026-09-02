@@ -1,0 +1,63 @@
+general_settings:
+  store_prompts_in_spend_logs: true
+  database_connection_pool_limit: 10
+  forward_client_headers_to_llm_api: false
+  maximum_spend_logs_retention_period: "60d"
+  maximum_spend_logs_cleanup_cron: "0 1 * * *"
+  proxy_budget_rescheduler_min_time: 15
+  proxy_budget_rescheduler_max_time: 20
+
+litellm_settings:
+  drop_params: true
+  default_redis_ttl: 20
+  request_timeout: 600
+  num_retries: 3
+  json_logs: true
+  store_audit_logs: true
+  cache: true
+  cache_params:
+    type: redis
+    host: 127.0.0.1
+    port: 6379
+    redis_startup_nodes:
+      - host: 127.0.0.1
+        port: 6379
+    ssl: true
+  callbacks: ["arize_phoenix", "datadog", "smtp_email", "prometheus", "otel"]
+  require_auth_for_metrics_endpoint: false
+
+router_settings:
+  routing_strategy: simple-shuffle
+  num_retries: 3
+  allowed_fails: 5
+  cooldown_time: 30
+
+model_list:
+  - model_name: gpt-5.5
+    litellm_params:
+      model: openai/gpt-5.5
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: claude-haiku-4-5
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: gemini-2.5-flash-vertex
+    litellm_params:
+      model: vertex_ai/gemini-2.5-flash
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: us-central1
+      vertex_credentials: os.environ/VERTEXAI_CREDENTIALS
+  - model_name: gemini-2.5-flash
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+  - model_name: gemini-2.5-flash
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+
+mcp_servers:
+  devin:
+    url: "https://mcp.devin.ai/mcp"
+    auth_type: api_key
+    auth_value: os.environ/DEVIN_API_KEY
