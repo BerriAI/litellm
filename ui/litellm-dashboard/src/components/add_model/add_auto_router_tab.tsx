@@ -615,6 +615,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                       escalationKeywords={escalationKeywords}
                       onEscalationKeywordsChange={setEscalationKeywords}
                       showValidationErrors={showValidationErrors}
+                      allowHeuristicV2={createScope === "unscoped-ok"}
                     />
                   </div>
                 )}
