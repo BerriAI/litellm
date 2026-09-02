@@ -1,37 +1,67 @@
 use std::time::Duration;
 
 use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
-use litellm_python_interop::{from_py, release_gil, to_py};
+use litellm_core::error::Error;
+use litellm_python_interop::from_py;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
 
 use crate::errors::core_error_to_pyerr;
-use crate::function_trace::trace_call;
-use crate::marshal::{optional_object_to_map, optional_timeout};
+use crate::marshal::{optional_object, optional_object_to_map, optional_timeout};
 
-type MarshaledOcrInputs = (
-    Value,
-    Option<Map<String, Value>>,
-    Map<String, Value>,
-    Option<Duration>,
-);
+use super::{block_on, into_py_future};
 
+struct OcrInputs {
+    model: String,
+    document: Value,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    extra_headers: Option<Map<String, Value>>,
+    optional_params: Map<String, Value>,
+    timeout: Option<Duration>,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn marshal_inputs(
     py: Python<'_>,
+    model: String,
     document: Py<PyAny>,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
     extra_headers: Option<Py<PyAny>>,
     optional_params: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
-) -> PyResult<MarshaledOcrInputs> {
-    let document = from_py(document.bind(py))?;
-    let extra_headers = match extra_headers {
-        Some(headers) => Some(optional_object_to_map(py, "extra_headers", Some(headers))?),
-        None => None,
-    };
-    let optional_params = optional_object_to_map(py, "optional_params", optional_params)?;
-    let timeout = optional_timeout(timeout_seconds);
+) -> PyResult<OcrInputs> {
+    Ok(OcrInputs {
+        model,
+        document: from_py(document.bind(py))?,
+        api_key,
+        api_base,
+        custom_llm_provider,
+        extra_headers: optional_object(py, "extra_headers", extra_headers)?,
+        optional_params: optional_object_to_map(py, "optional_params", optional_params)?,
+        timeout: optional_timeout(timeout_seconds),
+    })
+}
 
-    Ok((document, extra_headers, optional_params, timeout))
+async fn call(inputs: OcrInputs) -> Result<Value, Error> {
+    run_ocr(OcrRequest {
+        model: &inputs.model,
+        document: inputs.document,
+        api_key: inputs.api_key.as_deref(),
+        api_base: inputs.api_base.as_deref(),
+        custom_llm_provider: inputs.custom_llm_provider.as_deref(),
+        extra_headers: inputs.extra_headers,
+        optional_params: inputs.optional_params,
+        timeout: inputs.timeout,
+        callbacks: Vec::new(),
+        guardrails: Vec::new(),
+        request_metadata: Default::default(),
+        litellm_call_id: None,
+    })
+    .await
 }
 
 #[pyfunction]
@@ -49,38 +79,18 @@ fn ocr(
     timeout_seconds: Option<f64>,
     trace: bool,
 ) -> PyResult<Py<PyAny>> {
-    let (document, extra_headers, optional_params, timeout) = marshal_inputs(
+    let inputs = marshal_inputs(
         py,
+        model,
         document,
+        api_key,
+        api_base,
+        custom_llm_provider,
         extra_headers,
         optional_params,
         timeout_seconds,
     )?;
-
-    let result = release_gil(py, || {
-        pyo3_async_runtimes::tokio::get_runtime().block_on(trace_call(
-            run_ocr(OcrRequest {
-                model: &model,
-                document,
-                api_key: api_key.as_deref(),
-                api_base: api_base.as_deref(),
-                custom_llm_provider: custom_llm_provider.as_deref(),
-                extra_headers,
-                optional_params,
-                timeout,
-                callbacks: Vec::new(),
-                guardrails: Vec::new(),
-                request_metadata: Default::default(),
-                litellm_call_id: None,
-            }),
-            trace,
-        ))
-    });
-
-    match result {
-        Ok(value) => to_py(py, &value),
-        Err(err) => Err(core_error_to_pyerr(err)),
-    }
+    block_on(py, call(inputs), trace, core_error_to_pyerr)
 }
 
 #[pyfunction]
@@ -98,37 +108,18 @@ fn aocr(
     timeout_seconds: Option<f64>,
     trace: bool,
 ) -> PyResult<Bound<'_, PyAny>> {
-    let (document, extra_headers, optional_params, timeout) = marshal_inputs(
+    let inputs = marshal_inputs(
         py,
+        model,
         document,
+        api_key,
+        api_base,
+        custom_llm_provider,
         extra_headers,
         optional_params,
         timeout_seconds,
     )?;
-
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let value = trace_call(
-            run_ocr(OcrRequest {
-                model: &model,
-                document,
-                api_key: api_key.as_deref(),
-                api_base: api_base.as_deref(),
-                custom_llm_provider: custom_llm_provider.as_deref(),
-                extra_headers,
-                optional_params,
-                timeout,
-                callbacks: Vec::new(),
-                guardrails: Vec::new(),
-                request_metadata: Default::default(),
-                litellm_call_id: None,
-            }),
-            trace,
-        )
-        .await
-        .map_err(core_error_to_pyerr)?;
-
-        Python::attach(|py| to_py(py, &value))
-    })
+    into_py_future(py, call(inputs), trace, core_error_to_pyerr)
 }
 
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
