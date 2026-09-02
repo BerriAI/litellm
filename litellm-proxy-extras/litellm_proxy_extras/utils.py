@@ -721,12 +721,13 @@ class ProxyExtrasDBManager:
         INVALID (a migration deadlock between replicas is the usual cause; the
         retried migration skips them because of IF NOT EXISTS). Never raises:
         returns True when no invalid index remains, False when the repair was
-        skipped or failed and will be retried on the next startup. Runs over
-        DIRECT_URL when set: the session settings, the advisory lock and REINDEX
-        CONCURRENTLY all need one server session, which a transaction pooler
-        does not give."""
-        database_url: Final = os.getenv("DIRECT_URL") or os.getenv("DATABASE_URL")
-        if not database_url:
+        skipped or failed and will be retried on the next startup. Looks in the
+        schema DATABASE_URL names, the only URL Prisma migrates through, but
+        connects over DIRECT_URL when set: the session settings, the advisory
+        lock and REINDEX CONCURRENTLY all need one server session, which a
+        transaction pooler does not give."""
+        prisma_url: Final = os.getenv("DATABASE_URL")
+        if not prisma_url:
             return False
 
         try:
@@ -739,8 +740,8 @@ class ProxyExtrasDBManager:
             )
             return False
 
-        schema: Final = ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"
-        cleaned_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
+        schema: Final = ProxyExtrasDBManager._prisma_schema_param(prisma_url) or "public"
+        cleaned_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(os.getenv("DIRECT_URL") or prisma_url)
         try:
             with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
                 conn.execute("SET statement_timeout = 0")
