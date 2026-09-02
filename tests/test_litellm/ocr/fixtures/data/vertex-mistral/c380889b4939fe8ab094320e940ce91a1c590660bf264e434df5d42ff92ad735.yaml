@@ -1,0 +1,55 @@
+interactions:
+- request:
+    body: '{"model":"mistral-ocr-2505","document":{"type":"image_url","image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAUAAAABQCAIAAADnUzvSAAABfUlEQVR4nO3dwY2DMBRAQbza/ltmK+BAhNd+YaYAcEBPPnwC4zzPA2j6Wb0A4HMChjABQ5iAIUzAECZgCBMwhAkYwgQMYQKGMAFD2O9TBxpjHDM99cz2U+vcbT1XdnvW/er3zl7nWHTfZ99fOzCECRjCBAxhAoYwAUOYgCFMwBD22Bx41bz06viz5427rWc3s+efd897Lrrvs++vHRjCBAxhAoYwAUOYgCFMwBAmYAibPgfmne7Ow2ef91vZgSFMwBAmYAgTMIQJGMIEDGEChjBzYNjof8V32YEhTMAQJmAIEzCECRjCBAxhAoYwc2BebSx6X/dTx7cDQ5iAIUzAECZgCBMwhAkYwgQMYebAvML40u8z24EhTMAQJmAIEzCECRjCBAxhAoawsdt7bq/sts7d1nNl1Zxz1XUek6/nbt9DtgNDmIAhTMAQJmAIEzCECRjCBAxhj82Bgf9nB4YwAUOYgCFMwBAmYAgTMIQJGMIEDGEChjABQ5iA4ej6A6GiUaF+b+RaAAAAAElFTkSuQmCC"}}'
+    headers:
+      Accept:
+      - '*/*'
+      Content-Type:
+      - application/json
+      User-Agent:
+      - litellm/1.101.0
+    method: POST
+    uri: http://parity-provider.invalid/v1/projects/useful-shell-447307-d4/locations/us-central1/publishers/mistralai/models/mistral-ocr-2505:rawPredict
+  response:
+    body:
+      string: '{"pages":[{"index":0,"markdown":".","images":[],"tables":[],"hyperlinks":[],"header":null,"footer":null,"dimensions":{"dpi":200,"height":80,"width":320}}],"model":"mistral-ocr-2505","document_annotation":null,"usage_info":{"pages_processed":1,"doc_size_bytes":438}}'
+    headers:
+      Alt-Svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      Server:
+      - scaffolding on HTTPServer2
+      Vary:
+      - Origin
+      - X-Origin
+      - Referer
+      X-Content-Type-Options:
+      - nosniff
+      X-Frame-Options:
+      - SAMEORIGIN
+      X-XSS-Protection:
+      - '0'
+      content-type:
+      - application/json
+      date:
+      - Wed, 02 Sep 2026 22:36:29 GMT
+      x-pages-processed:
+      - '1'
+      x-vertex-ai-internal-prediction-backend:
+      - harpoon
+    status:
+      code: 200
+      message: ''
+recorded_at: '2026-09-02T22:36:29.759387+00:00'
+ttl_seconds: 0
+version: 1
+x-litellm:
+  case:
+    litellm_input:
+      document:
+        image_url: data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAUAAAABQCAIAAADnUzvSAAABfUlEQVR4nO3dwY2DMBRAQbza/ltmK+BAhNd+YaYAcEBPPnwC4zzPA2j6Wb0A4HMChjABQ5iAIUzAECZgCBMwhAkYwgQMYQKGMAFD2O9TBxpjHDM99cz2U+vcbT1XdnvW/er3zl7nWHTfZ99fOzCECRjCBAxhAoYwAUOYgCFMwBD22Bx41bz06viz5427rWc3s+efd897Lrrvs++vHRjCBAxhAoYwAUOYgCFMwBAmYAibPgfmne7Ow2ef91vZgSFMwBAmYAgTMIQJGMIEDGEChjBzYNjof8V32YEhTMAQJmAIEzCECRjCBAxhAoYwc2BebSx6X/dTx7cDQ5iAIUzAECZgCBMwhAkYwgQMYebAvML40u8z24EhTMAQJmAIEzCECRjCBAxhAoawsdt7bq/sts7d1nNl1Zxz1XUek6/nbt9DtgNDmIAhTMAQJmAIEzCECRjCBAxhj82Bgf9nB4YwAUOYgCFMwBAmYAgTMIQJGMIEDGEChjABQ5iA4ej6A6GiUaF+b+RaAAAAAElFTkSuQmCC
+        type: image_url
+      model: vertex_ai/mistral-ocr-2505
+      vertex_location: us-central1
+      vertex_project: useful-shell-447307-d4
+  request_source: recorded
+  schema_version: 1

@@ -21,6 +21,7 @@ from tests.test_litellm.ocr.fixtures.azure import (
 )
 from tests.test_litellm.ocr.fixtures.base import OcrSdkInputBase
 from tests.test_litellm.ocr.fixtures.common import OcrFixtureClient, OcrRecordingTarget
+from tests.test_litellm.ocr.fixtures.config import recording_environment
 from tests.test_litellm.ocr.fixtures.mistral import MISTRAL_MODELS, MISTRAL_PROVIDER_REJECTED_INPUTS
 from tests.test_litellm.ocr.fixtures.record import (
     discover_targets as discover_targets_with_media,
@@ -105,6 +106,7 @@ def _document_transport(case_input: OcrSdkInputBase) -> tuple[str, str]:
 
 
 def test_parse_args_has_no_model_selection() -> None:
+    assert parse_recording_args([]).concurrency == 1
     args: Final = parse_recording_args(["--examples", "2", "--concurrency", "3", "--fixture-dir", "/tmp/ocr"])
 
     assert args.examples == 2
@@ -333,7 +335,7 @@ def test_only_intentional_provider_failures_are_fixed_inputs() -> None:
         "azure-mistral": AZURE_MISTRAL_PROVIDER_REJECTED_INPUTS,
         "azure-document-intelligence": AZURE_DOCUMENT_INTELLIGENCE_PROVIDER_REJECTED_INPUTS,
         "vertex-mistral": vertex_mistral_provider_rejected_inputs("project-1", "us-central1", _INLINE_IMAGE_DATA_URI),
-        "vertex-deepseek": vertex_deepseek_provider_rejected_inputs("project-1", "us-central1", _INLINE_IMAGE_DATA_URI),
+        "vertex-deepseek": vertex_deepseek_provider_rejected_inputs("project-1", "global", _INLINE_IMAGE_DATA_URI),
         "reducto-v3": REDUCTO_V3_PROVIDER_REJECTED_INPUTS,
         "reducto-legacy": REDUCTO_LEGACY_PROVIDER_REJECTED_INPUTS,
     }
@@ -364,3 +366,60 @@ def test_mistral_adapters_preserve_omitted_optional_params() -> None:
         for target in targets
     )
     assert all(_MISTRAL_PARAMS.isdisjoint(baseline.as_sdk_kwargs()) for baseline in baselines)
+
+
+def test_recording_environment_uses_gcloud_project_and_oauth_token() -> None:
+    commands: Final[queue.SimpleQueue[tuple[str, ...]]] = queue.SimpleQueue()
+
+    def read_command(arguments: tuple[str, ...]) -> str:
+        commands.put(arguments)
+        return "project-1" if arguments == ("config", "get-value", "project") else "oauth-token"
+
+    environ: Final = recording_environment({"VERTEXT_API_KEY": "express-key"}, read_command)
+    calls: Final[queue.SimpleQueue[dict[str, object]]] = queue.SimpleQueue()
+    targets: Final = discover_targets(environ, _RecordingOcrClient(calls))
+    assert commands.get_nowait() == ("config", "get-value", "project")
+    assert commands.get_nowait() == ("auth", "print-access-token")
+    assert commands.empty()
+    assert tuple(target.name for target in targets) == ("vertex-mistral", "vertex-deepseek")
+    for target in targets:
+        target.invocation.execute("http://localhost:1234", generate_case_inputs(target.strategy, 1)[0])
+        kwargs: Final = calls.get_nowait()
+        assert kwargs["api_key"] == "oauth-token"
+        assert kwargs["vertex_project"] == "project-1"
+        if target.name == "vertex-deepseek":
+            assert kwargs["vertex_location"] == "global"
+            assert target.upstream.base_url == "https://aiplatform.googleapis.com"
+
+
+def test_explicit_vertex_credentials_do_not_invoke_gcloud() -> None:
+    def unexpected_command(arguments: tuple[str, ...]) -> str:
+        raise AssertionError(f"Unexpected gcloud call: {arguments}")
+
+    environ: Final = recording_environment(
+        {"VERTEX_PROJECT": "configured-project", "VERTEX_AI_ACCESS_TOKEN": "configured-token"}, unexpected_command
+    )
+    assert environ["VERTEXAI_PROJECT"] == "configured-project"
+    assert environ["VERTEX_AI_API_KEY"] == "configured-token"
+
+
+def test_vertex_oauth_failure_is_actionable_without_exposing_credentials() -> None:
+    with pytest.raises(SystemExit, match="gcloud auth login"):
+        recording_environment({"VERTEXAI_PROJECT": "project-1", "VERTEXT_API_KEY": "express-key"}, lambda _: "")
+    assert recording_environment({}, lambda _: "") == {}
+
+
+def test_azure_aliases_select_configured_deployment_and_document_intelligence() -> None:
+    targets: Final = discover_targets(
+        {
+            "AZURE_KEY": "azure-secret",
+            "AZURE_ENDPOINT": "https://azure.example",
+            "AZURE_DEPLOYMENT_NAME": "mistral-ocr-4-0",
+        },
+        _UNUSED_OCR_CLIENT,
+    )
+    assert tuple(target.name for target in targets) == ("azure-mistral", "azure-document-intelligence")
+    assert all(target.upstream.base_url == "https://azure.example" for target in targets)
+    assert all(
+        _model(case_input) == "azure_ai/mistral-ocr-4-0" for case_input in generate_case_inputs(targets[0].strategy, 20)
+    )

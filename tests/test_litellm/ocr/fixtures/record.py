@@ -19,7 +19,7 @@ from tests.test_litellm.ocr.fixtures.azure import (
 )
 from tests.test_litellm.ocr.fixtures.base import OcrSdkInputBase
 from tests.test_litellm.ocr.fixtures.common import OcrFixtureClient, OcrRecordingTarget, OcrSdkCall
-from tests.test_litellm.ocr.fixtures.config import DEFAULT_FIXTURE_DIRECTORY, FIXTURE_DIR_ENV
+from tests.test_litellm.ocr.fixtures.config import DEFAULT_FIXTURE_DIRECTORY, FIXTURE_DIR_ENV, recording_environment
 from tests.test_litellm.ocr.fixtures.mistral import mistral_recording_targets
 from tests.test_litellm.ocr.fixtures.models import OcrParityCase
 from tests.test_litellm.ocr.fixtures.reducto import reducto_recording_targets
@@ -60,7 +60,8 @@ def main() -> int:
     args: Final = parse_recording_args()
     client: Final = LiteLLMOcrFixtureClient(cast(OcrSdkCall, litellm.ocr))
     inline_image_data_uri: Final = structured_image_data_uri()
-    targets: Final = require_targets(discover_targets(os.environ, client, inline_image_data_uri))
+    environ: Final = recording_environment(os.environ)
+    targets: Final = require_targets(discover_targets(environ, client, inline_image_data_uri))
     root: Final = fixture_directory(
         args.fixture_dir,
         os.environ.get(FIXTURE_DIR_ENV),

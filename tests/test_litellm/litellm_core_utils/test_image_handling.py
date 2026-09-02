@@ -1,15 +1,22 @@
-from unittest.mock import patch
+from typing import Final
 
 import pytest
 from httpx import Request, Response
 
 import litellm
-from litellm import constants
 from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    _process_image_response,
     async_convert_url_to_base64,
     convert_url_to_base64,
 )
+
+
+@pytest.mark.parametrize("content_type", ("application/pdf; qs=0.001", "Application/PDF; charset=binary"))
+def test_pdf_data_uri_uses_media_type_without_http_parameters(content_type: str) -> None:
+    response: Final = Response(200, headers={"Content-Type": content_type}, content=b"%PDF-1.4")
+    data_uri: Final = _process_image_response(response, "https://example.test/parameterized-content-type.pdf")
+    assert data_uri == "data:application/pdf;base64,JVBERi0xLjQ="
 
 
 @pytest.fixture(autouse=True)
@@ -107,9 +114,7 @@ class StreamingLargeImageClient:
             request=Request("GET", url),
         )
         # Mock the iter_bytes method to return our generator
-        response.iter_bytes = lambda chunk_size=8192: generate_chunks(
-            size_bytes, chunk_size
-        )
+        response.iter_bytes = lambda chunk_size=8192: generate_chunks(size_bytes, chunk_size)
         return response
 
 
@@ -207,9 +212,7 @@ def test_streaming_download_handles_petabyte_file(monkeypatch):
     """
     # Simulate a 1 petabyte file (1,000,000 GB)
     # Without streaming protection, this would cause OOM or hang indefinitely
-    client = StreamingLargeImageClient(
-        size_mb=1_000_000_000, include_content_length=False
-    )
+    client = StreamingLargeImageClient(size_mb=1_000_000_000, include_content_length=False)
     monkeypatch.setattr(litellm, "module_level_client", client)
 
     with pytest.raises(litellm.ImageFetchError) as excinfo:
@@ -258,8 +261,6 @@ def test_image_size_limit_disabled(monkeypatch):
     """
     Test that setting MAX_IMAGE_URL_DOWNLOAD_SIZE_MB to 0 disables all image URL downloads.
     """
-    import litellm.litellm_core_utils.prompt_templates.image_handling as image_handling
-
     monkeypatch.setattr(litellm, "module_level_client", SmallImageClient())
     monkeypatch.setattr(image_handling, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 0)
 

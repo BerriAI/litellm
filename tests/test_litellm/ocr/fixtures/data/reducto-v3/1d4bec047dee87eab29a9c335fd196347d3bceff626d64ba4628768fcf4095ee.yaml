@@ -1,0 +1,71 @@
+interactions:
+- request:
+    body: !!binary |
+      LS1mOTY3MGM3NTExM2E4OTEzMTE4ODllNzk0NjcyMjgxNA0KQ29udGVudC1EaXNwb3NpdGlvbjog
+      Zm9ybS1kYXRhOyBuYW1lPSJmaWxlIjsgZmlsZW5hbWU9ImRvY3VtZW50Ig0KQ29udGVudC1UeXBl
+      OiBpbWFnZS9wbmcNCg0KiVBORw0KGgoAAAANSUhEUgAAAUAAAABQCAIAAADnUzvSAAABfUlEQVR4
+      nO3dwY2DMBRAQbza/ltmK+BAhNd+YaYAcEBPPnwC4zzPA2j6Wb0A4HMChjABQ5iAIUzAECZgCBMw
+      hAkYwgQMYQKGMAFD2O9TBxpjHDM99cz2U+vcbT1XdnvW/er3zl7nWHTfZ99fOzCECRjCBAxhAoYw
+      AUOYgCFMwBD22Bx41bz06viz5427rWc3s+efd897Lrrvs++vHRjCBAxhAoYwAUOYgCFMwBAmYAib
+      Pgfmne7Ow2ef91vZgSFMwBAmYAgTMIQJGMIEDGEChjBzYNjof8V32YEhTMAQJmAIEzCECRjCBAxh
+      AoYwc2BebSx6X/dTx7cDQ5iAIUzAECZgCBMwhAkYwgQMYebAvML40u8z24EhTMAQJmAIEzCECRjC
+      BAxhAoawsdt7bq/sts7d1nNl1Zxz1XUek6/nbt9DtgNDmIAhTMAQJmAIEzCECRjCBAxhj82Bgf9n
+      B4YwAUOYgCFMwBAmYAgTMIQJGMIEDGEChjABQ5iA4ej6A6GiUaF+b+RaAAAAAElFTkSuQmCCDQot
+      LWY5NjcwYzc1MTEzYTg5MTMxMTg4OWU3OTQ2NzIyODE0LS0NCg==
+    headers:
+      Accept:
+      - '*/*'
+      Content-Type:
+      - multipart/form-data; boundary=f9670c75113a891311889e7946722814
+      User-Agent:
+      - litellm/1.101.0
+    method: POST
+    uri: http://parity-provider.invalid/upload
+  response:
+    body:
+      string: '{"file_id":"reducto://d5a7481f-fa60-434a-9627-1a87623bdbba.png","presigned_url":null}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - Wed, 02 Sep 2026 22:36:47 GMT
+    status:
+      code: 200
+      message: ''
+- request:
+    body: '{"input":"reducto://d5a7481f-fa60-434a-9627-1a87623bdbba.png"}'
+    headers:
+      Accept:
+      - '*/*'
+      Content-Type:
+      - application/json
+      User-Agent:
+      - litellm/1.101.0
+    method: POST
+    uri: http://parity-provider.invalid/parse
+  response:
+    body:
+      string: '{"response_type":"parse","job_id":"65a5b269-f352-4042-bb0c-5a6322a63e10","duration":0.7565219402313232,"pdf_url":"https://prod-storage20241010144745140900000001.s3.amazonaws.com/org/8bd983d1-47dd-440b-93d8-431412d819bf/65a5b269-f352-4042-bb0c-5a6322a63e10/5cba5b4a-8303-4cdc-b27a-53492254656b.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIA2UOK6OVBOUYL7WYA%2F20260902%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20260902T223648Z&X-Amz-Expires=43200&X-Amz-SignedHeaders=host&X-Amz-Signature=81be3175477f2766ea40533a32642598f63e42775494bb6190cdf5a1ef8cc7a1","studio_link":"https://studio.reducto.ai/job/65a5b269-f352-4042-bb0c-5a6322a63e10","usage":{"num_pages":1,"credits":2.0,"credit_breakdown":{"page":1.0,"complex":1.0},"page_billing_breakdown":{"1":["complex","page"]},"non_empty_cell_count":null},"result":{"type":"full","chunks":[{"content":"Partial
+        cropped text fragment reading \"00C 123\".","embed":"Partial cropped text
+        fragment reading \"00C 123\".","enriched":null,"enrichment_success":false,"blocks":[{"type":"Figure","bbox":{"left":0.071875,"top":0.1375,"width":0.925,"height":0.725,"page":1,"original_page":1},"content":"Partial
+        cropped text fragment reading \"00C 123\".","image_url":null,"chart_data":null,"confidence":"high","granular_confidence":{"extract_confidence":null,"parse_confidence":0.7219684422016144},"extra":null}]}],"ocr":null,"custom":null},"parse_mode":null,"document_properties":null}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - Wed, 02 Sep 2026 22:36:49 GMT
+    status:
+      code: 200
+      message: ''
+recorded_at: '2026-09-02T22:36:50.166175+00:00'
+ttl_seconds: 0
+version: 1
+x-litellm:
+  case:
+    litellm_input:
+      document:
+        image_url: data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAUAAAABQCAIAAADnUzvSAAABfUlEQVR4nO3dwY2DMBRAQbza/ltmK+BAhNd+YaYAcEBPPnwC4zzPA2j6Wb0A4HMChjABQ5iAIUzAECZgCBMwhAkYwgQMYQKGMAFD2O9TBxpjHDM99cz2U+vcbT1XdnvW/er3zl7nWHTfZ99fOzCECRjCBAxhAoYwAUOYgCFMwBD22Bx41bz06viz5427rWc3s+efd897Lrrvs++vHRjCBAxhAoYwAUOYgCFMwBAmYAibPgfmne7Ow2ef91vZgSFMwBAmYAgTMIQJGMIEDGEChjBzYNjof8V32YEhTMAQJmAIEzCECRjCBAxhAoYwc2BebSx6X/dTx7cDQ5iAIUzAECZgCBMwhAkYwgQMYebAvML40u8z24EhTMAQJmAIEzCECRjCBAxhAoawsdt7bq/sts7d1nNl1Zxz1XUek6/nbt9DtgNDmIAhTMAQJmAIEzCECRjCBAxhj82Bgf9nB4YwAUOYgCFMwBAmYAgTMIQJGMIEDGEChjABQ5iA4ej6A6GiUaF+b+RaAAAAAElFTkSuQmCC
+        type: image_url
+      model: reducto/parse-v3
+  request_source: recorded
+  schema_version: 1

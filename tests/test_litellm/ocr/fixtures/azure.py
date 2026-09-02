@@ -5,7 +5,7 @@ from typing import Final, Literal, cast
 
 from hypothesis import strategies as st
 from hypothesis.strategies import SearchStrategy
-from pydantic import StrictInt, StrictStr, field_validator
+from pydantic import StrictInt, StrictStr, TypeAdapter, field_validator
 
 from tests.route_parity.fixtures.recording import UpstreamEndpoint
 from tests.test_litellm.ocr.fixtures.base import OcrDocument, OcrSdkInputBase
@@ -21,7 +21,7 @@ from tests.test_litellm.ocr.fixtures.mistral import (
     mistral_input_values_strategy,
 )
 
-AzureMistralModel = Literal["azure_ai/mistral-document-ai-2512",]
+AzureMistralModel = Literal["azure_ai/mistral-document-ai-2512", "azure_ai/mistral-ocr-4-0"]
 AzureMistralFixtureModel = AzureMistralModel | Literal["azure_ai/invalid-ocr-model-for-parity"]
 AzureDocumentIntelligenceModel = Literal[
     "azure_ai/doc-intelligence/prebuilt-read",
@@ -87,13 +87,16 @@ def _azure_mistral_input(values: dict[str, object], model: AzureMistralModel) ->
     return AzureMistralOcrSdkInput.model_validate({**values, "model": model})
 
 
-def azure_mistral_input_strategy(inline_image_data_uri: str) -> SearchStrategy[AzureMistralOcrSdkInput]:
+def azure_mistral_input_strategy(
+    inline_image_data_uri: str,
+    models: tuple[AzureMistralModel, ...] = AZURE_MISTRAL_MODELS,
+) -> SearchStrategy[AzureMistralOcrSdkInput]:
     # Foundry's active gateway schema rejects 2512-only controls and
     # document_annotation_prompt, even though native Mistral accepts them.
     return st.builds(
         _azure_mistral_input,
         values=mistral_input_values_strategy("2505", inline_image_data_uri, include_document_annotation_prompt=False),
-        model=st.sampled_from(AZURE_MISTRAL_MODELS),
+        model=st.sampled_from(models),
     )
 
 
@@ -171,17 +174,23 @@ def azure_document_intelligence_input_strategy() -> SearchStrategy[AzureDocument
 def azure_mistral_recording_targets(
     environ: Mapping[str, str], client: OcrFixtureClient, inline_image_data_uri: str
 ) -> tuple[OcrRecordingTarget, ...]:
-    api_key: Final = environ.get("AZURE_AI_API_KEY")
-    base_url: Final = environ.get("AZURE_AI_API_BASE")
+    api_key: Final = environ.get("AZURE_AI_API_KEY") or environ.get("AZURE_KEY")
+    base_url: Final = environ.get("AZURE_AI_API_BASE") or environ.get("AZURE_ENDPOINT")
     if not api_key or not base_url:
         return ()
+    deployment: Final = environ.get("AZURE_DEPLOYMENT_NAME")
+    models: Final = (
+        (TypeAdapter(AzureMistralModel).validate_python(f"azure_ai/{deployment.removeprefix('azure_ai/')}"),)
+        if deployment
+        else AZURE_MISTRAL_MODELS
+    )
     return (
         OcrRecordingTarget(
             name="azure-mistral",
             upstream=UpstreamEndpoint(base_url=base_url.rstrip("/")),
             strategy=cast(
                 SearchStrategy[OcrSdkInputBase],
-                azure_mistral_input_strategy(inline_image_data_uri),
+                azure_mistral_input_strategy(inline_image_data_uri, models),
             ),
             invocation=invoke_with_api_key(client, api_key),
             required_inputs=AZURE_MISTRAL_PROVIDER_REJECTED_INPUTS,
@@ -192,8 +201,8 @@ def azure_mistral_recording_targets(
 def azure_document_intelligence_recording_targets(
     environ: Mapping[str, str], client: OcrFixtureClient
 ) -> tuple[OcrRecordingTarget, ...]:
-    api_key: Final = environ.get("AZURE_DOCUMENT_INTELLIGENCE_API_KEY")
-    base_url: Final = environ.get("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT")
+    api_key: Final = environ.get("AZURE_DOCUMENT_INTELLIGENCE_API_KEY") or environ.get("AZURE_KEY")
+    base_url: Final = environ.get("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT") or environ.get("AZURE_ENDPOINT")
     if not api_key or not base_url:
         return ()
     return (

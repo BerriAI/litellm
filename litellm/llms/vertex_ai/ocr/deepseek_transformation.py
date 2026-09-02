@@ -178,7 +178,7 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
 
         # Build DeepSeek OCR request
         data: Final = {
-            "model": "deepseek-ai/" + model,
+            "model": "deepseek-ai/" + model.removeprefix("deepseek-ai/"),
             "messages": [{"role": "user", "content": [content_item]}],
         }
 
