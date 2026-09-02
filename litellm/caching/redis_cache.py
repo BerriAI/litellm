@@ -241,6 +241,23 @@ def _record_swallowed_redis_failure(breaker: RedisCircuitBreaker, exc: BaseExcep
     _swallowed_redis_failures.set(_swallowed_redis_failures.get() + 1)
 
 
+def _enter_circuit_breaker(breaker: RedisCircuitBreaker, name: str) -> int:
+    """Reject the call if the breaker is open, else return the swallowed-failure count to compare against."""
+    if breaker.is_open():
+        raise Exception(f"Redis circuit breaker is open — skipping {name}")
+    return _swallowed_redis_failures.get()
+
+
+def _exit_circuit_breaker(breaker: RedisCircuitBreaker, swallowed_before: int) -> None:
+    """Record success only when nothing failed while the call ran.
+
+    Several Redis methods catch their own connection errors and return a default, so a
+    method that returned is not on its own proof of a healthy Redis.
+    """
+    if _swallowed_redis_failures.get() == swallowed_before:
+        breaker.record_success()
+
+
 async def _run_under_circuit_breaker(
     breaker: RedisCircuitBreaker,
     name: str,
@@ -249,20 +266,33 @@ async def _run_under_circuit_breaker(
     """Run one Redis coroutine under a circuit breaker.
 
     Shared by the method decorator and the Lua script executor so both feed the same
-    health signal. Success is recorded only when nothing failed while ``call`` ran,
-    because several Redis methods catch their own connection errors and return a default.
+    health signal.
     """
-    if breaker.is_open():
-        raise Exception(f"Redis circuit breaker is open — skipping {name}")
-    swallowed_before: Final = _swallowed_redis_failures.get()
+    swallowed_before: Final = _enter_circuit_breaker(breaker, name)
     try:
         result: Final = await call()
     except Exception as e:
         if _is_redis_health_failure(e):
             breaker.record_failure()
         raise
-    if _swallowed_redis_failures.get() == swallowed_before:
-        breaker.record_success()
+    _exit_circuit_breaker(breaker, swallowed_before)
+    return result
+
+
+def _run_under_circuit_breaker_sync(
+    breaker: RedisCircuitBreaker,
+    name: str,
+    call: Callable[[], _RedisCallResult],
+) -> _RedisCallResult:
+    """Run one blocking Redis call under a circuit breaker, feeding the same health signal as the async path."""
+    swallowed_before: Final = _enter_circuit_breaker(breaker, name)
+    try:
+        result: Final = call()
+    except Exception as e:
+        if _is_redis_health_failure(e):
+            breaker.record_failure()
+        raise
+    _exit_circuit_breaker(breaker, swallowed_before)
     return result
 
 
@@ -282,6 +312,18 @@ def _redis_circuit_breaker_guard(method):
     @functools.wraps(method)
     async def wrapper(self, *args, **kwargs):
         return await _run_under_circuit_breaker(
+            self._circuit_breaker, method.__name__, lambda: method(self, *args, **kwargs)
+        )
+
+    return wrapper
+
+
+def _redis_circuit_breaker_guard_sync(method):
+    """Sync sibling of ``_redis_circuit_breaker_guard`` for blocking-client methods."""
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        return _run_under_circuit_breaker_sync(
             self._circuit_breaker, method.__name__, lambda: method(self, *args, **kwargs)
         )
 
@@ -1129,6 +1171,7 @@ class RedisCache(BaseCache):
         async_redis_client: Final = self.init_async_client()
         return await async_redis_client.mget(keys=keys)
 
+    @_redis_circuit_breaker_guard_sync
     def batch_get_cache(
         self,
         key_list: list[str] | list[str | None],
@@ -1179,6 +1222,7 @@ class RedisCache(BaseCache):
             return decoded_results
         except Exception as e:
             verbose_logger.error("Error occurred in batch get cache - %s", e)
+            _record_swallowed_redis_failure(self._circuit_breaker, e)
             return key_value_dict
 
     @_redis_circuit_breaker_guard

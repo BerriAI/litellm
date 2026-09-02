@@ -1,9 +1,7 @@
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-from unittest.mock import AsyncMock
 
 from litellm.caching.redis_cache import RedisCache
 
@@ -504,6 +502,23 @@ async def test_circuit_breaker_opens_when_method_swallows_redis_failure(redis_no
         await call_method(cache)
 
 
+def test_circuit_breaker_opens_when_sync_batch_get_cache_swallows_redis_failure(redis_no_ping):
+    """The sync batch read is a production path since LIT-6729 routed
+    DualCache.batch_get_cache to the blocking client, so it must feed the same
+    circuit breaker the async methods do: an unreachable Redis has to open the
+    breaker instead of costing every sync routing decision the full socket timeout.
+    """
+    from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
+
+    cache = RedisCache(host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
+
+    for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
+        assert cache.batch_get_cache(key_list=["lit6729"]) == {}
+
+    with pytest.raises(Exception, match="circuit breaker is open"):
+        cache.batch_get_cache(key_list=["lit6729"])
+
+
 @pytest.mark.asyncio
 async def test_circuit_breaker_success_still_resets_the_failure_streak(redis_no_ping):
     """A reachable Redis must keep the breaker closed, however many earlier calls failed.
@@ -580,7 +595,6 @@ async def test_concurrent_success_is_not_cancelled_by_another_calls_failure():
     async def swallows_a_failure():
         await asyncio.sleep(0.02)
         _record_swallowed_redis_failure(breaker, RedisConnectionError("redis unreachable"))
-        return None
 
     async def succeeds_while_the_other_fails():
         await asyncio.sleep(0.05)
