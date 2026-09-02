@@ -326,12 +326,16 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             )
 
     @staticmethod
+    def forced_tool_use_unsupported(model: str) -> bool:
+        return AnthropicModelInfo._get_model_capability(model, "supports_forced_tool_use") is False
+
+    @staticmethod
     def forced_tool_use_downgraded(model: str, drop_params: bool) -> bool:
         """True when the model map flags the model with
         ``supports_forced_tool_use: false`` (Fable 5.1 / Mythos 5.1 400 on
         ``any``/``tool``) and ``drop_params`` asks for the ``auto`` downgrade;
         raises a clean client-side 400 for such models without ``drop_params``."""
-        if AnthropicModelInfo._get_model_capability(model, "supports_forced_tool_use") is not False:
+        if not AnthropicModelInfo.forced_tool_use_unsupported(model):
             return False
         if not (litellm.drop_params or drop_params):
             raise litellm.utils.UnsupportedParamsError(
