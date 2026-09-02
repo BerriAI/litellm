@@ -34,7 +34,7 @@ jobs:
             | grep -E '^tests/e2e/([A-Za-z0-9_.-]+/)*test_[A-Za-z0-9_.-]+\.py$' \
             | grep -vE '^tests/e2e/(ui|claude_code|load)/' \
             | sort -u | tr '\n' ' ' | sed 's/ $//')" || true
-          if [ -z "${tests}" ] && printf '%s\n' "${files}" | grep -v '^tests/e2e/ui/' \
+          if [ -z "${tests}" ] && printf '%s\n' "${files}" | grep -vE '^tests/e2e/(ui|claude_code|load)/' \
             | grep -qE '^(tests/e2e/|\.github/e2e-stack/|\.github/workflows/test-e2e-changed\.yml$)'; then
             tests="${SMOKE_TESTS}"
             echo "harness or stack changed without a test file; running the smoke suite"
@@ -158,8 +158,8 @@ jobs:
             set -e
             echo "::endgroup::"
             if [ "${status}" = "5" ]; then
-              echo "selected files collected no runnable tests"
-              exit 0
+              echo "::error::the selected files collected no runnable tests, so nothing was verified"
+              exit 1
             fi
             if [ "${status}" != "0" ]; then
               echo "::error::pass ${pass} of 3 failed with exit code ${status}"
