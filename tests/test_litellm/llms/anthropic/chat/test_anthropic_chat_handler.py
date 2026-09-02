@@ -3,11 +3,13 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator, make_call
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
@@ -44,6 +46,43 @@ async def test_make_call_passes_logging_obj_to_client_post():
     mock_client.post.assert_called_once()
     call_kwargs = mock_client.post.call_args[1]
     assert call_kwargs.get("logging_obj") is logging_obj
+
+
+def test_anthropic_completion_does_not_send_deployment_default_limits():
+    captured_requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_default_limits",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-3-5-haiku-20241022",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        litellm.completion(
+            model="anthropic/claude-3-5-haiku-20241022",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            client=client,
+            default_api_key_rpm_limit=60,
+            default_api_key_tpm_limit=5000000,
+        )
+    finally:
+        client.close()
+
+    request_body = json.loads(captured_requests[0].content)
+    assert "default_api_key_rpm_limit" not in request_body
+    assert "default_api_key_tpm_limit" not in request_body
 
 
 def test_redacted_thinking_content_block_delta():
