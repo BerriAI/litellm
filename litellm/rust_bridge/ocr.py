@@ -65,6 +65,28 @@ _rust_ocr_impl: RustOcr | None = None
 _rust_aocr_impl: RustAocr | None = None
 
 
+class _OcrProviderError(Exception):
+    def __init__(self, status_code: int, message: str, api_base: str | None) -> None:
+        super().__init__(message)
+        self.status_code: Final = status_code
+        self.response: Final = httpx.Response(
+            status_code=status_code,
+            request=httpx.Request("POST", api_base or "https://api.mistral.ai/v1/ocr"),
+        )
+
+
+def _raise_provider_error(error: BaseException, api_base: str | None) -> None:
+    from litellm.rust_bridge import get_native_bridge
+
+    native_bridge: Final = get_native_bridge()
+    upstream_error: Final = getattr(native_bridge, "RustUpstreamError", None) if native_bridge is not None else None
+    if upstream_error is None or not isinstance(error, upstream_error):
+        raise error
+    status: Final = error.args[0] if error.args else 0
+    message: Final = error.args[1] if len(error.args) > 1 else ""
+    raise _OcrProviderError(int(status) or 500, str(message), api_base) from error
+
+
 def use_litellm_rust(
     enabled: bool = True,
     *,
@@ -152,16 +174,19 @@ def ocr(
     rust_ocr: Final = load_rust_ocr()
     if rust_ocr is None:
         return None
-    return rust_ocr(
-        model=model,
-        document=document,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        optional_params=optional_params,
-        timeout_seconds=_timeout_to_seconds(timeout),
-    )
+    try:
+        return rust_ocr(
+            model=model,
+            document=document,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            optional_params=optional_params,
+            timeout_seconds=_timeout_to_seconds(timeout),
+        )
+    except Exception as error:
+        _raise_provider_error(error, api_base)
 
 
 async def aocr(
@@ -178,13 +203,16 @@ async def aocr(
     rust_aocr: Final = load_rust_aocr()
     if rust_aocr is None:
         return None
-    return await rust_aocr(
-        model=model,
-        document=document,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        optional_params=optional_params,
-        timeout_seconds=_timeout_to_seconds(timeout),
-    )
+    try:
+        return await rust_aocr(
+            model=model,
+            document=document,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            optional_params=optional_params,
+            timeout_seconds=_timeout_to_seconds(timeout),
+        )
+    except Exception as error:
+        _raise_provider_error(error, api_base)

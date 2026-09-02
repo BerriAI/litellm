@@ -197,6 +197,25 @@ def _execute_sdk_case(
     return _execute_sdk_call(call_kwargs, route, event_loop)
 
 
+def _execute_recorded_sdk_case(
+    sdk_input: OcrSdkInput,
+    route: SDKRoute,
+    mock_url: str,
+    event_loop: asyncio.AbstractEventLoop,
+) -> OCRResponse | SDKError:
+    import litellm
+
+    call_kwargs: Final = _call_kwargs(sdk_input, mock_url, route)
+    try:
+        if route is SDKRoute.OCR:
+            sync_route: Final = cast(Callable[..., OCRResponse], litellm.ocr)
+            return sync_route(**call_kwargs)
+        async_route: Final = cast(Callable[..., Coroutine[object, object, OCRResponse]], litellm.aocr)
+        return event_loop.run_until_complete(async_route(**call_kwargs))
+    except Exception as error:
+        return sdk_error_report(error)
+
+
 def _execute_invalid_sdk_case(
     case: InvalidOcrCase,
     route: SDKRoute,
@@ -212,17 +231,6 @@ def _execute_invalid_sdk_case(
         **dict(case.extra_kwargs),
     }
     return _execute_sdk_call(call_kwargs, route, event_loop)
-
-
-def _call_sdk_case(sdk_input: OcrSdkInput, route: SDKRoute, mock_url: str) -> OCRResponse:
-    import litellm
-
-    call_kwargs: Final = _call_kwargs(sdk_input, mock_url, route)
-    if route is SDKRoute.OCR:
-        sync_route: Final = cast(Callable[..., OCRResponse], litellm.ocr)
-        return sync_route(**call_kwargs)
-    async_route: Final = cast(Callable[..., Coroutine[object, object, OCRResponse]], litellm.aocr)
-    return asyncio.run(async_route(**call_kwargs))
 
 
 class _RustOcrSpy:
@@ -333,27 +341,37 @@ def test_recorded_ocr_sdk_parity(
     route: SDKRoute,
 ) -> None:
     sync_spy, async_spy = _native_spies()
-    with _restore_rust_ocr_state(), replay_server() as provider:
-        rust_ocr_bridge.use_litellm_rust(False, ocr=sync_spy, aocr=async_spy)
-        python: Final = run_in_process(
-            provider,
-            ocr_fixture.provider_responses,
-            lambda mock_url: _call_sdk_case(ocr_fixture.litellm_input, route, mock_url),
-        )
-        assert sync_spy.calls == 0
-        assert async_spy.calls == 0
+    event_loop: Final = asyncio.new_event_loop()
+    try:
+        with _restore_rust_ocr_state(), replay_server() as provider:
+            rust_ocr_bridge.use_litellm_rust(False, ocr=sync_spy, aocr=async_spy)
+            python: Final = run_in_process(
+                provider,
+                ocr_fixture.provider_responses,
+                lambda mock_url: _execute_recorded_sdk_case(ocr_fixture.litellm_input, route, mock_url, event_loop),
+            )
+            assert sync_spy.calls == 0
+            assert async_spy.calls == 0
 
-        rust_ocr_bridge.use_litellm_rust(True, ocr=sync_spy, aocr=async_spy)
-        rust: Final = run_in_process(
-            provider,
-            ocr_fixture.provider_responses,
-            lambda mock_url: _call_sdk_case(ocr_fixture.litellm_input, route, mock_url),
-        )
+            rust_ocr_bridge.use_litellm_rust(True, ocr=sync_spy, aocr=async_spy)
+            rust: Final = run_in_process(
+                provider,
+                ocr_fixture.provider_responses,
+                lambda mock_url: _execute_recorded_sdk_case(ocr_fixture.litellm_input, route, mock_url, event_loop),
+            )
+    finally:
+        event_loop.close()
 
     assert sync_spy.calls == (1 if route is SDKRoute.OCR else 0)
     assert async_spy.calls == (1 if route is SDKRoute.AOCR else 0)
     assert_request_parity(python.requests, rust.requests)
-    assert_model_parity(python.response, rust.response)
+    if any(response.status_code >= 400 for response in ocr_fixture.provider_responses):
+        assert isinstance(python.response, SDKError)
+    if isinstance(python.response, SDKError):
+        assert python.response == rust.response
+    else:
+        assert isinstance(rust.response, OCRResponse)
+        assert_model_parity(python.response, rust.response)
 
 
 @pytest.mark.parametrize("case", INVALID_OCR_CASES, ids=tuple(case.name for case in INVALID_OCR_CASES))

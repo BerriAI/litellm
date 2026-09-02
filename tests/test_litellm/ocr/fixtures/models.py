@@ -11,7 +11,7 @@ from tests.test_litellm.ocr.fixtures.azure import (
     AzureMistralOcrSdkInput,
 )
 from tests.test_litellm.ocr.fixtures.base import OcrSdkInputBase
-from tests.test_litellm.ocr.fixtures.mistral import MistralOcrSdkInput
+from tests.test_litellm.ocr.fixtures.mistral import MistralOcrSdkInput, MistralProviderRejectedOcrSdkInput
 from tests.test_litellm.ocr.fixtures.reducto import ReductoParseLegacySdkInput, ReductoParseV3SdkInput
 from tests.test_litellm.ocr.fixtures.vertex import VertexDeepSeekOcrSdkInput, VertexMistralOcrSdkInput
 
@@ -22,14 +22,20 @@ def _ocr_boundary(value: object) -> str | None:
     if isinstance(value, Mapping):
         mapping: Final = cast(Mapping[object, object], value)
         boundary: Final = mapping.get("boundary")
+        model: Final = mapping.get("model")
+        if boundary == "mistral" and model == "mistral/invalid-ocr-model-for-parity":
+            return "mistral_provider_rejected"
         return boundary if isinstance(boundary, str) else None
     if isinstance(value, OcrSdkInputBase):
+        if isinstance(value, MistralProviderRejectedOcrSdkInput):
+            return "mistral_provider_rejected"
         return value.boundary
     return None
 
 
 OcrSdkInput = Annotated[
     Annotated[MistralOcrSdkInput, Tag("mistral")]
+    | Annotated[MistralProviderRejectedOcrSdkInput, Tag("mistral_provider_rejected")]
     | Annotated[AzureMistralOcrSdkInput, Tag("azure_mistral")]
     | Annotated[VertexMistralOcrSdkInput, Tag("vertex_mistral")]
     | Annotated[AzureDocumentIntelligenceOcrSdkInput, Tag("azure_document_intelligence")]

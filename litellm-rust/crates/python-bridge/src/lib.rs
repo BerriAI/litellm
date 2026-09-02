@@ -72,6 +72,13 @@ fn core_error_to_pyerr(err: CoreError) -> PyErr {
     }
 }
 
+fn ocr_error_to_pyerr(err: CoreError) -> PyErr {
+    match err {
+        CoreError::Http { status, body } => RustUpstreamError::new_err((status, body)),
+        other => core_error_to_pyerr(other),
+    }
+}
+
 /// Map a core error for a route whose host keeps a Python implementation.
 ///
 /// The distinction the host needs is whether the provider was already called.
@@ -252,7 +259,7 @@ fn ocr(
 
     match result {
         Ok(value) => to_py(py, &value),
-        Err(err) => Err(core_error_to_pyerr(err)),
+        Err(err) => Err(ocr_error_to_pyerr(err)),
     }
 }
 
@@ -294,7 +301,7 @@ fn aocr(
             litellm_call_id: None,
         })
         .await
-        .map_err(core_error_to_pyerr)?;
+        .map_err(ocr_error_to_pyerr)?;
 
         Python::attach(|py| to_py(py, &value))
     })

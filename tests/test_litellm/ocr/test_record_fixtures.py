@@ -19,7 +19,7 @@ from tests.test_litellm.ocr.fixtures.azure import (
 )
 from tests.test_litellm.ocr.fixtures.base import OcrSdkInputBase
 from tests.test_litellm.ocr.fixtures.common import OcrFixtureClient, OcrRecordingTarget
-from tests.test_litellm.ocr.fixtures.mistral import MISTRAL_MODELS
+from tests.test_litellm.ocr.fixtures.mistral import MISTRAL_MODELS, MISTRAL_PROVIDER_REJECTED_INPUTS
 from tests.test_litellm.ocr.fixtures.record import (
     discover_targets as discover_targets_with_media,
 )
@@ -301,7 +301,7 @@ def test_vertex_deepseek_recording_reaches_documented_image_branch() -> None:
     assert _document_transport(case_input) == ("image_url", "data")
 
 
-def test_ocr_targets_have_no_hardcoded_required_inputs() -> None:
+def test_only_intentional_provider_failures_are_fixed_inputs() -> None:
     targets: Final = discover_targets(
         {
             "MISTRAL_API_KEY": "mistral-secret",
@@ -316,7 +316,11 @@ def test_ocr_targets_have_no_hardcoded_required_inputs() -> None:
         _UNUSED_OCR_CLIENT,
     )
 
-    assert all(target.required_inputs == () for target in targets)
+    mistral: Final = next(target for target in targets if target.name == "mistral-ocr")
+    assert mistral.required_inputs == MISTRAL_PROVIDER_REJECTED_INPUTS
+    generated: Final = generate_case_inputs(mistral.strategy, examples=20)
+    assert all(case_input not in mistral.required_inputs for case_input in generated)
+    assert all(target.required_inputs == () for target in targets if target is not mistral)
 
 
 def test_mistral_adapters_preserve_omitted_optional_params() -> None:

@@ -90,7 +90,19 @@ class MistralOcrSdkInput(MistralCompatibleOcrSdkInput):
         return self
 
 
+class MistralProviderRejectedOcrSdkInput(MistralCompatibleOcrSdkInput):
+    boundary: str = Field(default="mistral", pattern=r"^mistral$")
+    model: Literal["mistral/invalid-ocr-model-for-parity"]
+    custom_llm_provider: Literal["mistral"] | None = None
+
+
 MISTRAL_MODEL: Final[MistralModel] = "mistral/mistral-ocr-latest"
+MISTRAL_PROVIDER_REJECTED_INPUTS: Final[tuple[MistralProviderRejectedOcrSdkInput, ...]] = (
+    MistralProviderRejectedOcrSdkInput(
+        model="mistral/invalid-ocr-model-for-parity",
+        document=pdf_document(),
+    ),
+)
 MistralFeatureLevel = Literal["2505", "2512", "4"]
 _MISTRAL_4_MODELS: Final = frozenset(
     {
@@ -256,5 +268,6 @@ def mistral_recording_targets(
                 _mistral_recording_strategy(inline_image_data_uri),
             ),
             invocation=invoke_with_api_key(client, api_key),
+            required_inputs=MISTRAL_PROVIDER_REJECTED_INPUTS,
         ),
     )
