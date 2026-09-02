@@ -1182,12 +1182,30 @@ def _blocks_keys_on_member_removal(general_settings: Mapping[str, object]) -> bo
     return general_settings.get("block_keys_on_team_member_removal") is True
 
 
+_NO_KEY_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
+
+
 def _key_metadata(metadata: object) -> Mapping[str, object]:
-    return metadata if isinstance(metadata, dict) else {}
+    return metadata if isinstance(metadata, dict) else _NO_KEY_METADATA
 
 
 def _was_blocked_by_member_removal(metadata: object) -> bool:
     return _key_metadata(metadata).get(TEAM_MEMBER_REMOVAL_BLOCKED_METADATA_KEY) is True
+
+
+async def _set_member_removal_block(
+    key_row: "prisma_models.LiteLLM_VerificationToken",
+    blocked: bool,
+    tokens_db: "TableActions[prisma_models.LiteLLM_VerificationToken]",
+) -> None:
+    marker: Final = TEAM_MEMBER_REMOVAL_BLOCKED_METADATA_KEY
+    metadata: Final = _key_metadata(key_row.metadata)
+    unmarked: Final = {k: v for k, v in metadata.items() if k != marker}  # mutable-ok: safe_dumps needs a dict
+    new_metadata: Final = {**unmarked, marker: True} if blocked else unmarked  # mutable-ok: safe_dumps needs a dict
+    await tokens_db.update(
+        where={"token": key_row.token},
+        data={"blocked": blocked, "metadata": safe_dumps(new_metadata)},
+    )
 
 
 async def _block_team_keys_of_removed_members(
@@ -1195,15 +1213,7 @@ async def _block_team_keys_of_removed_members(
     tokens_db: "TableActions[prisma_models.LiteLLM_VerificationToken]",
 ) -> None:
     for key_row in keys:
-        await tokens_db.update(
-            where={"token": key_row.token},
-            data={
-                "blocked": True,
-                "metadata": safe_dumps(
-                    {**_key_metadata(key_row.metadata), TEAM_MEMBER_REMOVAL_BLOCKED_METADATA_KEY: True}
-                ),
-            },
-        )
+        await _set_member_removal_block(key_row=key_row, blocked=True, tokens_db=tokens_db)
 
 
 async def _unblock_team_keys_of_readded_members(
@@ -1213,31 +1223,15 @@ async def _unblock_team_keys_of_readded_members(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None,
 ) -> None:
-    """Reverse `_block_team_keys_of_removed_members` for users who rejoin the team.
-
-    Only keys carrying the removal marker are unblocked, so a key an admin blocked by hand
-    stays blocked.
-    """
     if not user_ids:
         return
-    blocked_keys: Final = await _tokens_db(prisma_client).find_many(
+    tokens_db: Final = _tokens_db(prisma_client)
+    blocked_keys: Final = await tokens_db.find_many(
         where={"user_id": {"in": sorted(user_ids)}, "team_id": team_id, "blocked": True}
     )
     keys_to_unblock: Final = tuple(k for k in blocked_keys or () if _was_blocked_by_member_removal(k.metadata))
     for key_row in keys_to_unblock:
-        await _tokens_db(prisma_client).update(
-            where={"token": key_row.token},
-            data={
-                "blocked": False,
-                "metadata": safe_dumps(
-                    {
-                        k: v
-                        for k, v in _key_metadata(key_row.metadata).items()
-                        if k != TEAM_MEMBER_REMOVAL_BLOCKED_METADATA_KEY
-                    }
-                ),
-            },
-        )
+        await _set_member_removal_block(key_row=key_row, blocked=False, tokens_db=tokens_db)
     await delete_cache_key_objects(
         hashed_tokens=tuple(k.token for k in keys_to_unblock),
         user_api_key_cache=user_api_key_cache,

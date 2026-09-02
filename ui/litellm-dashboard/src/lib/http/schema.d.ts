@@ -25435,6 +25435,11 @@ export interface components {
              */
             background_health_checks?: boolean | null;
             /**
+             * Block Keys On Team Member Removal
+             * @description By default, removing a member from a team (via /team/member_delete or SCIM group sync) deletes the keys that member created for the team. If True, those keys are blocked instead and unblocked again when the member is re-added to the team. Default is False.
+             */
+            block_keys_on_team_member_removal?: boolean | null;
+            /**
              * Cancel On Disconnect
              * @description cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot); the request is logged as a 499 failure
              */
