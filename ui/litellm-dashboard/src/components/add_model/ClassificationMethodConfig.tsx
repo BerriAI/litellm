@@ -64,6 +64,17 @@ const CUSTOM_PROMPT_WITH_DEFAULT_MODEL_FALLBACK =
   "names stay fixed. The scoring below no longer runs at all, since a failed classifier routes to the default " +
   "model instead:";
 
+type ClassifierEffortStatus = "supported" | "unsupported" | "unverified" | undefined;
+
+const classifierEffortStatusFor = (
+  effort: string | undefined,
+  explicitlySupported: string[] | null | undefined,
+): ClassifierEffortStatus => {
+  if (effort === undefined) return undefined;
+  if (!Array.isArray(explicitlySupported)) return "unverified";
+  return explicitlySupported.includes(effort) ? "supported" : "unsupported";
+};
+
 /**
  * What the scoring breakdown below it actually describes. A custom prompt means the score no longer
  * decides the tier, and pairing one with the default-model fallback means the heuristic never runs
@@ -156,7 +167,7 @@ interface ClassificationMethodConfigProps {
   value: ComplexityRouterConfigValue;
   onChange: (value: ComplexityRouterConfigValue) => void;
   modelOptions: { value: string; label: string }[];
-  effortOptionsByModel: Record<string, string[]>;
+  effortOptionsByModel: Record<string, string[] | null | undefined>;
   customTechnicalKeywords?: string[];
   onCustomTechnicalKeywordsChange?: (keywords: string[]) => void;
   showValidationErrors?: boolean;
@@ -257,9 +268,14 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   const classificationRubric = value.classifier_llm_config?.classification_rubric ?? DEFAULT_CLASSIFICATION_RUBRIC;
   const classifierModel = value.classifier_llm_config?.model ?? "";
   const classifierReasoningEffort = value.classifier_llm_config?.reasoning_effort;
+  const explicitlySupportedClassifierEfforts = effortOptionsByModel[classifierModel];
+  const classifierEffortStatus = classifierEffortStatusFor(
+    classifierReasoningEffort,
+    explicitlySupportedClassifierEfforts,
+  );
   const classifierReasoningEffortOptions = Array.from(
     new Set([
-      ...(effortOptionsByModel[classifierModel] ?? []),
+      ...(explicitlySupportedClassifierEfforts ?? []),
       ...(classifierReasoningEffort ? [classifierReasoningEffort] : []),
     ]),
   );
@@ -311,6 +327,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   };
 
   const handleClassifierModelChange = (model: string) => {
+    if (model === value.classifier_llm_config?.model) return;
     const { reasoning_effort: _reasoningEffort, ...classifierLlmConfig } = value.classifier_llm_config ?? {
       model: "",
       timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS,
@@ -536,7 +553,13 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               <Select
                 items={[
                   { value: CLASSIFIER_PROVIDER_DEFAULT, label: "Default" },
-                  ...classifierReasoningEffortOptions.map((effort) => ({ value: effort, label: effort })),
+                  ...classifierReasoningEffortOptions.map((effort) => ({
+                    value: effort,
+                    label:
+                      effort === classifierReasoningEffort && classifierEffortStatus !== "supported"
+                        ? `${effort} (${classifierEffortStatus})`
+                        : effort,
+                  })),
                 ]}
                 value={classifierReasoningEffort ?? CLASSIFIER_PROVIDER_DEFAULT}
                 onValueChange={(reasoningEffort: string | null) =>
@@ -556,11 +579,25 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
                   <SelectItem value={CLASSIFIER_PROVIDER_DEFAULT}>Default</SelectItem>
                   {classifierReasoningEffortOptions.map((effort) => (
                     <SelectItem key={effort} value={effort}>
-                      {effort}
+                      {effort === classifierReasoningEffort && classifierEffortStatus !== "supported"
+                        ? `${effort} (${classifierEffortStatus})`
+                        : effort}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {classifierEffortStatus === "unverified" && (
+                <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+                  This saved effort cannot be verified for the selected model. Choose Default unless you have confirmed
+                  provider support.
+                </p>
+              )}
+              {classifierEffortStatus === "unsupported" && (
+                <p className="mt-1 text-xs text-destructive">
+                  This saved effort is not supported by every deployment in the selected model group. Choose Default or
+                  a supported value before saving.
+                </p>
+              )}
             </div>
           )}
           <div>

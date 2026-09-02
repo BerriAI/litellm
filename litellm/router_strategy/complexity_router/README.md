@@ -245,7 +245,7 @@ model_list:
         classifier_type: heuristic_first
         heuristic_first_max_tier: SIMPLE
         classifier_llm_config:
-          model: gpt-4o-mini
+          model: gpt-5-mini
           reasoning_effort: low
         tiers:
           SIMPLE: gpt-4o-mini

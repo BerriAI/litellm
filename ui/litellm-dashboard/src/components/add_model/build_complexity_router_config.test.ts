@@ -4,6 +4,7 @@ import {
   normalizeClassifierLlmConfig,
   getKeywordTierRulesError,
   getClassifierModelError,
+  getClassifierReasoningEffortError,
   getMissingTiersError,
   hydrateCustomTierSet,
   getSemanticConfigError,
@@ -544,15 +545,16 @@ describe("classifier prompt and fallback", () => {
   });
 
   it("normalizeClassifierLlmConfig leaves a real prompt untouched and strips an empty one", () => {
-    expect(
-      normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, reasoning_effort: "none", system_prompt: "x" }),
-    ).toEqual({
+    const customPromptConfig = { model: "m", timeout_ms: 1, reasoning_effort: "none" as const, system_prompt: "x" };
+    const emptyPromptConfig = { model: "m", timeout_ms: 1, system_prompt: "" };
+    const expectedCustomPromptConfig = {
       model: "m",
       timeout_ms: 1,
       reasoning_effort: "none",
       system_prompt: "x",
-    });
-    expect(normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, system_prompt: "" })).toEqual({
+    };
+    expect(normalizeClassifierLlmConfig(customPromptConfig)).toEqual(expectedCustomPromptConfig);
+    expect(normalizeClassifierLlmConfig(emptyPromptConfig)).toEqual({
       model: "m",
       timeout_ms: 1,
     });
@@ -770,6 +772,37 @@ describe("getClassifierModelError", () => {
   it("stays quiet once a model is chosen", () => {
     expect(
       getClassifierModelError({ classifier_type: "llm", classifier_llm_config: { model: "m", timeout_ms: 3000 } }),
+    ).toBeNull();
+  });
+});
+
+describe("getClassifierReasoningEffortError", () => {
+  const classifier = {
+    classifier_type: "llm" as const,
+    classifier_llm_config: { model: "classifier", timeout_ms: 3000, reasoning_effort: "low" },
+  };
+
+  it("accepts an explicitly supported effort", () => {
+    expect(
+      getClassifierReasoningEffortError(classifier, [
+        { model_group: "classifier", supported_reasoning_efforts: ["low", "medium"] },
+      ]),
+    ).toBeNull();
+  });
+
+  it("blocks an explicitly unsupported effort", () => {
+    expect(
+      getClassifierReasoningEffortError(classifier, [
+        { model_group: "classifier", supported_reasoning_efforts: ["medium", "high"] },
+      ]),
+    ).toContain("low reasoning effort is not supported");
+  });
+
+  it.each([[null], [undefined]])("fails open when capability levels are %o", (supportedReasoningEfforts) => {
+    expect(
+      getClassifierReasoningEffortError(classifier, [
+        { model_group: "classifier", supported_reasoning_efforts: supportedReasoningEfforts },
+      ]),
     ).toBeNull();
   });
 });

@@ -632,13 +632,16 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   const removeTierRow = (id: string) => dispatch({ kind: "remove", id });
   const exitToBuiltInTiers = () => dispatch({ kind: "restore" });
 
-  // An absent list means the proxy does not send the field yet, so every level is offered as before.
-  // An empty list is the group's own answer that its deployments share no level, and is left empty.
-  const effortOptionsByModel: Record<string, string[]> = Object.fromEntries(
+  // Tier pins retain the capability-blind fallback for older proxies. Classifier overrides are
+  // stricter below: they are new in this release, so an unknown list must not invent provider levels.
+  const tierEffortOptionsByModel: Record<string, string[]> = Object.fromEntries(
     modelInfo.map((model) => [
       model.model_group,
       model.supported_reasoning_efforts ?? (model.supports_reasoning ? [...REASONING_EFFORT_OPTIONS] : []),
     ]),
+  );
+  const classifierEffortOptionsByModel: Record<string, string[] | null | undefined> = Object.fromEntries(
+    modelInfo.map((model) => [model.model_group, model.supported_reasoning_efforts]),
   );
 
   // Embedding models can't serve a chat-completion role, so they're excluded here.
@@ -746,7 +749,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   <TierModelEffortRows
                     tierLabel={label}
                     models={row.models}
-                    effortOptionsByModel={effortOptionsByModel}
+                    effortOptionsByModel={tierEffortOptionsByModel}
                     paramsByModel={row.params}
                     onEffortChange={(model, effort) => handleTierModelEffortChange(row.id, model, effort)}
                   />
@@ -818,7 +821,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 value={value}
                 onChange={onChange}
                 modelOptions={modelOptions}
-                effortOptionsByModel={effortOptionsByModel}
+                effortOptionsByModel={classifierEffortOptionsByModel}
                 customTechnicalKeywords={customTechnicalKeywords}
                 onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
                 showValidationErrors={showValidationErrors}

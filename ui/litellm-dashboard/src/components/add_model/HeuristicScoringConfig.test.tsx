@@ -155,7 +155,11 @@ describe("HeuristicScoringConfig", () => {
 });
 
 describe("ClassificationMethodConfig scorer gating", () => {
-  const props = { onChange: vi.fn(), modelOptions: [{ value: "gpt-4o-mini", label: "gpt-4o-mini" }] };
+  const props = {
+    onChange: vi.fn(),
+    modelOptions: [{ value: "gpt-4o-mini", label: "gpt-4o-mini" }],
+    effortOptionsByModel: {},
+  };
   const withClassifier = (type: ClassifierType, fallback?: ClassifierFallback): ComplexityRouterConfigValue => ({
     ...BASE,
     classifier_type: type,

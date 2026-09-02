@@ -50,6 +50,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
@@ -225,6 +226,7 @@ from litellm.types.router import (
 )
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
+    AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
     PROMPT_QUOTING_ROUTING_DECISION_FIELDS,
     CustomPricingLiteLLMParams,
     GenericBudgetConfigType,
@@ -2156,6 +2158,94 @@ class Router:
             verbose_router_logger.debug("Error occurred while printing deployment - %s", e)
             raise e
 
+    @staticmethod
+    def _drop_effort_from_nested_carrier(  # mutable-ok: sanitizes a fresh deployment-params copy in place
+        params: dict[str, object],  # mutable-ok: sanitizes a fresh deployment-params copy in place
+        carrier: str,
+    ) -> None:
+        nested: Final = params.get(carrier)
+        if not isinstance(nested, Mapping):
+            return
+        sanitized: Final = {  # mutable-ok: replacement stays local to this request
+            key: value for key, value in nested.items() if key != "effort"
+        }
+        if sanitized:
+            params[carrier] = sanitized  # rebind-ok: intentional mutation of the request-local copy
+        else:
+            params.pop(carrier, None)
+
+    @staticmethod
+    def _deployment_params_with_request_reasoning_override(
+        deployment_params: Mapping[str, object], request_kwargs: Mapping[str, object]
+    ) -> dict[str, object]:  # mutable-ok: litellm's request pipeline consumes a mutable kwargs mapping
+        """Return deployment params whose equivalent effort controls cannot outrank a request override.
+
+        Providers expose the same setting through several native carriers. A request-level
+        ``reasoning_effort`` is the portable override, so a deployment's ``thinking`` or nested
+        ``*.effort`` must not remain beside it and either win or trigger a conflicting-params 400.
+        Every changed mapping is copied so the Router's shared deployment config stays immutable.
+        """
+        sanitized: Final = dict(deployment_params)  # mutable-ok: request-local copy protects shared Router state
+        if request_kwargs.get("reasoning_effort") is None:
+            return sanitized
+
+        sanitized.pop("thinking", None)
+        Router._drop_effort_from_nested_carrier(sanitized, "output_config")
+        Router._drop_effort_from_nested_carrier(sanitized, "reasoning")
+
+        extra_body: Final = sanitized.get("extra_body")
+        if isinstance(extra_body, Mapping):
+            sanitized_extra_body: Final[dict[str, object]] = dict(  # mutable-ok: request-local nested copy
+                extra_body
+            )
+            sanitized_extra_body.pop("reasoning_effort", None)
+            sanitized_extra_body.pop("thinking", None)
+            Router._drop_effort_from_nested_carrier(sanitized_extra_body, "output_config")
+            Router._drop_effort_from_nested_carrier(sanitized_extra_body, "reasoning")
+            if sanitized_extra_body:
+                sanitized["extra_body"] = sanitized_extra_body
+            else:
+                sanitized.pop("extra_body", None)
+        return sanitized
+
+    @staticmethod
+    def _is_classifier_internal_call(kwargs: Mapping[str, object]) -> bool:
+        metadata: Final = kwargs.get("metadata")
+        litellm_metadata: Final = kwargs.get("litellm_metadata")
+        return any(
+            isinstance(candidate, Mapping)
+            and candidate.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == AUTOROUTER_CLASSIFIER_CALL_ORIGIN
+            for candidate in (metadata, litellm_metadata)
+        )
+
+    def _drop_unsupported_classifier_reasoning_effort(
+        self,
+        deployment: DeploymentTypedDict,
+        model: str,
+        kwargs: dict[str, object],  # mutable-ok: fallback must update the active request and its log body together
+    ) -> None:
+        """Let a classifier fallback without reasoning support remain a usable fallback.
+
+        The dashboard only offers explicitly advertised levels, but an existing config can outlive
+        a model change and fallbacks can target a different group. Unknown capability fails open;
+        only a provider that explicitly rejects the parameter has it removed.
+        """
+        if kwargs.get("reasoning_effort") is None or not self._is_classifier_internal_call(kwargs):
+            return
+        if self._deployment_accepts_param(deployment, model, "reasoning_effort"):
+            return
+        verbose_router_logger.warning(
+            "litellm.router.py: dropping classifier reasoning_effort for model=%s because the selected deployment does not support it",
+            model,
+        )
+        kwargs.pop("reasoning_effort", None)
+        proxy_server_request: Final = kwargs.get("proxy_server_request")
+        if not isinstance(proxy_server_request, dict):
+            return
+        body: Final = proxy_server_request.get("body")
+        if isinstance(body, dict):
+            body.pop("reasoning_effort", None)
+
     ### COMPLETION, EMBEDDING, IMG GENERATION FUNCTIONS
 
     def completion(self, model: str, messages: list[dict[str, str]], **kwargs) -> ModelResponse | CustomStreamWrapper:
@@ -2191,9 +2281,18 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
+            self._drop_unsupported_classifier_reasoning_effort(
+                deployment=cast(  # cast-ok: deployment selection returns a router deployment mapping
+                    DeploymentTypedDict, deployment
+                ),
+                model=model,
+                kwargs=kwargs,
+            )
             # Check for silent model experiment
             # Make a local copy of litellm_params to avoid mutating the Router's state
-            litellm_params: Final = deployment["litellm_params"].copy()
+            litellm_params: Final = self._deployment_params_with_request_reasoning_override(
+                deployment["litellm_params"], kwargs
+            )
             silent_model: Final = litellm_params.pop("silent_model", None)
 
             if silent_model is not None:
@@ -3204,6 +3303,13 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
+            self._drop_unsupported_classifier_reasoning_effort(
+                deployment=cast(  # cast-ok: deployment selection returns a router deployment mapping
+                    DeploymentTypedDict, deployment
+                ),
+                model=model,
+                kwargs=kwargs,
+            )
 
             _timeout_debug_deployment_dict = deployment
             end_time: Final = time.time()
@@ -3225,7 +3331,9 @@ class Router:
 
             # Check for silent model experiment
             # Make a local copy of litellm_params to avoid mutating the Router's state
-            litellm_params: Final = deployment["litellm_params"].copy()
+            litellm_params: Final = self._deployment_params_with_request_reasoning_override(
+                deployment["litellm_params"], kwargs
+            )
             silent_model: Final = litellm_params.pop("silent_model", None)
 
             if silent_model is not None:
@@ -10191,6 +10299,8 @@ class Router:
         total_itpm: int | None = None
         total_otpm: int | None = None
         configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
+        reasoning_efforts_initialized = False
+        reasoning_efforts_unknown = False
         model_list: Final = self.get_model_list(model_name=model_group)
         if model_list is None:
             return None
@@ -10377,10 +10487,21 @@ class Router:
                 if model_info.get("rpm", None) is not None and _deployment_rpm is None:
                     _deployment_rpm = model_info.get("rpm")
 
-            model_group_info.supported_reasoning_efforts = intersect_supported_reasoning_efforts(
-                model_group_info.supported_reasoning_efforts,
-                resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=deployment_is_mapped),
+            deployment_reasoning_efforts = resolve_supported_reasoning_efforts(  # rebind-ok: recalculated per deployment
+                model_info, deployment_is_mapped=deployment_is_mapped
             )
+            if deployment_reasoning_efforts is None:
+                reasoning_efforts_unknown = True
+                model_group_info.supported_reasoning_efforts = None
+            elif not reasoning_efforts_initialized:
+                reasoning_efforts_initialized = True
+                if not reasoning_efforts_unknown:
+                    model_group_info.supported_reasoning_efforts = deployment_reasoning_efforts
+            elif not reasoning_efforts_unknown:
+                model_group_info.supported_reasoning_efforts = intersect_supported_reasoning_efforts(
+                    model_group_info.supported_reasoning_efforts,
+                    deployment_reasoning_efforts,
+                )
 
             if _deployment_tpm is not None:
                 if total_tpm is None:

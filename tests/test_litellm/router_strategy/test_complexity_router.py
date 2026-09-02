@@ -1880,6 +1880,19 @@ class TestLLMClassifier:
         assert call_kwargs["metadata"] == {**request_metadata, "internal_call_origin": "autorouter_classifier"}
 
     @pytest.mark.asyncio
+    async def test_aclassify_stamps_internal_origin_without_caller_metadata(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """Fallback handling must still recognize the classifier when an SDK caller supplied no metadata."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "SIMPLE"}'))
+
+        await llm_complexity_router.aclassify("hi")
+
+        assert mock_router_instance.acompletion.call_args.kwargs["metadata"] == {
+            "internal_call_origin": "autorouter_classifier"
+        }
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "request_kwargs",
         [

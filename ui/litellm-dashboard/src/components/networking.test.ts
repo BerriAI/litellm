@@ -617,6 +617,15 @@ describe("buildModelGroupTestRequest", () => {
     expect(path).toBe("/v1/embeddings");
     expect(body).toEqual({ model: "text-embedding-3-small", input: "test from litellm" });
   });
+
+  it("adds classifier request parameters to a chat probe", () => {
+    const { body } = Networking.buildModelGroupTestRequest("gpt-5-mini", "chat", { reasoning_effort: "low" });
+    expect(body).toEqual({
+      model: "gpt-5-mini",
+      messages: [{ role: "user", content: "test from litellm" }],
+      reasoning_effort: "low",
+    });
+  });
 });
 
 describe("testMCPToolsListRequest auth headers", () => {

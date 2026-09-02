@@ -1,4 +1,5 @@
 import { KeywordTierRule } from "./KeywordTierRules";
+import type { ModelGroup } from "../llm_calls/fetch_models";
 import {
   type CustomTierSet,
   type TierRow,
@@ -270,6 +271,20 @@ export const getClassifierModelError = (
   return config.custom_tier_set
     ? "Please select a classifier model: an edited tier set routes with the LLM classifier"
     : "Please select a classifier model, or switch back to Heuristic";
+};
+
+export const getClassifierReasoningEffortError = (
+  config: Pick<ComplexityRouterConfigValue, "custom_tier_set" | "classifier_type" | "classifier_llm_config">,
+  modelInfo: readonly ModelGroup[],
+): string | null => {
+  if (!usesLlmClassifier(effectiveClassifierType(config))) return null;
+  const classifierConfig = config.classifier_llm_config;
+  if (!classifierConfig?.model || !classifierConfig.reasoning_effort) return null;
+  const supported = modelInfo.find(
+    (model) => model.model_group === classifierConfig.model,
+  )?.supported_reasoning_efforts;
+  if (!Array.isArray(supported) || supported.includes(classifierConfig.reasoning_effort)) return null;
+  return `${classifierConfig.reasoning_effort} reasoning effort is not supported by every deployment in ${classifierConfig.model}. Choose Default or a supported value.`;
 };
 
 export const getSemanticConfigError = ({

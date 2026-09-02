@@ -19,11 +19,12 @@ import { all_admin_roles } from "@/utils/roles";
 import { type ModelWriteScope } from "@/utils/modelPermissions";
 import TeamDropdown from "../common_components/team_dropdown";
 import { type AddAutoRouterValues, handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
-import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
+import { fetchAvailableModels, type ModelGroup } from "@/components/llm_calls/fetch_models";
 import { autoRouterListKey, fetchAllModelDeployments } from "@/app/(dashboard)/hooks/models/useModels";
 import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
   effectiveClassifierType,
+  usesLlmClassifier,
   DEFAULT_ADAPTIVE_WEIGHTS,
   DEFAULT_SESSION_AFFINITY,
   DEFAULT_DEPLOYMENT_AFFINITY,
@@ -37,6 +38,7 @@ import {
   buildComplexityRouterConfig,
   getKeywordTierRulesError,
   getClassifierModelError,
+  getClassifierReasoningEffortError,
   getMissingTiersError,
   getPlanModeTierError,
   getSemanticConfigError,
@@ -123,14 +125,21 @@ export const getSubmitBlockedReason = (
   config: ComplexityRouterConfigValue,
   keywordTierRules: KeywordTierRule[],
   referencedModelsParams: Parameters<typeof getReferencedModelsError>[0],
-  availability: ModelAvailability,
-): string | null =>
-  (config.custom_tier_set ? getCustomTierRowsError(config.custom_tier_set) : getTierLabelsError(config.tier_labels)) ??
-  getMissingTiersError(activeTierRows(config)) ??
-  getPlanModeTierError(config.plan_mode_min_tier, activeTierRows(config)) ??
-  getKeywordTierRulesError(keywordTierRules, activeTierRows(config)) ??
-  getClassifierModelError(config) ??
-  getReferencedModelsError(referencedModelsParams, availability);
+  ...capabilities: [availability: ModelAvailability, modelInfo?: readonly ModelGroup[]]
+): string | null => {
+  const [availability, modelInfo = []] = capabilities;
+  return (
+    (config.custom_tier_set
+      ? getCustomTierRowsError(config.custom_tier_set)
+      : getTierLabelsError(config.tier_labels)) ??
+    getMissingTiersError(activeTierRows(config)) ??
+    getPlanModeTierError(config.plan_mode_min_tier, activeTierRows(config)) ??
+    getKeywordTierRulesError(keywordTierRules, activeTierRows(config)) ??
+    getClassifierModelError(config) ??
+    getClassifierReasoningEffortError(config, modelInfo) ??
+    getReferencedModelsError(referencedModelsParams, availability)
+  );
+};
 
 const autoRouterSchema = (requiresTeamScope: boolean) =>
   z.object({
@@ -333,6 +342,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     keywordTierRules,
     referencedModelsParams,
     groupsOnlyAvailability,
+    modelInfo,
   );
 
   const complexityRouterConfigParams: BuildComplexityRouterConfigParams = {
@@ -384,6 +394,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         keywordTierRules,
         referencedModelsParams,
         groupsOnlyAvailability,
+        modelInfo,
       ) ?? getSemanticConfigError({ semanticMatchingEnabled, embeddingModel, keywordTierRules });
     if (blockedReason) {
       setShowValidationErrors(true);
@@ -456,6 +467,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       semanticMatchingEnabled,
       embeddingModel,
       defaultModel: resolveComplexityDefaultModel(complexityRouterConfig, complexityRouterConfig.default_model),
+      classifier: usesLlmClassifier(effectiveClassifierType(complexityRouterConfig))
+        ? {
+            model: complexityRouterConfig.classifier_llm_config?.model ?? "",
+            reasoningEffort: complexityRouterConfig.classifier_llm_config?.reasoning_effort,
+          }
+        : undefined,
     };
     const targets = buildAutoRouterTestTargets(testTargetParams);
 

@@ -1149,14 +1149,58 @@ describe("ComplexityRouterConfig classifier reasoning effort", () => {
     });
   });
 
-  it("keeps a stored effort visible when capability metadata no longer lists it", () => {
+  it("keeps the effort when the already-selected classifier model is clicked again", async () => {
+    const onChange = renderClassifier({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, reasoning_effort: "high" },
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Classifier Model" }));
+    await user.click(await screen.findByRole("option", { name: "gpt-4" }));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps the effort when the already-selected classifier model is confirmed with Enter", async () => {
+    const onChange = renderClassifier({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, reasoning_effort: "high" },
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Classifier Model" }));
+    await user.keyboard("{Enter}");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps a stored unsupported effort visible and labels it before save", () => {
     renderClassifier({
       ...llmValue,
       classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, reasoning_effort: "max" },
     });
     expect(screen.getByRole("combobox", { name: "Reasoning effort for classifier model gpt-4" })).toHaveTextContent(
-      "max",
+      "max (unsupported)",
     );
+    expect(screen.getByText(/not supported by every deployment/)).toBeInTheDocument();
+  });
+
+  it("does not invent options for unknown capability metadata but keeps a saved value clearable", () => {
+    renderClassifier({
+      ...llmValue,
+      classifier_llm_config: { model: "claude-3-opus", timeout_ms: 3000, reasoning_effort: "low" },
+    });
+    expect(
+      screen.getByRole("combobox", { name: "Reasoning effort for classifier model claude-3-opus" }),
+    ).toHaveTextContent("low (unverified)");
+    expect(screen.getByText(/cannot be verified/)).toBeInTheDocument();
+  });
+
+  it("hides the classifier effort control when capability metadata is unknown and no value is saved", () => {
+    renderClassifier({
+      ...llmValue,
+      classifier_llm_config: { model: "claude-3-opus", timeout_ms: 3000 },
+    });
+    expect(
+      screen.queryByRole("combobox", { name: "Reasoning effort for classifier model claude-3-opus" }),
+    ).not.toBeInTheDocument();
   });
 
   it("hides the control for a classifier model without reasoning support", () => {
@@ -1278,12 +1322,13 @@ describe("ComplexityRouterConfig custom technical keywords", () => {
   });
 
   it("hides the keywords when the scorer never runs, so they cannot imply an effect they have none", () => {
-    openClassificationPanel({
+    const llmWithDefaultFallback = {
       ...defaultValue,
-      classifier_type: "llm",
+      classifier_type: "llm" as const,
       classifier_llm_config: llmConfig,
-      classifier_fallback: "default_model",
-    });
+      classifier_fallback: "default_model" as const,
+    };
+    openClassificationPanel(llmWithDefaultFallback);
     expect(screen.queryByText("Custom Technical Keywords")).not.toBeInTheDocument();
   });
 });

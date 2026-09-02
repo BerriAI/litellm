@@ -28,6 +28,7 @@ import {
   type BuildComplexityRouterConfigParams,
   buildComplexityRouterConfig,
   getClassifierModelError,
+  getClassifierReasoningEffortError,
   getKeywordTierRulesError,
   getMissingTiersError,
   getSemanticConfigError,
@@ -553,6 +554,12 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       if (classifierError) {
         setShowValidationErrors(true);
         toast.fromError(classifierError);
+        return;
+      }
+      const classifierEffortError = getClassifierReasoningEffortError(complexityRouterConfig, modelInfo);
+      if (classifierEffortError) {
+        setShowValidationErrors(true);
+        toast.fromError(classifierEffortError);
         return;
       }
       // Same guards the create form applies (add_auto_router_tab.tsx). The backend rejects a
