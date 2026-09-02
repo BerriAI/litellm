@@ -26,6 +26,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import ValidationError
 
+
 import litellm
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import PromptCachingDeploymentCheck
 from litellm.types.router import RetryPolicy, UpdateRouterConfig
@@ -241,7 +242,7 @@ async def test_config_update_persists_and_reads_back_retry_policy(monkeypatch):
     """The exact global retry_policy save the UI performs must survive the
     real ``/config/update`` -> DB -> apply -> ``/get/config/callbacks`` path,
     not snap back to the ``num_retries`` fallback the ticket reported."""
-    from litellm.proxy import proxy_server
+    import litellm.proxy.proxy_server as proxy_server
     from litellm.proxy._types import ConfigYAML, LitellmUserRoles, UserAPIKeyAuth
 
     router = _build_router()
