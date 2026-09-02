@@ -1,16 +1,48 @@
 from __future__ import annotations
 
+import importlib.util
 import subprocess
+import sys
 import zipfile
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType, ModuleType
-from typing import Final
+from typing import Final, Protocol, cast
 
 import pytest
 
-from litellm.rust_bridge import verify_linux_native_wheel as verifier
 
-_MODULE_PATH: Final = Path(verifier.__file__)
+class _CommandRunner(Protocol):
+    def __call__(
+        self,
+        command: tuple[str, ...],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]: ...
+
+
+class _VerifierModule(Protocol):
+    main: Callable[
+        [
+            Sequence[str] | None,
+            Mapping[str, str] | None,
+            Callable[[Path], ModuleType | None],
+            _CommandRunner,
+        ],
+        int,
+    ]
+
+
+_REPO_ROOT: Final = Path(__file__).resolve().parents[3]
+_MODULE_PATH: Final = _REPO_ROOT / ".github" / "scripts" / "verify_linux_native_wheel.py"
+_SPEC: Final = importlib.util.spec_from_file_location("verify_linux_native_wheel", _MODULE_PATH)
+assert _SPEC is not None and _SPEC.loader is not None
+_LOADED_VERIFIER: Final = importlib.util.module_from_spec(_SPEC)
+sys.modules[_SPEC.name] = _LOADED_VERIFIER
+_SPEC.loader.exec_module(_LOADED_VERIFIER)
+verifier: Final = cast(_VerifierModule, _LOADED_VERIFIER)
 
 _EXPECTED_TAG: Final = "cp310-abi3-linux_x86_64"
 _NATIVE_MEMBER: Final = "litellm/rust_bridge/_native.abi3.so"
