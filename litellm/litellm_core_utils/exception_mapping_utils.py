@@ -1349,24 +1349,21 @@ def _map_vertex_exception(
                 ),
             ),
         )
-    elif (
-        not _structured_validation_signal(
-            error_str=error_str,
+    elif not _structured_validation_signal(
+        error_str=error_str,
+        response=getattr(original_exception, "response", None),
+        error_body=getattr(original_exception, "body", None),
+    ) and (
+        "429 Quota exceeded" in error_str
+        or "Quota exceeded for" in error_str
+        or "Resource exhausted" in error_str
+        or "IndexError: list index out of range" in error_str
+        or "429 Unable to submit request because the service is temporarily out of capacity." in error_str
+        or ExceptionCheckers.is_error_str_rate_limit(
+            error_str,
+            status_code=getattr(original_exception, "status_code", None),
             response=getattr(original_exception, "response", None),
             error_body=getattr(original_exception, "body", None),
-        )
-        and (
-            "429 Quota exceeded" in error_str
-            or "Quota exceeded for" in error_str
-            or "Resource exhausted" in error_str
-            or "IndexError: list index out of range" in error_str
-            or "429 Unable to submit request because the service is temporarily out of capacity." in error_str
-            or ExceptionCheckers.is_error_str_rate_limit(
-                error_str,
-                status_code=getattr(original_exception, "status_code", None),
-                response=getattr(original_exception, "response", None),
-                error_body=getattr(original_exception, "body", None),
-            )
         )
     ):
         raise RateLimitError(
