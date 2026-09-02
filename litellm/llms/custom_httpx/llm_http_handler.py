@@ -1955,11 +1955,12 @@ class BaseLLMHTTPHandler:
         )
 
         # Resolve the request timeout so a silent upstream is not waited on
-        # indefinitely.  Priority: per-request kwargs["request_timeout"] >
-        # litellm_params.timeout > litellm.request_timeout > client default.
+        # indefinitely.  Priority: litellm_params.timeout (per-request explicit)
+        # > kwargs["request_timeout"] (proxy global) > litellm.request_timeout
+        # (library global) > client default.
         _request_timeout: Optional[Union[float, httpx.Timeout]] = (
-            kwargs.get("request_timeout")
-            or litellm_params.get("timeout")
+            litellm_params.get("timeout")
+            or kwargs.get("request_timeout")
             or litellm.request_timeout
             or None
         )
