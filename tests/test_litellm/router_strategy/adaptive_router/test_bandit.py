@@ -6,6 +6,7 @@ from litellm.router_strategy.adaptive_router.bandit import (
     BanditCell,
     apply_delta,
     initial_cell,
+    merge_persisted_delta,
     normalized_cost,
     pick_best,
     score,
@@ -29,26 +30,20 @@ def test_initial_cell_tier_only():
 
 
 def test_initial_cell_with_matching_strength():
-    prefs = AdaptiveRouterPreferences(
-        quality_tier=2, strengths=[RequestType.CODE_GENERATION]
-    )
+    prefs = AdaptiveRouterPreferences(quality_tier=2, strengths=[RequestType.CODE_GENERATION])
     cell = initial_cell(prefs, RequestType.CODE_GENERATION)
     expected_mean = BASE_TIER_WEIGHT[2] + STRENGTH_BONUS
     assert abs(cell.mean - expected_mean) < 0.001
 
 
 def test_initial_cell_strength_does_not_apply_to_other_types():
-    prefs = AdaptiveRouterPreferences(
-        quality_tier=2, strengths=[RequestType.CODE_GENERATION]
-    )
+    prefs = AdaptiveRouterPreferences(quality_tier=2, strengths=[RequestType.CODE_GENERATION])
     cell = initial_cell(prefs, RequestType.WRITING)
     assert abs(cell.mean - BASE_TIER_WEIGHT[2]) < 0.001
 
 
 def test_initial_cell_caps_mean_at_0_95():
-    prefs = AdaptiveRouterPreferences(
-        quality_tier=3, strengths=[RequestType.CODE_GENERATION]
-    )
+    prefs = AdaptiveRouterPreferences(quality_tier=3, strengths=[RequestType.CODE_GENERATION])
     cell = initial_cell(prefs, RequestType.CODE_GENERATION)
     assert cell.mean <= 0.95
 
@@ -65,6 +60,13 @@ def test_apply_delta_respects_sample_cap():
     same_cell = apply_delta(cell, 5.0, 5.0)
     assert same_cell.alpha == cell.alpha
     assert same_cell.beta == cell.beta
+
+
+def test_merge_persisted_delta_compresses_combined_evidence():
+    merged = merge_persisted_delta(BanditCell(alpha=36.0, beta=4.0), 80.0, 120.0)
+
+    assert merged.alpha + merged.beta == pytest.approx(SAMPLE_CAP)
+    assert merged.mean == pytest.approx(116.0 / 240.0)
 
 
 def test_thompson_sample_in_range():
@@ -100,7 +102,7 @@ def test_score_combines_quality_and_cost():
 
 
 def test_pick_best_empty_dict_raises():
-    with pytest.raises(ValueError, match='pick_best called with no models'):
+    with pytest.raises(ValueError, match="pick_best called with no models"):
         pick_best({}, {})
 
 
@@ -129,6 +131,4 @@ def test_thompson_converges_to_better_model():
 
     last_50 = picks[-50:]
     a_share = last_50.count("A") / 50
-    assert (
-        a_share >= 0.80
-    ), f"Expected A to dominate ({a_share=}); priors aren't biasing the sample correctly"
+    assert a_share >= 0.80, f"Expected A to dominate ({a_share=}); priors aren't biasing the sample correctly"

@@ -75,6 +75,16 @@ def apply_delta(cell: BanditCell, delta_alpha: float, delta_beta: float) -> Band
     return BanditCell(alpha=new_alpha, beta=new_beta)
 
 
+def merge_persisted_delta(cell: BanditCell, delta_alpha: float, delta_beta: float) -> BanditCell:
+    alpha: Final = cell.alpha + delta_alpha
+    beta: Final = cell.beta + delta_beta
+    total: Final = alpha + beta
+    if total <= SAMPLE_CAP:
+        return BanditCell(alpha=alpha, beta=beta)
+    mean: Final = alpha / total
+    return BanditCell(alpha=mean * SAMPLE_CAP, beta=(1.0 - mean) * SAMPLE_CAP)
+
+
 def apply_evaluation_prior(
     cell: BanditCell,
     successes: float,

@@ -12,6 +12,8 @@ from litellm.types.router import (
     AdaptiveRouterConfig,
     AdaptiveRouterEvaluationPrior,
     AdaptiveRouterPreferences,
+    AdaptiveRouterTierArtifact,
+    AdaptiveRouterTierGlobalStatistic,
     RequestType,
 )
 
@@ -28,6 +30,16 @@ def _make_router() -> AdaptiveRouter:
         config=cfg,
         model_to_prefs=prefs,
         model_to_cost=costs,
+    )
+
+
+def _tier_artifact() -> AdaptiveRouterTierArtifact:
+    return AdaptiveRouterTierArtifact(
+        global_statistics=tuple(
+            AdaptiveRouterTierGlobalStatistic(tier=tier, successes=successes, observations=100)
+            for tier, successes in enumerate((60, 80, 90, 99), start=1)
+        ),
+        routing_threshold=0.85,
     )
 
 
@@ -79,6 +91,52 @@ async def test_pick_model_min_quality_tier_filter_raises_when_no_eligible():
     r = _make_router()
     with pytest.raises(ValueError, match="min_quality_tier=4"):
         await r.pick_model(RequestType.GENERAL, min_quality_tier=4)
+
+
+@pytest.mark.asyncio
+async def test_tier_router_supports_unknown_model_after_tier_assignment():
+    router: Final = AdaptiveRouter(
+        router_name="tier-router",
+        config=AdaptiveRouterConfig(available_models=["new-model"], tier_artifact=_tier_artifact()),
+        model_to_prefs={"new-model": AdaptiveRouterPreferences(quality_tier=3)},
+        model_to_cost={"new-model": 0.002},
+    )
+
+    assert await router.pick_model(RequestType.GENERAL, prompt="Explain this system") == "new-model"
+
+
+@pytest.mark.asyncio
+async def test_tier_router_falls_upward_when_predicted_tier_is_missing():
+    router: Final = AdaptiveRouter(
+        router_name="tier-router",
+        config=AdaptiveRouterConfig(available_models=["simple", "reasoning"], tier_artifact=_tier_artifact()),
+        model_to_prefs={
+            "simple": AdaptiveRouterPreferences(quality_tier=1),
+            "reasoning": AdaptiveRouterPreferences(quality_tier=4),
+        },
+        model_to_cost={"simple": 0.001, "reasoning": 0.01},
+    )
+
+    assert await router.pick_model(RequestType.GENERAL, prompt="Explain this system") == "reasoning"
+
+
+@pytest.mark.asyncio
+async def test_tier_router_picks_cheapest_model_inside_selected_tier():
+    router: Final = AdaptiveRouter(
+        router_name="tier-router",
+        config=AdaptiveRouterConfig(
+            available_models=["simple", "complex-expensive", "complex-cheap"],
+            tier_artifact=_tier_artifact(),
+        ),
+        model_to_prefs={
+            "simple": AdaptiveRouterPreferences(quality_tier=1),
+            "complex-expensive": AdaptiveRouterPreferences(quality_tier=3),
+            "complex-cheap": AdaptiveRouterPreferences(quality_tier=3),
+        },
+        model_to_cost={"simple": 0.001, "complex-expensive": 0.01, "complex-cheap": 0.005},
+    )
+
+    assert await router.pick_model(RequestType.GENERAL, prompt="Explain this system") == "complex-cheap"
 
 
 # ---- record_turn --------------------------------------------------------
@@ -344,6 +402,39 @@ async def test_load_state_from_db_preserves_evaluation_priors():
     restored: Final = router._cells[(RequestType.GENERAL, "fast")]
     assert restored.alpha == seeded.alpha + 2.0
     assert restored.beta == seeded.beta + 3.0
+
+
+@pytest.mark.asyncio
+async def test_load_state_from_db_compresses_seeded_and_persisted_evidence_over_cap():
+    cfg: Final = AdaptiveRouterConfig(
+        available_models=["fast"],
+        evaluation_priors=(
+            AdaptiveRouterEvaluationPrior(
+                request_type=RequestType.GENERAL,
+                model="fast",
+                successes=36,
+                failures=4,
+            ),
+        ),
+    )
+    router: Final = AdaptiveRouter(
+        router_name="seeded",
+        config=cfg,
+        model_to_prefs={"fast": AdaptiveRouterPreferences(quality_tier=2)},
+        model_to_cost={"fast": 0.001},
+    )
+    seeded: Final = router._cells[(RequestType.GENERAL, "fast")]
+    row: Final = MagicMock(request_type="general", model_name="fast", alpha=80.0, beta=120.0)
+    prisma: Final = MagicMock()
+    prisma.db.litellm_adaptiverouterstate.find_many = AsyncMock(return_value=[row])
+
+    await router.load_state_from_db(prisma)
+
+    restored: Final = router._cells[(RequestType.GENERAL, "fast")]
+    combined_total: Final = seeded.alpha + seeded.beta + row.alpha + row.beta
+    assert restored.alpha + restored.beta == pytest.approx(200.0)
+    assert restored.mean == pytest.approx((seeded.alpha + row.alpha) / combined_total)
+    assert restored != seeded
 
 
 @pytest.mark.asyncio

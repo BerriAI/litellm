@@ -30,6 +30,7 @@ from litellm.router_strategy.adaptive_router.bandit import (
     apply_delta,
     apply_evaluation_prior,
     initial_cell,
+    merge_persisted_delta,
     pick_best,
 )
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
@@ -49,6 +50,10 @@ from litellm.router_strategy.adaptive_router.signals import (
     detect_response_signals,
     detect_user_feedback,
     merge_signal_deltas,
+)
+from litellm.router_strategy.adaptive_router.tier_predictor import (
+    TierSuccessPredictor,
+    resolve_tier_artifact,
 )
 from litellm.router_strategy.adaptive_router.update_queue import (
     AdaptiveRouterUpdateQueue,
@@ -101,6 +106,9 @@ class AdaptiveRouter:
         self.model_to_prefs = model_to_prefs
         self.model_to_cost = model_to_cost
         self.queue = AdaptiveRouterUpdateQueue()
+        self._tier_predictor: Final = (
+            TierSuccessPredictor(resolve_tier_artifact(config.tier_artifact)) if config.tier_artifact else None
+        )
 
         self._cells: dict[tuple[RequestType, str], BanditCell] = {}
         self._session_states: dict[tuple[str, str], SessionState] = {}
@@ -166,7 +174,7 @@ class AdaptiveRouter:
                 if row.model_name not in self.config.available_models:
                     continue
                 key = (rt, row.model_name)  # rebind-ok: each persisted row has its own cell
-                self._cells[key] = apply_delta(self._cells[key], row.alpha, row.beta)
+                self._cells[key] = merge_persisted_delta(self._cells[key], row.alpha, row.beta)
                 loaded += 1
             verbose_router_logger.info(
                 "AdaptiveRouter[%s]: loaded %d cells from DB",
@@ -205,7 +213,11 @@ class AdaptiveRouter:
 
         request_type: Final = classify_prompt(user_text)
         min_quality_tier: Final = self._extract_min_quality_tier(request_kwargs)
-        chosen_model: Final = await self.pick_model(request_type=request_type, min_quality_tier=min_quality_tier)
+        chosen_model: Final = await self.pick_model(
+            request_type=request_type,
+            min_quality_tier=min_quality_tier,
+            prompt=user_text,
+        )
         verbose_router_logger.debug(
             "AdaptiveRouter[%s]: classified=%s -> chose %s",
             self.router_name,
@@ -228,7 +240,7 @@ class AdaptiveRouter:
                 router_model_name=self.router_name,
                 router_type="adaptive",
                 routed_model=chosen_model,
-                cause="bandit",
+                cause="heuristic_scorer" if self._tier_predictor else "bandit",
                 request_type=request_type.value,
             ),
         )
@@ -239,8 +251,13 @@ class AdaptiveRouter:
         self,
         request_type: RequestType,
         min_quality_tier: int | None = None,
+        prompt: str | None = None,
     ) -> str:
         """Thompson-sample across eligible models. Stateless per-turn."""
+        if self._tier_predictor is not None and prompt is not None:
+            prediction: Final = self._tier_predictor.predict(prompt, request_type)
+            required_tier: Final = max(prediction.required_tier, min_quality_tier or 1)
+            return self._pick_tier_model(required_tier)
         eligible: Final = self._eligible_models(min_quality_tier)
         if not eligible:
             raise ValueError(f"AdaptiveRouter[{self.router_name}]: no models meet min_quality_tier={min_quality_tier}")
@@ -254,6 +271,24 @@ class AdaptiveRouter:
             cost_weight=self.config.weights.cost,
             exploration_rate=self.config.exploration_rate,
         )
+
+    def _pick_tier_model(self, required_tier: int) -> str:
+        available_tiers: Final = sorted(
+            frozenset(
+                (self.model_to_prefs.get(model) or _default_prefs()).quality_tier
+                for model in self.config.available_models
+                if (self.model_to_prefs.get(model) or _default_prefs()).quality_tier >= required_tier
+            )
+        )
+        if not available_tiers:
+            raise ValueError(f"AdaptiveRouter[{self.router_name}]: no models meet required tier {required_tier}")
+        selected_tier: Final = available_tiers[0]
+        eligible: Final = tuple(
+            model
+            for model in self.config.available_models
+            if (self.model_to_prefs.get(model) or _default_prefs()).quality_tier == selected_tier
+        )
+        return min(eligible, key=lambda model: (self.model_to_cost.get(model, float("inf")), model))
 
     async def get_state_snapshot(self) -> dict[str, Any]:
         """In-memory snapshot for the introspection endpoint. Cheap; no DB hit."""
@@ -285,6 +320,9 @@ class AdaptiveRouter:
                 "cost": self.config.weights.cost,
             },
             "exploration_rate": self.config.exploration_rate,
+            "tier_routing_threshold": (
+                self._tier_predictor.routing_threshold if self._tier_predictor is not None else None
+            ),
             "model_costs": dict(self.model_to_cost),
             "cells": cells,
             "feedback_contexts_live": feedback_contexts_live,

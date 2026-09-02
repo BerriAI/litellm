@@ -39,6 +39,7 @@ model_list:
       adaptive_router_default_model: gpt-4o-mini
       adaptive_router_config:
         available_models: ["gpt-4o", "gpt-4o-mini"]
+        tier_artifact: ultrafeedback
         exploration_rate: 0.05
         weights:
           quality: 0.7
@@ -47,6 +48,47 @@ model_list:
 
 Callers may pass header `x-litellm-min-quality-tier: 3` (or metadata key
 `min_quality_tier: 3`) to force selection from tier-3-or-higher models only.
+
+## Tier probability routing
+
+Set `tier_artifact: ultrafeedback` to use the bundled model-agnostic classifier
+instead of model-specific bandit scores. Tier 1 is simple, tier 2 is medium,
+tier 3 is complex, and tier 4 is reasoning. Each model only needs a
+`quality_tier` assignment, so a new or private model works without model-specific
+training data
+
+For each prompt, the classifier estimates success probability at all four tiers
+from global tier quality, request-type quality, and a deterministic similar-prompt
+cohort. The probabilities are forced to be monotonic. The router picks the first
+tier whose probability reaches the trained threshold, then picks the cheapest
+configured model in that tier. If the tier has no model, it falls upward to the
+next configured tier
+
+The bundled artifact was trained on 255,864 MIT-licensed UltraFeedback response
+scores. Prompt hashes created a 70% training, 15% validation, and 15% untouched
+test split. Success means `overall_score >= 4`. Validation selected domain prior
+mass 200, cohort prior mass 20, and routing threshold 0.75
+
+On 38,132 held-out response outcomes, the artifact reached Brier score 0.09675,
+log loss 0.32813, and expected calibration error 0.00188. On 660 held-out prompts
+with outcomes in every tier, it reached 0.84646 observed success at 1.5045 relative
+tier cost. Always-simple reached 0.80101 success at cost 1, while always-reasoning
+reached 0.98636 at cost 8
+
+To train another artifact, create JSONL with `prompt`, numeric `tier`, and
+`success` from 0 through 1, then run:
+
+```shell
+python -m litellm.router_strategy.adaptive_router.tier_training records.jsonl \
+  --artifact-output tier-artifact.json \
+  --dataset-name DATASET \
+  --dataset-url DATASET_URL \
+  --dataset-license LICENSE \
+  --success-definition "grader score >= 4"
+```
+
+The command tunes shrinkage masses and the quality-cost threshold on validation
+only, writes the artifact, and prints held-out calibration and routing benchmarks
 
 ## Seed quality from offline evaluations
 

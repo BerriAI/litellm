@@ -72,7 +72,11 @@ class EvaluationCompletion:
 
 
 EvaluationCompletionFunction = Callable[
-    [str, tuple[EvaluationMessage, ...], type[BaseModel] | None],
+    [
+        str,
+        tuple[EvaluationMessage, ...],
+        type[BaseModel] | None,
+    ],  # mutable-ok: Callable argument syntax requires a list
     Awaitable[EvaluationCompletion],
 ]
 
@@ -98,7 +102,9 @@ async def litellm_evaluation_completion(
 ) -> EvaluationCompletion:
     response: Final = await litellm.acompletion(  # pyright: ignore[reportUnknownMemberType]  # legacy API parameters
         model=model,
-        messages=[message.model_dump() for message in messages],
+        messages=[  # mutable-ok: LiteLLM completion expects a message list
+            message.model_dump() for message in messages
+        ],
         response_format=response_schema,
         temperature=0,
         stream=False,
@@ -117,7 +123,7 @@ def _judge_messages(
     candidate_answer: str,
 ) -> tuple[EvaluationMessage, ...]:
     payload: Final = json.dumps(
-        {
+        {  # mutable-ok: JSON serialization requires a plain object
             "prompt": case.prompt,
             "candidate_answer": candidate_answer,
             "reference_answer": case.reference_answer,

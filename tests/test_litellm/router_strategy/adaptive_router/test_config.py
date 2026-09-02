@@ -5,6 +5,8 @@ from litellm.types.router import (
     AdaptiveRouterConfig,
     AdaptiveRouterEvaluationPrior,
     AdaptiveRouterPreferences,
+    AdaptiveRouterTierArtifact,
+    AdaptiveRouterTierGlobalStatistic,
     AdaptiveRouterWeights,  # noqa: F401  # imported per spec, exercised transitively
     RequestType,
 )
@@ -34,11 +36,25 @@ def test_config_weights_must_sum_to_one():
         )
 
 
-def test_config_quality_tier_must_be_1_2_or_3():
+def test_config_quality_tier_must_be_1_through_4():
+    assert AdaptiveRouterPreferences(quality_tier=4, strengths=[]).quality_tier == 4
     with pytest.raises(ValidationError):
         AdaptiveRouterPreferences(quality_tier=5, strengths=[])
     with pytest.raises(ValidationError):
         AdaptiveRouterPreferences(quality_tier=0, strengths=[])
+
+
+def test_tier_artifact_requires_all_four_global_tiers():
+    with pytest.raises(ValidationError, match="each tier exactly once"):
+        AdaptiveRouterTierArtifact(
+            global_statistics=(AdaptiveRouterTierGlobalStatistic(tier=1, successes=8, observations=10),)
+        )
+
+
+def test_config_accepts_builtin_tier_artifact():
+    config = AdaptiveRouterConfig(available_models=["model"], tier_artifact="ultrafeedback")
+
+    assert config.tier_artifact == "ultrafeedback"
 
 
 def test_config_accepts_all_six_request_types_in_strengths():
