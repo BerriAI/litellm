@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import zipfile
+from collections.abc import Awaitable, Callable
 from http.client import HTTPMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -253,11 +254,100 @@ async def exercise_async_concurrency(native: object, api_base: str) -> None:
         assert_success("messages", response)
 
 
+def streaming_route_kwargs(route: str) -> dict[str, object]:
+    if route == "chat_completions":
+        return {
+            "request": {
+                "model": "claude-sonnet-4-5",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": True,
+            },
+            "provider": "anthropic",
+        }
+    if route == "messages":
+        return {
+            "request": {
+                "model": "claude-sonnet-4-5",
+                "messages": [{"role": "user", "content": "hello"}],
+                "max_tokens": 16,
+                "stream": True,
+            },
+            "provider": "anthropic",
+        }
+    if route == "responses":
+        return {
+            "request": {"model": "gpt-5", "input": "hello", "stream": True},
+            "provider": "openai",
+        }
+    raise AssertionError(f"unknown streaming route: {route}")
+
+
+def assert_streaming_decline(native: object, operation: Callable[[], object]) -> None:
+    try:
+        operation()
+    except native.RustBridgeDeclined:
+        return
+    raise AssertionError("disabled native streaming route did not decline")
+
+
+async def assert_async_streaming_decline(
+    native: object,
+    operation: Callable[[], Awaitable[object]],
+) -> None:
+    try:
+        await operation()
+    except native.RustBridgeDeclined:
+        return
+    raise AssertionError("disabled async native streaming route did not decline")
+
+
+def exercise_disabled_streaming_surface(native: object) -> None:
+    expected: Final = (
+        "ChatCompletionsEventStream",
+        "MessagesEventStream",
+        "ResponsesEventStream",
+        "ResponsesWebSocketSession",
+        "chat_completions_stream",
+        "achat_completions_stream",
+        "messages_stream",
+        "amessages_stream",
+        "responses_stream",
+        "aresponses_stream",
+    )
+    for name in expected:
+        if not hasattr(native, name):
+            raise AssertionError(f"packaged native bridge is missing {name}")
+
+    for route in ("chat_completions", "messages", "responses"):
+        function: Final = getattr(native, f"{route}_stream")
+        kwargs: Final = streaming_route_kwargs(route)
+        assert_streaming_decline(
+            native,
+            lambda function=function, kwargs=kwargs: function(**kwargs),
+        )
+
+    async def exercise_async_surface() -> None:
+        for route in ("chat_completions", "messages", "responses"):
+            function: Final = getattr(native, f"a{route}_stream")
+            kwargs: Final = streaming_route_kwargs(route)
+            await assert_async_streaming_decline(
+                native,
+                lambda function=function, kwargs=kwargs: function(**kwargs),
+            )
+        await assert_async_streaming_decline(
+            native,
+            lambda: native.ResponsesWebSocketSession.connect(provider="openai"),
+        )
+
+    asyncio.run(exercise_async_surface())
+
+
 def exercise_routes(native_path: Path, api_base: str) -> object:
     native: Final = load_native(native_path)
     exercise_sync(native, api_base)
     asyncio.run(exercise_async(native, api_base))
     asyncio.run(exercise_async_concurrency(native, api_base))
+    exercise_disabled_streaming_surface(native)
     return native
 
 
