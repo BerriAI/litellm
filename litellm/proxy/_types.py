@@ -422,6 +422,9 @@ class LiteLLMRoutes(enum.Enum):
         "/responses/{response_id}/cancel",
         "/v1/responses/{response_id}/cancel",
         "/openai/v1/responses/{response_id}/cancel",
+        "/responses/input_tokens",
+        "/v1/responses/input_tokens",
+        "/openai/v1/responses/input_tokens",
         # vector stores
         "/vector_stores",
         "/v1/vector_stores",
@@ -471,6 +474,7 @@ class LiteLLMRoutes(enum.Enum):
         "/vllm",
         "/mistral",
         "/milvus",
+        "/gigachat",
         "/watsonx",
     ]
 
@@ -1211,6 +1215,13 @@ class GenerateKeyRequest(KeyRequestBase):
     )
     organization_id: str | None = None
     project_id: str | None = None
+
+    @field_validator("team_id", mode="before")
+    @classmethod
+    def treat_cleared_team_id_as_unset(cls, v: object) -> object:
+        if v == "":
+            return None
+        return v
 
 
 class GenerateKeyResponse(KeyRequestBase):
@@ -2432,9 +2443,22 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     database_socket_timeout: float | None = Field(
         None,
         description=(
-            "Prisma `socket_timeout` URL param (seconds). When set, an idle/slow "
-            "connection that has not produced data within this window is closed. "
-            "This is the main knob for capping idle DB connections from LiteLLM."
+            "Prisma `socket_timeout` URL param (seconds). When set, an in-flight "
+            "operation that has not produced data within this window is aborted. "
+            "For capping how long idle pooled connections are kept, see "
+            "`database_max_idle_connection_lifetime`."
+        ),
+    )
+    database_max_idle_connection_lifetime: float | None = Field(
+        60,
+        description=(
+            "Prisma `max_idle_connection_lifetime` URL param (seconds). A pooled "
+            "connection idle longer than this is closed and replaced instead of "
+            "being handed to the next request. Defaults to 60 so connections are "
+            "recycled before common infra idle timeouts (AWS NLB / RDS Proxy "
+            "~350s, many LBs 60-350s) silently drop them and requests fail with "
+            "`Error { kind: Closed }`. A value pinned on the DATABASE_URL or set "
+            "via `database_extra_connection_params` takes precedence."
         ),
     )
     database_extra_connection_params: dict[str, Any] | None = Field(
@@ -2541,7 +2565,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     alerting: list | None = Field(
         None,
-        description="List of alerting integrations. Today, just slack - `alerting: ['slack']`",
+        description="List of alerting integrations - e.g. `alerting: ['slack', 'webhook', 'email']`. 'slack' posts Slack-format messages to any Slack-compatible webhook (Slack, Rocket.Chat, Mattermost); 'webhook' posts structured JSON budget alerts to WEBHOOK_URL",
     )
     alert_types: list[AlertType] | None = Field(
         None,
@@ -3549,6 +3573,19 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
     )
 
 
+class SpendLogsRouterMetadata(TypedDict):
+    """
+    Router provenance stamped on spend logs for deployments flagged with
+    model_info.internal_router_model, correlating the requested model group
+    with the provider deployment that served the call
+    """
+
+    requested_model: ReadOnly[str | None]
+    selected_model: ReadOnly[str | None]
+    selected_provider: ReadOnly[str | None]
+    router_correlation_id: ReadOnly[str | None]
+
+
 class SpendLogsMetadata(TypedDict):
     """
     Specific metadata k,v pairs logged to spendlogs for easier cost tracking
@@ -3591,6 +3628,7 @@ class SpendLogsMetadata(TypedDict):
     compression_savings: CompressionSavingsMetadata | None
     autorouter_savings: ReadOnly[float | None]  # stamped by the logging payload; None = not auto-routed
     litellm_gateway_injected_cache: ReadOnly[str | None]
+    router_metadata: ReadOnly[SpendLogsRouterMetadata | None]  # None = deployment not flagged internal_router_model
 
 
 class SpendLogsPayload(TypedDict):

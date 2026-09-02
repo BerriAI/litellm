@@ -213,6 +213,20 @@ describe("Sidebar (leftnav)", () => {
       expect(screen.getByText("Search Tools")).toBeInTheDocument();
     });
   });
+  it("reports whether a nested tab is expanded", async () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    const toggle = screen.getByText("Tools").closest("button")!;
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    act(() => {
+      fireEvent.click(toggle);
+    });
+    await waitFor(() => {
+      expect(toggle).toHaveAttribute("aria-expanded", "true");
+    });
+  });
+
   it("keeps Router Settings as a single Settings child", () => {
     // Router Settings is admin-only, so getAvailablePages() filters it out entirely and the
     // page_utils duplicate-key guard cannot see it. Walk menuGroups directly, otherwise a
