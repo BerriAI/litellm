@@ -305,7 +305,7 @@ async def _raise_if_heuristic_v2_slot_taken(
     existing_params: GenericLiteLLMParams | None,
     current_model_id: str | None = None,
 ) -> None:
-    """Allow at most one persisted heuristic-v2 complexity router per proxy."""
+    """Allow at most one heuristic-v2 complexity router per proxy."""
     effective_config: Final = _effective_complexity_router_config(incoming_params, existing_params)
     if not uses_heuristic_v2(effective_config):
         return
@@ -320,9 +320,12 @@ async def _raise_if_heuristic_v2_slot_taken(
             code=status.HTTP_403_FORBIDDEN,
             param="litellm_params.complexity_router_config.classifier_type",
         )
+    from litellm.proxy.proxy_server import llm_router
+
     rows: Final = await _proxy_model_table(prisma_client).find_many(where={})
     violation: Final = _heuristic_v2_slot_violation(
         persisted_rows=rows,
+        live_model_list=llm_router.model_list if llm_router is not None else (),
         incoming_params=incoming_params,
         existing_params=existing_params,
         current_model_id=current_model_id,
@@ -350,6 +353,7 @@ def _heuristic_v2_admin_violation(*, effective_config: Mapping[str, object] | No
 def _heuristic_v2_slot_violation(
     *,
     persisted_rows: Sequence[_ProxyModelRow],
+    live_model_list: Sequence[Mapping[str, object]] = (),
     incoming_params: GenericLiteLLMParams | None,
     existing_params: GenericLiteLLMParams | None,
     current_model_id: str | None = None,
@@ -358,6 +362,18 @@ def _heuristic_v2_slot_violation(
     effective_config: Final = _effective_complexity_router_config(incoming_params, existing_params)
     if not uses_heuristic_v2(effective_config):
         return None
+    for deployment in live_model_list:
+        model_info = deployment.get("model_info")
+        if isinstance(model_info, Mapping) and model_info.get("db_model") is True:
+            continue
+        litellm_params = _litellm_params_mapping(deployment.get("litellm_params"))
+        live_config = litellm_params.get("complexity_router_config")
+        if uses_heuristic_v2(live_config if isinstance(live_config, Mapping) else None):
+            return (
+                "Only one complexity router can use classifier_type='heuristic_v2' per proxy. "
+                "A config.yaml deployment already uses the slot; change or remove it before "
+                "creating a database-backed heuristic_v2 router."
+            )
     for row in persisted_rows:
         if current_model_id is not None and row.model_id == current_model_id:
             continue
