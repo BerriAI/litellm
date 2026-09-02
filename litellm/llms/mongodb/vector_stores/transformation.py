@@ -338,9 +338,9 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
             vector_store_id, self._embedding_vector(embedding_response), params, vector_store_search_optional_params
         )
 
-        client: Final = self.sync_client_factory(key)
-        target: Final = client[database][collection]  # pyright: ignore[reportIndexIssue]  # factory is typed as returning object so injected doubles are accepted
         try:
+            client: Final = self.sync_client_factory(key)
+            target: Final = client[database][collection]  # pyright: ignore[reportIndexIssue]  # factory is typed as returning object so injected doubles are accepted
             documents: Final = list(target.aggregate(pipeline))
         except Exception as e:
             raise translate_mongo_error(
@@ -382,9 +382,9 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
             vector_store_id, self._embedding_vector(embedding_response), params, vector_store_search_optional_params
         )
 
-        client: Final = self.async_client_factory(key)
-        target: Final = client[database][collection]  # pyright: ignore[reportIndexIssue]  # factory is typed as returning object so injected doubles are accepted
         try:
+            client: Final = self.async_client_factory(key)
+            target: Final = client[database][collection]  # pyright: ignore[reportIndexIssue]  # factory is typed as returning object so injected doubles are accepted
             cursor: Final = await target.aggregate(pipeline)
             documents: Final = [document async for document in cursor]
         except Exception as e:

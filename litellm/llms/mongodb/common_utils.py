@@ -121,6 +121,8 @@ _UNAUTHORIZED_CODE: Final = 13
 # Atlas reports a rejected user as code 8000 "AtlasError" rather than 18, so the
 # message is the only reliable signal for a serverless or shared-tier deployment.
 _AUTHENTICATION_MESSAGE_MARKERS: Final = ("bad auth", "authentication failed", "not authorized")
+_RESOLUTION_TIMEOUT_MARKERS: Final = ("resolution lifetime expired", "dns operation timed out")
+_UNKNOWN_HOSTNAME_MARKERS: Final = ("dns query name does not exist", "name or service not known")
 
 
 def _index_hint(index_name: str, database: str, collection: str) -> str:
@@ -206,6 +208,18 @@ def translate_mongo_error(error: Exception, index_name: str, database: str, coll
             f"'{index_name}'. Driver detail: {error}"
         )
     if isinstance(error, ConfigurationError):
+        configuration_detail: Final = str(error).lower()
+        if any(marker in configuration_detail for marker in _RESOLUTION_TIMEOUT_MARKERS):
+            return timeout_error(
+                "The DNS lookup for the cluster in mongodb_connection_string did not finish in time. "
+                "A mongodb+srv:// URI needs an SRV lookup before any connection is attempted, so this "
+                f"is DNS or the configured timeout, not MongoDB. Driver detail: {error}"
+            )
+        if any(marker in configuration_detail for marker in _UNKNOWN_HOSTNAME_MARKERS):
+            return config_error(
+                "The cluster hostname in mongodb_connection_string does not exist in DNS. Check the "
+                f"cluster name against the URI Atlas shows under Connect, Drivers. Driver detail: {error}"
+            )
         return config_error(
             "mongodb_connection_string is not a usable MongoDB connection string. "
             f"Driver detail: {error}"
