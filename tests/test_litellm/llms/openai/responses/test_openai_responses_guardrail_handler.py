@@ -1249,6 +1249,52 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
             )
 
     @pytest.mark.asyncio
+    async def test_output_item_done_last_rewrite_with_delivery_expected_fails_closed(self):
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        handler = OpenAIResponsesHandler()
+        events = self._ended_stream_events()[:-1]
+
+        with pytest.raises(UndeliverableStreamRewrite):
+            await handler.process_output_streaming_response(
+                responses_so_far=events,
+                guardrail_to_apply=self._masking_guardrail(),
+                litellm_logging_obj=None,
+                deliver_ended_stream_rewrites=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_output_item_done_last_scans_text_with_delivery_expected(self):
+        handler = OpenAIResponsesHandler()
+        events = self._ended_stream_events()[:-1]
+        guardrail = MockRecordingGuardrail(guardrail_name="test")
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is events
+        assert [inputs.get("texts") for inputs in guardrail.seen_inputs] == [["hello world"]]
+
+    @pytest.mark.asyncio
+    async def test_output_item_done_last_without_delivery_expected_skips_text(self):
+        handler = OpenAIResponsesHandler()
+        events = self._ended_stream_events()[:-1]
+        guardrail = MockRecordingGuardrail(guardrail_name="test")
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        assert result is events
+        assert guardrail.seen_inputs == []
+
+    @pytest.mark.asyncio
     async def test_fallback_rewrite_without_delivery_expected_does_not_raise(self):
         handler = OpenAIResponsesHandler()
         events = [

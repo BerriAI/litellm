@@ -328,6 +328,52 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
 
         assert chunks == original
 
+    @pytest.mark.asyncio
+    async def test_unended_stream_rewrite_with_delivery_expected_fails_closed(self):
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        handler = AnthropicMessagesHandler()
+        chunks = self._ended_sse_chunks()[:-2]
+
+        with pytest.raises(UndeliverableStreamRewrite):
+            await handler.process_output_streaming_response(
+                responses_so_far=chunks,
+                guardrail_to_apply=self._masking_guardrail(),
+                litellm_logging_obj=MagicMock(),
+                deliver_ended_stream_rewrites=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_unended_stream_without_rewrite_is_released_with_delivery_expected(self):
+        handler = AnthropicMessagesHandler()
+        chunks = self._ended_sse_chunks()[:-2]
+        original = [bytes(chunk) for chunk in chunks]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=MockPassThroughGuardrail(guardrail_name="test"),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is chunks
+        assert chunks == original
+
+    @pytest.mark.asyncio
+    async def test_unended_stream_rewrite_without_delivery_expected_does_not_raise(self):
+        handler = AnthropicMessagesHandler()
+        chunks = self._ended_sse_chunks()[:-2]
+        original = [bytes(chunk) for chunk in chunks]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert result is chunks
+        assert chunks == original
+
 
 class TestAnthropicMessagesHandlerInputProcessing:
     """Test input processing preserves litellm_metadata for dynamic guardrails."""
