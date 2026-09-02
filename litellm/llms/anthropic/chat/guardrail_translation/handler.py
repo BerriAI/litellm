@@ -100,16 +100,6 @@ InputWriteBackTarget = (
 )
 
 
-class _SSEDelta(TypedDict, total=False):
-    type: ReadOnly[str]
-    text: ReadOnly[str]
-    stop_reason: ReadOnly[str | None]
-
-
-class _SSEEventData(TypedDict, total=False):
-    delta: ReadOnly[_SSEDelta]
-
-
 def _as_str_mapping(value: Mapping[str, object]) -> Mapping[str, object]:
     return value
 
@@ -155,6 +145,16 @@ class ExtractedInput:
 
 
 EMPTY_EXTRACTED_INPUT: Final = ExtractedInput(scanned=(), images=())
+
+
+class _AnthropicSSEDelta(TypedDict, total=False):
+    type: ReadOnly[str]
+    text: ReadOnly[str]
+    stop_reason: ReadOnly[str | None]
+
+
+class _AnthropicSSEEvent(TypedDict, total=False):
+    delta: ReadOnly[_AnthropicSSEDelta]
 
 
 class AnthropicMessagesHandler(BaseTranslation):
@@ -1247,8 +1247,8 @@ class AnthropicMessagesHandler(BaseTranslation):
                 # Only process content_block_delta events
                 if event_type == "content_block_delta" and data_line:
                     try:
-                        data: _SSEEventData = json.loads(data_line)
-                        delta = data.get("delta", {})
+                        data: _AnthropicSSEEvent = json.loads(data_line)
+                        delta: _AnthropicSSEDelta = data.get("delta", {})
                         if delta.get("type") == "text_delta":
                             text += delta.get("text", "")
                     except json.JSONDecodeError:
@@ -1310,9 +1310,9 @@ class AnthropicMessagesHandler(BaseTranslation):
                         # Check for message_delta event with stop_reason
                         if event_type == "message_delta" and data_line:
                             try:
-                                data: _SSEEventData = json.loads(data_line)
-                                delta = data.get("delta", {})
-                                stop_reason = delta.get("stop_reason")
+                                data: _AnthropicSSEEvent = json.loads(data_line)
+                                delta: _AnthropicSSEDelta = data.get("delta", {})
+                                stop_reason: str | None = delta.get("stop_reason")
                                 if stop_reason is not None:
                                     return True
                             except json.JSONDecodeError:

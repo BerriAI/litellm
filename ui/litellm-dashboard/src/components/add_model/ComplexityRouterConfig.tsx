@@ -4,6 +4,9 @@ import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ChevronRight, Info, Plus, Trash2, X } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
+
+import { AffinityControls } from "./AffinityControls";
+import { ModalityRoutingControls } from "./ModalityRoutingControls";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
@@ -55,6 +58,16 @@ export const DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS = 8000;
 export const MIN_QUOTED_CONTEXT_TURN_CHARS = 120;
 export const DEFAULT_SESSION_AFFINITY = false;
 export const DEFAULT_DEPLOYMENT_AFFINITY = true;
+
+export type ClassificationMode = "every_request" | "user_turn";
+
+export const DEFAULT_CLASSIFICATION_MODE: ClassificationMode = "every_request";
+
+/**
+ * One operator-facing choice over the two wire fields that share the router's tier-pin machinery:
+ * session affinity pins every turn, user_turn pins every turn except a new human ask.
+ */
+export type ClassificationFrequency = ClassificationMode | "session";
 
 export type ComplexityTiers = {
   SIMPLE: string[];
@@ -384,7 +397,9 @@ export interface ComplexityRouterConfigValue {
   classification_prompt?: string;
   /** Highest tier the scorer may decide alone under heuristic_first. Required by that type, rejected by the others. */
   heuristic_first_max_tier?: string;
+  classification_mode?: ClassificationMode;
   session_affinity?: boolean;
+  modality_routing?: boolean;
   deployment_affinity?: boolean;
   /** Plan-mode floor as a tier ROW ID, unset meaning off. The wire carries the row's name. */
   plan_mode_min_tier?: string;
@@ -419,6 +434,21 @@ export interface ComplexityRouterConfigValue {
    */
   tier_model_params?: TierModelParamsByTier;
 }
+
+/** Session affinity wins where a hand-authored config sets both, matching the backend's own `or`. */
+export const classificationFrequency = (value: ComplexityRouterConfigValue): ClassificationFrequency => {
+  if (!value.custom_tier_set && (value.session_affinity ?? DEFAULT_SESSION_AFFINITY)) return "session";
+  return value.classification_mode === "user_turn" ? "user_turn" : "every_request";
+};
+
+export const withClassificationFrequency = (
+  value: ComplexityRouterConfigValue,
+  frequency: ClassificationFrequency,
+): ComplexityRouterConfigValue => ({
+  ...value,
+  classification_mode: frequency === "user_turn" ? "user_turn" : "every_request",
+  session_affinity: frequency === "session",
+});
 
 interface ComplexityRouterConfigProps {
   modelInfo: ModelGroup[];
@@ -484,39 +514,6 @@ export const DEFAULT_HEURISTIC_FIRST_MAX_TIER = "SIMPLE";
  * circuit every request and leave the classifier unreachable, which the backend rejects.
  */
 export const HEURISTIC_FIRST_MAX_TIER_KEYS = TIER_KEYS.slice(0, -1);
-
-const AffinityControls: React.FC<{
-  value: ComplexityRouterConfigValue;
-  onChange: (value: ComplexityRouterConfigValue) => void;
-}> = ({ value, onChange }) => (
-  <>
-    <div className="flex items-center gap-2 mb-2">
-      <Switch
-        checked={value.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY}
-        onCheckedChange={(deploymentAffinity) => onChange({ ...value, deployment_affinity: deploymentAffinity })}
-        aria-label="Pin a session to one deployment per model group"
-      />
-      <strong className="font-semibold">Pin a session to one deployment per model group</strong>
-    </div>
-    <span className="block text-xs mb-3 text-muted-foreground">
-      Keeps a session on the same deployment within a group, so provider prompt caches stay warm. Turn off to
-      load-balance every turn.
-    </span>
-    <div className="flex items-center gap-2 mb-2">
-      <Switch
-        checked={value.custom_tier_set ? false : value.session_affinity ?? DEFAULT_SESSION_AFFINITY}
-        disabled={Boolean(value.custom_tier_set)}
-        onCheckedChange={(sessionAffinity) => onChange({ ...value, session_affinity: sessionAffinity })}
-        aria-label="Pin a session to its first model"
-      />
-      <strong className="font-semibold">Pin a session to its first model</strong>
-    </div>
-    <span className="block text-xs text-muted-foreground">
-      {restrictedBy(value, "sessionAffinity")?.reason ??
-        "Keeps a session on its first turn's model instead of re-classifying each turn. Also pins the deployment."}
-    </span>
-  </>
-);
 
 const PlanModeOverrideControls: React.FC<{
   value: ComplexityRouterConfigValue;
@@ -827,6 +824,11 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             key: "affinity",
             label: <strong className="text-foreground font-semibold">Advanced: Affinity</strong>,
             children: <AffinityControls value={value} onChange={onChange} />,
+          },
+          {
+            key: "modality",
+            label: <strong className="text-foreground font-semibold">Advanced: Modality Routing</strong>,
+            children: <ModalityRoutingControls value={value} onChange={onChange} />,
           },
           {
             key: "plan-mode",

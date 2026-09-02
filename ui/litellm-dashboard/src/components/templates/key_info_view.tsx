@@ -895,7 +895,7 @@ export default function KeyInfoView({
 
                   <div>
                     <p className="text-sm font-medium">Budget Reset</p>
-                    <p className="text-sm">
+                    <p data-testid="budget-reset-value" className="text-sm">
                       {currentKeyData.budget_reset_at
                         ? `${currentKeyData.budget_duration ? `Every ${currentKeyData.budget_duration}, next ` : ""}${formatTimestamp(currentKeyData.budget_reset_at)}`
                         : "Never"}
