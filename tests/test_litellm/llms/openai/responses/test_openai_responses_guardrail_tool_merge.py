@@ -9,6 +9,7 @@ from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GuardrailToolParam
 
 
 def _groups(tools):
@@ -164,6 +165,28 @@ def test_guardrail_output_is_read_once():
     merged = merge_guardrailed_tools(original, groups, (chat_tool for chat_tool in _flat(groups)))
 
     assert list(merged) == original
+
+
+def test_pydantic_guardrail_tools_round_trip_like_dicts():
+    original = [_function("a"), {"type": "namespace", "name": "ns", "tools": [_function("x", "X doc")]}]
+    groups = _groups(original)
+    models = [GuardrailToolParam.model_validate(chat_tool) for chat_tool in _flat(groups)]
+
+    merged = merge_guardrailed_tools(original, groups, models)
+
+    assert list(merged) == original
+    assert all(merged_tool is original_tool for merged_tool, original_tool in zip(merged, original))
+
+
+def test_pydantic_guardrail_edit_lands_on_the_member():
+    original = [{"type": "namespace", "name": "ns", "tools": [_function("x", "X doc")]}]
+    groups = _groups(original)
+    edited = copy.deepcopy(_flat(groups))
+    edited[0]["function"]["description"] = "EDITED"
+
+    merged = merge_guardrailed_tools(original, groups, [GuardrailToolParam.model_validate(edited[0])])
+
+    assert list(merged) == [{"type": "namespace", "name": "ns", "tools": [_function("x", "EDITED")]}]
 
 
 def test_non_object_guardrail_items_are_dropped():

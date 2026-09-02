@@ -3,7 +3,7 @@ from itertools import accumulate, chain, groupby
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -19,8 +19,9 @@ _CHAT_TOOL_TOP_LEVEL_KEYS: Final = frozenset({"type", "function"})
 
 
 def _as_tool(value: object) -> Tool | None:
+    candidate: Final = value.model_dump(exclude_unset=True) if isinstance(value, BaseModel) else value
     try:
-        return _TOOL_ADAPTER.validate_python(value)
+        return _TOOL_ADAPTER.validate_python(candidate)
     except ValidationError:
         return None
 
