@@ -11993,3 +11993,55 @@ class TestPreRoutingTierDrivesFallbacks:
         response = await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
 
         assert response.choices[0].message.content == "from backup-b"
+
+
+@pytest.mark.asyncio
+async def test_prompt_management_factory_marks_injection_for_every_deployment(monkeypatch):
+    """The factory stamps a provisional deployment's model_info into kwargs before the
+    prompt pass runs, then routes on the returned model, so any deployment can end up
+    billed. An injection recorded there must carry the every-deployment sentinel, never
+    the provisional deployment's id, or a differently-billed deployment loses the credit."""
+    import time
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "cached-claude",
+                "litellm_params": {
+                    "model": "anthropic_cache_control_hook/claude-sonnet-5",
+                    "prompt_id": "cache-points",
+                },
+                "model_info": {"id": "provisional-dep"},
+            }
+        ]
+    )
+    captured: dict = {}
+
+    async def _capture_acompletion(**kwargs):
+        captured.update(kwargs)
+        return litellm.ModelResponse()
+
+    monkeypatch.setattr(litellm, "acompletion", _capture_acompletion)
+    logging_obj = LiteLLMLogging(
+        model="cached-claude",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="lit-6445",
+        function_id="f",
+    )
+    await router.acompletion(
+        model="cached-claude",
+        messages=[
+            {"role": "system", "content": "a static system prompt"},
+            {"role": "user", "content": "hi"},
+        ],
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        litellm_logging_obj=logging_obj,
+    )
+    bucket = captured.get("litellm_metadata") or captured["metadata"]
+    assert captured["model_info"]["id"] == "provisional-dep"
+    assert bucket["litellm_gateway_injected_cache"] == ""

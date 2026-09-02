@@ -4065,6 +4065,7 @@ class Router:
             prompt_variables=prompt_variables,
             prompt_label=prompt_label,
             request_kwargs=kwargs,
+            injected_for_every_deployment=True,
         )
 
         # Filter out prompt management specific parameters from data before merging
