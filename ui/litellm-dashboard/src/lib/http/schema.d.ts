@@ -25381,6 +25381,12 @@ export interface components {
          */
         ConfigGeneralSettings: {
             /**
+             * Admission Queue Timeout Seconds
+             * @description maximum time a request waits for a worker slot
+             * @default 1
+             */
+            admission_queue_timeout_seconds: number;
+            /**
              * Alert To Webhook Url
              * @description Mapping of alert type to webhook url. e.g. `alert_to_webhook_url: {'budget_alerts': 'https://nothooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX'}`
              */
@@ -25574,10 +25580,20 @@ export interface components {
              */
             max_batch_file_size_mb?: number | null;
             /**
+             * Max In Flight Requests Per Worker
+             * @description maximum concurrent requests handled by each worker
+             */
+            max_in_flight_requests_per_worker?: number | null;
+            /**
              * Max Parallel Requests
              * @description maximum parallel requests for each api key
              */
             max_parallel_requests?: number | null;
+            /**
+             * Max Queued Requests Per Worker
+             * @description maximum requests waiting for a worker slot
+             */
+            max_queued_requests_per_worker?: number | null;
             /**
              * Max Request Size Mb
              * @description max request size in MB, if a request is larger than this size it will be rejected
