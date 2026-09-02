@@ -6,6 +6,12 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
+const ENVIRONMENT_ITEMS = [
+  { value: "development", label: "Development" },
+  { value: "staging", label: "Staging" },
+  { value: "production", label: "Production" },
+] as const;
+
 interface PromptEditorHeaderProps {
   promptName: string;
   onNameChange: (name: string) => void;
@@ -57,14 +63,20 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
           style={{ width: "200px" }}
         />
         {version && <Badge>{version}</Badge>}
-        <Select value={environment} onValueChange={(value) => onEnvironmentChange(String(value))}>
+        <Select
+          items={ENVIRONMENT_ITEMS}
+          value={environment}
+          onValueChange={(value) => onEnvironmentChange(String(value))}
+        >
           <SelectTrigger size="sm" className="w-[140px]" aria-label="Environment">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="development">Development</SelectItem>
-            <SelectItem value="staging">Staging</SelectItem>
-            <SelectItem value="production">Production</SelectItem>
+            {ENVIRONMENT_ITEMS.map((item) => (
+              <SelectItem key={item.value} value={item.value}>
+                {item.label}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
         <Badge variant="secondary">Draft</Badge>

@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
@@ -320,6 +320,43 @@ describe("TeamMembersComponent", () => {
 
     expect(mockSetIsEditMemberModalVisible).toHaveBeenCalledWith(true);
     expect(mockSetSelectedEditMember).toHaveBeenCalled();
+  });
+
+  it("keeps a member's stored 0 limits as 0 in the table and in the edit payload, never unlimited", async () => {
+    const user = userEvent.setup();
+    vi.mocked(isProxyAdminRole).mockReturnValue(true);
+    const baseTeamData = createMockTeamData();
+    const teamData = {
+      ...baseTeamData,
+      team_memberships: baseTeamData.team_memberships.map((membership, index) =>
+        index === 0
+          ? {
+              ...membership,
+              litellm_budget_table: { ...membership.litellm_budget_table, max_budget: 0, tpm_limit: 0, rpm_limit: 0 },
+            }
+          : membership,
+      ),
+    };
+
+    renderWithProviders(
+      <TeamMembersComponent
+        teamData={teamData}
+        canEditTeam={true}
+        handleMemberDelete={mockHandleMemberDelete}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />,
+    );
+
+    const memberRow = screen.getByRole("row", { name: /user1@test\.com/ });
+    expect(within(memberRow).getByText("0 RPM / 0 TPM")).toBeInTheDocument();
+    expect(within(memberRow).queryByText("No Limits")).not.toBeInTheDocument();
+
+    await user.click(within(memberRow).getByTestId("edit-member"));
+
+    const zeroLimitsMember = { user_id: "user1@test.com", max_budget_in_team: 0, tpm_limit: 0, rpm_limit: 0 };
+    expect(mockSetSelectedEditMember).toHaveBeenCalledWith(expect.objectContaining(zeroLimitsMember));
   });
 
   it("should call setIsAddMemberModalVisible when Add Member button is clicked", async () => {

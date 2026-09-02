@@ -5,13 +5,10 @@ the implicit `"default"` group driven by the router's top-level
 `routing_strategy` / `routing_strategy_args`.
 """
 
-import os
-import sys
 from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm import Router

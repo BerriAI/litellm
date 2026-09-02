@@ -6,8 +6,6 @@ an SSRF primitive — guarded centrally in ``litellm_pre_call_utils`` so SDK
 users keep working but proxy users default-deny.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -20,7 +18,6 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_litellm_data_to_request,
 )
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 
 class TestRejectUrlValuedDestinations:

@@ -391,7 +391,7 @@ async def test_no_failover_when_flag_off():
         # enable_weighted_failover defaults to False
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(litellm.InternalServerError):
         await router.acompletion(
             model="test-model",
             messages=[{"role": "user", "content": "hi"}],
@@ -515,7 +515,7 @@ async def test_failover_exhausted_raises_original_error_class():
         enable_weighted_failover=True,
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(litellm.InternalServerError):
         await router.acompletion(
             model="test-model",
             messages=[{"role": "user", "content": "hi"}],
@@ -648,7 +648,7 @@ async def test_failover_skipped_for_non_simple_shuffle():
         enable_weighted_failover=True,
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(litellm.InternalServerError):
         await router.acompletion(
             model="test-model",
             messages=[{"role": "user", "content": "hi"}],

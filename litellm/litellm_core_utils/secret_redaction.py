@@ -24,9 +24,6 @@ def _build_secret_patterns() -> "re.Pattern[str]":
         r"(?:client_secret|azure_password|azure_username)\s+[^\s,'\"})\]{}>]+",
         # AWS access key IDs
         r"(?:AKIA|ASIA)[0-9A-Z]{16}",
-        # AWS secrets / session tokens / access key IDs (key=value)
-        r"(?:aws_secret_access_key|aws_session_token|aws_access_key_id)"
-        r"\s*[:=]\s*[A-Za-z0-9/+=]{20,}",
         # Bearer tokens (OAuth, JWT, etc.)
         r"Bearer\s+[A-Za-z0-9\-._~+/]{10,}=*",
         # Basic auth headers
@@ -61,6 +58,7 @@ def _build_secret_patterns() -> "re.Pattern[str]":
         # private_key with PEM-aware value capture
         r"""private_key['\"]?\s*[:=]\s*['\"]?(?:-----BEGIN[A-Z \-]*PRIVATE KEY-----[\s\S]*?-----END[A-Z \-]*PRIVATE KEY-----|[^\s,'\"})\]{}>]+)""",
         r"(?:master_key|xai_key|database_url|db_url|connection_string|"
+        r"aws_secret_access_key|aws_session_token|aws_access_key_id|"
         r"signing_key|encryption_key|"
         r"auth_token|access_token|refresh_token|"
         r"slack_webhook_url|webhook_url|"
@@ -83,3 +81,19 @@ _SECRET_RE: Final = _build_secret_patterns()
 def redact_string(value: str) -> str:
     """Scrub known secret/credential patterns from *value* and return the result."""
     return _SECRET_RE.sub(_REDACTED, value)
+
+
+def redact_structured_value(key: str | None, value: str) -> str:
+    """Scrub *value* as it appeared under *key* inside a structured record.
+
+    redact_string() replaces a whole ``key: value`` span with REDACTED, which is
+    fine inside free text but destroys the surrounding syntax when the span is a
+    JSON member rather than message content. This renders the pair the way a dict
+    repr would, so the key-name patterns still fire, but collapses only the value
+    so the caller's structure survives.
+    """
+    scrubbed: Final = redact_string(value)
+    if scrubbed != value or key is None:
+        return scrubbed
+    rendered: Final = f"'{key}': '{value}'"
+    return _REDACTED if redact_string(rendered) != rendered else value

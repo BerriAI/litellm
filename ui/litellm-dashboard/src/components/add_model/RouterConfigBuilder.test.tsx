@@ -159,7 +159,7 @@ describe("RouterConfigBuilder", () => {
     });
 
     const descriptionInput = screen.getByPlaceholderText("Describe when this route should be used...");
-    await user.type(descriptionInput, "For code generation");
+    fireEvent.change(descriptionInput, { target: { value: "For code generation" } });
 
     await waitFor(() => {
       const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1];

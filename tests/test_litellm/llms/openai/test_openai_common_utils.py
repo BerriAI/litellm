@@ -1,14 +1,12 @@
-import os
-import sys
 from unittest.mock import MagicMock, call, patch
 
+import httpx
+import openai
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
+from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.llms.openai.common_utils import BaseOpenAILLM
 
 # Test parameters for different API functions
@@ -83,7 +81,6 @@ async def test_openai_client_reuse(function_name, is_async, args):
     """
     Test that multiple API calls reuse the same OpenAI client
     """
-    litellm.set_verbose = True
 
     # Determine which client class to mock based on whether the test is async
     client_path = (
@@ -247,3 +244,151 @@ def test_a_client_litellm_built_its_own_http_client_for_is_still_closed(monkeypa
     closer.reap()
 
     assert wrapper.is_closed() is True
+
+
+OUTPUT_LIMIT_400_MESSAGE = (
+    "Could not finish the message because max_tokens or model output limit was reached. "
+    "Please try again with higher max_tokens."
+)
+GENUINE_400_MESSAGE = "Invalid value for 'max_tokens': integer above maximum value. Expected <= 128000, got 999999999."
+LONG_PROMPT = "please summarise the following notes for me: " + ("token " * 200)
+
+CALL_KWARGS_BY_PROVIDER = {
+    "openai": {"model": "gpt-5.6-sol", "api_key": "sk-not-a-real-key"},
+    "azure": {
+        "model": "azure/gpt-5.6-sol",
+        "api_key": "not-a-real-key",
+        "api_base": "https://not-a-real-resource.openai.azure.com",
+        "api_version": "2024-10-21",
+    },
+}
+
+
+def _transport(message: str) -> httpx.MockTransport:
+    def _handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": {"message": message, "type": "invalid_request_error"}})
+
+    return httpx.MockTransport(_handler)
+
+
+def _sync_client_raising(provider: str, message: str):
+    http_client = httpx.Client(transport=_transport(message))
+    if provider == "azure":
+        return openai.AzureOpenAI(
+            api_key="not-a-real-key",
+            azure_endpoint="https://not-a-real-resource.openai.azure.com",
+            api_version="2024-10-21",
+            http_client=http_client,
+        )
+    return openai.OpenAI(api_key="sk-not-a-real-key", http_client=http_client)
+
+
+def _async_client_raising(provider: str, message: str):
+    http_client = httpx.AsyncClient(transport=_transport(message))
+    if provider == "azure":
+        return openai.AsyncAzureOpenAI(
+            api_key="not-a-real-key",
+            azure_endpoint="https://not-a-real-resource.openai.azure.com",
+            api_version="2024-10-21",
+            http_client=http_client,
+        )
+    return openai.AsyncOpenAI(api_key="sk-not-a-real-key", http_client=http_client)
+
+
+def _completion_kwargs(provider: str, client, **overrides) -> dict:
+    return {
+        **CALL_KWARGS_BY_PROVIDER[provider],
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 1,
+        "client": client,
+        **overrides,
+    }
+
+
+@pytest.mark.parametrize("provider", ["openai", "azure"])
+def test_sync_output_limit_400_maps_to_length_truncated_response(provider):
+    response = litellm.completion(
+        **_completion_kwargs(provider, _sync_client_raising(provider, OUTPUT_LIMIT_400_MESSAGE))
+    )
+
+    assert response.choices[0].finish_reason == "length"
+    assert response.choices[0].message.content == ""
+    assert response.usage.completion_tokens == 0
+
+
+@pytest.mark.parametrize("provider", ["openai", "azure"])
+def test_mapped_response_still_bills_the_prompt_the_provider_processed(provider):
+    messages = [{"role": "user", "content": LONG_PROMPT}]
+    expected_prompt_tokens = token_counter(model="gpt-5.6-sol", messages=messages)
+    assert expected_prompt_tokens > 100, "the fixture prompt must be big enough for a zeroed count to stand out"
+
+    response = litellm.completion(
+        **_completion_kwargs(provider, _sync_client_raising(provider, OUTPUT_LIMIT_400_MESSAGE), messages=messages)
+    )
+
+    assert response.usage.prompt_tokens == expected_prompt_tokens
+    assert response.usage.completion_tokens == 0
+    assert litellm.completion_cost(completion_response=response) > 0
+
+
+@pytest.mark.parametrize("provider", ["openai", "azure"])
+@pytest.mark.asyncio
+async def test_async_output_limit_400_maps_to_length_truncated_response(provider):
+    response = await litellm.acompletion(
+        **_completion_kwargs(provider, _async_client_raising(provider, OUTPUT_LIMIT_400_MESSAGE))
+    )
+
+    assert response.choices[0].finish_reason == "length"
+    assert response.choices[0].message.content == ""
+    assert response.usage.completion_tokens == 0
+
+
+@pytest.mark.parametrize("provider", ["openai", "azure"])
+def test_sync_streaming_output_limit_400_maps_to_length_truncated_stream(provider):
+    stream = litellm.completion(
+        **_completion_kwargs(provider, _sync_client_raising(provider, OUTPUT_LIMIT_400_MESSAGE), stream=True)
+    )
+    chunks = list(stream)
+
+    assert [c.choices[0].finish_reason for c in chunks].count("length") == 1
+    assert all(not c.choices[0].delta.content for c in chunks)
+
+
+@pytest.mark.parametrize("provider", ["openai", "azure"])
+@pytest.mark.asyncio
+async def test_async_streaming_output_limit_400_maps_to_length_truncated_stream(provider):
+    stream = await litellm.acompletion(
+        **_completion_kwargs(provider, _async_client_raising(provider, OUTPUT_LIMIT_400_MESSAGE), stream=True)
+    )
+    chunks = [chunk async for chunk in stream]
+
+    assert [c.choices[0].finish_reason for c in chunks].count("length") == 1
+    assert all(not c.choices[0].delta.content for c in chunks)
+
+
+@pytest.mark.parametrize("provider", ["openai", "azure"])
+@pytest.mark.parametrize("stream", [False, True])
+def test_sync_genuine_bad_request_still_raises(provider, stream):
+    def _call_and_drain():
+        result = litellm.completion(
+            **_completion_kwargs(provider, _sync_client_raising(provider, GENUINE_400_MESSAGE), stream=stream)
+        )
+        list(result)
+
+    with pytest.raises(litellm.BadRequestError):
+        _call_and_drain()
+
+
+@pytest.mark.parametrize("provider", ["openai", "azure"])
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.asyncio
+async def test_async_genuine_bad_request_still_raises(provider, stream):
+    async def _call_and_drain():
+        result = await litellm.acompletion(
+            **_completion_kwargs(provider, _async_client_raising(provider, GENUINE_400_MESSAGE), stream=stream)
+        )
+        async for _ in result:
+            pass
+
+    with pytest.raises(litellm.BadRequestError):
+        await _call_and_drain()

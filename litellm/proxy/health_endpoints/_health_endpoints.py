@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 import logging
 import os
 import secrets
@@ -11,10 +12,16 @@ from typing import Any, Final, Literal, TypedDict, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS
+from litellm.integrations.SlackAlerting.ms_teams import (
+    MS_TEAMS_ALERT_HEADERS,
+    build_ms_teams_payload,
+    get_ms_teams_webhook_url,
+)
 from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
@@ -34,6 +41,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.db.proxy_worker_heartbeat import count_live_proxy_workers
 from litellm.proxy.health_check import (
     ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
     _clean_endpoint_data,
@@ -163,6 +171,7 @@ services = (
         "langfuse",
         "langfuse_otel",
         "slack",
+        "ms_teams",
         "openmeter",
         "webhook",
         "email",
@@ -177,6 +186,15 @@ services = (
     ]
     | str
 )
+
+
+class _ServiceTestErrorDetail(TypedDict):
+    error: ReadOnly[str]
+
+
+class _ServiceTestSuccessResponse(TypedDict):
+    status: ReadOnly[str]
+    message: ReadOnly[str]
 
 
 @router.get(
@@ -237,6 +255,7 @@ async def health_services_endpoint(
             "langfuse",
             "langfuse_otel",
             "slack",
+            "ms_teams",
             "openmeter",
             "webhook",
             "braintrust",
@@ -447,6 +466,38 @@ async def health_services_endpoint(
                     status_code=422,
                     detail={"error": f'"{service}" not in proxy config: general_settings. Unable to test this.'},
                 )
+        if service == "ms_teams":
+            if "ms_teams" not in general_settings.get("alerting", ()):
+                not_configured_detail: Final[_ServiceTestErrorDetail] = {
+                    "error": f'"{service}" not in proxy config: general_settings. Unable to test this.'
+                }
+                raise HTTPException(status_code=422, detail=not_configured_detail)
+            ms_teams_webhook_url: Final = get_ms_teams_webhook_url()
+            if ms_teams_webhook_url is None:
+                missing_webhook_detail: Final[_ServiceTestErrorDetail] = {
+                    "error": "MS_TEAMS_WEBHOOK_URL not set. Unable to test this."
+                }
+                raise HTTPException(status_code=422, detail=missing_webhook_detail)
+            ms_teams_test_message: Final = (
+                f"Alert type: `{AlertType.budget_alerts.value}`\nLevel: `Low`\n"
+                f"Timestamp: `{datetime.now().strftime('%H:%M:%S')}`\n\n"
+                "Message: This is a test MS Teams alert message"
+            )
+            ms_teams_response: Final = await proxy_logging_obj.slack_alerting_instance.async_http_handler.post(
+                url=ms_teams_webhook_url,
+                headers=dict(MS_TEAMS_ALERT_HEADERS),  # mutable-ok: async_http_handler.post only accepts dict headers
+                data=json.dumps(build_ms_teams_payload(ms_teams_test_message)),
+            )
+            if ms_teams_response.status_code >= 400:
+                delivery_failed_detail: Final[_ServiceTestErrorDetail] = {
+                    "error": f"MS Teams webhook returned status {ms_teams_response.status_code}: {ms_teams_response.text}"
+                }
+                raise HTTPException(status_code=500, detail=delivery_failed_detail)
+            ms_teams_success: Final[_ServiceTestSuccessResponse] = {
+                "status": "success",
+                "message": "Mock MS Teams Alert sent, verify MS Teams Alert Received in your channel",
+            }
+            return ms_teams_success
         if service == "email":
             webhook_event: Final = WebhookEvent(
                 event="key_created",
@@ -1112,6 +1163,7 @@ async def health_endpoint(
                 user_id=user_api_key_dict.user_id,
                 model_id=model_id,
                 max_concurrency=health_check_concurrency,
+                router=llm_router,
                 **_hc_filter,
             )
             return _post_process(router_result)
@@ -1320,8 +1372,25 @@ class DBHealthCache(TypedDict):
 
 db_health_cache: DBHealthCache = {"status": "unknown", "last_updated": datetime.now()}
 
+# Bounds each DB round-trip on the probe path so a hung connection during a
+# failover cannot make the probe fail by timeout (k8s default timeoutSeconds: 5).
+DB_READINESS_CHECK_TIMEOUT_SECONDS: Final = 2.0
+# One deadline for the whole probe-path DB check (initial check + reconnect +
+# re-check, including reconnect lock waits), kept under timeoutSeconds: 5.
+DB_READINESS_PROBE_DEADLINE_SECONDS: Final = 4.0
 
-async def _db_health_readiness_check():
+
+async def _db_health_readiness_check() -> DBHealthCache:
+    try:
+        return await asyncio.wait_for(
+            _db_health_readiness_check_unbounded(),
+            timeout=DB_READINESS_PROBE_DEADLINE_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        return {"status": "disconnected", "last_updated": db_health_cache["last_updated"]}
+
+
+async def _db_health_readiness_check_unbounded() -> DBHealthCache:
     from litellm.proxy.proxy_server import prisma_client
 
     global db_health_cache
@@ -1335,7 +1404,7 @@ async def _db_health_readiness_check():
             db_health_cache = {"status": "disconnected", "last_updated": datetime.now()}
             return db_health_cache
 
-        await prisma_client.health_check()
+        await asyncio.wait_for(prisma_client.health_check(), timeout=DB_READINESS_CHECK_TIMEOUT_SECONDS)
         db_health_cache = {"status": "connected", "last_updated": datetime.now()}
         return db_health_cache
     except Exception as e:
@@ -1343,8 +1412,15 @@ async def _db_health_readiness_check():
         if PrismaDBExceptionHandler.is_database_transport_error(e):
             try:
                 verbose_proxy_logger.warning("_db_health_readiness_check: health_check failed, attempting reconnect")
-                await prisma_client.attempt_db_reconnect(reason="health_readiness_check")
-                await prisma_client.health_check()
+                await prisma_client.attempt_db_reconnect(
+                    reason="health_readiness_check",
+                    timeout_seconds=DB_READINESS_CHECK_TIMEOUT_SECONDS,
+                    lock_timeout_seconds=DB_READINESS_CHECK_TIMEOUT_SECONDS,
+                )
+                await asyncio.wait_for(
+                    prisma_client.health_check(),
+                    timeout=DB_READINESS_CHECK_TIMEOUT_SECONDS,
+                )
                 verbose_proxy_logger.info("_db_health_readiness_check: reconnect succeeded")
                 db_health_cache = {
                     "status": "connected",
@@ -1451,7 +1527,7 @@ def callback_name(callback):
 DISABLE_NO_REDIS_WARNING_ENV_VAR: Final = "LITELLM_DISABLE_NO_REDIS_WARNING"
 
 
-def _show_no_redis_warning() -> bool:
+async def _show_no_redis_warning() -> bool:
     """
     Whether the UI should warn that no Redis is configured.
 
@@ -1461,16 +1537,22 @@ def _show_no_redis_warning() -> bool:
     coordination cache (from a Redis response cache, general_settings.
     coordination_redis, or the REDIS_* env fallback) and the router's own
     Redis (router_settings.redis_host), which backs cooldowns and usage-based
-    routing on its own. Operators who know they run one worker can silence the
-    warning with LITELLM_DISABLE_NO_REDIS_WARNING=true.
+    routing on its own. A deployment whose worker-heartbeat census proves it
+    is exactly one worker needs no cross-worker coordination, so it never
+    warns; when the census is unavailable or shows more than one worker, the
+    warning stands unless LITELLM_DISABLE_NO_REDIS_WARNING=true silences it.
     """
-    from litellm.proxy.proxy_server import llm_router, redis_usage_cache
+    from litellm.proxy.proxy_server import llm_router, prisma_client, redis_usage_cache
 
     if redis_usage_cache is not None:
         return False
     if llm_router is not None and llm_router.cache.redis_cache is not None:
         return False
-    return get_secret_bool(DISABLE_NO_REDIS_WARNING_ENV_VAR, False) is not True
+    if get_secret_bool(DISABLE_NO_REDIS_WARNING_ENV_VAR, False) is True:
+        return False
+    if prisma_client is None:
+        return True
+    return await count_live_proxy_workers(prisma_client) != 1
 
 
 async def _get_health_readiness_details(
@@ -1513,7 +1595,7 @@ async def _get_health_readiness_details(
         # check log level
         log_level_name: Final = logging.getLevelName(verbose_logger.getEffectiveLevel())
         is_detailed_debug: Final = verbose_logger.isEnabledFor(logging.DEBUG)
-        show_no_redis_warning: Final = _show_no_redis_warning()
+        show_no_redis_warning: Final = await _show_no_redis_warning()
 
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
@@ -1522,7 +1604,14 @@ async def _get_health_readiness_details(
             # serve requests that depend on persisted state (keys, budgets,
             # spend logs). Return 503 so orchestrators take this pod out of
             # rotation; "Not connected" (no DB configured at all) stays 200.
-            if response is not None and db_health_status["status"] != "connected":
+            # With allow_requests_on_db_unavailable the proxy keeps serving
+            # during a DB outage, so the pod must stay in rotation (200) and
+            # report the DB state through the body instead.
+            if (
+                response is not None
+                and db_health_status["status"] != "connected"
+                and not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+            ):
                 response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
             return {
                 "status": "healthy",
@@ -1613,7 +1702,10 @@ async def _resolve_public_readiness_db(response: Response) -> str:
         return "Not connected"
 
     db_health_status: Final = await _db_health_readiness_check()
-    if db_health_status["status"] != "connected":
+    if (
+        db_health_status["status"] != "connected"
+        and not PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
+    ):
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return db_health_status["status"]
 
@@ -1789,6 +1881,7 @@ async def test_model_connection(
         "audio_speech",
         "audio_transcription",
         "image_generation",
+        "image_edit",
         "video_generation",
         "batch",
         "rerank",
@@ -1881,6 +1974,8 @@ async def test_model_connection(
         # already resolved before reaching this endpoint; any remaining
         # reference must have come from the request body.
         _reject_os_environ_references(request_litellm_params)
+        if model_info:
+            _reject_os_environ_references(model_info)
         model_name: Final = request_litellm_params.get("model")
 
         # Look up model configuration from router if model name is provided
@@ -1943,22 +2038,22 @@ async def test_model_connection(
             **request_litellm_params,
         }
 
-        ## Auth check
-        auth_model_info: Final = loaded_model_info if loaded_model_info is not None else model_info
+        resolved_model_info: Final = loaded_model_info if loaded_model_info is not None else model_info
+        litellm_params = _update_litellm_params_for_health_check(
+            model_info=resolved_model_info or {},
+            litellm_params=litellm_params,
+        )
+
+        ## Auth check, on the final probe params so health_check_params cannot retarget it afterwards
         await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=Deployment(
                 model_name="test_model",
                 litellm_params=LiteLLM_Params(**litellm_params),
-                model_info=auth_model_info,
+                model_info=resolved_model_info,
             ),
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
-        )
-        # Include health_check_params if provided
-        litellm_params = _update_litellm_params_for_health_check(
-            model_info={},
-            litellm_params=litellm_params,
         )
         mode = mode or litellm_params.pop("mode", None)
 

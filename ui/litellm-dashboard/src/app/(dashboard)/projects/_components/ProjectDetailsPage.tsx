@@ -9,7 +9,7 @@ import { StatusBadge } from "@/components/shared/table_cells/status_badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Meter, MeterIndicator, MeterTrack } from "@/components/ui/meter";
+import { Meter, MeterIndicator, MeterTrack } from "@/components/shared/Meter";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { EditProjectModal } from "./ProjectModals/EditProjectModal";
 import { ProjectKeysSection } from "./ProjectKeysSection";

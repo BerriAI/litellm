@@ -159,7 +159,7 @@ class TestVertexAIFilesIntegration:
         # This test ensures the type annotations and error messages include vertex_ai
 
         # Test that calling with unsupported provider raises appropriate error
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match="unsupported_provider' is not a valid LlmProviders") as exc_info:
             litellm.file_content(
                 file_id="test-file-id",
                 custom_llm_provider="unsupported_provider",  # This should fail

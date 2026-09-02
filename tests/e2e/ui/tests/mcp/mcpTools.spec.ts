@@ -63,7 +63,7 @@ test.describe("MCP Tools", () => {
 
     // The form is generated from the tool's inputSchema, so `repoName` proves the schema
     // round-tripped through the proxy instead of the panel falling back to a generic field.
-    const repoInput = page.locator('input[id="repoName"]');
+    const repoInput = page.getByLabel(/repoName/);
     await expect(repoInput).toBeVisible();
     await repoInput.fill(TOOL_ARG_REPO);
 

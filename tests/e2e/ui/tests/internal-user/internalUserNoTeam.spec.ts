@@ -27,19 +27,16 @@ test.describe("Internal User with no team memberships", () => {
     await page.getByRole("button", { name: /Create New Key/i }).click();
     await expect(page.getByText("Key Ownership")).toBeVisible({ timeout: 10_000 });
 
-    const teamSelect = page.locator(".ant-select", { hasText: "Search or select a team" });
+    const teamSelect = page.getByTestId("team-dropdown").getByRole("combobox");
     await teamSelect.click();
 
-    const dropdown = page.locator(".ant-select-dropdown:visible").first();
-    await expect(dropdown).toBeVisible({ timeout: 5_000 });
-
     // Wait for the settled-empty state, not a transient one. The dropdown shows
-    // a spinner while teams load and only swaps in "No teams found" once the
-    // request resolves with nothing (team_dropdown.tsx renders the spinner when
-    // isLoading and this copy otherwise). Asserting on it means a regression
-    // where teams DO load for this user fails here instead of racing a one-shot
-    // count() against an in-flight request.
-    await expect(dropdown.getByText("No teams found")).toBeVisible({ timeout: 10_000 });
-    await expect(dropdown.getByRole("option")).toHaveCount(0);
+    // "Loading teams…" while teams load and only swaps in "No teams found" once
+    // the request resolves with nothing (team_dropdown.tsx passes both copies to
+    // PaginatedSearchSelect). Asserting on it means a regression where teams DO
+    // load for this user fails here instead of racing a one-shot count() against
+    // an in-flight request.
+    await expect(page.getByText("No teams found")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByRole("option")).toHaveCount(0);
   });
 });

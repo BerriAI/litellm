@@ -263,7 +263,7 @@ describe("ModelRetrySettingsTab", () => {
 
     const inputs = screen.getAllByRole("spinbutton");
     await user.clear(inputs[0]);
-    await user.type(inputs[0], "4");
+    fireEvent.change(inputs[0], { target: { value: "4" } });
 
     // setGlobalRetryPolicy is called with a function updater
     expect(setGlobalRetryPolicy).toHaveBeenCalled();
@@ -291,7 +291,7 @@ describe("ModelRetrySettingsTab", () => {
 
     const inputs = screen.getAllByRole("spinbutton");
     await user.clear(inputs[0]);
-    await user.type(inputs[0], "2");
+    fireEvent.change(inputs[0], { target: { value: "2" } });
 
     expect(setModelGroupRetryPolicy).toHaveBeenCalled();
     const updater = setModelGroupRetryPolicy.mock.calls.at(-1)![0];
@@ -300,5 +300,17 @@ describe("ModelRetrySettingsTab", () => {
     // Calling the updater returns the merged model-group policy
     const result = updater({ "gpt-4": { BadRequestErrorRetries: 0 } });
     expect(result["gpt-4"]).toMatchObject({ BadRequestErrorRetries: 2 });
+  });
+
+  it("shows the global scope by its human label rather than the raw value", () => {
+    render(<ModelRetrySettingsTab {...buildProps()} />);
+
+    expect(screen.getByRole("combobox")).toHaveTextContent("Global Default");
+  });
+
+  it("shows a selected model group by its own name", () => {
+    render(<ModelRetrySettingsTab {...buildProps({ selectedModelGroup: "gpt-4" })} />);
+
+    expect(screen.getByRole("combobox")).toHaveTextContent("gpt-4");
   });
 });

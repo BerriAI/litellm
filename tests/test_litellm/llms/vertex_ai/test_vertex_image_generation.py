@@ -1,12 +1,7 @@
-import os
-import sys
 from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.vertex_ai.image_generation.image_generation_handler import (

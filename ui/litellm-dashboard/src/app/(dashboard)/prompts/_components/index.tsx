@@ -6,7 +6,7 @@ import PromptTable from "./PromptTable";
 import PromptInfoView from "./prompt_info";
 import AddPromptForm from "./add_prompt_form";
 import PromptEditorView from "./prompt_editor_view";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { isProxyAdminRole } from "@/utils/roles";
 import { Button } from "@/components/ui/button";
 import {
@@ -121,11 +121,11 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
     setIsDeleting(true);
     try {
       await deletePromptCall(accessToken, promptToDelete.id);
-      NotificationsManager.success(`Prompt "${promptToDelete.name}" deleted successfully`);
+      toast.success(`Prompt "${promptToDelete.name}" deleted successfully`);
       fetchPrompts(); // Refresh the list
     } catch (error) {
       console.error("Error deleting prompt:", error);
-      NotificationsManager.fromBackend("Failed to delete prompt");
+      toast.fromError("Failed to delete prompt");
     } finally {
       setIsDeleting(false);
       setPromptToDelete(null);

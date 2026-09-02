@@ -1,14 +1,9 @@
 import json
-import os
-import sys
 from litellm._uuid import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.ollama.completion.transformation import (
     OllamaConfig,
@@ -480,7 +475,7 @@ class TestOllamaTextCompletionResponseIterator:
         assert isinstance(result, ModelResponseStream)
         assert result.choices and result.choices[0].delta is not None
         assert result.choices[0].delta.content == None
-        assert getattr(result.choices[0].delta, "reasoning_content", None) is ""
+        assert getattr(result.choices[0].delta, "reasoning_content", None) == ""
 
     def test_chunk_parser_done_chunk(self):
         """Test that done chunks work correctly."""

@@ -27,6 +27,7 @@ EXTRA_BOOLEAN_KEYS = frozenset(
         "uses_embed_content",
         "use_openai_responses_path",
         "bedrock_converse_supports_strict_tools",
+        "thinking_always_on",
     }
 )
 
@@ -40,6 +41,11 @@ OBJECT_KEYS: dict[str, JsonSchema] = {
             "search_context_size_high": NONNEG_NUMBER,
         },
         "additionalProperties": False,
+    },
+    "guardrail_cost_per_unit": {
+        "type": "object",
+        "description": "USD cost per billable guardrail unit, keyed by the provider's usage counter name (e.g. Bedrock's contentPolicyUnits).",
+        "additionalProperties": NONNEG_NUMBER,
     },
     "metadata": {
         "type": "object",
@@ -66,6 +72,11 @@ ARRAY_KEYS: dict[str, JsonSchema] = {
         "type": "array",
         "description": "Output modalities the model can produce.",
         "items": {"type": "string", "enum": ["text", "image", "audio", "video", "code"]},
+    },
+    "reasoning_effort_levels": {
+        "type": "array",
+        "description": "Exact reasoning_effort levels this deployment accepts; wins over supports_* flags.",
+        "items": {"type": "string", "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]},
     },
     "supported_regions": {
         "type": "array",
@@ -96,6 +107,7 @@ ARRAY_KEYS: dict[str, JsonSchema] = {
                 "output_cost_per_token": NONNEG_NUMBER,
                 "output_cost_per_reasoning_token": NONNEG_NUMBER,
                 "cache_read_input_token_cost": NONNEG_NUMBER,
+                "cache_creation_input_token_cost": NONNEG_NUMBER,
                 "input_cost_per_query": NONNEG_NUMBER,
             },
             "additionalProperties": False,
@@ -139,12 +151,20 @@ NUMBER_KEYS: dict[str, JsonSchema] = {
         "minimum": 1,
         "description": "Multiplier applied to all token costs for US data residency (e.g. 1.10 = +10%).",
     },
+    "regional_endpoint_uplift_multiplier": {
+        "type": "number",
+        "minimum": 1,
+        "description": "Multiplier applied to all token costs when served from a non-global Vertex AI endpoint (e.g. 1.10 = +10%).",
+    },
 }
 
 COST_DESCRIPTIONS: dict[str, str] = {
     "input_cost_per_token": "USD per prompt token.",
     "output_cost_per_token": "USD per generated token.",
     "output_cost_per_reasoning_token": "USD per reasoning/thinking token, when billed separately.",
+    "google_maps_grounding_cost_per_query": (
+        "USD per Grounding with Google Maps request; billed per query or per prompt per web_search_billing_unit."
+    ),
     "cache_creation_input_token_cost": "USD per token written to the provider's prompt cache.",
     "cache_read_input_token_cost": "USD per prompt token served from the provider's prompt cache.",
     "input_cost_per_token_batches": "USD per prompt token via the provider's batch API.",
@@ -199,6 +219,15 @@ def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
             "type": "string",
             "description": "Highest reasoning effort the Bedrock output_config accepts for this model.",
             "enum": ["low", "medium", "high", "max", "xhigh"],
+        },
+        "default_reasoning_effort": {
+            "type": "string",
+            "description": (
+                "Reasoning effort the provider applies when the request omits reasoning_effort. "
+                "Gates whether a non-default temperature or the top_p/logprobs sampling params are "
+                "accepted, which hold only when the effort resolves to 'none'."
+            ),
+            "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
         },
         "comment": STRING,
         "audio_transcription_config": STRING,

@@ -1,8 +1,6 @@
-import os
 import sys
 import types
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.integrations.helicone import HeliconeLogger
 

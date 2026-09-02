@@ -14,9 +14,11 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     Ambient,
     ApiKeyConfig,
     AuthConfig,
+    AuthorizationCodeConfig,
     AuthSpecKind,
     AwsSigV4Config,
     Byok,
+    ClientCredentialsConfig,
     ClientSecretAuth,
     CredError,
     Error,
@@ -27,7 +29,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     ServerSpec,
     SharedKey,
     StaticKeys,
+    TokenExchangeConfig,
     parse_auth_spec_kind,
+    validate_header_name,
 )
 
 _AUTH_CONFIG = TypeAdapter(AuthConfig)
@@ -229,3 +233,61 @@ def test_id_jag_server_spec_derives_auth_spec_kind():
         config=config,
     )
     assert spec.auth_spec_kind is AuthSpecKind.id_jag
+
+
+_CARRIER_CONFIGS = (
+    ("client_credentials", ClientCredentialsConfig),
+    ("token_exchange", lambda **kw: TokenExchangeConfig(token_exchange_endpoint="https://idp/te", **kw)),
+    ("authorization_code", AuthorizationCodeConfig),
+    (
+        "id_jag",
+        lambda **kw: IdJagConfig(
+            org_token_endpoint="https://idp.example.com/token",
+            resource_token_endpoint="https://mcp-as.example.com/token",
+            client_id="litellm",
+            client_auth=ClientSecretAuth(client_secret=SecretStr("s")),
+            **kw,
+        ),
+    ),
+    ("api_key", lambda **kw: ApiKeyConfig(key_source=SharedKey(value=SecretStr("k")), **kw)),
+)
+
+
+@pytest.mark.parametrize("name,build", _CARRIER_CONFIGS, ids=[n for n, _ in _CARRIER_CONFIGS])
+def test_every_resolved_credential_config_defaults_to_rfc6750_authorization(name, build):
+    # The default is what preserves today's wire behavior for every existing server.
+    assert build().header("tok") == ("Authorization", "Bearer tok")
+
+
+@pytest.mark.parametrize("name,build", _CARRIER_CONFIGS, ids=[n for n, _ in _CARRIER_CONFIGS])
+def test_every_resolved_credential_config_honors_a_custom_header(name, build):
+    assert build(header_name="esb-oauth").header("tok") == ("esb-oauth", "Bearer tok")
+
+
+@pytest.mark.parametrize("name,build", _CARRIER_CONFIGS, ids=[n for n, _ in _CARRIER_CONFIGS])
+def test_every_resolved_credential_config_can_send_a_raw_value(name, build):
+    assert build(header_name="esb-oauth", value_prefix="").header("tok") == ("esb-oauth", "tok")
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "with space",
+        "has:colon",
+        "trailing\r\nX-Injected",
+        "",
+        "   ",
+        "quoted\"name",
+    ],
+)
+def test_header_name_outside_the_rfc7230_token_grammar_is_rejected(bad):
+    # An operator-supplied name reaches egress verbatim, so anything that could split a
+    # header must fail closed at construction rather than be sanitized later.
+    with pytest.raises(ValidationError):
+        ClientCredentialsConfig(header_name=bad)
+    assert isinstance(validate_header_name(bad), Error)
+
+
+def test_header_name_is_trimmed_by_the_one_validator():
+    assert validate_header_name("  esb-oauth  ") == Ok("esb-oauth")
+    assert ClientCredentialsConfig(header_name=" esb-oauth ").header_name == "esb-oauth"
