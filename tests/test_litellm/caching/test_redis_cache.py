@@ -484,7 +484,7 @@ def _closed_port() -> int:
         pytest.param(lambda c: c.async_get_ttl("lit4930"), id="async_get_ttl"),
     ],
 )
-async def test_circuit_breaker_opens_when_method_swallows_redis_failure(redis_no_ping, call_method):
+async def test_circuit_breaker_opens_when_method_swallows_redis_failure(call_method):
     """A guarded method that swallows its own Redis error must still count as a failure.
 
     These methods catch connection errors and return a default so callers degrade instead
@@ -495,7 +495,7 @@ async def test_circuit_breaker_opens_when_method_swallows_redis_failure(redis_no
     """
     from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
 
-    cache = RedisCache(host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
+    cache = await asyncio.to_thread(RedisCache, host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
 
     for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
         await call_method(cache)
@@ -505,7 +505,7 @@ async def test_circuit_breaker_opens_when_method_swallows_redis_failure(redis_no
 
 
 @pytest.mark.asyncio
-async def test_circuit_breaker_success_still_resets_the_failure_streak(redis_no_ping):
+async def test_circuit_breaker_success_still_resets_the_failure_streak():
     """A reachable Redis must keep the breaker closed, however many earlier calls failed.
 
     The guard now records success only when nothing failed while the method ran, so this
@@ -514,7 +514,7 @@ async def test_circuit_breaker_success_still_resets_the_failure_streak(redis_no_
     """
     from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
 
-    cache = RedisCache(host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
+    cache = await asyncio.to_thread(RedisCache, host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
 
     for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD - 1):
         await cache.async_get_cache("lit4930")
@@ -532,7 +532,7 @@ async def test_circuit_breaker_success_still_resets_the_failure_streak(redis_no_
 
 
 @pytest.mark.asyncio
-async def test_circuit_breaker_covers_lua_script_execution(redis_no_ping):
+async def test_circuit_breaker_covers_lua_script_execution():
     """Lua script execution must feed the breaker like every other Redis call.
 
     The v3 rate limiter issues all of its Redis traffic through async_register_script, so
@@ -544,7 +544,7 @@ async def test_circuit_breaker_covers_lua_script_execution(redis_no_ping):
 
     from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
 
-    cache = RedisCache(host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
+    cache = await asyncio.to_thread(RedisCache, host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
     run_script = cache.async_register_script("return 1")
 
     for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):

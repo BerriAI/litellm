@@ -18,7 +18,7 @@
     "limit": 40
   },
   "reportDeprecated": {
-    "limit": 211
+    "limit": 210
   },
   "reportDuplicateImport": {
     "limit": 19

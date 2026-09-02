@@ -1,8 +1,8 @@
 import json
-import typing
 from pathlib import Path
 
 import pytest
+from typing_extensions import get_args, get_type_hints
 
 import litellm
 from litellm.types.utils import ModelInfoBase
@@ -50,8 +50,8 @@ def _load_cost_map() -> dict:
 
 
 def test_realtime_is_a_valid_mode_literal():
-    hints = typing.get_type_hints(ModelInfoBase, include_extras=False)
-    assert "realtime" in typing.get_args(hints["mode"])
+    hints = get_type_hints(ModelInfoBase, include_extras=False)
+    assert "realtime" in get_args(hints["mode"])
 
 
 @pytest.mark.parametrize("model", REALTIME_ONLY_GPT_MODELS)

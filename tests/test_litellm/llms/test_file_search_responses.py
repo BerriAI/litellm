@@ -13,6 +13,7 @@ Coverage:
 
 import base64
 from typing import Any, Dict, List, Optional
+from importlib import import_module
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -223,28 +224,28 @@ class TestFileSearchGuardInResponsesMain:
         expected = {"ok": True}
 
         with (
-            patch(
-                "litellm.responses.main.litellm.get_llm_provider",
+            patch.object(
+                import_module("litellm.responses.main").litellm, "get_llm_provider",
                 return_value=("claude-sonnet-4-5", "anthropic", None, None),
             ),
-            patch(
-                "litellm.responses.main.update_responses_input_with_model_file_ids",
+            patch.object(
+                import_module("litellm.responses.main"), "update_responses_input_with_model_file_ids",
                 return_value="hello",
             ),
-            patch(
-                "litellm.responses.main.update_responses_tools_with_model_file_ids",
+            patch.object(
+                import_module("litellm.responses.main"), "update_responses_tools_with_model_file_ids",
                 return_value=tools,
             ),
-            patch(
-                "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
+            patch.object(
+                import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config",
                 return_value=None,
             ),
-            patch(
-                "litellm.responses.main.ResponsesAPIRequestUtils.get_requested_response_api_optional_param",
+            patch.object(
+                import_module("litellm.responses.main").ResponsesAPIRequestUtils, "get_requested_response_api_optional_param",
                 return_value={},
             ),
-            patch(
-                "litellm.responses.main.run_async_function", return_value=expected
+            patch.object(
+                import_module("litellm.responses.main"), "run_async_function", return_value=expected
             ) as run_async_mock,
         ):
             result = responses(
@@ -274,28 +275,28 @@ class TestFileSearchGuardInResponsesMain:
         mock_config.supports_native_file_search.return_value = False
 
         with (
-            patch(
-                "litellm.responses.main.litellm.get_llm_provider",
+            patch.object(
+                import_module("litellm.responses.main").litellm, "get_llm_provider",
                 return_value=("claude-sonnet-4-5", "anthropic", None, None),
             ),
-            patch(
-                "litellm.responses.main.update_responses_input_with_model_file_ids",
+            patch.object(
+                import_module("litellm.responses.main"), "update_responses_input_with_model_file_ids",
                 return_value="hello",
             ),
-            patch(
-                "litellm.responses.main.update_responses_tools_with_model_file_ids",
+            patch.object(
+                import_module("litellm.responses.main"), "update_responses_tools_with_model_file_ids",
                 return_value=tools,
             ),
-            patch(
-                "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config",
+            patch.object(
+                import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config",
                 return_value=mock_config,
             ),
-            patch(
-                "litellm.responses.main.ResponsesAPIRequestUtils.get_requested_response_api_optional_param",
+            patch.object(
+                import_module("litellm.responses.main").ResponsesAPIRequestUtils, "get_requested_response_api_optional_param",
                 return_value={},
             ),
-            patch(
-                "litellm.responses.main.run_async_function", return_value=expected
+            patch.object(
+                import_module("litellm.responses.main"), "run_async_function", return_value=expected
             ) as run_async_mock,
         ):
             result = responses(
@@ -758,8 +759,8 @@ class TestEmulatedFileSearchHandler:
         mock_search_response.data = [search_result]
 
         with (
-            patch(
-                "litellm.responses.file_search.emulated_handler._call_aresponses",
+            patch.object(
+                import_module("litellm.responses.file_search.emulated_handler"), "_call_aresponses",
                 new=AsyncMock(side_effect=[first_resp, final_resp]),
             ),
             patch(
@@ -821,8 +822,8 @@ class TestEmulatedFileSearchHandler:
         mock_search_response.data = [search_result]
 
         with (
-            patch(
-                "litellm.responses.file_search.emulated_handler._call_aresponses",
+            patch.object(
+                import_module("litellm.responses.file_search.emulated_handler"), "_call_aresponses",
                 new=AsyncMock(side_effect=[first_resp_plural, final_resp]),
             ),
             patch(
@@ -855,8 +856,8 @@ class TestEmulatedFileSearchHandler:
             text="I already know the answer."
         )
 
-        with patch(
-            "litellm.responses.file_search.emulated_handler._call_aresponses",
+        with patch.object(
+            import_module("litellm.responses.file_search.emulated_handler"), "_call_aresponses",
             new=AsyncMock(return_value=direct_resp),
         ):
             result = await aresponses_with_emulated_file_search(
@@ -905,8 +906,8 @@ class TestEmulatedFileSearchHandler:
         mock_search_response.data = [search_result]
 
         with (
-            patch(
-                "litellm.responses.file_search.emulated_handler._call_aresponses",
+            patch.object(
+                import_module("litellm.responses.file_search.emulated_handler"), "_call_aresponses",
                 new=AsyncMock(side_effect=[first_resp, final_resp]),
             ) as mock_call,
             patch(

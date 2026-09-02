@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 
 import urllib.parse
+from importlib import import_module
 from unittest.mock import MagicMock, patch
 
 import litellm
@@ -2515,8 +2516,8 @@ def test_completion_forwards_store_and_prompt_cache_key_to_mcp_gateway():
     prompt_cache_key are named params, so they no longer travel via **kwargs and
     must be forwarded explicitly like safety_identifier and service_tier.
     """
-    with patch(
-        "litellm.responses.mcp.chat_completions_handler.acompletion_with_mcp"
+    with patch.object(
+        import_module("litellm.responses.mcp.chat_completions_handler"), "acompletion_with_mcp"
     ) as mock_mcp:
         result = litellm.completion(
             model="openai/gpt-4o",
