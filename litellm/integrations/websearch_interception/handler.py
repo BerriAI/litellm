@@ -416,24 +416,14 @@ class WebSearchInterceptionLogger(CustomLogger):
         if not tools:
             return None
 
-        is_responses_call: Final = call_type in (CallTypes.responses, CallTypes.aresponses)
-        has_websearch: Final = (
-            any(is_web_search_tool_responses(tool) for tool in tools)
-            if is_responses_call
-            else any(is_web_search_tool(tool) for tool in tools)
-        )
+        if call_type in (CallTypes.responses, CallTypes.aresponses):
+            return self._convert_responses_tools(kwargs=kwargs, tools=tools)
+
+        # Check if any tool is a web search tool (native or already LiteLLM standard)
+        has_websearch: Final = any(is_web_search_tool(t) for t in tools)
+
         if not has_websearch:
             return None
-
-        if self.search_tool_name:
-            try:
-                from litellm.proxy.proxy_server import llm_router
-            except ImportError:
-                llm_router = None
-            self._select_search_tool_from_router(llm_router=llm_router)
-
-        if is_responses_call:
-            return self._convert_responses_tools(kwargs=kwargs, tools=tools)
 
         verbose_logger.debug("WebSearchInterception: Converting native web_search tools to LiteLLM standard")
 
@@ -1641,36 +1631,34 @@ class WebSearchInterceptionLogger(CustomLogger):
         return None
 
     def _select_search_tool_from_router(self, llm_router: object) -> "_SearchToolConfig | None":
-        search_tools: Final = list(getattr(llm_router, "search_tools", []) or [])
+        if llm_router is None or not hasattr(llm_router, "search_tools"):
+            return None
+        search_tools: Final = tuple(getattr(llm_router, "search_tools", None) or ())
         return self._select_search_tool_from_list(search_tools=search_tools, source="router")
 
     def _select_search_tool_from_list(
         self,
-        search_tools: list[_SearchToolConfig],
+        search_tools: Sequence[_SearchToolConfig],
         source: str,
     ) -> "_SearchToolConfig | None":
         if self.search_tool_name:
-            matching_tools = [tool for tool in search_tools if tool.get("search_tool_name") == self.search_tool_name]
-            if not matching_tools:
-                raise ValueError(f"Configured search tool '{self.search_tool_name}' was not found")
-
-            selected_tool: Final = matching_tools[0]
-            litellm_params: Final = selected_tool.get("litellm_params")
-            selected_search_provider: Final = (
-                litellm_params.get("search_provider") if isinstance(litellm_params, Mapping) else None
+            matching_tools: Final = tuple(
+                tool for tool in search_tools if tool.get("search_tool_name") == self.search_tool_name
             )
-            if not isinstance(selected_search_provider, str) or not selected_search_provider.strip():
-                raise ValueError(
-                    f"Configured search tool '{self.search_tool_name}' does not define a valid search provider"
+            if matching_tools:
+                search_provider = (matching_tools[0].get("litellm_params", {}) or {}).get("search_provider")
+                verbose_logger.debug(
+                    "WebSearchInterception: Found search tool '%s' from %s with provider '%s'",
+                    self.search_tool_name,
+                    source,
+                    search_provider,
                 )
-
+                return matching_tools[0]
             verbose_logger.debug(
-                "WebSearchInterception: Found search tool '%s' from %s with provider '%s'",
+                "WebSearchInterception: Search tool '%s' not found in %s, falling back to first available or perplexity",
                 self.search_tool_name,
                 source,
-                selected_search_provider,
             )
-            return selected_tool
 
         if search_tools:
             first_tool: Final = search_tools[0]

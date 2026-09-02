@@ -4692,3 +4692,82 @@ async def test_async_stream_assembled_response_keeps_vertex_traffic_type(logging
     assembled = litellm.stream_chunk_builder(chunks=received, messages=[{"role": "user", "content": "hi"}])
     assert assembled is not None
     assert assembled._hidden_params["provider_specific_fields"]["traffic_type"] == "ON_DEMAND_FLEX"
+
+
+class TestStableStreamingResponseId:
+    """
+    All chunks of one streamed response must share the same top-level id
+    (OpenAI streaming contract). Providers streaming via GenericStreamingChunk
+    (e.g. GigaChat) do not propagate an upstream response id, so
+    CustomStreamWrapper must pin the id from the first chunk it creates,
+    mirroring the existing `created` pinning (issue #11437).
+
+    Clients such as goose merge streamed deltas into one assistant message by
+    chunk id; per-chunk ids split a single reply into many messages.
+    """
+
+    def test_generic_chunks_share_one_id(self):
+        def _generic_chunks():
+            return iter(
+                [
+                    {
+                        "text": "Hello",
+                        "tool_use": None,
+                        "is_finished": False,
+                        "finish_reason": "",
+                        "usage": None,
+                        "index": 0,
+                    },
+                    {
+                        "text": " world",
+                        "tool_use": None,
+                        "is_finished": False,
+                        "finish_reason": "",
+                        "usage": None,
+                        "index": 0,
+                    },
+                    {
+                        "text": "",
+                        "tool_use": None,
+                        "is_finished": True,
+                        "finish_reason": "stop",
+                        "usage": {
+                            "prompt_tokens": 1,
+                            "completion_tokens": 2,
+                            "total_tokens": 3,
+                        },
+                        "index": 0,
+                    },
+                ]
+            )
+
+        wrapper = CustomStreamWrapper(
+            completion_stream=_generic_chunks(),
+            model="gigachat/GigaChat-2-Max",
+            logging_obj=MagicMock(),
+            custom_llm_provider="gigachat",
+        )
+        ids = [chunk.id for chunk in wrapper if chunk.id]
+        assert ids, "no chunks emitted"
+        assert len(set(ids)) == 1, f"chunk ids differ across one stream: {ids}"
+
+    def test_creator_pins_id_from_first_chunk(self):
+        wrapper = CustomStreamWrapper(
+            completion_stream=iter([]),
+            model="gigachat/GigaChat-2-Max",
+            logging_obj=MagicMock(),
+            custom_llm_provider="gigachat",
+        )
+        first = wrapper.model_response_creator()
+        assert wrapper.response_id == first.id
+        assert wrapper.model_response_creator().id == first.id
+
+    def test_provider_supplied_id_still_wins(self):
+        wrapper = CustomStreamWrapper(
+            completion_stream=iter([]),
+            model="gigachat/GigaChat-2-Max",
+            logging_obj=MagicMock(),
+            custom_llm_provider="gigachat",
+        )
+        wrapper.response_id = "chatcmpl-from-provider"
+        assert wrapper.model_response_creator().id == "chatcmpl-from-provider"
