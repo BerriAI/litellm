@@ -1,7 +1,6 @@
 """Tests for the MCP guardrail translation handler."""
 
 import asyncio
-from typing import Optional
 
 import pytest
 from fastapi import HTTPException
@@ -34,7 +33,6 @@ class MockGuardrail(CustomGuardrail):
         self.call_count += 1
         self.last_inputs = inputs
         self.last_request_data = request_data
-        return None  # Guardrail doesn't modify for MCP tools
 
 
 @pytest.mark.asyncio
@@ -102,7 +100,7 @@ class ArgumentMaskingGuardrail(CustomGuardrail):
         self,
         secret: str = "jane.doe@example.com",
         replacement: str = "<EMAIL_ADDRESS>",
-        texts_override: Optional[list] = None,
+        texts_override: list[str] | None = None,
         **kwargs,
     ):
         kwargs.setdefault("guardrail_name", "argument-masking-mcp-guardrail")
@@ -110,7 +108,7 @@ class ArgumentMaskingGuardrail(CustomGuardrail):
         self.secret = secret
         self.replacement = replacement
         self.texts_override = texts_override
-        self.seen_texts: Optional[list] = None
+        self.seen_texts: list[str] | None = None
 
     def _mask(self, text: str) -> str:
         return text.replace(self.secret, self.replacement)
@@ -125,18 +123,20 @@ class ArgumentMaskingGuardrail(CustomGuardrail):
 
 
 @pytest.fixture
-def restore_callbacks():
+def restore_callbacks(monkeypatch):
     """Restore the process-wide state driving pre_call_hook through unified_guardrail.
 
     unified_guardrail memoizes its translation mappings in a module global, and
     ProxyLogging caches callback capabilities keyed on id()s of litellm.callbacks,
     so leaving either populated leaks into unrelated tests in the same worker.
     """
-    original_callbacks = litellm.callbacks
-    original_mappings = unified_guardrail.endpoint_guardrail_translation_mappings
+    monkeypatch.setattr(litellm, "callbacks", litellm.callbacks)
+    monkeypatch.setattr(
+        unified_guardrail,
+        "endpoint_guardrail_translation_mappings",
+        unified_guardrail.endpoint_guardrail_translation_mappings,
+    )
     yield
-    litellm.callbacks = original_callbacks
-    unified_guardrail.endpoint_guardrail_translation_mappings = original_mappings
     ProxyLogging._callback_capabilities_cache.clear()
 
 
@@ -349,7 +349,7 @@ async def test_a_renamed_argument_key_blocks_rather_than_dropping_the_mask():
 
 @pytest.mark.parametrize("run_in_parallel", [False, True])
 @pytest.mark.asyncio
-async def test_masked_arguments_reach_the_outbound_mcp_call(restore_callbacks, run_in_parallel):
+async def test_masked_arguments_reach_the_outbound_mcp_call(restore_callbacks, monkeypatch, run_in_parallel):
     """End to end over the real MCP pre-call path, not just the handler.
 
     Drives the same sequence mcp_server_manager.call_tool uses:
@@ -364,7 +364,7 @@ async def test_masked_arguments_reach_the_outbound_mcp_call(restore_callbacks, r
         default_on=True,
         run_in_parallel=run_in_parallel,
     )
-    litellm.callbacks = [guardrail]
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
     arguments = {"query": "contact jane.doe@example.com about the invoice"}
@@ -444,9 +444,9 @@ async def _arguments_sent_upstream(arguments: dict):
 
 
 @pytest.mark.asyncio
-async def test_two_sequential_guardrails_both_masks_survive(restore_callbacks):
+async def test_two_sequential_guardrails_both_masks_survive(restore_callbacks, monkeypatch):
     """The recommended config: each guardrail sees the previous one's output."""
-    litellm.callbacks = _two_interleaving_maskers(run_in_parallel=False)
+    monkeypatch.setattr(litellm, "callbacks", _two_interleaving_maskers(run_in_parallel=False))
 
     sent = await _arguments_sent_upstream({"note": "mail jane.doe@example.com or call 415-555-0132"})
 
@@ -454,9 +454,9 @@ async def test_two_sequential_guardrails_both_masks_survive(restore_callbacks):
 
 
 @pytest.mark.asyncio
-async def test_two_parallel_guardrails_on_separate_arguments_both_masks_survive(restore_callbacks):
+async def test_two_parallel_guardrails_on_separate_arguments_both_masks_survive(restore_callbacks, monkeypatch):
     """Concurrent rewrites of different leaves compose; neither is lost."""
-    litellm.callbacks = _two_interleaving_maskers(run_in_parallel=True)
+    monkeypatch.setattr(litellm, "callbacks", _two_interleaving_maskers(run_in_parallel=True))
 
     sent = await _arguments_sent_upstream({"email": "jane.doe@example.com", "phone": "415-555-0132"})
 
@@ -464,14 +464,14 @@ async def test_two_parallel_guardrails_on_separate_arguments_both_masks_survive(
 
 
 @pytest.mark.asyncio
-async def test_two_parallel_guardrails_on_one_argument_block_instead_of_losing_a_mask(restore_callbacks):
+async def test_two_parallel_guardrails_on_one_argument_block_instead_of_losing_a_mask(restore_callbacks, monkeypatch):
     """Unmergeable concurrent rewrites must fail closed, not ship one redaction.
 
     Both guardrails derive a full replacement string from the same snapshot, so
     writing either result would silently discard the other's redaction and leak
     the value it was configured to mask.
     """
-    litellm.callbacks = _two_interleaving_maskers(run_in_parallel=True)
+    monkeypatch.setattr(litellm, "callbacks", _two_interleaving_maskers(run_in_parallel=True))
     original = "mail jane.doe@example.com or call 415-555-0132"
 
     with pytest.raises(HTTPException) as exc_info:
