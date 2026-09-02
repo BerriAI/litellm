@@ -2,6 +2,7 @@
 
 import importlib.util
 import sys
+from argparse import Namespace
 from pathlib import Path
 
 import pytest
@@ -84,26 +85,72 @@ def test_dry_run_scans_cluster_aware_iterator_without_deleting() -> None:
     assert redis.unlink_calls == []
 
 
-def test_apply_deletes_only_unique_legacy_keys() -> None:
+def test_apply_requires_namespace() -> None:
     old_key = "global_router:id:model:rpm:13-07"
     redis = FakeRedis([old_key, old_key, "global_router:id:model:rpm:v2:29300000"], {old_key: -1})
 
-    report = cleanup.cleanup_legacy_keys(redis, apply=True)
+    with pytest.raises(ValueError, match="namespace"):
+        cleanup.cleanup_legacy_keys(redis, apply=True)
 
-    assert report.candidates == 1
+    assert redis.unlink_calls == []
+
+
+def test_apply_deletes_only_unique_permanent_legacy_keys() -> None:
+    permanent_key = "tenant-a:global_router:id:model:rpm:13-07"
+    finite_key = "tenant-a:global_router:id:model:tpm:13-07"
+    redis = FakeRedis(
+        [permanent_key, permanent_key, finite_key, "tenant-a:global_router:id:model:rpm:v2:29300000"],
+        {permanent_key: -1, finite_key: 30},
+    )
+
+    report = cleanup.cleanup_legacy_keys(redis, namespace="tenant-a", apply=True)
+
+    assert report.candidates == 2
+    assert report.permanent == 1
+    assert report.finite == 1
     assert report.deleted == 1
     assert report.failed == 0
-    assert redis.unlink_calls == [old_key]
+    assert redis.unlink_calls == [permanent_key]
 
 
 def test_apply_falls_back_to_single_key_delete() -> None:
-    old_key = "13-07:model"
+    old_key = "tenant-a:13-07:model"
     redis = DeleteOnlyRedis([old_key], {old_key: 9})
 
-    report = cleanup.cleanup_legacy_keys(redis, apply=True)
+    report = cleanup.cleanup_legacy_keys(redis, namespace="tenant-a", apply=True)
+
+    assert report.deleted == 0
+    assert redis.delete_calls == []
+
+
+def test_apply_falls_back_to_single_key_delete_for_permanent_key() -> None:
+    old_key = "tenant-a:13-07:model"
+    redis = DeleteOnlyRedis([old_key], {old_key: -1})
+
+    report = cleanup.cleanup_legacy_keys(redis, namespace="tenant-a", apply=True)
 
     assert report.deleted == 1
     assert redis.delete_calls == [old_key]
+
+
+def test_connection_overrides_require_an_explicit_host_and_port() -> None:
+    with pytest.raises(ValueError, match="--host"):
+        cleanup._connection_kwargs(Namespace(host=None, port=6380, db=None))
+    with pytest.raises(ValueError, match="--port"):
+        cleanup._connection_kwargs(Namespace(host="redis.example", port=None, db=None))
+
+
+def test_connection_overrides_do_not_accept_a_url() -> None:
+    kwargs = cleanup._connection_kwargs(Namespace(host="redis.example", port=6380, db=2))
+
+    assert kwargs == {"host": "redis.example", "port": 6380, "db": 2}
+
+
+def test_connection_overrides_do_not_mix_with_cluster_configuration(monkeypatch) -> None:
+    monkeypatch.setenv("REDIS_CLUSTER_NODES", '[{"host": "cluster.example", "port": 6379}]')
+
+    with pytest.raises(ValueError, match="Cluster or Sentinel"):
+        cleanup._connect(Namespace(host="redis.example", port=6380, db=None))
 
 
 def test_count_must_be_positive() -> None:

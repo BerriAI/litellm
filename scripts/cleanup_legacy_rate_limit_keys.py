@@ -10,15 +10,18 @@ Usage:
     python scripts/cleanup_legacy_rate_limit_keys.py [options]
 
 The Redis connection is read from LiteLLM's normal REDIS_* configuration. A
-namespace can be supplied to narrow the SCAN. redis-py RedisCluster's
-``scan_iter`` is used as-is, so cluster scans remain node-aware. Deletions are
-sent one key at a time to avoid a cross-slot multi-key command.
+namespace can be supplied to narrow the SCAN. Apply mode requires a namespace
+and removes only keys with a permanent TTL (``TTL=-1``), so a dry-run is the
+only unscoped mode and active finite-TTL counters are retained. redis-py
+RedisCluster's ``scan_iter`` is used as-is, so cluster scans remain node-aware.
+Deletions are sent one key at a time to avoid a cross-slot multi-key command.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from collections import Counter
@@ -128,6 +131,8 @@ def cleanup_legacy_keys(
     normalized_namespace = _normalize_namespace(namespace)
     if count <= 0:
         raise ValueError("count must be positive")
+    if apply and normalized_namespace is None:
+        raise ValueError("namespace is required when apply=True")
 
     scan_iter = getattr(client, "scan_iter", None)
     ttl = getattr(client, "ttl", None)
@@ -153,14 +158,16 @@ def cleanup_legacy_keys(
             report.ttl_errors += 1
             continue
 
+        is_permanent = False
         if ttl_value == -1:
             report.permanent += 1
+            is_permanent = True
         elif isinstance(ttl_value, int) and ttl_value >= 0:
             report.finite += 1
         else:
             report.unknown_ttl += 1
 
-        if apply:
+        if apply and is_permanent:
             try:
                 _delete_one(client, key)
             except Exception:
@@ -172,8 +179,12 @@ def cleanup_legacy_keys(
 
 
 def _connection_kwargs(args: argparse.Namespace) -> dict[str, object]:
+    if args.host is None and (args.port is not None or args.db is not None):
+        raise ValueError("--host is required when using --port or --db")
+    if args.host is not None and args.port is None:
+        raise ValueError("--port is required when using --host")
+
     values = {
-        "url": args.url,
         "host": args.host,
         "port": args.port,
         "db": args.db,
@@ -187,7 +198,10 @@ def _connect(args: argparse.Namespace) -> object:
     # and Cluster/Sentinel connection handling for the real command.
     from litellm._redis import get_redis_client
 
-    return get_redis_client(**_connection_kwargs(args))
+    connection_kwargs = _connection_kwargs(args)
+    if connection_kwargs and (os.getenv("REDIS_CLUSTER_NODES") or os.getenv("REDIS_SENTINEL_NODES")):
+        raise ValueError("explicit host overrides cannot be combined with Redis Cluster or Sentinel configuration")
+    return get_redis_client(**connection_kwargs)
 
 
 def _write_report(report: CleanupReport, *, apply: bool, json_output: bool) -> None:
@@ -216,10 +230,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--namespace", help="only inspect keys beginning with NAMESPACE:")
     parser.add_argument("--count", type=int, default=1000, help="Redis SCAN count hint (default: 1000)")
-    parser.add_argument("--url", help="Redis URL; otherwise use the normal REDIS_* configuration")
-    parser.add_argument("--host", help="Redis host override")
-    parser.add_argument("--port", type=int, help="Redis port override")
-    parser.add_argument("--db", type=int, help="Redis database override")
+    parser.add_argument("--host", help="Redis host override; use with --port")
+    parser.add_argument("--port", type=int, help="Redis port override; use with --host")
+    parser.add_argument("--db", type=int, help="Redis database override; use with --host")
     parser.add_argument("--json", action="store_true", dest="json_output", help="emit machine-readable JSON")
     parser.add_argument(
         "--apply",
