@@ -4706,9 +4706,10 @@ async def is_valid_fallback_model(
 
 
 # The shape abbreviate_api_key writes into LiteLLM_VerificationToken.key_name. The
-# last four characters are unconstrained because a custom key's are: a real key is
-# at least MINIMUM_CUSTOM_KEY_LENGTH long, so it can never fullmatch this itself.
-_MASKED_KEY_NAME_RE: Final = re.compile(r"sk-\.\.\.(?:\S{4})?")
+# last four characters are only barred from being whitespace or a control code,
+# because a custom key's can be anything else, punctuation and non-ASCII included;
+# a real key is at least MINIMUM_CUSTOM_KEY_LENGTH long, so it never fullmatches.
+_MASKED_KEY_NAME_RE: Final = re.compile(r"sk-\.\.\.(?:[^\s\x00-\x1f\x7f-\x9f]{4})?")
 
 
 def _apply_budget_exceeded_throttle(valid_token: UserAPIKeyAuth) -> bool:

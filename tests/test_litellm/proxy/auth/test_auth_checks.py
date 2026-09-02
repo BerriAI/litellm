@@ -7485,6 +7485,10 @@ async def _run_key_budget_check(key_name: str) -> str:
         "sk-mx5ous1o9Iezz5fj3pkLuA",
         "my-company-key-2026",
         "sk-...5LuA-but-longer",
+        # /key/generate takes a custom key ending in an escape sequence, and this
+        # message reaches a terminal and a log viewer
+        "sk-...\x1b[2J",
+        "sk-...a\x9bm",
     ],
 )
 async def test_key_budget_error_does_not_carry_a_raw_key_name(key_name):
