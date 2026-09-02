@@ -24811,6 +24811,8 @@ export interface components {
              * @enum {string}
              */
             boundary: "supported" | "uncertain" | "unsupported";
+            /** Observed Success Probability */
+            observed_success_probability?: number | null;
             /** Rule */
             rule: string;
         };
