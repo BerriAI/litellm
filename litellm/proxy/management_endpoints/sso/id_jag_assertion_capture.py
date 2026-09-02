@@ -69,3 +69,12 @@ def id_jag_assertion_capture_gap() -> str | None:
             )
         case _:
             assert_never(provider)
+
+
+def id_jag_assertion_capture_gap_at_startup() -> str | None:
+    """Config load runs before SSO settings stored in the database are reconciled into the process
+    environment, so an unresolved provider at that point is not yet a gap; the SSO callback reports it
+    once a login happens."""
+    if active_sso_provider() is ActiveSSOProvider.none:
+        return None
+    return id_jag_assertion_capture_gap()

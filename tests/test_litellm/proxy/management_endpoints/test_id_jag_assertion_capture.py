@@ -4,6 +4,7 @@ from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
     ActiveSSOProvider,
     active_sso_provider,
     id_jag_assertion_capture_gap,
+    id_jag_assertion_capture_gap_at_startup,
 )
 
 _SSO_ENV_VARS = (
@@ -98,3 +99,19 @@ class TestIdJagAssertionCaptureGap:
         gap = id_jag_assertion_capture_gap()
         assert gap is not None
         assert "google" in gap
+
+
+class TestIdJagAssertionCaptureGapAtStartup:
+    def test_no_provider_at_startup_is_not_yet_a_gap(self):
+        assert id_jag_assertion_capture_gap_at_startup() is None
+
+    def test_google_provider_at_startup_reports_the_capture_gap(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-cid")
+        startup_gap = id_jag_assertion_capture_gap_at_startup()
+        callback_gap = id_jag_assertion_capture_gap()
+        assert startup_gap is not None
+        assert startup_gap == callback_gap
+
+    def test_generic_provider_at_startup_has_no_gap(self, monkeypatch):
+        monkeypatch.setenv("GENERIC_CLIENT_ID", "generic-cid")
+        assert id_jag_assertion_capture_gap_at_startup() is None
