@@ -431,7 +431,11 @@ async def test_fake_stream_wraps_rust_response_as_anthropic_sse():
     response = cast(AnthropicMessagesResponse, dict(FAKE_MESSAGES_RESPONSE))
     stream = BaseLLMHTTPHandler._rust_anthropic_messages_fake_stream(response)
 
-    assert stream._hidden_params["additional_headers"] == {}
+    assert stream._hidden_params["core_engine"] == "rust"
+    assert stream._hidden_params["additional_headers"] == {
+        "x-litellm-core": "rust",
+        "x-litellm-rust": "true",
+    }
 
     chunks = [chunk async for chunk in stream]
     joined = b"".join(chunks)

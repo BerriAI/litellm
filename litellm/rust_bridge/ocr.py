@@ -106,7 +106,7 @@ def ocr(
         adapt=identity,
         mode=FallbackMode.PYTHON,
         context=BridgeErrorContext(route="ocr", provider=custom_llm_provider or "", model=model),
-    )
+    ).value
 
 
 async def aocr(
@@ -135,10 +135,12 @@ async def aocr(
             timeout_seconds=_timeout_to_seconds(timeout),
         )
     )
-    return await ainvoke(
-        native_call=native_call,
-        fallback=async_none,
-        adapt=identity,
-        mode=FallbackMode.PYTHON,
-        context=BridgeErrorContext(route="ocr", provider=custom_llm_provider or "", model=model),
-    )
+    return (
+        await ainvoke(
+            native_call=native_call,
+            fallback=async_none,
+            adapt=identity,
+            mode=FallbackMode.PYTHON,
+            context=BridgeErrorContext(route="ocr", provider=custom_llm_provider or "", model=model),
+        )
+    ).value

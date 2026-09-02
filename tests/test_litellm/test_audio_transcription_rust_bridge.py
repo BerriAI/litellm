@@ -133,6 +133,11 @@ def test_bedrock_transcription_uses_rust_only_path() -> None:
         rust_bridge.configure_rust_transcription(transcription=None, atranscription=None)
 
     assert response.text == "rust"
+    assert response._hidden_params["core_engine"] == "rust"
+    assert response._hidden_params["additional_headers"] == {
+        "x-litellm-core": "rust",
+        "x-litellm-rust": "true",
+    }
 
 
 @pytest.mark.asyncio
@@ -150,3 +155,8 @@ async def test_bedrock_atranscription_uses_rust_only_path() -> None:
         rust_bridge.configure_rust_transcription(transcription=None, atranscription=None)
 
     assert response.text == "rust"
+    assert response._hidden_params["core_engine"] == "rust"
+    assert response._hidden_params["additional_headers"] == {
+        "x-litellm-core": "rust",
+        "x-litellm-rust": "true",
+    }

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol, cast
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -28,12 +28,15 @@ from litellm.rust_bridge.bindings import UNSET, NativeBinding, Unset
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.runtime import (
     BridgeErrorContext,
+    CoreEngine,
+    ExecutionResult,
     FallbackMode,
     RustDeclined,
     RustHandled,
     aattempt,
     ainvoke,
     attempt,
+    execution_hidden_params,
     identity,
     invoke,
 )
@@ -50,6 +53,7 @@ RUST_CHAT_COMPLETIONS_PROVIDERS: Final = frozenset({"anthropic", "bedrock"})
 # `litellm_params` values are `object`, so validate the one this module reads
 # rather than narrowing an unparameterized `Mapping` and typing the result Any.
 _LITELLM_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
 
 class RustChatCompletions(Protocol):
     def __call__(
@@ -265,10 +269,29 @@ def _build_model_response(
     built: Final = convert_to_model_response_object(
         response_object=dict(rust_response),  # mutable-ok: the converter takes a real dict and rewrites it
         model_response_object=model_response,
+        hidden_params=execution_hidden_params(None, CoreEngine.RUST),  # mutable-ok: rewritten by the converter
     )
     if not isinstance(built, ModelResponse):
         raise TypeError(f"expected a ModelResponse from the rust path, got {type(built).__name__}")
     return built
+
+
+def _unwrap_execution(result: ExecutionResult[object]) -> object:
+    value: Final = result.value
+    if isinstance(value, ModelResponse):
+        raw_hidden_params: Final = cast(
+            object,
+            value._hidden_params,  # pyright: ignore[reportPrivateUsage]  # ModelResponse has no public metadata getter
+        )
+        hidden_params: Final = (
+            cast(Mapping[str, object], raw_hidden_params)  # cast-ok: guarded by the mapping check
+            if isinstance(raw_hidden_params, Mapping)
+            else None
+        )
+        value._hidden_params = execution_hidden_params(  # pyright: ignore[reportPrivateUsage]  # ModelResponse has no public metadata setter
+            hidden_params, result.source
+        )
+    return value
 
 
 def chat_completions(
@@ -387,12 +410,14 @@ def chat_completions_or_fallback(
         on_response(rust_response)
         return _build_model_response(rust_response, model_response)
 
-    return invoke(
-        native_call=native_call,
-        fallback=python_fallback,
-        adapt=adapt,
-        mode=FallbackMode.PYTHON,
-        context=BridgeErrorContext(route="chat completions", provider=custom_llm_provider or "", model=model),
+    return _unwrap_execution(
+        invoke(
+            native_call=native_call,
+            fallback=python_fallback,
+            adapt=adapt,
+            mode=FallbackMode.PYTHON,
+            context=BridgeErrorContext(route="chat completions", provider=custom_llm_provider or "", model=model),
+        )
     )
 
 
@@ -430,10 +455,12 @@ async def achat_completions_or_fallback(
         on_response(rust_response)
         return _build_model_response(rust_response, model_response)
 
-    return await ainvoke(
-        native_call=native_call,
-        fallback=python_fallback,
-        adapt=adapt,
-        mode=FallbackMode.PYTHON,
-        context=BridgeErrorContext(route="chat completions", provider=custom_llm_provider or "", model=model),
+    return _unwrap_execution(
+        await ainvoke(
+            native_call=native_call,
+            fallback=python_fallback,
+            adapt=adapt,
+            mode=FallbackMode.PYTHON,
+            context=BridgeErrorContext(route="chat completions", provider=custom_llm_provider or "", model=model),
+        )
     )

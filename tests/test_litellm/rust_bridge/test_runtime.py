@@ -44,7 +44,8 @@ def test_invoke_tags_native_decline_before_running_fallback() -> None:
         context=context(),
     )
 
-    assert value == "fallback"
+    assert value.value == "fallback"
+    assert value.source is runtime.CoreEngine.PYTHON
     assert calls == ["rust", "python"]
 
 
@@ -62,6 +63,10 @@ def test_invoke_translates_upstream_without_fallback() -> None:
         )
 
     assert caught.value.status_code == 429
+    assert caught.value.headers == {
+        "x-litellm-core": "rust",
+        "x-litellm-rust": "true",
+    }
 
 
 @pytest.mark.asyncio
@@ -72,16 +77,38 @@ async def test_ainvoke_handles_native_success() -> None:
     async def fallback() -> str:
         pytest.fail("fallback must not run")
 
-    assert (
-        await runtime.ainvoke(
-            native_call=native,
-            fallback=fallback,
-            adapt=str,
-            mode=runtime.FallbackMode.PYTHON,
-            context=context(),
-        )
-        == "3"
+    result = await runtime.ainvoke(
+        native_call=native,
+        fallback=fallback,
+        adapt=str,
+        mode=runtime.FallbackMode.PYTHON,
+        context=context(),
     )
+    assert result.value == "3"
+    assert result.source is runtime.CoreEngine.RUST
+
+
+def test_execution_hidden_params_overwrites_reserved_provider_headers() -> None:
+    hidden_params = runtime.execution_hidden_params(
+        {
+            "provider": "anthropic",
+            "additional_headers": {
+                "request-id": "req-1",
+                "X-LiteLLM-Core": "spoofed",
+                "x-litellm-rust": "spoofed",
+            },
+        },
+        runtime.CoreEngine.PYTHON,
+    )
+
+    assert hidden_params == {
+        "provider": "anthropic",
+        "core_engine": "python",
+        "additional_headers": {
+            "request-id": "req-1",
+            "x-litellm-core": "python",
+        },
+    }
 
 
 def test_required_mode_rejects_unavailable_bridge() -> None:

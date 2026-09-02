@@ -78,14 +78,13 @@ async def test_adapter_raises_clean_close_when_rust_connection_ends() -> None:
 async def test_bridge_unavailable_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: None)
 
-    assert (
-        await responses_websocket.connect(
-            url="wss://example.test/responses",
-            headers={},
-            timeout=None,
-        )
-        is None
+    result = await responses_websocket.connect(
+        url="wss://example.test/responses",
+        headers={},
+        timeout=None,
     )
+    assert result.value is None
+    assert result.source is responses_websocket.CoreEngine.PYTHON
 
 
 @pytest.mark.asyncio
@@ -94,13 +93,16 @@ async def test_enabled_bridge_connects_and_adapts_socket(
 ) -> None:
     responses_websocket.set_rust_responses_websocket(connection=_FakeNativeBridge)
 
-    connection = await responses_websocket.connect(
+    result = await responses_websocket.connect(
         url="wss://example.test/responses",
         headers={"Authorization": "Bearer key"},
         timeout=1.0,
     )
 
+    assert result.source is responses_websocket.CoreEngine.RUST
+    connection = result.value
     assert connection is not None
+    assert connection.core_engine is responses_websocket.CoreEngine.RUST
     await connection.send("response.create")
     assert await connection.recv() == "response.completed"
     await connection.close()
