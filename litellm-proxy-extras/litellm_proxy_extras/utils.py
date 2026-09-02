@@ -721,8 +721,11 @@ class ProxyExtrasDBManager:
         INVALID (a migration deadlock between replicas is the usual cause; the
         retried migration skips them because of IF NOT EXISTS). Never raises:
         returns True when no invalid index remains, False when the repair was
-        skipped or failed and will be retried on the next startup."""
-        database_url: Final = os.getenv("DATABASE_URL")
+        skipped or failed and will be retried on the next startup. Runs over
+        DIRECT_URL when set: the session settings, the advisory lock and REINDEX
+        CONCURRENTLY all need one server session, which a transaction pooler
+        does not give."""
+        database_url: Final = os.getenv("DIRECT_URL") or os.getenv("DATABASE_URL")
         if not database_url:
             return False
 
