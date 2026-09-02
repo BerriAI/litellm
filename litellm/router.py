@@ -12636,6 +12636,8 @@ class Router:
         registered_model_name: str,
         request_kwargs: Mapping[str, object],
     ) -> str:
+        if not any((self.auto_routers, self.complexity_routers, self.adaptive_routers, self.quality_routers)):
+            return registered_model_name
         cache_key: Final = self._claude_code_session_router_cache_key(request_kwargs)
         if cache_key is None or not isinstance(request_kwargs, dict):
             return registered_model_name
