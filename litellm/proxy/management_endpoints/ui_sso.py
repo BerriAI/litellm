@@ -810,7 +810,6 @@ def normalize_email(email: str | None) -> str | None:
     return email.lower() if isinstance(email, str) else email
 
 
-
 def determine_role_from_groups(
     user_groups: list[str],
     role_mappings: "RoleMappings",
