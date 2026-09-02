@@ -2817,6 +2817,34 @@
     "default_model_placeholder": "scx-ai/GLM-5.2"
   },
   {
+    "provider": "OpenZoo",
+    "provider_display_name": "OpenZoo",
+    "litellm_provider": "openzoo",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.openzoo.fun/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": "sk-openzoo",
+        "tooltip": "OpenZoo does not require signup. Any key value works; usage is billed per call.",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "openzoo/z-ai/glm-5.3-flash"
+  },
+  {
     "provider": "Snowflake",
     "provider_display_name": "Snowflake",
     "litellm_provider": "snowflake",

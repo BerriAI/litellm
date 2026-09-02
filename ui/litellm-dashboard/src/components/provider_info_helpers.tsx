@@ -43,6 +43,7 @@ import nvidiaTritonLogo from "../../public/assets/logos/nvidia_triton.png";
 import ollamaLogo from "../../public/assets/logos/ollama.svg";
 import openaiSmallLogo from "../../public/assets/logos/openai_small.svg";
 import openrouterLogo from "../../public/assets/logos/openrouter.svg";
+import openzooLogo from "../../public/assets/logos/openzoo.svg";
 import oracleLogo from "../../public/assets/logos/oracle.svg";
 import perplexityAiLogo from "../../public/assets/logos/perplexity-ai.svg";
 import qwenLogo from "../../public/assets/logos/qwen.png";
@@ -144,6 +145,7 @@ export enum Providers {
   OpenAI_Text = "OpenAI Text Completion",
   OpenAI_Text_Compatible = "OpenAI-Compatible Completions (legacy /v1/completions)",
   Openrouter = "Openrouter",
+  OpenZoo = "OpenZoo",
   Oracle = "Oracle Cloud Infrastructure (OCI)",
   OVHCLOUD = "Ovhcloud",
   Perplexity = "Perplexity",
@@ -256,6 +258,7 @@ export const provider_map: Record<string, string> = {
   OpenAI_Text: "text-completion-openai",
   OpenAI_Text_Compatible: "text-completion-openai",
   Openrouter: "openrouter",
+  OpenZoo: "openzoo",
   Oracle: "oci",
   OVHCLOUD: "ovhcloud",
   Perplexity: "perplexity",
@@ -355,6 +358,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.OpenAI_Text_Compatible]: openaiSmallLogo.src,
   [Providers.OpenAI_Compatible]: openaiSmallLogo.src,
   [Providers.Openrouter]: openrouterLogo.src,
+  [Providers.OpenZoo]: openzooLogo.src,
   [Providers.Oracle]: oracleLogo.src,
   [Providers.Perplexity]: perplexityAiLogo.src,
   [Providers.RECRAFT]: recraftLogo.src,
@@ -426,6 +430,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Google_AI_Studio]: "gemini-pro",
   [Providers.JinaAI]: "jina_ai/",
   [Providers.NVIDIA_RIVA]: "nvidia_riva/nvidia/parakeet-ctc-1_1b-asr",
+  [Providers.OpenZoo]: "openzoo/z-ai/glm-5.3-flash",
   [Providers.Oracle]: "oci/xai.grok-4",
   [Providers.RunwayML]: "runwayml/gen4_turbo",
   [Providers.SageMaker]: "sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b",
