@@ -1213,7 +1213,8 @@ async def _block_team_keys_of_removed_members(
     tokens_db: "TableActions[prisma_models.LiteLLM_VerificationToken]",
 ) -> None:
     for key_row in keys:
-        await _set_member_removal_block(key_row=key_row, blocked=True, tokens_db=tokens_db)
+        if not key_row.blocked:
+            await _set_member_removal_block(key_row=key_row, blocked=True, tokens_db=tokens_db)
 
 
 async def _unblock_team_keys_of_readded_members(
