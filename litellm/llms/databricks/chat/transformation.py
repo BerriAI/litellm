@@ -56,6 +56,14 @@ from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import DatabricksBase, DatabricksException
 
 
+def _is_bare_assistant_message(message_dict: dict[str, Any]) -> bool:
+    """Databricks rejects assistant messages with neither content nor tool calls, e.g. a replayed
+    thinking-only turn once its `thinking_blocks` are stripped."""
+    return message_dict.get("role") == "assistant" and not any(
+        message_dict.get(key) for key in ("content", "tool_calls", "function_call")
+    )
+
+
 def _sanitize_empty_content(message_dict: dict[str, Any]) -> None:
     """
     Remove or filter content so empty text blocks are not sent.
@@ -434,6 +442,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             if "cache_control" in _message and isinstance(_message.get("content"), str):
                 _message = self._move_cache_control_into_string_content_block(_message)
             _sanitize_empty_content(cast(dict[str, Any], _message))
+            if _is_bare_assistant_message(cast(dict[str, Any], _message)):
+                continue
             new_messages.append(_message)
 
         if "claude" not in model:

@@ -284,9 +284,51 @@ def test_transform_request_strips_thinking_blocks_and_reasoning_content():
 
     assert result[1] == {"role": "assistant", "content": "Hello! How can I help?"}
     assert not any(
-        key in message for message in result for key in ("thinking_blocks", "reasoning_content", "provider_specific_fields")
+        key in message
+        for message in result
+        for key in ("thinking_blocks", "reasoning_content", "provider_specific_fields")
     )
     assert "thinking_blocks" in messages[1]
+
+
+def test_transform_request_drops_thinking_only_assistant_turn_but_keeps_tool_call_turn():
+    """A replayed thinking-only assistant turn has nothing left once `thinking_blocks` are stripped, so it must be
+    dropped instead of being sent as a bare {"role": "assistant"}. A thinking + tool_use turn keeps its tool_calls."""
+    config = DatabricksConfig()
+    tool_call = {"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [{"type": "thinking", "thinking": "hmm", "signature": "sig_1"}],
+            "reasoning_content": "hmm",
+        },
+        {"role": "user", "content": "again"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [{"type": "thinking", "thinking": "call f", "signature": "sig_2"}],
+            "reasoning_content": "call f",
+            "tool_calls": [tool_call],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+    ]
+
+    result = config.transform_request(
+        model="databricks-claude-opus-5",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )["messages"]
+
+    assert result == [
+        {"role": "user", "content": "hi"},
+        {"role": "user", "content": "again"},
+        {"role": "assistant", "tool_calls": [tool_call]},
+        {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+    ]
 
 
 def _parallel_tool_calls():
