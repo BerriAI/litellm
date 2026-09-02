@@ -70,10 +70,12 @@ pub struct MistralOcrConfig;
 pub const MISTRAL_OCR_CONFIG: MistralOcrConfig = MistralOcrConfig;
 
 impl OcrProviderConfig for MistralOcrConfig {
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn supported_ocr_params(&self) -> &'static [&'static str] {
         SUPPORTED_OCR_PARAMS
     }
 
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_ocr_request(
         &self,
         model: &str,
@@ -100,6 +102,7 @@ impl OcrProviderConfig for MistralOcrConfig {
         })
     }
 
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_ocr_response(
         &self,
         model: &str,
@@ -134,6 +137,7 @@ impl OcrProviderConfig for MistralOcrConfig {
         })
     }
 
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn complete_url(
         &self,
         api_base: Option<&str>,
@@ -153,6 +157,7 @@ impl OcrProviderConfig for MistralOcrConfig {
     }
 }
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub fn supported_ocr_params() -> &'static [&'static str] {
     MISTRAL_OCR_CONFIG.supported_ocr_params()
 }
@@ -161,6 +166,7 @@ pub fn map_ocr_params(non_default_params: &Map<String, Value>) -> Map<String, Va
     MISTRAL_OCR_CONFIG.map_ocr_params(non_default_params)
 }
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub fn transform_ocr_request(
     model: &str,
     document: Value,
@@ -169,6 +175,7 @@ pub fn transform_ocr_request(
     MISTRAL_OCR_CONFIG.transform_ocr_request(model, document, optional_params)
 }
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub fn transform_ocr_response(model: &str, response_json: Value) -> Result<OcrResponseData, Error> {
     MISTRAL_OCR_CONFIG.transform_ocr_response(model, response_json)
 }
