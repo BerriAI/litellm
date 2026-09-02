@@ -8500,6 +8500,26 @@ class TestClaudeCodeSubagentSessionRouterBinding:
         redis_cache.async_delete_cache.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_no_pre_routing_strategies_means_no_session_cache_traffic(self):
+        from litellm.caching.caching import RedisCache
+
+        router = self._router()
+        router.complexity_routers = {}
+        redis_cache = MagicMock(spec=RedisCache)
+        redis_cache.async_get_cache = AsyncMock(return_value=None)
+        redis_cache.async_set_cache = AsyncMock()
+        redis_cache.async_delete_cache = AsyncMock()
+        router._update_redis_cache(cache=redis_cache)
+
+        for request_kwargs in (self._request_kwargs(), self._request_kwargs(agent_id="agent-1234")):
+            response = await router.async_pre_routing_hook(model="expensive-model", request_kwargs=request_kwargs)
+            assert response is None
+
+        redis_cache.async_get_cache.assert_not_awaited()
+        redis_cache.async_set_cache.assert_not_awaited()
+        redis_cache.async_delete_cache.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_session_bindings_do_not_evict_router_rate_limit_state(self):
         router = self._router()
         assert router._update_usage(deployment_id="deployment-id", parent_otel_span=None) == 1
