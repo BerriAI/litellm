@@ -1261,7 +1261,10 @@ async def get_global_spend_report(
     ),
     api_key: str | None = fastapi.Query(
         default=None,
-        description="View spend for a specific api_key. Example api_key='sk-1234",
+        description=(
+            "View spend for a specific api_key. Pass the key's sha256 hash so the raw key stays "
+            "out of URLs and access logs. Example api_key='d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa'"
+        ),
     ),
     internal_user_id: str | None = fastapi.Query(
         default=None,
@@ -1742,7 +1745,11 @@ async def get_key_spend_report(
     api_key: Annotated[
         str | None,
         fastapi.Query(
-            description="View spend for a specific api_key. Proxy admin only; other callers are scoped to their own key."
+            description=(
+                "View spend for a specific api_key. Proxy admin only; other callers are scoped to their "
+                "own key. Pass the key's sha256 hash so the raw key stays out of URLs and access logs. "
+                "Example api_key='d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa'"
+            )
         ),
     ] = None,
 ) -> Sequence[Mapping[str, object]]:
@@ -3002,7 +3009,7 @@ async def view_spend_logs(
 
     Example Request for specific api_key
     ```
-    curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=sk-test-example-key-123" \
+    curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" \
 -H "Authorization: Bearer sk-1234"
     ```
 
