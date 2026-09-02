@@ -17,3 +17,11 @@ python3 tests/sdk_function_trace/list_python_steps.py --route chat_completions -
 Routes are `chat_completions`, `audio_transcription`, `messages`, and `ocr`; omit `--route` to list all. Omit `--signatures` or `--calls` for shorter output. `--repo /path/to/litellm` reads another checkout
 
 The listing reads source declarations and direct call sites, including conditional branches. It covers SDK entrypoints, shared handlers and bases, and selected provider paths. It reports missing selected functions as `NOT FOUND`; it does not execute calls or claim runtime ordering
+
+For the equivalent Rust listing:
+
+```bash
+uv run tests/sdk_function_trace/list_rust_steps.py --route ocr --signatures --calls
+```
+
+It accepts the same route and output flags. `uv` installs the two pinned parser packages in an isolated script environment; it does not build Rust or install LiteLLM. The listing includes bridge functions, trait declarations, implementations and call sites from core/provider and gateway route modules. Macros are named but not expanded, conditional compilation is not evaluated, and test modules/files are omitted
