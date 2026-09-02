@@ -496,3 +496,70 @@ async def test_async_invoke_streaming_forwards_bedrock_response_headers():
 
     assert stream._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "req-987"
 
+
+@pytest.mark.parametrize(
+    "timeout",
+    [
+        pytest.param(1.25, id="numeric"),
+        pytest.param(httpx.Timeout(1.5), id="httpx-timeout"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_async_invoke_streaming_forwards_timeout_to_existing_client(timeout):
+    async def _no_bytes(chunk_size=None):
+        return
+        yield b""
+
+    response = MagicMock()
+    response.status_code = 200
+    response.aiter_bytes = _no_bytes
+    response.headers = httpx.Headers()
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(return_value=response)
+
+    await litellm.acompletion(
+        model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        timeout=timeout,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+    )
+
+    assert client.post.await_args.kwargs["timeout"] == timeout
+
+
+@pytest.mark.asyncio
+async def test_make_call_sets_timeout_on_httpx_request_transport():
+    transport = MagicMock(return_value=httpx.Response(200, content=b""))
+    timeout = httpx.Timeout(connect=1.0, read=2.0, write=3.0, pool=4.0)
+    client = AsyncHTTPHandler()
+    await client.client.aclose()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+
+    try:
+        await make_call(
+            client=client,
+            api_base=(
+                "https://bedrock-runtime.us-east-1.amazonaws.com/model/"
+                "anthropic.claude-sonnet-4-6/invoke-with-response-stream"
+            ),
+            headers={},
+            data="{}",
+            model="anthropic.claude-sonnet-4-6",
+            messages=[],
+            logging_obj=MagicMock(),
+            timeout=timeout,
+        )
+    finally:
+        await client.client.aclose()
+
+    assert transport.call_args.args[0].extensions["timeout"] == {
+        "connect": 1.0,
+        "read": 2.0,
+        "write": 3.0,
+        "pool": 4.0,
+    }
+

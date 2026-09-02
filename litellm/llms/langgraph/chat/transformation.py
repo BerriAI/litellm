@@ -286,6 +286,7 @@ class LangGraphConfig(BaseConfig):
         client: Union[HTTPHandler, "AsyncHTTPHandler"] | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> CustomStreamWrapper:
         """
         Get a CustomStreamWrapper for synchronous streaming.
@@ -345,6 +346,7 @@ class LangGraphConfig(BaseConfig):
         client: Optional["AsyncHTTPHandler"] = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> CustomStreamWrapper:
         """
         Get a CustomStreamWrapper for asynchronous streaming.

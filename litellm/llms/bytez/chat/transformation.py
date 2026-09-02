@@ -259,6 +259,7 @@ class BytezChatConfig(BaseConfig):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> "BytezCustomStreamWrapper":
         if client is None or isinstance(client, AsyncHTTPHandler):
             client = _get_httpx_client(params={})
@@ -301,6 +302,7 @@ class BytezChatConfig(BaseConfig):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> "BytezCustomStreamWrapper":
         if client is None or isinstance(client, HTTPHandler):
             client = get_async_httpx_client(llm_provider=LlmProviders.BYTEZ, params={})

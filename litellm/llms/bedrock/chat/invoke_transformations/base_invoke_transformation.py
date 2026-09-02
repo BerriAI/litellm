@@ -446,6 +446,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         client: AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> CustomStreamWrapper:
         completion_stream, response_headers = await make_call(
             client=client,
@@ -458,6 +459,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             fake_stream=True if "ai21" in api_base else False,
             bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
             json_mode=json_mode,
+            timeout=timeout,
         )
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -481,6 +483,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> CustomStreamWrapper:
         sync_client: Final = (
             _get_httpx_client(params={}) if client is None or isinstance(client, AsyncHTTPHandler) else client
@@ -497,6 +500,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             fake_stream=True if "ai21" in api_base else False,
             bedrock_invoke_provider=self.get_bedrock_invoke_provider(model),
             json_mode=json_mode,
+            timeout=timeout,
         )
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
