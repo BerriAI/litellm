@@ -21,19 +21,20 @@ pub enum Error {
     Http { status: u16, body: String },
     #[error("upstream network error: {0}")]
     Network(String),
-    /// The provider was never reached: DNS, TCP, TLS or proxy setup failed
-    /// before any byte of the request went out. Nothing was billed, so a host
-    /// that keeps a reference implementation can serve the request itself.
-    /// A timeout is deliberately not this, since the provider may have received
-    /// and answered the request already.
-    #[error("could not reach the provider: {0}")]
-    Connect(String),
     #[error("routing error: {0}")]
     Routing(String),
     /// The request is outside the surface this route covers in Rust. Hosts that
     /// keep a reference implementation treat this as "fall back", not "fail".
     #[error("unsupported by the rust path: {0}")]
     Unsupported(&'static str),
+}
+
+/// Re-tag an error raised after the provider has already returned a response.
+pub(crate) fn as_response_error(err: Error) -> Error {
+    match err {
+        already @ (Error::InvalidResponse(_) | Error::Http { .. }) => already,
+        other => Error::InvalidResponse(other.to_string()),
+    }
 }
 
 pub fn json_type_name(value: &serde_json::Value) -> &'static str {
@@ -44,5 +45,36 @@ pub fn json_type_name(value: &serde_json::Value) -> &'static str {
         serde_json::Value::String(_) => "string",
         serde_json::Value::Array(_) => "array",
         serde_json::Value::Object(_) => "object",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn response_errors_collapse_to_one_non_retryable_variant() {
+        for original in [
+            Error::MissingField("usage"),
+            Error::Unsupported("non-text response content block"),
+            Error::InvalidRequest("whatever".to_string()),
+            Error::Auth("whatever".to_string()),
+        ] {
+            assert!(matches!(
+                as_response_error(original),
+                Error::InvalidResponse(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn response_errors_preserve_an_upstream_status() {
+        assert!(matches!(
+            as_response_error(Error::Http {
+                status: 500,
+                body: "boom".to_string()
+            }),
+            Error::Http { status: 500, .. }
+        ));
     }
 }

@@ -29,28 +29,15 @@ pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
 
 /// Map a core error for a route whose host keeps a Python implementation.
 ///
-/// The distinction the host needs is whether the provider was already called.
-/// Everything raised before the request goes out is safe for the host to retry
-/// on its own path; anything after it is not, because the provider has already
-/// done the work and billed for it.
-pub(crate) fn chat_completions_error_to_pyerr(err: Error) -> PyErr {
+/// Only an explicit capability decline permits the host to try Python. Every
+/// other error may have happened after provider dispatch and must be terminal.
+pub(crate) fn fallback_route_error_to_pyerr(err: Error) -> PyErr {
     match err {
-        Error::Unsupported(_)
-        | Error::Auth(_)
-        | Error::InvalidProvider(_)
-        | Error::InvalidRequest(_)
-        | Error::InvalidType { .. }
-        | Error::MissingField(_)
-        | Error::Routing(_)
-        // Nothing reached the provider, so serving it on Python cannot double
-        // bill and is the only way the caller gets an answer at all.
-        | Error::Connect(_) => RustBridgeDeclined::new_err(err.to_string()),
+        Error::Unsupported(_) => RustBridgeDeclined::new_err(err.to_string()),
         Error::Http { status, body } => {
             RustUpstreamError::new_err((status, format!("{status}: {body}")))
         }
-        Error::Network(message) | Error::InvalidResponse(message) => {
-            RustUpstreamError::new_err((0u16, message))
-        }
+        other => RustUpstreamError::new_err((0u16, other.to_string())),
     }
 }
 
@@ -58,4 +45,54 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = module.py();
     module.add("RustBridgeDeclined", py.get_type::<RustBridgeDeclined>())?;
     module.add("RustUpstreamError", py.get_type::<RustUpstreamError>())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fallback_routes_distinguish_declines_from_upstream_failures() {
+        Python::initialize();
+        Python::attach(|py| {
+            let declines = [Error::Unsupported("unsupported")];
+            for error in declines {
+                let mapped = fallback_route_error_to_pyerr(error);
+                assert!(mapped.is_instance_of::<RustBridgeDeclined>(py));
+            }
+
+            let upstream_failures = [
+                (
+                    Error::Http {
+                        status: 429,
+                        body: "rate limited".to_string(),
+                    },
+                    (429, "429: rate limited"),
+                ),
+                (
+                    Error::Network("request timed out".to_string()),
+                    (0, "upstream network error: request timed out"),
+                ),
+                (
+                    Error::InvalidResponse("bad JSON".to_string()),
+                    (0, "invalid response: bad JSON"),
+                ),
+                (Error::Auth("missing key".to_string()), (0, "missing key")),
+                (
+                    Error::InvalidRequest("invalid".to_string()),
+                    (0, "invalid request: invalid"),
+                ),
+            ];
+            for (error, expected) in upstream_failures {
+                let mapped = fallback_route_error_to_pyerr(error);
+                assert!(mapped.is_instance_of::<RustUpstreamError>(py));
+                let args: (u16, String) = mapped
+                    .value(py)
+                    .getattr("args")
+                    .and_then(|args| args.extract())
+                    .expect("upstream error should carry status and message");
+                assert_eq!(args, (expected.0, expected.1.to_string()));
+            }
+        });
+    }
 }
