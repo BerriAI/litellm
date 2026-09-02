@@ -4743,6 +4743,118 @@ async def test_streaming_responses_reasoning_summary_deltas_are_scanned_alongsid
     assert "Streaming response blocked by Model Armor" in rendered
 
 
+@pytest.mark.asyncio
+async def test_streaming_responses_deltas_of_separate_fields_do_not_form_a_finding_across_their_boundary():
+    """Two fields of a turn are separate text, so what runs across their boundary is not model output.
+
+    A reasoning summary ending in half a card number and an answer opening with the other half
+    each carry nothing to find, and joining them without a break would invent one.
+    """
+    from litellm.types.llms.openai import (
+        OutputTextDeltaEvent,
+        ReasoningSummaryTextDeltaEvent,
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    answer = "1111-1111 is not a full card"
+    summary_delta = ReasoningSummaryTextDeltaEvent(
+        type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
+        item_id="rs_1",
+        output_index=0,
+        delta="the prefix they gave me is 4111-1111-",
+    )
+    text_delta = OutputTextDeltaEvent(
+        type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+        item_id="msg_1",
+        output_index=1,
+        content_index=0,
+        delta=answer,
+    )
+    completed = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=ResponsesAPIResponse(
+            id="resp_1",
+            created_at=0,
+            model="gpt-5-mini",
+            object="response",
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": answer, "annotations": []}],
+                }
+            ],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+        ),
+    )
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_CLEAN)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, (summary_delta, text_delta, completed))
+
+    post.assert_called_once()
+    scanned = post.call_args.kwargs["json"]["modelResponseData"]["text"]
+    assert "4111-1111-" in scanned
+    assert answer in scanned
+    assert "4111-1111-1111-1111" not in scanned
+    rendered = "".join(str(item) for item in delivered)
+    assert "Streaming response blocked by Model Armor" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_streaming_responses_one_fields_deltas_still_join_into_a_single_finding():
+    """A card number split across two deltas of one field is still one card number to scan."""
+    from litellm.types.llms.openai import (
+        OutputTextDeltaEvent,
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    halves = ("my card is 4111-1111-", "1111-1111")
+    text_deltas = tuple(
+        OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            delta=half,
+        )
+        for half in halves
+    )
+    completed = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=ResponsesAPIResponse(
+            id="resp_1",
+            created_at=0,
+            model="gpt-5-mini",
+            object="response",
+            output=[],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+        ),
+    )
+    guardrail = _surface_guardrail()
+    post = _armor_post_mock(_MODEL_ARMOR_BLOCK)
+
+    with patch.object(guardrail.async_handler, "post", post):
+        delivered = await _drain_surface_hook(guardrail, (*text_deltas, completed))
+
+    post.assert_called_once()
+    assert "4111-1111-1111-1111" in post.call_args.kwargs["json"]["modelResponseData"]["text"]
+    rendered = "".join(str(item) for item in delivered)
+    assert "4111-1111-1111-1111" not in rendered
+    assert "Streaming response blocked by Model Armor" in rendered
+
+
 def test_every_responses_delta_event_is_in_the_scanned_set():
     """Every ``.delta`` the Responses event enum defines is model output on its way to the client."""
     from litellm.proxy.guardrails.guardrail_hooks.model_armor.model_armor import (

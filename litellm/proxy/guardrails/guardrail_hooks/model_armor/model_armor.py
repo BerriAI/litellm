@@ -69,6 +69,10 @@ _RESPONSES_DELTA_EVENT_TYPES: Final = frozenset(
     event.value for event in ResponsesAPIStreamEvents if event.value.endswith(".delta")
 )
 
+# What makes two delta events part of the same field of the turn, rather than two fields that merely
+# streamed next to each other
+_RESPONSES_DELTA_FIELD_ATTRS: Final = ("type", "item_id", "output_index", "content_index", "summary_index")
+
 
 class _StreamSurface(Enum):
     """Wire format of a buffered streaming response, which decides how it is read and how it is refused."""
@@ -975,13 +979,27 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         return self._extract_content_from_response(assembled_response)
 
     @staticmethod
+    def _responses_delta_field(chunk: object) -> tuple[str, ...]:
+        """Which field of the turn a delta event belongs to."""
+        return tuple(str(getattr(chunk, attr, None)) for attr in _RESPONSES_DELTA_FIELD_ATTRS)
+
+    @staticmethod
     def _responses_delta_text(all_chunks: Sequence[object]) -> str:
-        """Text a ``/v1/responses`` stream has already spelled out in its delta events."""
-        return "".join(
-            delta
+        """Text a ``/v1/responses`` stream has already spelled out in its delta events.
+
+        One field's deltas are joined as they streamed, since a finding can be split across them,
+        and separate fields stay apart, so a reasoning summary running into the visible answer
+        cannot spell out a finding that neither of them carries.
+        """
+        deltas: Final = tuple(
+            (ModelArmorGuardrail._responses_delta_field(chunk), delta)
             for chunk in all_chunks
             if getattr(chunk, "type", None) in _RESPONSES_DELTA_EVENT_TYPES
             and isinstance(delta := getattr(chunk, "delta", None), str)
+        )
+        return "\n".join(
+            "".join(delta for field, delta in deltas if field == streamed_field)
+            for streamed_field in dict.fromkeys(field for field, _ in deltas)
         )
 
     def _streaming_content_to_scan(
