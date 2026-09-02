@@ -1,0 +1,25 @@
+{
+  "order": 40,
+  "id": "existing_e2e_test_sdk",
+  "label": "Existing e2e SDK tests",
+  "description": "Run the SDK-level e2e provider tests that already live under tests/ once per Rust/Python environment variant, so a real end-to-end call proves parity instead of only a bridge-level comparison.",
+  "variants": [
+    {"name": "python", "env": {"LITELLM_USE_RUST_OCR": "0"}},
+    {"name": "rust", "env": {"LITELLM_USE_RUST_OCR": "1"}}
+  ],
+  "functions": {
+    "core/ocr": {
+      "coverage": "partial",
+      "selectors": [
+        "tests/ocr_tests/test_ocr_mistral.py",
+        "tests/ocr_tests/test_ocr_azure_ai.py",
+        "tests/ocr_tests/test_ocr_azure_document_intelligence.py",
+        "tests/ocr_tests/test_ocr_vertex_ai.py"
+      ],
+      "note": "Live SDK-level litellm.ocr()/aocr() calls against real providers. LITELLM_USE_RUST_OCR toggles the Rust bridge, so the python/rust rows prove the same test suite passes on both paths. Requires provider credentials; partial because it does not yet cover every OCR provider litellm supports."
+    },
+    "core/messages": {"coverage": "planned", "selectors": [], "note": "No env-var Rust toggle exists yet for litellm.messages(); wire it here once dsh-messages gains one."},
+    "core/responses": {"coverage": "planned", "selectors": [], "note": "No env-var Rust toggle exists yet for litellm.responses(); wire it here once one is added."},
+    "core/count_tokens": {"coverage": "planned", "selectors": [], "note": "No existing e2e SDK test suite with a Rust toggle exists yet."}
+  }
+}

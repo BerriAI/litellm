@@ -33,7 +33,7 @@ class ConfidenceLevel(str, Enum):
     LOW = "LOW"
 
 
-SDK_FUNCTIONS = ("ocr", "messages", "responses", "count_tokens")
+SDK_FUNCTIONS = ("core/ocr", "core/messages", "core/responses", "core/count_tokens")
 
 
 @dataclass(frozen=True)
@@ -58,6 +58,7 @@ class Strategy:
     description: str
     directory: Path
     cases: tuple[HarnessCase, ...]
+    env: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

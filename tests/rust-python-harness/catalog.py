@@ -15,7 +15,43 @@ def _require_string(value: Any, field: str, source: Path) -> str:
     return value
 
 
-def _load_strategy(source: Path) -> Strategy:
+def _load_variants(data: dict[str, Any], source: Path) -> tuple[tuple[str | None, dict[str, str]], ...]:
+    """Parse the optional `variants` manifest key.
+
+    Absent `variants` yields a single unnamed variant with no environment
+    overrides, so a manifest that never declares variants keeps its plain
+    strategy id (backward compatible with the original three strategies).
+    A declared `variants` list always suffixes the resulting strategy ids
+    with `__<name>`, even for a single entry, so a manifest opting into the
+    mechanism is unambiguous about which cells came from which environment.
+    """
+    raw = data.get("variants")
+    if raw is None:
+        return ((None, {}),)
+    if not isinstance(raw, list) or not raw:
+        raise ValueError(f"{source}: variants must be a non-empty list")
+    variants: list[tuple[str | None, dict[str, str]]] = []
+    seen: set[str] = set()
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise ValueError(f"{source}: each variant must be an object")
+        name = _require_string(entry.get("name"), "variants[].name", source)
+        if name in seen:
+            raise ValueError(f"{source}: duplicate variant name {name!r}")
+        seen.add(name)
+        env = entry.get("env", {})
+        if not isinstance(env, dict) or not all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in env.items()
+        ):
+            raise ValueError(
+                f"{source}: variants[].env must be a string-to-string mapping"
+            )
+        variants.append((name, dict(env)))
+    return tuple(variants)
+
+
+def _load_strategies(source: Path) -> tuple[Strategy, ...]:
     with source.open(encoding="utf-8") as stream:
         data = json.load(stream)
 
@@ -36,7 +72,7 @@ def _load_strategy(source: Path) -> Strategy:
             f"{source}: functions must exactly match {SDK_FUNCTIONS}; missing={missing}, extra={extra}"
         )
 
-    cases: list[HarnessCase] = []
+    parsed_functions: dict[str, tuple[Coverage, tuple[str, ...], str]] = {}
     for sdk_function in SDK_FUNCTIONS:
         case_data = function_data[sdk_function]
         if not isinstance(case_data, dict):
@@ -56,25 +92,39 @@ def _load_strategy(source: Path) -> Strategy:
             raise ValueError(
                 f"{source}: not_applicable case {sdk_function} cannot have selectors"
             )
-        cases.append(
-            HarnessCase(
-                strategy_id=strategy_id,
-                strategy_label=label,
-                sdk_function=sdk_function,
-                coverage=coverage,
-                selectors=tuple(selectors),
-                note=str(case_data.get("note", "")),
-            )
+        parsed_functions[sdk_function] = (
+            coverage,
+            tuple(selectors),
+            str(case_data.get("note", "")),
         )
 
-    return Strategy(
-        order=order,
-        id=strategy_id,
-        label=label,
-        description=description,
-        directory=source.parent,
-        cases=tuple(cases),
-    )
+    strategies: list[Strategy] = []
+    for variant_name, env in _load_variants(data, source):
+        variant_id = strategy_id if variant_name is None else f"{strategy_id}__{variant_name}"
+        variant_label = label if variant_name is None else f"{label} [{variant_name}]"
+        cases = tuple(
+            HarnessCase(
+                strategy_id=variant_id,
+                strategy_label=variant_label,
+                sdk_function=sdk_function,
+                coverage=coverage,
+                selectors=selectors,
+                note=note,
+            )
+            for sdk_function, (coverage, selectors, note) in parsed_functions.items()
+        )
+        strategies.append(
+            Strategy(
+                order=order,
+                id=variant_id,
+                label=variant_label,
+                description=description,
+                directory=source.parent,
+                cases=cases,
+                env=env,
+            )
+        )
+    return tuple(strategies)
 
 
 def load_catalog(root: Path = STRATEGIES_ROOT) -> tuple[Strategy, ...]:
@@ -83,7 +133,11 @@ def load_catalog(root: Path = STRATEGIES_ROOT) -> tuple[Strategy, ...]:
         raise ValueError(f"No strategy manifests found below {root}")
     strategies = tuple(
         sorted(
-            (_load_strategy(source) for source in sources),
+            (
+                strategy
+                for source in sources
+                for strategy in _load_strategies(source)
+            ),
             key=lambda strategy: strategy.order,
         )
     )

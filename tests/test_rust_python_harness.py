@@ -37,7 +37,7 @@ def _case(
     return HarnessCase(
         strategy_id="example",
         strategy_label="Example",
-        sdk_function="messages",
+        sdk_function="core/messages",
         coverage=coverage,
         selectors=selectors,
     )
@@ -56,13 +56,15 @@ def _manifest() -> dict[str, object]:
     }
 
 
-def test_should_load_the_three_harness_strategies_in_order() -> None:
+def test_should_load_the_five_harness_strategies_in_order() -> None:
     strategies = load_catalog()
 
     assert [strategy.id for strategy in strategies] == [
         "e2e_fuzz_tests",
         "unit_tests_rust",
         "validate_sub_methods",
+        "existing_e2e_test_sdk__python",
+        "existing_e2e_test_sdk__rust",
     ]
     assert all(
         tuple(case.sdk_function for case in strategy.cases) == SDK_FUNCTIONS
@@ -70,11 +72,36 @@ def test_should_load_the_three_harness_strategies_in_order() -> None:
     )
 
 
+def test_should_expand_a_manifest_with_variants_into_one_strategy_per_variant(
+    tmp_path: Path,
+) -> None:
+    strategy_directory = tmp_path / "example"
+    strategy_directory.mkdir()
+    manifest = _manifest()
+    manifest["variants"] = [
+        {"name": "python", "env": {"EXAMPLE_TOGGLE": "0"}},
+        {"name": "rust", "env": {"EXAMPLE_TOGGLE": "1"}},
+    ]
+    (strategy_directory / "strategy.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+
+    strategies = load_catalog(tmp_path)
+
+    assert [strategy.id for strategy in strategies] == [
+        "example__python",
+        "example__rust",
+    ]
+    assert strategies[0].env == {"EXAMPLE_TOGGLE": "0"}
+    assert strategies[1].env == {"EXAMPLE_TOGGLE": "1"}
+    assert all(case.strategy_id == "example__python" for case in strategies[0].cases)
+
+
 def test_should_reject_a_manifest_missing_an_sdk_function(tmp_path: Path) -> None:
     strategy_directory = tmp_path / "example"
     strategy_directory.mkdir()
     manifest = _manifest()
-    del manifest["functions"]["count_tokens"]  # type: ignore[index]
+    del manifest["functions"]["core/count_tokens"]  # type: ignore[index]
     (strategy_directory / "strategy.json").write_text(
         json.dumps(manifest), encoding="utf-8"
     )
@@ -164,10 +191,10 @@ def test_should_replace_a_pass_with_a_teardown_error() -> None:
 def test_should_filter_the_catalog_by_strategy_and_sdk_function() -> None:
     strategies = load_catalog()
 
-    cases = _select(strategies, {"e2e_fuzz_tests"}, {"messages"})
+    cases = _select(strategies, {"e2e_fuzz_tests"}, {"core/messages"})
 
     assert len(cases) == 1
-    assert cases[0].key == "e2e_fuzz_tests:messages"
+    assert cases[0].key == "e2e_fuzz_tests:core/messages"
 
 
 def test_should_reject_an_unknown_strategy() -> None:
@@ -220,7 +247,7 @@ def test_should_report_confidence_for_each_sdk_section() -> None:
     strategies = load_catalog()
     cases = tuple(case for strategy in strategies for case in strategy.cases)
     run = HarnessRun.from_cases(cases)
-    passing = run.results["e2e_fuzz_tests:responses"]
+    passing = run.results["e2e_fuzz_tests:core/responses"]
     passing.collected.add("tests/test_parity.py::test_one")
     passing.record("tests/test_parity.py::test_one", RunStatus.PASSED)
 
@@ -228,9 +255,9 @@ def test_should_report_confidence_for_each_sdk_section() -> None:
         score.sdk_function: score for score in section_confidence(run, strategies)
     }
 
-    assert scores["responses"].verified_strategies == 1
-    assert scores["responses"].required_strategies == 3
-    assert scores["responses"].percentage == 33
-    assert scores["responses"].level.value == "MEDIUM"
-    assert scores["count_tokens"].percentage == 0
-    assert scores["count_tokens"].level.value == "LOW"
+    assert scores["core/responses"].verified_strategies == 1
+    assert scores["core/responses"].required_strategies == 5
+    assert scores["core/responses"].percentage == 20
+    assert scores["core/responses"].level.value == "MEDIUM"
+    assert scores["core/count_tokens"].percentage == 0
+    assert scores["core/count_tokens"].level.value == "LOW"

@@ -4,9 +4,9 @@
   "label": "Validate sub-methods",
   "description": "Compare isolated transforms and verify Python-to-Rust helper coverage.",
   "functions": {
-    "ocr": {"coverage": "planned", "selectors": []},
-    "messages": {"coverage": "planned", "selectors": []},
-    "responses": {"coverage": "planned", "selectors": []},
-    "count_tokens": {"coverage": "planned", "selectors": []}
+    "core/ocr": {"coverage": "planned", "selectors": []},
+    "core/messages": {"coverage": "planned", "selectors": []},
+    "core/responses": {"coverage": "planned", "selectors": []},
+    "core/count_tokens": {"coverage": "planned", "selectors": []}
   }
 }

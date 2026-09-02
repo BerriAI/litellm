@@ -2,14 +2,56 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from time import monotonic
+from typing import Iterator
 
 import pytest
 
 from .models import CaseResult, HarnessCase, HarnessRun, RunStatus
 
 UpdateCallback = Callable[[HarnessRun], None]
+
+
+def _env_truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+@contextmanager
+def _temporary_env(overrides: dict[str, str]) -> Iterator[None]:
+    """Apply environment overrides for the duration of the block, then restore.
+
+    `LITELLM_USE_RUST_OCR` is read once at `litellm.rust_bridge.ocr` import
+    time, so mutating `os.environ` alone has no effect once that module is
+    already loaded in this process (as it will be across repeated in-process
+    `pytest.main()` calls). Re-apply it through `use_litellm_rust()`, the
+    module's own runtime toggle, so an OCR variant actually switches paths.
+    """
+    if not overrides:
+        yield
+        return
+    previous = {key: os.environ.get(key) for key in overrides}
+    os.environ.update(overrides)
+    rust_ocr_module = None
+    previous_rust_ocr_enabled = False
+    if "LITELLM_USE_RUST_OCR" in overrides:
+        from litellm.rust_bridge import ocr as rust_ocr_module
+
+        previous_rust_ocr_enabled = rust_ocr_module.rust_ocr_enabled()
+        rust_ocr_module.use_litellm_rust(
+            enabled=_env_truthy(overrides["LITELLM_USE_RUST_OCR"])
+        )
+    try:
+        yield
+    finally:
+        if rust_ocr_module is not None:
+            rust_ocr_module.use_litellm_rust(enabled=previous_rust_ocr_enabled)
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def selector_matches_node(selector: str, nodeid: str) -> bool:
@@ -127,6 +169,7 @@ def run_pytest(
     repo_root: Path,
     on_update: UpdateCallback,
     pytest_args: Sequence[str] = (),
+    env: dict[str, str] | None = None,
 ) -> tuple[int, HarnessRun]:
     run = HarnessRun.from_cases(cases)
     selectors = runnable_selectors(cases, repo_root)
@@ -150,7 +193,8 @@ def run_pytest(
     previous_directory = Path.cwd()
     try:
         os.chdir(repo_root)
-        exit_code = int(pytest.main(args, plugins=[plugin]))
+        with _temporary_env(env or {}):
+            exit_code = int(pytest.main(args, plugins=[plugin]))
     finally:
         os.chdir(previous_directory)
     if exit_code == 0 and any(
@@ -158,3 +202,49 @@ def run_pytest(
     ):
         exit_code = int(pytest.ExitCode.TESTS_FAILED)
     return exit_code, run
+
+
+def run_pytest_grouped(
+    cases: Sequence[HarnessCase],
+    repo_root: Path,
+    on_update: UpdateCallback,
+    strategy_env: dict[str, dict[str, str]],
+    pytest_args: Sequence[str] = (),
+) -> tuple[int, HarnessRun]:
+    """Run `cases` once per distinct owning-strategy environment.
+
+    A strategy that declares `variants` (for example Python vs. Rust via
+    `LITELLM_USE_RUST_OCR`) produces one `HarnessCase` per variant, each
+    carrying its own `strategy_id`. This groups cases by their strategy's
+    environment overrides, runs pytest once per group under that
+    environment, and merges every group's results into one combined run so
+    a variant that fails is never silently overwritten by one that passes.
+    """
+    groups: dict[tuple[tuple[str, str], ...], list[HarnessCase]] = {}
+    for case in cases:
+        env = strategy_env.get(case.strategy_id, {})
+        groups.setdefault(tuple(sorted(env.items())), []).append(case)
+
+    combined = HarnessRun.from_cases(cases)
+
+    def merge_update(sub_run: HarnessRun) -> None:
+        combined.results.update(sub_run.results)
+        combined.current_nodeid = sub_run.current_nodeid
+        for failure in sub_run.failures:
+            if failure not in combined.failures:
+                combined.failures.append(failure)
+        on_update(combined)
+
+    exit_code = 0
+    for env_items, group_cases in groups.items():
+        sub_exit_code, _ = run_pytest(
+            group_cases,
+            repo_root,
+            merge_update,
+            pytest_args,
+            env=dict(env_items),
+        )
+        exit_code = exit_code or sub_exit_code
+    combined.finished_at = monotonic()
+    on_update(combined)
+    return exit_code, combined

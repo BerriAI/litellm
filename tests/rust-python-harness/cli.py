@@ -6,8 +6,8 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from .catalog import load_catalog
-from .models import HarnessCase, Strategy
-from .runner import run_pytest
+from .models import SDK_FUNCTIONS, HarnessCase, Strategy
+from .runner import run_pytest_grouped
 from .ui import make_dashboard
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -40,7 +40,7 @@ def _parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         dest="sdk_functions",
-        choices=("ocr", "messages", "responses", "count_tokens"),
+        choices=SDK_FUNCTIONS,
         help="run only this SDK function",
     )
     parser.add_argument(
@@ -100,7 +100,7 @@ def _interactive_filters(strategies: Sequence[Strategy]) -> tuple[set[str], set[
     )
     sdk_functions = _pick_values(
         "SDK functions",
-        [(name, name) for name in ("ocr", "messages", "responses", "count_tokens")],
+        [(name, name) for name in SDK_FUNCTIONS],
     )
     return strategy_ids, sdk_functions
 
@@ -166,11 +166,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     pytest_args = [*args.pytest_arg]
     if args.coverage:
         pytest_args.extend(_coverage_pytest_args())
+    strategy_env = {strategy.id: strategy.env for strategy in strategies}
     with dashboard:
-        exit_code, run = run_pytest(
+        exit_code, run = run_pytest_grouped(
             cases=cases,
             repo_root=REPO_ROOT,
             on_update=dashboard.update,
+            strategy_env=strategy_env,
             pytest_args=pytest_args,
         )
         dashboard.finish(run, exit_code)
