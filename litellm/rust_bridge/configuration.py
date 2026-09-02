@@ -4,6 +4,8 @@ import os
 import warnings
 from typing import TYPE_CHECKING, Final
 
+from litellm.rust_bridge.bindings import UNSET, Unset
+
 if TYPE_CHECKING:
     from litellm.rust_bridge.messages import RustAmessages, RustMessages
     from litellm.rust_bridge.ocr import RustAocr, RustOcr
@@ -15,13 +17,6 @@ _TRUE_ENV_VALUES: Final = frozenset({"1", "true", "yes", "on"})
 _FALSE_ENV_VALUES: Final = frozenset({"0", "false", "no", "off"})
 _GLOBAL_ENV_NAME: Final = "LITELLM_RUST"
 _LEGACY_OCR_ENV_NAME: Final = "LITELLM_USE_RUST_OCR"
-
-
-class _Unset:
-    pass
-
-
-_UNSET: Final = _Unset()
 
 
 class _RustConfiguration:
@@ -107,13 +102,13 @@ def reset_rust_configuration() -> None:
 def use_litellm_rust(
     enabled: bool = True,
     *,
-    ocr: RustOcr | None | _Unset = _UNSET,
-    aocr: RustAocr | None | _Unset = _UNSET,
-    messages: RustMessages | None | _Unset = _UNSET,
-    amessages: RustAmessages | None | _Unset = _UNSET,
-    responses_websocket: type[RustResponsesWebSocketConnection] | None | _Unset = _UNSET,
-    transcription: RustTranscription | None | _Unset = _UNSET,
-    atranscription: RustAtranscription | None | _Unset = _UNSET,
+    ocr: RustOcr | None | Unset = UNSET,
+    aocr: RustAocr | None | Unset = UNSET,
+    messages: RustMessages | None | Unset = UNSET,
+    amessages: RustAmessages | None | Unset = UNSET,
+    responses_websocket: type[RustResponsesWebSocketConnection] | None | Unset = UNSET,
+    transcription: RustTranscription | None | Unset = UNSET,
+    atranscription: RustAtranscription | None | Unset = UNSET,
 ) -> None:
     """Set the process override for optional Rust paths.
 
@@ -121,7 +116,7 @@ def use_litellm_rust(
     """
     _CONFIGURATION.override = enabled
     bindings: Final = (ocr, aocr, messages, amessages, responses_websocket, transcription, atranscription)
-    if all(isinstance(binding, _Unset) for binding in bindings):
+    if all(isinstance(binding, Unset) for binding in bindings):
         return
     warnings.warn(
         "Injecting Rust bridge implementations through use_litellm_rust() is deprecated; "
@@ -130,28 +125,28 @@ def use_litellm_rust(
         stacklevel=2,
     )
 
-    if not isinstance(ocr, _Unset) or not isinstance(aocr, _Unset):
+    if not isinstance(ocr, Unset) or not isinstance(aocr, Unset):
         from litellm.rust_bridge.ocr import set_rust_ocr
 
-        if not isinstance(ocr, _Unset):
+        if not isinstance(ocr, Unset):
             set_rust_ocr(ocr=ocr)
-        if not isinstance(aocr, _Unset):
+        if not isinstance(aocr, Unset):
             set_rust_ocr(aocr=aocr)
-    if not isinstance(messages, _Unset) or not isinstance(amessages, _Unset):
+    if not isinstance(messages, Unset) or not isinstance(amessages, Unset):
         from litellm.rust_bridge.messages import set_rust_messages
 
-        if not isinstance(messages, _Unset):
+        if not isinstance(messages, Unset):
             set_rust_messages(messages=messages)
-        if not isinstance(amessages, _Unset):
+        if not isinstance(amessages, Unset):
             set_rust_messages(amessages=amessages)
-    if not isinstance(responses_websocket, _Unset):
+    if not isinstance(responses_websocket, Unset):
         from litellm.rust_bridge.responses_websocket import set_rust_responses_websocket
 
         set_rust_responses_websocket(connection=responses_websocket)
-    if not isinstance(transcription, _Unset) or not isinstance(atranscription, _Unset):
+    if not isinstance(transcription, Unset) or not isinstance(atranscription, Unset):
         from litellm.rust_bridge.transcription import configure_rust_transcription
 
-        if not isinstance(transcription, _Unset):
+        if not isinstance(transcription, Unset):
             configure_rust_transcription(transcription=transcription)
-        if not isinstance(atranscription, _Unset):
+        if not isinstance(atranscription, Unset):
             configure_rust_transcription(atranscription=atranscription)

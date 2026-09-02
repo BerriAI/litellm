@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from litellm.llms.custom_httpx.llm_http_handler import _rust_responses_websocket_enabled
-from litellm.rust_bridge import configuration, responses_websocket
+from litellm.rust_bridge import bindings, configuration, responses_websocket
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -76,8 +76,7 @@ async def test_adapter_raises_clean_close_when_rust_connection_ends() -> None:
 
 @pytest.mark.asyncio
 async def test_bridge_unavailable_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(responses_websocket, "_STATE", responses_websocket._RustResponsesWebSocketState())
-    monkeypatch.setattr(responses_websocket, "get_native_bridge", lambda: None)
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: None)
 
     assert (
         await responses_websocket.connect(

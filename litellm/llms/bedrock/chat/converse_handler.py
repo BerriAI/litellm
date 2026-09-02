@@ -383,6 +383,91 @@ class BedrockConverseLLM(BaseAWSLLM):
         # Filter beta headers in HTTP headers before making the request
         headers = update_headers_with_filtered_beta(headers=headers, provider="bedrock_converse")
 
+        def sync_python_path(*, skip_pre_call_logging: bool) -> ModelResponse | CustomStreamWrapper:
+            request_data: Final = litellm.AmazonConverseConfig()._transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=extra_headers,
+            )
+            serialized_data: Final = json.dumps(request_data)
+            prepped: Final = self.get_request_headers(
+                credentials=credentials,
+                aws_region_name=aws_region_name,
+                extra_headers=extra_headers,
+                endpoint_url=proxy_endpoint_url,
+                data=serialized_data,
+                headers=headers,
+                api_key=api_key,
+            )
+            if not skip_pre_call_logging:
+                logging_obj.pre_call(
+                    input=messages,
+                    api_key="",
+                    additional_args={  # mutable-ok: logging callback contract requires a mutable dict
+                        "complete_input_dict": serialized_data,
+                        "api_base": proxy_endpoint_url,
+                        "headers": prepped.headers,
+                    },
+                )
+            request_timeout: Final = (
+                httpx.Timeout(timeout) if isinstance(timeout, float) or isinstance(timeout, int) else timeout
+            )
+            request_client: Final = (
+                _get_httpx_client(  # mutable-ok: HTTP client factory requires a mutable options dict
+                    {"timeout": request_timeout} if request_timeout is not None else {}
+                )
+                if client is None or isinstance(client, AsyncHTTPHandler)
+                else client
+            )
+            if stream is not None and stream is True:
+                completion_stream, response_headers = make_sync_call(
+                    client=request_client if isinstance(request_client, HTTPHandler) else None,
+                    api_base=proxy_endpoint_url,
+                    headers=prepped.headers,
+                    data=serialized_data,
+                    model=model,
+                    messages=messages,
+                    logging_obj=logging_obj,
+                    json_mode=json_mode,
+                    fake_stream=fake_stream,
+                    stream_chunk_size=stream_chunk_size,
+                )
+                return CustomStreamWrapper(
+                    completion_stream=completion_stream,
+                    model=model,
+                    custom_llm_provider="bedrock",
+                    logging_obj=logging_obj,
+                    _response_headers=response_headers,
+                )
+            try:
+                response: Final = request_client.post(
+                    url=proxy_endpoint_url,
+                    headers=prepped.headers,
+                    data=serialized_data,
+                    logging_obj=logging_obj,
+                )
+                response.raise_for_status()
+            except httpx.HTTPStatusError as error:
+                raise BedrockError(status_code=error.response.status_code, message=error.response.text)
+            except httpx.TimeoutException:
+                raise BedrockError(status_code=408, message="Timeout error occurred.")
+            transformed: Final = litellm.AmazonConverseConfig()._transform_response(
+                model=model,
+                response=response,
+                model_response=model_response,
+                stream=stream if isinstance(stream, bool) else False,
+                logging_obj=logging_obj,
+                api_key="",
+                data=serialized_data,
+                messages=messages,
+                optional_params=optional_params,
+                encoding=encoding,
+            )
+            transformed.set_provider_response_headers(response.headers)
+            return transformed
+
         # The Rust core owns the whole call for the subset it accepts. Ask
         # before transforming so whichever path runs emits pre_call once, and
         # hand down the credentials, region and endpoint this handler already
@@ -449,7 +534,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                         skip_pre_call_logging=True,
                     ),
                 )
-            rust_response: Final = rust_chat_completions_bridge.chat_completions(
+            return rust_chat_completions_bridge.chat_completions_or_fallback(
                 model=model,
                 messages=messages,
                 optional_params=rust_optional_params,
@@ -460,9 +545,8 @@ class BedrockConverseLLM(BaseAWSLLM):
                 extra_headers=headers,
                 timeout=timeout,
                 on_response=log_rust_post_call,
+                python_fallback=lambda: sync_python_path(skip_pre_call_logging=True),
             )
-            if rust_response is not None:
-                return rust_response
 
         ### ROUTING (ASYNC, STREAMING, SYNC)
         if acompletion:
@@ -508,103 +592,4 @@ class BedrockConverseLLM(BaseAWSLLM):
                 api_key=api_key,
             )
 
-        ## TRANSFORMATION ##
-
-        _data: Final = litellm.AmazonConverseConfig()._transform_request(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            headers=extra_headers,
-        )
-        data: Final = json.dumps(_data)
-
-        prepped: Final = self.get_request_headers(
-            credentials=credentials,
-            aws_region_name=aws_region_name,
-            extra_headers=extra_headers,
-            endpoint_url=proxy_endpoint_url,
-            data=data,
-            headers=headers,
-            api_key=api_key,
-        )
-
-        ## LOGGING
-        # Reaching here with `serves_via_rust` set means the synchronous Rust
-        # attempt declined at call time, before the provider was called, and
-        # already logged this request. That is the same attempt continuing.
-        # The asynchronous branch above returns before this point, and hands
-        # its own fallback `skip_pre_call_logging=True` for the same reason.
-        if not serves_via_rust:
-            logging_obj.pre_call(
-                input=messages,
-                api_key="",
-                additional_args={
-                    "complete_input_dict": data,
-                    "api_base": proxy_endpoint_url,
-                    "headers": prepped.headers,
-                },
-            )
-        if client is None or isinstance(client, AsyncHTTPHandler):
-            _params: Final = {}
-            if timeout is not None:
-                if isinstance(timeout, float) or isinstance(timeout, int):
-                    timeout = httpx.Timeout(timeout)
-                _params["timeout"] = timeout
-            client = _get_httpx_client(_params)
-        else:
-            client = client
-
-        if stream is not None and stream is True:
-            completion_stream, response_headers = make_sync_call(
-                client=(client if client is not None and isinstance(client, HTTPHandler) else None),
-                api_base=proxy_endpoint_url,
-                headers=prepped.headers,
-                data=data,
-                model=model,
-                messages=messages,
-                logging_obj=logging_obj,
-                json_mode=json_mode,
-                fake_stream=fake_stream,
-                stream_chunk_size=stream_chunk_size,
-            )
-            streaming_response: Final = CustomStreamWrapper(
-                completion_stream=completion_stream,
-                model=model,
-                custom_llm_provider="bedrock",
-                logging_obj=logging_obj,
-                _response_headers=response_headers,
-            )
-
-            return streaming_response
-
-        ### COMPLETION
-
-        try:
-            response: Final = client.post(
-                url=proxy_endpoint_url,
-                headers=prepped.headers,
-                data=data,
-                logging_obj=logging_obj,
-            )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as err:
-            error_code: Final = err.response.status_code
-            raise BedrockError(status_code=error_code, message=err.response.text)
-        except httpx.TimeoutException:
-            raise BedrockError(status_code=408, message="Timeout error occurred.")
-
-        sync_transformed_response: Final = litellm.AmazonConverseConfig()._transform_response(
-            model=model,
-            response=response,
-            model_response=model_response,
-            stream=stream if isinstance(stream, bool) else False,
-            logging_obj=logging_obj,
-            api_key="",
-            data=data,
-            messages=messages,
-            optional_params=optional_params,
-            encoding=encoding,
-        )
-        sync_transformed_response.set_provider_response_headers(response.headers)
-        return sync_transformed_response
+        return sync_python_path(skip_pre_call_logging=False)
