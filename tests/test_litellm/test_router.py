@@ -8429,6 +8429,20 @@ class TestClaudeCodeSubagentSessionRouterBinding:
         redis_cache.async_delete_cache.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_session_bindings_do_not_evict_router_rate_limit_state(self):
+        router = self._router()
+        assert router._update_usage(deployment_id="deployment-id", parent_otel_span=None) == 1
+
+        for session_index in range(201):
+            request_kwargs = self._request_kwargs()
+            request_kwargs["proxy_server_request"]["headers"]["X-Claude-Code-Session-Id"] = (
+                f"session-{session_index:04d}"
+            )
+            await router.async_pre_routing_hook(model="smart-router", request_kwargs=request_kwargs)
+
+        assert router._update_usage(deployment_id="deployment-id", parent_otel_span=None) == 2
+
+    @pytest.mark.asyncio
     async def test_background_and_fallback_requests_do_not_clear_the_session_router(self):
         router = self._router()
 
