@@ -1651,11 +1651,7 @@ class ProxyBaseLLMRequestProcessing:
                 headers.update(logging_caching_headers)
 
         try:
-            return {
-                key: safe_header_value(str(value))
-                for key, value in headers.items()
-                if value not in exclude_values
-            }
+            return {key: safe_header_value(str(value)) for key, value in headers.items() if value not in exclude_values}
         except Exception as e:
             verbose_proxy_logger.error("Error setting custom headers: %s", e)
             return {}
