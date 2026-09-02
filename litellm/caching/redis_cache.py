@@ -318,16 +318,12 @@ def _redis_circuit_breaker_guard(method):
     return wrapper
 
 
-def _redis_circuit_breaker_guard_sync(method):
-    """Sync sibling of ``_redis_circuit_breaker_guard`` for blocking-client methods."""
-
-    @functools.wraps(method)
-    def wrapper(self, *args, **kwargs):
-        return _run_under_circuit_breaker_sync(
+def _redis_circuit_breaker_guard_sync(method: Callable[..., _RedisCallResult]) -> Callable[..., _RedisCallResult]:
+    return functools.wraps(method)(
+        lambda self, *args, **kwargs: _run_under_circuit_breaker_sync(
             self._circuit_breaker, method.__name__, lambda: method(self, *args, **kwargs)
         )
-
-    return wrapper
+    )
 
 
 class RedisCache(BaseCache):
