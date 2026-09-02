@@ -3939,3 +3939,89 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_tool
 
     function_call_output = next(item for item in response if item.get("type") == "function_call_output")
     assert function_call_output["output"] == [{"type": "input_text", "text": "1 tool found"}]
+
+
+@pytest.mark.parametrize(
+    "event_type",
+    ["response.function_call_arguments.delta", "response.custom_tool_call_input.delta"],
+)
+def test_empty_argument_delta_is_forwarded_instead_of_killing_the_stream(event_type: str) -> None:
+    """An empty argument delta is a legal event and text deltas already accept one. Treating it as a
+    missing field raised out of the chunk parser, which surfaced to the caller as an
+    APIConnectionError and tore down the whole stream mid tool call.
+    https://github.com/BerriAI/litellm/pull/33341"""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    chunk = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+        {
+            "type": event_type,
+            "item_id": "fc_0217883343023450",
+            "output_index": 2,
+            "delta": "",
+            "sequence_number": 95,
+        },
+        tool_call_index_map={},
+    )
+
+    tool_calls = chunk.choices[0].delta.tool_calls
+    assert tool_calls is not None, f"{event_type} with an empty delta produced no tool_calls: {chunk}"
+    assert tool_calls[0].function is not None
+    assert tool_calls[0].function.arguments == ""
+
+
+def test_stream_carrying_an_empty_argument_delta_still_yields_the_whole_tool_call() -> None:
+    """Replay of a real stream that opens the argument deltas with an empty one: every chunk must parse
+    and the concatenated arguments must be the complete JSON the model sent."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=iter([]), sync_stream=True)
+    stream = (
+        {
+            "type": "response.output_item.added",
+            "output_index": 2,
+            "item": {"type": "function_call", "name": "read_file", "call_id": "call_1", "arguments": ""},
+        },
+        {"type": "response.function_call_arguments.delta", "output_index": 2, "delta": ""},
+        {"type": "response.function_call_arguments.delta", "output_index": 2, "delta": '{"path"'},
+        {"type": "response.function_call_arguments.delta", "output_index": 2, "delta": ':"/tmp/a"}'},
+        {
+            "type": "response.output_item.done",
+            "output_index": 2,
+            "item": {
+                "type": "function_call",
+                "name": "read_file",
+                "call_id": "call_1",
+                "arguments": '{"path":"/tmp/a"}',
+            },
+        },
+        {"type": "response.completed", "response": {"output": [{"type": "function_call"}]}},
+    )
+
+    parsed = tuple(iterator.chunk_parser(dict(chunk)) for chunk in stream)
+
+    arguments = "".join(
+        tool_call.function.arguments or ""
+        for chunk in parsed
+        for tool_call in (chunk.choices[0].delta.tool_calls or ())
+        if tool_call.function is not None
+    )
+    assert arguments == '{"path":"/tmp/a"}'
+    assert parsed[-1].choices[0].finish_reason == "tool_calls"
+
+
+def test_argument_delta_without_a_delta_key_still_raises() -> None:
+    """Only an empty delta is legal. A missing one violates the event schema, so it must keep raising
+    rather than silently emitting an argument-less tool call."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    with pytest.raises(ValueError, match="Invalid function argument delta"):
+        OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+            {"type": "response.function_call_arguments.delta", "output_index": 2},
+            tool_call_index_map={},
+        )
