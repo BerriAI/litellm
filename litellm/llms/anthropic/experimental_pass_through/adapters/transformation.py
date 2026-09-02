@@ -18,6 +18,24 @@ TOOL_NAME_PREFIX_LENGTH: Final = OPENAI_MAX_TOOL_NAME_LENGTH - TOOL_NAME_HASH_LE
 PROVIDERS_PROXYING_AN_UNKNOWN_BACKEND: Final = frozenset({"litellm_proxy"})
 
 
+def _optional_attr(source: object, name: str) -> object:
+    return getattr(source, name, None)
+
+
+def _as_string_mapping(value: object) -> Mapping[str, object] | None:
+    if isinstance(value, Mapping):
+        return value
+    return None
+
+
+def _thought_signature(provider_specific_fields: object) -> str | None:
+    fields: Final = _as_string_mapping(provider_specific_fields)
+    if fields is None:
+        return None
+    signature: Final = fields.get("thought_signature")
+    return signature if isinstance(signature, str) else None
+
+
 _ANTHROPIC_TOOL_SCHEMA_KEYS: Final = frozenset(
     {"name", "type", "input_schema", "description", "cache_control", "strict"}
 )
@@ -56,7 +74,7 @@ def truncate_tool_name(name: str) -> str:
 
 
 def create_tool_name_mapping(
-    tools: list[dict[str, Any]],
+    tools: Sequence[Mapping[str, object]],
 ) -> dict[str, str]:
     """
     Create a mapping of truncated tool names to original names.
@@ -70,6 +88,8 @@ def create_tool_name_mapping(
     mapping: Final[dict[str, str]] = {}
     for tool in tools:
         original_name = tool.get("name", "")
+        if not isinstance(original_name, str):
+            continue
         truncated_name = truncate_tool_name(original_name)
         if truncated_name != original_name:
             mapping[truncated_name] = original_name
@@ -90,7 +110,7 @@ from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
 from litellm.llms.anthropic.common_utils import (
-    is_empty_thinking_block,
+    is_empty_unsigned_thinking_block,
     normalize_anthropic_tool_use_id,
 )
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
@@ -286,44 +306,44 @@ class LiteLLMAnthropicMessagesAdapter:
 
     ### FOR [BETA] `/v1/messages` endpoint support
 
-    def _extract_signature_from_tool_call(self, tool_call: Any) -> str | None:
+    def _extract_signature_from_tool_call(self, tool_call: object) -> str | None:
         """
         Extract signature from a tool call's provider_specific_fields.
         Only checks provider_specific_fields, not thinking blocks.
         """
-        signature = None
+        fields: Final = _optional_attr(tool_call, "provider_specific_fields")
+        if fields:
+            return _thought_signature(fields)
 
-        if hasattr(tool_call, "provider_specific_fields") and tool_call.provider_specific_fields:
-            if "thought_signature" in tool_call.provider_specific_fields:
-                signature = tool_call.provider_specific_fields["thought_signature"]
-        elif hasattr(tool_call.function, "provider_specific_fields") and tool_call.function.provider_specific_fields:
-            if "thought_signature" in tool_call.function.provider_specific_fields:
-                signature = tool_call.function.provider_specific_fields["thought_signature"]
+        function_fields: Final = _optional_attr(_optional_attr(tool_call, "function"), "provider_specific_fields")
+        if function_fields:
+            return _thought_signature(function_fields)
 
-        return signature
+        return None
 
-    def _extract_signature_from_tool_use_content(self, content: dict[str, Any]) -> str | None:
+    def _extract_signature_from_tool_use_content(self, content: Mapping[str, object]) -> str | None:
         """
         Extract signature from a tool_use content block's provider_specific_fields.
         """
-        provider_specific_fields: Final = content.get("provider_specific_fields", {})
+        provider_specific_fields: Final = _as_string_mapping(content.get("provider_specific_fields", {}))
         if provider_specific_fields:
-            return provider_specific_fields.get("signature")
+            signature: Final = provider_specific_fields.get("signature")
+            return signature if isinstance(signature, str) else None
         return None
 
     def _add_cache_control_if_applicable(
         self,
-        source: Any,
-        target: Any,
+        source: object,
+        target: object,
         model: str | None,
     ) -> None:
         """
         Extract cache_control from source and add to target if it should be preserved.
 
-        This method accepts Any type to support both regular dicts and TypedDict objects.
-        TypedDict objects (like ChatCompletionTextObject, ChatCompletionImageObject, etc.)
-        are dicts at runtime but have specific types at type-check time. Using Any allows
-        this method to work with both while maintaining runtime correctness.
+        This method accepts an unconstrained type to support both regular dicts and
+        TypedDict objects. TypedDict objects (like ChatCompletionTextObject,
+        ChatCompletionImageObject, etc.) are dicts at runtime but have specific types at
+        type-check time, so the widest parameter type works with both.
 
         Args:
             source: Dict or TypedDict containing potential cache_control field
@@ -751,7 +771,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
         return new_tools, tool_name_mapping
 
-    def translate_anthropic_output_format_to_openai(self, output_format: Any) -> dict[str, object] | None:
+    def translate_anthropic_output_format_to_openai(self, output_format: object) -> dict[str, object] | None:
         """
         Translate Anthropic's output_format to OpenAI's response_format.
 
@@ -1267,7 +1287,7 @@ class LiteLLMAnthropicMessagesAdapter:
             if hasattr(choice.message, "thinking_blocks") and choice.message.thinking_blocks:
                 for thinking_block in choice.message.thinking_blocks:
                     if thinking_block.get("type") == "thinking":
-                        if is_empty_thinking_block(thinking_block):
+                        if is_empty_unsigned_thinking_block(thinking_block):
                             continue
                         thinking_value = thinking_block.get("thinking", "")
                         signature_value = thinking_block.get("signature", "")
@@ -1366,7 +1386,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
     @classmethod
     def _first_positive_prompt_tokens_detail_value(cls, usage: Usage, field_names: tuple[str, ...]) -> int:
-        prompt_tokens_details: Final = getattr(usage, "prompt_tokens_details", None)
+        prompt_tokens_details: Final = _optional_attr(usage, "prompt_tokens_details")
         if prompt_tokens_details is None:
             return 0
 
@@ -1374,7 +1394,7 @@ class LiteLLMAnthropicMessagesAdapter:
             if isinstance(prompt_tokens_details, dict):
                 value = cls._positive_int(prompt_tokens_details.get(field_name))
             else:
-                value = cls._positive_int(getattr(prompt_tokens_details, field_name, None))
+                value = cls._positive_int(_optional_attr(prompt_tokens_details, field_name))
             if value > 0:
                 return value
         return 0

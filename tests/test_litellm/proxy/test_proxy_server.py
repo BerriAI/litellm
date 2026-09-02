@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import importlib
 import json
 import os
@@ -7816,6 +7817,7 @@ async def test_window_spend_counter_reseeds_from_spend_logs_on_counter_miss():
     counter_cache = DualCache()
     window_start = datetime.now(timezone.utc) - timedelta(hours=1)
     fake_prisma = MagicMock()
+    fake_prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(return_value=None)
     fake_prisma.db.litellm_spendlogs.group_by = AsyncMock(
         return_value=[{"api_key": "key-window", "_sum": {"spend": 2.25}}]
     )
@@ -7830,6 +7832,7 @@ async def test_window_spend_counter_reseeds_from_spend_logs_on_counter_miss():
             counter_key="spend:key:key-window:window:1h",
             entity_type="Key",
             entity_id="key-window",
+            window_duration="1h",
             window_start=window_start,
             increment=0.5,
         )
@@ -7933,6 +7936,7 @@ async def test_window_spend_counter_redis_clean_miss_skips_stale_in_memory():
     counter_cache.redis_cache = fake_redis
 
     fake_prisma = MagicMock()
+    fake_prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(return_value=None)
     fake_prisma.db.litellm_spendlogs.group_by = AsyncMock(
         return_value=[{"api_key": "key-window-stale-local", "_sum": {"spend": 2.25}}]
     )
@@ -7947,6 +7951,7 @@ async def test_window_spend_counter_redis_clean_miss_skips_stale_in_memory():
             counter_key=counter_key,
             entity_type="Key",
             entity_id="key-window-stale-local",
+            window_duration="1h",
             window_start=window_start,
             increment=0.5,
         )
@@ -7995,6 +8000,7 @@ async def test_window_spend_counter_redis_concurrent_seed_does_not_double_seed()
     counter_cache.redis_cache = fake_redis
 
     fake_prisma = MagicMock()
+    fake_prisma.db.litellm_budgetwindowspend.find_unique = AsyncMock(return_value=None)
     fake_prisma.db.litellm_spendlogs.group_by = AsyncMock(
         return_value=[{"api_key": "key-window-concurrent-seed", "_sum": {"spend": 2.25}}]
     )
@@ -8009,6 +8015,7 @@ async def test_window_spend_counter_redis_concurrent_seed_does_not_double_seed()
             counter_key=counter_key,
             entity_type="Key",
             entity_id="key-window-concurrent-seed",
+            window_duration="1h",
             window_start=window_start,
             increment=0.5,
         )
@@ -8041,6 +8048,7 @@ async def test_window_spend_counter_skips_invalid_window_start():
             counter_key="spend:key:key-invalid-window:window:not-a-duration",
             entity_type="Key",
             entity_id="key-invalid-window",
+            window_duration="not-a-duration",
             window_start=None,
             increment=0.5,
         )
@@ -8068,6 +8076,7 @@ async def test_window_spend_counter_does_not_seed_zero_when_db_unavailable():
             counter_key=counter_key,
             entity_type="Key",
             entity_id="key-window-db-unavailable",
+            window_duration="1h",
             window_start=datetime.now(timezone.utc) - timedelta(hours=1),
         )
 
@@ -10437,6 +10446,75 @@ async def test_update_config_general_settings_emits_audit_log(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_config_field_rejects_out_of_range_alerting_args(monkeypatch):
+    """Out-of-range alerting_args must be rejected at save time. If they land in the
+    DB, SlackAlertingArgs raises during the config reload and alerting breaks."""
+    from unittest.mock import MagicMock
+
+    from fastapi import HTTPException
+
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", MagicMock())
+
+    admin = UserAPIKeyAuth(
+        api_key="hashed-admin",
+        user_id="admin-1",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await update_config_general_settings(
+            data=ConfigFieldUpdate(
+                field_name="alerting_args",
+                field_value={
+                    "daily_spend_per_user_threshold": -5.0,
+                    "user_spend_check_interval": 20,
+                },
+                config_type="general_settings",
+            ),
+            user_api_key_dict=admin,
+        )
+
+    assert exc_info.value.status_code == 400
+    error_msg = exc_info.value.detail["error"]
+    assert "daily_spend_per_user_threshold" in error_msg
+    assert "user_spend_check_interval" in error_msg
+
+
+@pytest.mark.asyncio
+async def test_update_config_field_accepts_valid_alerting_args(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    fake = _fake_prisma_with_config({})
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+
+    admin = UserAPIKeyAuth(
+        api_key="hashed-admin",
+        user_id="admin-1",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="alerting_args",
+            field_value={
+                "daily_spend_per_user_threshold": 5.0,
+                "user_spend_check_interval": 60,
+            },
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+
+    written = json.loads(fake.db.litellm_config.upsert.call_args.kwargs["data"]["update"]["param_value"])
+    assert written["alerting_args"]["daily_spend_per_user_threshold"] == 5.0
+
+
+@pytest.mark.asyncio
 async def test_update_config_general_settings_applies_ssrf_globals(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import ConfigFieldUpdate
@@ -11198,6 +11276,244 @@ def test_startup_is_silent_when_mock_testing_params_disabled(caplog):
         ProxyStartupEvent._warn_if_mock_testing_params_enabled(general_settings={})
 
     assert MOCK_TESTING_CONFIG_KEY not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Budget window spend row enqueue (LiteLLM_BudgetWindowSpend writer)
+# ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def _window_spend_enqueue_env(cached_objects: dict):
+    """Point increment_spend_counters at throwaway caches and a real
+    WindowSpendUpdateQueue, and hand back the queue to inspect."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
+        WindowSpendUpdateQueue,
+    )
+    import litellm.proxy.proxy_server as ps
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_get_cache = AsyncMock(side_effect=lambda key, **_: cached_objects.get(key))
+
+    queue = WindowSpendUpdateQueue()
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.window_spend_update_queue = queue
+
+    originals = (
+        ps.user_api_key_cache,
+        ps.spend_counter_cache,
+        ps.prisma_client,
+        ps.proxy_logging_obj,
+    )
+    ps.user_api_key_cache = user_api_key_cache
+    ps.spend_counter_cache = DualCache()
+    ps.prisma_client = None
+    ps.proxy_logging_obj = proxy_logging_obj
+    try:
+        yield queue
+    finally:
+        (
+            ps.user_api_key_cache,
+            ps.spend_counter_cache,
+            ps.prisma_client,
+            ps.proxy_logging_obj,
+        ) = originals
+
+
+async def _drain(queue):
+    return list(await queue.flush_and_get_aggregated_window_spend_transactions())
+
+
+@pytest.mark.asyncio
+async def test_key_window_spend_row_is_enqueued_with_the_actual_cost():
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    reset_at = datetime.now(timezone.utc) + timedelta(days=10)
+    key_obj = MagicMock()
+    key_obj.budget_limits = [
+        {"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}
+    ]
+
+    with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
+        await increment_spend_counters(
+            token="hashed-token", team_id=None, user_id=None, response_cost=0.25
+        )
+        enqueued = await _drain(queue)
+
+    assert len(enqueued) == 1
+    assert enqueued[0]["entity_type"] == "key"
+    assert enqueued[0]["entity_id"] == "hashed-token"
+    assert enqueued[0]["window_duration"] == "30d"
+    assert enqueued[0]["spend"] == pytest.approx(0.25)
+    assert enqueued[0]["window_start"] == (reset_at - timedelta(days=30)).astimezone(timezone.utc).replace(
+        tzinfo=None
+    ).isoformat(timespec="microseconds")
+
+
+@pytest.mark.asyncio
+async def test_team_window_spend_row_is_enqueued():
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    reset_at = datetime.now(timezone.utc) + timedelta(days=3)
+    team_obj = MagicMock()
+    team_obj.budget_limits = [
+        {"budget_duration": "7d", "max_budget": 50.0, "reset_at": reset_at.isoformat()}
+    ]
+
+    with _window_spend_enqueue_env({"team_id:team-1": team_obj}) as queue:
+        await increment_spend_counters(
+            token=None, team_id="team-1", user_id=None, response_cost=1.5
+        )
+        enqueued = await _drain(queue)
+
+    assert len(enqueued) == 1
+    assert enqueued[0]["entity_type"] == "team"
+    assert enqueued[0]["entity_id"] == "team-1"
+    assert enqueued[0]["window_duration"] == "7d"
+    assert enqueued[0]["spend"] == pytest.approx(1.5)
+
+
+@pytest.mark.asyncio
+async def test_window_spend_row_is_enqueued_even_when_the_counter_was_reserved():
+    """A reservation only pre-charged the cache counter with an estimate; the
+    row still owes the actual cost, so the enqueue must not be skipped."""
+    from litellm.proxy.proxy_server import increment_spend_counters
+    import litellm.proxy.spend_tracking.budget_reservation as br
+
+    reset_at = datetime.now(timezone.utc) + timedelta(days=10)
+    key_obj = MagicMock()
+    key_obj.budget_limits = [
+        {"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}
+    ]
+    reservation = {
+        "entries": [
+            {"counter_key": "spend:key:hashed-token", "reserved": 1.0},
+            {"counter_key": "spend:key:hashed-token:window:30d", "reserved": 1.0},
+        ]
+    }
+
+    original_reconcile = br.reconcile_budget_reservation
+    br.reconcile_budget_reservation = AsyncMock(return_value=None)
+    try:
+        with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
+            await increment_spend_counters(
+                token="hashed-token",
+                team_id=None,
+                user_id=None,
+                response_cost=0.25,
+                budget_reservation=reservation,
+            )
+            enqueued = await _drain(queue)
+    finally:
+        br.reconcile_budget_reservation = original_reconcile
+
+    assert len(enqueued) == 1
+    assert enqueued[0]["spend"] == pytest.approx(0.25)
+
+
+@pytest.mark.asyncio
+async def test_sliding_window_without_reset_at_is_not_enqueued():
+    """Windows with no reset_at slide with wall clock, so window_start moves on
+    every request and no single row can represent them; the read path keeps
+    using its LiteLLM_SpendLogs fallback instead."""
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    key_obj = MagicMock()
+    key_obj.budget_limits = [{"budget_duration": "30d", "max_budget": 100.0}]
+
+    with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
+        await increment_spend_counters(
+            token="hashed-token", team_id=None, user_id=None, response_cost=0.25
+        )
+        enqueued = await _drain(queue)
+
+    assert enqueued == []
+
+
+@pytest.mark.asyncio
+async def test_each_configured_window_gets_its_own_row_enqueue():
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    now = datetime.now(timezone.utc)
+    key_obj = MagicMock()
+    key_obj.budget_limits = [
+        {"budget_duration": "1d", "max_budget": 5.0, "reset_at": (now + timedelta(hours=5)).isoformat()},
+        {"budget_duration": "30d", "max_budget": 100.0, "reset_at": (now + timedelta(days=10)).isoformat()},
+    ]
+
+    with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
+        await increment_spend_counters(
+            token="hashed-token", team_id=None, user_id=None, response_cost=0.25
+        )
+        enqueued = await _drain(queue)
+
+    assert sorted(item["window_duration"] for item in enqueued) == ["1d", "30d"]
+    assert all(item["spend"] == pytest.approx(0.25) for item in enqueued)
+
+
+@pytest.mark.asyncio
+async def test_no_window_spend_row_enqueued_without_budget_limits():
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    key_obj = MagicMock()
+    key_obj.budget_limits = None
+
+    with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
+        await increment_spend_counters(
+            token="hashed-token", team_id=None, user_id=None, response_cost=0.25
+        )
+        enqueued = await _drain(queue)
+
+    assert enqueued == []
+
+
+@pytest.mark.asyncio
+async def test_window_spend_row_carries_the_request_start_time():
+    """The seed sums LiteLLM_SpendLogs only up to this point, so it must be the
+    same start the spend log row was written with."""
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    reset_at = datetime.now(timezone.utc) + timedelta(days=10)
+    key_obj = MagicMock()
+    key_obj.budget_limits = [
+        {"budget_duration": "30d", "max_budget": 100.0, "reset_at": reset_at.isoformat()}
+    ]
+
+    with _window_spend_enqueue_env({"hashed-token": key_obj}) as queue:
+        await increment_spend_counters(
+            token="hashed-token",
+            team_id=None,
+            user_id=None,
+            response_cost=0.25,
+            request_started_at=datetime(2026, 8, 10, 12, 0, 0, 500_000, tzinfo=timezone.utc),
+        )
+        enqueued = await _drain(queue)
+
+    assert enqueued[0]["started_at"] == "2026-08-10T12:00:00.500000"
+
+
+@pytest.mark.asyncio
+async def test_team_window_spend_row_carries_the_request_start_time():
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    reset_at = datetime.now(timezone.utc) + timedelta(days=3)
+    team_obj = MagicMock()
+    team_obj.budget_limits = [
+        {"budget_duration": "7d", "max_budget": 50.0, "reset_at": reset_at.isoformat()}
+    ]
+
+    with _window_spend_enqueue_env({"team_id:team-1": team_obj}) as queue:
+        await increment_spend_counters(
+            token=None,
+            team_id="team-1",
+            user_id=None,
+            response_cost=1.5,
+            request_started_at=datetime(2026, 8, 10, 12, 0, 0, 500_000, tzinfo=timezone.utc),
+        )
+        enqueued = await _drain(queue)
+
+    assert enqueued[0]["started_at"] == "2026-08-10T12:00:00.500000"
 
 
 def _mock_startup_prisma_client(health_check_error=None, connect_error=None):

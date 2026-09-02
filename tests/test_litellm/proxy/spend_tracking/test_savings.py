@@ -6,12 +6,15 @@ import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.proxy.spend_tracking.savings import (
     _baseline_usage,
+    _resolve_model,
     compute_autorouter_savings,
     compute_savings_spend,
     marks_gateway_injection,
 )
 from litellm.router import Router
 from litellm.types.utils import Usage
+
+pytestmark = pytest.mark.usefixtures("local_model_cost_map")
 
 
 def _anthropic_costs(model: str) -> tuple[float, float]:
@@ -754,24 +757,55 @@ def test_a_baseline_that_prices_caching_implicitly_still_pays_for_its_prompt():
     assert reported > 0, "routing a cold first turn onto a cheaper model is a saving, not a loss"
 
 
+def _priced_chat_model_without_cache_read_rate() -> tuple[str, str, str]:
+    """A chat model the bundled map prices per token for input and output but not for cache
+    reads, derived from the map itself: a hardcoded pick goes stale the moment the registry
+    prices that model's cache reads, which is exactly how this test's premise last broke.
+    Candidates go through the savings module's own resolver, so the pick is one the code
+    under test can actually price."""
+    for key in sorted(litellm.model_cost):
+        entry = litellm.model_cost[key]
+        provider = entry.get("litellm_provider")
+        if not isinstance(provider, str) or not key.startswith(f"{provider}/"):
+            continue
+        if entry.get("mode") != "chat" or entry.get("cache_read_input_token_cost") is not None:
+            continue
+        if not entry.get("input_cost_per_token") or not entry.get("output_cost_per_token"):
+            continue
+        if _resolve_model(key, None) is None:
+            continue
+        priced = compute_autorouter_savings(
+            baseline_model=key,
+            selected_model="claude-haiku-4-5",
+            selected_provider="anthropic",
+            usage=_usage(fresh=1_000, cached=0, written=0, out=100),
+            conversation_continuing=True,
+        )
+        if priced == 0.0:
+            continue
+        return key, key.removeprefix(f"{provider}/"), provider
+    raise AssertionError("the bundled map has no per-token chat model without a cache-read rate")
+
+
 def test_a_baseline_with_no_cache_read_rate_is_charged_its_input_rate():
     """The same hole on the other bucket. A baseline whose entry has no
     `cache_read_input_token_cost` reads for 0.0, so a continuing turn priced the whole
     prompt at nothing and every switch away from it reported a loss.
     """
+    baseline_key, baseline_name, baseline_provider = _priced_chat_model_without_cache_read_rate()
     continuing = _usage(fresh=0, cached=0, written=20_000, out=1_000)
     reported = compute_autorouter_savings(
-        baseline_model="xai/grok-4",
+        baseline_model=baseline_key,
         selected_model="claude-haiku-4-5",
         selected_provider="anthropic",
         usage=continuing,
         conversation_continuing=True,
     )
 
-    grok = litellm.get_model_info("grok-4", "xai")
-    assert grok.get("cache_read_input_token_cost") is None, "pick a baseline with no cache-read rate"
+    baseline = litellm.get_model_info(baseline_name, baseline_provider)
+    assert baseline.get("cache_read_input_token_cost") is None, "pick a baseline with no cache-read rate"
     haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
-    baseline_pays_input = 20_000 * grok["input_cost_per_token"] + 1_000 * grok["output_cost_per_token"]
+    baseline_pays_input = 20_000 * baseline["input_cost_per_token"] + 1_000 * baseline["output_cost_per_token"]
     actually_paid = 20_000 * haiku["cache_creation_input_token_cost"] + 1_000 * haiku["output_cost_per_token"]
     assert reported == pytest.approx(baseline_pays_input - actually_paid)
 
@@ -1149,6 +1183,61 @@ def test_logging_payload_never_stamps_internal_calls():
         cost_breakdown=None,
     )
     assert internal is None
+
+
+def test_savings_are_net_of_a_priced_classifier():
+    """The classifier call is part of what routing cost, so the per-request figure
+    deducts it; a charge big enough to outweigh the model saving goes negative,
+    since the figure is signed on purpose (GH #38816)."""
+    from litellm.proxy.spend_tracking.savings import autorouter_savings_for_request
+
+    gross = autorouter_savings_for_request(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        routing_decision=_routed_decision(),
+        usage_object=_cached_usage_object(),
+    )
+    net = autorouter_savings_for_request(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        routing_decision={**_routed_decision(), "classifier_cost": 0.005},
+        usage_object=_cached_usage_object(),
+    )
+    assert gross is not None and net == pytest.approx(gross - 0.005)
+
+
+@pytest.mark.parametrize("classifier_cost", [0.0, "bogus", True])
+def test_an_unpriced_classifier_deducts_nothing(classifier_cost: object):
+    from litellm.proxy.spend_tracking.savings import autorouter_savings_for_request
+
+    gross = autorouter_savings_for_request(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        routing_decision=_routed_decision(),
+        usage_object=_cached_usage_object(),
+    )
+    with_cost_field = autorouter_savings_for_request(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        routing_decision={**_routed_decision(), "classifier_cost": classifier_cost},
+        usage_object=_cached_usage_object(),
+    )
+    assert with_cost_field == gross
+
+
+def test_recorded_savings_are_already_net_and_not_deducted_again():
+    """The deduction lives at the figure's computation owner, so a stamped figure is
+    net by construction; the recorded-wins path must not subtract a second time."""
+    result = compute_savings_spend(
+        model="claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        compression_saved_tokens=0,
+        gateway_injected_cache=False,
+        routing_decision={**_routed_decision(), "classifier_cost": 0.005},
+        usage_object=_cached_usage_object(),
+        recorded_autorouter_savings=0.5,
+    )
+    assert result.autorouter == 0.5
 
 
 def test_caching_savings_require_a_gateway_injected_breakpoint():
