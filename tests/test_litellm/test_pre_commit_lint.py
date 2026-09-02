@@ -1,4 +1,5 @@
 import os
+import shutil
 import signal
 import subprocess
 import time
@@ -224,6 +225,7 @@ def test_nothing_staged_and_no_changes_is_an_explicit_no_op(tmp_path: Path) -> N
     proc = _run(repo, bin_dir, {})
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "nothing to check" in proc.stdout
+    assert "check: PASS" in proc.stdout
     assert "linting Python" not in proc.stdout
 
 
@@ -234,6 +236,7 @@ def test_nothing_staged_without_a_base_ref_fails_with_a_fetch_hint(tmp_path: Pat
     assert proc.returncode == 1
     assert "cannot resolve the merge base" in proc.stdout
     assert "git fetch origin litellm_internal_staging" in proc.stdout
+    assert "check: FAIL" in proc.stdout
 
 
 def test_partial_staging_warns_which_checks_were_skipped(tmp_path: Path) -> None:
@@ -384,3 +387,83 @@ def test_a_failing_block_fails_the_whole_run(tmp_path: Path, fail: str, message:
     proc = _run(repo, bin_dir, {"STUB_FAIL": fail})
     assert proc.returncode == 1
     assert message in proc.stdout + proc.stderr
+
+
+def test_run_ends_with_a_summary_of_ran_and_skipped_blocks(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "check: summary" in proc.stdout
+    assert "ran:     Python lint (make lint)" in proc.stdout
+    assert "ran:     dashboard lint (prettier + eslint + lint budgets)" in proc.stdout
+    assert "ran:     dashboard API-type sync (npm run gen:api)" in proc.stdout
+    assert "skipped: tests/e2e checks (basedpyright + raw HTTP client ban) (no tests/e2e Python files in scope)" in proc.stdout
+    assert "check: PASS" in proc.stdout
+    assert "check: FAIL" not in proc.stdout
+
+
+def test_staged_files_matching_no_check_print_an_explicit_noop_note_and_nonempty_log(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    tests_dir = repo / "tests" / "test_litellm"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "test_x.py").write_text("def test_x() -> None: ...\n")
+    subprocess.run(["git", "add", "tests"], cwd=repo, check=True)
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "no gating lint check matches the files in scope, so nothing ran" in proc.stdout
+    assert "tests/test_litellm/test_x.py" in proc.stdout
+    assert "a no-op, not a lint verdict" in proc.stdout
+    assert "check: PASS" in proc.stdout
+    assert "linting Python" not in proc.stdout
+    log = (repo / ".git" / "pre_commit_lint.log").read_text()
+    assert "check: summary" in log
+    assert "skipped: Python lint (make lint) (no litellm/ Python files in scope)" in log
+
+
+def test_run_queues_through_the_machine_wide_gate_slot_lock(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    lock_dir = tmp_path / "gate-locks"
+    proc = _run(repo, bin_dir, {"LITELLM_GATE_SLOT_DIR": str(lock_dir)})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (lock_dir / "slot-0.lock").exists()
+
+
+def test_run_under_a_held_slot_skips_reacquiring_the_gate_lock(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    lock_dir = tmp_path / "gate-locks"
+    proc = _run(
+        repo,
+        bin_dir,
+        {"LITELLM_GATE_SLOT_DIR": str(lock_dir), "LITELLM_GATE_SLOT_HELD": "1"},
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert not lock_dir.exists()
+
+
+def test_hook_symlink_install_still_resolves_the_slot_lock_helper(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    scripts_dir = repo / "scripts"
+    scripts_dir.mkdir()
+    shutil.copy(SCRIPT, scripts_dir / "pre_commit_lint.sh")
+    shutil.copy(SCRIPT.parent / "gate_slot_lock.py", scripts_dir / "gate_slot_lock.py")
+    (repo / ".git" / "hooks" / "pre-commit").symlink_to(Path("../../scripts/pre_commit_lint.sh"))
+    lock_dir = tmp_path / "gate-locks"
+    proc = subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "hooked"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env=_env(repo, bin_dir, {"LITELLM_GATE_SLOT_DIR": str(lock_dir)}),
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (lock_dir / "slot-0.lock").exists()
+
+
+def test_failing_run_ends_with_a_fail_verdict(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    proc = _run(repo, bin_dir, {"STUB_FAIL": "make-lint"})
+    assert proc.returncode == 1
+    assert "check: FAIL" in proc.stdout
+    assert "check: PASS" not in proc.stdout

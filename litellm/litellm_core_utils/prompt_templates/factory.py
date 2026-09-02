@@ -16,6 +16,7 @@ import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
 from litellm.types.files import get_file_extension_from_mime_type
@@ -642,49 +643,6 @@ def claude_2_1_pt(
     return prompt
 
 
-### TOGETHER AI
-
-
-def get_model_info(token, model):
-    try:
-        headers: Final = {"Authorization": f"Bearer {token}"}
-        client: Final = HTTPHandler(concurrent_limit=1)
-        response: Final = client.get("https://api.together.xyz/models/info", headers=headers)
-        if response.status_code == 200:
-            model_info: Final = response.json()
-            for m in model_info:
-                if m["name"].lower().strip() == model.strip():
-                    return m["config"].get("prompt_format", None), m["config"].get("chat_template", None)
-            return None, None
-        else:
-            return None, None
-    except Exception:  # safely fail a prompt template request
-        return None, None
-
-
-## OLD TOGETHER AI FLOW
-# def format_prompt_togetherai(messages, prompt_format, chat_template):
-#     if prompt_format is None:
-#         return default_pt(messages)
-
-#     human_prompt, assistant_prompt = prompt_format.split("{prompt}")
-
-#     if chat_template is not None:
-#         prompt = hf_chat_template(
-#             model=None, messages=messages, chat_template=chat_template
-#         )
-#     elif prompt_format is not None:
-#         prompt = custom_prompt(
-#             role_dict={},
-#             messages=messages,
-#             initial_prompt_value=human_prompt,
-#             final_prompt_value=assistant_prompt,
-#         )
-#     else:
-#         prompt = default_pt(messages)
-#     return prompt
-
-
 ### IBM Granite
 
 
@@ -1200,13 +1158,14 @@ def _encode_tool_call_id_with_signature(tool_call_id: str, thought_signature: st
     return tool_call_id
 
 
-def _get_thought_signature_from_tool(tool: dict, model: str | None = None) -> str | None:
+def _get_thought_signature_from_tool(tool: dict) -> str | None:
     """Extract thought signature from tool call's provider_specific_fields.
 
     If not provided try to extract thought signature from tool call id
 
     Checks both tool.provider_specific_fields and tool.function.provider_specific_fields.
-    If no signature is found and model is gemini-3, returns a dummy signature.
+    Returns None when the tool call carries no signature; callers decide whether a
+    placeholder signature is needed.
     """
     # First check tool's provider_specific_fields
     provider_fields: Final = tool.get("provider_specific_fields") or {}
@@ -1236,13 +1195,6 @@ def _get_thought_signature_from_tool(tool: dict, model: str | None = None) -> st
         if len(parts) == 2:
             _, signature = parts
             return signature
-    # If no signature found and model is gemini-3, return dummy signature
-    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-        VertexGeminiConfig,
-    )
-
-    if model and VertexGeminiConfig._is_gemini_3_or_newer(model):
-        return _get_dummy_thought_signature()
     return None
 
 
@@ -1251,10 +1203,14 @@ def _get_dummy_thought_signature() -> str:
 
     This is used when transferring conversation history from older models
     (like gemini-2.5-flash) to gemini-3, which requires thought_signature
-    for strict validation.
+    for strict validation. Google documents it as a last resort that "will
+    negatively impact model performance", so callers must only fall back to it
+    when no real signature is available.
+
+    See:
+    https://ai.google.dev/gemini-api/docs/thought-signatures#faqs
+    https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking/thought-signatures
     """
-    # Return a base64-encoded dummy signature string
-    # Below dummy signature is recommended by google - https://ai.google.dev/gemini-api/docs/thought-signatures#faqs
     dummy_data: Final = b"skip_thought_signature_validator"
     return base64.b64encode(dummy_data).decode("utf-8")
 
@@ -1312,8 +1268,10 @@ def convert_to_gemini_tool_call_invoke(
             VertexGeminiConfig,
         )
 
+        needs_dummy_signature: Final = model is not None and VertexGeminiConfig._is_gemini_3_or_newer(model)
+
         if tool_calls is not None:
-            for idx, tool in enumerate(tool_calls):
+            for tool in tool_calls:
                 if "function" in tool:
                     gemini_function_call: VertexFunctionCall | None = _gemini_tool_call_invoke_helper(
                         function_call_params=tool["function"],
@@ -1321,7 +1279,13 @@ def convert_to_gemini_tool_call_invoke(
                     )
                     if gemini_function_call is not None:
                         part_dict: VertexPartType = {"function_call": gemini_function_call}
-                        thought_signature = _get_thought_signature_from_tool(dict(tool), model=model)
+                        thought_signature = _get_thought_signature_from_tool(dict(tool))
+                        # Gemini signs only the first functionCall part of a parallel batch, so scope the
+                        # placeholder fallback to that part instead of fabricating one per sibling call:
+                        # https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking/thought-signatures#parallel_function_calling_example
+                        is_first_function_call = len(_parts_list) == 0
+                        if not thought_signature and is_first_function_call and needs_dummy_signature:
+                            thought_signature = _get_dummy_thought_signature()
                         if thought_signature:
                             part_dict["thoughtSignature"] = thought_signature
 
@@ -1344,7 +1308,7 @@ def convert_to_gemini_tool_call_invoke(
                     thought_signature = provider_fields.get("thought_signature")
 
                 # If no signature found and model is gemini-3, use dummy signature
-                if not thought_signature and model and VertexGeminiConfig._is_gemini_3_or_newer(model):
+                if not thought_signature and needs_dummy_signature:
                     thought_signature = _get_dummy_thought_signature()
 
                 if thought_signature:
@@ -1418,7 +1382,7 @@ def convert_to_gemini_tool_call_result(
                 content_type = content.get("type", "")
                 if content_type == "text":
                     content_str += content.get("text", "")
-                elif content_type == "image":
+                elif content_type == "image":  # pyright: ignore[reportUnnecessaryComparison]  # loose runtime dict
                     # Anthropic-native image block: {"type": "image", "source": {"type": "base64", ...}}
                     source = content.get("source", {})
                     if isinstance(source, dict) and source.get("type") == "base64":
@@ -1448,7 +1412,7 @@ def convert_to_gemini_tool_call_result(
                             )
                         except Exception as e:
                             verbose_logger.warning("Failed to process image in tool response: %s", e)
-                elif content_type in ("file", "input_file"):
+                elif content_type in ("file", "input_file"):  # pyright: ignore[reportUnnecessaryContains]  # loose runtime dict
                     # Extract file for inline_data (for tool results with PDF, audio, video, etc.)
                     file_data = content.get("file_data", "")
                     if not file_data:
@@ -1600,14 +1564,23 @@ def convert_to_anthropic_tool_result(
     }
     """
     anthropic_content: (
-        str | list[AnthropicMessagesToolResultContent | AnthropicMessagesImageParam | AnthropicMessagesDocumentParam]
+        str
+        | list[
+            AnthropicMessagesToolResultContent
+            | AnthropicMessagesImageParam
+            | AnthropicMessagesDocumentParam
+            | ToolReference
+        ]
     ) = ""
     if isinstance(message["content"], str):
         anthropic_content = message["content"]
     elif isinstance(message["content"], list):
         content_list: Final = message["content"]
         anthropic_content_list: list[
-            AnthropicMessagesToolResultContent | AnthropicMessagesImageParam | AnthropicMessagesDocumentParam
+            AnthropicMessagesToolResultContent
+            | AnthropicMessagesImageParam
+            | AnthropicMessagesDocumentParam
+            | ToolReference
         ] = []
         for content in content_list:
             if content["type"] == "text":
@@ -1650,6 +1623,8 @@ def convert_to_anthropic_tool_result(
                         original_content_element=content,
                     )
                     anthropic_content_list.append(cast(AnthropicMessagesImageParam, _anthropic_image_param))
+            elif content["type"] == "tool_reference":
+                anthropic_content_list.append(ToolReference(type="tool_reference", tool_name=content["tool_name"]))
             elif content["type"] == "file":
                 file_content = cast(ChatCompletionFileObject, content)
                 _file_block = anthropic_process_openai_file_message(file_content)
@@ -1719,6 +1694,18 @@ def convert_function_to_anthropic_tool_invoke(
         raise e
 
 
+def _find_server_tool_result(
+    tool_id: str,
+    web_search_results: Sequence[object] | None,
+    tool_results: Sequence[object] | None,
+) -> dict[str, object] | None:
+    candidates: Final = (*(web_search_results or ()), *(tool_results or ()))
+    return next(
+        (result for result in candidates if isinstance(result, dict) and result.get("tool_use_id") == tool_id),
+        None,
+    )
+
+
 def convert_to_anthropic_tool_invoke(
     tool_calls: list[ChatCompletionAssistantToolCall],
     web_search_results: list[Any] | None = None,
@@ -1783,32 +1770,22 @@ def convert_to_anthropic_tool_invoke(
             context="Anthropic tool invoke",
         )
 
-        # Check if this is a server-side tool (web_search, tool_search, etc.)
-        # Server tool IDs start with "srvtoolu_"
-        if tool_id.startswith("srvtoolu_"):
-            # Create server_tool_use block instead of tool_use
-            _anthropic_server_tool_use: dict[str, object] = {
-                "type": "server_tool_use",
-                "id": tool_id,
-                "name": tool_name,
-                "input": tool_input,
-            }
-            anthropic_tool_invoke.append(_anthropic_server_tool_use)
-
-            # Add corresponding tool result if available.
-            # Check both web_search_results (web_search_tool_result / web_fetch_tool_result)
-            # and tool_results (bash_code_execution_tool_result, etc.)
-            _all_tool_results: list[Any] = []
-            if web_search_results:
-                _all_tool_results.extend(web_search_results)
-            if tool_results:
-                _all_tool_results.extend(tool_results)
-            for result in _all_tool_results:
-                if result.get("tool_use_id") == tool_id:
-                    anthropic_tool_invoke.append(result)
-                    break
+        server_tool_result = (
+            _find_server_tool_result(tool_id, web_search_results, tool_results)
+            if tool_id.startswith("srvtoolu_")
+            else None
+        )
+        if server_tool_result is not None:
+            anthropic_tool_invoke.append(
+                {
+                    "type": "server_tool_use",
+                    "id": tool_id,
+                    "name": tool_name,
+                    "input": tool_input,
+                }
+            )
+            anthropic_tool_invoke.append(server_tool_result)
         else:
-            # Regular tool_use
             sanitized_tool_id = _sanitize_anthropic_tool_use_id(tool_id)
             _anthropic_tool_use_param = AnthropicMessagesToolUseParam(
                 type="tool_use",
@@ -3712,7 +3689,13 @@ def _convert_to_bedrock_tool_call_invoke(
                         _parts_list.append(cache_point_block)
         return _parts_list
     except Exception as e:
-        raise Exception(f"Unable to convert openai tool calls={tool_calls} to bedrock tool calls. Received error={e}")
+        tool_call_ids: Final = tuple(tool.get("id") for tool in tool_calls if isinstance(tool, dict))
+        raise litellm.BadRequestError(
+            message=f"Unable to convert openai tool calls with ids={tool_call_ids} to bedrock tool calls. "
+            f"Received error={e}",
+            model=model or "",
+            llm_provider="bedrock",
+        ) from e
 
 
 def _append_bedrock_tool_result_media_block(
@@ -4974,10 +4957,13 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
 
 
 def add_cache_point_tool_block(tool: dict, model: str | None = None) -> BedrockToolBlock | None:
-    from litellm.llms.bedrock.common_utils import is_claude_4_5_on_bedrock
+    from litellm.llms.bedrock.common_utils import (
+        bedrock_model_accepts_cache_points,
+        is_claude_4_5_on_bedrock,
+    )
 
     cache_control: Final = tool.get("cache_control", None)
-    if cache_control is not None:
+    if cache_control is not None and bedrock_model_accepts_cache_points(model):
         cache_point: Final = cache_control.get("type", "ephemeral")
         if cache_point == "ephemeral":
             cache_point_block: Final[CachePointBlock] = {"type": "default"}
@@ -5371,12 +5357,13 @@ def _parse_tool_call_arguments(raw: Any, tool_name: str | None, context: str) ->
         return raw
     if not isinstance(raw, str):
         return {}
+    normalized_raw: Final = "{}" if raw == REDACTED_BY_LITELLM else raw
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         parse_tool_call_arguments,
     )
 
     try:
-        parsed: Final = parse_tool_call_arguments(raw, tool_name=tool_name, context=context)
+        parsed: Final = parse_tool_call_arguments(normalized_raw, tool_name=tool_name, context=context)
     except ValueError as e:
         verbose_logger.warning("Failed to parse tool call arguments: %s", e)
         return {}

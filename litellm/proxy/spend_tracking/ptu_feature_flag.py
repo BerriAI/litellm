@@ -1,18 +1,12 @@
-"""Opt-in flag for PTU (provisioned throughput unit) flat-cost attribution.
+"""Re-exported from ``litellm.litellm_core_utils.ptu_pricing``.
 
-The whole feature is inert unless an operator sets
-``LITELLM_ENABLE_PTU_COST_ATTRIBUTION``: the daily rollup is not scheduled, the
-model endpoints reject PTU config, the daily activity read path reports zero flat
-cost, and the model form hides the PTU inputs.
+The flag lives in core because the router reads it while registering a deployment, and
+router code cannot import from the proxy.
 """
 
-from typing import Final
+from litellm.litellm_core_utils.ptu_pricing import (
+    PTU_COST_ATTRIBUTION_ENV_VAR,
+    is_ptu_cost_attribution_enabled,
+)
 
-from litellm.secret_managers.main import get_secret_bool
-
-PTU_COST_ATTRIBUTION_ENV_VAR: Final = "LITELLM_ENABLE_PTU_COST_ATTRIBUTION"
-
-
-def is_ptu_cost_attribution_enabled() -> bool:
-    """Report whether this deployment opted into PTU flat-cost attribution."""
-    return get_secret_bool(PTU_COST_ATTRIBUTION_ENV_VAR, False) is True
+__all__ = ("PTU_COST_ATTRIBUTION_ENV_VAR", "is_ptu_cost_attribution_enabled")

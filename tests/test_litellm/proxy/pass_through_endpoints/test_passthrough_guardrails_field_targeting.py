@@ -6,13 +6,10 @@ and send only specified fields to the guardrail.
 """
 
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.proxy._types import PassThroughGuardrailSettings
 from litellm.proxy.pass_through_endpoints.passthrough_guardrails import (
