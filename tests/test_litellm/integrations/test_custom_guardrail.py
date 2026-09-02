@@ -2259,7 +2259,7 @@ class _ApplyOnlyObserver(CustomGuardrail):
         return GenericGuardrailAPIInputs(texts=["[MASKED]" for _ in inputs.get("texts") or []])
 
 
-def _logged_call(messages: list) -> tuple[dict, object]:
+def _logged_call(messages: list | str) -> tuple[dict, object]:
     from litellm.types.utils import Choices, Message, ModelResponse
 
     response = ModelResponse(choices=[Choices(message=Message(role="assistant", content="general kenobi"))])
@@ -2340,10 +2340,40 @@ class TestLoggingOnlyApplyGuardrail:
         guardrail = _ApplyOnlyObserver()
         kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
 
-        out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.aembedding.value)
+        out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.amoderation.value)
 
         assert guardrail.calls == []
         assert out_kwargs["standard_logging_object"]["guardrail_information"] is None
+
+    @pytest.mark.asyncio
+    async def test_aembedding_scans_logged_input(self):
+        from litellm.types.utils import EmbeddingResponse
+
+        guardrail = _ApplyOnlyObserver()
+        kwargs, _ = _logged_call("hello there")
+        response = EmbeddingResponse(data=[{"embedding": [0.1], "index": 0, "object": "embedding"}])
+
+        out_kwargs, out_response = await guardrail.async_logging_hook(kwargs, response, CallTypes.aembedding.value)
+
+        assert guardrail.calls == [("request", ["hello there"])]
+        assert out_kwargs["messages"] == "hello there"
+        assert out_response is response
+        entries = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert [e["guardrail_status"] for e in entries] == ["success"]
+
+    @pytest.mark.asyncio
+    async def test_native_lifecycle_hook_guardrail_is_left_alone(self):
+        class _NativeHooks(_ApplyOnlyObserver):
+            use_native_lifecycle_hooks = True
+
+        guardrail = _NativeHooks()
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+
+        out_kwargs, out_response = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        assert guardrail.calls == []
+        assert out_kwargs is kwargs
+        assert out_response is response
 
     @pytest.mark.asyncio
     async def test_aresponses_scans_logged_messages_when_input_is_cleared(self):
