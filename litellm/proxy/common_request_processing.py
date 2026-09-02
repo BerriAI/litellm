@@ -65,7 +65,10 @@ from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
 from litellm.router import Router
-from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.router_utils.add_retry_fallback_headers import (
+    get_hidden_params_dict,
+    safe_header_value,
+)
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
@@ -1648,7 +1651,11 @@ class ProxyBaseLLMRequestProcessing:
                 headers.update(logging_caching_headers)
 
         try:
-            return {key: str(value) for key, value in headers.items() if value not in exclude_values}
+            return {
+                key: safe_header_value(str(value))
+                for key, value in headers.items()
+                if value not in exclude_values
+            }
         except Exception as e:
             verbose_proxy_logger.error("Error setting custom headers: %s", e)
             return {}

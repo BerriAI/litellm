@@ -5,6 +5,7 @@ import json
 from types import SimpleNamespace
 from typing import AsyncGenerator, Callable, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import unquote
 
 import httpx
 import pytest
@@ -799,6 +800,33 @@ class TestProxyBaseLLMRequestProcessing:
         # Discount headers should not be in the final dict
         assert "x-litellm-response-cost-original" not in headers
         assert "x-litellm-response-cost-discount-amount" not in headers
+
+    def test_get_custom_headers_percent_encodes_non_latin1_model_name(self):
+        """
+        Regression test for https://github.com/BerriAI/litellm/issues/39284:
+        a deployment or model-group name outside latin-1 (e.g. Chinese) used to
+        crash header assembly with UnicodeEncodeError when FastAPI/Starlette
+        encoded the response headers.
+        """
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id",
+            model_id="中文模型",
+        )
+
+        encoded_model_id = headers["x-litellm-model-id"]
+        assert encoded_model_id.encode("latin-1")
+        assert unquote(encoded_model_id) == "中文模型"
+
+        # Would raise UnicodeEncodeError before the fix.
+        response = Response(headers=headers)
+        assert response.headers["x-litellm-model-id"] == encoded_model_id
 
     def test_get_custom_headers_with_margin_info(self):
         """

@@ -1,5 +1,6 @@
 import json
 from typing import Any, Final, Protocol, TypedDict, cast
+from urllib.parse import quote
 
 from pydantic import BaseModel
 
@@ -48,6 +49,21 @@ def prepare_response_for_header_attachment(response: object) -> object | None:
     if hasattr(response, "__anext__"):
         return HiddenParamsAsyncIteratorWrapper(response)
     return response
+
+
+def safe_header_value(value: str) -> str:
+    """
+    HTTP header values must be latin-1 encodable (RFC 7230). Values derived from
+    user-configured strings (e.g. a model name) can contain non-latin-1
+    characters, which crashes response header assembly with a UnicodeEncodeError.
+    Percent-encode such values so they stay ASCII-safe and reversible via
+    ``urllib.parse.unquote``, instead of dropping them or crashing the request.
+    """
+    try:
+        value.encode("latin-1")
+        return value
+    except UnicodeEncodeError:
+        return quote(value, safe="")
 
 
 def ensure_response_additional_headers(response: object) -> dict[str, object]:

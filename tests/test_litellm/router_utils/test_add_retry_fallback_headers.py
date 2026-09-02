@@ -1,4 +1,5 @@
 import json
+from urllib.parse import unquote
 
 from pydantic import BaseModel
 
@@ -7,6 +8,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
     add_retry_headers_to_response,
     get_fallback_errors_from_headers,
     get_hidden_params_dict,
+    safe_header_value,
 )
 
 
@@ -162,3 +164,14 @@ def test_add_fallback_headers_to_dict_response():
 
     assert result is response
     assert response["_hidden_params"]["additional_headers"]["x-litellm-attempted-fallbacks"] == 1
+
+
+def test_safe_header_value_passes_through_latin1_values():
+    assert safe_header_value("azure/gpt-4o") == "azure/gpt-4o"
+
+
+def test_safe_header_value_percent_encodes_non_latin1_values():
+    result = safe_header_value("azure/中文模型名稱")
+
+    assert result.encode("latin-1")
+    assert unquote(result) == "azure/中文模型名稱"
