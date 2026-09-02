@@ -28,7 +28,7 @@ interface RequestLogsTableProps {
   onRefresh: () => void;
   onRowClick: (log: LogEntry) => void;
   onKeyHashClick: (keyHash: string) => void;
-  onSessionClick: (sessionId: string) => void;
+  onSessionClick: (log: LogEntry) => void;
   teams: Team[];
   logsWindow: LogsWindow;
   toolbarChildren?: ReactNode;

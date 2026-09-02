@@ -2040,6 +2040,7 @@ interface UiSpendLogsParams {
   min_spend?: number;
   max_spend?: number;
   exclude_internal_health_checks?: boolean;
+  group_by_session?: boolean;
 }
 
 interface UiSpendLogsCallOptions {

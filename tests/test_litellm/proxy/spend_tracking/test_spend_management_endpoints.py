@@ -3971,6 +3971,8 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
                 "session_total_spend": 15.0,
                 "mcp_tool_call_count": 1,
                 "mcp_tool_call_spend": 10.0,
+                "session_llm_count": 1,
+                "session_agent_count": 0,
             }
         ]
     )
@@ -3995,6 +3997,8 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
     assert rows[0]["mcp_tool_call_spend"] == 10.0
     assert rows[1]["mcp_tool_call_count"] == 1
     assert rows[1]["mcp_tool_call_spend"] == 10.0
+    assert rows[0]["session_llm_count"] == 1
+    assert rows[0]["session_agent_count"] == 0
 
     # Every row in the session carries the full session spend, not just its own
     assert rows[0]["session_total_spend"] == 15.0
