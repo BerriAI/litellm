@@ -5044,6 +5044,10 @@ class ProxyConfig:
 
         self._load_environment_variables(config=config)
 
+        from litellm.extensions.runtime import configure_extension_runtime
+
+        await configure_extension_runtime(config)
+
         ## Coordination Redis (before cache init, so the explicit block wins)
         coordination_redis_cache: Final = self._init_coordination_redis(config=config)
         if coordination_redis_cache is not None:
@@ -5246,8 +5250,16 @@ class ProxyConfig:
                     for callback in value:
                         # user passed custom_callbacks.async_on_succes_logger. They need us to import a function
                         if "." in callback:
+                            from litellm.extensions.runtime import get_extension_runtime, remote_callback
+
+                            callback_instance = remote_callback(callback)
+                            if callback_instance is None and get_extension_runtime() is not None:
+                                raise ValueError(
+                                    f"callback {callback!r} was not present in the extension host manifest"
+                                )
                             litellm.logging_callback_manager.add_litellm_success_callback(
-                                get_instance_fn(
+                                callback_instance
+                                or get_instance_fn(
                                     value=callback,
                                     config_file_path=config_file_path,
                                 )
@@ -5273,8 +5285,16 @@ class ProxyConfig:
                     for callback in value:
                         # user passed custom_callbacks.async_on_succes_logger. They need us to import a function
                         if "." in callback:
+                            from litellm.extensions.runtime import get_extension_runtime, remote_callback
+
+                            callback_instance = remote_callback(callback)
+                            if callback_instance is None and get_extension_runtime() is not None:
+                                raise ValueError(
+                                    f"callback {callback!r} was not present in the extension host manifest"
+                                )
                             litellm.logging_callback_manager.add_litellm_failure_callback(
-                                get_instance_fn(
+                                callback_instance
+                                or get_instance_fn(
                                     value=callback,
                                     config_file_path=config_file_path,
                                 )

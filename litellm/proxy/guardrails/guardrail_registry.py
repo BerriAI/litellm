@@ -47,6 +47,7 @@ from litellm.types.guardrails import (
     GuardrailEventHooks,
     LakeraCategoryThresholds,
     LitellmParams,
+    Mode,
     SupportedGuardrailIntegrations,
 )
 
@@ -424,6 +425,16 @@ def _apply_configured_bool_overrides(instance: CustomGuardrail, litellm_params: 
         instance.scan_raw_request = bool(litellm_params.scan_raw_request)
 
 
+def _remote_guardrail_event_hook(
+    mode: str | list[str] | Mode,  # mutable-ok: guardrail config accepts a hook list
+) -> GuardrailEventHooks | list[GuardrailEventHooks] | Mode:  # mutable-ok: CustomGuardrail requires a list
+    if isinstance(mode, Mode):
+        return mode
+    if isinstance(mode, list):
+        return [GuardrailEventHooks(hook) for hook in mode]  # mutable-ok: CustomGuardrail requires a list
+    return GuardrailEventHooks(mode)
+
+
 class InMemoryGuardrailHandler:
     """
     Class that handles initializing guardrails and adding them to the CallbackManager
@@ -581,10 +592,6 @@ class InMemoryGuardrailHandler:
             guardrail_type,
         )
 
-        _guardrail_class: Final[Callable[..., CustomGuardrail]] = get_instance_fn(
-            guardrail_type, config_file_path=config_file_path
-        )
-
         mode: Final = litellm_params.mode
         if mode is None:
             raise ValueError(
@@ -604,6 +611,25 @@ class InMemoryGuardrailHandler:
         # Remove params that are handled explicitly or are internal
         for key in ["guardrail", "mode", "default_on"]:
             extra_params.pop(key, None)
+
+        from litellm.extensions.runtime import get_extension_runtime, remote_guardrail
+
+        remote: Final = remote_guardrail(
+            guardrail_type,
+            guardrail["guardrail_name"],
+            event_hook=_remote_guardrail_event_hook(mode),
+            default_on=bool(default_on),
+            **extra_params,
+        )
+        if remote is not None:
+            litellm.logging_callback_manager.add_litellm_callback(remote)
+            return remote
+        if get_extension_runtime() is not None:
+            raise ValueError(f"guardrail {guardrail_type!r} was not present in the extension host manifest")
+
+        _guardrail_class: Final[Callable[..., CustomGuardrail]] = get_instance_fn(
+            guardrail_type, config_file_path=config_file_path
+        )
 
         _guardrail_callback: Final = _guardrail_class(
             guardrail_name=guardrail["guardrail_name"],

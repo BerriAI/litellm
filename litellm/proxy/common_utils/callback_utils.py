@@ -369,15 +369,25 @@ def initialize_callbacks_on_proxy(
                 verbose_proxy_logger.debug(
                     "%s attempting to import custom calback=%s %s", blue_color_code, callback, reset_color_code
                 )
-                imported_list.append(
-                    _loaded_callback_or_raise(
-                        entry=callback,
-                        loaded=get_instance_fn(
-                            value=callback,
-                            config_file_path=config_file_path,
-                        ),
-                    )
+                from litellm.extensions.runtime import get_extension_runtime, remote_callback
+
+                remote_for_callback = remote_callback(  # rebind-ok: each configured callback is independent
+                    callback
                 )
+                if remote_for_callback is not None:
+                    imported_list.append(remote_for_callback)
+                elif get_extension_runtime() is not None:
+                    raise ValueError(f"callback {callback!r} was not present in the extension host manifest")
+                else:
+                    imported_list.append(
+                        _loaded_callback_or_raise(
+                            entry=callback,
+                            loaded=get_instance_fn(
+                                value=callback,
+                                config_file_path=config_file_path,
+                            ),
+                        )
+                    )
         if isinstance(litellm.callbacks, list):
             litellm.callbacks.extend(imported_list)
         else:
@@ -388,15 +398,23 @@ def initialize_callbacks_on_proxy(
 
             PrometheusLogger._mount_metrics_endpoint()
     else:
-        litellm.callbacks = [
-            _loaded_callback_or_raise(
-                entry=value,
-                loaded=get_instance_fn(
-                    value=value,
-                    config_file_path=config_file_path,
-                ),
-            )
-        ]
+        from litellm.extensions.runtime import get_extension_runtime, remote_callback
+
+        remote_single: Final = remote_callback(value)
+        if remote_single is not None:
+            litellm.callbacks = [remote_single]  # mutable-ok: global callback registry requires a list
+        elif get_extension_runtime() is not None:
+            raise ValueError(f"callback {value!r} was not present in the extension host manifest")
+        else:
+            litellm.callbacks = [  # mutable-ok: global callback registry requires a list
+                _loaded_callback_or_raise(
+                    entry=value,
+                    loaded=get_instance_fn(
+                        value=value,
+                        config_file_path=config_file_path,
+                    ),
+                )
+            ]
     verbose_proxy_logger.debug("%s Initialized Callbacks - %s %s", blue_color_code, litellm.callbacks, reset_color_code)
 
 
