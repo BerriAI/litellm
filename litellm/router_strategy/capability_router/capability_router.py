@@ -122,6 +122,16 @@ def _classification_context(messages: Sequence[Mapping[str, object]]) -> tuple[M
     return tuple(selected)
 
 
+def _capped(value: object, cap: int) -> object:
+    if isinstance(value, str):
+        return value if len(value) <= cap else f"{value[:cap]}...[truncated {len(value) - cap} chars]"
+    if isinstance(value, Mapping):
+        return {key: _capped(item, cap) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return tuple(_capped(item, cap) for item in value)
+    return value
+
+
 def _tool_names(request_kwargs: Mapping[str, object]) -> tuple[str, ...]:
     tools = request_kwargs.get("tools")
     if not isinstance(tools, Sequence) or isinstance(tools, (str, bytes)):
@@ -187,11 +197,15 @@ class CapabilityRouter(CustomLogger):
         context = _classification_context(messages)
         if not context:
             raise CapabilityClassifierFailure("No user task was available for capability classification")
-        payload = {
-            "conversation": context,
+        cap: Final = self.config.classifier.max_message_chars
+        payload: Final = {
+            "conversation": tuple(_capped(message, cap) for message in context),
             "available_tools": _tool_names(request_kwargs),
         }
-        return "Task context (untrusted JSON):\n" + json.dumps(payload, default=str, ensure_ascii=False)
+        return (
+            "Task context (untrusted JSON; long values truncated; the newest user message is the task to forecast):\n"
+            + json.dumps(payload, default=str, ensure_ascii=False)
+        )
 
     def _cache_key(
         self,
