@@ -1658,16 +1658,6 @@ def _stream_chunk(content: str, finish_reason: str | None) -> ModelResponseStrea
     )
 
 
-def _assembled_response(content: str) -> ModelResponse:
-    return ModelResponse(
-        id="mock-response",
-        model="gpt-4",
-        choices=[
-            litellm.Choices(index=0, message=litellm.Message(role="assistant", content=content), finish_reason="stop")
-        ],
-    )
-
-
 async def _guard_calls_for_stream(handler: CrowdStrikeAIDRHandler, chunk_texts: list[str]) -> int:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
@@ -1693,16 +1683,12 @@ async def _guard_calls_for_stream(handler: CrowdStrikeAIDRHandler, chunk_texts: 
     async with httpx.AsyncClient(transport=httpx.MockTransport(_allow)) as client:
         await handler.async_handler.close()
         handler.async_handler.client = client
-        with patch(
-            "litellm.llms.openai.chat.guardrail_translation.handler.stream_chunk_builder",
-            return_value=_assembled_response("".join(chunk_texts)),
+        async for _ in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/chat/completions"),
+            response=stream(),
+            request_data=request_data,
         ):
-            async for _ in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
-                user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/chat/completions"),
-                response=stream(),
-                request_data=request_data,
-            ):
-                pass
+            pass
     return calls
 
 
