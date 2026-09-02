@@ -2360,7 +2360,7 @@ class Router:
     @overload
     async def acompletion(
         self, model: str, messages: list[AllMessageValues], stream: Literal[True, False] = False, **kwargs
-    ) -> CustomStreamWrapper | ModelResponse: 
+    ) -> CustomStreamWrapper | ModelResponse:
         ...
 
     # fmt: on
@@ -6410,8 +6410,6 @@ class Router:
             "responses",
             "generate_content",
             "generate_content_stream",
-            "vector_store_search",
-            "vector_store_create",
             "ocr",
             "search",
             "video_generation",
@@ -6435,6 +6433,8 @@ class Router:
             return sync_wrapper
 
         if call_type in (
+            "vector_store_search",
+            "vector_store_create",
             "vector_store_retrieve",
             "vector_store_list",
             "vector_store_update",
@@ -6446,11 +6446,16 @@ class Router:
                 client: object | None = None,
                 **kwargs,
             ):
-                if custom_llm_provider and "custom_llm_provider" not in kwargs:
-                    kwargs["custom_llm_provider"] = custom_llm_provider
-                if kwargs.get("model"):
-                    return self._generic_api_call_with_fallbacks(original_function=original_function, **kwargs)
-                return original_function(**kwargs)
+                provider_kwargs: Final = (
+                    MappingProxyType({**kwargs, "custom_llm_provider": custom_llm_provider})
+                    if custom_llm_provider and "custom_llm_provider" not in kwargs
+                    else MappingProxyType(kwargs)
+                )
+                if provider_kwargs.get("model"):
+                    return self._generic_api_call_with_fallbacks(original_function=original_function, **provider_kwargs)
+                if call_type == "vector_store_search":
+                    return original_function(**MappingProxyType({**provider_kwargs, "router": self}))
+                return original_function(**provider_kwargs)
 
             return vector_store_sync_wrapper
 
@@ -6626,6 +6631,7 @@ class Router:
                 return await self._init_vector_store_api_endpoints(
                     original_function=original_function,
                     custom_llm_provider=custom_llm_provider,
+                    call_type=call_type,
                     **kwargs,
                 )
             elif call_type in ("afile_delete", "afile_content"):
@@ -6666,6 +6672,7 @@ class Router:
         self,
         original_function: Callable,
         custom_llm_provider: str | None = None,
+        call_type: str | None = None,
         **kwargs,
     ):
         """
@@ -6683,6 +6690,13 @@ class Router:
                 original_function=original_function,
                 **kwargs,
             )
+
+        # For search, pass the router so provider transforms can resolve
+        # router-managed embedding models (e.g. S3 Vectors query embeddings).
+        # The merge also overrides any client-supplied `router` key.
+        if call_type == "avector_store_search":
+            search_kwargs: Final = MappingProxyType({**kwargs, "router": self})
+            return await original_function(**search_kwargs)
 
         # Otherwise, call the original function directly
         return await original_function(**kwargs)
