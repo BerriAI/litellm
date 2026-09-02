@@ -22,8 +22,9 @@ topology changed.
 redis-py 8.x recovers connections per-connection, so the copied override is not used. Upstream
 still flips the shared ``_initialize`` flag on any node's timeout, funneling every concurrent
 caller through the reinit lock and, if ``CLUSTER SLOTS`` lands on the slow node, into a full
-teardown. For those versions, the factory returns the thin timeout-tolerant wrapper described
-above.
+teardown. For those versions the factory returns a thin wrapper around upstream's
+``_execute_command`` that clears the flag again after an isolated timeout (a ConnectionError,
+a third consecutive timeout on the same node, or a concurrent ``aclose()`` still reinit).
 """
 
 import asyncio
