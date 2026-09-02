@@ -1,6 +1,6 @@
 # SDK function tracing
 
-The compare runner executes the same SDK calls through the Python engine and the Rust native bridge against a local HTTP provider fixture, then prints each engine's pipeline step tree (steps missing on one side are marked and colored blue for python-only, yellow for rust-only) and a difference summary (shared step order, python-only steps, rust-only steps). Each invocation must issue exactly one HTTP request. It requires the LiteLLM Python dependencies and the native extension built with tracing support
+The compare runner executes the same SDK calls through the Python engine and the Rust native bridge against a local HTTP provider fixture, then prints their pipeline trees side by side. Matching calls align on the same row in green; Python-only calls are blue, Rust-only calls yellow, and reordered calls red. Gaps preserve execution order and each column retains its own nesting. A comparison column labels every row even without color. Colors are enabled in terminals unless `NO_COLOR` is set. A difference summary follows (shared step order, python-only steps, rust-only steps). Each invocation must issue exactly one HTTP request. It requires the LiteLLM Python dependencies and the native extension built with tracing support
 
 From the repository root, using the project's Python environment:
 
