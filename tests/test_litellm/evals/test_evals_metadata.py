@@ -205,6 +205,19 @@ def test_prefix_filter_covers_everything_the_old_denylist_did():
     assert not missed, f"prefix filter no longer strips {missed}"
 
 
+def test_proxy_metadata_control_fields_are_covered():
+    """The proxy also writes guardrail, policy and routing control fields into `metadata`.
+
+    Those are internal too, so none of them may reach the provider. Pinned against the
+    proxy's own list so a field added there shows up here as a failure rather than a leak.
+    """
+    pre_call_utils = pytest.importorskip("litellm.proxy.litellm_pre_call_utils")
+    from litellm.evals.main import _is_internal_metadata_key
+
+    missed = sorted(k for k in pre_call_utils._UNTRUSTED_METADATA_CONTROL_FIELDS if not _is_internal_metadata_key(k))
+    assert not missed, f"evals filter does not strip proxy-injected {missed}"
+
+
 def test_update_eval_filtering_is_unchanged(captured_body):
     """Hoisting the filter out of update_eval must not change what update_eval does.
 
