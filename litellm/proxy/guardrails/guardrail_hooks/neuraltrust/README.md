@@ -2,6 +2,9 @@
 
 Native LiteLLM guardrail. Sends chat input and output to TrustGuard `POST /v1/evaluate`.
 
+Setup guide, verdict mapping, and the streaming caveat:
+[docs.neuraltrust.ai/trustguard/integrations/litellm](https://docs.neuraltrust.ai/trustguard/integrations/litellm).
+
 ## Config
 
 ```yaml
@@ -43,3 +46,10 @@ HTTP 503 entitlements, 401/403, other 4xx/5xx, and unusable TrustGuard verdicts 
 ## Streaming
 
 LiteLLM streaming guardrails default to `block_only`. `block` still fires on streamed calls. `transform` rewrites are not applied to the streamed tokens; use non-streaming requests when DLP redaction must reach the client.
+
+## References
+
+- [NeuralTrust TrustGuard on LiteLLM](https://docs.neuraltrust.ai/trustguard/integrations/litellm)
+- [TrustGuard Evaluate API](https://docs.neuraltrust.ai/trustguard/api/evaluate)
+- [TrustGuard collectors](https://docs.neuraltrust.ai/trustguard/concepts/collectors)
+- [LiteLLM Guardrails Documentation](https://docs.litellm.ai/docs/proxy/guardrails/quick_start)
