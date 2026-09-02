@@ -80,6 +80,15 @@ describe("ComplexityRouterConfig", () => {
     expect(screen.getByText(/Score > 0.60/)).toBeInTheDocument();
   });
 
+  it("leaves the score threshold list color to the theme instead of an inline style", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    const list = screen.getByText(/Score < 0.15/).closest<HTMLUListElement>("ul");
+    expect(list).toBeInTheDocument();
+    expect(list).toHaveClass("text-muted-foreground");
+    expect(list?.style.color).toBe("");
+  });
+
   it("should default to heuristic and hide classifier model/timeout fields", () => {
     renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
     expect(screen.getByText("Advanced: Classification Method")).toBeInTheDocument();
@@ -589,6 +598,82 @@ describe("ComplexityRouterConfig classifier fallback", () => {
   });
 });
 
+describe("ComplexityRouterConfig classification frequency", () => {
+  const llmValue: ComplexityRouterConfigValue = {
+    ...defaultValue,
+    classifier_type: "llm",
+    classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+  };
+
+  it("defaults to every request, matching both backend field defaults", () => {
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByRole("radio", { name: /Every request/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /Every new user message/ })).not.toBeChecked();
+    expect(screen.getByRole("radio", { name: /Once per session/ })).not.toBeChecked();
+  });
+
+  it("writes both wire fields when the frequency moves to every new user message", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    fireEvent.click(screen.getByRole("radio", { name: /Every new user message/ }));
+    expect(onChange).toHaveBeenCalledWith({
+      ...llmValue,
+      classification_mode: "user_turn",
+      session_affinity: false,
+    });
+  });
+
+  it("writes session affinity, not a classification mode, when the frequency moves to once per session", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={llmValue} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    fireEvent.click(screen.getByRole("radio", { name: /Once per session/ }));
+    expect(onChange).toHaveBeenCalledWith({
+      ...llmValue,
+      classification_mode: "every_request",
+      session_affinity: true,
+    });
+  });
+
+  it("shows a hand-authored config that sets both fields as once per session, matching the backend", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        modelInfo={mockModelInfo}
+        value={{ ...llmValue, classification_mode: "user_turn", session_affinity: true }}
+        onChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByRole("radio", { name: /Once per session/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /Every new user message/ })).not.toBeChecked();
+  });
+
+  it("records a switch back to every request", () => {
+    const onChange = vi.fn();
+    renderWithProviders(
+      <ComplexityRouterConfig
+        modelInfo={mockModelInfo}
+        value={{ ...llmValue, classification_mode: "user_turn" }}
+        onChange={onChange}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByRole("radio", { name: /Every new user message/ })).toBeChecked();
+    fireEvent.click(screen.getByRole("radio", { name: /Every request/ }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ classification_mode: "every_request" }));
+  });
+
+  it("offers the frequency on a heuristic router, where holding the tier still pins the model", () => {
+    // The backend pin is gated on the two fields alone, so a heuristic router that switches models
+    // mid tool loop is fixed by this control too.
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    expect(screen.getByRole("radio", { name: /Every new user message/ })).toBeInTheDocument();
+  });
+});
+
 describe("ComplexityRouterConfig classifier rubric", () => {
   const llmValue: ComplexityRouterConfigValue = {
     ...defaultValue,
@@ -751,13 +836,34 @@ describe("ComplexityRouterConfig tier labels", () => {
   });
 });
 
+describe("ComplexityRouterConfig modality panel", () => {
+  it("defaults the image-routing switch off and writes modality_routing through onChange", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Modality Routing"));
+
+    const toggle = screen.getByRole("switch", { name: "Route image requests to vision-capable models" });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+
+    expect(onChange).toHaveBeenCalledWith({ ...defaultValue, modality_routing: true });
+  });
+
+  it("renders a stored modality_routing=true as on", () => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={{ ...defaultValue, modality_routing: true }} />);
+    fireEvent.click(screen.getByText("Advanced: Modality Routing"));
+
+    expect(screen.getByRole("switch", { name: "Route image requests to vision-capable models" })).toBeChecked();
+  });
+});
+
 describe("ComplexityRouterConfig affinity panel", () => {
-  it("holds both affinity switches with their backend defaults", () => {
+  it("holds the deployment switch at its backend default, session pinning having moved to the frequency choice", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);
     fireEvent.click(screen.getByText("Advanced: Affinity"));
 
     expect(screen.getByRole("switch", { name: "Pin a session to one deployment per model group" })).toBeChecked();
-    expect(screen.getByRole("switch", { name: "Pin a session to its first model" })).not.toBeChecked();
+    expect(screen.queryByRole("switch", { name: "Pin a session to its first model" })).not.toBeInTheDocument();
   });
 
   it("writes deployment_affinity through onChange without touching other keys", () => {
@@ -1282,10 +1388,18 @@ describe("ComplexityRouterConfig tier editing", () => {
     expect(screen.getByLabelText("Fallback tier")).toBeInTheDocument();
   });
 
-  it("disables session pinning and says why, rather than letting a stripped value look saved", () => {
-    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={customValue} onEditingTiersChange={vi.fn()} />);
-    fireEvent.click(screen.getByText("Advanced: Affinity"));
-    expect(screen.getByLabelText("Pin a session to its first model")).toHaveAttribute("data-disabled");
+  it("disables the once-per-session frequency and says why, rather than letting a stripped value look saved", () => {
+    renderWithProviders(
+      <ComplexityRouterConfig
+        {...baseProps}
+        value={{ ...customValue, session_affinity: true }}
+        onEditingTiersChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    const sessionOption = screen.getByRole("radio", { name: /Once per session/ });
+    expect(sessionOption).toHaveAttribute("aria-disabled", "true");
+    expect(sessionOption).not.toBeChecked();
     expect(
       screen.getByText("Session pinning escalates along the built-in tier ladder", { exact: false }),
     ).toBeInTheDocument();
