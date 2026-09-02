@@ -73,6 +73,18 @@ class _ContentChunk(TypedDict):
     choices: Sequence[_ContentChoice]
 
 
+class _FunctionCallDelta(TypedDict):
+    function_call: ReadOnly[FunctionCall]
+
+
+class _FunctionCallChoice(TypedDict):
+    delta: ReadOnly[_FunctionCallDelta]
+
+
+class _FunctionCallChunk(TypedDict):
+    choices: ReadOnly[Sequence[_FunctionCallChoice]]
+
+
 class _AudioDelta(TypedDict, total=False):
     audio: ChatCompletionAudioDelta | None
 
@@ -588,7 +600,7 @@ class ChunkProcessor:
 
         return tool_calls_list
 
-    def get_combined_function_call_content(self, function_call_chunks: list[dict[str, Any]]) -> FunctionCall:
+    def get_combined_function_call_content(self, function_call_chunks: Sequence["_FunctionCallChunk"]) -> FunctionCall:
         argument_list: Final = []
         delta = function_call_chunks[0]["choices"][0]["delta"]
         function_call = delta.get("function_call", "")

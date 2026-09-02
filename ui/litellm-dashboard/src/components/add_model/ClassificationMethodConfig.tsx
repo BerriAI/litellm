@@ -15,9 +15,12 @@ import { RestrictedSection, restrictedBy } from "./TierRestrictions";
 import HeuristicScoringConfig from "./HeuristicScoringConfig";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
+  ClassificationFrequency,
   ClassifierFallback,
   ClassifierType,
   ComplexityRouterConfigValue,
+  classificationFrequency,
+  withClassificationFrequency,
   DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS,
   MIN_QUOTED_CONTEXT_TURN_CHARS,
   DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
@@ -39,6 +42,10 @@ import {
 const DEFAULT_SCORING_EXPLANATION =
   "The router scores each request across 7 dimensions: token count, code presence, reasoning markers, technical " +
   "terms, simple indicators, multi-step patterns, and question complexity. The weighted score determines the tier:";
+
+const CLASSIFIER_TIMEOUT_ID = "classifier-timeout-ms";
+const CLASSIFIER_CONTEXT_WINDOW_SIZE_ID = "classifier-context-window-size";
+const CLASSIFIER_CONTEXT_BUDGET_CHARS_ID = "classifier-context-budget-chars";
 
 const CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK =
   "This router classifies with your own prompt, so the tier comes from whatever rubric it states. The four tier " +
@@ -107,7 +114,7 @@ const HowClassificationWorks: React.FC<{ value: ComplexityRouterConfigValue }> =
         <strong className="block mb-2 font-semibold">How Classification Works</strong>
         <span className="text-[13px] text-muted-foreground">{scoringExplanation(value)}</span>
         {scorerRuns && ranges && (
-          <ul style={{ marginTop: 8, marginBottom: 0, paddingLeft: 20, fontSize: 13, color: "rgba(0, 0, 0, 0.45)" }}>
+          <ul className="mt-2 pl-5 text-[13px] text-muted-foreground">
             <li>
               <strong>{effectiveTierLabel("SIMPLE", value.tier_labels)}</strong>: Score &lt; {ranges.simpleMedium}
             </li>
@@ -204,8 +211,10 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   showValidationErrors = false,
   defaultModel,
 }) => {
+  const [draft, setDraft] = React.useState<{ id: string; raw: string } | null>(null);
   const hasDefaultModel = Boolean(defaultModel);
   const classifierType = effectiveClassifierType(value);
+  const sessionFrequencyRestriction = restrictedBy(value, "sessionAffinity");
   const classifierModelMissing =
     showValidationErrors && usesLlmClassifier(classifierType) && !value.classifier_llm_config?.model;
   const usesCustomPrompt = Boolean(value.classifier_llm_config?.system_prompt?.trim());
@@ -261,13 +270,13 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     });
   };
 
-  const handleClassifierTimeoutChange = (timeoutMs: number | null) => {
+  const handleClassifierTimeoutChange = (timeoutMs: number) => {
     onChange({
       ...value,
       classifier_llm_config: {
         ...value.classifier_llm_config,
         model: value.classifier_llm_config?.model ?? "",
-        timeout_ms: timeoutMs ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
+        timeout_ms: timeoutMs,
       },
     });
   };
@@ -300,18 +309,34 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     onChange({ ...value, classifier_fallback: fallback });
   };
 
-  const handleClassifierContextWindowSizeChange = (windowSize: number | null) => {
+  const handleClassificationFrequencyChange = (frequency: ClassificationFrequency) => {
+    onChange(withClassificationFrequency(value, frequency));
+  };
+
+  const handleClassifierContextWindowSizeChange = (windowSize: number) => {
     onChange({
       ...value,
-      classifier_context_window_size: windowSize ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
+      classifier_context_window_size: windowSize,
     });
   };
 
-  const handleClassifierContextBudgetCharsChange = (budgetChars: number | null) => {
+  const handleClassifierContextBudgetCharsChange = (budgetChars: number) => {
     onChange({
       ...value,
-      classifier_context_budget_chars: budgetChars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS,
+      classifier_context_budget_chars: budgetChars,
     });
+  };
+
+  const handleClassifierIntegerChange = (
+    id: string,
+    raw: string,
+    minimum: number,
+    onCommit: (value: number) => void,
+  ) => {
+    setDraft({ id, raw });
+    const parsed = Number(raw);
+    if (raw.trim() === "" || !Number.isFinite(parsed)) return;
+    onCommit(Math.max(minimum, Math.round(parsed)));
   };
 
   const handleClassifierContextIncludeAssistantTurnsChange = (includeAssistantTurns: boolean) => {
@@ -350,6 +375,49 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         </div>
       )}
 
+      <div className="mt-4 space-y-2">
+        <strong className="block font-semibold">How often to classify</strong>
+        <RadioGroup
+          value={classificationFrequency(value)}
+          onValueChange={(frequency: unknown) =>
+            handleClassificationFrequencyChange(frequency as ClassificationFrequency)
+          }
+        >
+          <div className="inline-flex flex-col gap-2">
+            <Label className="items-start font-normal leading-normal">
+              <RadioGroupItem value="every_request" className="mt-0.5" />
+              <span>
+                <span>Every request</span>{" "}
+                <span className="text-muted-foreground">: score every turn, tool-result continuations included</span>
+              </span>
+            </Label>
+            <Label className="items-start font-normal leading-normal">
+              <RadioGroupItem value="user_turn" className="mt-0.5" />
+              <span>
+                <span>Every new user message</span>{" "}
+                <span className="text-muted-foreground">
+                  : score each new human ask, then hold that tier for the tool calls that follow it
+                </span>
+              </span>
+            </Label>
+            <Label className="items-start font-normal leading-normal">
+              <RadioGroupItem value="session" className="mt-0.5" disabled={Boolean(sessionFrequencyRestriction)} />
+              <span>
+                <span>Once per session</span>{" "}
+                <span className="text-muted-foreground">
+                  {sessionFrequencyRestriction?.reason ??
+                    ": score the first turn only, then hold that tier and its deployment for the whole session"}
+                </span>
+              </span>
+            </Label>
+          </div>
+        </RadioGroup>
+        <p className="text-sm text-muted-foreground">
+          Holding the tier keeps an agent on one model for a whole tool loop and cuts scoring cost. A turn the router
+          cannot match to a held decision, such as one with no session id or an expired one, is scored again
+        </p>
+      </div>
+
       {usesLlmClassifier(classifierType) && (
         <div className="mt-4 space-y-3">
           <div>
@@ -366,14 +434,27 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             {classifierModelMissing && <span className="text-xs text-destructive">A classifier model is required</span>}
           </div>
           <div>
-            <strong className="block mb-1 font-semibold">Timeout (ms)</strong>
+            <Label htmlFor={CLASSIFIER_TIMEOUT_ID} className="block mb-1 font-semibold">
+              Timeout (ms)
+            </Label>
             <Input
-              type="number"
-              value={value.classifier_llm_config?.timeout_ms ?? DEFAULT_CLASSIFIER_TIMEOUT_MS}
-              onChange={(event) =>
-                handleClassifierTimeoutChange(event.target.value === "" ? null : event.target.valueAsNumber)
+              id={CLASSIFIER_TIMEOUT_ID}
+              type="text"
+              inputMode="numeric"
+              value={
+                draft?.id === CLASSIFIER_TIMEOUT_ID
+                  ? draft.raw
+                  : String(value.classifier_llm_config?.timeout_ms ?? DEFAULT_CLASSIFIER_TIMEOUT_MS)
               }
-              min={1}
+              onChange={(event) =>
+                handleClassifierIntegerChange(
+                  CLASSIFIER_TIMEOUT_ID,
+                  event.target.value,
+                  1,
+                  handleClassifierTimeoutChange,
+                )
+              }
+              onBlur={() => setDraft(null)}
               className="w-full"
             />
             <span className="text-xs text-muted-foreground">
@@ -480,14 +561,27 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             </span>
           </RestrictedSection>
           <div>
-            <strong className="block mb-1 font-semibold">Context Window Size</strong>
+            <Label htmlFor={CLASSIFIER_CONTEXT_WINDOW_SIZE_ID} className="block mb-1 font-semibold">
+              Context Window Size
+            </Label>
             <Input
-              type="number"
-              value={value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE}
-              onChange={(event) =>
-                handleClassifierContextWindowSizeChange(event.target.value === "" ? null : event.target.valueAsNumber)
+              id={CLASSIFIER_CONTEXT_WINDOW_SIZE_ID}
+              type="text"
+              inputMode="numeric"
+              value={
+                draft?.id === CLASSIFIER_CONTEXT_WINDOW_SIZE_ID
+                  ? draft.raw
+                  : String(value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE)
               }
-              min={0}
+              onChange={(event) =>
+                handleClassifierIntegerChange(
+                  CLASSIFIER_CONTEXT_WINDOW_SIZE_ID,
+                  event.target.value,
+                  0,
+                  handleClassifierContextWindowSizeChange,
+                )
+              }
+              onBlur={() => setDraft(null)}
               className="w-full"
             />
             <span className="text-xs text-muted-foreground">
@@ -497,14 +591,27 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             </span>
           </div>
           <div>
-            <strong className="block mb-1 font-semibold">Context Character Budget</strong>
+            <Label htmlFor={CLASSIFIER_CONTEXT_BUDGET_CHARS_ID} className="block mb-1 font-semibold">
+              Context Character Budget
+            </Label>
             <Input
-              type="number"
-              value={value.classifier_context_budget_chars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS}
-              onChange={(event) =>
-                handleClassifierContextBudgetCharsChange(event.target.value === "" ? null : event.target.valueAsNumber)
+              id={CLASSIFIER_CONTEXT_BUDGET_CHARS_ID}
+              type="text"
+              inputMode="numeric"
+              value={
+                draft?.id === CLASSIFIER_CONTEXT_BUDGET_CHARS_ID
+                  ? draft.raw
+                  : String(value.classifier_context_budget_chars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS)
               }
-              min={0}
+              onChange={(event) =>
+                handleClassifierIntegerChange(
+                  CLASSIFIER_CONTEXT_BUDGET_CHARS_ID,
+                  event.target.value,
+                  0,
+                  handleClassifierContextBudgetCharsChange,
+                )
+              }
+              onBlur={() => setDraft(null)}
               className="w-full"
             />
             <span className="text-xs text-muted-foreground">
