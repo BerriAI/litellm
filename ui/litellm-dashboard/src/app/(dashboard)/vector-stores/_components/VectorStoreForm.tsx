@@ -138,6 +138,17 @@ const vectorStoreSchema = z.object(vectorStoreShape).superRefine((values, ctx) =
 
 type VectorStoreFormValues = z.output<typeof vectorStoreSchema>;
 
+const VECTOR_STORE_ID_PLACEHOLDERS: Record<string, string> = {
+  vertex_rag_engine: '6917529027641081856 (corpus ID from Vertex AI / "RAG Engine" console)',
+  "vertex_ai/search_api": 'my-datastore_1234567890 (data store ID from Vertex AI / "Agent Search" console)',
+  valkey: "my-search-index (FT index name in Valkey)",
+  mongodb: "my-vector-index (Atlas Vector Search index name)",
+};
+
+const VERTEX_SEARCH_API_WITH_ENGINE_PLACEHOLDER = "Any identifier you'll use to reference this in LiteLLM";
+
+const DEFAULT_VECTOR_STORE_ID_PLACEHOLDER = "Enter vector store ID from your provider";
+
 const EMPTY_VALUES: VectorStoreFormValues = {
   custom_llm_provider: "bedrock",
   vector_store_id: "",
@@ -268,17 +279,9 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
   };
 
   const vectorStoreIdPlaceholder =
-    selectedProvider === "vertex_rag_engine"
-      ? '6917529027641081856 (corpus ID from Vertex AI / "RAG Engine" console)'
-      : selectedProvider === "vertex_ai/search_api"
-        ? vertexEngineId
-          ? "Any identifier you'll use to reference this in LiteLLM"
-          : 'my-datastore_1234567890 (data store ID from Vertex AI / "Agent Search" console)'
-        : selectedProvider === "valkey"
-          ? "my-search-index (FT index name in Valkey)"
-          : selectedProvider === "mongodb"
-            ? "my-vector-index (Atlas Vector Search index name)"
-            : "Enter vector store ID from your provider";
+    selectedProvider === "vertex_ai/search_api" && vertexEngineId
+      ? VERTEX_SEARCH_API_WITH_ENGINE_PLACEHOLDER
+      : VECTOR_STORE_ID_PLACEHOLDERS[selectedProvider] ?? DEFAULT_VECTOR_STORE_ID_PLACEHOLDER;
 
   return (
     <Dialog open={isVisible} onOpenChange={(open) => !open && handleCancel()}>
