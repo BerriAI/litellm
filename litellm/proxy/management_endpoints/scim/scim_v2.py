@@ -585,6 +585,37 @@ async def _users_named_by_member_value(
     return tuple(dict.fromkeys(row.user_id for row in rows))
 
 
+async def _accounts_named_by_member_value(value: str, prisma_client: PrismaClient) -> tuple[str, ...]:
+    """Every user id this member value names, by user id, SSO identity or email.
+
+    Classification needs to know whether the value is one account's ``user_id`` and
+    whether it names any other account, so all three fields are read in one pass. The
+    id is compared exactly and unstripped, as a primary key lookup would; the
+    identities compare as ``_users_named_by_member_value`` describes. Two rows are
+    enough to tell one account from several, so the read stops there. Only a full
+    read that lacks the row keyed by the value leaves that row's existence open, and
+    only then is the id read on its own.
+    """
+    subject: Final = value.strip()
+    email: Final[_CaseInsensitiveMatch] = {"equals": subject, "mode": "insensitive"}
+    users: Final = _table(UserRepository(prisma_client))
+    rows: Final = await users.find_many(
+        where={  # mutable-ok: Prisma filter
+            "OR": [  # mutable-ok: Prisma filter
+                {"user_id": value},  # mutable-ok: Prisma filter
+                {"sso_user_id": subject},  # mutable-ok: Prisma filter
+                {"user_email": email},  # mutable-ok: Prisma filter
+            ],
+        },
+        take=2,
+    )
+    named: Final = tuple(dict.fromkeys(row.user_id for row in rows))
+    if len(named) < 2 or value in named:
+        return named
+    keyed: Final = await users.find_unique(where={"user_id": value})
+    return named if keyed is None else (value, *named)
+
+
 async def _classify_group_member(member: SCIMMember, prisma_client: PrismaClient) -> _ClassifiedGroupMember:
     """
     Decide what a single SCIM group member refers to.
@@ -627,11 +658,9 @@ async def _classify_group_member(member: SCIMMember, prisma_client: PrismaClient
     if member_type == "group":
         return _SkippedGroupMember(value=value, reason="nested_group")
 
-    user: Final = await _table(UserRepository(prisma_client)).find_unique(where={"user_id": value})
-    if user is not None:
-        shared_with: Final = tuple(
-            other for other in await _users_named_by_member_value(value, prisma_client) if other != value
-        )
+    named: Final = await _accounts_named_by_member_value(value, prisma_client)
+    if value in named:
+        shared_with: Final = tuple(other for other in named if other != value)
         if shared_with:
             verbose_proxy_logger.warning(
                 "SCIM: group member '%s' is one account's user id and is also account '%s' by SSO identity or email, "
@@ -651,7 +680,6 @@ async def _classify_group_member(member: SCIMMember, prisma_client: PrismaClient
         if team is not None and _team_metadata_has_scim_provenance(team.metadata):
             return _SkippedGroupMember(value=value, reason="existing_team")
 
-    named: Final = await _users_named_by_member_value(value, prisma_client)
     if len(named) == 1:
         verbose_proxy_logger.info(
             "SCIM: group member '%s' matched user_id '%s' by SSO identity or email",
