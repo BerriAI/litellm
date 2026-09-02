@@ -16353,8 +16353,8 @@ async def update_config(
                 for key, value in raw_router_settings.items()
                 if key not in typed_router_settings and value is not None
             }
-            updates: Final = {**typed_router_settings, **raw_router_settings_without_none}
-            new_router_settings: Final = {**existing, **updates}
+            router_settings_updates: Final = {**typed_router_settings, **raw_router_settings_without_none}
+            new_router_settings: Final = {**existing, **router_settings_updates}
             await _upsert_section("router_settings", new_router_settings)
             asyncio.create_task(
                 create_config_audit_log(
