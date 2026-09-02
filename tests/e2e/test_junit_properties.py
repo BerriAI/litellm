@@ -38,11 +38,18 @@ class FakeItem:
     ) -> None:
         self.nodeid = nodeid
         self.location = location
-        self.user_properties: list[tuple[str, str]] = []
+        self.user_properties: list[tuple[str, object]] = []
         self._markers = markers
 
     def iter_markers(self, name: str):
         return (marker for marker in self._markers if marker.name == name)
+
+
+def as_item(fake: FakeItem) -> pytest.Item:
+    """FakeItem reports the three things junit_properties reads off a collected
+    test, and a real pytest.Item cannot be built without a session, so the stand-in
+    is handed over structurally."""
+    return fake  # pyright: ignore[reportReturnType]  # structural stand-in for a collected Item
 
 
 def repo_root() -> Path | None:
@@ -115,7 +122,7 @@ class TestResultProperties:
             ("logging/test_x.py", 40, "TestFoo.test_bar"),
             (FakeMarker("covers", "LOG-1", "LOG-2"),),
         )
-        assert result_properties(item) == (
+        assert result_properties(as_item(item)) == (
             ("package", "logging"),
             ("covers", "LOG-1,LOG-2"),
             ("source", "tests/e2e/logging/test_x.py:41"),
@@ -125,8 +132,8 @@ class TestResultProperties:
         """Collection can run the hook more than once; a second pass must not
         double the <property> entries in the report."""
         item = FakeItem("logging/test_x.py::test_bar", ("logging/test_x.py", 40, "test_bar"))
-        attach_result_properties(item)
-        attach_result_properties(item)
+        attach_result_properties(as_item(item))
+        attach_result_properties(as_item(item))
         assert [name for name, _ in item.user_properties] == ["package", "covers", "source"]
 
 

@@ -298,6 +298,7 @@ class GuardrailsClient:
         guardrails: list[str] | None = None,
         max_tokens: int = 16,
         tools: list[ChatTool] | None = None,
+        tool_choice: str | None = None,
     ) -> StreamingResponse:
         """Drive /chat/completions returning the raw HTTP outcome, for the
         assertions a typed body cannot carry: the `x-litellm-applied-guardrails`
@@ -312,6 +313,7 @@ class GuardrailsClient:
                 max_tokens=max_tokens,
                 guardrails=guardrails,
                 tools=tools,
+                tool_choice=tool_choice,
             ),
         )
 

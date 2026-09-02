@@ -7,6 +7,11 @@ Weave's own query API (``POST /calls/stream_query``), which answers JSON Lines:
 one JSON object per call, so the body is parsed line by line rather than as one
 document.
 
+The project is shared with other traffic, so the read never relies on the target
+being among the newest N calls: the query is scoped server-side to the
+``litellm_request`` op and to calls that started after the test's own request,
+and pages with ``offset`` until the window is exhausted.
+
 Weave's own ``summary.weave.status`` is a rollup that reads "success" even for a
 span the exporter marked failed, so status comes from the OTEL span itself
 (``attributes.otel_span.status.code``), and the shipped cost from
@@ -24,6 +29,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
+from itertools import count, takewhile
 from typing import Final
 
 import pytest
@@ -45,10 +51,9 @@ LITELLM_REQUEST_OP: Final = "litellm_request"
 #: the bug being guarded against.
 WEAVE_SETTLE_SECONDS: Final = 45.0
 
-#: Rows fetched per query. The project is shared with other traffic, so the
-#: window has to be wide enough to still hold this run's call once concurrent
-#: calls land alongside it.
-_QUERY_LIMIT: Final = 200
+#: Rows per page. The query is already scoped to this run's time window, so this
+#: only bounds one round trip, not what the read can see.
+_PAGE_SIZE: Final = 500
 
 
 class _WeaveSortBy(BaseModel):
@@ -56,10 +61,33 @@ class _WeaveSortBy(BaseModel):
     direction: str
 
 
+class _WeaveOpFilter(BaseModel):
+    op_names: list[str]
+
+
+class _WeaveGetField(BaseModel):
+    get_field: str = Field(serialization_alias="$getField")
+
+
+class _WeaveLiteral(BaseModel):
+    literal: float = Field(serialization_alias="$literal")
+
+
+class _WeaveGreaterThan(BaseModel):
+    gt: tuple[_WeaveGetField, _WeaveLiteral] = Field(serialization_alias="$gt")
+
+
+class _WeaveQuery(BaseModel):
+    expr: _WeaveGreaterThan = Field(serialization_alias="$expr")
+
+
 class _WeaveQueryBody(BaseModel):
     project_id: str
-    limit: int = _QUERY_LIMIT
-    sort_by: list[_WeaveSortBy] = [_WeaveSortBy(field="started_at", direction="desc")]
+    filter: _WeaveOpFilter
+    query: _WeaveQuery
+    limit: int = _PAGE_SIZE
+    offset: int = 0
+    sort_by: list[_WeaveSortBy] = [_WeaveSortBy(field="started_at", direction="asc")]
 
 
 class _OtelStatus(BaseModel):
@@ -181,51 +209,64 @@ class WeaveReader:
         token = base64.b64encode(f"api:{self.api_key}".encode()).decode()
         return AuthHeaders(authorization=f"Basic {token}")
 
-    def calls_matching(self, marker: str, *, op: str = LITELLM_REQUEST_OP) -> list[WeaveCall]:
-        """Every ingested call under ``op`` whose inputs carry ``marker``.
+    def _query_body(self, *, since: float, offset: int, op: str) -> _WeaveQueryBody:
+        return _WeaveQueryBody(
+            project_id=self.project_id,
+            filter=_WeaveOpFilter(op_names=[f"weave:///{self.project_id}/op/{op}:*"]),
+            query=_WeaveQuery(
+                expr=_WeaveGreaterThan(gt=(_WeaveGetField(get_field="started_at"), _WeaveLiteral(literal=since)))
+            ),
+            offset=offset,
+        )
 
-        More than one is the duplicate-delivery bug, so this never collapses to a
-        single call.
-        """
+    def _page(self, *, since: float, offset: int, op: str) -> tuple[WeaveCall, ...]:
         outcome = send(
             URL(f"{_WEAVE_TRACE_API}/calls/stream_query"),
             headers=self._headers,
-            json=_WeaveQueryBody(project_id=self.project_id),
+            json=self._query_body(since=since, offset=offset, op=op),
         )
         if not outcome.ok:
             pytest.fail(
                 f"Weave calls query for project {self.project_id!r} failed "
                 f"({outcome.status_code}): {outcome.body[:300]}"
             )
-        matches: list[WeaveCall] = []
-        for line in outcome.body.splitlines():
-            if not line.strip():
-                continue
-            call = WeaveCall.model_validate_json(line)
-            if call.op == op and call.mentions(marker):
-                matches.append(call)
-        return matches
+        return tuple(WeaveCall.model_validate_json(line) for line in outcome.body.splitlines() if line.strip())
 
-    def poll_calls_matching(self, marker: str, *, op: str = LITELLM_REQUEST_OP) -> list[WeaveCall]:
+    def calls_matching(self, marker: str, *, since: float, op: str = LITELLM_REQUEST_OP) -> tuple[WeaveCall, ...]:
+        """Every call under ``op`` started after ``since`` whose inputs carry
+        ``marker``, paging until the window is exhausted.
+
+        More than one is the duplicate-delivery bug, so this never collapses to a
+        single call.
+        """
+        pages = tuple(
+            takewhile(
+                bool,
+                (self._page(since=since, offset=offset, op=op) for offset in count(0, _PAGE_SIZE)),
+            )
+        )
+        return tuple(call for page in pages for call in page if call.mentions(marker))
+
+    def poll_calls_matching(self, marker: str, *, since: float, op: str = LITELLM_REQUEST_OP) -> tuple[WeaveCall, ...]:
         """Poll until the call is readable, then keep re-reading for
         WEAVE_SETTLE_SECONDS so a duplicate exported by a later batch flush
         cannot hide from the exactly-one assertion. A duplicate ends the settle
         early, because more waiting cannot clear it."""
         deadline = time.monotonic() + POLL_TIMEOUT
         while time.monotonic() < deadline:
-            calls = self.calls_matching(marker, op=op)
+            calls = self.calls_matching(marker, since=since, op=op)
             if calls:
-                return self._settled(marker, op=op, first=calls)
+                return self._settled(marker, since=since, op=op, first=calls)
             time.sleep(POLL_INTERVAL)
-        return []
+        return ()
 
-    def _settled(self, marker: str, *, op: str, first: list[WeaveCall]) -> list[WeaveCall]:
+    def _settled(self, marker: str, *, since: float, op: str, first: tuple[WeaveCall, ...]) -> tuple[WeaveCall, ...]:
         """A transiently empty re-read never downgrades what was already seen."""
         settle_deadline = time.monotonic() + WEAVE_SETTLE_SECONDS
-        latest = first
+        latest = first  # rebind-ok: one settle window, re-read per poll interval
         while time.monotonic() < settle_deadline and len(latest) <= 1:
             time.sleep(POLL_INTERVAL)
-            latest = self.calls_matching(marker, op=op) or latest
+            latest = self.calls_matching(marker, since=since, op=op) or latest
         return latest
 
 

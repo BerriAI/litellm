@@ -51,7 +51,17 @@ def weave_reader() -> WeaveReader:
     return build_weave_reader()
 
 
-def _exactly_one(calls: list[WeaveCall], *, marker: str, what: str) -> WeaveCall:
+#: How far before the request the Weave read-back window opens, to absorb clock
+#: skew between this host and Weave. Without it a host running slightly fast
+#: would filter out its own call.
+_WINDOW_SKEW_SECONDS = 120.0
+
+
+def _window_start() -> float:
+    return time.time() - _WINDOW_SKEW_SECONDS
+
+
+def _exactly_one(calls: tuple[WeaveCall, ...], *, marker: str, what: str) -> WeaveCall:
     assert calls, f"no Weave call for the {what} (marker {marker}) reached the project within the deadline"
     assert len(calls) == 1, (
         f"expected exactly ONE Weave call for the {what} (marker {marker}), got {len(calls)}: "
@@ -79,6 +89,7 @@ class TestWeaveLogDelivery:
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()
+        since = _window_start()
         outcome = first_ok(
             client,
             lambda: client.chat_raw(key, CHEAP_ANTHROPIC_MODEL, f"reply with one word {marker}", max_tokens=64),
@@ -87,7 +98,9 @@ class TestWeaveLogDelivery:
             f"the response must report x-litellm-response-cost, got {outcome.response_cost!r}"
         )
 
-        call = _exactly_one(weave_reader.poll_calls_matching(marker), marker=marker, what="successful call")
+        call = _exactly_one(
+            weave_reader.poll_calls_matching(marker, since=since), marker=marker, what="successful call"
+        )
 
         assert call.status_code == "OK", f"a successful call must land at OK span status, got {call.status_code!r}"
         cost = call.response_cost
@@ -126,9 +139,10 @@ class TestWeaveLogDelivery:
         resources.defer(lambda: client.delete_key(key))
 
         marker = unique_marker()
+        since = _window_start()
         outcome = _provoke_provider_failure(client, key, model_name, marker)
 
-        call = _exactly_one(weave_reader.poll_calls_matching(marker), marker=marker, what="failed call")
+        call = _exactly_one(weave_reader.poll_calls_matching(marker, since=since), marker=marker, what="failed call")
 
         assert call.status_code == "ERROR", (
             f"a failed call must land at ERROR span status, got {call.status_code!r} - "

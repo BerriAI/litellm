@@ -6,10 +6,12 @@ runs. Two halves of one product promise:
 
 - blocks: a request declaring a tool outside the allow-list is rejected with a 400
   naming the denied tool, and never reaches the model
-- allows: a request declaring only the permitted tool is served normally, and the
-  response's `x-litellm-applied-guardrails` header names the guardrail, which is
-  what separates "the guardrail ran and allowed it" from "the guardrail was never
-  attached"
+- allows: a request declaring only the permitted tool is served normally, comes
+  back with a real tool call for that tool, and carries an
+  `x-litellm-applied-guardrails` header naming the guardrail, which is what
+  separates "the guardrail ran and allowed it" from "the guardrail was never
+  attached". `tool_choice="required"` keeps the model from answering directly and
+  making the outcome depend on its mood
 
 No vendor API is involved: `tool_permission` is a built-in guardrail, so the
 verdict comes from the proxy itself.
@@ -30,7 +32,7 @@ from guardrails_client import (
     poll_until_blocked,
 )
 from lifecycle import ResourceManager
-from models import ChatTool, ChatToolFunction
+from models import ChatResponse, ChatTool, ChatToolFunction
 
 pytestmark = pytest.mark.e2e
 
@@ -57,7 +59,7 @@ DENIED_TOOL: Final = ChatTool(
     )
 )
 
-TOOL_PROMPT: Final = "What is the weather in Paris right now? Use the tool you have."
+TOOL_PROMPT: Final = "What is the weather in Paris right now?"
 
 
 def _register_tool_permission(client: GuardrailsClient, resources: ResourceManager, *, name: str) -> None:
@@ -84,6 +86,16 @@ def _register_tool_permission(client: GuardrailsClient, resources: ResourceManag
 
 def _applied_guardrails(outcome: StreamingResponse) -> str:
     return outcome.headers.get("x-litellm-applied-guardrails", "")
+
+
+def _tool_call_names(response: ChatResponse) -> tuple[str, ...]:
+    return tuple(
+        call.function.name
+        for choice in response.choices
+        if choice.message
+        for call in choice.message.tool_calls or ()
+        if call.function.name
+    )
 
 
 class TestToolPermissionPreCall:
@@ -125,10 +137,10 @@ class TestToolPermissionPreCall:
     def test_pre_call_allows_permitted_tool(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
-        """The mirror half: a request declaring only the permitted tool is served,
-        AND the guardrail is proven to have run on it. Without the header check a
-        guardrail that never attached would pass this test for the wrong reason,
-        so the 200 alone is not the contract."""
+        """The mirror half: a request declaring only the permitted tool is served
+        and the model calls it. Without the header check a guardrail that never
+        attached would pass this test for the wrong reason, so the 200 alone is
+        not the contract."""
         name = f"e2e-toolperm-allow-{unique_marker()}"
         _register_tool_permission(client, resources, name=name)
 
@@ -139,6 +151,7 @@ class TestToolPermissionPreCall:
             guardrails=[name],
             max_tokens=128,
             tools=[ALLOWED_TOOL],
+            tool_choice="required",
         )
 
         assert outcome.ok, f"the permitted tool must be served, got {outcome.status_code}: {outcome.body[:400]}"
@@ -147,10 +160,8 @@ class TestToolPermissionPreCall:
             "the allowed call must carry x-litellm-applied-guardrails naming the guardrail; "
             f"without it the 200 only proves the guardrail never ran. Got {applied!r}"
         )
-        assert ALLOWED_TOOL.function.name in outcome.body, (
-            "the permitted tool must survive into the served call (the model is asked to use it); "
-            f"got: {outcome.body[:400]}"
-        )
-        assert DENIED_TOOL.function.name not in outcome.body, (
-            f"the denied tool was never declared and must not appear; got: {outcome.body[:400]}"
+
+        called = _tool_call_names(ChatResponse.model_validate_json(outcome.body))
+        assert called == (ALLOWED_TOOL.function.name,), (
+            f"the served call must carry one tool call for the permitted tool, got {called!r}: {outcome.body[:400]}"
         )
