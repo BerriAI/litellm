@@ -26,6 +26,12 @@ from litellm.llms.bedrock_mantle.responses.transformation import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
+LOOKALIKE_MANTLE_HOSTS = (
+    "https://bedrock-mantle.us-east-1.api.aws.internal.example.com",
+    "https://bedrock-mantle.us-gov-west-1.api.aws-int.example.com",
+    "https://bedrock-mantle.us-east-1.api.aws:8443",
+)
+
 
 class TestBedrockMantleResponsesURL:
     def test_url_uses_region_from_env(self, monkeypatch):
@@ -1554,6 +1560,23 @@ class TestBedrockMantleResponsesSigV4:
             litellm_params={"aws_region_name": "us-east-2"},
         )
         assert url == "https://mantle-proxy.internal.example/openai/v1/responses"
+
+    @pytest.mark.parametrize("lookalike_host", LOOKALIKE_MANTLE_HOSTS)
+    def test_lookalike_mantle_host_from_api_base_is_preserved(self, monkeypatch, lookalike_host):
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        cfg = BedrockMantleResponsesAPIConfig()
+        url = cfg.get_complete_url(
+            api_base=f"{lookalike_host}/openai/v1",
+            litellm_params={"aws_region_name": "us-east-2"},
+        )
+        assert url == f"{lookalike_host}/openai/v1/responses"
+
+    @pytest.mark.parametrize("lookalike_host", LOOKALIKE_MANTLE_HOSTS)
+    def test_lookalike_mantle_host_from_env_is_preserved(self, monkeypatch, lookalike_host):
+        monkeypatch.setenv("BEDROCK_MANTLE_API_BASE", lookalike_host)
+        cfg = BedrockMantleResponsesAPIConfig()
+        url = cfg.get_complete_url(api_base=None, litellm_params={})
+        assert url == f"{lookalike_host}/openai/v1/responses"
 
     def test_caller_authorization_does_not_override_sigv4(self, monkeypatch):
         """Adversarial-review regression: a caller-supplied Authorization header (e.g.
