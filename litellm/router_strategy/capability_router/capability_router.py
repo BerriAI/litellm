@@ -403,6 +403,15 @@ class CapabilityRouter(CustomLogger):
             candidate_probabilities={  # mutable-ok: safe_dumps stringifies non-dict mappings in the spend log
                 candidate.model: candidate.p_solve for candidate in decision.candidates
             },
+            raw_candidate_probabilities={  # mutable-ok: safe_dumps stringifies non-dict mappings in the spend log
+                candidate.model: candidate.raw_p_solve for candidate in decision.candidates
+            },
+            candidate_rules={  # mutable-ok: safe_dumps stringifies non-dict mappings in the spend log
+                candidate.model: candidate.primary_rule for candidate in decision.candidates
+            },
+            candidate_boundaries={  # mutable-ok: safe_dumps stringifies non-dict mappings in the spend log
+                candidate.model: candidate.capability_boundary for candidate in decision.candidates
+            },
             candidate_costs={  # mutable-ok: safe_dumps stringifies non-dict mappings in the spend log
                 candidate.model: candidate.estimated_cost
                 for candidate in decision.candidates

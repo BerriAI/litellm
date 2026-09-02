@@ -2936,6 +2936,9 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     tier_litellm_params: Mapping[str, object]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     probability_threshold: float  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     candidate_probabilities: Mapping[str, float]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    raw_candidate_probabilities: Mapping[str, float]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    candidate_rules: Mapping[str, str]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    candidate_boundaries: Mapping[str, str]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     candidate_costs: Mapping[str, float]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     qualified_models: Sequence[str]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     fallback_reason: str | None  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
@@ -2970,6 +2973,9 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "tier_litellm_params",
         "probability_threshold",
         "candidate_probabilities",
+        "raw_candidate_probabilities",
+        "candidate_rules",
+        "candidate_boundaries",
         "candidate_costs",
         "qualified_models",
         "fallback_reason",

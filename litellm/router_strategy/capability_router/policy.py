@@ -26,14 +26,29 @@ def effective_boundary(candidate: CapabilityRouterCandidate, score: CapabilityCa
     """With a rule card, the matched rule's operator-declared boundary overrides the judge's opinion."""
     if not candidate.rules:
         return score.capability_boundary
-    boundaries: Final = MappingProxyType({rule_id: rule.boundary for rule_id, rule in indexed_rules(candidate)})
+    boundaries: Final[Mapping[str, CapabilityBoundary]] = MappingProxyType(
+        {rule_id: rule.boundary for rule_id, rule in indexed_rules(candidate)}
+    )
     return boundaries.get(score.primary_rule, "unmatched")
+
+
+def calibrated_probability(candidate: CapabilityRouterCandidate, raw_probability: float) -> float:
+    return next(
+        (
+            bucket.probability
+            for bucket in candidate.probability_calibration
+            if raw_probability <= bucket.upper_bound
+        ),
+        raw_probability,
+    )
 
 
 class CapabilityCandidateAssessment(BaseModel):
     model: str
+    raw_p_solve: float
     p_solve: float
     reason: str
+    primary_rule: str
     capability_boundary: CapabilityBoundary
     estimated_cost: float | None
     qualified: bool
@@ -72,17 +87,19 @@ def select_capability_model(
     if frozenset(scores) != frozenset(configured):
         return fallback_decision(config, "invalid_classifier_verdict")
 
-    boundaries: Final = MappingProxyType(
+    boundaries: Final[Mapping[str, CapabilityBoundary]] = MappingProxyType(
         {model: effective_boundary(configured[model], scores[model]) for model in configured}
     )
     assessments: Final = tuple(
         CapabilityCandidateAssessment(
             model=model,
-            p_solve=scores[model].p_solve,
+            raw_p_solve=scores[model].p_solve,
+            p_solve=calibrated_probability(configured[model], scores[model].p_solve),
             reason=scores[model].reason,
+            primary_rule=scores[model].primary_rule,
             capability_boundary=boundaries[model],
             estimated_cost=estimated_costs.get(model),
-            qualified=scores[model].p_solve
+            qualified=calibrated_probability(configured[model], scores[model].p_solve)
             > round(
                 config.probability_threshold + BOUNDARY_THRESHOLD_STEPS[boundaries[model]] * config.threshold_step,
                 9,
