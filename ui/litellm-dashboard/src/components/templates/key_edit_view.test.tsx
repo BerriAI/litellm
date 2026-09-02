@@ -1457,6 +1457,32 @@ describe("KeyEditView", () => {
         expect(screen.getByLabelText("Organization")).toHaveValue("Engineering");
       });
     });
+
+    it("submits organization_id as undefined after the organization is cleared", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderWithProviders(
+        <KeyEditView
+          keyData={{ ...MOCK_KEY_DATA, organization_id: "org-1" }}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Organization")).toHaveValue("Engineering");
+      });
+      await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ organization_id: undefined }));
+      });
+      expect(onSubmit.mock.calls[0][0].organization_id).toBeUndefined();
+    });
   });
 
   describe("models dropdown team gating", () => {
