@@ -253,6 +253,31 @@ async def test_generation__reencodes_id_with_model_id(harness):
 
 
 @pytest.mark.asyncio
+async def test_generation__reencodes_id_with_routed_deployment_id(harness):
+    # data["model"] is the public group here; only litellm_metadata carries the
+    # deployment the router picked.
+    response = VideoObject(
+        id=encode_video_id_with_provider("video_raw", "openai", None),
+        object="video",
+        status="processing",
+    )
+    response._hidden_params = {"custom_llm_provider": "openai"}
+    harness.base_process.return_value = response
+
+    resp = await call_generation(
+        harness,
+        body={
+            "model": "sora-2",
+            "litellm_metadata": {"model_info": {"id": VIDEO_MODEL_ID}},
+        },
+    )
+
+    decoded_video_id = decode_video_id_with_provider(resp.id)
+    assert decoded_video_id["model_id"] == VIDEO_MODEL_ID
+    assert decoded_video_id["video_id"] == "video_raw"
+
+
+@pytest.mark.asyncio
 async def test_generation__input_reference_attached(harness):
     body = {"model": "sora-2", "prompt": "a sunset"}
     upload = MagicMock(name="upload_file")
