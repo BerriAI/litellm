@@ -1185,6 +1185,18 @@ def test_vertex_ai_map_thinking_param_with_budget_tokens_0():
     }
 
 
+def test_vertex_ai_map_thinking_param_without_budget_tokens_for_gemini_3():
+    v = VertexGeminiConfig()
+    result = v.map_openai_params(
+        non_default_params={"thinking": {"type": "enabled"}},
+        optional_params={},
+        model="gemini-3.5-flash",
+        drop_params=False,
+    )
+
+    assert result["thinkingConfig"] == {"includeThoughts": True}
+
+
 def test_vertex_ai_map_tools():
     v = VertexGeminiConfig()
     optional_params = {}

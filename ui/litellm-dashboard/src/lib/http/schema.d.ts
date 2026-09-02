@@ -13289,6 +13289,58 @@ export interface paths {
         patch: operations["patch_user_scim_v2_Users__user_id__patch"];
         trace?: never;
     };
+    "/scim/v2/placeholders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Placeholders
+         * @description List user rows whose id is another account's SSO identity or email.
+         *
+         *     An earlier release provisioned a group member it could not match as a user keyed
+         *     by the raw member value, and that row now shadows the account the value really
+         *     names, so every push of that member is refused. This lists those rows so an
+         *     operator can fold each one into the account it shadows with
+         *     ``POST /scim/v2/placeholders/{user_id}/merge``. A row that has an SSO identity of
+         *     its own or owns virtual keys is left out: someone uses that account.
+         */
+        get: operations["list_placeholders_scim_v2_placeholders_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scim/v2/placeholders/{user_id}/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Merge Placeholder
+         * @description Fold a placeholder user into the one account its id names by SSO identity or email.
+         *
+         *     The account is added to every team the placeholder is on, then the placeholder is
+         *     deleted the way ``DELETE /scim/v2/Users/{id}`` deletes a user, so the next group
+         *     push resolves the member value to the real account. Refused with 409 when the row
+         *     has an SSO identity of its own, owns virtual keys, or names no account or several.
+         */
+        post: operations["merge_placeholder_scim_v2_placeholders__user_id__merge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/search": {
         parameters: {
             query?: never;
@@ -22962,7 +23014,7 @@ export interface components {
          * @description Enum for alert types and management event types
          * @enum {string}
          */
-        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "model_deprecation_warnings" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted";
+        AlertType: "llm_exceptions" | "llm_too_slow" | "llm_requests_hanging" | "budget_alerts" | "spend_reports" | "failed_tracking_spend" | "user_spend_thresholds" | "user_spend_anomalies" | "db_exceptions" | "daily_reports" | "cooldown_deployment" | "new_model_added" | "model_deprecation_warnings" | "outage_alerts" | "region_outage_alerts" | "fallback_reports" | "new_virtual_key_created" | "virtual_key_updated" | "virtual_key_deleted" | "new_team_created" | "team_updated" | "team_deleted" | "new_internal_user_created" | "internal_user_updated" | "internal_user_deleted";
         /** AllowedVectorStoreIndexItem */
         AllowedVectorStoreIndexItem: {
             /** Index Name */
@@ -25436,8 +25488,14 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /**
+             * Database Max Idle Connection Lifetime
+             * @description Prisma `max_idle_connection_lifetime` URL param (seconds). A pooled connection idle longer than this is closed and replaced instead of being handed to the next request. Defaults to 60 so connections are recycled before common infra idle timeouts (AWS NLB / RDS Proxy ~350s, many LBs 60-350s) silently drop them and requests fail with `Error { kind: Closed }`. A value pinned on the DATABASE_URL or set via `database_extra_connection_params` takes precedence.
+             * @default 60
+             */
+            database_max_idle_connection_lifetime: number | null;
+            /**
              * Database Socket Timeout
-             * @description Prisma `socket_timeout` URL param (seconds). When set, an idle/slow connection that has not produced data within this window is closed. This is the main knob for capping idle DB connections from LiteLLM.
+             * @description Prisma `socket_timeout` URL param (seconds). When set, an in-flight operation that has not produced data within this window is aborted. For capping how long idle pooled connections are kept, see `database_max_idle_connection_lifetime`.
              */
             database_socket_timeout?: number | null;
             /**
@@ -34921,6 +34979,27 @@ export interface components {
             /** Value */
             value?: unknown | null;
         };
+        /**
+         * SCIMPlaceholder
+         * @description A user row keyed by a value that names another account by SSO identity or email.
+         */
+        SCIMPlaceholder: {
+            /** Placeholder User Id */
+            placeholder_user_id: string;
+            /** Resolved User Ids */
+            resolved_user_ids: string[];
+            /** Team Ids */
+            team_ids: string[];
+        };
+        /** SCIMPlaceholderMergeResult */
+        SCIMPlaceholderMergeResult: {
+            /** Merged Into User Id */
+            merged_into_user_id: string;
+            /** Placeholder User Id */
+            placeholder_user_id: string;
+            /** Team Ids */
+            team_ids: string[];
+        };
         /** SCIMServiceProviderConfig */
         SCIMServiceProviderConfig: {
             /** Authenticationschemes */
@@ -37394,6 +37473,8 @@ export interface components {
             } | null;
             /** Num Retries */
             num_retries?: number | null;
+            /** Optional Pre Call Checks */
+            optional_pre_call_checks?: ("prompt_caching" | "router_budget_limiting" | "responses_api_deployment_check" | "deployment_affinity" | "session_affinity" | "forward_client_headers_by_model_group" | "enforce_model_rate_limits" | "encrypted_content_affinity")[] | null;
             /** Retry After */
             retry_after?: number | null;
             retry_policy?: components["schemas"]["RetryPolicy"] | null;
@@ -55839,6 +55920,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SCIMUser-Output"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_placeholders_scim_v2_placeholders_get: {
+        parameters: {
+            query?: {
+                feature?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SCIMPlaceholder"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    merge_placeholder_scim_v2_placeholders__user_id__merge_post: {
+        parameters: {
+            query?: {
+                feature?: string | null;
+            };
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SCIMPlaceholderMergeResult"];
                 };
             };
             /** @description Validation Error */

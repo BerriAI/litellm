@@ -326,12 +326,16 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             )
 
     @staticmethod
+    def forced_tool_use_unsupported(model: str) -> bool:
+        return AnthropicModelInfo._get_model_capability(model, "supports_forced_tool_use") is False
+
+    @staticmethod
     def forced_tool_use_downgraded(model: str, drop_params: bool) -> bool:
         """True when the model map flags the model with
         ``supports_forced_tool_use: false`` (Fable 5.1 / Mythos 5.1 400 on
         ``any``/``tool``) and ``drop_params`` asks for the ``auto`` downgrade;
         raises a clean client-side 400 for such models without ``drop_params``."""
-        if AnthropicModelInfo._get_model_capability(model, "supports_forced_tool_use") is not False:
+        if not AnthropicModelInfo.forced_tool_use_unsupported(model):
             return False
         if not (litellm.drop_params or drop_params):
             raise litellm.utils.UnsupportedParamsError(
@@ -1374,31 +1378,38 @@ def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
     return additional_headers
 
 
-def _anthropic_model_entry(model: ModelInfoResponse, created_at: str) -> Mapping[str, object]:
+def _anthropic_model_entry(
+    model: ModelInfoResponse, created_at: str, display_names: Mapping[str, str]
+) -> Mapping[str, object]:
     return {  # mutable-ok: JSON response body, serialized by the route and never mutated
         "type": "model",
         "id": model["id"],
-        "display_name": model["id"],
+        "display_name": display_names.get(model["id"], model["id"]),
         "created_at": created_at,
         "max_input_tokens": model.get("max_input_tokens"),
         "max_tokens": model.get("max_output_tokens"),
     }
 
 
-def create_anthropic_model_list_response(models: Sequence[ModelInfoResponse]) -> Mapping[str, object]:
+def create_anthropic_model_list_response(
+    models: Sequence[ModelInfoResponse],
+    display_names: Mapping[str, str] = MappingProxyType({}),
+) -> Mapping[str, object]:
     """Build the Anthropic-native /v1/models envelope.
 
     Clients that send an anthropic-version header parse the Anthropic Models API
     shape (type/display_name/created_at plus has_more/first_id/last_id) and filter
     the list themselves, so every model is returned here. The token limits carry
     over from the OpenAI-shaped listing, named as the Messages API names them, and
-    are always present because the vendor shape declares them nullable, not optional
+    are always present because the vendor shape declares them nullable, not optional.
+    display_names maps a listed model id to a configured human-readable name; ids
+    without an entry fall back to the id itself, matching the vendor behavior
     """
     created_at: Final = (
         datetime.fromtimestamp(DEFAULT_MODEL_CREATED_AT_TIME, tz=timezone.utc).isoformat().replace("+00:00", "Z")
     )
     data: Final = [  # mutable-ok: JSON response body, serialized by the route and never mutated
-        _anthropic_model_entry(model, created_at) for model in models
+        _anthropic_model_entry(model, created_at, display_names) for model in models
     ]
     return {  # mutable-ok: JSON response body, serialized by the route and never mutated
         "data": data,

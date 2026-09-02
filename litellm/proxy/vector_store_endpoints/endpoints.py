@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import (
     Annotated,
     Any,  # noqa: TID251  # jsonify_object in proxy/utils.py is annotated with a bare dict
@@ -27,9 +29,67 @@ from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
 from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
 
 router: Final = APIRouter()
+
+BLOCKED_QUERY_EMBEDDING_SELECTION_PARAMS: Final = frozenset(
+    {
+        "embedding_model",
+        "litellm_embedding_model",
+        "litellm_embedding_config",
+        "litellm_credential_name",
+    }
+)
+
+
+def reject_caller_embedding_selection_params(payload: Mapping[str, object], source: str) -> None:
+    blocked: Final = sorted(BLOCKED_QUERY_EMBEDDING_SELECTION_PARAMS & payload.keys())
+    if blocked:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"'{blocked[0]}' cannot be set in {source}. "
+                "Embedding configuration comes from the vector store's server-side registration."
+            },
+        )
+
+
 ########################################################
 # OpenAI Compatible Endpoints
 ########################################################
+
+
+async def build_request_data_from_managed_vector_store(
+    vector_store: LiteLLM_ManagedVectorStore,
+) -> Mapping[str, object]:
+    """
+    Build request params (provider, credential ref, litellm_params) from an
+    already-resolved managed vector store.
+
+    ``litellm_embedding_config`` is resolved here, at request-handling time,
+    instead of at row-creation time: the resolved api_key/api_base/api_version
+    lives only in the returned per-request mapping and is never persisted back
+    to the registry cache. Legacy rows that already carry a resolved
+    (cleartext) config skip the lookup and pass through unchanged.
+    """
+    top_level: Final = MappingProxyType(
+        {
+            key: vector_store.get(key)
+            for key in ("custom_llm_provider", "litellm_credential_name")
+            if key in vector_store
+        }
+    )
+    litellm_params: Final = vector_store.get("litellm_params") or MappingProxyType({})
+    embedding_model: Final = litellm_params.get("litellm_embedding_model")
+    if not embedding_model or litellm_params.get("litellm_embedding_config"):
+        return MappingProxyType({**top_level, **litellm_params})
+
+    from litellm.proxy.proxy_server import prisma_client
+
+    resolved_config: Final = await _resolve_embedding_config(
+        embedding_model=embedding_model, prisma_client=prisma_client
+    )
+    if not resolved_config:
+        return MappingProxyType({**top_level, **litellm_params})
+    return MappingProxyType({**top_level, **litellm_params, "litellm_embedding_config": resolved_config})
 
 
 async def _update_request_data_with_litellm_managed_vector_store_registry(
@@ -51,47 +111,14 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
     vector_store_to_run: Final[LiteLLM_ManagedVectorStore | None] = await get_litellm_managed_vector_store(
         vector_store_id=vector_store_id
     )
-    if vector_store_to_run is not None:
-        if user_api_key_dict is not None:
-            await assert_user_can_access_vector_store(
-                vector_store=vector_store_to_run,
-                user_api_key_dict=user_api_key_dict,
-            )
-
-        if "custom_llm_provider" in vector_store_to_run:
-            data["custom_llm_provider"] = vector_store_to_run.get("custom_llm_provider")
-
-        if "litellm_credential_name" in vector_store_to_run:
-            data["litellm_credential_name"] = vector_store_to_run.get("litellm_credential_name")
-
-        if "litellm_params" in vector_store_to_run:
-            litellm_params = vector_store_to_run.get("litellm_params", {}) or {}
-            # Resolve ``litellm_embedding_config`` here, at request-handling
-            # time, instead of at row-creation time. The resolved
-            # ``api_key`` / ``api_base`` / ``api_version`` lives only in
-            # this per-request ``data`` dict and is never persisted.
-            # Legacy rows that already carry a resolved (cleartext)
-            # ``litellm_embedding_config`` skip the lookup and pass through
-            # unchanged so the embed call keeps working.
-            embedding_model: Final = litellm_params.get("litellm_embedding_model")
-            if embedding_model and not litellm_params.get("litellm_embedding_config"):
-                from litellm.proxy.proxy_server import prisma_client
-
-                resolved_config: Final = await _resolve_embedding_config(
-                    embedding_model=embedding_model, prisma_client=prisma_client
-                )
-                if resolved_config:
-                    # Build a fresh dict via spread instead of mutating
-                    # ``litellm_params`` in place — the registry hands back
-                    # a reference to its cached object, so an in-place
-                    # update would persist the resolved cleartext into the
-                    # in-memory cache for the lifetime of the process.
-                    litellm_params = {
-                        **litellm_params,
-                        "litellm_embedding_config": resolved_config,
-                    }
-            data.update(litellm_params)
-    return data
+    if vector_store_to_run is None:
+        return data
+    if user_api_key_dict is not None:
+        await assert_user_can_access_vector_store(
+            vector_store=vector_store_to_run,
+            user_api_key_dict=user_api_key_dict,
+        )
+    return {**data, **(await build_request_data_from_managed_vector_store(vector_store_to_run))}
 
 
 @router.post(
@@ -130,6 +157,7 @@ async def vector_store_search(
     )
 
     data = await _read_request_body(request=request)
+    reject_caller_embedding_selection_params(payload=data, source="the search request body")
     data["vector_store_id"] = vector_store_id
 
     # Check for legacy vector store registry (non-managed vector stores)
