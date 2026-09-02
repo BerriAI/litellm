@@ -311,3 +311,56 @@ async def test_async_with_still_executes():
         sandbox_globals,
     )
     assert await sandbox_globals["f"](_ACtx((5, 6))) == 11
+
+
+def test_async_for_gets_the_same_guards_as_for():
+    """`async for` is the async spelling of `for`; it must not enforce less."""
+    sync_guards = _guard_names("def f(x):\n    for a in x:\n        pass\n")
+    async_guards = _guard_names("async def f(x):\n    async for a in x:\n        pass\n")
+
+    assert "_getiter_" in sync_guards, "precondition: `for` iteration is guarded"
+    assert sync_guards <= async_guards
+
+
+def test_async_for_unpacking_uses_the_async_unpack_guard():
+    """Tuple targets are guarded too, via the async-iterable variant of the helper."""
+    guards = _guard_names("async def f(x):\n    async for a, b in x:\n        pass\n")
+
+    assert "_aiter_unpack_sequence_" in guards
+    # The sync generator would raise "requires an object with __aiter__".
+    assert "_iter_unpack_sequence_" not in guards
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "items", "expected"),
+    [
+        ("    async for i in src:\n        out.append(i)\n", [1, 2, 3], [1, 2, 3]),
+        ("    async for a, b in src:\n        out.append(a + b)\n", [(1, 2), (3, 4)], [3, 7]),
+    ],
+)
+async def test_async_for_still_executes(body: str, items: list, expected: list):
+    """Guarding `async for` must not break it, with or without a tuple target."""
+    from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
+        build_sandbox_globals,
+        compile_sandboxed,
+    )
+
+    class _AIter:
+        def __init__(self, values):
+            self.values = list(values)
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if not self.values:
+                raise StopAsyncIteration
+            return self.values.pop(0)
+
+    sandbox_globals = build_sandbox_globals()
+    exec(  # noqa: S102
+        compile_sandboxed("async def f(src):\n    out = []\n" + body + "    return out\n"),
+        sandbox_globals,
+    )
+    assert await sandbox_globals["f"](_AIter(items)) == expected
