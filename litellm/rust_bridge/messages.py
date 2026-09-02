@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable
-from dataclasses import dataclass
-from typing import Final, Protocol, cast
+from typing import Final, Protocol
 
 import httpx
 
+from litellm.rust_bridge.bindings import NativeBinding
+from litellm.rust_bridge.runtime import (
+    BridgeErrorContext,
+    FallbackMode,
+    ainvoke,
+    async_none,
+    identity,
+    invoke,
+)
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
 
@@ -39,20 +47,15 @@ class RustAmessages(Protocol):
         raise NotImplementedError
 
 
+_MESSAGES: Final = NativeBinding[RustMessages]("messages")
+_AMESSAGES: Final = NativeBinding[RustAmessages]("amessages")
+
+
 class _Unset:
     pass
 
 
-_UNSET: Final[_Unset] = _Unset()
-
-
-@dataclass(slots=True)
-class _RustMessagesState:
-    messages: RustMessages | None = None
-    amessages: RustAmessages | None = None
-
-
-_STATE: Final[_RustMessagesState] = _RustMessagesState()
+_UNSET: Final = _Unset()
 
 
 def set_rust_messages(
@@ -61,31 +64,25 @@ def set_rust_messages(
     amessages: RustAmessages | None | _Unset = _UNSET,
 ) -> None:
     if not isinstance(messages, _Unset):
-        _STATE.messages = messages
+        _MESSAGES.reset() if messages is None else _MESSAGES.override(messages)
     if not isinstance(amessages, _Unset):
-        _STATE.amessages = amessages
+        _AMESSAGES.reset() if amessages is None else _AMESSAGES.override(amessages)
 
 
 def load_rust_messages() -> RustMessages | None:
-    if _STATE.messages is not None:
-        return _STATE.messages
-    from litellm.rust_bridge import get_native_bridge
-
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    return cast(RustMessages, getattr(native_bridge, "messages", None))
+    return _MESSAGES.load()
 
 
 def load_rust_amessages() -> RustAmessages | None:
-    if _STATE.amessages is not None:
-        return _STATE.amessages
-    from litellm.rust_bridge import get_native_bridge
+    return _AMESSAGES.load()
 
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    return cast(RustAmessages, getattr(native_bridge, "amessages", None))
+
+def _context(model: str, custom_llm_provider: str | None) -> BridgeErrorContext:
+    return BridgeErrorContext(
+        route="messages",
+        provider=custom_llm_provider or "anthropic",
+        model=model,
+    )
 
 
 def messages(
@@ -98,17 +95,25 @@ def messages(
     extra_headers: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
-    rust_messages: Final = load_rust_messages()
-    if rust_messages is None:
-        return None
-    return rust_messages(
-        model=model,
-        body=body,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        timeout_seconds=timeout_to_seconds(timeout),
+    native: Final = load_rust_messages()
+    return invoke(
+        native_call=(
+            None
+            if native is None
+            else lambda: native(
+                model=model,
+                body=body,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                timeout_seconds=timeout_to_seconds(timeout),
+            )
+        ),
+        fallback=lambda: None,
+        adapt=identity,
+        mode=FallbackMode.PYTHON,
+        context=_context(model, custom_llm_provider),
     )
 
 
@@ -122,15 +127,23 @@ async def amessages(
     extra_headers: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
-    rust_amessages: Final = load_rust_amessages()
-    if rust_amessages is None:
-        return None
-    return await rust_amessages(
-        model=model,
-        body=body,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        timeout_seconds=timeout_to_seconds(timeout),
+    native: Final = load_rust_amessages()
+    return await ainvoke(
+        native_call=(
+            None
+            if native is None
+            else lambda: native(
+                model=model,
+                body=body,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                timeout_seconds=timeout_to_seconds(timeout),
+            )
+        ),
+        fallback=async_none,
+        adapt=identity,
+        mode=FallbackMode.PYTHON,
+        context=_context(model, custom_llm_provider),
     )

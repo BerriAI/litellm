@@ -105,7 +105,6 @@ impl IntoResponse for MessagesRouteError {
             ),
             Error::Http { .. }
             | Error::Network(_)
-            | Error::Connect(_)
             | Error::InvalidResponse(_)
             | Error::InvalidType { .. }
             | Error::MissingField(_) => (
