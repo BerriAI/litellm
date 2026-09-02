@@ -350,6 +350,57 @@ def test_v2_p3009_deadlocked_ledger_row_rolls_back_and_retries(monkeypatch, tmp_
     assert rolled_back == ["20260415120000_health_check_latest_per_model_index"]
 
 
+def test_v2_p3009_empty_ledger_logs_rolls_back_and_retries(monkeypatch, tmp_path):
+    """v2: empty failed ledger logs mean a concurrent deploy moved it on."""
+    _stub_v2_env(monkeypatch, tmp_path)
+
+    stderr = (
+        "Error: P3009\n"
+        "migrate found failed migrations in the target database\n"
+        "The `20260415120000_health_check_latest_per_model_index` migration "
+        "started at 2026-09-01 18:46:13 UTC failed"
+    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_failed_migration_logs", lambda name: "")
+    rolled_back = []
+    monkeypatch.setattr(
+        ProxyExtrasDBManager,
+        "_roll_back_migration",
+        lambda name: rolled_back.append(name),
+    )
+    monkeypatch.setattr(
+        ProxyExtrasDBManager,
+        "_resolve_specific_migration",
+        lambda name: pytest.fail("a deadlocked migration must never be marked applied"),
+    )
+    monkeypatch.setattr("subprocess.run", _succeed_after(1, stderr))
+
+    ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+    assert ok is True
+    assert rolled_back == ["20260415120000_health_check_latest_per_model_index"]
+
+
+def test_v2_p3009_unreadable_ledger_still_raises(monkeypatch, tmp_path):
+    """v2: an unreadable ledger cannot establish that P3009 was a deadlock."""
+    _stub_v2_env(monkeypatch, tmp_path)
+
+    stderr = (
+        "Error: P3009\n"
+        "migrate found failed migrations in the target database\n"
+        "The `20260415120000_health_check_latest_per_model_index` migration "
+        "started at 2026-09-01 18:46:13 UTC failed"
+    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_failed_migration_logs", lambda name: None)
+    monkeypatch.setattr(
+        ProxyExtrasDBManager,
+        "_roll_back_migration",
+        lambda name: pytest.fail("an unreadable ledger must not trigger a retry"),
+    )
+    monkeypatch.setattr("subprocess.run", _succeed_after(1, stderr))
+
+    with pytest.raises(RuntimeError, match="cannot be auto-recovered"):
+        ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+
+
 def test_v2_p3009_non_deadlock_ledger_row_still_raises(monkeypatch, tmp_path):
     """v2: a failed ledger row whose logs show a real SQL error stays fatal."""
     _stub_v2_env(monkeypatch, tmp_path)
