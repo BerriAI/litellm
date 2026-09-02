@@ -22,7 +22,6 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Optional
 
 import pytest
 
@@ -302,7 +301,7 @@ def test_db_push_timeout_hint_names_the_per_command_budget(
     ids=["raised_command_budget_carries_over", "lowered_command_budget_does_not", "override_wins_upward", "override_wins_downward"],
 )
 def test_migrate_deploy_budget_keeps_a_raised_command_budget(
-    command_timeout: str, deploy_timeout: Optional[str], expected: float, monkeypatch: pytest.MonkeyPatch
+    command_timeout: str, deploy_timeout: str | None, expected: float, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Deployments that raised the per-command budget to survive a long deploy keep that budget for deploy."""
     monkeypatch.setenv(PRISMA_COMMAND_TIMEOUT_ENV_VAR, command_timeout)
