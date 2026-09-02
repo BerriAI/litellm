@@ -349,7 +349,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     complexity_router_default_model: str | None = None
 
     # capability-router params
-    capability_router_config: dict | None = None
+    capability_router_config: dict | None = None  # mutable-ok: sibling router-config fields arrive via dict splats
 
     # adaptive-router params
     adaptive_router_default_model: str | None = None

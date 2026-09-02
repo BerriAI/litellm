@@ -8,7 +8,8 @@ import json
 import weakref
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, cast
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, Literal, TypedDict
 
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
@@ -33,7 +34,7 @@ from litellm.types.utils import (
 from .config import CapabilityClassifierVerdict, CapabilityRouterConfig
 from .policy import CapabilityRoutingDecision, fallback_decision, select_capability_model
 from .pricing import estimate_model_group_cost
-from .prompts import build_classifier_prompt, build_classifier_response_schema
+from .prompts import ClassifierResponseSchema, build_classifier_prompt, build_classifier_response_schema
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -43,7 +44,7 @@ if TYPE_CHECKING:
 class _JsonSchemaSpec(TypedDict):
     name: ReadOnly[str]
     strict: ReadOnly[bool]
-    schema: ReadOnly[dict[str, Any]]
+    schema: ReadOnly[ClassifierResponseSchema]
 
 
 class _JsonSchemaResponseFormat(TypedDict):
@@ -60,6 +61,16 @@ class _ClassifierRequestBody(TypedDict):
 
 class _ClassifierProxyRequest(TypedDict):
     body: ReadOnly[_ClassifierRequestBody]
+
+
+class _ClassifierPayload(TypedDict):
+    conversation: ReadOnly[tuple[object, ...]]
+    available_tools: ReadOnly[tuple[str, ...]]
+
+
+class _CacheKeyContext(TypedDict):
+    messages: ReadOnly[tuple[Mapping[str, object], ...]]
+    tools: ReadOnly[tuple[str, ...]]
 
 
 @dataclass(frozen=True)
@@ -84,15 +95,17 @@ def _hash(value: str) -> str:
 
 
 def _response_cost(response: ModelResponse) -> float | None:
-    hidden_params = getattr(response, "_hidden_params", None)
-    value = hidden_params.get("response_cost") if hasattr(hidden_params, "get") else None
+    hidden_params: Final = getattr(response, "_hidden_params", None)
+    if not isinstance(hidden_params, Mapping):
+        return None
+    value: Final = hidden_params.get("response_cost")
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
 
 
 def _normalize_json(content: str) -> str:
-    normalized = content.strip()
+    normalized: Final = content.strip()
     for prefix in ("```json", "```"):
         if normalized.startswith(prefix) and normalized.endswith("```"):
             return normalized[len(prefix) : -3].strip()
@@ -100,50 +113,45 @@ def _normalize_json(content: str) -> str:
 
 
 def _message_role(message: Mapping[str, object]) -> str:
-    role = message.get("role")
+    role: Final = message.get("role")
     return role if isinstance(role, str) else ""
 
 
 def _classification_context(messages: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
     """Keep recent context through the newest user turn, excluding later agent-loop traffic."""
-    last_user_index = next(
+    last_user_index: Final = next(
         (index for index in range(len(messages) - 1, -1, -1) if _message_role(messages[index]) == "user"),
         None,
     )
     if last_user_index is None:
         return ()
-    through_user = messages[: last_user_index + 1]
-    recent = through_user[-8:]
-    selected: list[Mapping[str, object]] = []
-    for message in (*through_user, *recent):
-        if _message_role(message) == "system" or message in recent:
-            if message not in selected:
-                selected.append(message)
-    return tuple(selected)
+    through_user: Final = messages[: last_user_index + 1]
+    recent: Final = through_user[-8:]
+    kept: Final = tuple(message for message in through_user if _message_role(message) == "system" or message in recent)
+    return tuple(message for index, message in enumerate(kept) if message not in kept[:index])
 
 
 def _capped(value: object, cap: int) -> object:
     if isinstance(value, str):
         return value if len(value) <= cap else f"{value[:cap]}...[truncated {len(value) - cap} chars]"
     if isinstance(value, Mapping):
-        return {key: _capped(item, cap) for key, item in value.items()}
+        return {key: _capped(item, cap) for key, item in value.items()}  # mutable-ok: json.dumps needs a plain dict
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         return tuple(_capped(item, cap) for item in value)
     return value
 
 
 def _tool_names(request_kwargs: Mapping[str, object]) -> tuple[str, ...]:
-    tools = request_kwargs.get("tools")
+    tools: Final = request_kwargs.get("tools")
     if not isinstance(tools, Sequence) or isinstance(tools, (str, bytes)):
         return ()
-    names: list[str] = []
-    for tool in tools:
-        if not isinstance(tool, Mapping):
-            continue
-        function = tool.get("function")
-        if isinstance(function, Mapping) and isinstance(function.get("name"), str):
-            names.append(cast(str, function["name"]))
-    return tuple(names)
+    return tuple(
+        name
+        for tool in tools
+        if isinstance(tool, Mapping)
+        and isinstance((function := tool.get("function")), Mapping)
+        and isinstance((name := function.get("name")), str)
+    )
 
 
 class CapabilityRouter(CustomLogger):
@@ -172,33 +180,36 @@ class CapabilityRouter(CustomLogger):
 
     @staticmethod
     def _resolve_messages(
-        messages: list[dict[str, Any]] | None,
-        request_kwargs: dict[str, Any],
-    ) -> list[dict[str, Any]]:
+        messages: list[dict[str, object]] | None,  # mutable-ok: same shape the base hook receives
+        request_kwargs: dict[str, object],  # mutable-ok: handed to resolve_structured_messages as-is
+    ) -> tuple[Mapping[str, object], ...]:
         from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
 
-        return resolve_structured_messages(messages=messages, request_kwargs=request_kwargs) or []
+        resolved: Final = resolve_structured_messages(messages=messages, request_kwargs=request_kwargs)
+        return tuple(resolved) if resolved else ()
 
     @staticmethod
     def _metadata(request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
         """Merge both metadata carriers so auth and session scope cannot be missed."""
-        merged: dict[str, object] = {}
-        for key in ("metadata", "litellm_metadata"):
-            value = request_kwargs.get(key)
-            if isinstance(value, Mapping):
-                merged.update(value)
-        return merged
+        return MappingProxyType(
+            {
+                key: value
+                for carrier in ("metadata", "litellm_metadata")
+                if isinstance((entry := request_kwargs.get(carrier)), Mapping)
+                for key, value in entry.items()
+            }
+        )
 
     def _classifier_payload(
         self,
         messages: Sequence[Mapping[str, object]],
         request_kwargs: Mapping[str, object],
     ) -> str:
-        context = _classification_context(messages)
+        context: Final = _classification_context(messages)
         if not context:
             raise CapabilityClassifierFailure("No user task was available for capability classification")
         cap: Final = self.config.classifier.max_message_chars
-        payload: Final = {
+        payload: Final[_ClassifierPayload] = {
             "conversation": tuple(_capped(message, cap) for message in context),
             "available_tools": _tool_names(request_kwargs),
         }
@@ -212,14 +223,14 @@ class CapabilityRouter(CustomLogger):
         messages: Sequence[Mapping[str, object]],
         request_kwargs: Mapping[str, object],
     ) -> str:
-        metadata = self._metadata(request_kwargs)
-        caller = metadata.get("user_api_key_hash") or metadata.get("team_id") or "unscoped"
-        session = metadata.get("session_id") or request_kwargs.get("litellm_session_id") or "no-session"
-        context = {
+        metadata: Final = self._metadata(request_kwargs)
+        caller: Final = metadata.get("user_api_key_hash") or metadata.get("team_id") or "unscoped"
+        session: Final = metadata.get("session_id") or request_kwargs.get("litellm_session_id") or "no-session"
+        context: Final[_CacheKeyContext] = {
             "messages": _classification_context(messages),
             "tools": _tool_names(request_kwargs),
         }
-        context_hash = _hash(json.dumps(context, default=str, sort_keys=True))
+        context_hash: Final = _hash(json.dumps(context, default=str, sort_keys=True))
         return (
             f"capability_router:v1:{self.model_name}:{self._config_hash}:"
             f"{_hash(str(caller))[:16]}:{_hash(str(session))[:16]}:{context_hash}"
@@ -230,13 +241,15 @@ class CapabilityRouter(CustomLogger):
         messages: Sequence[Mapping[str, object]],
         request_kwargs: Mapping[str, object],
     ) -> tuple[CapabilityClassifierVerdict, float | None]:
-        classifier = self.config.classifier
-        classifier_messages: list[AllMessageValues] = [
+        classifier: Final = self.config.classifier
+        classifier_messages: Final[list[AllMessageValues]] = [  # mutable-ok: router.acompletion requires a list
             ChatCompletionSystemMessage(role="system", content=self._system_prompt),
             ChatCompletionUserMessage(role="user", content=self._classifier_payload(messages, request_kwargs)),
         ]
-        metadata = forwarded_internal_call_metadata(self._metadata(request_kwargs), AUTOROUTER_CLASSIFIER_CALL_ORIGIN)
-        response = await self.litellm_router_instance.acompletion(
+        metadata: Final = forwarded_internal_call_metadata(
+            self._metadata(request_kwargs), AUTOROUTER_CLASSIFIER_CALL_ORIGIN
+        )
+        response: Final = await self.litellm_router_instance.acompletion(
             model=classifier.model,
             messages=classifier_messages,
             response_format=self._response_format,
@@ -252,8 +265,8 @@ class CapabilityRouter(CustomLogger):
                 )
             ),
         )
-        classifier_cost = _response_cost(response)
-        content = response.choices[0].message.content
+        classifier_cost: Final = _response_cost(response)
+        content: Final = response.choices[0].message.content
         if not isinstance(content, str) or not content.strip():
             raise CapabilityClassifierFailure("Capability classifier returned empty content", classifier_cost)
         try:
@@ -269,15 +282,16 @@ class CapabilityRouter(CustomLogger):
         import litellm
 
         try:
-            tools_value = request_kwargs.get("tools")
-            tools = _TOOLS_ADAPTER.validate_python(tools_value) if tools_value is not None else None
-            tool_choice_value = request_kwargs.get("tool_choice")
-            if tool_choice_value in ("none", "auto", "required", None):
-                tool_choice = tool_choice_value
-            else:
-                tool_choice = _NAMED_TOOL_CHOICE_ADAPTER.validate_python(tool_choice_value)
-            input_tokens = litellm.token_counter(
-                messages=list(messages),
+            tools_value: Final = request_kwargs.get("tools")
+            tools: Final = _TOOLS_ADAPTER.validate_python(tools_value) if tools_value is not None else None
+            tool_choice_value: Final = request_kwargs.get("tool_choice")
+            tool_choice: Final = (
+                tool_choice_value
+                if tool_choice_value in ("none", "auto", "required", None)
+                else _NAMED_TOOL_CHOICE_ADAPTER.validate_python(tool_choice_value)
+            )
+            input_tokens: Final = litellm.token_counter(
+                messages=messages,
                 tools=tools,
                 tool_choice=tool_choice,
                 use_default_image_token_count=True,
@@ -286,12 +300,12 @@ class CapabilityRouter(CustomLogger):
             verbose_router_logger.warning("CapabilityRouter: token estimate failed (%s)", exc)
             return None
 
-        requested_limits = tuple(
+        requested_limits: Final = tuple(
             value
             for field in ("max_completion_tokens", "max_tokens", "max_output_tokens")
             if isinstance((value := request_kwargs.get(field)), int) and not isinstance(value, bool) and value > 0
         )
-        output_tokens = min((self.config.estimated_output_tokens, *requested_limits))
+        output_tokens: Final = min((self.config.estimated_output_tokens, *requested_limits))
         return Usage(
             prompt_tokens=input_tokens,
             completion_tokens=output_tokens,
@@ -305,15 +319,17 @@ class CapabilityRouter(CustomLogger):
     ) -> tuple[CapabilityRoutingDecision, float | None]:
         try:
             verdict, classifier_cost = await self._classify(messages, request_kwargs)
-            usage = self._estimated_usage(messages, request_kwargs)
-            costs = {
-                candidate.model: (
-                    estimate_model_group_cost(self.litellm_router_instance, candidate.model, usage)
-                    if usage is not None
-                    else None
-                )
-                for candidate in self.config.candidates
-            }
+            usage: Final = self._estimated_usage(messages, request_kwargs)
+            costs: Final = MappingProxyType(
+                {
+                    candidate.model: (
+                        estimate_model_group_cost(self.litellm_router_instance, candidate.model, usage)
+                        if usage is not None
+                        else None
+                    )
+                    for candidate in self.config.candidates
+                }
+            )
             return select_capability_model(self.config, verdict, costs), classifier_cost
         except CapabilityClassifierFailure as exc:
             verbose_router_logger.warning("CapabilityRouter: classifier failed; using fallback")
@@ -324,10 +340,10 @@ class CapabilityRouter(CustomLogger):
 
     def _cached_decision(self, value: object) -> CapabilityRoutingDecision | None:
         try:
-            decision = CapabilityRoutingDecision.model_validate(value)
+            decision: Final = CapabilityRoutingDecision.model_validate(value)
         except ValidationError:
             return None
-        configured = {candidate.model for candidate in self.config.candidates}
+        configured: Final = frozenset(candidate.model for candidate in self.config.candidates)
         return decision if decision.selected_model in configured else None
 
     async def _decision(
@@ -336,15 +352,17 @@ class CapabilityRouter(CustomLogger):
         messages: Sequence[Mapping[str, object]],
         request_kwargs: Mapping[str, object],
     ) -> _DecisionOutcome:
-        cached = self._cached_decision(await self.litellm_router_instance.cache.async_get_cache(key=cache_key))
+        cached: Final = self._cached_decision(await self.litellm_router_instance.cache.async_get_cache(key=cache_key))
         if cached is not None:
             return _DecisionOutcome(cached, None, True)
 
-        lock = self._classification_locks.setdefault(cache_key, asyncio.Lock())
+        lock: Final = self._classification_locks.setdefault(cache_key, asyncio.Lock())
         async with lock:
-            cached = self._cached_decision(await self.litellm_router_instance.cache.async_get_cache(key=cache_key))
-            if cached is not None:
-                return _DecisionOutcome(cached, None, True)
+            rechecked: Final = self._cached_decision(
+                await self.litellm_router_instance.cache.async_get_cache(key=cache_key)
+            )
+            if rechecked is not None:
+                return _DecisionOutcome(rechecked, None, True)
             decision, classifier_cost = await self._new_decision(messages, request_kwargs)
             await self.litellm_router_instance.cache.async_set_cache(
                 key=cache_key,
@@ -354,8 +372,8 @@ class CapabilityRouter(CustomLogger):
             return _DecisionOutcome(decision, classifier_cost, False)
 
     def _routing_record(self, outcome: _DecisionOutcome) -> StandardLoggingRoutingDecision:
-        decision = outcome.decision
-        record = StandardLoggingRoutingDecision(
+        decision: Final = outcome.decision
+        record: Final = StandardLoggingRoutingDecision(
             router_model_name=self.model_name,
             router_type="capability",
             routed_model=decision.selected_model,
@@ -368,13 +386,15 @@ class CapabilityRouter(CustomLogger):
             ),
             classifier_model=self.config.classifier.model,
             probability_threshold=self.config.probability_threshold,
-            candidate_probabilities={candidate.model: candidate.p_solve for candidate in decision.candidates},
-            candidate_costs={
+            candidate_probabilities={  # mutable-ok: safe_dumps stringifies non-dict mappings in the spend log
+                candidate.model: candidate.p_solve for candidate in decision.candidates
+            },
+            candidate_costs={  # mutable-ok: safe_dumps stringifies non-dict mappings in the spend log
                 candidate.model: candidate.estimated_cost
                 for candidate in decision.candidates
                 if candidate.estimated_cost is not None
             },
-            qualified_models=[candidate.model for candidate in decision.candidates if candidate.qualified],
+            qualified_models=tuple(candidate.model for candidate in decision.candidates if candidate.qualified),
             fallback_reason=(decision.reason if decision.reason != "cheapest_qualified" else None),
             cached=outcome.cached,
         )
@@ -385,15 +405,15 @@ class CapabilityRouter(CustomLogger):
     async def async_pre_routing_hook(
         self,
         model: str,
-        request_kwargs: dict,
-        messages: list[dict[str, Any]] | None = None,
-        input: str | list | None = None,
+        request_kwargs: dict,  # mutable-ok: same shape the base hook receives
+        messages: list[dict[str, object]] | None = None,  # mutable-ok: same shape the base hook receives
+        input: str | list | None = None,  # mutable-ok: same shape the base hook receives
         specific_deployment: bool | None = False,
     ) -> PreRoutingHookResponse:
         from litellm.types.router import PreRoutingHookResponse
 
-        resolved_messages = self._resolve_messages(messages, request_kwargs)
-        outcome = await self._decision(
+        resolved_messages: Final = self._resolve_messages(messages, request_kwargs)
+        outcome: Final = await self._decision(
             self._cache_key(resolved_messages, request_kwargs),
             resolved_messages,
             request_kwargs,

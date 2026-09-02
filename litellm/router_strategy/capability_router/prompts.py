@@ -1,14 +1,64 @@
 """Classifier prompt and response schema for capability routing."""
 
-from typing import Any
+from typing import Final, Literal, TypedDict
+
+from typing_extensions import ReadOnly
 
 from .config import CapabilityRouterConfig
 
-CAPABILITY_BOUNDARIES = ("supported", "uncertain", "unsupported", "unmatched")
+CAPABILITY_BOUNDARIES: Final = ("supported", "uncertain", "unsupported", "unmatched")
+
+
+class _StringEnumSchema(TypedDict):
+    type: ReadOnly[Literal["string"]]
+    enum: ReadOnly[list[str]]  # mutable-ok: provider json_schema transforms only rewrite list-typed arrays
+
+
+class _NonBlankStringSchema(TypedDict):
+    type: ReadOnly[Literal["string"]]
+    minLength: ReadOnly[int]
+
+
+class _UnitIntervalSchema(TypedDict):
+    type: ReadOnly[Literal["number"]]
+    minimum: ReadOnly[int]
+    maximum: ReadOnly[int]
+
+
+class _CandidateProperties(TypedDict):
+    model: ReadOnly[_StringEnumSchema]
+    reason: ReadOnly[_NonBlankStringSchema]
+    capability_boundary: ReadOnly[_StringEnumSchema]
+    p_solve: ReadOnly[_UnitIntervalSchema]
+
+
+class _CandidateItemSchema(TypedDict):
+    type: ReadOnly[Literal["object"]]
+    properties: ReadOnly[_CandidateProperties]
+    required: ReadOnly[list[str]]  # mutable-ok: provider json_schema transforms only rewrite list-typed arrays
+    additionalProperties: ReadOnly[bool]
+
+
+class _CandidateArraySchema(TypedDict):
+    type: ReadOnly[Literal["array"]]
+    minItems: ReadOnly[int]
+    maxItems: ReadOnly[int]
+    items: ReadOnly[_CandidateItemSchema]
+
+
+class _VerdictProperties(TypedDict):
+    candidates: ReadOnly[_CandidateArraySchema]
+
+
+class ClassifierResponseSchema(TypedDict):
+    type: ReadOnly[Literal["object"]]
+    properties: ReadOnly[_VerdictProperties]
+    required: ReadOnly[list[str]]  # mutable-ok: provider json_schema transforms only rewrite list-typed arrays
+    additionalProperties: ReadOnly[bool]
 
 
 def build_classifier_prompt(config: CapabilityRouterConfig) -> str:
-    candidates = "\n".join(f"- {candidate.model}: {candidate.description}" for candidate in config.candidates)
+    candidates: Final = "\n".join(f"- {candidate.model}: {candidate.description}" for candidate in config.candidates)
     return f"""You forecast task outcomes for a model router.
 
 For each candidate model below, forecast one binary event. SUCCESS means the candidate completes the newest user task correctly and completely in one fresh attempt, using only the tools available in the request. FAILURE is any other outcome. The two outcomes are exhaustive.
@@ -28,9 +78,9 @@ Candidates:
 Return one entry for every candidate using the exact model names."""
 
 
-def build_classifier_response_schema(config: CapabilityRouterConfig) -> dict[str, Any]:
-    model_names = [candidate.model for candidate in config.candidates]
-    return {
+def build_classifier_response_schema(config: CapabilityRouterConfig) -> ClassifierResponseSchema:
+    model_names: Final = [candidate.model for candidate in config.candidates]  # mutable-ok: wire arrays are lists
+    schema: Final[ClassifierResponseSchema] = {
         "type": "object",
         "properties": {
             "candidates": {
@@ -42,14 +92,23 @@ def build_classifier_response_schema(config: CapabilityRouterConfig) -> dict[str
                     "properties": {
                         "model": {"type": "string", "enum": model_names},
                         "reason": {"type": "string", "minLength": 1},
-                        "capability_boundary": {"type": "string", "enum": list(CAPABILITY_BOUNDARIES)},
+                        "capability_boundary": {
+                            "type": "string",
+                            "enum": list(CAPABILITY_BOUNDARIES),  # mutable-ok: wire arrays are lists
+                        },
                         "p_solve": {"type": "number", "minimum": 0, "maximum": 1},
                     },
-                    "required": ["model", "reason", "capability_boundary", "p_solve"],
+                    "required": [  # mutable-ok: wire arrays are lists
+                        "model",
+                        "reason",
+                        "capability_boundary",
+                        "p_solve",
+                    ],
                     "additionalProperties": False,
                 },
             }
         },
-        "required": ["candidates"],
+        "required": ["candidates"],  # mutable-ok: wire arrays are lists
         "additionalProperties": False,
     }
+    return schema

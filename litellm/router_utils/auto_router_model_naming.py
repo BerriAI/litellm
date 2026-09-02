@@ -22,7 +22,7 @@ from litellm.router_strategy.complexity_router.config import (
 
 AUTO_ROUTER_MODEL_PREFIX: Final = "auto_router/"
 
-StrategyRouterKind = Literal["semantic", "complexity", "capability", "adaptive", "quality"]
+StrategyRouterKind: TypeAlias = Literal["semantic", "complexity", "capability", "adaptive", "quality"]
 
 StrategyRouterDependencyRole: TypeAlias = Literal["tier", "candidate", "default", "classifier", "embedding"]
 
@@ -148,10 +148,10 @@ def strategy_router_dependencies(
             )
         )
     if kind == "capability":
-        capability = _mapping(litellm_params.get("capability_router_config"))
-        classifier = _mapping(capability.get("classifier"))
-        candidates = capability.get("candidates")
-        candidate_dependencies = (
+        capability: Final = _mapping(litellm_params.get("capability_router_config"))
+        capability_classifier: Final = _mapping(capability.get("classifier"))
+        candidates: Final = capability.get("candidates")
+        candidate_dependencies: Final = (
             tuple(
                 dependency
                 for candidate in candidates
@@ -164,7 +164,7 @@ def strategy_router_dependencies(
             dict.fromkeys(
                 candidate_dependencies
                 + _named(capability.get("fallback_model"), "default")
-                + _named(classifier.get("model"), "classifier")
+                + _named(capability_classifier.get("model"), "classifier")
             )
         )
     complexity: Final = _mapping(litellm_params.get("complexity_router_config"))
@@ -226,8 +226,8 @@ def validate_capability_router_config_write(capability_router_config: Mapping[st
     try:
         _ = CapabilityRouterConfig.model_validate(capability_router_config)
     except ValidationError as exc:
-        first = exc.errors()[0]
-        location = ".".join(str(part) for part in first.get("loc", ())) or "capability_router_config"
+        first: Final = exc.errors()[0]
+        location: Final = ".".join(str(part) for part in first.get("loc", ())) or "capability_router_config"
         return f"capability_router_config is invalid at {location}: {first.get('msg', 'invalid value')}"
     return None
 

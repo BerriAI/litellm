@@ -795,7 +795,9 @@ class Router:
         self.pattern_router = PatternMatchRouter()
         self.team_pattern_routers: dict[str, PatternMatchRouter] = {}  # {"TEAM_ID": PatternMatchRouter}
         self.auto_routers: dict[str, list[TaggedPreRoutingStrategy[AutoRouter]]] = {}
-        self.capability_routers: dict[str, list[TaggedPreRoutingStrategy[CapabilityRouter]]] = {}
+        self.capability_routers: dict[  # mutable-ok: registry mutated by the shared pre-routing helpers
+            str, list[TaggedPreRoutingStrategy[CapabilityRouter]]
+        ] = {}  # mutable-ok: registry mutated by the shared pre-routing helpers
         self.complexity_routers: dict[str, list[TaggedPreRoutingStrategy[ComplexityRouter]]] = {}
         self.adaptive_routers: dict[str, list[TaggedPreRoutingStrategy[AdaptiveRouter]]] = {}
         self.quality_routers: dict[str, list[TaggedPreRoutingStrategy[QualityRouter]]] = {}
@@ -8575,9 +8577,7 @@ class Router:
 
         config: Final = deployment.litellm_params.capability_router_config
         if config is None:
-            raise ValueError(
-                "capability_router_config is required for capability-router deployments"
-            )
+            raise ValueError("capability_router_config is required for capability-router deployments")
         capability_router: Final = CapabilityRouter(
             model_name=deployment.model_name,
             litellm_router_instance=self,
@@ -8947,7 +8947,7 @@ class Router:
         # Reset per-strategy router registries so hot-reload doesn't leave
         # stale routers pointing at the old model_list.
         self.quality_routers = {}
-        self.capability_routers = {}
+        self.capability_routers = {}  # mutable-ok: registry mutated by the shared pre-routing helpers
         self.complexity_routers = {}
         self.auto_routers = {}
         self._provider_unresolved_deployments = ()
@@ -12577,7 +12577,7 @@ class Router:
         """
         candidates: Final[list[TaggedPreRoutingStrategy[PreRoutingStrategy]]] = [
             *self.auto_routers.get(model, []),
-            *self.capability_routers.get(model, []),
+            *self.capability_routers.get(model, ()),
             *self.complexity_routers.get(model, []),
             *self.adaptive_routers.get(model, []),
             *self.quality_routers.get(model, []),

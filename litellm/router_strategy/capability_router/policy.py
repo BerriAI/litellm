@@ -56,12 +56,12 @@ def select_capability_model(
     estimated_costs: Mapping[str, float | None],
 ) -> CapabilityRoutingDecision:
     """Choose the cheapest candidate whose p_solve clears its boundary-stepped threshold."""
-    configured_models = tuple(candidate.model for candidate in config.candidates)
-    scores = {candidate.model: candidate for candidate in verdict.candidates}
-    if set(scores) != set(configured_models):
+    configured_models: Final = tuple(candidate.model for candidate in config.candidates)
+    scores: Final = MappingProxyType({candidate.model: candidate for candidate in verdict.candidates})
+    if frozenset(scores) != frozenset(configured_models):
         return fallback_decision(config, "invalid_classifier_verdict")
 
-    assessments = tuple(
+    assessments: Final = tuple(
         CapabilityCandidateAssessment(
             model=model,
             p_solve=scores[model].p_solve,
@@ -77,14 +77,14 @@ def select_capability_model(
         )
         for model in configured_models
     )
-    qualified = tuple(candidate for candidate in assessments if candidate.qualified)
+    qualified: Final = tuple(candidate for candidate in assessments if candidate.qualified)
     if not qualified:
         return fallback_decision(config, "no_qualified_candidate", assessments)
     if any(candidate.estimated_cost is None for candidate in qualified):
         return fallback_decision(config, "missing_candidate_price", assessments)
 
-    order = {model: index for index, model in enumerate(configured_models)}
-    selected = min(
+    order: Final = MappingProxyType({model: index for index, model in enumerate(configured_models)})
+    selected: Final = min(
         qualified,
         key=lambda candidate: (
             candidate.estimated_cost if candidate.estimated_cost is not None else math.inf,

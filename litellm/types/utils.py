@@ -2934,12 +2934,12 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     savings_baseline_model: str
     savings_baseline_deployment_id: str
     tier_litellm_params: Mapping[str, object]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
-    probability_threshold: float
-    candidate_probabilities: Mapping[str, float]
-    candidate_costs: Mapping[str, float]
-    qualified_models: Sequence[str]
-    fallback_reason: str | None
-    cached: bool
+    probability_threshold: float  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    candidate_probabilities: Mapping[str, float]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    candidate_costs: Mapping[str, float]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    qualified_models: Sequence[str]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    fallback_reason: str | None  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    cached: bool  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
 
 
 # Fields whose values quote the caller's prompt. Dropped when an operator turns message
