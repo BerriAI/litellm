@@ -39,7 +39,7 @@ from litellm.types.router import RetryPolicy, UpdateRouterConfig
 def isolate_litellm_callbacks():
     callbacks_before: Final = litellm.callbacks.copy()
     yield
-    litellm.callbacks = callbacks_before
+    litellm.callbacks = callbacks_before  # test-quality-ok: required callback-state restoration fixture
 
 
 # ---------------------------------------------------------------------------
