@@ -254,6 +254,7 @@ from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
+    ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG,
     USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
 )
@@ -5711,13 +5712,9 @@ class ProxyConfig:
         router_settings: Final = config.get("router_settings", None)
 
         if router_settings and isinstance(router_settings, dict):
-            # model list and search_tools already set
-            exclude_args: Final = {
-                "model_list",
-                "search_tools",
-            }
-
-            available_args: Final = [x for x in litellm.Router.get_valid_args() if x not in exclude_args]
+            available_args: Final = [
+                x for x in litellm.Router.get_valid_args() if x not in ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG
+            ]
 
             for k, v in router_settings.items():
                 if k in available_args:
@@ -16229,14 +16226,17 @@ async def update_config(
         )
         raw_router_settings: Final = request_body.get("router_settings")
         if isinstance(raw_router_settings, dict):
-            unsupported_router_settings: Final = sorted(set(raw_router_settings) - RUNTIME_UPDATABLE_ROUTER_SETTINGS)
+            supported_router_settings: Final = RUNTIME_UPDATABLE_ROUTER_SETTINGS | (
+                frozenset(litellm.Router.get_valid_args()) - ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG
+            )
+            unsupported_router_settings: Final = sorted(set(raw_router_settings) - supported_router_settings)
             if unsupported_router_settings:
                 raise HTTPException(
                     status_code=400,
                     detail={
                         "error": (
                             f"Unsupported router settings: {', '.join(unsupported_router_settings)} "
-                            "are not runtime-updatable router settings"
+                            "are not valid router settings"
                         )
                     },
                 )
@@ -16342,10 +16342,20 @@ async def update_config(
             )
 
         # router_settings: merge existing + request, request wins.
-        if config_info.router_settings is not None:
+        if isinstance(raw_router_settings, dict):
             existing = await _read_section("router_settings")
             before_router_settings: Final = copy.deepcopy(existing)
-            updates = config_info.router_settings.dict(exclude_none=True)
+            typed_router_settings: Final = (
+                config_info.router_settings.dict(exclude_none=True)
+                if config_info.router_settings is not None
+                else {}
+            )
+            raw_router_settings_without_none: Final = {
+                key: value
+                for key, value in raw_router_settings.items()
+                if key not in typed_router_settings and value is not None
+            }
+            updates: Final = {**typed_router_settings, **raw_router_settings_without_none}
             new_router_settings: Final = {**existing, **updates}
             await _upsert_section("router_settings", new_router_settings)
             asyncio.create_task(
