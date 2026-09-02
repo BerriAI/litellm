@@ -8395,7 +8395,7 @@ class TestSavingsBaselineOnDecision:
 
         from litellm.proxy.management_endpoints import auto_router_endpoints
 
-        source = inspect.getsource(auto_router_endpoints.preview_auto_router_routing)
+        source = inspect.getsource(auto_router_endpoints._authorized_routing_test_strategy)
         assert "derive_savings_baseline=False" in source
 
 

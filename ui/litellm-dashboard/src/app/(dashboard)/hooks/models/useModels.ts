@@ -92,6 +92,7 @@ export interface AutoRouterDeployment extends AutoRouterCandidateDeployment {
     model?: string | null;
     complexity_router_config?: unknown;
     complexity_router_default_model?: string | null;
+    capability_router_config?: unknown;
     auto_router_config?: unknown;
     auto_router_default_model?: string | null;
     auto_router_embedding_model?: string | null;

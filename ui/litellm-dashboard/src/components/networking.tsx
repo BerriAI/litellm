@@ -2394,7 +2394,8 @@ export const testModelGroupConnection = async (
 
 export interface AutoRouterRoutingTestRequest {
   prompt: string;
-  complexity_router_config: ComplexityRouterConfigPayload;
+  complexity_router_config?: ComplexityRouterConfigPayload;
+  capability_router_config?: Record<string, unknown>;
   default_model?: string;
   router_name?: string;
   team_id?: string;
@@ -2435,16 +2436,18 @@ export interface ComplexityRouterConfigValidation {
 // write gate stays authoritative.
 export const validateAutoRouterConfig = async (
   accessToken: string,
-  complexityRouterConfig: Record<string, unknown>,
+  routerConfig: Record<string, unknown>,
   teamId?: string,
+  routerType: "complexity" | "capability" = "complexity",
 ): Promise<ComplexityRouterConfigValidation> => {
   try {
-    return await apiClient.post<ComplexityRouterConfigValidation>("/auto_router/validate_complexity_router_config", {
+    const configKey = `${routerType}_router_config`;
+    return await apiClient.post<ComplexityRouterConfigValidation>(`/auto_router/validate_${routerType}_router_config`, {
       accessToken,
-      body: { complexity_router_config: complexityRouterConfig, ...(teamId && { team_id: teamId }) },
+      body: { [configKey]: routerConfig, ...(teamId && { team_id: teamId }) },
     });
   } catch (error) {
-    console.warn("Could not dry-run the complexity router config; the save will be validated server side", error);
+    console.warn(`Could not dry-run the ${routerType} router config; the save will be validated server side`, error);
     return { valid: true };
   }
 };

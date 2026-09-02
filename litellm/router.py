@@ -270,6 +270,9 @@ if TYPE_CHECKING:
         AutoRouter,
         PreRoutingHookResponse,
     )
+    from litellm.router_strategy.capability_router.capability_router import (
+        CapabilityRouter,
+    )
     from litellm.router_strategy.complexity_router.complexity_router import (
         ComplexityRouter,
     )
@@ -822,6 +825,9 @@ class Router:
         self.pattern_router = PatternMatchRouter()
         self.team_pattern_routers: dict[str, PatternMatchRouter] = {}  # {"TEAM_ID": PatternMatchRouter}
         self.auto_routers: dict[str, list[TaggedPreRoutingStrategy[AutoRouter]]] = {}
+        self.capability_routers: dict[  # mutable-ok: registry mutated by the shared pre-routing helpers
+            str, list[TaggedPreRoutingStrategy[CapabilityRouter]]
+        ] = {}  # mutable-ok: registry mutated by the shared pre-routing helpers
         self.complexity_routers: dict[str, list[TaggedPreRoutingStrategy[ComplexityRouter]]] = {}
         self.adaptive_routers: dict[str, list[TaggedPreRoutingStrategy[AdaptiveRouter]]] = {}
         self.quality_routers: dict[str, list[TaggedPreRoutingStrategy[QualityRouter]]] = {}
@@ -8645,6 +8651,29 @@ class Router:
         """
         return classify_strategy_router_model(litellm_params.model) == "complexity"
 
+    def _is_capability_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
+        """True when this deployment configures a capability router."""
+        return classify_strategy_router_model(litellm_params.model) == "capability"
+
+    def init_capability_router_deployment(self, deployment: Deployment) -> None:
+        """Initialize and register a capability router deployment."""
+        from litellm.router_strategy.capability_router import CapabilityRouter
+
+        config: Final = deployment.litellm_params.capability_router_config
+        if config is None:
+            raise ValueError("capability_router_config is required for capability-router deployments")
+        capability_router: Final = CapabilityRouter(
+            model_name=deployment.model_name,
+            litellm_router_instance=self,
+            capability_router_config=config,
+        )
+        self._register_pre_routing_strategy(
+            registry=self.capability_routers,
+            deployment=deployment,
+            strategy=capability_router,
+            strategy_label="Capability-router",
+        )
+
     def init_complexity_router_deployment(self, deployment: Deployment):
         """
         Initialize the complexity-router deployment.
@@ -8793,7 +8822,12 @@ class Router:
             return
         model_name: Final = deployment.model_name
         tags: Final = self._deployment_tags(deployment)
-        for registry in (self.auto_routers, self.complexity_routers, self.quality_routers):
+        for registry in (
+            self.auto_routers,
+            self.capability_routers,
+            self.complexity_routers,
+            self.quality_routers,
+        ):
             self._unregister_pre_routing_strategy(registry, model_name, tags)
         if self._unregister_pre_routing_strategy(self.adaptive_routers, model_name, tags):
             self._sync_adaptive_router_hooks()
@@ -8997,6 +9031,7 @@ class Router:
         # Reset per-strategy router registries so hot-reload doesn't leave
         # stale routers pointing at the old model_list.
         self.quality_routers = {}
+        self.capability_routers = {}  # mutable-ok: registry mutated by the shared pre-routing helpers
         self.complexity_routers = {}
         self.auto_routers = {}
         self._provider_unresolved_deployments = ()
@@ -9186,6 +9221,9 @@ class Router:
         #########################################################
         if self._is_complexity_router_deployment(litellm_params=deployment.litellm_params):
             self.init_complexity_router_deployment(deployment=deployment)
+
+        if self._is_capability_router_deployment(litellm_params=deployment.litellm_params):
+            self.init_capability_router_deployment(deployment=deployment)
 
         # NOTE: adaptive-router deployments are deferred to the end of
         # set_model_list() because their init needs visibility into the OTHER
@@ -12624,6 +12662,7 @@ class Router:
         """
         candidates: Final[list[TaggedPreRoutingStrategy[PreRoutingStrategy]]] = [
             *self.auto_routers.get(model, []),
+            *self.capability_routers.get(model, ()),
             *self.complexity_routers.get(model, []),
             *self.adaptive_routers.get(model, []),
             *self.quality_routers.get(model, []),

@@ -22,9 +22,9 @@ from litellm.router_strategy.complexity_router.config import (
 
 AUTO_ROUTER_MODEL_PREFIX: Final = "auto_router/"
 
-StrategyRouterKind = Literal["semantic", "complexity", "adaptive", "quality"]
+StrategyRouterKind: TypeAlias = Literal["semantic", "complexity", "capability", "adaptive", "quality"]
 
-StrategyRouterDependencyRole: TypeAlias = Literal["tier", "default", "classifier", "embedding"]
+StrategyRouterDependencyRole: TypeAlias = Literal["tier", "candidate", "default", "classifier", "embedding"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +44,7 @@ STRATEGY_ROUTER_PARAM_FIELDS: Final[frozenset[str]] = frozenset(
         "auto_router_max_input_chars",
         "complexity_router_config",
         "complexity_router_default_model",
+        "capability_router_config",
         "adaptive_router_config",
         "quality_router_config",
         "quality_router_default_model",
@@ -57,6 +58,7 @@ _REQUIRED_FIELD_GROUPS: Final[Mapping[StrategyRouterKind, tuple[tuple[str, ...],
         ("auto_router_embedding_model",),
     ),
     "complexity": (("complexity_router_config", "complexity_router_default_model"),),
+    "capability": (("capability_router_config",),),
     "adaptive": (("adaptive_router_config",),),
     "quality": (("quality_router_config", "quality_router_default_model"),),
 }
@@ -74,6 +76,8 @@ def classify_strategy_router_model(model: str) -> StrategyRouterKind | None:
     remainder: Final = model[len(AUTO_ROUTER_MODEL_PREFIX) :]
     if remainder.startswith("complexity_router"):
         return "complexity"
+    if remainder.startswith("capability_router"):
+        return "capability"
     if remainder.startswith("adaptive_router"):
         return "adaptive"
     if remainder.startswith("quality_router"):
@@ -143,6 +147,26 @@ def strategy_router_dependencies(
                 )
             )
         )
+    if kind == "capability":
+        capability: Final = _mapping(litellm_params.get("capability_router_config"))
+        capability_classifier: Final = _mapping(capability.get("classifier"))
+        candidates: Final = capability.get("candidates")
+        candidate_dependencies: Final = (
+            tuple(
+                dependency
+                for candidate in candidates
+                for dependency in _named(_mapping(candidate).get("model"), "candidate")
+            )
+            if isinstance(candidates, Sequence) and not isinstance(candidates, (str, bytes))
+            else ()
+        )
+        return tuple(
+            dict.fromkeys(
+                candidate_dependencies
+                + _named(capability.get("fallback_model"), "default")
+                + _named(capability_classifier.get("model"), "classifier")
+            )
+        )
     complexity: Final = _mapping(litellm_params.get("complexity_router_config"))
     classifier: Final = _mapping(complexity.get("classifier_llm_config"))
     return tuple(
@@ -188,6 +212,23 @@ def validate_complexity_router_config_write(complexity_router_config: Mapping[st
             f"complexity_router_config is invalid at {location}: {first.get('msg', 'invalid value')}. "
             "The router would drop this deployment at load time, so the write is rejected instead."
         )
+    return None
+
+
+def validate_capability_router_config_write(capability_router_config: Mapping[str, object] | None) -> str | None:
+    """Reject a capability config the router itself would reject."""
+    from pydantic import ValidationError
+
+    from litellm.router_strategy.capability_router.config import CapabilityRouterConfig
+
+    if capability_router_config is None:
+        return None
+    try:
+        _ = CapabilityRouterConfig.model_validate(capability_router_config)
+    except ValidationError as exc:
+        first: Final = exc.errors()[0]
+        location: Final = ".".join(str(part) for part in first.get("loc", ())) or "capability_router_config"
+        return f"capability_router_config is invalid at {location}: {first.get('msg', 'invalid value')}"
     return None
 
 

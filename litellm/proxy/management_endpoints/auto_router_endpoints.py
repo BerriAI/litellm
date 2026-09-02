@@ -39,6 +39,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 )
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.team_repository import TeamRepository
+from litellm.router_strategy.capability_router import CapabilityRouter
 from litellm.router_strategy.complexity_router import ComplexityRouter
 from litellm.router_utils.auto_router_model_naming import (
     StrategyRouterDependencyRole,
@@ -54,6 +55,8 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterCacheStats,
     AutoRouterRoutingTestRequest,
     AutoRouterRoutingTestResponse,
+    CapabilityRouterConfigValidationRequest,
+    CapabilityRouterConfigValidationResponse,
     ComplexityRouterConfigValidationRequest,
     ComplexityRouterConfigValidationResponse,
     RequestComplexityRouterConfig,
@@ -277,7 +280,19 @@ async def _authorize_models_this_test_can_call(
     the key's own budget is not checked either. Test Connection gets both for free by routing
     its calls through the proxy. Team and member budgets are already enforced on every route.
     """
-    models: Final = _models_this_test_can_call(config)
+    await _authorize_model_names_this_test_can_call(
+        models=_models_this_test_can_call(config),
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+    )
+
+
+async def _authorize_model_names_this_test_can_call(
+    models: Sequence[str],
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: "Router",
+) -> None:
+    """Apply model-access and key-budget checks to internal dry-run calls."""
     if not models:
         return
 
@@ -332,6 +347,59 @@ async def validate_complexity_router_config(
 
     error: Final = validate_complexity_router_config_write(data.complexity_router_config)
     return ComplexityRouterConfigValidationResponse(valid=error is None, error=error)
+
+
+@router.post(
+    "/auto_router/validate_capability_router_config",
+    tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
+    response_model=CapabilityRouterConfigValidationResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def validate_capability_router_config(
+    data: CapabilityRouterConfigValidationRequest,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> CapabilityRouterConfigValidationResponse:
+    """Validate a capability-router config without saving it."""
+    await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
+    from litellm.router_utils.auto_router_model_naming import (
+        validate_capability_router_config_write,
+    )
+
+    error: Final = validate_capability_router_config_write(data.capability_router_config)
+    return CapabilityRouterConfigValidationResponse(valid=error is None, error=error)
+
+
+async def _authorized_routing_test_strategy(
+    data: AutoRouterRoutingTestRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: "Router",
+) -> CapabilityRouter | ComplexityRouter:
+    """Authorize the config's internal dry-run calls, then build the strategy under test."""
+    if data.capability_router_config is not None:
+        await _authorize_model_names_this_test_can_call(
+            models=(data.capability_router_config.classifier.model,),
+            user_api_key_dict=user_api_key_dict,
+            llm_router=llm_router,
+        )
+        return CapabilityRouter(
+            model_name=data.router_name,
+            litellm_router_instance=llm_router,
+            capability_router_config=data.capability_router_config.model_dump(exclude_none=True),
+        )
+    assert data.complexity_router_config is not None
+    await _authorize_models_this_test_can_call(
+        config=data.complexity_router_config,
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+    )
+    return ComplexityRouter(
+        model_name=data.router_name,
+        litellm_router_instance=llm_router,
+        complexity_router_config=data.complexity_router_config.model_dump(exclude_none=True),
+        default_model=data.default_model,
+        derive_savings_baseline=False,
+    )
 
 
 @router.post(
@@ -397,18 +465,10 @@ async def preview_auto_router_routing(
             },
         )
 
-    await _authorize_models_this_test_can_call(
-        config=data.complexity_router_config,
+    strategy: Final = await _authorized_routing_test_strategy(
+        data=data,
         user_api_key_dict=user_api_key_dict,
         llm_router=llm_router,
-    )
-
-    complexity_router: Final = ComplexityRouter(
-        model_name=data.router_name,
-        litellm_router_instance=llm_router,
-        complexity_router_config=data.complexity_router_config.model_dump(exclude_none=True),
-        default_model=data.default_model,
-        derive_savings_baseline=False,
     )
 
     request_kwargs: Final = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
@@ -423,7 +483,7 @@ async def preview_auto_router_routing(
     refresh_proxy_server_request_body_snapshot(request_kwargs)
 
     try:
-        hook_response: Final = await complexity_router.async_pre_routing_hook(
+        hook_response: Final = await strategy.async_pre_routing_hook(
             model=data.router_name,
             request_kwargs=request_kwargs,
             messages=request_kwargs["messages"],
@@ -635,7 +695,7 @@ def _idle_router_groups(
 
 @router.get(
     "/auto_router/benchmarks",
-    tags=("auto router",),
+    tags=["auto router"],  # mutable-ok: fastapi's decorator signature types tags as a list
     dependencies=(Depends(user_api_key_auth),),
     response_model=AutoRouterBenchmarksResponse,
 )
@@ -1305,7 +1365,7 @@ async def _shadow_eval_results(
 
 @router.post(
     "/auto_router/shadow_eval/start",
-    tags=("auto router",),
+    tags=["auto router"],  # mutable-ok: fastapi's decorator signature types tags as a list
     dependencies=(Depends(user_api_key_auth),),
     response_model=ShadowEvalJobResponse,
     status_code=status.HTTP_201_CREATED,
@@ -1528,7 +1588,7 @@ async def start_shadow_eval(
 
 @router.get(
     "/auto_router/shadow_eval",
-    tags=("auto router",),
+    tags=["auto router"],  # mutable-ok: fastapi's decorator signature types tags as a list
     dependencies=(Depends(user_api_key_auth),),
     response_model=list[ShadowEvalJobResponse],
 )
@@ -1578,7 +1638,7 @@ async def list_shadow_eval_jobs(
 
 @router.get(
     "/auto_router/shadow_eval/{job_id}",
-    tags=("auto router",),
+    tags=["auto router"],  # mutable-ok: fastapi's decorator signature types tags as a list
     dependencies=(Depends(user_api_key_auth),),
     response_model=ShadowEvalJobResponse,
 )
@@ -1633,7 +1693,7 @@ async def get_shadow_eval_job(
 
 @router.post(
     "/auto_router/shadow_eval/{job_id}/stop",
-    tags=("auto router",),
+    tags=["auto router"],  # mutable-ok: fastapi's decorator signature types tags as a list
     dependencies=(Depends(user_api_key_auth),),
     response_model=ShadowEvalJobResponse,
 )

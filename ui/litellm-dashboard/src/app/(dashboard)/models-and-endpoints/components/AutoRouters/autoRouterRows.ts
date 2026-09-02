@@ -78,6 +78,14 @@ const configManaged = (label: string, config: Record<string, unknown>): Presenta
 
 /** How each strategy renders itself, given its own config object. */
 const PRESENTERS: Record<AutoRouterKind, (config: Record<string, unknown>) => Presentation> = {
+  capability: (config) => ({
+    typeLabel: "Capability",
+    targets: dedupe(
+      (Array.isArray(config.candidates) ? config.candidates : [])
+        .map((candidate) => asRecord(candidate).model)
+        .filter((model): model is string => typeof model === "string" && model.length > 0),
+    ),
+  }),
   complexity: (config) => ({
     typeLabel: complexityTypeLabel(config),
     targets: dedupe(Object.values(asRecord(config.tiers)).flatMap(normalizeTierModels)),
@@ -115,7 +123,9 @@ export const toAutoRouterRow = (
     canDelete: canDelete && mayActOnRow,
     editBlockedReason,
     createdAt: info.created_at ?? undefined,
-    defaultModel: (params[strategy.defaultModelKey] as string | null | undefined) ?? null,
+    defaultModel: strategy.defaultModelKey
+      ? (params[strategy.defaultModelKey] as string | null | undefined) ?? null
+      : null,
     deployment,
     ...PRESENTERS[strategy.kind](asRecord(params[strategy.configKey])),
   };

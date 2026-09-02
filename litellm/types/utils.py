@@ -2888,6 +2888,9 @@ RoutingDecisionCause = Literal[
     "keyword",
     "quality_tier",
     "bandit",
+    "capability_classifier",
+    "capability_cache",
+    "capability_fallback",
 ]
 
 
@@ -2910,7 +2913,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     """Per-request provenance for a pre-routing strategy (auto-router) decision."""
 
     router_model_name: str
-    router_type: Literal["complexity", "adaptive", "quality"]
+    router_type: Literal["complexity", "adaptive", "quality", "capability"]
     routed_model: str
     cause: RoutingDecisionCause
     tier: str
@@ -2931,6 +2934,12 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     savings_baseline_model: str
     savings_baseline_deployment_id: str
     tier_litellm_params: Mapping[str, object]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    probability_threshold: float  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    candidate_probabilities: Mapping[str, float]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    candidate_costs: Mapping[str, float]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    qualified_models: Sequence[str]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    fallback_reason: str | None  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    cached: bool  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
 
 
 # Fields whose values quote the caller's prompt. Dropped when an operator turns message
@@ -2959,6 +2968,12 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "savings_baseline_model",
         "savings_baseline_deployment_id",
         "tier_litellm_params",
+        "probability_threshold",
+        "candidate_probabilities",
+        "candidate_costs",
+        "qualified_models",
+        "fallback_reason",
+        "cached",
     }
 )
 
@@ -3705,6 +3720,7 @@ all_litellm_params = (
         "auto_router_max_input_chars",
         "complexity_router_config",
         "complexity_router_default_model",
+        "capability_router_config",
         "adaptive_router_config",
         "adaptive_router_default_model",
         "quality_router_config",
