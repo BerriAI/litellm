@@ -202,6 +202,22 @@ class TestHostedVLLMRerankTruncationParams:
         assert params["max_tokens_per_doc"] == 128
         assert "metadata" not in params
 
+    @pytest.mark.parametrize(
+        "bad_params",
+        [{"truncation_side": "middle"}, {"truncate_prompt_tokens": "lots"}, {"max_tokens_per_query": -1.5}],
+    )
+    def test_map_cohere_rerank_params_rejects_invalid_truncation_params_as_400(self, bad_params: dict[str, object]):
+        with pytest.raises(litellm.UnsupportedParamsError) as raised:
+            self.config.map_cohere_rerank_params(
+                non_default_params=dict(bad_params),
+                model=self.model,
+                drop_params=False,
+                query="test query",
+                documents=["doc1", "doc2"],
+            )
+        assert raised.value.status_code == 400
+        assert next(iter(bad_params)) in str(raised.value)
+
     def test_map_cohere_rerank_params_omits_truncation_params_when_absent(self):
         params: Final = self.config.map_cohere_rerank_params(
             non_default_params={"metadata": {"user_api_key": "sk-test"}},
@@ -224,16 +240,6 @@ class TestHostedVLLMRerankTruncationParams:
             "documents": ["doc1", "doc2"],
             "return_documents": True,
         }
-
-    def test_map_cohere_rerank_params_rejects_invalid_truncation_side(self):
-        with pytest.raises(ValueError, match="truncation_side"):
-            self.config.map_cohere_rerank_params(
-                non_default_params={"truncation_side": "middle"},
-                model=self.model,
-                drop_params=False,
-                query="test query",
-                documents=["doc1", "doc2"],
-            )
 
     def test_transform_request_forwards_truncation_params(self):
         body: Final = self.config.transform_rerank_request(
