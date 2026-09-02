@@ -711,11 +711,21 @@ async def test_circuit_breaker_success_still_resets_the_failure_streak():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure_stage", ["client_init", "set"])
-async def test_async_set_cache_failure_does_not_log_key_or_value(
-    failure_stage, monkeypatch, redis_no_ping, caplog
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "set_client_init",
+        "set",
+        "pipeline",
+        "sadd_client_init",
+        "sadd",
+        "increment",
+    ],
+)
+async def test_async_redis_write_failure_does_not_log_key_or_value(
+    operation, monkeypatch, redis_no_ping, caplog
 ):
-    """Redis failures must remain diagnosable without logging cached prompts or responses."""
+    """Every Redis write API must diagnose failures without exposing cached data."""
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
     redis_cache = RedisCache()
     redis_cache.service_logger_obj.async_service_failure_hook = AsyncMock()
@@ -725,8 +735,24 @@ async def test_async_set_cache_failure_does_not_log_key_or_value(
     }
     redis_error = TimeoutError("synthetic redis timeout")
     redis_client = AsyncMock()
-    redis_client.set.side_effect = redis_error
-    init_side_effect = redis_error if failure_stage == "client_init" else None
+    pipeline = MagicMock()
+    pipeline.set = MagicMock()
+    pipeline.execute = AsyncMock(side_effect=redis_error)
+    pipeline_context = MagicMock()
+    pipeline_context.__aenter__ = AsyncMock(return_value=pipeline)
+    pipeline_context.__aexit__ = AsyncMock(return_value=None)
+    redis_client.pipeline = MagicMock(return_value=pipeline_context)
+
+    if operation == "set":
+        redis_client.set.side_effect = redis_error
+    elif operation == "sadd":
+        redis_client.sadd.side_effect = redis_error
+    elif operation == "increment":
+        redis_client.incrbyfloat.side_effect = redis_error
+
+    init_side_effect = (
+        redis_error if operation in {"set_client_init", "sadd_client_init"} else None
+    )
 
     with (
         caplog.at_level(logging.ERROR, logger="LiteLLM"),
@@ -737,11 +763,27 @@ async def test_async_set_cache_failure_does_not_log_key_or_value(
             side_effect=init_side_effect,
         ),
     ):
-        if failure_stage == "client_init":
+        if operation == "set_client_init":
             with pytest.raises(TimeoutError, match="synthetic redis timeout"):
                 await redis_cache.async_set_cache(sensitive_key, sensitive_value)
-        else:
+        elif operation == "set":
             await redis_cache.async_set_cache(sensitive_key, sensitive_value)
+        elif operation == "pipeline":
+            await redis_cache.async_set_cache_pipeline(
+                [(sensitive_key, sensitive_value)]
+            )
+        elif operation == "sadd_client_init":
+            with pytest.raises(TimeoutError, match="synthetic redis timeout"):
+                await redis_cache.async_set_cache_sadd(
+                    sensitive_key, [sensitive_value], ttl=None
+                )
+        elif operation == "sadd":
+            await redis_cache.async_set_cache_sadd(
+                sensitive_key, [sensitive_value], ttl=None
+            )
+        else:
+            with pytest.raises(TimeoutError, match="synthetic redis timeout"):
+                await redis_cache.async_increment(sensitive_key, 1)
 
         await asyncio.sleep(0)
 
@@ -754,6 +796,27 @@ async def test_async_set_cache_failure_does_not_log_key_or_value(
     assert "private customer message" not in logged_arguments
     assert sensitive_key not in telemetry_arguments
     assert "private customer message" not in telemetry_arguments
+
+
+def test_increment_cache_failure_does_not_log_key_or_value(
+    monkeypatch, redis_no_ping, caplog
+):
+    """The synchronous Redis write API follows the same log-redaction contract."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    sensitive_key = "customer-secret-cache-key"
+    sensitive_value = 8675309
+    redis_error = TimeoutError("synthetic redis timeout")
+    redis_cache.redis_client = MagicMock()
+    redis_cache.redis_client.incr.side_effect = redis_error
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        with pytest.raises(TimeoutError, match="synthetic redis timeout"):
+            redis_cache.increment_cache(sensitive_key, sensitive_value)
+
+    assert "synthetic redis timeout" in caplog.text
+    assert sensitive_key not in caplog.text
+    assert str(sensitive_value) not in caplog.text
 
 
 @pytest.mark.asyncio
