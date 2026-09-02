@@ -12,6 +12,7 @@ from openai.lib import _parsing, _pydantic
 from pydantic import BaseModel, TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm.constants import ANTHROPIC_BILLING_METADATA_PREFIX
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionSystemMessage, ChatCompletionToolCallChunk
 from litellm.types.utils import Message, ProviderSpecificModelInfo, TokenCountResponse
 
@@ -244,13 +245,20 @@ def _as_system_message(message: AllMessageValues) -> AllMessageValues:
 def _merged_system_messages(
     first: ChatCompletionSystemMessage, second: ChatCompletionSystemMessage
 ) -> ChatCompletionSystemMessage:
+    # A cache_control breakpoint covers the prefix up to its block, so the later
+    # message's marker is the one that still means the same thing after the merge.
     merged: Final[ChatCompletionSystemMessage] = {
-        **second,
         **first,
+        **second,
         "role": "system",
         "content": merge_system_message_contents(_system_content(first), _system_content(second)),
     }
     return merged
+
+
+def _is_billing_metadata(message: ChatCompletionSystemMessage) -> bool:
+    content: Final = _system_content(message)
+    return isinstance(content, str) and content.startswith(ANTHROPIC_BILLING_METADATA_PREFIX)
 
 
 def _fold_into_previous_system(
@@ -260,6 +268,10 @@ def _fold_into_previous_system(
         return (*acc, message)
     previous: Final = acc[-1]
     if previous["role"] != "system":
+        return (*acc, message)
+    if _is_billing_metadata(previous) or _is_billing_metadata(message):
+        # Anthropic-family transformations strip billing metadata by matching the
+        # block's prefix; merging would hide the marker or the neighbor behind it.
         return (*acc, message)
     return (*acc[:-1], _merged_system_messages(previous, message))
 

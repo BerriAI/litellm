@@ -4196,6 +4196,26 @@ class TestInstructionsMergedWithLeadingSystemInput:
         assert messages[0]["content"] == "You are a data exporter\n\nAlways output valid JSON"
         assert messages[1]["role"] == "user"
 
+    def test_responses_api_developer_input_without_instructions_passes_through(self):
+        input_items = [
+            {"role": "developer", "content": "Always output valid JSON"},
+            {"role": "user", "content": "Give me data"},
+        ]
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=input_items,
+            responses_api_request={},
+        )
+        assert len(messages) == 2
+        assert messages[0]["role"] == "developer"
+        assert messages[0]["content"] == "Always output valid JSON"
+
+    def test_responses_api_instructions_with_empty_input(self):
+        messages = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[],
+            responses_api_request={"instructions": "You are a data exporter"},
+        )
+        assert messages == [{"role": "system", "content": "You are a data exporter"}]
+
     def test_responses_api_instructions_with_plain_user_input(self):
         input_items = "Hello, world!"
         responses_api_request = {"instructions": "You are a helpful assistant"}

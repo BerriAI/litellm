@@ -94,6 +94,30 @@ class TestMapDeveloperRoleToSystemRole:
             {"role": "user", "content": "Hello"},
         ]
 
+    def test_merge_keeps_later_cache_control_when_both_set(self):
+        messages = [
+            {"role": "system", "content": "A", "cache_control": {"type": "ephemeral", "ttl": "5m"}},
+            {"role": "system", "content": "B", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+        ]
+        assert map_developer_role_to_system_role(messages) == [
+            {"role": "system", "content": "A\n\nB", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+        ]
+
+    def test_merge_keeps_cache_control_supplied_only_by_later_message(self):
+        messages = [
+            {"role": "system", "content": "A"},
+            {"role": "developer", "content": "B", "cache_control": {"type": "ephemeral"}},
+        ]
+        assert map_developer_role_to_system_role(messages) == [
+            {"role": "system", "content": "A\n\nB", "cache_control": {"type": "ephemeral"}},
+        ]
+
+    def test_billing_metadata_system_message_is_never_merged(self):
+        billing = {"role": "system", "content": "x-anthropic-billing-header: cc_version=1.0;"}
+        advisory = {"role": "system", "content": "Guardrail advisory: request was flagged"}
+        assert map_developer_role_to_system_role([billing, advisory]) == [billing, advisory]
+        assert map_developer_role_to_system_role([advisory, billing]) == [advisory, billing]
+
     def test_merge_preserves_cache_control_of_first_message(self):
         messages = [
             {"role": "system", "content": "Cached prompt", "cache_control": {"type": "ephemeral"}},
