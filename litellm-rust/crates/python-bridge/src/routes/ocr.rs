@@ -1,12 +1,14 @@
 use std::time::Duration;
 
 use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
-use litellm_python_interop::{from_py, release_gil, to_py};
+use litellm_python_interop::from_py;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
 
 use crate::errors::core_error_to_pyerr;
 use crate::marshal::{optional_object_to_map, optional_timeout};
+
+use super::runtime::{run_async, run_sync};
 
 type MarshaledOcrInputs = (
     Value,
@@ -55,27 +57,27 @@ fn ocr(
         timeout_seconds,
     )?;
 
-    let result = release_gil(py, || {
-        pyo3_async_runtimes::tokio::get_runtime().block_on(run_ocr(OcrRequest {
-            model: &model,
-            document,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            optional_params,
-            timeout,
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
-            request_metadata: Default::default(),
-            litellm_call_id: None,
-        }))
-    });
-
-    match result {
-        Ok(value) => to_py(py, &value),
-        Err(err) => Err(core_error_to_pyerr(err)),
-    }
+    run_sync(
+        py,
+        async move {
+            run_ocr(OcrRequest {
+                model: &model,
+                document,
+                api_key: api_key.as_deref(),
+                api_base: api_base.as_deref(),
+                custom_llm_provider: custom_llm_provider.as_deref(),
+                extra_headers,
+                optional_params,
+                timeout,
+                callbacks: Vec::new(),
+                guardrails: Vec::new(),
+                request_metadata: Default::default(),
+                litellm_call_id: None,
+            })
+            .await
+        },
+        core_error_to_pyerr,
+    )
 }
 
 #[pyfunction]
@@ -100,26 +102,27 @@ fn aocr(
         timeout_seconds,
     )?;
 
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let value = run_ocr(OcrRequest {
-            model: &model,
-            document,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            optional_params,
-            timeout,
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
-            request_metadata: Default::default(),
-            litellm_call_id: None,
-        })
-        .await
-        .map_err(core_error_to_pyerr)?;
-
-        Python::attach(|py| to_py(py, &value))
-    })
+    run_async(
+        py,
+        async move {
+            run_ocr(OcrRequest {
+                model: &model,
+                document,
+                api_key: api_key.as_deref(),
+                api_base: api_base.as_deref(),
+                custom_llm_provider: custom_llm_provider.as_deref(),
+                extra_headers,
+                optional_params,
+                timeout,
+                callbacks: Vec::new(),
+                guardrails: Vec::new(),
+                request_metadata: Default::default(),
+                litellm_call_id: None,
+            })
+            .await
+        },
+        core_error_to_pyerr,
+    )
 }
 
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
