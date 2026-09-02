@@ -1,10 +1,10 @@
-"""Trace /ocr gateway endpoint - maps to litellm-rust/crates/ai-gateway/src/routes/ocr.rs"""
+"""Trace /ocr gateway endpoint - maps to litellm-rust/crates/ai-gateway/src/ocr/handler.rs"""
 from fastapi.testclient import TestClient
 import sys
 from pathlib import Path
 
-# Add parent to path for tracer import
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add gateway_trace root to path for tracer import
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 from tracer import ExecutionTracer, print_trace_table
 
 
@@ -14,7 +14,7 @@ RUST_FUNCTIONS = {
 }
 
 
-def test_ocr_endpoint():
+def test_ocr_handler():
     """Trace /ocr endpoint execution."""
     from litellm.proxy.proxy_server import app
 
@@ -37,4 +37,4 @@ def test_ocr_endpoint():
 
 
 if __name__ == "__main__":
-    test_ocr_endpoint()
+    test_ocr_handler()

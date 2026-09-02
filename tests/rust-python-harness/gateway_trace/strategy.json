@@ -1,22 +1,24 @@
 {
+  "order": 15,
   "id": "gateway_trace",
-  "label": "Gateway Trace",
-  "description": "Gateway endpoint execution tracing",
-  "order": 4,
+  "label": "Gateway endpoint execution tracing",
+  "description": "Traces actual gateway endpoint execution using sys.settrace() to map Python calls to Rust implementations.",
   "functions": {
     "ocr": {
       "coverage": "partial",
-      "selectors": ["tests/rust-python-harness/gateway_trace/ai-gateway/test_ocr_endpoint.py"]
+      "selectors": ["tests/rust-python-harness/gateway_trace/crates/ai-gateway/src/ocr/test_handler.py"]
     },
     "messages": {
       "coverage": "partial",
-      "selectors": ["tests/rust-python-harness/gateway_trace/ai-gateway/test_messages_endpoint.py"]
+      "selectors": ["tests/rust-python-harness/gateway_trace/crates/core/src/chat_completions/test_client.py"]
     },
     "responses": {
-      "coverage": "not_applicable"
+      "coverage": "not_applicable",
+      "selectors": []
     },
     "count_tokens": {
-      "coverage": "not_applicable"
+      "coverage": "not_applicable",
+      "selectors": []
     }
   }
 }
