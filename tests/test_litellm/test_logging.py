@@ -5,6 +5,7 @@ import logging
 import re
 import sys
 import time
+from io import StringIO
 from pathlib import Path
 from typing import List
 
@@ -1096,12 +1097,36 @@ def test_access_log_filter_redacts_a_record_that_carries_no_positional_args():
     assert _LEAKED_KEY not in record.getMessage()
 
 
-def test_uvicorn_access_logger_carries_the_access_log_filter():
+def _emit_access_line(full_path: str) -> str:
+    """Hand one real record to uvicorn.access and return what a handler wrote out."""
+    from uvicorn.logging import AccessFormatter
+
+    logger = logging.getLogger("uvicorn.access")
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False))
+    saved_level, saved_propagate = logger.level, logger.propagate
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    try:
+        logger.handle(_access_record(full_path))
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(saved_level)
+        logger.propagate = saved_propagate
+    return stream.getvalue()
+
+
+def test_uvicorn_access_logger_redacts_a_credential_it_is_handed():
     """Registration happens at litellm import; without it the filter never runs."""
-    assert any(isinstance(f, AccessLogRedactionFilter) for f in logging.getLogger("uvicorn.access").filters)
+    emitted = _emit_access_line(f"/key/info?key={_LEAKED_KEY}")
+
+    assert _LEAKED_KEY not in emitted
+    assert "REDACTED" in emitted
 
 
-def test_access_log_filter_survives_uvicorn_json_log_config():
+def test_access_redaction_survives_the_uvicorn_json_log_config():
     """litellm hands uvicorn a dictConfig when json_logs is on. dictConfig clears a
     logger's handlers but not its filters, so redaction has to still be attached."""
     import logging.config
@@ -1110,7 +1135,10 @@ def test_access_log_filter_survives_uvicorn_json_log_config():
     saved = tuple((logging.getLogger(n), logging.getLogger(n).handlers[:], logging.getLogger(n).level) for n in names)
     try:
         logging.config.dictConfig(_get_uvicorn_json_log_config())
-        assert any(isinstance(f, AccessLogRedactionFilter) for f in logging.getLogger("uvicorn.access").filters)
+        emitted = _emit_access_line(f"/key/info?key={_LEAKED_KEY}")
+
+        assert _LEAKED_KEY not in emitted
+        assert "REDACTED" in emitted
     finally:
         for lg, handlers, level in saved:
             lg.handlers[:] = handlers
