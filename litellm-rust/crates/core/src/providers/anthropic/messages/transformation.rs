@@ -1,4 +1,4 @@
-use crate::error::{CoreError, CoreResult};
+use crate::error::Error;
 use crate::messages::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
 
 const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
@@ -17,12 +17,12 @@ pub fn non_empty(value: Option<&str>) -> Option<&str> {
 pub fn resolve_anthropic_api_key(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> CoreResult<String> {
+) -> Result<String, Error> {
     non_empty(api_key)
         .map(str::to_string)
         .or_else(|| env_lookup(ANTHROPIC_API_KEY_ENV).filter(|value| !value.trim().is_empty()))
         .ok_or_else(|| {
-            CoreError::Auth(
+            Error::Auth(
                 "Missing Anthropic API Key - Set `api_key` or the ANTHROPIC_API_KEY \
                  environment variable"
                     .to_string(),
@@ -52,7 +52,7 @@ impl AnthropicMessagesProviderConfig for AnthropicMessagesConfig {
         api_base: Option<&str>,
         _model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String> {
+    ) -> Result<String, Error> {
         Ok(complete_anthropic_url(api_base, env_lookup))
     }
 
@@ -60,7 +60,7 @@ impl AnthropicMessagesProviderConfig for AnthropicMessagesConfig {
         &self,
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String> {
+    ) -> Result<String, Error> {
         resolve_anthropic_api_key(api_key, env_lookup)
     }
 
@@ -121,7 +121,7 @@ mod tests {
         );
         assert!(matches!(
             resolve_anthropic_api_key(None, &|_| None).expect_err("missing key"),
-            CoreError::Auth(_)
+            Error::Auth(_)
         ));
     }
 

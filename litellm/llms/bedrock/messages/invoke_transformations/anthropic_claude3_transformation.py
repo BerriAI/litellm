@@ -29,14 +29,14 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import (
-    convert_bedrock_invoke_output_format_to_inline_schema,
+    apply_bedrock_invoke_structured_output,
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
-    pop_bedrock_invoke_output_config_format,
+    strip_unsupported_bedrock_invoke_output_config_keys,
 )
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
@@ -51,7 +51,6 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 from litellm.types.utils import GenericStreamingChunk as GChunk
-from litellm.utils import _supports_factory
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -708,52 +707,25 @@ class AmazonAnthropicClaudeMessagesConfig(
         # 4. Remove `ttl` field from cache_control in messages (Bedrock doesn't support it for older models)
         self._remove_ttl_from_cache_control(anthropic_messages_request=anthropic_messages_request, model=model)
 
-        # 5. Convert structured-output params to inline schema.
-        # Bedrock Invoke doesn't support top-level `output_format`; its
-        # accepted `output_config` subset is also narrower than Anthropic's, so
-        # consume the newer `output_config.format` shape here instead of
-        # forwarding it as an unknown nested key.
+        # 5. Route structured-output params (`output_format` /
+        # `output_config.format`) to native enforcement or the inline-schema
+        # fallback, then strip `output_config` keys the model does not accept.
+        # Ref: https://github.com/BerriAI/litellm/issues/22797
         existing_output_config: Final = anthropic_messages_request.get("output_config")
         if isinstance(existing_output_config, dict):
             anthropic_messages_request["output_config"] = dict(existing_output_config)
-        output_format: Final = anthropic_messages_request.pop("output_format", None)
-        output_config_format: Final = pop_bedrock_invoke_output_config_format(anthropic_messages_request)
-        if output_format:
-            convert_bedrock_invoke_output_format_to_inline_schema(
-                output_format=output_format,
-                request_body=anthropic_messages_request,
-            )
-        elif output_config_format:
-            convert_bedrock_invoke_output_format_to_inline_schema(
-                output_format=output_config_format,
-                request_body=anthropic_messages_request,
-            )
+        apply_bedrock_invoke_structured_output(
+            model=model,
+            request_body=anthropic_messages_request,
+        )
         normalize_bedrock_opus_output_config_effort(
             model=model,
             output_config=anthropic_messages_request.get("output_config"),
         )
-
-        # 5a. Bedrock Invoke supports output_config (effort) for Claude 4.6+ models,
-        # but older models do not — strip it to avoid request rejection.
-        # Ref: https://github.com/BerriAI/litellm/issues/22797
-        if not (
-            _supports_factory(
-                model=model,
-                custom_llm_provider="bedrock",
-                key="supports_output_config",
-            )
-            or AnthropicConfig._model_supports_effort_param(model, "bedrock")
-        ):
-            if anthropic_messages_request.pop("output_config", None) is not None:
-                verbose_logger.warning(
-                    "Bedrock Invoke: stripping unsupported `output_config` for "
-                    "model=%s — neither `supports_output_config` nor any "
-                    "`supports_*_reasoning_effort` flag is set in "
-                    "model_prices_and_context_window.json. Add the capability "
-                    "flag to the model JSON entry if this model accepts "
-                    "`output_config`.",
-                    model,
-                )
+        strip_unsupported_bedrock_invoke_output_config_keys(
+            model=model,
+            request_body=anthropic_messages_request,
+        )
 
         # 5b. Hoist `custom.defer_loading` then drop `custom` (Bedrock doesn't support it)
         # Ref: https://github.com/BerriAI/litellm/issues/22847
@@ -774,9 +746,11 @@ class AmazonAnthropicClaudeMessagesConfig(
         if filtered_betas:
             anthropic_messages_request["anthropic_beta"] = filtered_betas
 
+        remaining_output_config: Final = anthropic_messages_request.get("output_config")
         if (
             litellm.drop_params is True
-            and "output_config" in anthropic_messages_request
+            and isinstance(remaining_output_config, dict)
+            and any(key != "format" for key in remaining_output_config)
             and not AnthropicConfig._model_supports_effort_param(model, "bedrock")
         ):
             verbose_logger.warning(

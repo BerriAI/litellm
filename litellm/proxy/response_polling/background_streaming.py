@@ -76,17 +76,17 @@ class _StreamEventParser:
 
 async def background_streaming_task(
     polling_id: str,
-    data: dict,
+    data: dict[str, object],
     polling_handler: ResponsePollingHandler,
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth,
-    general_settings: dict,
+    general_settings: dict[str, object],
     llm_router: "Router | None",
     proxy_config: "ProxyConfig",
     proxy_logging_obj: "ProxyLogging",
-    select_data_generator,
-    user_model,
+    select_data_generator: Callable[..., object] | None,
+    user_model: str | None,
     user_temperature: float | None,
     user_request_timeout: float | None,
     user_max_tokens: int | None,
@@ -144,10 +144,8 @@ async def background_streaming_task(
 
         # Process streaming response following OpenAI events format
         # https://platform.openai.com/docs/api-reference/responses-streaming
-        output_items: Final = dict[str, _OutputItem]()  # Track output items by ID
-        accumulated_text: Final = dict[
-            tuple[str, int], str
-        ]()  # Track accumulated text deltas by (item_id, content_index)
+        output_items: Final = dict[str, _OutputItem]()
+        accumulated_text: Final = dict[tuple[str, int], str]()
 
         # ResponsesAPIResponse fields to extract from response.completed
         usage_data = None
@@ -262,7 +260,6 @@ async def background_streaming_task(
                                 if "content" in delta_item:
                                     content_list = delta_item["content"]
                                     if content_index < len(content_list):
-                                        # Update existing content part with accumulated text
                                         content_entry = content_list[content_index]
                                         if isinstance(content_entry, dict):
                                             content_entry["text"] = accumulated_text[key]
