@@ -147,3 +147,6 @@ crash.*.log
 
 ui/litellm-dashboard/out/
 litellm.log
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat

@@ -949,7 +949,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         # For Gemini 3+ models, use thinkingLevel instead of thinkingBudget
         if model and VertexGeminiConfig._is_gemini_3_or_newer(model):
             if thinking_enabled:
-                if thinking_budget is None or thinking_budget == 0:
+                if thinking_budget == 0:
                     params["includeThoughts"] = False
                 else:
                     params["includeThoughts"] = True
