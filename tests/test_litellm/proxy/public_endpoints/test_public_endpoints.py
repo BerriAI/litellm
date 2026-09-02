@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -754,6 +755,45 @@ def test_public_agent_hub_returns_empty_when_no_public_groups():
 
     assert response.status_code == 200
     assert response.json() == []
+
+
+# ---------------------------------------------------------------------------
+# /public/agents/fields
+# ---------------------------------------------------------------------------
+
+
+def test_bedrock_agentcore_runtime_arn_validation_pattern_accepts_full_resource_path():
+    """Regression for LIT-6737: the AgentCore agent_runtime_arn field's
+    validation_pattern must accept a complete runtime ARN whose resource part
+    is itself multi-segment (``runtime/<runtime-id>``), and reject the exact
+    truncated shape a naive split("/")-by-position parse used to produce (the
+    ARN cut off right after the ``runtime`` resource type).
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/agents/fields")
+    assert response.status_code == 200
+    agents = response.json()
+
+    bedrock_agentcore = next((a for a in agents if a["agent_type"] == "bedrock_agentcore"), None)
+    assert bedrock_agentcore is not None, "bedrock_agentcore agent type not found"
+    assert bedrock_agentcore["model_template"] == "bedrock/agentcore/{agent_runtime_arn}"
+
+    fields_by_key = {f["key"]: f for f in bedrock_agentcore["credential_fields"]}
+    arn_field = fields_by_key["agent_runtime_arn"]
+    assert arn_field["required"] is True
+    assert arn_field["include_in_litellm_params"] is False
+
+    pattern = arn_field.get("validation_pattern")
+    assert pattern, "agent_runtime_arn must ship a validation_pattern so the UI can reject a truncated ARN"
+
+    full_arn = "arn:aws:bedrock-agentcore:eu-central-1:123456789012:runtime/hosted_agent_4vm3i-BaTdfOELAs"
+    truncated_arn = "arn:aws:bedrock-agentcore:eu-central-1:123456789012:runtime"
+
+    assert re.match(pattern, full_arn), "the validator must accept a complete runtime ARN"
+    assert not re.match(pattern, truncated_arn), "the validator must reject the truncated ARN"
 
 
 # ---------------------------------------------------------------------------

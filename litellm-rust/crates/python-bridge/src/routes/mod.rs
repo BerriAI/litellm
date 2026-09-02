@@ -2,7 +2,6 @@ use pyo3::prelude::*;
 
 #[macro_use]
 mod definition;
-mod runtime;
 
 mod audio_transcription;
 mod chat_completions;

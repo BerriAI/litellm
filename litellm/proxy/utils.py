@@ -1524,6 +1524,7 @@ class ProxyLogging:
                 prompt_label=data.pop("prompt_label", None) or {},
                 prompt_version=data.pop("prompt_version", None) or {},
                 request_kwargs=data,
+                injected_for_every_deployment=True,
             )
 
             data.update(optional_params)

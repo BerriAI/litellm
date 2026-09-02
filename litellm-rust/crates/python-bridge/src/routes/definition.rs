@@ -20,33 +20,43 @@ macro_rules! bridge_route {
         }
 
         #[pyfunction]
-        #[pyo3(signature = ($($required_name),*, $($optional_name=None),*))]
+        #[pyo3(signature = ($($required_name),*, $($optional_name=None,)* trace=false))]
         #[allow(clippy::too_many_arguments)]
         fn $sync_name(
             py: pyo3::Python<'_>,
             $($(#[$required_attr])* $required_name: $required_type,)*
-            $($(#[$optional_attr])* $optional_name: $optional_type),*
+            $($(#[$optional_attr])* $optional_name: $optional_type,)*
+            trace: bool,
         ) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
             let future = $prepare($inputs {
                 $($required_name,)*
                 $($optional_name),*
             })?;
-            $crate::routes::runtime::run_sync(py, future, $map_error)
+            $crate::execution::run_sync(
+                py,
+                $crate::function_trace::trace_call(future, trace),
+                $map_error,
+            )
         }
 
         #[pyfunction]
-        #[pyo3(signature = ($($required_name),*, $($optional_name=None),*))]
+        #[pyo3(signature = ($($required_name),*, $($optional_name=None,)* trace=false))]
         #[allow(clippy::too_many_arguments)]
         fn $async_name(
             py: pyo3::Python<'_>,
             $($(#[$required_attr])* $required_name: $required_type,)*
-            $($(#[$optional_attr])* $optional_name: $optional_type),*
+            $($(#[$optional_attr])* $optional_name: $optional_type,)*
+            trace: bool,
         ) -> pyo3::PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
             let future = $prepare($inputs {
                 $($required_name,)*
                 $($optional_name),*
             })?;
-            $crate::routes::runtime::run_async(py, future, $map_error)
+            $crate::execution::run_async(
+                py,
+                $crate::function_trace::trace_call(future, trace),
+                $map_error,
+            )
         }
 
         pub(super) fn register(
@@ -154,22 +164,22 @@ mod tests {
                 (
                     "ocr",
                     "aocr",
-                    "(model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None)",
+                    "(model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None, trace=False)",
                 ),
                 (
                     "transcription",
                     "atranscription",
-                    "(model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None)",
+                    "(model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None, trace=False)",
                 ),
                 (
                     "messages",
                     "amessages",
-                    "(model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None)",
+                    "(model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None, trace=False)",
                 ),
                 (
                     "chat_completions",
                     "achat_completions",
-                    "(model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None)",
+                    "(model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None, trace=False)",
                 ),
             ];
 

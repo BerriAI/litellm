@@ -181,6 +181,14 @@ def assert_success(route: str, response: object) -> None:
         raise AssertionError(f"{route} returned {actual!r}, expected {expected!r}")
 
 
+def assert_traced_success(route: str, response: object) -> None:
+    if not isinstance(response, dict):
+        raise TypeError(f"{route} returned {type(response).__name__}, expected a traced dict")
+    assert_success(route, response["response"])
+    expected_function: Final = "audio_transcription" if route == "transcription" else route
+    assert response["trace"][0] == {"function": expected_function, "depth": 0}
+
+
 def success_value(route: str, response: dict[object, object]) -> object:
     if route == "ocr":
         return response["pages"][0]["markdown"]
@@ -205,6 +213,7 @@ def exercise_sync(native: object, api_base: str) -> None:
     for route in ("ocr", "transcription", "messages", "chat_completions"):
         function: Final = getattr(native, route)
         assert_success(route, function(**route_kwargs(route, api_base, "success")))
+        assert_traced_success(route, function(**route_kwargs(route, api_base, "success"), trace=True))
         try:
             function(**route_kwargs(route, api_base, "429"))
         except (RuntimeError, native.RustUpstreamError) as error:
@@ -217,6 +226,7 @@ async def exercise_async(native: object, api_base: str) -> None:
     for route in ("ocr", "transcription", "messages", "chat_completions"):
         function: Final = getattr(native, f"a{route}")
         assert_success(route, await function(**route_kwargs(route, api_base, "success")))
+        assert_traced_success(route, await function(**route_kwargs(route, api_base, "success"), trace=True))
         try:
             await function(**route_kwargs(route, api_base, "429"))
         except (RuntimeError, native.RustUpstreamError) as error:
