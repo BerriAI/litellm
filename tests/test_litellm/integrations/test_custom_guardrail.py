@@ -2237,3 +2237,134 @@ class TestRecordsOwnGuardrailInformation:
         )
 
         assert _guardrail_entries(request_data) == []
+
+
+class _ApplyOnlyObserver(CustomGuardrail):
+    """Overrides only apply_guardrail, like panw_prisma_airs; inherits async_logging_hook."""
+
+    def __init__(self, block: bool = False):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        super().__init__(guardrail_name="apply-only-observer", event_hook=GuardrailEventHooks.logging_only)
+        self.block = block
+        self.calls: list = []
+
+    @log_guardrail_information
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        from fastapi import HTTPException
+
+        self.calls.append((input_type, list(inputs.get("texts") or [])))
+        if self.block:
+            raise HTTPException(status_code=400, detail={"error": "flagged"})
+        return GenericGuardrailAPIInputs(texts=["[MASKED]" for _ in inputs.get("texts") or []])
+
+
+def _logged_call(messages: list) -> tuple[dict, object]:
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    response = ModelResponse(choices=[Choices(message=Message(role="assistant", content="general kenobi"))])
+    kwargs = {
+        "model": "gpt-5.4-mini",
+        "messages": messages,
+        "litellm_call_id": "call-1",
+        "litellm_params": {"metadata": {"user_api_key_user_id": "u1"}},
+        "optional_params": {},
+        "standard_logging_object": {"guardrail_information": None},
+    }
+    return kwargs, response
+
+
+class TestLoggingOnlyApplyGuardrail:
+    """LIT-4876 regression: a guardrail in mode logging_only that implements only
+    apply_guardrail must still run against the logged request and response and
+    record guardrail_information, instead of inheriting the CustomLogger no-op."""
+
+    @pytest.mark.asyncio
+    async def test_runs_apply_guardrail_observe_only_and_records_verdict(self):
+        guardrail = _ApplyOnlyObserver()
+        messages = [{"role": "user", "content": "hello there"}]
+        kwargs, response = _logged_call(messages)
+
+        out_kwargs, out_response = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        assert guardrail.calls == [("request", ["hello there"]), ("response", ["general kenobi"])]
+        assert out_kwargs["messages"] == [{"role": "user", "content": "hello there"}]
+        assert out_response.choices[0].message.content == "general kenobi"
+        entries = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert [e["guardrail_name"] for e in entries] == ["apply-only-observer", "apply-only-observer"]
+        assert {e["guardrail_mode"] for e in entries} == {"logging_only"}
+        assert {e["guardrail_status"] for e in entries} == {"success"}
+        assert "standard_logging_guardrail_information" not in kwargs["litellm_params"]["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_block_verdict_is_recorded_without_raising(self):
+        guardrail = _ApplyOnlyObserver(block=True)
+        kwargs, response = _logged_call([{"role": "user", "content": "flagged content"}])
+
+        out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        assert guardrail.calls == [("request", ["flagged content"])]
+        entries = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert [e["guardrail_status"] for e in entries] == ["guardrail_intervened"]
+
+    @pytest.mark.asyncio
+    async def test_call_type_without_translation_is_skipped(self):
+        guardrail = _ApplyOnlyObserver()
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+
+        out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.aembedding.value)
+
+        assert guardrail.calls == []
+        assert out_kwargs["standard_logging_object"]["guardrail_information"] is None
+
+    @pytest.mark.asyncio
+    async def test_aresponses_scans_logged_messages_when_input_is_cleared(self):
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        guardrail = _ApplyOnlyObserver()
+        kwargs, _ = _logged_call([{"role": "user", "content": "hello there"}])
+        kwargs["input"] = None
+        response = ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            model="gpt-5.4-mini",
+            object="response",
+            status="completed",
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "general kenobi"}],
+                }
+            ],
+        )
+
+        out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.aresponses.value)
+
+        assert guardrail.calls == [("request", ["hello there"]), ("response", ["general kenobi"])]
+        entries = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert [e["guardrail_status"] for e in entries] == ["success", "success"]
+
+    @pytest.mark.asyncio
+    async def test_acompletion_success_path_reaches_apply_guardrail(self, monkeypatch):
+        import litellm
+
+        guardrail = _ApplyOnlyObserver()
+        guardrail.default_on = True
+        monkeypatch.setattr(litellm, "callbacks", [guardrail])
+        monkeypatch.setattr(litellm, "success_callback", [])
+        monkeypatch.setattr(litellm, "_async_success_callback", [])
+
+        await litellm.acompletion(
+            model="gpt-5.4-mini",
+            messages=[{"role": "user", "content": "hello there"}],
+            mock_response="general kenobi",
+        )
+        for _ in range(50):
+            if len(guardrail.calls) == 2:
+                break
+            await asyncio.sleep(0.1)
+
+        assert guardrail.calls == [("request", ["hello there"]), ("response", ["general kenobi"])]
