@@ -4,7 +4,6 @@
 #
 # +-------------------------------------------------------------+
 import os
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
 from fastapi import HTTPException
@@ -13,7 +12,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
-    updated_litellm_param,
 )
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -104,10 +102,9 @@ class ZscalerAIGuard(CustomGuardrail):
 
         return timeout
 
-    def update_in_memory_litellm_params(self, litellm_params: "LitellmParams | Mapping[str, object]") -> None:
+    def update_in_memory_litellm_params(self, litellm_params: "LitellmParams") -> None:
         super().update_in_memory_litellm_params(litellm_params)
-        raw_timeout: Final = updated_litellm_param(litellm_params, "timeout")
-        self.timeout = self._resolve_timeout(raw_timeout if isinstance(raw_timeout, (int, float)) else None)
+        self.timeout = self._resolve_timeout(litellm_params.timeout)
 
     @staticmethod
     def _resolve_metadata_value(request_data: dict | None, key: str) -> str | None:

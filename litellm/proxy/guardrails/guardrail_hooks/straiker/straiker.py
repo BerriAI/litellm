@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import random
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
 from urllib.parse import urlsplit
@@ -48,7 +47,6 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.guardrails import LitellmParams
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 GUARDRAIL_NAME: Final = "straiker"
@@ -329,10 +327,6 @@ class StraikerGuardrail(CustomGuardrail):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         super().__init__(**kwargs)
 
-        self.configured_modes = _configured_modes(self.event_hook)
-
-    def update_in_memory_litellm_params(self, litellm_params: LitellmParams | Mapping[str, object]) -> None:
-        super().update_in_memory_litellm_params(litellm_params)
         self.configured_modes = _configured_modes(self.event_hook)
 
     def _webhook_url(self) -> str:
