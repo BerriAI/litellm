@@ -65,6 +65,7 @@ class TrainedTierArtifact(BaseModel):
             raise ValueError("cohort statistics must contain unique cohort and tier pairs")
         return self
 
+
 _CODE_PATTERN: Final = re.compile(
     r"```|\b(def|class|function|python|javascript|typescript|sql|code)\b",
     re.IGNORECASE,
