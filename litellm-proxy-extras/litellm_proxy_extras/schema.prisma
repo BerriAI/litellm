@@ -662,6 +662,8 @@ model LiteLLM_SpendLogs {
   @@index([startTime, request_id])
   @@index([end_user])
   @@index([session_id])
+  @@index([user, startTime(sort: Desc)])
+  @@index([api_key, startTime(sort: Desc)])
 }
 
 model LiteLLM_BudgetWindowSpend {
