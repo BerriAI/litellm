@@ -3,7 +3,7 @@ import base64
 import json
 from collections.abc import Callable
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -246,18 +246,21 @@ async def test_absolute_pacing_delays_only_audio_ahead_of_wall_time():
 
 
 @pytest.mark.asyncio
-async def test_append_larger_than_four_seconds_is_rejected_without_dropping_prefix():
+async def test_append_larger_than_four_seconds_is_rejected_without_decoding():
     adapter, provider_ws, _ = await _configured_adapter(rate=16_000)
-    oversized_pcm: Final = b"\x00\x00" * (16_000 * 4 + 1)
+    max_pcm_bytes: Final = 16_000 * 2 * 4
+    oversized_audio: Final = "A" * (4 * ((max_pcm_bytes + 2) // 3) + 1)
 
-    await adapter.send(
-        json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(oversized_pcm).decode()})
-    )
+    with patch(  # test-quality-ok: proves rejection happens before an attacker-controlled allocation
+        "litellm.llms.meta.realtime.handler.base64.b64decode"
+    ) as decode:
+        await adapter.send(json.dumps({"type": "input_audio_buffer.append", "audio": oversized_audio}))
+
     error: Final = json.loads(await adapter.recv())
-
     assert error["error"]["code"] == "audio_backlog_exceeded"
     assert adapter.close_code == 1008
     assert not any(isinstance(frame, bytes) for frame in provider_ws.sent)
+    decode.assert_not_called()
     await adapter.close()
 
 
