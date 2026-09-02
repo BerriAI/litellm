@@ -23,7 +23,7 @@ def _positive_int(value: str) -> int:
 
 def parse_recording_args(argv: Sequence[str] | None = None) -> RecordingArgs:
     parser: Final = argparse.ArgumentParser()
-    parser.add_argument("--concurrency", type=_positive_int, default=1)
+    parser.add_argument("--concurrency", type=_positive_int, default=2)
     parser.add_argument("--examples", type=_positive_int, default=4)
     parser.add_argument("--fixture-dir", type=Path)
     namespace: Final = parser.parse_args(argv)

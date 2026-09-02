@@ -106,7 +106,7 @@ def _document_transport(case_input: OcrSdkInputBase) -> tuple[str, str]:
 
 
 def test_parse_args_has_no_model_selection() -> None:
-    assert parse_recording_args([]).concurrency == 1
+    assert parse_recording_args([]).concurrency == 2
     args: Final = parse_recording_args(["--examples", "2", "--concurrency", "3", "--fixture-dir", "/tmp/ocr"])
 
     assert args.examples == 2

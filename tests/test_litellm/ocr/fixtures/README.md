@@ -13,7 +13,7 @@ Run it with:
 uv run python -m tests.test_litellm.ocr.fixtures.record --examples 1000
 ```
 
-`--concurrency` defaults to 1 and caps active recording jobs across all targets. Increase it explicitly when provider
+`--concurrency` defaults to 2 and caps active recording jobs across all targets. Increase it explicitly when provider
 quotas permit. Concurrency limits do not guarantee a request-per-minute quota; HTTP 408, 429, and 5xx responses fail
 recording without being saved. Rerunning retries missing fixtures and reuses successful recordings
 
