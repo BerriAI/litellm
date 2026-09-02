@@ -8465,6 +8465,19 @@ class TestClaudeCodeSubagentSessionRouterBinding:
         assert response.model == "cheap-model"
 
     @pytest.mark.asyncio
+    async def test_subagent_fallback_does_not_reapply_the_session_router(self):
+        router = self._router()
+
+        await router.async_pre_routing_hook(model="smart-router", request_kwargs=self._request_kwargs())
+
+        response = await router.async_pre_routing_hook(
+            model="expensive-model",
+            request_kwargs=self._request_kwargs(agent_id="agent-1234", fallback_depth=1),
+        )
+
+        assert response is None
+
+    @pytest.mark.asyncio
     async def test_session_router_binding_is_scoped_to_the_authenticated_key(self):
         router = self._router()
 
