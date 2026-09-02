@@ -4,6 +4,7 @@ import json
 import os
 from collections.abc import Mapping, Sequence
 from datetime import date, datetime, timedelta, timezone
+from itertools import groupby
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -14,7 +15,7 @@ from typing import (
     Protocol,
     TypedDict,
     TypeVar,
-    cast,  # noqa: TID251  # Prisma group_by returns untyped aggregate mappings
+    cast,  # noqa: TID251  # prisma group_by returns untyped aggregate mappings
 )
 
 import fastapi
@@ -247,6 +248,24 @@ ORDER BY 1
         *(value for _, value in filter_params),
     )
     return sql_query, params
+
+
+def _sum_spend_by(
+    rows: Sequence[_SpendDailySummaryRow], column: Literal["api_key", "user", "model"]
+) -> dict[str | None, float]:
+    keys: Final = frozenset(row[column] for row in rows)
+    return {key: sum(float(row["spend"]) for row in rows if row[column] == key) for key in keys}
+
+
+def _daily_summary_item(summary_date: date, rows: Sequence[_SpendDailySummaryRow]) -> dict[str, object]:
+    api_key_spend: Final = {key: value for key, value in _sum_spend_by(rows, "api_key").items() if key is not None}
+    return {
+        **api_key_spend,
+        "startTime": summary_date,
+        "spend": sum(float(row["spend"]) for row in rows),
+        "users": _sum_spend_by(rows, "user"),
+        "models": _sum_spend_by(rows, "model"),
+    }
 
 
 async def _find_spend_logs(
@@ -2956,7 +2975,7 @@ async def view_spend_logs(
         description="When start_date and end_date are provided, summarize=true returns aggregated data by date (legacy behavior), summarize=false returns filtered individual logs",
     ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> Sequence[object] | None:
     """
     [DEPRECATED] This endpoint is not paginated and can cause performance issues.
     Please use `/spend/logs/v2` instead for paginated access to spend logs.
@@ -3039,8 +3058,6 @@ async def view_spend_logs(
                 if api_key is not None and api_key.startswith("sk-")
                 else api_key
             )
-            summary_request_id: Final[str | None] = request_id
-            summary_user_id: Final[str | None] = user_id
             if api_key is not None and isinstance(api_key, str):
                 filter_query["api_key"] = summary_api_key
             if request_id is not None and isinstance(request_id, str):
@@ -3065,63 +3082,30 @@ async def view_spend_logs(
                 start_date_iso=start_date_iso,
                 end_date_iso=end_date_iso,
                 api_key=summary_api_key,
-                request_id=summary_request_id,
-                user_id=summary_user_id,
+                request_id=request_id,
+                user_id=user_id,
             )
             sql_query, params = summary_sql_and_params
             rows: Final[Sequence[_SpendDailySummaryRow]] = await _query_raw(prisma_client, sql_query, *params)
             if len(rows) == 0:
-                empty_summary: Final[list[dict[str, object]]] = []
-                return empty_summary
+                return []
 
-            spend_by_day: Final[dict[date, float]] = {}
-            spend_by_api_key: Final[dict[date, dict[str, float]]] = {}
-            spend_by_user: Final[dict[date, dict[str | None, float]]] = {}
-            spend_by_model: Final[dict[date, dict[str, float]]] = {}
-            for record in rows:
-                summary_date = date.fromisoformat(record["day"])
-                spend = float(record["spend"])
-                if summary_date not in spend_by_day:
-                    spend_by_day[summary_date] = 0.0
-                    spend_by_api_key[summary_date] = {}
-                    spend_by_user[summary_date] = {}
-                    spend_by_model[summary_date] = {}
-                spend_by_day[summary_date] += spend
-                record_api_key = record["api_key"]
-                spend_by_api_key[summary_date][record_api_key] = (
-                    spend_by_api_key[summary_date].get(record_api_key, 0.0) + spend
-                )
-                record_user = record["user"]
-                spend_by_user[summary_date][record_user] = spend_by_user[summary_date].get(record_user, 0.0) + spend
-                record_model = record["model"]
-                spend_by_model[summary_date][record_model] = spend_by_model[summary_date].get(record_model, 0.0) + spend
-
-            return_list: Final[list[dict[str, object]]] = [
-                {
-                    **spend_by_api_key[summary_date],
-                    "startTime": summary_date,
-                    "spend": spend_by_day[summary_date],
-                    "users": spend_by_user[summary_date],
-                    "models": spend_by_model[summary_date],
-                }
-                for summary_date in sorted(spend_by_day)
-            ]
-            final_date: Final[date] = max(spend_by_day)
+            summary_items: Final = tuple(
+                _daily_summary_item(date.fromisoformat(day), tuple(day_rows))
+                for day, day_rows in groupby(rows, key=lambda row: row["day"])
+            )
+            final_date: Final = date.fromisoformat(rows[-1]["day"])
             end_date_date: Final = end_date_obj.date()
-            if final_date < end_date_date:
-                return_list.extend(
-                    {
-                        "startTime": current_date,
-                        "spend": 0,
-                        "users": {},
-                        "models": {},
-                    }
-                    for current_date in (
-                        final_date + timedelta(days=offset)
-                        for offset in range(1, (end_date_date - final_date).days + 1)
-                    )
-                )
-            return return_list
+            padding: Final[tuple[dict[str, object], ...]] = tuple(
+                {
+                    "startTime": final_date + timedelta(days=offset),
+                    "spend": 0,
+                    "users": {},
+                    "models": {},
+                }
+                for offset in range(1, (end_date_date - final_date).days + 1)
+            )
+            return [*summary_items, *padding]
 
         else:
             scoped_filter: Final[dict[str, str]] = {}
