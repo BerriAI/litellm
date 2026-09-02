@@ -8505,6 +8505,56 @@ class TestClaudeCodeSubagentSessionRouterBinding:
         redis_cache.async_delete_cache.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_redis_read_failure_does_not_reject_a_subagent_request(self):
+        from litellm.caching.caching import RedisCache
+
+        router = self._router()
+        request_kwargs = self._request_kwargs(agent_id="agent-1234")
+        cache_key = router._claude_code_session_router_cache_key(request_kwargs)
+        assert cache_key is not None
+        await router._claude_code_session_router_cache.in_memory_cache.async_set_cache(
+            cache_key,
+            "smart-router",
+        )
+        redis_cache = MagicMock(spec=RedisCache)
+        redis_cache.async_get_cache = AsyncMock(side_effect=Exception("Redis circuit breaker is open"))
+        router._update_redis_cache(cache=redis_cache)
+
+        response = await router.async_pre_routing_hook(
+            model="expensive-model",
+            request_kwargs=request_kwargs,
+        )
+
+        assert response is None
+        assert "model_group" not in request_kwargs["metadata"]
+        redis_cache.async_get_cache.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_redis_write_failures_do_not_reject_main_or_subagent_requests(self):
+        from litellm.caching.caching import RedisCache
+
+        router = self._router()
+        redis_cache = MagicMock(spec=RedisCache)
+        redis_cache.async_get_cache = AsyncMock(return_value="smart-router")
+        redis_cache.async_set_cache = AsyncMock(side_effect=Exception("redis unavailable"))
+        router._update_redis_cache(cache=redis_cache)
+
+        main_response = await router.async_pre_routing_hook(
+            model="smart-router",
+            request_kwargs=self._request_kwargs(),
+        )
+        subagent_response = await router.async_pre_routing_hook(
+            model="expensive-model",
+            request_kwargs=self._request_kwargs(agent_id="agent-1234"),
+        )
+
+        assert main_response is not None
+        assert main_response.model == "cheap-model"
+        assert subagent_response is not None
+        assert subagent_response.model == "cheap-model"
+        assert redis_cache.async_set_cache.await_count == 2
+
+    @pytest.mark.asyncio
     async def test_subagents_follow_the_main_threads_latest_router_across_workers(self):
         from types import SimpleNamespace
 

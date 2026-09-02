@@ -12632,9 +12632,16 @@ class Router:
 
     async def _get_claude_code_session_router_binding(self, cache_key: str) -> object:
         session_cache: Final = self._claude_code_session_router_cache
-        if session_cache.redis_cache is None:
-            return await session_cache.async_get_cache(key=cache_key)
-        return await session_cache.redis_cache.async_get_cache(key=cache_key)
+        try:
+            if session_cache.redis_cache is None:
+                return await session_cache.async_get_cache(key=cache_key)
+            return await session_cache.redis_cache.async_get_cache(key=cache_key)
+        except Exception as e:  # noqa: BLE001  # an optional binding must not make routing depend on Redis
+            verbose_router_logger.warning(
+                "Failed to read Claude Code session router binding; using the requested model: %s",
+                e,
+            )
+            return None
 
     async def _resolve_claude_code_session_router(
         self,
