@@ -7851,15 +7851,15 @@ async def test_token_exchange_refresh_passes_presented_refresh_ownership():
     enforce = AsyncMock()
 
     with (
-        patch(
+        patch(  # test-quality-ok: no injection seam exists for the exchange's HTTP and identity collaborators
             "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
             return_value=client,
         ),
-        patch(
+        patch(  # test-quality-ok: no injection seam exists for request identity extraction
             "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_user_id_from_request",
             new=AsyncMock(return_value="user-a"),
         ),
-        patch(
+        patch(  # test-quality-ok: captures the ownership value at the exchange boundary
             "litellm.proxy._experimental.mcp_server.discoverable_endpoints.enforce_oauth_identity_binding",
             new=enforce,
         ),
@@ -7915,20 +7915,20 @@ async def test_token_exchange_authorization_code_passes_no_refresh_ownership():
     enforce = AsyncMock()
 
     with (
-        patch(
+        patch(  # test-quality-ok: no injection seam exists for the exchange's HTTP and identity collaborators
             "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
             return_value=client,
         ),
-        patch(
+        patch(  # test-quality-ok: no injection seam exists for request identity extraction
             "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_user_id_from_request",
             new=AsyncMock(return_value="user-a"),
         ),
-        patch(
+        patch(  # test-quality-ok: captures the ownership value at the exchange boundary
             "litellm.proxy._experimental.mcp_server.discoverable_endpoints.enforce_oauth_identity_binding",
             new=enforce,
         ),
     ):
-        await exchange_token_with_server(
+        result = await exchange_token_with_server(
             request=request,
             mcp_server=server,
             grant_type="authorization_code",
@@ -7939,6 +7939,8 @@ async def test_token_exchange_authorization_code_passes_no_refresh_ownership():
             code_verifier=None,
         )
 
+    assert result.status_code == 200
+    assert json.loads(result.body)["access_token"] == "at"
     assert enforce.await_args.kwargs["refresh_ownership"] is None
 
 
