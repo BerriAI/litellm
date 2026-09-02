@@ -9,14 +9,25 @@ from pydantic import BaseModel, ConfigDict
 
 from .config import (
     CapabilityBoundary,
+    CapabilityCandidateScore,
     CapabilityClassifierVerdict,
+    CapabilityRouterCandidate,
     CapabilityRouterConfig,
     CapabilitySelectionReason,
+    indexed_rules,
 )
 
 BOUNDARY_THRESHOLD_STEPS: Final[Mapping[CapabilityBoundary, int]] = MappingProxyType(
     {"supported": 0, "uncertain": 1, "unmatched": 1, "unsupported": 2}
 )
+
+
+def effective_boundary(candidate: CapabilityRouterCandidate, score: CapabilityCandidateScore) -> CapabilityBoundary:
+    """With a rule card, the matched rule's operator-declared boundary overrides the judge's opinion."""
+    if not candidate.rules:
+        return score.capability_boundary
+    boundaries: Final = MappingProxyType({rule_id: rule.boundary for rule_id, rule in indexed_rules(candidate)})
+    return boundaries.get(score.primary_rule, "unmatched")
 
 
 class CapabilityCandidateAssessment(BaseModel):
@@ -56,26 +67,28 @@ def select_capability_model(
     estimated_costs: Mapping[str, float | None],
 ) -> CapabilityRoutingDecision:
     """Choose the cheapest candidate whose p_solve clears its boundary-stepped threshold."""
-    configured_models: Final = tuple(candidate.model for candidate in config.candidates)
+    configured: Final = MappingProxyType({candidate.model: candidate for candidate in config.candidates})
     scores: Final = MappingProxyType({candidate.model: candidate for candidate in verdict.candidates})
-    if frozenset(scores) != frozenset(configured_models):
+    if frozenset(scores) != frozenset(configured):
         return fallback_decision(config, "invalid_classifier_verdict")
 
+    boundaries: Final = MappingProxyType(
+        {model: effective_boundary(configured[model], scores[model]) for model in configured}
+    )
     assessments: Final = tuple(
         CapabilityCandidateAssessment(
             model=model,
             p_solve=scores[model].p_solve,
             reason=scores[model].reason,
-            capability_boundary=scores[model].capability_boundary,
+            capability_boundary=boundaries[model],
             estimated_cost=estimated_costs.get(model),
             qualified=scores[model].p_solve
             > round(
-                config.probability_threshold
-                + BOUNDARY_THRESHOLD_STEPS[scores[model].capability_boundary] * config.threshold_step,
+                config.probability_threshold + BOUNDARY_THRESHOLD_STEPS[boundaries[model]] * config.threshold_step,
                 9,
             ),
         )
-        for model in configured_models
+        for model in configured
     )
     qualified: Final = tuple(candidate for candidate in assessments if candidate.qualified)
     if not qualified:
@@ -83,7 +96,7 @@ def select_capability_model(
     if any(candidate.estimated_cost is None for candidate in qualified):
         return fallback_decision(config, "missing_candidate_price", assessments)
 
-    order: Final = MappingProxyType({model: index for index, model in enumerate(configured_models)})
+    order: Final = MappingProxyType({model: index for index, model in enumerate(configured)})
     selected: Final = min(
         qualified,
         key=lambda candidate: (

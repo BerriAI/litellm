@@ -21,11 +21,29 @@ def _provider_model(value: str, field_name: str) -> str:
     return normalized
 
 
+CapabilityRuleBoundary: TypeAlias = Literal["supported", "uncertain", "unsupported"]
+
+
+class CapabilityRule(BaseModel):
+    """One operator-declared condition and the coverage it implies when it matches the task."""
+
+    boundary: CapabilityRuleBoundary
+    rule: str
+
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator("rule")
+    @classmethod
+    def validate_rule(cls, value: str) -> str:
+        return _nonblank(value, "capability rule")
+
+
 class CapabilityRouterCandidate(BaseModel):
     """A model group and the operator's description of when it succeeds."""
 
     model: str
     description: str
+    rules: tuple[CapabilityRule, ...] = ()
 
     model_config = ConfigDict(extra="forbid")
 
@@ -38,6 +56,11 @@ class CapabilityRouterCandidate(BaseModel):
     @classmethod
     def validate_description(cls, value: str) -> str:
         return _nonblank(value, "candidate description")
+
+
+def indexed_rules(candidate: CapabilityRouterCandidate) -> tuple[tuple[str, CapabilityRule], ...]:
+    """Pair each rule with the opaque id the prompt shows and the policy resolves."""
+    return tuple((f"R{index + 1}", rule) for index, rule in enumerate(candidate.rules))
 
 
 class CapabilityClassifierConfig(BaseModel):
@@ -99,12 +122,13 @@ class CapabilityCandidateScore(BaseModel):
 
     model: str
     reason: str
+    primary_rule: str = "none"
     capability_boundary: CapabilityBoundary
     p_solve: float = Field(ge=0.0, le=1.0)
 
     model_config = ConfigDict(extra="forbid")
 
-    @field_validator("model", "reason")
+    @field_validator("model", "reason", "primary_rule")
     @classmethod
     def validate_nonblank(cls, value: str, info) -> str:
         return _nonblank(value, info.field_name)

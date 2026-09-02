@@ -217,3 +217,92 @@ def test_response_schema_orders_reasoning_before_probability() -> None:
     assert fields.index("capability_boundary") < fields.index("p_solve")
     assert "capability_boundary" in item["required"]
     assert item["properties"]["capability_boundary"]["enum"] == ["supported", "uncertain", "unsupported", "unmatched"]
+
+
+def rule_config() -> dict:
+    with_rules = config()
+    with_rules["candidates"] = [
+        {
+            "model": "small",
+            "description": "Reliable for short factual answers",
+            "rules": [
+                {"boundary": "supported", "rule": "The answer is a short widely known fact"},
+                {
+                    "boundary": "unsupported",
+                    "rule": "Correct output must be fluent text in a language other than English",
+                },
+            ],
+        },
+        {"model": "frontier", "description": "Reliable for ambiguous multi-step tasks"},
+    ]
+    return with_rules
+
+
+def test_matched_rule_boundary_overrides_the_judges_opinion() -> None:
+    parsed = CapabilityRouterConfig.model_validate(rule_config())
+    verdict = CapabilityClassifierVerdict.model_validate(
+        {
+            "candidates": [
+                {
+                    "model": "small",
+                    "reason": "must write German prose",
+                    "primary_rule": "R2",
+                    "capability_boundary": "supported",
+                    "p_solve": 0.85,
+                },
+                {"model": "frontier", "capability_boundary": "supported", "p_solve": 0.85, "reason": "covered"},
+            ]
+        }
+    )
+
+    decision = select_capability_model(parsed, verdict, {"small": 0.01, "frontier": 0.05})
+
+    assert decision.selected_model == "frontier"
+    small = next(candidate for candidate in decision.candidates if candidate.model == "small")
+    assert small.capability_boundary == "unsupported"
+    assert small.qualified is False
+
+
+def test_unlisted_rule_id_counts_as_unmatched_and_no_rules_keeps_judge_boundary() -> None:
+    parsed = CapabilityRouterConfig.model_validate(rule_config())
+    verdict = CapabilityClassifierVerdict.model_validate(
+        {
+            "candidates": [
+                {
+                    "model": "small",
+                    "reason": "no rule fits",
+                    "primary_rule": "none",
+                    "capability_boundary": "supported",
+                    "p_solve": 0.78,
+                },
+                {
+                    "model": "frontier",
+                    "reason": "judge boundary rules here",
+                    "primary_rule": "R9",
+                    "capability_boundary": "uncertain",
+                    "p_solve": 0.85,
+                },
+            ]
+        }
+    )
+
+    decision = select_capability_model(parsed, verdict, {"small": 0.01, "frontier": 0.05})
+
+    small, frontier = decision.candidates
+    assert small.capability_boundary == "unmatched"
+    assert small.qualified is False
+    assert frontier.capability_boundary == "uncertain"
+    assert frontier.qualified is True
+
+
+def test_prompt_renders_rule_card_without_leaking_boundaries() -> None:
+    from litellm.router_strategy.capability_router.prompts import build_classifier_prompt
+
+    prompt = build_classifier_prompt(CapabilityRouterConfig.model_validate(rule_config()))
+
+    assert "R1: The answer is a short widely known fact" in prompt
+    assert "R2: Correct output must be fluent text in a language other than English" in prompt
+    assert "R2 [unsupported]" not in prompt and "R2: unsupported" not in prompt
+    schema = build_classifier_response_schema(CapabilityRouterConfig.model_validate(rule_config()))
+    fields = list(schema["properties"]["candidates"]["items"]["properties"])
+    assert fields.index("primary_rule") < fields.index("capability_boundary") < fields.index("p_solve")
