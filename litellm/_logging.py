@@ -17,7 +17,11 @@ from litellm.constants import (
 from litellm.litellm_core_utils.env_utils import get_env_int
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.litellm_core_utils.secret_redaction import redact_string, redact_structured_value
+from litellm.litellm_core_utils.secret_redaction import (
+    redact_internal_details,
+    redact_string,
+    redact_structured_value,
+)
 
 set_verbose = False
 
@@ -87,6 +91,19 @@ def redact_secrets(value: str) -> str:
     if not _ENABLE_SECRET_REDACTION:
         return value
     return _redact_string(value)
+
+
+def redact_internal_details_from_client_message(value: str) -> str:
+    """Public API: redact secrets, filesystem paths, and internal hostnames from
+    a string about to leave the process in an HTTP response.
+
+    Client-facing use only — never call this from the logging pipeline, an
+    operator's own server logs must keep this detail. See redact_secrets() for
+    the credential-only version already used there.
+    """
+    if not _ENABLE_SECRET_REDACTION:
+        return value
+    return redact_internal_details(value)
 
 
 def _substituted_color_message(record: logging.LogRecord) -> str | None:

@@ -56,6 +56,7 @@ from litellm.constants import (
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
+    GENERIC_INTERNAL_SERVER_ERROR_MESSAGE,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
     LITELLM_UI_ALLOW_HEADERS,
@@ -1751,7 +1752,7 @@ async def otel_unhandled_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={
             "error": {
-                "message": "Internal server error",
+                "message": GENERIC_INTERNAL_SERVER_ERROR_MESSAGE,
                 "type": "internal_server_error",
             }
         },
@@ -18316,7 +18317,7 @@ async def toolset_mcp_route(toolset_name: str, request: Request):
         raise e
     except Exception as e:
         verbose_proxy_logger.exception("Error handling toolset MCP route for %s: %s", toolset_name, str(e))
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=GENERIC_INTERNAL_SERVER_ERROR_MESSAGE)
 
 
 async def _mcp_forward_as_path(path_segment: str, request: Request):
@@ -18481,4 +18482,4 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
         raise e
     except Exception as e:
         verbose_proxy_logger.exception("Error handling dynamic MCP route for %s: %s", mcp_server_name, str(e))
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail=GENERIC_INTERNAL_SERVER_ERROR_MESSAGE)

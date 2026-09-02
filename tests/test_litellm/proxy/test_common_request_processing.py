@@ -3013,7 +3013,9 @@ class TestHandleLLMApiExceptionDictDetail:
         assert "NotFoundError" in proxy_exc.message
 
     async def test_exception_with_status_code_propagates(self):
-        """Exception with a statically-set status_code should propagate it."""
+        """Exception with a statically-set status_code should propagate it,
+        including its message: a real provider error is safe and useful to
+        forward as-is."""
         from litellm.llms.vertex_ai.common_utils import VertexAIError
 
         exc = VertexAIError(
@@ -3022,12 +3024,36 @@ class TestHandleLLMApiExceptionDictDetail:
         )
         proxy_exc = await self._invoke(exc)
         assert proxy_exc.code == "429"
+        assert proxy_exc.message == "Rate limit exceeded"
 
     async def test_exception_without_status_code_defaults_to_500(self):
-        """Exception with no status_code attribute defaults to 500."""
+        """Exception with no status_code attribute defaults to 500. Its message
+        still reaches the client unredacted when it carries no secret pattern:
+        many routes deliberately raise a plain exception (ValueError, etc.) as
+        an informative validation message, e.g. the OCR endpoint's rejection of
+        provider-native file IDs, and that convention must keep working."""
         exc = ValueError("Something broke")
         proxy_exc = await self._invoke(exc)
         assert proxy_exc.code == "500"
+        assert proxy_exc.message == "Something broke"
+
+    async def test_unclassified_exception_redacts_internal_details_from_client_message(self):
+        """A bug in proxy-layer code (a custom callback, a hook) can raise any
+        exception, and its message may embed a credential, a filesystem path,
+        or an internal hostname. Only the client-facing message is redacted,
+        since an unclassified exception never went through provider-error
+        redaction. Regression for LIT-6747."""
+        exc = RuntimeError(
+            "Failed to connect to postgresql://litellm_internal:S3cr3tPGPass@10.20.30.40:5432/litellm_prod "
+            "(config file /etc/litellm/secrets/db.yaml)"
+        )
+        proxy_exc = await self._invoke(exc)
+        assert proxy_exc.code == "500"
+        assert "S3cr3tPGPass" not in proxy_exc.message
+        assert "litellm_internal" not in proxy_exc.message
+        assert "10.20.30.40" not in proxy_exc.message
+        assert "/etc/litellm/secrets/db.yaml" not in proxy_exc.message
+        assert "REDACTED" in proxy_exc.message
 
     async def test_already_normalized_proxy_exception_is_honored(self):
         """A ProxyException raised mid-request (e.g. a guardrail block) is already
@@ -3243,6 +3269,43 @@ class TestStreamCloseOnDisconnect:
         await gen.aclose()
 
         assert upstream.aclosed
+
+    async def test_async_streaming_data_generator_redacts_internal_details_on_error(
+        self,
+    ):
+        """An exception raised mid-stream must not hand its raw text (or a
+        traceback) to serialize_error: both may embed credentials, filesystem
+        paths, or internal hostnames. Regression for LIT-6747."""
+
+        class FailingUpstream:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise RuntimeError(
+                    "Failed to connect to postgresql://litellm_internal:S3cr3tPGPass@10.20.30.40:5432/litellm_prod "
+                    "(config file /etc/litellm/secrets/db.yaml)"
+                )
+
+        ProxyLogging._callback_capabilities_cache.clear()
+        captured: list = []
+        gen = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=FailingUpstream(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            request_data={"model": "mock-model"},
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=MagicMock()),
+            serialize_chunk=lambda c: "data: x\n\n",
+            serialize_error=lambda e: captured.append(e) or "data: error\n\n",
+        )
+
+        await gen.__anext__()
+
+        assert len(captured) == 1
+        message = captured[0].message
+        assert "S3cr3tPGPass" not in message
+        assert "10.20.30.40" not in message
+        assert "/etc/litellm/secrets/db.yaml" not in message
+        assert "Traceback (most recent call last)" not in message
 
     @staticmethod
     def _request_that_disconnects() -> Request:

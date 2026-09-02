@@ -2,6 +2,7 @@ import logging
 import logging.config
 import sys
 import time
+import traceback
 from collections.abc import Callable
 from io import StringIO
 from typing import Final
@@ -13,11 +14,12 @@ from litellm._logging import (
     JsonFormatter,
     _redact_string,
     _secret_filter,
+    redact_internal_details_from_client_message,
     verbose_logger,
     verbose_proxy_logger,
     verbose_router_logger,
 )
-from litellm.litellm_core_utils.secret_redaction import redact_string
+from litellm.litellm_core_utils.secret_redaction import redact_internal_details, redact_string
 
 SECRET = "sk-proj-abc123def456ghi789jklmnopqrst"
 
@@ -657,3 +659,69 @@ def test_json_formatter_redacts_non_string_extra_values(extra):
     assert output.strip(), "no record captured"
     assert SECRET not in output, f"non-string extra leaked a secret: {output}"
     assert "REDACTED" in output
+
+
+@pytest.mark.parametrize(
+    "text,leaked",
+    (
+        ("config file /etc/litellm/secrets/db.yaml", "/etc/litellm/secrets/db.yaml"),
+        ("home dir /Users/admin/.litellm/master_key.txt", "/Users/admin/.litellm/master_key.txt"),
+        ("cache at /var/cache/litellm/tokens.db", "/var/cache/litellm/tokens.db"),
+        ("path C:\\Users\\admin\\secrets.env", "C:\\Users\\admin\\secrets.env"),
+        ("connecting to host 10.20.30.40", "10.20.30.40"),
+        ("connecting to host 192.168.1.5", "192.168.1.5"),
+        ("connecting to host 172.16.0.9", "172.16.0.9"),
+        ("connecting to host 127.0.0.1", "127.0.0.1"),
+        ("connecting to db-primary.internal", "db-primary.internal"),
+        ("connecting to redis.corp", "redis.corp"),
+    ),
+)
+def test_redact_internal_details_catches_paths_and_hostnames(text, leaked):
+    result = redact_internal_details(text)
+    assert leaked not in result, f"{leaked!r} was not redacted"
+    assert "REDACTED" in result
+
+
+def test_redact_internal_details_leaves_public_hostnames_and_routes_alone():
+    """Public provider hostnames and API routes must survive unchanged: they
+    are not internal details, and litellm's own error messages rely on them
+    staying legible (e.g. `/v1/models`, `api.openai.com`)."""
+    safe_strings = (
+        "call https://api.openai.com/v1/chat/completions",
+        "/chat/completions: Invalid model name passed in model=gpt-9",
+        "Call `/v1/models` to view available models for your key",
+        "reducto:// file IDs are not accepted through the proxy OCR API",
+    )
+    for text in safe_strings:
+        assert redact_internal_details(text) == text
+
+
+def test_redact_internal_details_layers_on_top_of_credential_redaction():
+    text = "postgresql://litellm_internal:S3cr3tPGPass@10.20.30.40:5432/litellm_prod"
+    result = redact_internal_details(text)
+    assert "S3cr3tPGPass" not in result
+    assert "10.20.30.40" not in result
+
+
+def test_redact_internal_details_drops_embedded_traceback():
+    """litellm.exception_type() embeds a full traceback in some exception
+    messages as a debugging aid for direct SDK callers (see
+    test_exception_mapping_utils.py); that traceback must never reach an
+    HTTP client. Regression for LIT-6747."""
+    try:
+        raise RuntimeError("socket hung up")
+    except RuntimeError:
+        raw_tb = traceback.format_exc()
+    message = f"litellm.APIConnectionError: MinimaxException - socket hung up\n{raw_tb}"
+
+    result = redact_internal_details(message)
+
+    assert result == "litellm.APIConnectionError: MinimaxException - socket hung up"
+    assert "Traceback (most recent call last)" not in result
+    assert __file__.split("/")[-1] not in result
+
+
+def test_redact_internal_details_from_client_message_respects_disable_flag():
+    with patch("litellm._logging._ENABLE_SECRET_REDACTION", False):  # test-quality-ok: the opt-out flag is the SUT
+        text = "config file /etc/litellm/secrets/db.yaml"
+        assert redact_internal_details_from_client_message(text) == text
