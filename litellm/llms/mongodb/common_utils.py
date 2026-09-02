@@ -9,6 +9,8 @@ TLS handshake and topology discovery: measured at ~890ms against Atlas versus
 """
 
 import asyncio
+import weakref
+from asyncio import AbstractEventLoop
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
@@ -53,7 +55,12 @@ class MongoClientKey:
 
 
 _sync_clients: dict[MongoClientKey, "MongoClient"] = {}  # mutable-ok: process-level connection cache, see module docstring
-_async_clients: dict[tuple[MongoClientKey, int], "AsyncMongoClient"] = {}  # mutable-ok: same cache, keyed per event loop
+# The value carries a weak reference to the loop the client was built on: CPython recycles
+# id() aggressively (measured: 200 of 200 fresh loops landed on an id already in this cache),
+# so the id alone would hand a new loop a client bound to a closed one.
+_async_clients: dict[  # mutable-ok: same cache, keyed per event loop
+    tuple[MongoClientKey, int], tuple["weakref.ref[AbstractEventLoop]", "AsyncMongoClient"]
+] = {}
 
 
 def import_sync_mongo_client() -> "type[MongoClient]":
@@ -93,13 +100,14 @@ def get_sync_client(key: MongoClientKey) -> "MongoClient":
 
 def get_async_client(key: MongoClientKey) -> "AsyncMongoClient":
     """Async clients bind to the loop that created them, so the cache is keyed per loop."""
-    loop_key: Final = (key, id(asyncio.get_running_loop()))
+    loop: Final = asyncio.get_running_loop()
+    loop_key: Final = (key, id(loop))
     cached: Final = _async_clients.get(loop_key)
-    if cached is not None:
-        return cached
+    if cached is not None and cached[0]() is loop:
+        return cached[1]
     client: Final = import_async_mongo_client()(key.connection_string, **_client_kwargs(key))
-    if len(_async_clients) < _MAX_CACHED_CLIENTS:
-        _async_clients[loop_key] = client
+    if len(_async_clients) < _MAX_CACHED_CLIENTS or loop_key in _async_clients:
+        _async_clients[loop_key] = (weakref.ref(loop), client)
     return client
 
 

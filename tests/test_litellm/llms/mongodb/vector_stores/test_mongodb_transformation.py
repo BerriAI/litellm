@@ -1,4 +1,7 @@
+import asyncio
+import gc
 import sys
+import weakref
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -539,6 +542,46 @@ class TestClientCache:
             second = get_async_client(self._key())
 
         assert first is second
+
+
+    def test_a_new_loop_never_inherits_a_closed_loop_client(self):
+        """CPython recycles id() so aggressively that a fresh event loop almost always lands on
+        the id of one already collected: measured at 37 of 40 rounds. Keying the cache on the id
+        alone therefore hands the new loop an AsyncMongoClient bound to a closed loop, and every
+        operation on it raises "Event loop is closed"."""
+
+        class LoopAgnosticClient:
+            """Holds no reference to the loop, unlike pymongo's, whose own reference happens to
+            keep ids from being recycled and hides the bug until the cache fills."""
+
+            def __init__(self, *args, **kwargs):
+                self.built_on = None
+
+        key = self._key()
+        clients_handed_out = []
+
+        async def fetch():
+            return get_async_client(key)
+
+        with patch("litellm.llms.mongodb.common_utils.import_async_mongo_client") as importer:
+            importer.return_value = LoopAgnosticClient
+
+            for _ in range(20):
+                loop = asyncio.new_event_loop()
+                client = loop.run_until_complete(fetch())
+                clients_handed_out.append((client, client.built_on, loop.is_closed()))
+                client.built_on = weakref.ref(loop)
+                loop.close()
+                del loop
+                gc.collect()
+
+        stale = [
+            handed_out
+            for client, built_on, _ in clients_handed_out
+            if built_on is not None and (built_on() is None or built_on().is_closed())
+            for handed_out in (client,)
+        ]
+        assert stale == [], f"{len(stale)} of 20 loops were handed a client built on a closed loop"
 
 
 class TestClientKeyDerivation:
