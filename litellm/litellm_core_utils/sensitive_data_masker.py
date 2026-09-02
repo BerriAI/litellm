@@ -6,33 +6,41 @@ from pydantic import BaseModel
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
 
 
+_DEFAULT_SENSITIVE_PATTERNS: Final = frozenset(
+    {
+        "password",
+        "secret",
+        "key",
+        "token",
+        "auth",
+        "authorization",
+        "credential",
+        # Plural form: Vertex uses ``vertex_credentials``; segment-exact
+        # matching otherwise misses it because "credential" != "credentials".
+        "credentials",
+        "access",
+        "private",
+        "certificate",
+        "fingerprint",
+        "tenancy",
+    }
+)
+
+
 class SensitiveDataMasker:
     def __init__(
         self,
         sensitive_patterns: set[str] | None = None,
+        extra_sensitive_patterns: set[str] | None = None,
         non_sensitive_overrides: set[str] | None = None,
         visible_prefix: int = 4,
         visible_suffix: int = 4,
         mask_char: str = "*",
         mask_short_values: bool = True,
     ):
-        self.sensitive_patterns = sensitive_patterns or {
-            "password",
-            "secret",
-            "key",
-            "token",
-            "auth",
-            "authorization",
-            "credential",
-            # Plural form: Vertex uses ``vertex_credentials``; segment-exact
-            # matching otherwise misses it because "credential" != "credentials".
-            "credentials",
-            "access",
-            "private",
-            "certificate",
-            "fingerprint",
-            "tenancy",
-        }
+        self.sensitive_patterns = (sensitive_patterns or _DEFAULT_SENSITIVE_PATTERNS) | (
+            extra_sensitive_patterns or frozenset()
+        )
         # If any key segment matches one of these, the key is not considered sensitive
         # even if it also matches a sensitive pattern. For example, "input_cost_per_token"
         # contains "token" but "cost" overrides that — it's a pricing field, not a secret.

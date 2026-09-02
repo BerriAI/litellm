@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2699,6 +2700,41 @@ class TestRedactSensitiveLitellmParams:
         out = _redact_sensitive_litellm_params(params)
         for k, v in params.items():
             assert out[k] == v, f"{k} should be preserved verbatim"
+
+    def test_redacts_wire_protocol_connection_strings(self):
+        """
+        A MongoDB vector store's whole credential is its connection string:
+        ``mongodb+srv://<user>:<password>@<cluster>`` embeds the database
+        password, and none of the default api_key/secret/token patterns match
+        the key name, so an unextended masker returns it verbatim to every
+        caller of /vector_store/list and /vector_store/info.
+        """
+        from litellm.constants import REDACTED_BY_LITELM_STRING
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        password = "hunter2-not-for-callers"
+        params = {
+            "mongodb_connection_string": f"mongodb+srv://dbuser:{password}@cluster0.mongodb.net",
+            "mongodb_database": "sample_mflix",
+            "mongodb_collection": "embedded_movies",
+            "mongodb_embedding_field": "plot_embedding",
+            "mongodb_text_field": "plot",
+            "litellm_embedding_model": "openai/text-embedding-ada-002",
+        }
+        out = _redact_sensitive_litellm_params(params)
+
+        assert out["mongodb_connection_string"] == REDACTED_BY_LITELM_STRING
+        assert password not in json.dumps(out)
+        for k in (
+            "mongodb_database",
+            "mongodb_collection",
+            "mongodb_embedding_field",
+            "mongodb_text_field",
+            "litellm_embedding_model",
+        ):
+            assert out[k] == params[k], f"{k} is not a credential and must survive redaction"
 
     def test_handles_none_and_empty(self):
         from litellm.proxy.vector_store_endpoints.management_endpoints import (
