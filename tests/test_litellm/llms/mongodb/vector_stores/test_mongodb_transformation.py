@@ -983,3 +983,61 @@ class TestUnrecognisedParameters:
 
         with pytest.raises(BadRequestError, match="mongodb_collectoin"):
             await _asearch(config, litellm_params={"mongodb_collectoin": "embedded_movies"})
+
+
+class TestClientConstructionFailures:
+    """Building the client parses the URI and, for mongodb+srv://, performs a DNS SRV lookup, so it
+    fails on exactly the inputs a user is most likely to get wrong. Constructing it outside the
+    translation boundary let those escape as raw pymongo errors, which litellm.exception_type then
+    wrapped into a 500 with a traceback in the body."""
+
+    def _config_that_fails_to_connect(self, error):
+        def factory(_key):
+            raise error
+
+        return MongoDBVectorStoreConfig(
+            embedding_fn=FakeEmbeddingFn([0.1, 0.2, 0.3]), sync_client_factory=factory
+        )
+
+    def _async_config_that_fails_to_connect(self, error):
+        def factory(_key):
+            raise error
+
+        return MongoDBVectorStoreConfig(
+            aembedding_fn=FakeAsyncEmbeddingFn([0.1, 0.2, 0.3]), async_client_factory=factory
+        )
+
+    def test_a_malformed_uri_is_a_bad_request_not_a_500(self):
+        from pymongo.errors import InvalidURI
+
+        config = self._config_that_fails_to_connect(InvalidURI("Invalid URI scheme"))
+
+        with pytest.raises(BadRequestError, match="not a usable MongoDB connection string"):
+            _search(config)
+
+    def test_an_unresolvable_cluster_name_says_so(self):
+        from pymongo.errors import ConfigurationError
+
+        config = self._config_that_fails_to_connect(ConfigurationError("The DNS query name does not exist"))
+
+        with pytest.raises(BadRequestError, match="does not exist in DNS"):
+            _search(config)
+
+    def test_a_dns_lookup_that_ran_out_of_time_is_a_timeout(self):
+        from pymongo.errors import ConfigurationError
+
+        config = self._config_that_fails_to_connect(
+            ConfigurationError("The resolution lifetime expired after 0.291 seconds")
+        )
+
+        with pytest.raises(Timeout, match="did not finish in time"):
+            _search(config)
+
+    @pytest.mark.asyncio
+    async def test_the_async_path_translates_them_too(self):
+        from pymongo.errors import InvalidURI
+
+        config = self._async_config_that_fails_to_connect(InvalidURI("Invalid URI scheme"))
+
+        with pytest.raises(BadRequestError, match="not a usable MongoDB connection string"):
+            await _asearch(config)
