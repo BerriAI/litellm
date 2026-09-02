@@ -14,6 +14,7 @@ from .commands.autoroute.commands import autoroute_group
 from .commands.chat import chat
 from .commands.config import config_commands, get_config_value, hidden_command_names
 from .commands.credentials import credentials
+from .commands.debug import debug
 from .commands.encryption import encryption
 from .commands.http import http
 from .commands.keys import keys
@@ -143,6 +144,8 @@ cli.add_command(encryption)
 cli.add_command(chat)
 # Add the http command group
 cli.add_command(http)
+# Add the debug command group (session debug reports for coding agents)
+cli.add_command(debug)
 # Add the keys command group
 cli.add_command(keys)
 # Add the teams command group
