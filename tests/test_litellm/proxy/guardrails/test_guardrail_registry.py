@@ -566,7 +566,14 @@ def test_update_in_memory_guardrail_reaches_presidio_siblings_and_keeps_their_st
     try:
         handler.initialize_guardrail(_presidio_db_guardrail({"EMAIL_ADDRESS": "MASK", "IP_ADDRESS": "MASK"}))
         tracked = _presidio_callbacks_in(litellm.callbacks)
-        roles_before = [(callback.apply_to_output, callback.event_hook) for callback in tracked]
+        roles_before = [
+            (callback.apply_to_output, callback.output_parse_pii, callback.event_hook) for callback in tracked
+        ]
+        assert roles_before == [
+            (False, True, [GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call]),
+            (False, True, GuardrailEventHooks.post_call),
+            (True, False, GuardrailEventHooks.post_call),
+        ]
 
         updated = Guardrail(
             guardrail_id=PRESIDIO_SIBLINGS_GID,
@@ -585,7 +592,9 @@ def test_update_in_memory_guardrail_reaches_presidio_siblings_and_keeps_their_st
         handler.update_in_memory_guardrail(guardrail_id=PRESIDIO_SIBLINGS_GID, guardrail=updated)
 
         assert [callback.pii_entities_config for callback in tracked] == [{"EMAIL_ADDRESS": "MASK"}] * 3
-        assert [(callback.apply_to_output, callback.event_hook) for callback in tracked] == roles_before
+        assert [
+            (callback.apply_to_output, callback.output_parse_pii, callback.event_hook) for callback in tracked
+        ] == roles_before
         assert _presidio_callbacks_in(litellm.callbacks) == tracked
     finally:
         for cb_list, snapshot in zip(lists, snapshots):
