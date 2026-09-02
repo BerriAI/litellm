@@ -141,7 +141,7 @@ def _build_query_params(
 
 def _error_message_from_response(response: httpx.Response) -> str:
     try:
-        body: Final = response.json()
+        body: Final[object] = response.json()
     except ValueError:
         return response.text
 
@@ -330,7 +330,7 @@ class GenericContainerHandler:
         timeout: float | httpx.Timeout = 600,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         **kwargs: object,
-    ) -> Any:
+    ) -> ContainerEndpointResponse:
         """Synchronous request handler."""
         endpoint_config: Final = _get_endpoint_config(endpoint_name)
         if not endpoint_config:
@@ -410,7 +410,7 @@ class GenericContainerHandler:
         timeout: float | httpx.Timeout = 600,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         **kwargs: object,
-    ) -> Any:
+    ) -> ContainerEndpointResponse:
         """Asynchronous request handler."""
         endpoint_config: Final = _get_endpoint_config(endpoint_name)
         if not endpoint_config:

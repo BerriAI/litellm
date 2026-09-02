@@ -117,7 +117,7 @@ class OTELGenAISemconvMixin:
     if TYPE_CHECKING:
         config: "OpenTelemetryConfig"
 
-        def safe_set_attribute(self, span: Span, key: str, value: Any) -> None: ...
+        def safe_set_attribute(self, span: Span, key: str, value: object) -> None: ...
 
         def _capture_in_event(self) -> bool: ...
 
@@ -195,13 +195,13 @@ class OTELGenAISemconvMixin:
             if value:
                 self.safe_set_attribute(span=span, key=semconv_key, value=value)
 
-    def _build_inference_details_attrs(self, kwargs: dict, response_obj: dict, provider: str) -> dict[str, Any]:
+    def _build_inference_details_attrs(self, kwargs: dict, response_obj: dict, provider: str) -> dict[str, str]:
         """Build the attribute payload for the inference-details event.
 
         Always includes provider/operation; input/output messages are added
         only when content capture is enabled and non-empty. Mixin-internal.
         """
-        attrs: Final[dict[str, Any]] = {
+        attrs: Final[dict[str, str]] = {
             "event_name": _INFERENCE_DETAILS_EVENT_NAME,
             "gen_ai.provider.name": provider,
             "gen_ai.operation.name": self._gen_ai_operation_name(kwargs),

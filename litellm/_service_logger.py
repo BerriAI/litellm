@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import litellm
 from litellm._logging import verbose_logger
@@ -24,7 +24,30 @@ else:
     UserAPIKeyAuth = Any
 
 
-def _get_otel_v2_class() -> type | None:
+class _ServiceSpanLogger(Protocol):
+    """The OTel logger surface this module drives: the two service-span hooks it calls."""
+
+    async def async_service_success_hook(
+        self,
+        payload: ServiceLoggerPayload,
+        parent_otel_span: Span | None = None,
+        start_time: datetime | float | None = None,
+        end_time: datetime | float | None = None,
+        event_metadata: dict | None = None,
+    ) -> None: ...
+
+    async def async_service_failure_hook(
+        self,
+        payload: ServiceLoggerPayload,
+        error: str | None = "",
+        parent_otel_span: Span | None = None,
+        start_time: datetime | float | None = None,
+        end_time: datetime | float | None = None,
+        event_metadata: dict | None = None,
+    ) -> None: ...
+
+
+def _get_otel_v2_class() -> type[_ServiceSpanLogger] | None:
     """Return the ``OpenTelemetryV2`` class, or ``None`` if the OTel SDK is absent.
 
     Imported lazily: ``litellm.integrations.otel.logger`` imports the OpenTelemetry
@@ -54,7 +77,7 @@ class ServiceLogging(CustomLogger):
         if "prometheus_system" in litellm.service_callback:
             self.prometheusServicesLogger = PrometheusServicesLogger()
 
-    def _resolve_otel_service_logger(self, callback: Any) -> Any | None:
+    def _resolve_otel_service_logger(self, callback: object) -> _ServiceSpanLogger | None:
         """Resolve the OTel logger (legacy or V2) to emit a service span on.
 
         Returns the logger instance whose ``async_service_*_hook`` should fire for
@@ -69,18 +92,21 @@ class ServiceLogging(CustomLogger):
         """
         otel_v2_cls: Final = _get_otel_v2_class()
 
-        def _is_otel_logger(obj: Any) -> bool:
+        def _as_otel_logger(obj: object) -> _ServiceSpanLogger | None:
             if isinstance(obj, OpenTelemetry):
-                return True
-            return otel_v2_cls is not None and isinstance(obj, otel_v2_cls)
+                return obj
+            if otel_v2_cls is not None and isinstance(obj, otel_v2_cls):
+                return obj
+            return None
 
-        if _is_otel_logger(callback):
-            return callback
+        resolved_callback: Final = _as_otel_logger(callback)
+        if resolved_callback is not None:
+            return resolved_callback
         if callback == "otel":
             from litellm.proxy.proxy_server import open_telemetry_logger
 
-            if open_telemetry_logger is not None and _is_otel_logger(open_telemetry_logger):
-                return open_telemetry_logger
+            if open_telemetry_logger is not None:
+                return _as_otel_logger(open_telemetry_logger)
         return None
 
     def service_success_hook(

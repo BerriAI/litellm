@@ -2,7 +2,7 @@
 
 import json
 import time
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -24,6 +24,9 @@ from litellm.types.realtime import (
     RealtimeTranscriptionSessionResponse,
 )
 
+if TYPE_CHECKING:
+    from litellm.router import Router
+
 router: Final = APIRouter()
 
 _REALTIME_TOKEN_VERSION: Final = "realtime_v1"
@@ -38,7 +41,7 @@ def _coerce_realtime_session_type(session_type: str | None) -> str:
     return "realtime"
 
 
-def _append_model_candidate(candidates: list[str], model: Any) -> None:
+def _append_model_candidate(candidates: list[str], model: object) -> None:
     if isinstance(model, str) and model and model not in candidates:
         candidates.append(model)
 
@@ -116,7 +119,7 @@ async def _prepare_client_secret_session(
     req: RealtimeClientSecretRequest,
     user_api_key_dict: UserAPIKeyAuth,
     llm_model_list: list | None,
-    llm_router: Any,
+    llm_router: "Router | None",
 ) -> tuple[str, dict | None, str]:
     session_type: Final = _coerce_realtime_session_type(req.session.type if req.session else None)
     session_data: Final[dict | None] = req.session.model_dump(exclude_none=True) if req.session else None
@@ -171,7 +174,7 @@ def _encode_realtime_token_payload(
     Encode metadata with the upstream ephemeral key so /realtime/calls can
     route without requiring model as a query param.
     """
-    payload: Final[dict[str, Any]] = {
+    payload: Final[dict[str, str | int | None]] = {
         "v": _REALTIME_TOKEN_VERSION,
         "ephemeral_key": ephemeral_key,
         "model_id": model_id,

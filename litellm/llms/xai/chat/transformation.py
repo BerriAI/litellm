@@ -196,7 +196,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "XAIChatCompletionStreamingHandler":
         return XAIChatCompletionStreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,

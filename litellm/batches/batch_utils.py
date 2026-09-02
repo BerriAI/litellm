@@ -160,7 +160,7 @@ def _classify_output_line_stats(
 
 
 def _safe_output_line_stats(
-    entry: Mapping[str, Any],
+    entry: Mapping[str, object],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock"],
     model_name: str | None,
     model_info: ModelInfo | None,
@@ -182,7 +182,7 @@ def _safe_output_line_stats(
 
 
 def _compute_output_line_stats(
-    entry: Mapping[str, Any],
+    entry: Mapping[str, object],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock"],
     model_name: str | None,
     model_info: ModelInfo | None,
@@ -213,7 +213,7 @@ def _compute_output_line_stats(
 
 
 def _output_line_cost(
-    response_body: Mapping[str, Any],
+    response_body: Mapping[str, object],
     usage: Usage,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock"],
     model_name: str | None,
@@ -556,7 +556,7 @@ def _iter_batch_output_entries(file_content: bytes) -> Iterator[dict]:
 
 def _parse_batch_output_line(line: bytes) -> dict | None:
     try:
-        parsed: Final = json.loads(line)
+        parsed: Final[object] = json.loads(line)
     except ValueError as e:
         verbose_logger.warning("skipping malformed batch output line: %s", str(e))
         return None
@@ -601,7 +601,7 @@ def _count_entry_tokens(
     return 0
 
 
-def _count_prompt_or_input_tokens(model: str, value: Any) -> int:
+def _count_prompt_or_input_tokens(model: str, value: object) -> int:
     """Token-count a ``prompt`` / ``input`` field that the OpenAI batch
     schema allows in four shapes:
 
@@ -680,7 +680,7 @@ def _get_anthropic_result_from_batch_results_line(batch_results_line: Mapping[st
 
 def _get_response_from_batch_job_output_file(
     batch_job_output_file: Mapping[str, Any], custom_llm_provider: str = "openai"
-) -> Mapping[str, Any]:
+) -> Mapping[str, object]:
     """
     Get the response from the batch job output file
     """

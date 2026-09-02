@@ -4,7 +4,7 @@ Humanloop integration
 https://humanloop.com/
 """
 
-from typing import Any, Final, cast
+from typing import Final, cast
 
 import httpx
 from typing_extensions import TypedDict
@@ -24,7 +24,7 @@ class PromptManagementClient(TypedDict):
     prompt_id: str
     prompt_template: list[AllMessageValues]
     model: str | None
-    optional_params: dict[str, Any] | None
+    optional_params: dict[str, object] | None
 
 
 class HumanLoopPromptManager(DualCache):
@@ -36,7 +36,7 @@ class HumanLoopPromptManager(DualCache):
         return cast(PromptManagementClient | None, self.get_cache(key=humanloop_prompt_id))
 
     def _compile_prompt_helper(
-        self, prompt_template: list[AllMessageValues], prompt_variables: dict[str, Any]
+        self, prompt_template: list[AllMessageValues], prompt_variables: dict[str, object]
     ) -> list[AllMessageValues]:
         """
         Helper function to compile the prompt by substituting variables in the template.

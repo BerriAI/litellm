@@ -6,7 +6,7 @@ containing content blocks, unlike standard Voyage embeddings which use
 /v1/embeddings and a string/list `input` field.
 """
 
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
@@ -98,7 +98,7 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
             )
         return {"Authorization": f"Bearer {api_key}"}
 
-    def _normalize_content_item(self, item: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_content_item(self, item: dict[str, object]) -> dict[str, object]:
         item_type: Final = item.get("type")
         if item_type == "image_url":
             image_url = item.get("image_url")
@@ -115,7 +115,7 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
             return {"type": "image_url", "image_url": image_url}
         return item
 
-    def _normalize_input_item(self, item: Any) -> dict[str, Any]:
+    def _normalize_input_item(self, item: object) -> object:
         if isinstance(item, str):
             return {"content": [{"type": "text", "text": item}]}
         if isinstance(item, dict) and "content" in item:

@@ -11,7 +11,7 @@ import json
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 import litellm
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
@@ -56,9 +56,9 @@ def create_sync_endpoint_function(endpoint_config: dict) -> Callable:
     def endpoint_func(
         timeout: int = 600,
         custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
-        extra_headers: dict[str, Any] | None = None,
-        extra_query: dict[str, Any] | None = None,
-        extra_body: dict[str, Any] | None = None,
+        extra_headers: dict[str, object] | None = None,
+        extra_query: dict[str, object] | None = None,
+        extra_body: dict[str, object] | None = None,
         **kwargs,
     ):
         local_vars: Final = locals()
@@ -145,9 +145,9 @@ def create_async_endpoint_function(
     async def async_endpoint_func(
         timeout: int = 600,
         custom_llm_provider: Literal["openai", "azure", "azure_text"] = "openai",
-        extra_headers: dict[str, Any] | None = None,
-        extra_query: dict[str, Any] | None = None,
-        extra_body: dict[str, Any] | None = None,
+        extra_headers: dict[str, object] | None = None,
+        extra_query: dict[str, object] | None = None,
+        extra_body: dict[str, object] | None = None,
         **kwargs,
     ):
         local_vars: Final = locals()

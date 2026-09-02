@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
@@ -143,8 +144,8 @@ class SharedHealthCheckManager:
 
     async def cache_health_check_results(
         self,
-        healthy_endpoints: list[dict[str, Any]],
-        unhealthy_endpoints: list[dict[str, Any]],
+        healthy_endpoints: Sequence[Mapping[str, object]],
+        unhealthy_endpoints: Sequence[Mapping[str, object]],
     ) -> None:
         """
         Cache health check results in Redis.
@@ -336,14 +337,14 @@ class SharedHealthCheckManager:
             verbose_proxy_logger.error("Error checking health check lock status: %s", str(e))
             return False
 
-    async def get_health_check_status(self) -> dict[str, Any]:
+    async def get_health_check_status(self) -> dict[str, object]:
         """
         Get the current status of health check coordination.
 
         Returns:
             Dict containing status information
         """
-        status: Final = {
+        status: Final[dict[str, object]] = {
             "pod_id": self.pod_id,
             "redis_available": self.redis_cache is not None,
             "lock_ttl": self.lock_ttl,

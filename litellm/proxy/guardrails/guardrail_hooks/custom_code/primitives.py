@@ -8,7 +8,7 @@ and provide safe, sandboxed functionality for common guardrail operations.
 import json
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any, Final
+from typing import Final
 from urllib.parse import urlparse
 
 import httpx
@@ -16,7 +16,7 @@ from pydantic import JsonValue
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 # =============================================================================
@@ -508,7 +508,7 @@ async def http_request(
 
 
 async def _execute_http_request(
-    client: Any,
+    client: AsyncHTTPHandler,
     method: str,
     url: str,
     headers: dict[str, str] | None,
