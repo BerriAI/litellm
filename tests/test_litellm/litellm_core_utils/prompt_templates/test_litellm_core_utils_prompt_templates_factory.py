@@ -2932,6 +2932,28 @@ def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5(monkeypatch):
             monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
+def test_add_cache_point_tool_block_stands_down_for_model_without_prompt_caching(monkeypatch):
+    """A tool carrying cache_control must not become a cachePoint for a Bedrock model
+    whose cost-map entry lacks prompt caching support, since Bedrock rejects the whole
+    request. An unmapped id keeps emitting so ARN deployments do not lose caching."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        add_cache_point_tool_block,
+    )
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    tool = {"cache_control": {"type": "ephemeral"}}
+
+    assert add_cache_point_tool_block(tool, model="nvidia.nemotron-super-3-120b") is None
+    assert add_cache_point_tool_block(tool, model="us.nvidia.nemotron-super-3-120b") is None
+    assert add_cache_point_tool_block(
+        tool, model="arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
+    ) == {"cachePoint": {"type": "default"}}
+    assert add_cache_point_tool_block(tool, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0") == {
+        "cachePoint": {"type": "default"}
+    }
+
+
 def test_bedrock_tools_pt_passes_ttl_for_claude_4_5(monkeypatch):
     """
     End-to-end: _bedrock_tools_pt should produce cachePoint blocks with ttl
@@ -3627,3 +3649,67 @@ def test_convert_gemini_tool_call_result_answers_tool_reference_only_result():
     )
 
     assert result == {"function_response": {"name": "ToolSearch", "response": {"content": ""}}}
+
+
+def test_convert_to_anthropic_tool_invoke_degrades_unpaired_server_tool_use():
+    """A replayed srvtoolu_ call whose server tool result is not available
+    (e.g. the Responses bridge replays items without provider_specific_fields)
+    must become a plain client tool_use so the client's tool_result can pair
+    with it. A dangling server_tool_use makes Anthropic 400 the request with
+    "unexpected `tool_use_id` found in `tool_result` blocks"."""
+    from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_tool_invoke
+
+    result = convert_to_anthropic_tool_invoke(
+        tool_calls=[
+            {
+                "id": "srvtoolu_01Unpaired",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "zig version"}'},
+            }
+        ],
+        web_search_results=None,
+        tool_results=None,
+    )
+
+    assert result == [
+        {
+            "type": "tool_use",
+            "id": "srvtoolu_01Unpaired",
+            "name": "web_search",
+            "input": {"query": "zig version"},
+        }
+    ]
+
+
+def test_convert_to_anthropic_tool_invoke_keeps_paired_server_tool_use():
+    """When the paired server tool result is available, the srvtoolu_ call is
+    still reconstructed as server_tool_use followed by its result block."""
+    from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_tool_invoke
+
+    server_result = {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu_01Paired",
+        "content": [{"type": "web_search_result", "url": "https://ziglang.org", "title": "Zig"}],
+    }
+
+    result = convert_to_anthropic_tool_invoke(
+        tool_calls=[
+            {
+                "id": "srvtoolu_01Paired",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '{"query": "zig version"}'},
+            }
+        ],
+        web_search_results=[server_result],
+        tool_results=None,
+    )
+
+    assert result == [
+        {
+            "type": "server_tool_use",
+            "id": "srvtoolu_01Paired",
+            "name": "web_search",
+            "input": {"query": "zig version"},
+        },
+        server_result,
+    ]

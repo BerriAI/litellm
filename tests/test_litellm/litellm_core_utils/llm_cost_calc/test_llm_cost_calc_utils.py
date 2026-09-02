@@ -32,6 +32,8 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     TokenTypeCostBreakdown,
     _calculate_input_cost,
     _get_token_base_cost,
+    _is_off_peak,
+    _is_within_off_peak_window,
     calculate_cache_writing_cost,
     generic_cost_per_token,
     get_token_type_cost_breakdown,
@@ -407,6 +409,377 @@ def test_get_token_base_cost_picks_highest_crossed_tier():
     prompt_base_cost = _get_token_base_cost(model_info, usage)[0]
 
     assert prompt_base_cost == 9e-6
+
+
+def test_is_within_off_peak_window_same_day():
+    from datetime import datetime, timezone
+
+    window = "09:00-17:00"
+    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)) is True
+    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 8, 59, tzinfo=timezone.utc)) is False
+    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)) is True
+    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 17, 0, tzinfo=timezone.utc)) is False
+
+
+def test_is_within_off_peak_window_wraps_midnight():
+    from datetime import datetime, timezone
+
+    window = "16:30-00:30"
+    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc)) is True
+    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 0, 15, tzinfo=timezone.utc)) is True
+    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 16, 30, tzinfo=timezone.utc)) is True
+    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 0, 30, tzinfo=timezone.utc)) is False
+    assert _is_within_off_peak_window(window, datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)) is False
+
+
+def test_is_within_off_peak_window_equal_start_and_end_covers_whole_day():
+    """An equal start and end is the natural way to spell off-peak all day. It used to take the
+    non-wrap branch, where start <= now < end can never hold, so it matched nothing and billed at
+    standard rates around the clock without raising or logging anything."""
+    from datetime import datetime, timezone
+
+    for window in ("00:00-00:00", "10:00-10:00"):
+        for hour in range(24):
+            assert (
+                _is_within_off_peak_window(window, datetime(2026, 1, 1, hour, 0, tzinfo=timezone.utc)) is True
+            ), f"{window} should cover {hour:02d}:00"
+
+
+def test_is_within_off_peak_window_multiple_windows():
+    from datetime import datetime, timezone
+
+    # Providers like DeepSeek V4 have more than one daily peak/off-peak window.
+    windows = ["01:00-05:00", "13:00-16:00"]
+    assert _is_within_off_peak_window(windows, datetime(2026, 1, 1, 3, 0, tzinfo=timezone.utc)) is True
+    assert _is_within_off_peak_window(windows, datetime(2026, 1, 1, 14, 30, tzinfo=timezone.utc)) is True
+    assert _is_within_off_peak_window(windows, datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc)) is False
+    # a malformed entry in the list is ignored, valid entries still match
+    assert _is_within_off_peak_window(["bad", "13:00-16:00"], datetime(2026, 1, 1, 14, 0, tzinfo=timezone.utc)) is True
+    assert _is_within_off_peak_window([], datetime(2026, 1, 1, 14, 0, tzinfo=timezone.utc)) is False
+
+
+def test_is_within_off_peak_window_normalizes_timezone_aware_input():
+    from datetime import datetime, timedelta, timezone
+
+    # A caller may pass a non-UTC aware datetime; the window is UTC and must be
+    # evaluated in UTC, not against the caller's wall-clock. 09:00 at UTC+8 is
+    # 01:00 UTC, inside the 01:00-05:00 window.
+    tz_plus_8 = timezone(timedelta(hours=8))
+    assert _is_within_off_peak_window("01:00-05:00", datetime(2026, 1, 1, 9, 0, tzinfo=tz_plus_8)) is True
+    assert _is_within_off_peak_window("01:00-05:00", datetime(2026, 1, 1, 12, 0, tzinfo=tz_plus_8)) is True
+    # 06:00 at UTC+8 is 22:00 UTC the previous day, outside the window
+    assert _is_within_off_peak_window("01:00-05:00", datetime(2026, 1, 1, 6, 0, tzinfo=tz_plus_8)) is False
+
+
+def test_is_within_off_peak_window_malformed_returns_false():
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc)
+    assert _is_within_off_peak_window("not-a-window", now) is False
+    assert _is_within_off_peak_window("16:30", now) is False
+    assert _is_within_off_peak_window("25:00-26:00", now) is False
+
+
+def test_is_off_peak_weekday_qualified_windows_deepseek_schedule():
+    """DeepSeek since 2026-08-23: peak is 01:00-04:00 and 06:00-10:00 UTC on weekdays only, with
+    weekends off-peak around the clock. The weekday axis is not a filter on one window set; on
+    two days of seven the off-peak window becomes the whole day, so the schedule needs two
+    day-qualified rules. The weekend instants inside would-be peak hours are the ones a
+    time-only implementation bills wrong."""
+    from datetime import datetime, timezone
+
+    deepseek = {
+        "windows": [
+            {"hours_utc": ["00:00-01:00", "04:00-06:00", "10:00-00:00"], "weekdays": [1, 2, 3, 4, 5]},
+            {"hours_utc": "00:00-00:00", "weekdays": [6, 7]},
+        ],
+    }
+    peak_instants = [
+        datetime(2026, 8, 24, 1, 30, tzinfo=timezone.utc),
+        datetime(2026, 8, 26, 7, 0, tzinfo=timezone.utc),
+        datetime(2026, 8, 28, 9, 59, tzinfo=timezone.utc),
+    ]
+    off_peak_instants = [
+        datetime(2026, 8, 23, 1, 30, tzinfo=timezone.utc),
+        datetime(2026, 8, 29, 2, 0, tzinfo=timezone.utc),
+        datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc),
+        datetime(2026, 8, 26, 5, 0, tzinfo=timezone.utc),
+        datetime(2026, 8, 28, 16, 30, tzinfo=timezone.utc),
+        datetime(2026, 8, 24, 0, 30, tzinfo=timezone.utc),
+    ]
+    for when in peak_instants:
+        assert _is_off_peak(deepseek, when) is False, f"{when.isoformat()} should bill peak"
+    for when in off_peak_instants:
+        assert _is_off_peak(deepseek, when) is True, f"{when.isoformat()} should bill off-peak"
+
+
+def test_is_off_peak_weekday_timezone_reads_vendor_calendar():
+    """The UTC and Asia/Shanghai calendars only disagree about the date over 16:00-24:00 UTC, so
+    a window in that stretch is the one place a vendor-local weekday differs from a UTC one:
+    2026-08-28T16:30Z is Friday in UTC but already Saturday in Beijing."""
+    from datetime import datetime, timezone
+
+    shanghai_saturday = {
+        "weekday_timezone": "Asia/Shanghai",
+        "windows": [{"hours_utc": "16:00-17:00", "weekdays": [6]}],
+    }
+    assert _is_off_peak(shanghai_saturday, datetime(2026, 8, 28, 16, 30, tzinfo=timezone.utc)) is True
+    assert _is_off_peak(shanghai_saturday, datetime(2026, 8, 29, 16, 30, tzinfo=timezone.utc)) is False
+
+
+def test_is_off_peak_weekdays_default_utc_calendar_and_accept_names():
+    from datetime import datetime, timezone
+
+    named_weekend = {"windows": [{"hours_utc": "00:00-00:00", "weekdays": ["Sat", "sunday"]}]}
+    assert _is_off_peak(named_weekend, datetime(2026, 8, 29, 12, 0, tzinfo=timezone.utc)) is True
+    assert _is_off_peak(named_weekend, datetime(2026, 8, 28, 12, 0, tzinfo=timezone.utc)) is False
+
+    utc_friday = {"windows": [{"hours_utc": "16:00-17:00", "weekdays": [5]}]}
+    assert _is_off_peak(utc_friday, datetime(2026, 8, 28, 16, 30, tzinfo=timezone.utc)) is True
+    assert _is_off_peak(utc_friday, datetime(2026, 8, 29, 16, 30, tzinfo=timezone.utc)) is False
+
+
+def test_is_off_peak_naive_current_time_read_as_utc():
+    from datetime import datetime
+
+    block = {"windows": [{"hours_utc": "16:00-17:00", "weekdays": [5]}]}
+    assert _is_off_peak(block, datetime(2026, 8, 28, 16, 30)) is True
+    assert _is_off_peak(block, datetime(2026, 8, 29, 16, 30)) is False
+
+
+def test_is_off_peak_invalid_weekday_timezone_falls_back_to_utc():
+    from datetime import datetime, timezone
+
+    block = {"weekday_timezone": "Not/AZone", "windows": [{"hours_utc": "16:00-17:00", "weekdays": [5]}]}
+    assert _is_off_peak(block, datetime(2026, 8, 28, 16, 30, tzinfo=timezone.utc)) is True
+    assert _is_off_peak(block, datetime(2026, 8, 29, 16, 30, tzinfo=timezone.utc)) is False
+
+
+def test_is_off_peak_ignores_malformed_weekday_rules():
+    from datetime import datetime, timezone
+
+    when = datetime(2026, 8, 29, 12, 0, tzinfo=timezone.utc)
+    assert _is_off_peak({"windows": [{"hours_utc": "00:00-00:00", "weekdays": []}]}, when) is False
+    assert _is_off_peak({"windows": [{"hours_utc": "00:00-00:00", "weekdays": [0, 8, "noday", True]}]}, when) is False
+    assert _is_off_peak({"windows": [{"weekdays": [6]}]}, when) is False
+    assert _is_off_peak({"windows": [{"hours_utc": 1630}]}, when) is False
+    assert _is_off_peak({"windows": ["00:00-00:00"]}, when) is False
+    assert _is_off_peak({"windows": "00:00-00:00"}, when) is False
+    assert _is_off_peak({"hours_utc": 1630}, when) is False
+    assert _is_off_peak({}, when) is False
+
+
+def test_is_off_peak_flat_hours_and_windows_are_a_union():
+    from datetime import datetime, timezone
+
+    block = {
+        "hours_utc": "04:00-06:00",
+        "windows": [{"hours_utc": "00:00-00:00", "weekdays": [7]}],
+    }
+    assert _is_off_peak(block, datetime(2026, 8, 28, 5, 0, tzinfo=timezone.utc)) is True
+    assert _is_off_peak(block, datetime(2026, 8, 30, 20, 0, tzinfo=timezone.utc)) is True
+    assert _is_off_peak(block, datetime(2026, 8, 28, 20, 0, tzinfo=timezone.utc)) is False
+
+
+def test_get_token_base_cost_weekend_only_off_peak_rate():
+    from datetime import datetime, timezone
+    from typing import cast
+
+    from litellm.types.utils import ModelInfo
+
+    model_info = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "off_peak_pricing": {
+                "windows": [
+                    {"hours_utc": ["00:00-01:00", "04:00-06:00", "10:00-00:00"], "weekdays": [1, 2, 3, 4, 5]},
+                    {"hours_utc": "00:00-00:00", "weekdays": [6, 7]},
+                ],
+                "input_cost_per_token": 5e-7,
+                "output_cost_per_token": 1e-6,
+            },
+        },
+    )
+    usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+
+    saturday_peak_hours = _get_token_base_cost(
+        model_info, usage, current_time=datetime(2026, 8, 29, 2, 0, tzinfo=timezone.utc)
+    )
+    assert saturday_peak_hours[:2] == (5e-7, 1e-6)
+
+    monday_same_hours = _get_token_base_cost(
+        model_info, usage, current_time=datetime(2026, 8, 24, 2, 0, tzinfo=timezone.utc)
+    )
+    assert monday_same_hours[:2] == (1e-6, 2e-6)
+
+
+def test_get_token_base_cost_applies_off_peak_pricing():
+    from datetime import datetime, timezone
+    from typing import cast
+
+    from litellm.types.utils import ModelInfo
+
+    model_info = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "cache_read_input_token_cost": 1e-7,
+            "off_peak_pricing": {
+                "hours_utc": "16:30-00:30",
+                "input_cost_per_token": 5e-7,
+                "output_cost_per_token": 1e-6,
+                "cache_read_input_token_cost": 5e-8,
+            },
+        },
+    )
+    usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+
+    off_peak = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc))
+    assert off_peak[0] == 5e-7
+    assert off_peak[1] == 1e-6
+    assert off_peak[4] == 5e-8
+
+    peak = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
+    assert peak[0] == 1e-6
+    assert peak[1] == 2e-6
+    assert peak[4] == 1e-7
+
+
+def test_get_token_base_cost_non_mapping_off_peak_block_bills_standard_rates():
+    """A truthy non-mapping off_peak_pricing value (a bare string or a list in
+    YAML) must bill standard rates rather than raising, matching how every
+    other malformed piece of the block behaves.
+    """
+    from datetime import datetime, timezone
+    from typing import cast
+
+    from litellm.types.utils import ModelInfo
+
+    usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+    when = datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc)
+
+    for malformed_block in ("16:00-19:00", ["16:00-19:00"], 5e-7, True):
+        model_info = cast(
+            ModelInfo,
+            {
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "off_peak_pricing": malformed_block,
+            },
+        )
+        result = _get_token_base_cost(model_info, usage, current_time=when)
+        assert result[0] == 1e-6
+        assert result[1] == 2e-6
+
+
+def test_get_token_base_cost_off_peak_falls_back_to_standard_when_unset():
+    from datetime import datetime, timezone
+    from typing import cast
+
+    from litellm.types.utils import ModelInfo
+
+    model_info = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "off_peak_pricing": {"hours_utc": "16:30-00:30", "input_cost_per_token": 5e-7},
+        },
+    )
+    usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+
+    result = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc))
+    assert result[0] == 5e-7
+    assert result[1] == 2e-6
+
+
+def test_get_token_base_cost_off_peak_wins_over_threshold():
+    from datetime import datetime, timezone
+    from typing import cast
+
+    from litellm.types.utils import ModelInfo
+
+    model_info = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "input_cost_per_token_above_200k_tokens": 3e-6,
+            "output_cost_per_token_above_200k_tokens": 4e-6,
+            "off_peak_pricing": {
+                "hours_utc": "16:30-00:30",
+                "input_cost_per_token": 5e-7,
+                "output_cost_per_token": 1e-6,
+            },
+        },
+    )
+    usage = Usage(prompt_tokens=250000, completion_tokens=250000, total_tokens=500000)
+
+    off_peak = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc))
+    assert off_peak[0] == 5e-7
+    assert off_peak[1] == 1e-6
+
+    peak = _get_token_base_cost(model_info, usage, current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
+    assert peak[0] == 3e-6
+    assert peak[1] == 4e-6
+
+
+def test_get_model_info_propagates_off_peak_fields():
+    model_name = "test-off-peak-model"
+    off_peak_pricing = {
+        "hours_utc": "16:30-00:30",
+        "input_cost_per_token": 5e-7,
+        "output_cost_per_token": 1e-6,
+        "cache_read_input_token_cost": 5e-8,
+    }
+    litellm.register_model(
+        {
+            model_name: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "off_peak_pricing": off_peak_pricing,
+            }
+        }
+    )
+    info = litellm.get_model_info(model=model_name)
+    assert info["off_peak_pricing"] == off_peak_pricing
+
+
+def test_get_token_base_cost_off_peak_wins_over_tiered_pricing():
+    """Tiered pricing resolves base rates on its own path and returns early, so off-peak has to
+    be applied there too or a model carrying both would silently bill the tier rate all day."""
+    from datetime import datetime, timezone
+
+    model_name = "litellm-test-off-peak-tiered"
+    litellm.register_model(
+        {
+            model_name: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "tiered_pricing": [
+                    {"range": [0, 128000], "input_cost_per_token": 3e-6, "output_cost_per_token": 6e-6},
+                ],
+                "off_peak_pricing": {
+                    "hours_utc": "16:30-00:30",
+                    "input_cost_per_token": 5e-7,
+                    "output_cost_per_token": 1e-6,
+                },
+            }
+        }
+    )
+    info = litellm.get_model_info(model=model_name)
+    usage = Usage(prompt_tokens=1_000, completion_tokens=100, total_tokens=1_100)
+
+    inside = _get_token_base_cost(info, usage, current_time=datetime(2026, 1, 1, 18, 0, tzinfo=timezone.utc))
+    assert inside[:2] == (5e-7, 1e-6)
+
+    outside = _get_token_base_cost(info, usage, current_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc))
+    assert outside[:2] == (3e-6, 6e-6)
 
 
 def test_generic_cost_per_token_gpt54_above_272k_tokens(_local_model_cost_map):
@@ -1149,7 +1522,7 @@ def test_gpt_5_6_alias_prices_match_sol(local_model_cost_map):
     sol = litellm.model_cost["gpt-5.6-sol"]
 
     cost_fields = sorted(field for field in sol if "cost" in field)
-    assert len(cost_fields) == 23
+    assert len(cost_fields) == 27
 
     for field in cost_fields:
         assert alias.get(field) == sol.get(field), field
@@ -3666,8 +4039,8 @@ def test_fast_service_tier_matches_priority_above_the_context_threshold(_local_m
     )
 
     assert fast == priority
-    assert fast[0] == pytest.approx(300_000 * 8e-06, rel=1e-9)
-    assert fast[1] == pytest.approx(1_000 * 3e-05, rel=1e-9)
+    assert fast[0] == pytest.approx(300_000 * 1.6e-05, rel=1e-9)
+    assert fast[1] == pytest.approx(1_000 * 6e-05, rel=1e-9)
 
 
 def test_priority_reasoning_tokens_bill_at_the_priority_output_rate(_local_model_cost_map):
@@ -3820,6 +4193,86 @@ def test_generic_cost_per_token_gemini_37_flash(_local_model_cost_map):
     )
     prompt_cost, completion_cost = generic_cost_per_token(
         model="gemini-3.7-flash",
+        usage=usage,
+        custom_llm_provider="gemini",
+    )
+    assert prompt_cost == pytest.approx(0.00075)
+    assert completion_cost == pytest.approx(0.001875)
+
+
+GEMINI_38_FLASH_LAUNCH_PRICING = [
+    ("gemini-3.8-flash", 7.5e-07, 3.75e-06, 7.5e-08),
+    ("gemini/gemini-3.8-flash", 7.5e-07, 3.75e-06, 7.5e-08),
+    ("vertex_ai/gemini-3.8-flash", 7.5e-07, 3.75e-06, 7.5e-08),
+]
+
+
+@pytest.mark.parametrize("model,input_cost,output_cost,cache_read_cost", GEMINI_38_FLASH_LAUNCH_PRICING)
+def test_gemini_38_flash_launch_pricing(model, input_cost, output_cost, cache_read_cost, _local_model_cost_map):
+    model_cost_map = litellm.model_cost[model]
+    assert model_cost_map["input_cost_per_token"] == input_cost
+    assert model_cost_map["output_cost_per_token"] == output_cost
+    assert model_cost_map["output_cost_per_reasoning_token"] == output_cost
+    assert model_cost_map["cache_read_input_token_cost"] == cache_read_cost
+    assert model_cost_map["mode"] == "chat"
+    assert model_cost_map["supports_reasoning"] is True
+    assert model_cost_map["supports_function_calling"] is True
+    assert model_cost_map["max_input_tokens"] == 1048576
+
+
+GEMINI_38_FLASH_FIELDS_SHARED_WITH_37_FLASH = (
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "output_cost_per_reasoning_token",
+    "cache_read_input_token_cost",
+    "input_cost_per_token_batches",
+    "output_cost_per_token_batches",
+    "input_cost_per_token_flex",
+    "output_cost_per_token_flex",
+    "cache_read_input_token_cost_flex",
+    "input_cost_per_token_priority",
+    "output_cost_per_token_priority",
+    "cache_read_input_token_cost_priority",
+    "search_context_cost_per_query",
+    "google_maps_grounding_cost_per_query",
+    "prompt_cache_min_tokens",
+    "max_input_tokens",
+    "max_output_tokens",
+    "supports_reasoning",
+    "supports_function_calling",
+    "supports_prompt_caching",
+    "supports_vision",
+    "supports_pdf_input",
+    "supports_audio_input",
+    "supports_video_input",
+    "supports_response_schema",
+    "supports_tool_choice",
+    "supports_web_search",
+    "supports_url_context",
+)
+
+
+@pytest.mark.parametrize("prefix", ["", "gemini/", "vertex_ai/"])
+def test_gemini_38_flash_matches_37_flash_promotional_pricing(prefix, _local_model_cost_map):
+    new_model = litellm.model_cost[f"{prefix}gemini-3.8-flash"]
+    old_model = litellm.model_cost[f"{prefix}gemini-3.7-flash"]
+    for field in GEMINI_38_FLASH_FIELDS_SHARED_WITH_37_FLASH:
+        assert new_model[field] == old_model[field], field
+
+
+def test_generic_cost_per_token_gemini_38_flash(_local_model_cost_map):
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            reasoning_tokens=200,
+            text_tokens=300,
+        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=1000),
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="gemini-3.8-flash",
         usage=usage,
         custom_llm_provider="gemini",
     )

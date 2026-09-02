@@ -114,6 +114,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._pending_tool_events: list[BaseLiteLLMOpenAIResponseObject] = []
         self._tool_output_index_by_call_id: dict[str, int] = {}
         self._tool_args_by_call_id: dict[str, str] = {}
+        self._tool_item_id_by_call_id: dict[str, str] = {}  # mutable-ok: filled per call id as tool call events stream
         self._tool_call_id_by_index: dict[int, str] = {}
         self._ambiguous_tool_call_indexes: set[int] = set()
         self._next_tool_output_index: int = 1  # output_index=0 reserved for the message item
@@ -227,6 +228,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 self._sequence_number += 1
                 names = self._custom_tool_names
                 item_kwargs = build_tool_call_item_kwargs(call_id, tool_name, "", "in_progress", names)
+                self._tool_item_id_by_call_id[call_id] = item_kwargs["id"]
                 if tool_namespace:
                     item_kwargs["namespace"] = tool_namespace
                 event = OutputItemAddedEvent(
@@ -248,7 +250,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     self._sequence_number += 1
                     delta_event: BaseLiteLLMOpenAIResponseObject = FunctionCallArgumentsDeltaEvent(
                         type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
-                        item_id=call_id,
+                        item_id=self._tool_item_id_by_call_id.get(call_id, call_id),
                         output_index=output_index,
                         delta=delta_chunk,
                     )
@@ -300,6 +302,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 self._sequence_number += 1
                 names = self._custom_tool_names
                 item_kwargs = build_tool_call_item_kwargs(call_id, tool_name, "", "in_progress", names)
+                self._tool_item_id_by_call_id[call_id] = item_kwargs["id"]
                 if tool_namespace:
                     item_kwargs["namespace"] = tool_namespace
                 event = OutputItemAddedEvent(
@@ -325,7 +328,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     self._sequence_number += 1
                     delta_event = FunctionCallArgumentsDeltaEvent(
                         type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
-                        item_id=call_id,
+                        item_id=self._tool_item_id_by_call_id.get(call_id, call_id),
                         output_index=output_index,
                         delta=delta_chunk,
                     )
@@ -335,7 +338,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._sequence_number += 1
             done_event = FunctionCallArgumentsDoneEvent(
                 type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
-                item_id=call_id,
+                item_id=self._tool_item_id_by_call_id.get(call_id, call_id),
                 output_index=output_index,
                 arguments=final_args,
             )
@@ -345,6 +348,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._sequence_number += 1
             names = self._custom_tool_names
             item_kwargs = build_tool_call_item_kwargs(call_id, tool_name, final_args, "completed", names)
+            item_kwargs["id"] = self._tool_item_id_by_call_id.setdefault(call_id, item_kwargs["id"])
             if tool_namespace:
                 item_kwargs["namespace"] = tool_namespace
             item_done_event = OutputItemDoneEvent(
@@ -1165,16 +1169,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
     def _emit_response_completed_event(self, litellm_model_response: ModelResponse) -> ResponseCompletedEvent | None:
         if litellm_model_response:
-            # Add cost to usage object if include_cost_in_streaming_usage is True
-            if litellm.include_cost_in_streaming_usage and self.litellm_logging_obj is not None:
-                usage: Final[object] = getattr(litellm_model_response, "usage", None)
-                if usage is not None:
-                    setattr(
-                        usage,
-                        "cost",
-                        self.litellm_logging_obj._response_cost_calculator(result=litellm_model_response),
-                    )
-
             # Transform the response
             responses_api_response: Final = (
                 LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(

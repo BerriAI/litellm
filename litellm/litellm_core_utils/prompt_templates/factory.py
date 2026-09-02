@@ -1694,6 +1694,18 @@ def convert_function_to_anthropic_tool_invoke(
         raise e
 
 
+def _find_server_tool_result(
+    tool_id: str,
+    web_search_results: Sequence[object] | None,
+    tool_results: Sequence[object] | None,
+) -> dict[str, object] | None:
+    candidates: Final = (*(web_search_results or ()), *(tool_results or ()))
+    return next(
+        (result for result in candidates if isinstance(result, dict) and result.get("tool_use_id") == tool_id),
+        None,
+    )
+
+
 def convert_to_anthropic_tool_invoke(
     tool_calls: list[ChatCompletionAssistantToolCall],
     web_search_results: list[Any] | None = None,
@@ -1758,32 +1770,22 @@ def convert_to_anthropic_tool_invoke(
             context="Anthropic tool invoke",
         )
 
-        # Check if this is a server-side tool (web_search, tool_search, etc.)
-        # Server tool IDs start with "srvtoolu_"
-        if tool_id.startswith("srvtoolu_"):
-            # Create server_tool_use block instead of tool_use
-            _anthropic_server_tool_use: dict[str, object] = {
-                "type": "server_tool_use",
-                "id": tool_id,
-                "name": tool_name,
-                "input": tool_input,
-            }
-            anthropic_tool_invoke.append(_anthropic_server_tool_use)
-
-            # Add corresponding tool result if available.
-            # Check both web_search_results (web_search_tool_result / web_fetch_tool_result)
-            # and tool_results (bash_code_execution_tool_result, etc.)
-            _all_tool_results: list[Any] = []
-            if web_search_results:
-                _all_tool_results.extend(web_search_results)
-            if tool_results:
-                _all_tool_results.extend(tool_results)
-            for result in _all_tool_results:
-                if result.get("tool_use_id") == tool_id:
-                    anthropic_tool_invoke.append(result)
-                    break
+        server_tool_result = (
+            _find_server_tool_result(tool_id, web_search_results, tool_results)
+            if tool_id.startswith("srvtoolu_")
+            else None
+        )
+        if server_tool_result is not None:
+            anthropic_tool_invoke.append(
+                {
+                    "type": "server_tool_use",
+                    "id": tool_id,
+                    "name": tool_name,
+                    "input": tool_input,
+                }
+            )
+            anthropic_tool_invoke.append(server_tool_result)
         else:
-            # Regular tool_use
             sanitized_tool_id = _sanitize_anthropic_tool_use_id(tool_id)
             _anthropic_tool_use_param = AnthropicMessagesToolUseParam(
                 type="tool_use",
@@ -4955,10 +4957,13 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
 
 
 def add_cache_point_tool_block(tool: dict, model: str | None = None) -> BedrockToolBlock | None:
-    from litellm.llms.bedrock.common_utils import is_claude_4_5_on_bedrock
+    from litellm.llms.bedrock.common_utils import (
+        bedrock_model_accepts_cache_points,
+        is_claude_4_5_on_bedrock,
+    )
 
     cache_control: Final = tool.get("cache_control", None)
-    if cache_control is not None:
+    if cache_control is not None and bedrock_model_accepts_cache_points(model):
         cache_point: Final = cache_control.get("type", "ephemeral")
         if cache_point == "ephemeral":
             cache_point_block: Final[CachePointBlock] = {"type": "default"}
