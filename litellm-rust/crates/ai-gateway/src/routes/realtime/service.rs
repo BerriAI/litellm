@@ -51,18 +51,17 @@ where
         provider_model,
         params.api_key.as_deref(),
         params.api_base.as_deref(),
-    ) {
-        if let Some(handoff) = pool.take(&key) {
-            return crate::io::realtime::realtime_warm(
-                provider_model,
-                handoff,
-                idle_timeout,
-                observe,
-                client_in,
-                client_out,
-            )
-            .await;
-        }
+    ) && let Some(handoff) = pool.take(&key)
+    {
+        return crate::io::realtime::realtime_warm(
+            provider_model,
+            handoff,
+            idle_timeout,
+            observe,
+            client_in,
+            client_out,
+        )
+        .await;
     }
 
     // Cold path: fresh dial (the original behavior).
