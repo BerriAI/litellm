@@ -1404,13 +1404,33 @@ def _with_portable_cache_control_in_message(message: object) -> object:
         return message
     return {  # mutable-ok: JSON wire format
         **message,
-        "content": [_with_portable_cache_control_in_content_block(block) for block in content],
+        "content": [  # mutable-ok: JSON wire format
+            _with_portable_cache_control_in_content_block(block) for block in content
+        ],
     }
 
 
-def normalize_cache_control_in_anthropic_payload(  # mutable-ok: JSON wire format
+def _with_portable_cache_control_in_messages(messages: object) -> object:
+    if isinstance(messages, str) or not isinstance(messages, Sequence):
+        return messages
+    return [  # mutable-ok: JSON wire format
+        _with_portable_cache_control_in_message(message) for message in messages
+    ]
+
+
+def _with_portable_cache_control_in_scoped_value(key: str, value: object) -> object:
+    match key:
+        case "system" | "tools":
+            return _with_portable_cache_control_in_blocks(value)
+        case "messages":
+            return _with_portable_cache_control_in_messages(value)
+        case _:
+            return value
+
+
+def normalize_cache_control_in_anthropic_payload(
     payload: Mapping[str, object],
-) -> dict[str, object]:
+) -> dict[str, object]:  # mutable-ok: JSON wire format
     """
     Return a copy of an Anthropic /v1/messages payload with every
     ``cache_control`` entry reduced to ``{"type": <its type, or "ephemeral">}``
@@ -1427,17 +1447,9 @@ def normalize_cache_control_in_anthropic_payload(  # mutable-ok: JSON wire forma
     dropped entirely. The caller's payload is never mutated.
     """
     portable: Final = _with_portable_cache_control(payload)
-    scoped: Final = {  # mutable-ok: JSON wire format
-        key: (
-            _with_portable_cache_control_in_blocks(value)
-            if key in ("system", "tools")
-            else [_with_portable_cache_control_in_message(message) for message in value]
-            if key == "messages" and isinstance(value, Sequence) and not isinstance(value, str)
-            else value
-        )
-        for key, value in portable.items()
+    return {  # mutable-ok: JSON wire format
+        key: _with_portable_cache_control_in_scoped_value(key, value) for key, value in portable.items()
     }
-    return scoped
 
 
 def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
