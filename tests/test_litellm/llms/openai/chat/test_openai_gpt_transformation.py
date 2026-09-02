@@ -260,6 +260,15 @@ class TestGetOptionalParamsIntegration:
             )
             assert optional_params.get("reasoning_effort") == effort
 
+    def test_gpt5_chat_catalog_metadata_does_not_add_reasoning_effort(self):
+        """gpt-5-chat* stays off the metadata reasoning path even when bundled
+        model_cost marks supports_reasoning (#13781)."""
+        from litellm.llms.openai.openai import OpenAIConfig
+
+        assert "reasoning_effort" not in OpenAIConfig().get_supported_openai_params(
+            "gpt-5-chat-latest"
+        )
+
 
 class TestOpenAIChatCompletionStreamingHandler:
     """Tests for OpenAIChatCompletionStreamingHandler.chunk_parser()"""

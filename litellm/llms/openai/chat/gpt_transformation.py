@@ -182,9 +182,12 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         supported_params = base_params + model_specific_params
         if OpenAIGPTConfig.is_openai_catalog_model(model):
             model_for_metadata: Final = model.split("responses/", 1)[1] if "responses/" in model else model
-            model_info = litellm.model_cost.get(model_for_metadata) or {}
-            if model_info.get("supports_reasoning") is True and "reasoning_effort" not in supported_params:
-                return supported_params + ["reasoning_effort"]
+            # gpt-5-chat* are regular chat models (#13781); bundled model_cost may still
+            # carry supports_reasoning without exposing reasoning_effort on this path.
+            if not model_for_metadata.split("/")[-1].startswith("gpt-5-chat"):
+                model_info = litellm.model_cost.get(model_for_metadata) or {}
+                if model_info.get("supports_reasoning") is True and "reasoning_effort" not in supported_params:
+                    return supported_params + ["reasoning_effort"]
         return supported_params
 
     @staticmethod
