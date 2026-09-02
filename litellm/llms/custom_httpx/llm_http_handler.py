@@ -163,7 +163,11 @@ def _rust_responses_websocket_enabled(
 
     raw_request_override: Final = litellm_params.get("rust")
     request_override: Final = raw_request_override if isinstance(raw_request_override, bool) else None
-    return custom_llm_provider == "openai" and rust_enabled(request_override=request_override)
+    if custom_llm_provider != "openai" or not rust_enabled(request_override=request_override):
+        return False
+    from litellm.rust_bridge.streaming import supports_streaming
+
+    return supports_streaming("responses", custom_llm_provider, "websocket")
 
 
 def _anthropic_messages_with_core_engine(
@@ -6513,7 +6517,9 @@ class BaseLLMHTTPHandler:
                     from litellm.rust_bridge import responses_websocket as rust_responses_websocket
 
                     rust_execution: Final = await rust_responses_websocket.connect(
-                        url=ws_url,
+                        provider="openai",
+                        api_key=api_key,
+                        api_base=api_base,
                         headers={str(key): str(value) for key, value in headers.items()},
                         timeout=timeout,
                     )
