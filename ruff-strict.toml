@@ -30,6 +30,7 @@ external = [
 # grows over time; typing it concretely (`object`) broke that forwarding call outright —
 # basedpyright turned every named param into a reportArgumentType error. Any is correct here.
 "litellm/proxy/guardrails/guardrail_hooks/alice/alice.py" = ["ANN401"]
+"litellm/proxy/guardrails/guardrail_hooks/airia/airia.py" = ["ANN401"]
 
 [lint.mccabe]
 max-complexity = 15
