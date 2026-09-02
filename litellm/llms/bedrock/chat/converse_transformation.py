@@ -87,6 +87,7 @@ from ..common_utils import (
     BedrockError,
     BedrockModelInfo,
     bedrock_converse_supports_parallel_tool_use_config,
+    bedrock_model_accepts_cache_points,
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
     is_bedrock_application_inference_profile_arn,
@@ -588,6 +589,10 @@ class AmazonConverseConfig(BaseConfig):
             supported_params.append("context_management")
         return supported_params
 
+    @staticmethod
+    def _auto_tool_choice() -> ToolChoiceValuesBlock:
+        return ToolChoiceValuesBlock(auto={})
+
     def map_tool_choice_values(
         self, model: str, tool_choice: str | dict, drop_params: bool
     ) -> ToolChoiceValuesBlock | None:
@@ -600,10 +605,14 @@ class AmazonConverseConfig(BaseConfig):
                     status_code=400,
                 )
         elif tool_choice == "required":
+            if AnthropicModelInfo.forced_tool_use_downgraded(model, drop_params):
+                return self._auto_tool_choice()
             return ToolChoiceValuesBlock(any={})
         elif tool_choice == "auto":
-            return ToolChoiceValuesBlock(auto={})
+            return self._auto_tool_choice()
         elif isinstance(tool_choice, dict):
+            if AnthropicModelInfo.forced_tool_use_downgraded(model, drop_params):
+                return self._auto_tool_choice()
             # only supported for anthropic + mistral models - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             specific_tool: Final = SpecificToolChoiceBlock(
                 name=make_valid_bedrock_tool_name(tool_choice.get("function", {}).get("name", ""))
@@ -1065,6 +1074,7 @@ class AmazonConverseConfig(BaseConfig):
             if (
                 litellm.utils.supports_tool_choice(model=model, custom_llm_provider=self.custom_llm_provider)
                 and not is_thinking_enabled
+                and not AnthropicModelInfo.forced_tool_use_unsupported(model)
             ):
                 optional_params["tool_choice"] = ToolChoiceValuesBlock(
                     tool=SpecificToolChoiceBlock(name=RESPONSE_FORMAT_TOOL_NAME)
@@ -1140,7 +1150,7 @@ class AmazonConverseConfig(BaseConfig):
         model: str | None = None,
     ) -> SystemContentBlock | ContentBlock | None:
         cache_control: Final = message_block.get("cache_control", None)
-        if cache_control is None:
+        if cache_control is None or not bedrock_model_accepts_cache_points(model):
             return None
 
         cache_point: Final = self._build_cache_point_block(cache_control, model)
@@ -1604,7 +1614,7 @@ class AmazonConverseConfig(BaseConfig):
 
         # Append cachePoint to tools if cache_control_injection_points has tool_config
         cache_injection_points: Final = additional_request_params.pop("cache_control_injection_points", None)
-        if cache_injection_points and len(bedrock_tools) > 0:
+        if cache_injection_points and len(bedrock_tools) > 0 and bedrock_model_accepts_cache_points(model):
             for point in cache_injection_points:
                 if point.get("location") == "tool_config":
                     cache_point = self._build_cache_point_block(point.get("control"), model)

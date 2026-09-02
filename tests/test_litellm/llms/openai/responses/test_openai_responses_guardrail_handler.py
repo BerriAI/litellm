@@ -828,6 +828,24 @@ class MockPassThroughGuardrail(CustomGuardrail):
         return inputs
 
 
+class MockRecordingGuardrail(MockPassThroughGuardrail):
+    """Pass-through guardrail that records every apply_guardrail inputs payload"""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.seen_inputs: List[GenericGuardrailAPIInputs] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.seen_inputs.append(inputs)
+        return inputs
+
+
 class TestOpenAIResponsesHandlerStreamingOutputProcessing:
     """Test streaming output processing functionality"""
 
@@ -1103,6 +1121,80 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
 
         output_text = result[-1]["response"]["output"][0]["content"][0]["text"]
         assert output_text == original_text
+
+    @pytest.mark.asyncio
+    async def test_failed_stream_scans_delta_text(self):
+        """A stream ending in response.failed has text only in delta events; the
+        fallback scan must assemble and scan it instead of skipping on an empty string."""
+        handler = OpenAIResponsesHandler()
+        guardrail = MockRecordingGuardrail(guardrail_name="test")
+
+        responses_so_far = [
+            {"type": "response.created", "response": {"id": "resp_123"}},
+            {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_123"}},
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_123",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "Hello",
+            },
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_123",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": " world",
+            },
+            {"type": "response.failed", "response": {"id": "resp_123", "status": "failed"}},
+        ]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=responses_so_far,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        assert result == responses_so_far
+        assert [inputs.get("texts") for inputs in guardrail.seen_inputs] == [["Hello world"]]
+
+    def test_get_streaming_string_so_far_prefers_done_text_over_deltas(self):
+        """The done event repeats the whole part, so deltas must not be double counted;
+        a part with no done event yet still contributes its joined deltas."""
+        handler = OpenAIResponsesHandler()
+
+        events = [
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "Hello",
+            },
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": " world",
+            },
+            {
+                "type": "response.output_text.done",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "text": "Hello world",
+            },
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_2",
+                "output_index": 1,
+                "content_index": 0,
+                "delta": "; unfinished",
+            },
+        ]
+
+        assert handler.get_streaming_string_so_far(events) == "Hello world; unfinished"
 
 
 class TestGetStructuredMessages:
@@ -1746,3 +1838,219 @@ class TestPatchEdgeBranches:
         from litellm.llms.openai.responses.guardrail_translation.handler import _item_rewrite_field
 
         assert _item_rewrite_field({"type": 123, "content": "hello"}) is None
+
+
+class TestBuildBlockSseChunks:
+    """build_block_sse_chunks turns a streaming ModifyResponseException into 200 SSE events"""
+
+    def _exc(self, original_response=None):
+        from litellm.exceptions import ModifyResponseException
+
+        return ModifyResponseException(
+            message="Blocked by policy.",
+            model="gpt-5.4-mini",
+            request_data={},
+            guardrail_name="test",
+            original_response=original_response,
+        )
+
+    def _payloads(self, chunks):
+        import json
+
+        return [json.loads(chunk.decode().removeprefix("data: ").strip()) for chunk in chunks]
+
+    def test_standalone_block_emits_complete_synthetic_stream(self):
+        handler = OpenAIResponsesHandler()
+        payloads = self._payloads(handler.build_block_sse_chunks(self._exc(), stream_started=False))
+        types = [payload["type"] for payload in payloads]
+        assert types[0] == "response.created"
+        assert types[-1] == "response.completed"
+        completed = payloads[-1]["response"]
+        assert completed["id"].startswith("resp_")
+        assert completed["model"] == "gpt-5.4-mini"
+        assert completed["output"][0]["content"][0]["text"] == "Blocked by policy."
+
+    def test_continuation_appends_item_at_next_output_index_with_real_usage(self):
+        handler = OpenAIResponsesHandler()
+        yielded = [
+            {"type": "response.created", "response": {"id": "resp_live", "model": "gpt-5.4-mini-2026-01-01"}},
+            {"type": "response.output_item.added", "output_index": 2, "item": {"id": "msg_orig"}},
+        ]
+        original = yielded + [
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_live",
+                    "model": "gpt-5.4-mini-2026-01-01",
+                    "output": [],
+                    "usage": {"input_tokens": 7, "output_tokens": 21, "total_tokens": 28},
+                },
+            }
+        ]
+        payloads = self._payloads(
+            handler.build_block_sse_chunks(
+                self._exc(original_response=original), stream_started=True, responses_so_far=yielded
+            )
+        )
+        types = [payload["type"] for payload in payloads]
+        assert "response.created" not in types
+        assert types[0] == "response.output_item.done"
+        assert payloads[0]["output_index"] == 2
+        assert payloads[0]["item"]["id"] == "msg_orig"
+        assert payloads[0]["item"]["status"] == "completed"
+        assert types[1] == "response.output_item.added"
+        assert payloads[1]["output_index"] == 3
+        completed = payloads[-1]["response"]
+        assert completed["id"] == "resp_live"
+        assert completed["model"] == "gpt-5.4-mini-2026-01-01"
+        assert completed["output"][0]["content"][0]["text"] == "Blocked by policy."
+        assert completed["usage"] == {"input_tokens": 7, "output_tokens": 21, "total_tokens": 28}
+
+    def test_continuation_reads_usage_from_typed_completed_event(self):
+        from litellm.types.llms.openai import (
+            ResponseCompletedEvent,
+            ResponsesAPIResponse,
+            ResponsesAPIStreamEvents,
+        )
+
+        handler = OpenAIResponsesHandler()
+        original = [
+            ResponseCompletedEvent(
+                type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                response=ResponsesAPIResponse.model_validate(
+                    {
+                        "id": "resp_live",
+                        "created_at": 1,
+                        "model": "gpt-5.4-mini",
+                        "output": [],
+                        "usage": {"input_tokens": 7, "output_tokens": 21, "total_tokens": 28},
+                    }
+                ),
+            )
+        ]
+        payloads = self._payloads(
+            handler.build_block_sse_chunks(
+                self._exc(original_response=original), stream_started=True, responses_so_far=[]
+            )
+        )
+        completed = payloads[-1]["response"]
+        assert completed["usage"]["input_tokens"] == 7
+        assert completed["usage"]["output_tokens"] == 21
+        assert completed["usage"]["total_tokens"] == 28
+
+    def test_continuation_closes_open_item_given_pydantic_events_with_enum_types(self):
+        from litellm.types.llms.openai import (
+            BaseLiteLLMOpenAIResponseObject,
+            ContentPartAddedEvent,
+            OutputItemAddedEvent,
+            OutputTextDeltaEvent,
+            ResponsesAPIStreamEvents,
+        )
+
+        handler = OpenAIResponsesHandler()
+        open_item = GenericResponseOutputItem.model_validate(
+            {"type": "message", "id": "msg_live", "status": "in_progress", "role": "assistant", "content": []}
+        )
+        yielded = [
+            OutputItemAddedEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, output_index=0, item=open_item
+            ),
+            ContentPartAddedEvent(
+                type=ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+                item_id="msg_live",
+                output_index=0,
+                content_index=0,
+                part=BaseLiteLLMOpenAIResponseObject.model_validate(
+                    {"type": "output_text", "text": "", "annotations": []}
+                ),
+            ),
+            OutputTextDeltaEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+                item_id="msg_live",
+                output_index=0,
+                content_index=0,
+                delta="partial ",
+            ),
+            OutputTextDeltaEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+                item_id="msg_live",
+                output_index=0,
+                content_index=0,
+                delta="text",
+            ),
+        ]
+        payloads = self._payloads(
+            handler.build_block_sse_chunks(
+                self._exc(original_response=yielded), stream_started=True, responses_so_far=yielded
+            )
+        )
+        types = [payload["type"] for payload in payloads]
+        assert types[:3] == [
+            "response.output_text.done",
+            "response.content_part.done",
+            "response.output_item.done",
+        ]
+        assert payloads[0]["text"] == "partial text"
+        assert payloads[2]["item"]["id"] == "msg_live"
+        assert payloads[2]["item"]["status"] == "completed"
+        assert payloads[2]["item"]["content"][0]["text"] == "partial text"
+        assert types[3] == "response.output_item.added"
+        assert payloads[3]["output_index"] == 1
+
+    def test_continuation_closes_open_function_call_as_incomplete(self):
+        handler = OpenAIResponsesHandler()
+        yielded = [
+            {"type": "response.created", "response": {"id": "resp_live", "model": "gpt-5.4-mini"}},
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "id": "fc_live",
+                    "type": "function_call",
+                    "status": "in_progress",
+                    "call_id": "call_1",
+                    "name": "run_payment",
+                    "arguments": "",
+                },
+            },
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_live",
+                "output_index": 0,
+                "delta": '{"amount": 100}',
+            },
+        ]
+        payloads = self._payloads(
+            handler.build_block_sse_chunks(
+                self._exc(original_response=yielded), stream_started=True, responses_so_far=yielded
+            )
+        )
+        types = [payload["type"] for payload in payloads]
+        assert types[0] == "response.output_item.done"
+        closed = payloads[0]["item"]
+        assert closed["id"] == "fc_live"
+        assert closed["type"] == "function_call"
+        assert closed["status"] == "incomplete"
+        assert closed["name"] == "run_payment"
+        assert "content" not in closed
+        assert types[1] == "response.output_item.added"
+        assert payloads[1]["output_index"] == 1
+        assert types[-1] == "response.completed"
+
+    def test_continuation_without_open_item_emits_no_closing_events(self):
+        handler = OpenAIResponsesHandler()
+        yielded = [
+            {"type": "response.created", "response": {"id": "resp_live", "model": "gpt-5.4-mini"}},
+            {"type": "response.in_progress", "response": {"id": "resp_live"}},
+        ]
+        payloads = self._payloads(
+            handler.build_block_sse_chunks(
+                self._exc(original_response=yielded), stream_started=True, responses_so_far=yielded
+            )
+        )
+        types = [payload["type"] for payload in payloads]
+        assert types[0] == "response.output_item.added"
+        assert types[-1] == "response.completed"
+        dones = [payload for payload in payloads if payload["type"] == "response.output_item.done"]
+        assert len(dones) == 1
+        assert dones[0]["item"]["content"][0]["text"] == "Blocked by policy."
