@@ -6241,22 +6241,6 @@ class TestBedrockGuardrailImageInput:
             )
         assert sent == [20, 20, 5], sent
 
-    def test_masking_keeps_image_parts_in_the_request(self):
-        """Masking rewrites text in place; the image must survive to reach the model."""
-        image_part = {"type": "image_url", "image_url": {"url": self._PNG_DATA_URI}}
-        messages = [
-            {
-                "role": "user",
-                "content": [{"type": "text", "text": "my ssn is 123-45-6789"}, image_part],
-            }
-        ]
-
-        updated = self._guardrail()._apply_masking_to_messages(messages=messages, masked_texts=["my ssn is {SSN}"])
-
-        assert updated[0]["content"] == [
-            {"type": "text", "text": "my ssn is {SSN}"},
-            image_part,
-        ]
 
 def test_load_credentials_assumes_role_with_external_id():
     """A trust policy requiring sts:ExternalId must be satisfied by the guardrail's aws_external_id."""

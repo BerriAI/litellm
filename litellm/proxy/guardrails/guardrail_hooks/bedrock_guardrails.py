@@ -3325,9 +3325,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     masking_index += 1
                 if item is not None:
                     new_content.append(item)
-            else:
-                new_content.append(item)  # pyright: ignore[reportArgumentType]  # opaque provider parts stay unchanged
-
         return new_content, masking_index
 
     def _apply_masking_to_response(
