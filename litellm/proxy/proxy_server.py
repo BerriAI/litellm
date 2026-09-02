@@ -16346,9 +16346,7 @@ async def update_config(
             existing = await _read_section("router_settings")
             before_router_settings: Final = copy.deepcopy(existing)
             typed_router_settings: Final = (
-                config_info.router_settings.dict(exclude_none=True)
-                if config_info.router_settings is not None
-                else {}
+                config_info.router_settings.dict(exclude_none=True) if config_info.router_settings is not None else {}
             )
             raw_router_settings_without_none: Final = {
                 key: value
