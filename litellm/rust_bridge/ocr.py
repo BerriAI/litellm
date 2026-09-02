@@ -3,11 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable
-from typing import Final, Protocol, cast
+from typing import Final, Protocol
 
 import httpx
 
 from litellm.rust_bridge import configuration as _configuration
+from litellm.rust_bridge.bindings import UNSET, NativeBinding, Unset
+from litellm.rust_bridge.runtime import (
+    BridgeErrorContext,
+    FallbackMode,
+    ainvoke,
+    async_none,
+    identity,
+    invoke,
+)
 from litellm.rust_bridge.timeouts import timeout_to_seconds as _timeout_to_seconds
 
 rust_ocr_enabled = _configuration.rust_ocr_enabled
@@ -44,49 +53,25 @@ class RustAocr(Protocol):
         raise NotImplementedError
 
 
-class _Unset:
-    pass
-
-
-_UNSET: Final[_Unset] = _Unset()
-
-
-_rust_ocr_impl: RustOcr | None = None
-_rust_aocr_impl: RustAocr | None = None
+_OCR: Final = NativeBinding[RustOcr]("ocr")
+_AOCR: Final = NativeBinding[RustAocr]("aocr")
 
 
 def set_rust_ocr(
     *,
-    ocr: RustOcr | None | _Unset = _UNSET,
-    aocr: RustAocr | None | _Unset = _UNSET,
+    ocr: RustOcr | None | Unset = UNSET,
+    aocr: RustAocr | None | Unset = UNSET,
 ) -> None:
-    global _rust_ocr_impl, _rust_aocr_impl
-    if not isinstance(ocr, _Unset):
-        _rust_ocr_impl = ocr
-    if not isinstance(aocr, _Unset):
-        _rust_aocr_impl = aocr
+    _OCR.update(ocr)
+    _AOCR.update(aocr)
 
 
 def load_rust_ocr() -> RustOcr | None:
-    if _rust_ocr_impl is not None:
-        return _rust_ocr_impl
-    from litellm.rust_bridge import get_native_bridge
-
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    return cast(RustOcr, native_bridge.ocr)
+    return _OCR.load()
 
 
 def load_rust_aocr() -> RustAocr | None:
-    if _rust_aocr_impl is not None:
-        return _rust_aocr_impl
-    from litellm.rust_bridge import get_native_bridge
-
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    return cast(RustAocr, getattr(native_bridge, "aocr", None))
+    return _AOCR.load()
 
 
 def ocr(
@@ -101,17 +86,26 @@ def ocr(
     timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
     rust_ocr: Final = load_rust_ocr()
-    if rust_ocr is None:
-        return None
-    return rust_ocr(
-        model=model,
-        document=document,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        optional_params=optional_params,
-        timeout_seconds=_timeout_to_seconds(timeout),
+    native_call: Final = (
+        None
+        if rust_ocr is None
+        else lambda: rust_ocr(
+            model=model,
+            document=document,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            optional_params=optional_params,
+            timeout_seconds=_timeout_to_seconds(timeout),
+        )
+    )
+    return invoke(
+        native_call=native_call,
+        fallback=lambda: None,
+        adapt=identity,
+        mode=FallbackMode.PYTHON,
+        context=BridgeErrorContext(route="ocr", provider=custom_llm_provider or "", model=model),
     )
 
 
@@ -127,15 +121,24 @@ async def aocr(
     timeout: float | httpx.Timeout | None,
 ) -> dict[str, object] | None:
     rust_aocr: Final = load_rust_aocr()
-    if rust_aocr is None:
-        return None
-    return await rust_aocr(
-        model=model,
-        document=document,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        optional_params=optional_params,
-        timeout_seconds=_timeout_to_seconds(timeout),
+    native_call: Final = (
+        None
+        if rust_aocr is None
+        else lambda: rust_aocr(
+            model=model,
+            document=document,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            optional_params=optional_params,
+            timeout_seconds=_timeout_to_seconds(timeout),
+        )
+    )
+    return await ainvoke(
+        native_call=native_call,
+        fallback=async_none,
+        adapt=identity,
+        mode=FallbackMode.PYTHON,
+        context=BridgeErrorContext(route="ocr", provider=custom_llm_provider or "", model=model),
     )
