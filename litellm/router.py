@@ -30,7 +30,7 @@ import anyio
 import httpx
 import openai
 from openai import AsyncOpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import overload
 
 import litellm
@@ -50,6 +50,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
+    RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
@@ -354,6 +355,13 @@ _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
 _ALIAS_PARAMS_NEVER_FORWARDED: Final = frozenset({"model", "api_base", "api_key", "api_version"})
 _ALIAS_MARKER_FORWARDED_PARAMS_KWARG: Final = "_alias_marker_forwarded_params"
 
+_RUNTIME_TOGGLEABLE_PRE_CALL_CHECKS: Final[Mapping[str, type[CustomLogger]]] = MappingProxyType(
+    {
+        "prompt_caching": PromptCachingDeploymentCheck,
+        "enforce_model_rate_limits": ModelRateLimitingCheck,
+    }
+)
+
 
 def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream]) -> bool:
     for chunk in chunks:
@@ -373,6 +381,28 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
         ):
             return True
     return False
+
+
+_NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
+_SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def _with_router_resolved_session_model(session: object, model_name: str) -> Mapping[str, Mapping[str, object]]:
+    """
+    Realtime client-secret requests carry the model inside ``session`` as well, and the caller's copy of it still
+    holds the pre-routing model group name, so it has to follow the deployment the router just picked.
+
+    Returns kwargs to merge into the downstream call, empty when there is no session model to resolve.
+    """
+    try:
+        typed_session: Final = _SESSION_ADAPTER.validate_python(session)
+    except ValidationError:
+        return _NO_SESSION_KWARGS
+    if "model" not in typed_session:
+        return _NO_SESSION_KWARGS
+    return MappingProxyType(
+        {"session": {**typed_session, "model": model_name}}  # mutable-ok: callees deepcopy and JSON-dump session
+    )
 
 
 # Router._aanthropic_messages_streaming_iterator buffers lifecycle chunks
@@ -2072,10 +2102,38 @@ class Router:
             if _callback is None:
                 continue
 
+            if self.optional_callbacks is not None and any(
+                isinstance(callback, type(_callback)) for callback in self.optional_callbacks
+            ):
+                continue
             if self.optional_callbacks is None:
                 self.optional_callbacks = []
             self.optional_callbacks.append(_callback)
             litellm.logging_callback_manager.add_litellm_callback(_callback)
+
+    def set_optional_pre_call_checks(self, optional_pre_call_checks: OptionalPreCallChecks | None) -> None:
+        if optional_pre_call_checks is None:
+            return
+        requested: Final = frozenset(optional_pre_call_checks)
+        for name, callback_cls in _RUNTIME_TOGGLEABLE_PRE_CALL_CHECKS.items():
+            if name not in requested:
+                self._remove_optional_callbacks_of_type(callback_cls)
+        self.add_optional_pre_call_checks(optional_pre_call_checks)
+
+    def _remove_optional_callbacks_of_type(self, callback_cls: type[CustomLogger]) -> None:
+        if self.optional_callbacks is None or not any(type(cb) is callback_cls for cb in self.optional_callbacks):
+            return
+        self.optional_callbacks = [cb for cb in self.optional_callbacks if type(cb) is not callback_cls]
+        if any(
+            router is not self and any(type(cb) is callback_cls for cb in (router.optional_callbacks or []))
+            for router in tuple(_live_routers)
+        ):
+            return
+        for cb in tuple(litellm.callbacks):
+            if type(cb) is callback_cls:
+                litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                    litellm.callbacks, cb, require_self=False
+                )
 
     def print_deployment(self, deployment: dict):
         """
@@ -2324,7 +2382,7 @@ class Router:
     @overload
     async def acompletion(
         self, model: str, messages: list[AllMessageValues], stream: Literal[True, False] = False, **kwargs
-    ) -> CustomStreamWrapper | ModelResponse: 
+    ) -> CustomStreamWrapper | ModelResponse:
         ...
 
     # fmt: on
@@ -4007,6 +4065,7 @@ class Router:
             prompt_variables=prompt_variables,
             prompt_label=prompt_label,
             request_kwargs=kwargs,
+            injected_for_every_deployment=True,
         )
 
         # Filter out prompt management specific parameters from data before merging
@@ -4894,6 +4953,7 @@ class Router:
                 "caching": self.cache_responses,
                 **kwargs,
                 "model": model_name,
+                **_with_router_resolved_session_model(kwargs.get("session"), model_name),
             }
             # Only set custom_llm_provider if it's not None
             if custom_llm_provider is not None:
@@ -6374,8 +6434,6 @@ class Router:
             "responses",
             "generate_content",
             "generate_content_stream",
-            "vector_store_search",
-            "vector_store_create",
             "ocr",
             "search",
             "video_generation",
@@ -6399,6 +6457,8 @@ class Router:
             return sync_wrapper
 
         if call_type in (
+            "vector_store_search",
+            "vector_store_create",
             "vector_store_retrieve",
             "vector_store_list",
             "vector_store_update",
@@ -6410,11 +6470,16 @@ class Router:
                 client: object | None = None,
                 **kwargs,
             ):
-                if custom_llm_provider and "custom_llm_provider" not in kwargs:
-                    kwargs["custom_llm_provider"] = custom_llm_provider
-                if kwargs.get("model"):
-                    return self._generic_api_call_with_fallbacks(original_function=original_function, **kwargs)
-                return original_function(**kwargs)
+                provider_kwargs: Final = (
+                    MappingProxyType({**kwargs, "custom_llm_provider": custom_llm_provider})
+                    if custom_llm_provider and "custom_llm_provider" not in kwargs
+                    else MappingProxyType(kwargs)
+                )
+                if provider_kwargs.get("model"):
+                    return self._generic_api_call_with_fallbacks(original_function=original_function, **provider_kwargs)
+                if call_type == "vector_store_search":
+                    return original_function(**MappingProxyType({**provider_kwargs, "router": self}))
+                return original_function(**provider_kwargs)
 
             return vector_store_sync_wrapper
 
@@ -6590,6 +6655,7 @@ class Router:
                 return await self._init_vector_store_api_endpoints(
                     original_function=original_function,
                     custom_llm_provider=custom_llm_provider,
+                    call_type=call_type,
                     **kwargs,
                 )
             elif call_type in ("afile_delete", "afile_content"):
@@ -6630,6 +6696,7 @@ class Router:
         self,
         original_function: Callable,
         custom_llm_provider: str | None = None,
+        call_type: str | None = None,
         **kwargs,
     ):
         """
@@ -6648,6 +6715,13 @@ class Router:
                 **kwargs,
             )
 
+        # For search, pass the router so provider transforms can resolve
+        # router-managed embedding models (e.g. S3 Vectors query embeddings).
+        # The merge also overrides any client-supplied `router` key.
+        if call_type == "avector_store_search":
+            search_kwargs: Final = MappingProxyType({**kwargs, "router": self})
+            return await original_function(**search_kwargs)
+
         # Otherwise, call the original function directly
         return await original_function(**kwargs)
 
@@ -6664,7 +6738,10 @@ class Router:
         metadata. When present, decode the ID, replace ``container_id`` with the
         upstream value, and route through ``_ageneric_api_call_with_fallbacks`` so
         deployment credentials (e.g. regional ``api_base`` for Azure) match
-        :meth:`_init_responses_api_endpoints`. Otherwise call the handler directly.
+        :meth:`_init_responses_api_endpoints`. Create/list calls carry no container ID, so
+        they route through the deployment named by ``model`` when the caller passes one,
+        falling back to the direct call when no deployment matches. Otherwise call the
+        handler directly with global provider credentials.
         """
         if custom_llm_provider and "custom_llm_provider" not in kwargs:
             kwargs["custom_llm_provider"] = custom_llm_provider
@@ -6695,6 +6772,14 @@ class Router:
                     original_function=original_function,
                     **kwargs,
                 )
+
+        requested_model: Final = kwargs.get("model")
+        if isinstance(requested_model, str) and requested_model.strip():
+            return await self._ageneric_api_call_with_fallbacks(
+                original_function=original_function,
+                passthrough_on_no_deployment=True,
+                **kwargs,
+            )
 
         return await original_function(**kwargs)
 
@@ -9746,6 +9831,26 @@ class Router:
             coerce_token_limit(model_info.get("max_output_tokens")),
         )
 
+    def get_configured_display_name(self, model_name: str) -> "str | None":
+        """
+        Return the display_name explicitly configured in a concrete deployment's
+        model_info for model_name, via O(1) index lookup.
+
+        Returns None for wildcard-expanded or unknown names, and treats a
+        non-string or empty configured value as absent rather than failing the
+        listing. Like get_configured_token_limits, this never triggers pattern
+        matching or deep copies, so it is safe to call per listed model on the
+        /v1/models hot path.
+        """
+        deployment: Final = self.get_deployment_by_model_group_name(model_group_name=model_name)
+        if deployment is None:
+            return None
+
+        display_name: Final = deployment.model_info.get("display_name")
+        if isinstance(display_name, str) and display_name.strip():
+            return display_name
+        return None
+
     def get_deployment_credentials_with_provider(
         self, model_id: str, team_id: str | None = None
     ) -> dict[str, Any] | None:
@@ -11331,27 +11436,6 @@ class Router:
         """
         Update the router settings.
         """
-        # only the following settings are allowed to be configured
-        _allowed_settings: Final = [
-            "routing_strategy_args",
-            "routing_strategy",
-            "routing_groups",
-            "allowed_fails",
-            "cooldown_time",
-            "num_retries",
-            "timeout",
-            "max_retries",
-            "retry_after",
-            "fallbacks",
-            "context_window_fallbacks",
-            "retry_policy",
-            "model_group_retry_policy",
-            "model_group_alias",
-            "enable_weighted_failover",
-            "enable_tag_filtering",
-            "tag_routing_prefix",
-        ]
-
         _int_settings: Final = [
             "timeout",
             "num_retries",
@@ -11364,13 +11448,15 @@ class Router:
         rebuild_routing_groups = False
         relink_lar1_from_args = False
         for var in kwargs:
-            if var in _allowed_settings:
+            if var in RUNTIME_UPDATABLE_ROUTER_SETTINGS:
                 if var in _int_settings:
                     _casted_value = int(kwargs[var])
                     setattr(self, var, _casted_value)
                 elif var == "routing_groups":
                     self._routing_groups_input = kwargs[var]
                     rebuild_routing_groups = True
+                elif var == "optional_pre_call_checks":
+                    self.set_optional_pre_call_checks(kwargs[var])
                 elif var == "retry_policy":
                     value = kwargs[var]
                     if isinstance(value, dict):

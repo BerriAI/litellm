@@ -9,7 +9,7 @@
     "limit": 809
   },
   "ANN201": {
-    "limit": 2001
+    "limit": 2000
   },
   "ANN202": {
     "limit": 835
@@ -108,7 +108,7 @@
     "limit": 3
   },
   "F401": {
-    "limit": 13
+    "limit": 12
   },
   "LOG015": {
     "limit": 5
@@ -147,7 +147,7 @@
     "limit": 3
   },
   "PLR1714": {
-    "limit": 256
+    "limit": 253
   },
   "PLW0127": {
     "limit": 57
@@ -177,7 +177,7 @@
     "limit": 8
   },
   "RUF019": {
-    "limit": 29
+    "limit": 27
   },
   "RUF046": {
     "limit": 4
