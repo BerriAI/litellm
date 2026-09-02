@@ -3013,9 +3013,7 @@ class TestHandleLLMApiExceptionDictDetail:
         assert "NotFoundError" in proxy_exc.message
 
     async def test_exception_with_status_code_propagates(self):
-        """Exception with a statically-set status_code should propagate it,
-        including its message: a real provider error is safe and useful to
-        forward as-is."""
+        """Exception with a statically-set status_code should propagate it and its message."""
         from litellm.llms.vertex_ai.common_utils import VertexAIError
 
         exc = VertexAIError(
@@ -3027,22 +3025,16 @@ class TestHandleLLMApiExceptionDictDetail:
         assert proxy_exc.message == "Rate limit exceeded"
 
     async def test_exception_without_status_code_defaults_to_500(self):
-        """Exception with no status_code attribute defaults to 500. Its message
-        still reaches the client unredacted when it carries no secret pattern:
-        many routes deliberately raise a plain exception (ValueError, etc.) as
-        an informative validation message, e.g. the OCR endpoint's rejection of
-        provider-native file IDs, and that convention must keep working."""
+        """Exception with no status_code attribute defaults to 500; a message with nothing
+        to redact still reaches the client, since routes raise plain exceptions as validation text."""
         exc = ValueError("Something broke")
         proxy_exc = await self._invoke(exc)
         assert proxy_exc.code == "500"
         assert proxy_exc.message == "Something broke"
 
     async def test_unclassified_exception_redacts_internal_details_from_client_message(self):
-        """A bug in proxy-layer code (a custom callback, a hook) can raise any
-        exception, and its message may embed a credential, a filesystem path,
-        or an internal hostname. Only the client-facing message is redacted,
-        since an unclassified exception never went through provider-error
-        redaction. Regression for LIT-6747."""
+        """Regression for LIT-6747: an unclassified exception's credential, path, and host
+        must not reach the client."""
         exc = RuntimeError(
             "Failed to connect to postgresql://litellm_internal:S3cr3tPGPass@10.20.30.40:5432/litellm_prod "
             "(config file /etc/litellm/secrets/db.yaml)"
@@ -3273,9 +3265,8 @@ class TestStreamCloseOnDisconnect:
     async def test_async_streaming_data_generator_redacts_internal_details_on_error(
         self,
     ):
-        """An exception raised mid-stream must not hand its raw text (or a
-        traceback) to serialize_error: both may embed credentials, filesystem
-        paths, or internal hostnames. Regression for LIT-6747."""
+        """Regression for LIT-6747: a mid-stream exception must not hand its raw text or a
+        traceback to serialize_error."""
 
         class FailingUpstream:
             def __aiter__(self):

@@ -94,13 +94,8 @@ def redact_secrets(value: str) -> str:
 
 
 def redact_internal_details_from_client_message(value: str) -> str:
-    """Public API: redact secrets, filesystem paths, and internal hostnames from
-    a string about to leave the process in an HTTP response.
-
-    Client-facing use only — never call this from the logging pipeline, an
-    operator's own server logs must keep this detail. See redact_secrets() for
-    the credential-only version already used there.
-    """
+    """Public API: redact_secrets() plus filesystem paths, internal hostnames, and an
+    embedded traceback, for a string about to leave the process in an HTTP response."""
     if not _ENABLE_SECRET_REDACTION:
         return value
     return redact_internal_details(value)

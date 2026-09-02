@@ -683,9 +683,7 @@ def test_redact_internal_details_catches_paths_and_hostnames(text, leaked):
 
 
 def test_redact_internal_details_leaves_public_hostnames_and_routes_alone():
-    """Public provider hostnames and API routes must survive unchanged: they
-    are not internal details, and litellm's own error messages rely on them
-    staying legible (e.g. `/v1/models`, `api.openai.com`)."""
+    """litellm's own error messages rely on routes like /v1/models staying legible."""
     safe_strings = (
         "call https://api.openai.com/v1/chat/completions",
         "/chat/completions: Invalid model name passed in model=gpt-9",
@@ -704,10 +702,8 @@ def test_redact_internal_details_layers_on_top_of_credential_redaction():
 
 
 def test_redact_internal_details_drops_embedded_traceback():
-    """litellm.exception_type() embeds a full traceback in some exception
-    messages as a debugging aid for direct SDK callers (see
-    test_exception_mapping_utils.py); that traceback must never reach an
-    HTTP client. Regression for LIT-6747."""
+    """Regression for LIT-6747: the traceback exception_type() embeds for SDK callers
+    must never reach an HTTP client."""
     try:
         raise RuntimeError("socket hung up")
     except RuntimeError:

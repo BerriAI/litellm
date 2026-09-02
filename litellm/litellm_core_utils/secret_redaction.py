@@ -92,40 +92,22 @@ def redact_string(value: str) -> str:
     return _SECRET_RE.sub(_REDACTED, value)
 
 
-def _build_internal_detail_patterns() -> "re.Pattern[str]":
-    patterns: Final[tuple[str, ...]] = (
-        # Unix absolute filesystem paths rooted under a well-known OS/user
-        # directory. Deliberately excludes bare API routes like /v1/models,
-        # which never start with one of these directory names.
-        r"/(?:etc|var|opt|usr|home|root|private|Users|tmp|mnt|srv)/[^\s'\"\)\]}>,]+",
-        # Windows absolute filesystem paths
-        r"[A-Za-z]:\\[^\s'\"\)\]}>,]+",
-        # RFC 1918 private IPv4 ranges and loopback
-        r"\b(?:10(?:\.\d{1,3}){3}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|"
-        r"192\.168(?:\.\d{1,3}){2}|127(?:\.\d{1,3}){3})\b",
-        # Hostnames under a conventionally internal-only suffix
-        r"\b[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.(?:internal|local|corp|lan|intra|private)\b",
-    )
-    return re.compile("|".join(patterns), re.IGNORECASE)
-
-
-_INTERNAL_DETAIL_RE: Final = _build_internal_detail_patterns()
+_UNIX_SYSTEM_PATH: Final = r"/(?:etc|var|opt|usr|home|root|private|Users|tmp|mnt|srv)/[^\s'\"\)\]}>,]+"
+_WINDOWS_DRIVE_PATH: Final = r"[A-Za-z]:\\[^\s'\"\)\]}>,]+"
+_PRIVATE_OR_LOOPBACK_IPV4: Final = (
+    r"\b(?:10(?:\.\d{1,3}){3}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|192\.168(?:\.\d{1,3}){2}|127(?:\.\d{1,3}){3})\b"
+)
+_INTERNAL_SUFFIX_HOSTNAME: Final = r"\b[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.(?:internal|local|corp|lan|intra|private)\b"
+_INTERNAL_DETAIL_RE: Final = re.compile(
+    "|".join((_UNIX_SYSTEM_PATH, _WINDOWS_DRIVE_PATH, _PRIVATE_OR_LOOPBACK_IPV4, _INTERNAL_SUFFIX_HOSTNAME)),
+    re.IGNORECASE,
+)
 _TRACEBACK_MARKER: Final = "Traceback (most recent call last):"
 
 
 def redact_internal_details(value: str) -> str:
-    """Scrub a stack trace, filesystem paths, and internal hostnames from
-    *value*, on top of the credential patterns redact_string() already covers.
-
-    litellm's own exception mapper embeds a full traceback in some exception
-    messages as a debugging aid for direct SDK callers, so the traceback is
-    dropped here rather than in the mapper itself.
-
-    Client-facing use only. An operator's own server logs must keep this
-    detail to debug the underlying failure, so this must never run in the
-    logging pipeline (redact_string() intentionally does not call it) — only
-    at the point a message is about to leave the process in an HTTP response.
-    """
+    """Drop an embedded traceback and scrub filesystem paths and internal hostnames,
+    on top of redact_string(). For client-facing messages only: server logs keep this detail."""
     marker_index: Final = value.find(_TRACEBACK_MARKER)
     without_traceback: Final = value[:marker_index].rstrip() if marker_index != -1 else value
     return _INTERNAL_DETAIL_RE.sub(_REDACTED, redact_string(without_traceback))

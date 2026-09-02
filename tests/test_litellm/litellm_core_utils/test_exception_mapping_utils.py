@@ -1016,9 +1016,8 @@ def test_an_unmapped_exception_with_no_model_or_provider_is_a_connection_error(q
 def _raise_and_map(
     model: str | None, original_exception: Exception, custom_llm_provider: str | None
 ) -> None:
-    """Mirrors how litellm/main.py calls exception_type(): from inside the
-    except block of the original error, so traceback.format_exc() reflects
-    a real call stack rather than an empty one."""
+    """Calls exception_type() from inside the except block, as litellm/main.py does,
+    so traceback.format_exc() has a real stack."""
     try:
         raise original_exception
     except type(original_exception) as caught:
@@ -1030,11 +1029,8 @@ def _raise_and_map(
 
 
 def test_an_unmapped_exception_message_keeps_traceback_for_sdk_callers(quiet_exception_mapping):
-    """exception_type() is shared by direct SDK usage (litellm.completion())
-    and the proxy; a caller using litellm as a library needs the traceback
-    frame to debug an unmapped provider SDK exception. Only the proxy's
-    client-facing response boundary (ProxyBaseLLMRequestProcessing) strips
-    this, not exception_type() itself. Regression for LIT-6747."""
+    """Direct SDK callers debug unmapped provider exceptions with this traceback;
+    only the proxy's response boundary strips it."""
     with pytest.raises(litellm.APIConnectionError) as raised:
         _raise_and_map(
             model="MiniMax-M2.5",
