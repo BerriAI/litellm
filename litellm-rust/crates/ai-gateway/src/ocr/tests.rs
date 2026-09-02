@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use litellm_core::error::CoreError;
+use litellm_core::error::Error;
 use litellm_core::ocr::transformation::OcrResponseHandling;
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -395,7 +395,7 @@ async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
     .await
     .expect_err("provider error propagates");
 
-    assert!(matches!(err, CoreError::Http { status: 500, .. }));
+    assert!(matches!(err, Error::Http { status: 500, .. }));
     server.await.expect("server task completes");
     assert_eq!(
         logger.events(),
@@ -439,7 +439,7 @@ async fn ocr_lifecycle_pre_call_block_skips_provider_socket() {
     .await
     .expect_err("guardrail blocks request");
 
-    assert!(matches!(err, CoreError::InvalidRequest(_)));
+    assert!(matches!(err, Error::InvalidRequest(_)));
     assert_eq!(guardrail.events(), vec!["async_pre_call_hook"]);
     assert_eq!(
         logger.events(),
@@ -607,7 +607,7 @@ fn string_headers_rejects_non_string_values() {
     let err = string_headers(Some(headers)).expect_err("non-string header rejected");
     assert_eq!(
         err,
-        CoreError::InvalidRequest(
+        Error::InvalidRequest(
             "OCR extra_headers.x-retry-count must be a string, got number".to_string()
         )
     );
