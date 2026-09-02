@@ -52,7 +52,7 @@ def _serialize_litellm_params(litellm_params):
 
 def test_direct_vector_store_embedding_executor_rejects_invalid_value():
     with pytest.raises(TypeError, match="Invalid direct vector store embedding executor"):
-        _direct_vector_store_embedding_executor(object())
+        _direct_vector_store_embedding_executor(object(), None)
 
 
 def test_router_vector_store_search_injects_executor_and_request_metadata():

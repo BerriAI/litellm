@@ -86,9 +86,12 @@ class RouterVectorStoreEmbeddingExecutor:
         )
         return bool(resolved) or model in deployment_models
 
+    def _embeds_through_sdk(self, model: str, configuration: Mapping[str, object]) -> bool:
+        return bool(configuration) and not self._router_serves(model)
+
     def embed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
         embedding_kwargs: Final = self._embedding_kwargs(configuration)
-        if not self._router_serves(model):
+        if self._embeds_through_sdk(model, configuration):
             return LiteLLMVectorStoreEmbeddingExecutor().embed(model, query, embedding_kwargs)
         return self.router.embedding(  # pyright: ignore[reportUnknownMemberType]  # Router embedding input retains a legacy untyped list
             model=model,
@@ -98,7 +101,7 @@ class RouterVectorStoreEmbeddingExecutor:
 
     async def aembed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
         embedding_kwargs: Final = self._embedding_kwargs(configuration)
-        if not self._router_serves(model):
+        if self._embeds_through_sdk(model, configuration):
             return await LiteLLMVectorStoreEmbeddingExecutor().aembed(model, query, embedding_kwargs)
         return await self.router.aembedding(  # pyright: ignore[reportUnknownMemberType]  # Router embedding input retains a legacy untyped list
             model=model,

@@ -575,6 +575,32 @@ async def test_router_search_resolves_bare_embedding_alias_async(
     _assert_alias_resolved(embedding_route, search_route, response)
 
 
+def test_sdk_search_with_router_kwarg_resolves_bare_embedding_alias_sync(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    embedding_route = _mock_embedding_route(respx_mock)
+    search_route = _mock_search_route(respx_mock)
+
+    response = litellm.vector_stores.search(router=_alias_router(), **ALIAS_SEARCH_KWARGS)
+
+    _assert_alias_resolved(embedding_route, search_route, response)
+
+
+@pytest.mark.asyncio
+async def test_sdk_search_with_router_kwarg_resolves_bare_embedding_alias_async(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    embedding_route = _mock_embedding_route(respx_mock)
+    search_route = _mock_search_route(respx_mock)
+
+    response = await litellm.vector_stores.asearch(router=_alias_router(), **ALIAS_SEARCH_KWARGS)
+
+    _assert_alias_resolved(embedding_route, search_route, response)
+
+
 @pytest.mark.asyncio
 async def test_transform_uses_injected_executor_without_embedding_config(respx_mock: respx.MockRouter):
     executor = RecordingEmbeddingExecutor(ALIAS_EMBEDDING_RESPONSE)
