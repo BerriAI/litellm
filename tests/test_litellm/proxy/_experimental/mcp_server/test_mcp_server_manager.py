@@ -11160,11 +11160,11 @@ class TestConfigServerIdPinning:
         assert list(manager.config_mcp_servers) == ["docs-prod-1"]
 
     @staticmethod
-    async def _reload_with_db_server(manager: MCPServerManager, server_id: str) -> None:
+    async def _reload_with_db_server(manager: MCPServerManager, server_id: str, db_name: str = "db_server") -> None:
         row = LiteLLM_MCPServerTable(
             server_id=server_id,
-            server_name="db_server",
-            alias="db_server",
+            server_name=db_name,
+            alias=db_name,
             url="https://db.example.com/mcp",
             transport=MCPTransport.http,
         )
@@ -11174,8 +11174,8 @@ class TestConfigServerIdPinning:
         repository.table.find_many = AsyncMock(return_value=[raw_row])
         built = MCPServer(
             server_id=server_id,
-            name="db_server",
-            server_name="db_server",
+            name=db_name,
+            server_name=db_name,
             url="https://db.example.com/mcp",
             transport=MCPTransport.http,
         )
@@ -11462,3 +11462,28 @@ class TestConfigServerIdPinning:
 
         assert "wiki" in manager.config_mcp_servers
         assert manager.config_mcp_servers["wiki"].url == "https://example.com/mcp"
+
+    @pytest.mark.asyncio
+    async def test_a_row_that_shadows_one_id_still_reports_capturing_another(self, caplog):
+        """Skipping is per identifier, not per row, so the second collision is not lost."""
+        manager = MCPServerManager()
+        await manager.load_servers_from_config(
+            {
+                "docs_server": {
+                    "server_id": "shadow_x",
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+                "wiki_server": {
+                    "server_id": "capture_y",
+                    "url": "https://wiki.example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+            }
+        )
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "shadow_x", db_name="capture_y")
+
+        assert any("shadow_x" in m and "database entry takes precedence" in m for m in caplog.messages)
+        assert any("capture_y" in m and "name or alias of a database-backed" in m for m in caplog.messages)

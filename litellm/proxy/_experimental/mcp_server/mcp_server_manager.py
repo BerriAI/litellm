@@ -483,16 +483,17 @@ def _config_ids_capturing_db_identifiers(
     stops being reachable by name. The config load cannot catch this because the database registry
     is not loaded yet, so it is reported from the reload that does have both halves.
 
-    A database server whose own id is that config id is skipped: ``get_registry`` is
+    An identifier equal to the database server's own id is skipped: ``get_registry`` is
     ``config_mcp_servers | registry``, so there the database server wins the id outright and the
-    shadow warning above is the accurate one. Reporting both would contradict.
+    shadow warning above is the accurate one. Reporting both would contradict. The skip is per
+    identifier rather than per server, so a row that shadows one config id and captures another
+    still reports the capture.
     """
     return frozenset(
         identifier
         for server in db_servers
-        if server.server_id not in config_server_ids
         for identifier in (server.name, server.server_name, server.alias)
-        if identifier and identifier in config_server_ids
+        if identifier and identifier != server.server_id and identifier in config_server_ids
     )
 
 
