@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -182,7 +183,7 @@ class TestHostedVLLMRerankTruncationParams:
         self.model = "hosted-vllm-model"
 
     def test_map_cohere_rerank_params_forwards_vllm_truncation_params(self):
-        params = self.config.map_cohere_rerank_params(
+        params: Final = self.config.map_cohere_rerank_params(
             non_default_params={
                 "truncate_prompt_tokens": 512,
                 "truncation_side": "left",
@@ -202,15 +203,20 @@ class TestHostedVLLMRerankTruncationParams:
         assert "metadata" not in params
 
     def test_map_cohere_rerank_params_omits_truncation_params_when_absent(self):
-        params = self.config.map_cohere_rerank_params(
+        params: Final = self.config.map_cohere_rerank_params(
             non_default_params={"metadata": {"user_api_key": "sk-test"}},
             model=self.model,
             drop_params=False,
             query="test query",
             documents=["doc1", "doc2"],
         )
-        body = self.config.transform_rerank_request(model=self.model, optional_rerank_params=params, headers={})
-        truncation_keys = {"truncate_prompt_tokens", "truncation_side", "max_tokens_per_query", "max_tokens_per_doc"}
+        body: Final = self.config.transform_rerank_request(model=self.model, optional_rerank_params=params, headers={})
+        truncation_keys: Final = {
+            "truncate_prompt_tokens",
+            "truncation_side",
+            "max_tokens_per_query",
+            "max_tokens_per_doc",
+        }
         assert not truncation_keys & body.keys()
         assert body == {
             "model": self.model,
@@ -230,7 +236,7 @@ class TestHostedVLLMRerankTruncationParams:
             )
 
     def test_transform_request_forwards_truncation_params(self):
-        body = self.config.transform_rerank_request(
+        body: Final = self.config.transform_rerank_request(
             model=self.model,
             optional_rerank_params={
                 "query": "test query",
@@ -248,7 +254,7 @@ class TestHostedVLLMRerankTruncationParams:
         assert body["max_tokens_per_doc"] == 128
 
     def test_transform_request_omits_truncation_params_when_absent(self):
-        body = self.config.transform_rerank_request(
+        body: Final = self.config.transform_rerank_request(
             model=self.model,
             optional_rerank_params={"query": "test query", "documents": ["doc1", "doc2"]},
             headers={},
@@ -259,8 +265,8 @@ class TestHostedVLLMRerankTruncationParams:
         assert "max_tokens_per_doc" not in body
 
     def test_rerank_sends_truncate_prompt_tokens_to_vllm(self):
-        client = HTTPHandler()
-        mock_response = MagicMock(spec=httpx.Response)
+        client: Final = HTTPHandler()
+        mock_response: Final = MagicMock(spec=httpx.Response)
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "id": "score-1",
@@ -277,7 +283,7 @@ class TestHostedVLLMRerankTruncationParams:
                 truncation_side="left",
                 client=client,
             )
-        sent_body = json.loads(mock_post.call_args.kwargs["data"])
+        sent_body: Final = json.loads(mock_post.call_args.kwargs["data"])
         assert mock_post.call_args.kwargs["url"] == "http://vllm.local:8000/rerank"
         assert sent_body["truncate_prompt_tokens"] == 512
         assert sent_body["truncation_side"] == "left"
