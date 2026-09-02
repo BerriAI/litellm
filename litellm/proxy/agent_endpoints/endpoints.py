@@ -20,7 +20,6 @@ from typing_extensions import ReadOnly, Required
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -32,6 +31,10 @@ from litellm.proxy.a2a.agent_card import (
     SUPPORTED_A2A_PROTOCOL_VERSIONS,
     merge_agent_card,
     normalize_protocol_version,
+)
+from litellm.proxy.agent_endpoints.agent_registry import (
+    parse_agent_litellm_params,
+    redact_sensitive_agent_litellm_params,
 )
 from litellm.proxy.agent_endpoints.agent_search import (
     DEFAULT_AGENT_SEARCH_TOP_K,
@@ -139,25 +142,37 @@ async def _attach_keys_to_agents(agents: Sequence[AgentResponse], prisma_client)
         agent.keys = matched_keys or None
 
 
+def _redact_agent_litellm_params_dict(
+    litellm_params: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: AgentResponse.litellm_params is declared as a plain dict, not Mapping
+    """Type-narrowing wrapper: a dict in always yields a dict back from
+    ``redact_sensitive_agent_litellm_params``, which the function's general
+    (possible-JSON-string, possibly-None) signature can't express."""
+    return dict(  # mutable-ok: AgentResponse.litellm_params is declared as a plain dict, not Mapping
+        parse_agent_litellm_params(redact_sensitive_agent_litellm_params(litellm_params))
+    )
+
+
 def _redact_sensitive_agent_fields(
     agents: Sequence[AgentResponse],
+    *,
+    is_admin: bool,
 ) -> list[AgentResponse]:
     """
-    Return copies of the given agents with sensitive configuration fields
-    redacted.  The original objects are not modified.
+    Return copies of the given agents with credential-bearing litellm_params
+    values replaced by a fixed marker (never returned to ANY caller,
+    admin included) and, for non-admin callers, virtual-key and header
+    fields stripped entirely. The original objects are not modified.
     """
     redacted: Final[list[AgentResponse]] = []
     for agent in agents:
         copy = agent.model_copy(deep=True)
-        copy.static_headers = None
-        copy.extra_headers = None
-        copy.keys = None
+        if not is_admin:
+            copy.static_headers = None
+            copy.extra_headers = None
+            copy.keys = None
         if copy.litellm_params:
-            copy.litellm_params = _get_masked_values(
-                copy.litellm_params,
-                unmasked_length=4,
-                number_of_asterisks=4,
-            )
+            copy.litellm_params = _redact_agent_litellm_params_dict(copy.litellm_params)
         redacted.append(copy)
     return redacted
 
@@ -345,13 +360,13 @@ async def get_agents(
                 global_agent_registry.ids_for_agent(agent.agent_id).isdisjoint(litellm.public_agent_groups)
             )
 
-        # Redact sensitive fields for non-admin users
+        # litellm_params secrets are always redacted; keys/headers stay
+        # admin-only.
         is_admin: Final = (
             user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
         )
-        if not is_admin:
-            returned_agents = _redact_sensitive_agent_fields(returned_agents)
+        returned_agents = _redact_sensitive_agent_fields(returned_agents, is_admin=is_admin)
 
         if health_check:
             agents_with_url: Final = [agent for agent in returned_agents if (agent.agent_card_params or {}).get("url")]
@@ -505,7 +520,9 @@ async def create_agent(
                 "Failed to register agent '%s' (ID: %s) in memory: %s", agent_name, agent_id, reg_error
             )
 
-        return result
+        # The caller is a proxy admin (enforced above); litellm_params
+        # secrets are still never echoed back in the response.
+        return _redact_sensitive_agent_fields((result,), is_admin=True)[0]
 
     except HTTPException:
         raise
@@ -578,13 +595,13 @@ async def get_agent_by_id(
 
         await _attach_keys_to_agents([agent], prisma_client)
 
-        # Redact sensitive fields for non-admin users
+        # litellm_params secrets are always redacted; keys/headers stay
+        # admin-only.
         is_admin = (
             user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
         )
-        if not is_admin:
-            agent = _redact_sensitive_agent_fields([agent])[0]
+        agent = _redact_sensitive_agent_fields((agent,), is_admin=is_admin)[0]
 
         return agent
     except HTTPException:
@@ -688,7 +705,7 @@ async def update_agent(
             "Successfully updated agent '%s' (ID: %s) in memory", existing_agent.get("agent_name"), agent_id
         )
 
-        return result
+        return _redact_sensitive_agent_fields((result,), is_admin=True)[0]
     except HTTPException:
         raise
     except Exception as e:
@@ -791,7 +808,7 @@ async def patch_agent(
             "Successfully updated agent '%s' (ID: %s) in memory", existing_agent.get("agent_name"), agent_id
         )
 
-        return result
+        return _redact_sensitive_agent_fields((result,), is_admin=True)[0]
     except HTTPException:
         raise
     except Exception as e:

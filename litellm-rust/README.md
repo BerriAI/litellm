@@ -26,9 +26,10 @@ coverage and production evidence.
 |-------|------|
 | litellm-core | The SDK. Per-route entrypoints (`messages::messages()`), types, provider transforms (modules under `providers/`), provider resolution, auth, the provider HTTP call, and the router. |
 | litellm-ai-gateway | The axum server (behind the `server` feature) and WebSocket hosts. Translates HTTP/WS to core entrypoints; no provider handlers. |
-| litellm-python-bridge | PyO3 cdylib exposing Rust to the litellm Python SDK — marshals Python objects and calls core entrypoints. |
+| litellm-python-interop | Domain-neutral PyO3 foundation for GIL handling and typed Python/Serde conversion. |
+| litellm-python-bridge | PyO3 cdylib exposing LiteLLM Rust APIs to the Python SDK. Owns API registration, domain wiring, and Python exception mapping. |
 
-Dependency direction (acyclic): litellm-core ← litellm-ai-gateway ← litellm-python-bridge.
+Dependency direction is acyclic: `litellm-python-bridge` depends on the domain layers and `litellm-python-interop`; the interop foundation depends on no LiteLLM domain crate.
 
 ## Layout
 
@@ -38,7 +39,8 @@ crates/
     src/messages/   mod.rs (entrypoint), types, transformation, prepare, handler, client
     src/providers/anthropic/messages/transformation.rs
   ai-gateway/     Axum server + WebSocket hosts; calls core entrypoints.
-  python-bridge/  PyO3 bridge for Python LiteLLM.
+  python-interop/ Domain-neutral PyO3 conversion and GIL primitives.
+  python-bridge/  PyO3 API adapter for Python LiteLLM.
 ```
 
 The folder shape follows the Python provider tree:

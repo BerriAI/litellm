@@ -22868,6 +22868,10 @@ export interface components {
             required: boolean;
             /** Tooltip */
             tooltip?: string | null;
+            /** Validation Message */
+            validation_message?: string | null;
+            /** Validation Pattern */
+            validation_pattern?: string | null;
         };
         /**
          * AgentExtension
@@ -25435,6 +25439,11 @@ export interface components {
              */
             background_health_checks?: boolean | null;
             /**
+             * Blocked File Extensions
+             * @description file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename
+             */
+            blocked_file_extensions?: string[] | null;
+            /**
              * Cancel On Disconnect
              * @description cancel the in-flight upstream LLM request (non-streaming) when the client disconnects, freeing backend capacity (e.g. a vLLM GPU slot); the request is logged as a 499 failure
              */
@@ -25519,6 +25528,11 @@ export interface components {
              */
             disable_budget_reservation?: boolean | null;
             /**
+             * Disable Password Login When Sso Enabled
+             * @description If True and SSO is configured (MICROSOFT_CLIENT_ID, GOOGLE_CLIENT_ID, GENERIC_CLIENT_ID, or SAML_IDP_METADATA_URL/XML), disables username/password login on /login, /v2/login, and /v3/login so SSO is the only way to reach the Admin UI. An admin locked out of the UI can still administer the proxy over the API with the master key; unset this setting and restart the proxy to restore UI username/password login. Default is False.
+             */
+            disable_password_login_when_sso_enabled?: boolean | null;
+            /**
              * Enable Public Model Hub
              * @description Public model hub for users to see what models they have access to, supported openai params, etc.
              * @default false
@@ -25573,6 +25587,11 @@ export interface components {
              * @description max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider
              */
             max_batch_file_size_mb?: number | null;
+            /**
+             * Max File Size Mb
+             * @description max file size in MB for /v1/files uploads, for any purpose, if a file is larger than this size it will be rejected before being forwarded to the provider
+             */
+            max_file_size_mb?: number | null;
             /**
              * Max Parallel Requests
              * @description maximum parallel requests for each api key
@@ -25663,6 +25682,31 @@ export interface components {
              * @description Default upstream request timeout in seconds for native and custom pass-through endpoints that use pass_through_request. Defaults to 600 when unset.
              */
             pass_through_request_timeout?: number | null;
+            /**
+             * Password Policy Min Length
+             * @description Minimum length required for a locally-managed user's password. Default is 12; a value below 8 is floored to 8 rather than weakening the requirement further.
+             */
+            password_policy_min_length?: number | null;
+            /**
+             * Password Policy Require Lowercase
+             * @description If True (default), a locally-managed user's password must contain a lowercase letter.
+             */
+            password_policy_require_lowercase?: boolean | null;
+            /**
+             * Password Policy Require Numbers
+             * @description If True (default), a locally-managed user's password must contain a number.
+             */
+            password_policy_require_numbers?: boolean | null;
+            /**
+             * Password Policy Require Special Characters
+             * @description If True (default), a locally-managed user's password must contain a special (non-alphanumeric) character.
+             */
+            password_policy_require_special_characters?: boolean | null;
+            /**
+             * Password Policy Require Uppercase
+             * @description If True (default), a locally-managed user's password must contain an uppercase letter.
+             */
+            password_policy_require_uppercase?: boolean | null;
             /**
              * Plugins
              * @description external services registered as embeddable UI plugins

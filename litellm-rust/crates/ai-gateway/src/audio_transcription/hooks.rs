@@ -1,11 +1,9 @@
-use std::future::Future;
-use std::pin::Pin;
-
-use litellm_core::CoreResult;
 use litellm_core::audio_transcription::transformation::AudioTranscriptionAuth;
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
-use litellm_core::error::CoreError;
+use litellm_core::error::Error;
 use serde_json::{Map, Value, json};
+use std::future::Future;
+use std::pin::Pin;
 
 use super::common_utils::{audio_transcription_provider_config, has_header, string_headers};
 use super::handler::sign_request;
@@ -26,7 +24,7 @@ pub(crate) struct AudioTranscriptionLifecycleHooks {
     request_metadata: RequestMetadata,
 }
 
-type AudioFuture<'a, T> = Pin<Box<dyn Future<Output = CoreResult<T>> + Send + 'a>>;
+type AudioFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
 type AudioLogFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 
 impl AudioTranscriptionLifecycleHooks {
@@ -45,7 +43,7 @@ impl AudioTranscriptionLifecycleHooks {
     async fn run_pre_call_guardrails(
         &self,
         request: PreparedAudioTranscriptionRequest,
-    ) -> CoreResult<PreparedAudioTranscriptionRequest> {
+    ) -> Result<PreparedAudioTranscriptionRequest, Error> {
         if self.guardrail_runner.is_empty() {
             return Ok(request);
         }
@@ -63,17 +61,17 @@ impl AudioTranscriptionLifecycleHooks {
             .await
             .map_err(guardrail_error_to_core_error)?;
         let Value::Object(mut data) = guardrail_request.data else {
-            return Err(CoreError::InvalidRequest(
+            return Err(Error::InvalidRequest(
                 "audio transcription pre_call guardrail must return an object".to_string(),
             ));
         };
         let audio = data.remove("audio").ok_or_else(|| {
-            CoreError::InvalidRequest("audio transcription guardrail removed audio".to_string())
+            Error::InvalidRequest("audio transcription guardrail removed audio".to_string())
         })?;
         let optional_params = match data.remove("optional_params") {
             Some(Value::Object(value)) => value,
             Some(_) => {
-                return Err(CoreError::InvalidRequest(
+                return Err(Error::InvalidRequest(
                     "audio transcription optional_params must be an object".to_string(),
                 ));
             }
@@ -89,9 +87,9 @@ impl AudioTranscriptionLifecycleHooks {
     async fn prepare_provider_request(
         &self,
         request: PreparedAudioTranscriptionRequest,
-    ) -> CoreResult<ProviderAudioTranscriptionRequest> {
+    ) -> Result<ProviderAudioTranscriptionRequest, Error> {
         let config = audio_transcription_provider_config(&request.custom_llm_provider)
-            .ok_or_else(|| CoreError::InvalidProvider(request.custom_llm_provider.clone()))?;
+            .ok_or_else(|| Error::InvalidProvider(request.custom_llm_provider.clone()))?;
         let env_lookup = super::handler::environment_lookup;
         let headers = string_headers(request.extra_headers)?;
         let url = config.complete_url(
@@ -135,7 +133,7 @@ impl AudioTranscriptionLifecycleHooks {
     async fn run_during_call_guardrails(
         &self,
         request: ProviderAudioTranscriptionRequest,
-    ) -> CoreResult<ProviderAudioTranscriptionRequest> {
+    ) -> Result<ProviderAudioTranscriptionRequest, Error> {
         if self.guardrail_runner.is_empty() {
             return Ok(request);
         }
@@ -153,12 +151,12 @@ impl AudioTranscriptionLifecycleHooks {
             .await
             .map_err(guardrail_error_to_core_error)?;
         let Value::Object(mut data) = guardrail_request.data else {
-            return Err(CoreError::InvalidRequest(
+            return Err(Error::InvalidRequest(
                 "audio transcription during_call guardrail must return an object".to_string(),
             ));
         };
         let body = data.remove("body").ok_or_else(|| {
-            CoreError::InvalidRequest("audio transcription guardrail removed body".to_string())
+            Error::InvalidRequest("audio transcription guardrail removed body".to_string())
         })?;
         Ok(ProviderAudioTranscriptionRequest { body, ..request })
     }
@@ -241,7 +239,7 @@ impl CallLifecycleHooks<PreparedAudioTranscriptionRequest, ProviderAudioTranscri
     fn async_log_failure_event<'a>(
         &'a self,
         context: &'a CallLifecycleContext,
-        error: &'a CoreError,
+        error: &'a Error,
         timing: &'a CallLifecycleTiming,
     ) -> Self::FailureFuture<'a> {
         Box::pin(async move {
@@ -281,22 +279,22 @@ fn guardrail_context(metadata: &RequestMetadata) -> GuardrailContext {
     }
 }
 
-fn guardrail_error_to_core_error(error: GuardrailError) -> CoreError {
-    CoreError::InvalidRequest(format!("{}: {}", error.kind, error.message))
+fn guardrail_error_to_core_error(error: GuardrailError) -> Error {
+    Error::InvalidRequest(format!("{}: {}", error.kind, error.message))
 }
 
-fn core_error_kind(error: &CoreError) -> &'static str {
+fn core_error_kind(error: &Error) -> &'static str {
     match error {
-        CoreError::Auth(_) => "AuthError",
-        CoreError::InvalidProvider(_) => "InvalidProvider",
-        CoreError::InvalidRequest(_) => "InvalidRequest",
-        CoreError::InvalidType { .. } => "InvalidType",
-        CoreError::MissingField(_) => "MissingField",
-        CoreError::Http { .. } => "HttpError",
-        CoreError::InvalidResponse(_) => "InvalidResponse",
-        CoreError::Network(_) => "NetworkError",
-        CoreError::Connect(_) => "ConnectError",
-        CoreError::Routing(_) => "RoutingError",
-        CoreError::Unsupported(_) => "UnsupportedRequest",
+        Error::Auth(_) => "AuthError",
+        Error::InvalidProvider(_) => "InvalidProvider",
+        Error::InvalidRequest(_) => "InvalidRequest",
+        Error::InvalidType { .. } => "InvalidType",
+        Error::MissingField(_) => "MissingField",
+        Error::Http { .. } => "HttpError",
+        Error::InvalidResponse(_) => "InvalidResponse",
+        Error::Network(_) => "NetworkError",
+        Error::Connect(_) => "ConnectError",
+        Error::Routing(_) => "RoutingError",
+        Error::Unsupported(_) => "UnsupportedRequest",
     }
 }
