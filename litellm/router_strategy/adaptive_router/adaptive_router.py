@@ -149,7 +149,7 @@ class AdaptiveRouter:
         )
 
     async def load_state_from_db(self, prisma_client: Any) -> None:
-        """Override cold-start cells with persisted state. Called once at startup."""
+        """Add persisted online deltas to configured priors. Called once at startup."""
         if prisma_client is None:
             return
         try:
@@ -165,7 +165,8 @@ class AdaptiveRouter:
                     continue
                 if row.model_name not in self.config.available_models:
                     continue
-                self._cells[(rt, row.model_name)] = BanditCell(alpha=row.alpha, beta=row.beta)
+                key = (rt, row.model_name)  # rebind-ok: each persisted row has its own cell
+                self._cells[key] = apply_delta(self._cells[key], row.alpha, row.beta)
                 loaded += 1
             verbose_router_logger.info(
                 "AdaptiveRouter[%s]: loaded %d cells from DB",

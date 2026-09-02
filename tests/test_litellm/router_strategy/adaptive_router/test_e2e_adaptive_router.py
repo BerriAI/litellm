@@ -186,8 +186,9 @@ async def test_failure_signal_increments_beta_after_flush():
 
 
 @pytest.mark.asyncio
-async def test_load_state_from_db_overrides_cold_start():
+async def test_load_state_from_db_adds_online_deltas_to_cold_start():
     router = _make_router()
+    cold = router._cells[(RequestType.GENERAL, "gpt-4o")]
     fake_row = MagicMock()
     fake_row.request_type = RequestType.GENERAL.value
     fake_row.model_name = "gpt-4o"
@@ -200,8 +201,8 @@ async def test_load_state_from_db_overrides_cold_start():
     await router.load_state_from_db(prisma)
 
     cell = router._cells[(RequestType.GENERAL, "gpt-4o")]
-    assert cell.alpha == 90.0
-    assert cell.beta == 10.0
+    assert cell.alpha == cold.alpha + 90.0
+    assert cell.beta == cold.beta + 10.0
 
 
 @pytest.mark.asyncio

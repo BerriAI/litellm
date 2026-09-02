@@ -297,7 +297,7 @@ async def test_record_turn_bounds_feedback_contexts_and_evicts_least_recent_sess
 
 
 @pytest.mark.asyncio
-async def test_load_state_from_db_overrides_cold_start():
+async def test_load_state_from_db_adds_online_deltas_to_cold_start():
     r = _make_router()
     cold = r._cells[(RequestType.GENERAL, "fast")]
 
@@ -312,8 +312,38 @@ async def test_load_state_from_db_overrides_cold_start():
     await r.load_state_from_db(prisma)
 
     new_cell = r._cells[(RequestType.GENERAL, "fast")]
-    assert (new_cell.alpha, new_cell.beta) == (42.0, 13.0)
-    assert (new_cell.alpha, new_cell.beta) != (cold.alpha, cold.beta)
+    assert (new_cell.alpha, new_cell.beta) == (cold.alpha + 42.0, cold.beta + 13.0)
+
+
+@pytest.mark.asyncio
+async def test_load_state_from_db_preserves_evaluation_priors():
+    cfg: Final = AdaptiveRouterConfig(
+        available_models=["fast"],
+        evaluation_priors=(
+            AdaptiveRouterEvaluationPrior(
+                request_type=RequestType.GENERAL,
+                model="fast",
+                successes=18,
+                failures=2,
+            ),
+        ),
+    )
+    router: Final = AdaptiveRouter(
+        router_name="seeded",
+        config=cfg,
+        model_to_prefs={"fast": AdaptiveRouterPreferences(quality_tier=2)},
+        model_to_cost={"fast": 0.001},
+    )
+    seeded: Final = router._cells[(RequestType.GENERAL, "fast")]
+    row: Final = MagicMock(request_type="general", model_name="fast", alpha=2.0, beta=3.0)
+    prisma: Final = MagicMock()
+    prisma.db.litellm_adaptiverouterstate.find_many = AsyncMock(return_value=[row])
+
+    await router.load_state_from_db(prisma)
+
+    restored: Final = router._cells[(RequestType.GENERAL, "fast")]
+    assert restored.alpha == seeded.alpha + 2.0
+    assert restored.beta == seeded.beta + 3.0
 
 
 @pytest.mark.asyncio
@@ -338,7 +368,7 @@ async def test_load_state_from_db_handles_unknown_request_type():
     await r.load_state_from_db(prisma)
 
     # Unknown skipped; good applied.
-    assert r._cells[(RequestType.GENERAL, "fast")].alpha == 7.0
+    assert r._cells[(RequestType.GENERAL, "fast")].alpha == cold.alpha + 7.0
     # Other request types kept their cold-start values.
     assert r._cells[(RequestType.WRITING, "fast")] == cold or True
 
