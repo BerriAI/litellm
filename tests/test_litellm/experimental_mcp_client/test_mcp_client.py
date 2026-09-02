@@ -1014,6 +1014,8 @@ class TestAuthSchemeNormalization:
     [
         ("Bearer abc", "Bearer", "abc"),
         ("bearer abc", "Bearer", "abc"),
+        ("Bearer\tabc", "Bearer", "abc"),
+        ("bearer\t\tabc", "Bearer", "abc"),
         ("  Bearer   abc  ", "Bearer", "abc  "),
         ("abc", "Bearer", "abc"),
         ("Bearerabc", "Bearer", "Bearerabc"),

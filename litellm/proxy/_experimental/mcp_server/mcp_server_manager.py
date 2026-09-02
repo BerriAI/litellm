@@ -3293,9 +3293,7 @@ class MCPServerManager:
             normalized: Final = {k.lower(): v for k, v in raw_headers.items()}
             auth_value = normalized.get("authorization")
         if auth_value:
-            if auth_value.startswith("Bearer "):
-                return auth_value[len("Bearer ") :]
-            return auth_value
+            return strip_auth_scheme(auth_value, "Bearer")
         return None
 
     def _obo_subject_token(

@@ -2583,6 +2583,67 @@ class TestMCPServerManager:
         assert resolved == ["good-subject"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "authorization",
+        [
+            "Bearer subj-jwt",
+            "bearer subj-jwt",
+            "BEARER subj-jwt",
+            "Bearer\tsubj-jwt",
+            "Bearer  subj-jwt",
+        ],
+    )
+    async def test_preflight_token_exchange_strips_inbound_authorization_scheme(self, authorization):
+        """The resolver posts inbound_token verbatim as subject_token."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        resolved: Final[list[str | None]] = []
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                resolved.append(subject.inbound_token.get_secret_value() if subject.inbound_token else None)
+                return Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server(f"te-preflight-auth-{authorization!r}")
+
+        await manager.preflight_token_exchange(
+            server=server,
+            oauth2_headers={"Authorization": authorization},
+            user_api_key_auth=None,
+        )
+
+        assert resolved == ["subj-jwt"]
+
+    @pytest.mark.asyncio
+    async def test_preflight_token_exchange_preserves_authorization_without_separator(self):
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        resolved: Final[list[str | None]] = []
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                resolved.append(subject.inbound_token.get_secret_value() if subject.inbound_token else None)
+                return Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server("te-preflight-auth-no-separator")
+
+        await manager.preflight_token_exchange(
+            server=server,
+            oauth2_headers={"Authorization": "Bearersubj-jwt"},
+            user_api_key_auth=None,
+        )
+
+        assert resolved == ["Bearersubj-jwt"]
+
+    @pytest.mark.asyncio
     async def test_preflight_token_exchange_skips_discovery_for_other_auth_modes(self):
         """Preflight must not make unrelated auth modes depend on OAuth discovery."""
         manager = MCPServerManager()
