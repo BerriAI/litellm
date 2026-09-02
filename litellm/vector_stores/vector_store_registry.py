@@ -104,6 +104,7 @@ class VectorStoreRegistry:
     def __init__(self, vector_stores: list[LiteLLM_ManagedVectorStore] = []):
         self.vector_stores: list[LiteLLM_ManagedVectorStore] = vector_stores
         self.vector_store_ids_to_vector_store_map: dict[str, LiteLLM_ManagedVectorStore] = {}
+        self.config_vector_store_ids: set[str] = set()
 
     def _extract_tool_params(self, tool: dict) -> VectorStoreToolParams:
         """
@@ -429,6 +430,7 @@ class VectorStoreRegistry:
                 updated_at=datetime.now(timezone.utc),
             )
             self.vector_stores.append(litellm_managed_vector_store)
+            self.config_vector_store_ids.add(vector_store_id)
 
         verbose_logger.debug(
             "all loaded vector stores = %s",
@@ -474,6 +476,7 @@ class VectorStoreRegistry:
             for vector_store in self.vector_stores
             if vector_store.get("vector_store_id") != vector_store_id
         ]
+        self.config_vector_store_ids.discard(vector_store_id)
 
     def update_vector_store_in_registry(self, vector_store_id: str, updated_data: LiteLLM_ManagedVectorStore):
         """Update or add a vector store in the registry"""

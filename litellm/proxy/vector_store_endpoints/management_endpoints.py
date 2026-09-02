@@ -613,6 +613,7 @@ async def list_vector_stores(
         # Process in-memory vector stores
         if litellm.vector_store_registry is not None:
             in_memory_vector_stores: Final = copy.deepcopy(litellm.vector_store_registry.vector_stores)
+            config_vector_store_ids: Final = litellm.vector_store_registry.config_vector_store_ids
 
             vector_stores_to_delete_from_memory: Final[list[str]] = []
 
@@ -621,8 +622,7 @@ async def list_vector_stores(
                 if not vector_store_id:
                     continue
 
-                # If vector store is in memory but NOT in database, it was deleted
-                if vector_store_id not in db_vector_store_ids:
+                if vector_store_id not in db_vector_store_ids and vector_store_id not in config_vector_store_ids:
                     verbose_proxy_logger.info(
                         "Vector store %s exists in memory but not in database - marking for deletion from cache",
                         vector_store_id,

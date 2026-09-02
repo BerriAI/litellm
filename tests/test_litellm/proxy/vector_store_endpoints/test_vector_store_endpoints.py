@@ -2003,6 +2003,54 @@ async def test_vector_store_update_and_list_synchronization():
 
 
 @pytest.mark.asyncio
+async def test_list_vector_stores_keeps_config_defined_store_missing_from_db():
+    """
+    Stores from config.yaml `vector_store_registry` are only loaded in memory and never written
+    to the DB. Listing must not treat that DB miss as a deletion and evict them, while a
+    DB-sourced store that disappeared from the DB is still evicted.
+    """
+    from litellm.proxy.vector_store_endpoints.management_endpoints import list_vector_stores
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    registry = VectorStoreRegistry(vector_stores=[])
+    registry.load_vector_stores_from_config(
+        [
+            {
+                "vector_store_name": "config-search-store",
+                "litellm_params": {
+                    "vector_store_id": "config-search-store",
+                    "custom_llm_provider": "azure_ai",
+                    "api_key": "fake",
+                    "api_base": "https://example.search.windows.net",
+                },
+            }
+        ]
+    )
+    stale_db_store: LiteLLM_ManagedVectorStore = {
+        "vector_store_id": "deleted-elsewhere",
+        "custom_llm_provider": "bedrock",
+        "litellm_params": {"vector_store_id": "deleted-elsewhere", "custom_llm_provider": "bedrock"},
+    }
+    registry.add_vector_store_to_registry(vector_store=stale_db_store)
+
+    admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value, user_id="admin")
+    with (
+        patch.dict("litellm.proxy.proxy_server.general_settings", {}, clear=True),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch.object(litellm, "vector_store_registry", registry),
+        patch(
+            "litellm.proxy.vector_store_endpoints.management_endpoints.VectorStoreRegistry._get_vector_stores_from_db",
+            new=AsyncMock(return_value=[]),
+        ),
+    ):
+        response = await list_vector_stores(user_api_key_dict=admin)
+
+    assert [vs.get("vector_store_id") for vs in response["data"]] == ["config-search-store"]
+    assert registry.get_litellm_managed_vector_store_from_registry_by_name("config-search-store") is not None
+    assert registry.get_litellm_managed_vector_store_from_registry("deleted-elsewhere") is None
+
+
+@pytest.mark.asyncio
 async def test_resolve_embedding_config_from_db():
     """Test that _resolve_embedding_config_from_db correctly resolves embedding config from database."""
     mock_prisma_client = MagicMock()
