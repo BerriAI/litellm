@@ -355,6 +355,13 @@ _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
 _ALIAS_PARAMS_NEVER_FORWARDED: Final = frozenset({"model", "api_base", "api_key", "api_version"})
 _ALIAS_MARKER_FORWARDED_PARAMS_KWARG: Final = "_alias_marker_forwarded_params"
 
+_RUNTIME_TOGGLEABLE_PRE_CALL_CHECKS: Final[Mapping[str, type[CustomLogger]]] = MappingProxyType(
+    {
+        "prompt_caching": PromptCachingDeploymentCheck,
+        "enforce_model_rate_limits": ModelRateLimitingCheck,
+    }
+)
+
 
 def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream]) -> bool:
     for chunk in chunks:
@@ -2081,6 +2088,27 @@ class Router:
                 self.optional_callbacks = []
             self.optional_callbacks.append(_callback)
             litellm.logging_callback_manager.add_litellm_callback(_callback)
+
+    def set_optional_pre_call_checks(self, optional_pre_call_checks: OptionalPreCallChecks | None) -> None:
+        if optional_pre_call_checks is None:
+            return
+        requested: Final = frozenset(optional_pre_call_checks)
+        for name, callback_cls in _RUNTIME_TOGGLEABLE_PRE_CALL_CHECKS.items():
+            if name not in requested:
+                self._remove_optional_callbacks_of_type(callback_cls)
+        self.add_optional_pre_call_checks(optional_pre_call_checks)
+
+    def _remove_optional_callbacks_of_type(self, callback_cls: type[CustomLogger]) -> None:
+        if self.optional_callbacks is None:
+            return
+        removed: Final = [cb for cb in self.optional_callbacks if isinstance(cb, callback_cls)]
+        if not removed:
+            return
+        self.optional_callbacks = [cb for cb in self.optional_callbacks if not isinstance(cb, callback_cls)]
+        for cb in removed:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, cb, require_self=False
+            )
 
     def print_deployment(self, deployment: dict):
         """
@@ -11356,7 +11384,7 @@ class Router:
                     self._routing_groups_input = kwargs[var]
                     rebuild_routing_groups = True
                 elif var == "optional_pre_call_checks":
-                    self.add_optional_pre_call_checks(kwargs[var])
+                    self.set_optional_pre_call_checks(kwargs[var])
                 elif var == "retry_policy":
                     value = kwargs[var]
                     if isinstance(value, dict):
