@@ -1431,7 +1431,11 @@ class TestListToolsRestAPI:
     async def test_aggregate_list_absorbs_one_server_auth_failure(self, monkeypatch):
         """The multi-server aggregate listing degrades a server whose upstream
         rejects auth to an empty contribution and still returns the healthy
-        server's tools with a 200, rather than surfacing a 401."""
+        server's tools with a 200, rather than surfacing a 401. The absorbed
+        server must still show up as a classified per-server outcome so a REST
+        caller can tell "needs upstream auth" apart from "has no tools"."""
+        from pydantic import TypeAdapter
+
         from litellm.proxy._experimental.mcp_server.exceptions import (
             MCPUpstreamAuthError,
         )
@@ -1497,6 +1501,11 @@ class TestListToolsRestAPI:
 
         assert result["tools"] == ["good-tool"]
         assert result["error"] is None
+        wire_body = json.loads(TypeAdapter(dict).dump_json(result))
+        assert wire_body["server_outcomes"] == {
+            "good": {"status": "ok", "tool_count": 1},
+            "bad": {"status": "auth_required", "http_status": 401},
+        }
 
     async def test_name_resolution_finds_server_by_uuid(self, monkeypatch):
         """When server_id is a name string, it should be resolved to its UUID

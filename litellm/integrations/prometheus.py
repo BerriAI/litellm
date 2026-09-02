@@ -8,6 +8,7 @@ import math
 import os
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast
 
@@ -58,6 +59,7 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from prometheus_client import Gauge
     from prometheus_client.metrics import MetricWrapperBase
 
     from litellm.router import Router
@@ -474,6 +476,30 @@ class PrometheusLogger(CustomLogger):
                 "litellm_remaining_api_key_tokens_for_model",
                 "Remaining Tokens API Key can make for model (model based tpm limit on key)",
                 labelnames=self.get_labels_for_metric("litellm_remaining_api_key_tokens_for_model"),
+            )
+
+            self.litellm_api_key_rate_limit_allowed_metric = self._gauge_factory(
+                "litellm_api_key_rate_limit_allowed_metric",
+                "Configured rate limit for the API Key in the current window (rpm_limit / tpm_limit), by rate_limit_type",
+                labelnames=self.get_labels_for_metric("litellm_api_key_rate_limit_allowed_metric"),
+            )
+
+            self.litellm_api_key_rate_limit_used_metric = self._gauge_factory(
+                "litellm_api_key_rate_limit_used_metric",
+                "Requests or tokens the API Key has consumed in the current rate limit window, by rate_limit_type",
+                labelnames=self.get_labels_for_metric("litellm_api_key_rate_limit_used_metric"),
+            )
+
+            self.litellm_team_rate_limit_allowed_metric = self._gauge_factory(
+                "litellm_team_rate_limit_allowed_metric",
+                "Configured rate limit for the Team in the current window (team rpm_limit / tpm_limit), by rate_limit_type",
+                labelnames=self.get_labels_for_metric("litellm_team_rate_limit_allowed_metric"),
+            )
+
+            self.litellm_team_rate_limit_used_metric = self._gauge_factory(
+                "litellm_team_rate_limit_used_metric",
+                "Requests or tokens the Team has consumed in the current rate limit window, by rate_limit_type",
+                labelnames=self.get_labels_for_metric("litellm_team_rate_limit_used_metric"),
             )
 
             ########################################
@@ -1475,6 +1501,11 @@ class PrometheusLogger(CustomLogger):
             model_id=enum_values.model_id,
         )
 
+        self._set_key_and_team_rate_limit_metrics(
+            standard_logging_payload=standard_logging_payload,  # pyright: ignore[reportArgumentType]  # isinstance(dict) above narrows the TypedDict to dict[Unknown, Unknown]
+            enum_values=enum_values,
+        )
+
         # set latency metrics
         self._set_latency_metrics(
             kwargs=kwargs,
@@ -2002,16 +2033,101 @@ class PrometheusLogger(CustomLogger):
         """
         if standard_logging_payload is None:
             return None
+        return PrometheusLogger._get_int_from_v3_rate_limit_headers(
+            standard_logging_payload=standard_logging_payload,
+            header_name=f"x-ratelimit-model_per_key-remaining-{rate_limit_type}",
+        )
+
+    @staticmethod
+    def _get_int_from_v3_rate_limit_headers(
+        standard_logging_payload: StandardLoggingPayload,
+        header_name: str,
+    ) -> int | None:
         hidden_params: Final = standard_logging_payload.get("hidden_params")
         if hidden_params is None:
             return None
-        additional_headers: Final = hidden_params.get("additional_headers")
+        additional_headers: Final[Mapping[str, object] | None] = hidden_params.get("additional_headers")
         if additional_headers is None:
             return None
-        value: Final = dict(additional_headers).get(f"x-ratelimit-model_per_key-remaining-{rate_limit_type}")
+        value: Final = additional_headers.get(header_name)
         if isinstance(value, bool) or not isinstance(value, int):
             return None
         return value
+
+    def _set_key_and_team_rate_limit_metrics(
+        self,
+        standard_logging_payload: StandardLoggingPayload,
+        enum_values: UserAPIKeyLabelValues,
+    ) -> None:
+        """
+        Export the key-level and team-level RPM / TPM limit and current window
+        usage from the ``x-ratelimit-{api_key,team}-{limit,remaining}-*``
+        headers the v3 rate limiter mirrors into the logging payload. The
+        limiter already read these counters (from Redis when configured) on
+        the request path, so no extra store lookup happens here. Descriptors
+        without a configured limit emit no header, so their series is removed
+        rather than left at the value from before the limit was dropped.
+        """
+        descriptor_gauges: Final[
+            tuple[tuple[Literal["api_key", "team"], DEFINED_PROMETHEUS_METRICS, Gauge, Gauge], ...]
+        ] = (
+            (
+                "api_key",
+                "litellm_api_key_rate_limit_allowed_metric",
+                self.litellm_api_key_rate_limit_allowed_metric,
+                self.litellm_api_key_rate_limit_used_metric,
+            ),
+            (
+                "team",
+                "litellm_team_rate_limit_allowed_metric",
+                self.litellm_team_rate_limit_allowed_metric,
+                self.litellm_team_rate_limit_used_metric,
+            ),
+        )
+        for descriptor_key, metric_name, allowed_gauge, used_gauge in descriptor_gauges:
+            for rate_limit_type in ("requests", "tokens"):
+                self._set_rate_limit_allowed_and_used_gauges(
+                    standard_logging_payload=standard_logging_payload,
+                    enum_values=enum_values,
+                    descriptor_key=descriptor_key,
+                    metric_name=metric_name,
+                    allowed_gauge=allowed_gauge,
+                    used_gauge=used_gauge,
+                    rate_limit_type=rate_limit_type,
+                )
+
+    def _set_rate_limit_allowed_and_used_gauges(
+        self,
+        standard_logging_payload: StandardLoggingPayload,
+        enum_values: UserAPIKeyLabelValues,
+        descriptor_key: Literal["api_key", "team"],
+        metric_name: DEFINED_PROMETHEUS_METRICS,
+        allowed_gauge: Gauge,
+        used_gauge: Gauge,
+        rate_limit_type: Literal["requests", "tokens"],
+    ) -> None:
+        limit: Final = self._get_int_from_v3_rate_limit_headers(
+            standard_logging_payload=standard_logging_payload,
+            header_name=f"x-ratelimit-{descriptor_key}-limit-{rate_limit_type}",
+        )
+        remaining: Final = self._get_int_from_v3_rate_limit_headers(
+            standard_logging_payload=standard_logging_payload,
+            header_name=f"x-ratelimit-{descriptor_key}-remaining-{rate_limit_type}",
+        )
+        labelled_values: Final = replace(enum_values, rate_limit_type=rate_limit_type)
+        labelnames: Final = self.get_labels_for_metric(metric_name)
+        labels: Final = prometheus_label_factory(
+            supported_enum_labels=labelnames,
+            enum_values=labelled_values,
+            label_context=PrometheusLabelFactoryContext(labelled_values),
+        )
+        if limit is None or remaining is None:
+            label_values: Final = tuple(labels.get(label) for label in labelnames)
+            self._bounded_prometheus_series_tracker.remove_series(allowed_gauge, label_values)
+            self._bounded_prometheus_series_tracker.remove_series(used_gauge, label_values)
+            return
+        allowed_gauge.labels(**labels).set(limit)
+        used_gauge.labels(**labels).set(limit - remaining)
 
     def _set_virtual_key_rate_limit_metrics(
         self,
