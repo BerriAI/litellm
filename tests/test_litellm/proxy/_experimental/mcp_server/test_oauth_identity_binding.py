@@ -95,7 +95,7 @@ async def test_fetch_issuer_jwks_fetches_and_caches_keys():
     client: Final = MagicMock()
     client.get = AsyncMock(return_value=response)
 
-    with patch(
+    with patch(  # test-quality-ok: no HTTP dependency injection seam exists for JWKS fetching
         "litellm.proxy._experimental.mcp_server.oauth_identity_binding.get_async_httpx_client",
         return_value=client,
     ):
@@ -115,7 +115,7 @@ async def test_fetch_issuer_jwks_rejects_malformed_document():
     client: Final = MagicMock()
     client.get = AsyncMock(return_value=response)
 
-    with patch(
+    with patch(  # test-quality-ok: no HTTP dependency injection seam exists for JWKS fetching
         "litellm.proxy._experimental.mcp_server.oauth_identity_binding.get_async_httpx_client",
         return_value=client,
     ):
@@ -130,7 +130,7 @@ async def test_discover_jwks_url_returns_provider_uri():
     client: Final = MagicMock()
     client.get = AsyncMock(return_value=response)
 
-    with patch(
+    with patch(  # test-quality-ok: no HTTP dependency injection seam exists for OIDC discovery
         "litellm.proxy._experimental.mcp_server.oauth_identity_binding.get_async_httpx_client",
         return_value=client,
     ):
@@ -147,7 +147,7 @@ async def test_discover_jwks_url_rejects_missing_provider_uri():
     client: Final = MagicMock()
     client.get = AsyncMock(return_value=response)
 
-    with patch(
+    with patch(  # test-quality-ok: no HTTP dependency injection seam exists for OIDC discovery
         "litellm.proxy._experimental.mcp_server.oauth_identity_binding.get_async_httpx_client",
         return_value=client,
     ):
@@ -171,7 +171,7 @@ async def test_load_caller_principal_supports_user_id_and_database_email():
     assert user_id_binding is not None
     assert await _load_caller_principal("user-a", user_id_binding) == "user-a"
 
-    with patch(
+    with patch(  # test-quality-ok: caller loading is a lazy database boundary without injection
         "litellm.proxy._experimental.mcp_server.bridge_token_flow.load_active_user_by_id",
         new=AsyncMock(side_effect=["no_active_key", SimpleNamespace(user_email="alice@example.com")]),
     ):
@@ -183,18 +183,18 @@ async def test_load_caller_principal_supports_user_id_and_database_email():
 async def test_load_stored_refresh_token_returns_credential_and_fails_closed():
     get_credential: Final = AsyncMock(return_value={"refresh_token": "rt-1"})
     with (
-        patch(
+        patch(  # test-quality-ok: stored-token loading is a lazy database boundary without injection
             "litellm.proxy._experimental.mcp_server.db.get_user_oauth_credential",
             new=get_credential,
         ),
-        patch(
+        patch(  # test-quality-ok: stored-token loading is a lazy database boundary without injection
             "litellm.proxy.utils.get_prisma_client_or_throw",
             return_value="prisma",
         ),
     ):
         assert await _load_stored_refresh_token("user-a", "srv-1") == "rt-1"
 
-    with patch(
+    with patch(  # test-quality-ok: stored-token loading is a lazy database boundary without injection
         "litellm.proxy.utils.get_prisma_client_or_throw",
         side_effect=RuntimeError("database unavailable"),
     ):
