@@ -470,10 +470,11 @@ async def run_async_fallback(
     attempted: Final = (
         carried_targets if isinstance(carried_targets, AttemptedFallbackTargets) else AttemptedFallbackTargets()
     )
-    attempted.record(original_model_group)
+    failed_model_group: Final = get_pre_routing_selection(kwargs) or original_model_group
+    attempted.record(failed_model_group)
 
     for mg in fallback_model_group:
-        if mg == original_model_group:
+        if mg == failed_model_group:
             continue
         if same_model_group_only and _get_fallback_target_model_group(mg) != original_model_group:
             verbose_router_logger.info(
