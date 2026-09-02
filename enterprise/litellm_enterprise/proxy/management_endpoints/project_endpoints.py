@@ -12,9 +12,10 @@ Endpoints for /project operations
 
 import json
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -26,37 +27,50 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
 )
 from litellm.proxy.utils import PrismaClient, handle_exception_on_proxy
+from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.project_repository import ProjectRepository
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
+from litellm.repositories.verification_token_repository import VerificationTokenRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
-    from prisma.actions import (
-        LiteLLM_ProjectTableActions,
-        LiteLLM_TeamTableActions,
-        LiteLLM_VerificationTokenActions,
-    )
+
+    from litellm import Router
 
 router = APIRouter()
 
-
-def _team_table(prisma_client: PrismaClient) -> "LiteLLM_TeamTableActions[prisma_models.LiteLLM_TeamTable]":
-    team_table: LiteLLM_TeamTableActions[prisma_models.LiteLLM_TeamTable] = prisma_client.db.litellm_teamtable
-    return team_table
+_OBJECT_PERMISSION_PAYLOAD: Final = TypeAdapter(dict[str, object])
 
 
-def _project_table(prisma_client: PrismaClient) -> "LiteLLM_ProjectTableActions[prisma_models.LiteLLM_ProjectTable]":
-    project_table: LiteLLM_ProjectTableActions[prisma_models.LiteLLM_ProjectTable] = (
-        prisma_client.db.litellm_projecttable
-    )
-    return project_table
+def _team_table(prisma_client: PrismaClient) -> TableActions["prisma_models.LiteLLM_TeamTable"]:
+    return TeamRepository(prisma_client).table
+
+
+def _project_table(prisma_client: PrismaClient) -> TableActions["prisma_models.LiteLLM_ProjectTable"]:
+    return ProjectRepository(prisma_client).table
 
 
 def _verification_token_table(
     prisma_client: PrismaClient,
-) -> "LiteLLM_VerificationTokenActions[prisma_models.LiteLLM_VerificationToken]":
-    verification_token_table: LiteLLM_VerificationTokenActions[prisma_models.LiteLLM_VerificationToken] = (
-        prisma_client.db.litellm_verificationtoken
-    )
-    return verification_token_table
+) -> TableActions["prisma_models.LiteLLM_VerificationToken"]:
+    return VerificationTokenRepository(prisma_client).table
+
+
+def _budget_table(prisma_client: PrismaClient) -> TableActions["prisma_models.LiteLLM_BudgetTable"]:
+    return BudgetRepository(prisma_client).table
+
+
+def _object_permission_table(
+    prisma_client: PrismaClient,
+) -> TableActions["prisma_models.LiteLLM_ObjectPermissionTable"]:
+    return ObjectPermissionRepository(prisma_client).table
+
+
+def _user_table(prisma_client: PrismaClient) -> TableActions["prisma_models.LiteLLM_UserTable"]:
+    return UserRepository(prisma_client).table
 
 
 def _jsonified(prisma_client: PrismaClient, payload: dict[str, object]) -> dict[str, object]:
@@ -205,6 +219,114 @@ def _check_team_project_limits(
         )
 
 
+def _project_models_missing_positive_quota(
+    models: list[str] | None,
+    rpm_limits: Mapping[str, object] | None,
+    tpm_limits: Mapping[str, object] | None,
+) -> list[str]:
+    """Return the models that lack a positive `rpm` AND `tpm` quota.
+
+    A valid quota is a positive integer; null, zero, and negative are rejected
+    because downstream rate limiters treat a non-positive limit as immediately
+    exhausted (every request blocked).
+    """
+
+    def _is_positive(value: object) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+    rpm = rpm_limits or {}
+    tpm = tpm_limits or {}
+    return [model for model in (models or []) if not _is_positive(rpm.get(model)) or not _is_positive(tpm.get(model))]
+
+
+def _router_access_group_names(llm_router: "Router | None") -> frozenset[str]:
+    return frozenset(llm_router.get_model_access_groups()) if llm_router is not None else frozenset()
+
+
+def _project_models_expanding_at_request_time(
+    models: Sequence[str] | None, access_group_names: frozenset[str]
+) -> tuple[str, ...]:
+    """Entries project auth expands to many concrete models (`all-proxy-models`, `*` patterns,
+    access groups). The rate limiter looks quotas up by the exact requested model name, so a
+    quota keyed on one of these entries is never applied."""
+    return tuple(
+        model
+        for model in (models or ())
+        if model == SpecialModelNames.all_proxy_models.value or "*" in model or model in access_group_names
+    )
+
+
+def _raise_on_project_models_expanding_at_request_time(
+    models: Sequence[str] | None, access_group_names: frozenset[str]
+) -> None:
+    expanding: Final = _project_models_expanding_at_request_time(models, access_group_names)
+    if not expanding:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": f"models {list(expanding)} expand to multiple models at request time, so a per-model rpm/tpm quota cannot be enforced for them while 'enforce_project_model_quota' is enabled. List concrete model names instead."
+        },
+    )
+
+
+def _raise_on_missing_project_model_quota(
+    data: NewProjectRequest | UpdateProjectRequest, access_group_names: frozenset[str] = frozenset()
+) -> None:
+    """Require a positive `rpm`/`tpm` quota for every model on project CREATE.
+
+    `model_rpm_limit`/`model_tpm_limit` are relocated into `metadata` by the request
+    model's `set_model_info` validator, so they are read from there.
+
+    Only invoked when `general_settings.enforce_project_model_quota` is enabled
+    (default off), so it is opt-in and does not change behavior for existing users.
+    """
+    _raise_on_project_models_expanding_at_request_time(data.models, access_group_names)
+    metadata = data.metadata or {}
+    missing = _project_models_missing_positive_quota(
+        data.models, metadata.get("model_rpm_limit"), metadata.get("model_tpm_limit")
+    )
+    if not missing:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": f"models {missing} added to project without a positive rpm/tpm quota. Set a positive model_rpm_limit and model_tpm_limit for each model."
+        },
+    )
+
+
+def _raise_on_missing_project_model_quota_on_update(
+    data: UpdateProjectRequest, existing_project: object, access_group_names: frozenset[str] = frozenset()
+) -> None:
+    """Require a positive `rpm`/`tpm` quota over the RESULTING state on project UPDATE.
+
+    `/project/update` replaces `models` and `metadata` when they are provided, so the
+    check runs on what the project WILL look like: a partial update that doesn't touch
+    models/quota keeps the existing values, while one that adds a model or clears a
+    model's quota must leave every resulting model with a positive limit.
+
+    Only invoked when `general_settings.enforce_project_model_quota` is enabled
+    (default off), so it is opt-in and does not change behavior for existing users.
+    """
+    resulting_models = data.models if data.models is not None else (getattr(existing_project, "models", None) or [])
+    resulting_metadata = (
+        data.metadata if data.metadata is not None else (getattr(existing_project, "metadata", None) or {})
+    )
+    _raise_on_project_models_expanding_at_request_time(resulting_models, access_group_names)
+    missing = _project_models_missing_positive_quota(
+        resulting_models, resulting_metadata.get("model_rpm_limit"), resulting_metadata.get("model_tpm_limit")
+    )
+    if not missing:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": f"models {missing} would be left on the project without a positive rpm/tpm quota. Set a positive model_rpm_limit and model_tpm_limit for each model."
+        },
+    )
+
+
 async def _create_budget_for_project(
     data: NewProjectRequest,
     user_id: str | None,
@@ -219,7 +341,7 @@ async def _create_budget_for_project(
 
     new_budget = _jsonified(prisma_client, budget_row.model_dump(exclude_none=True))
 
-    _budget: prisma_models.LiteLLM_BudgetTable = await prisma_client.db.litellm_budgettable.create(
+    _budget: Final = await _budget_table(prisma_client).create(
         data={
             **new_budget,
             "created_by": user_id or litellm_proxy_admin_name,
@@ -242,10 +364,8 @@ async def _set_project_object_permission(
         return None
 
     if data.object_permission is not None:
-        created_object_permission: prisma_models.LiteLLM_ObjectPermissionTable = (
-            await prisma_client.db.litellm_objectpermissiontable.create(
-                data=data.object_permission.model_dump(exclude_none=True),
-            )
+        created_object_permission: Final = await _object_permission_table(prisma_client).create(
+            data=data.object_permission.model_dump(exclude_none=True),
         )
         del data.object_permission
         return created_object_permission.object_permission_id
@@ -352,7 +472,9 @@ async def new_project(
     ```
     """
     from litellm.proxy.proxy_server import (
+        general_settings,
         litellm_proxy_admin_name,
+        llm_router,
         premium_user,
         prisma_client,
     )
@@ -398,6 +520,10 @@ async def new_project(
             team_object=LiteLLM_TeamTable.model_validate(team_object.model_dump()),
             data=data,
         )
+
+        # Opt-in (default off): require rpm/tpm for every model added to the project.
+        if general_settings.get("enforce_project_model_quota", False):
+            _raise_on_missing_project_model_quota(data, _router_access_group_names(llm_router))
 
         # Check if user has permission to create projects for this team
         # only team admins can create projects for their team
@@ -470,10 +596,8 @@ async def new_project(
         new_project_row = _remove_budget_fields_from_project_data(new_project_row)
 
         verbose_proxy_logger.info(f"new_project_row: {json.dumps(new_project_row, indent=2)}")
-        response: prisma_models.LiteLLM_ProjectTable = await prisma_client.db.litellm_projecttable.create(
-            data={
-                **new_project_row,  # type: ignore
-            },
+        response: Final = await _project_table(prisma_client).create(
+            data={**new_project_row},
             include={"litellm_budget_table": True},
         )
 
@@ -538,7 +662,9 @@ async def update_project(
     ```
     """
     from litellm.proxy.proxy_server import (
+        general_settings,
         litellm_proxy_admin_name,
+        llm_router,
         premium_user,
         prisma_client,
         user_api_key_cache,
@@ -642,6 +768,12 @@ async def update_project(
                 data=data,
             )
 
+        # Opt-in (default off): require rpm/tpm for every model the update would leave on the project.
+        if general_settings.get("enforce_project_model_quota", False):
+            _raise_on_missing_project_model_quota_on_update(
+                data, existing_project, _router_access_group_names(llm_router)
+            )
+
         # Prepare update data
         update_data = _jsonified(prisma_client, data.model_dump(exclude_none=True, exclude={"project_id"}))
         update_data["updated_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
@@ -652,7 +784,7 @@ async def update_project(
 
         if budget_updates and existing_project.budget_id:
             # Update existing budget
-            await prisma_client.db.litellm_budgettable.update(
+            await _budget_table(prisma_client).update(
                 where={"budget_id": existing_project.budget_id},
                 data={
                     **budget_updates,
@@ -667,18 +799,17 @@ async def update_project(
         if "object_permission" in update_data:
             object_permission_data = update_data.pop("object_permission")
             if object_permission_data:
+                object_permission_payload: Final = _OBJECT_PERMISSION_PAYLOAD.validate_python(object_permission_data)
                 if existing_project.object_permission_id:
                     # Update existing permission
-                    await prisma_client.db.litellm_objectpermissiontable.update(
+                    await _object_permission_table(prisma_client).update(
                         where={"object_permission_id": existing_project.object_permission_id},
-                        data=object_permission_data,
+                        data=object_permission_payload,
                     )
                 else:
                     # Create new permission
-                    created_permission: prisma_models.LiteLLM_ObjectPermissionTable = (
-                        await prisma_client.db.litellm_objectpermissiontable.create(
-                            data=object_permission_data,
-                        )
+                    created_permission: Final = await _object_permission_table(prisma_client).create(
+                        data=object_permission_payload,
                     )
                     update_data["object_permission_id"] = created_permission.object_permission_id
 
@@ -694,7 +825,7 @@ async def update_project(
         update_data = _remove_budget_fields_from_project_data(update_data)
 
         # Update project
-        updated_project: prisma_models.LiteLLM_ProjectTable | None = await prisma_client.db.litellm_projecttable.update(
+        updated_project: Final = await _project_table(prisma_client).update(
             where={"project_id": data.project_id},
             data=update_data,
             include={"litellm_budget_table": True, "object_permission": True},
@@ -934,7 +1065,7 @@ async def list_projects(
             # Look up the user's team memberships via the reverse-index on
             # LiteLLM_UserTable.teams (maintained by team_member_add alongside
             # members_with_roles). This avoids a full scan of all team rows.
-            user_record: prisma_models.LiteLLM_UserTable | None = await prisma_client.db.litellm_usertable.find_unique(
+            user_record: Final = await _user_table(prisma_client).find_unique(
                 where={"user_id": user_api_key_dict.user_id},
             )
             user_team_ids: list[str] = user_record.teams if user_record is not None and user_record.teams else []

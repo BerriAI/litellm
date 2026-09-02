@@ -2,7 +2,7 @@ import { screen, waitFor, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { vi, it, expect, beforeEach, describe, Mock, MockedFunction } from "vitest";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { chooseSelectOption, renderWithProviders } from "../../../tests/test-utils";
 import { VirtualKeysTable } from "./VirtualKeysTable";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
@@ -207,6 +207,8 @@ it("left-anchors the create-key CTA below the title, between the header and the 
   renderWithProviders(<VirtualKeysTable headerActions={<button>Create New Key</button>} />);
 
   const heading = screen.getByRole("heading", { name: "Virtual Keys" });
+  expect(screen.getByText("Every key that authenticates requests to the gateway.")).toBeInTheDocument();
+  expect(document.querySelector(".lucide-key-round")).not.toBeNull();
   const ctas = screen.getAllByRole("button", { name: "Create New Key" });
   expect(ctas).toHaveLength(1);
   const cta = ctas[0];
@@ -325,8 +327,7 @@ it("sorts by the backend max_budget field when 'Budget descending' is chosen fro
   const user = userEvent.setup();
   renderWithProviders(<VirtualKeysTable />);
 
-  await user.click(screen.getByTestId("sort-trigger-spend"));
-  await user.click(await screen.findByText("Budget descending"));
+  await chooseSelectOption(user, screen.getByTestId("sort-trigger-spend"), "Budget descending", "menuitem");
 
   await waitFor(() => {
     expect(mockUseKeys).toHaveBeenLastCalledWith(
@@ -341,8 +342,7 @@ it("emphasizes the active field in the Spend / Budget header so the sorted colum
   const user = userEvent.setup();
   renderWithProviders(<VirtualKeysTable />);
 
-  await user.click(screen.getByTestId("sort-trigger-spend"));
-  await user.click(await screen.findByText("Budget descending"));
+  await chooseSelectOption(user, screen.getByTestId("sort-trigger-spend"), "Budget descending", "menuitem");
 
   await waitFor(() => {
     expect(screen.getByText("Budget", { selector: "[data-sort-field='max_budget']" })).toHaveClass("font-semibold");
@@ -354,8 +354,7 @@ it("sorts by spend ascending when 'Spend ascending' is chosen from the Spend / B
   const user = userEvent.setup();
   renderWithProviders(<VirtualKeysTable />);
 
-  await user.click(screen.getByTestId("sort-trigger-spend"));
-  await user.click(await screen.findByText("Spend ascending"));
+  await chooseSelectOption(user, screen.getByTestId("sort-trigger-spend"), "Spend ascending", "menuitem");
 
   await waitFor(() => {
     expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ sortBy: "spend", sortOrder: "asc" }));

@@ -4,9 +4,36 @@ BitBucket API client for fetching .prompt files from BitBucket repositories.
 
 import base64
 import urllib.parse
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import Final, TypedDict
+
+from typing_extensions import NotRequired, ReadOnly
 
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+
+class BitBucketSrcEntry(TypedDict):
+    path: ReadOnly[NotRequired[str]]
+    type: ReadOnly[NotRequired[str]]
+
+
+class BitBucketSrcListing(TypedDict):
+    values: ReadOnly[NotRequired[list[BitBucketSrcEntry]]]
+
+
+class BitBucketBranch(TypedDict):
+    name: ReadOnly[NotRequired[str]]
+    type: ReadOnly[NotRequired[str]]
+
+
+class BitBucketBranchListing(TypedDict):
+    values: ReadOnly[NotRequired[list[BitBucketBranch]]]
+
+
+class BitBucketFileMetadata(TypedDict):
+    content_type: ReadOnly[str | None]
+    content_length: ReadOnly[str | None]
+    last_modified: ReadOnly[str | None]
 
 
 def _sanitize_file_path(file_path: str) -> str:
@@ -31,7 +58,7 @@ class BitBucketClient:
     - Branch-specific file fetching
     """
 
-    def __init__(self, config: dict[str, Any]):
+    def __init__(self, config: Mapping[str, object]):
         """
         Initialize the BitBucket client.
 
@@ -135,16 +162,12 @@ class BitBucketClient:
             response: Final = self.http_handler.get(url, headers=self.headers)
             response.raise_for_status()
 
-            data: Final = response.json()
-            files: Final = []
-
-            for item in data.get("values", []):
-                if item.get("type") == "commit_file":
-                    file_path = item.get("path", "")
-                    if file_path.endswith(file_extension):
-                        files.append(file_path)
-
-            return files
+            data: Final[BitBucketSrcListing] = response.json()
+            return [
+                file_path
+                for item in data.get("values", [])
+                if item.get("type") == "commit_file" and (file_path := item.get("path", "")).endswith(file_extension)
+            ]
 
         except Exception as e:
             # Check if it's an HTTP error
@@ -162,7 +185,7 @@ class BitBucketClient:
             else:
                 raise Exception(f"Error listing files in '{directory_path}': {e}")
 
-    def get_repository_info(self) -> dict[str, Any]:
+    def get_repository_info(self) -> Mapping[str, object]:
         """
         Get information about the repository.
 
@@ -191,7 +214,7 @@ class BitBucketClient:
         except Exception:
             return False
 
-    def get_branches(self) -> list[dict[str, Any]]:
+    def get_branches(self) -> list[BitBucketBranch]:
         """
         Get list of branches in the repository.
 
@@ -204,12 +227,12 @@ class BitBucketClient:
             response: Final = self.http_handler.get(url, headers=self.headers)
             response.raise_for_status()
 
-            data: Final = response.json()
+            data: Final[BitBucketBranchListing] = response.json()
             return data.get("values", [])
         except Exception as e:
             raise Exception(f"Failed to get branches: {e}")
 
-    def get_file_metadata(self, file_path: str) -> dict[str, Any] | None:
+    def get_file_metadata(self, file_path: str) -> BitBucketFileMetadata | None:
         """
         Get metadata about a file (size, last modified, etc.).
 

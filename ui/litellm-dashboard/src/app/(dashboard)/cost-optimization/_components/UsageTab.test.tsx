@@ -1,4 +1,4 @@
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolSpendResponse } from "@/components/networking";
@@ -137,36 +137,41 @@ describe("UsageTab", () => {
   });
 
   it("sums compression and caching dollars across days into the summary cards", () => {
-    const { getByText } = renderWith([
-      day("2026-07-12", {
-        compression_savings_spend: 0.04,
-        prompt_caching_savings_spend: 0.006,
-        compression_saved_tokens: 40000,
-      }),
-      day("2026-07-13", {
-        compression_savings_spend: 0.1,
-        prompt_caching_savings_spend: 0.01,
-        compression_saved_tokens: 100000,
-      }),
-    ]);
+    // Total caching and the LiteLLM-injected share deliberately differ so these
+    // assertions pin which one each figure uses: the caching headline and the
+    // Total-saved tile take the injected share, the secondary keeps the total.
+    const firstDay: Partial<SpendMetrics> = {
+      compression_savings_spend: 0.04,
+      prompt_caching_savings_spend: 0.006,
+      gateway_injected_caching_savings_spend: 0.004,
+      compression_saved_tokens: 40000,
+    };
+    const secondDay: Partial<SpendMetrics> = {
+      compression_savings_spend: 0.1,
+      prompt_caching_savings_spend: 0.01,
+      gateway_injected_caching_savings_spend: 0.006,
+      compression_saved_tokens: 100000,
+    };
+    renderWith([day("2026-07-12", firstDay), day("2026-07-13", secondDay)]);
 
-    expect(getByText("$0.1560")).toBeInTheDocument();
-    expect(getByText("$0.1400")).toBeInTheDocument();
-    expect(getByText("$0.0160")).toBeInTheDocument();
-    expect(getByText("140,000 tokens compressed")).toBeInTheDocument();
+    expect(screen.getByText("$0.1500")).toBeInTheDocument();
+    expect(screen.getByText("$0.1400")).toBeInTheDocument();
+    expect(screen.getByText("$0.0100")).toBeInTheDocument();
+    expect(screen.getByText("$0.0160")).toBeInTheDocument();
+    expect(screen.getByText("140,000 tokens compressed")).toBeInTheDocument();
   });
 
   const twoDays = () => [
-    day("2026-07-12", { compression_savings_spend: 0.04, prompt_caching_savings_spend: 0.006 }),
-    day("2026-07-13", { compression_savings_spend: 0.1, prompt_caching_savings_spend: 0.01 }),
+    day("2026-07-12", { compression_savings_spend: 0.04, gateway_injected_caching_savings_spend: 0.006 }),
+    day("2026-07-13", { compression_savings_spend: 0.1, gateway_injected_caching_savings_spend: 0.01 }),
   ];
 
   it("opens on a running total anchored at $0 at the start of the range", () => {
-    const { getByTestId } = renderWith(twoDays());
+    renderWith(twoDays());
 
     // Cumulative prepends a synthetic $0 point at the range start (Jul 1) so the
     // line rises from zero rather than floating; the daily running totals follow.
-    const series = readSeries(getByTestId("area-chart"));
+    const series = readSeries(screen.getByTestId("area-chart"));
     expect(series).toHaveLength(3);
     expect(series[0]).toMatchObject({ date: "Jul 1", Compression: 0, "Prompt caching": 0 });
     expect(series[1]).toMatchObject({ Compression: 0.04, "Prompt caching": 0.006 });
@@ -178,12 +183,12 @@ describe("UsageTab", () => {
     // The original complaint: a one-day range plotted a single floating dot. The
     // synthetic start anchor gives the line a zero origin to climb from.
     const oneDay = new Date(2026, 6, 24);
-    const { getByTestId } = renderWith(
-      [day("2026-07-24", { compression_savings_spend: 0.2, prompt_caching_savings_spend: 0.05 })],
-      { from: oneDay, to: oneDay },
-    );
+    renderWith([day("2026-07-24", { compression_savings_spend: 0.2, gateway_injected_caching_savings_spend: 0.05 })], {
+      from: oneDay,
+      to: oneDay,
+    });
 
-    const series = readSeries(getByTestId("area-chart"));
+    const series = readSeries(screen.getByTestId("area-chart"));
     expect(series).toHaveLength(2);
     expect(series[0]).toMatchObject({ date: "Jul 24", Compression: 0, "Prompt caching": 0 });
     expect(series[1]).toMatchObject({ date: "Jul 24", Compression: 0.2, "Prompt caching": 0.05 });
@@ -194,52 +199,52 @@ describe("UsageTab", () => {
     // still read left to right in time, and the running total must climb toward
     // the newest day, not fall away from it.
     const newestFirst = [
-      day("2026-07-13", { prompt_caching_savings_spend: 0.1 }),
-      day("2026-07-12", { prompt_caching_savings_spend: 0.04 }),
+      day("2026-07-13", { gateway_injected_caching_savings_spend: 0.1 }),
+      day("2026-07-12", { gateway_injected_caching_savings_spend: 0.04 }),
     ];
-    const { getByTestId, getByRole } = renderWith(newestFirst);
+    renderWith(newestFirst);
 
     // The $0 anchor leads, then the days climb oldest to newest.
-    const cumulative = readSeries(getByTestId("area-chart"));
+    const cumulative = readSeries(screen.getByTestId("area-chart"));
     expect(cumulative.map((p: { date: string }) => p.date)).toEqual(["Jul 1", "Jul 12", "Jul 13"]);
     expect(cumulative[1]["Prompt caching"]).toBeCloseTo(0.04, 5);
     expect(cumulative[2]["Prompt caching"]).toBeCloseTo(0.14, 5);
     expect(cumulative[2]["Prompt caching"]).toBeGreaterThan(cumulative[1]["Prompt caching"]);
 
-    await userEvent.click(getByRole("tab", { name: "Per day" }));
-    const perDay = readSeries(getByTestId("bar-chart"));
+    await userEvent.click(screen.getByRole("tab", { name: "Per day" }));
+    const perDay = readSeries(screen.getByTestId("bar-chart"));
     expect(perDay.map((p: { date: string }) => p.date)).toEqual(["Jul 12", "Jul 13"]);
   });
 
   it("draws bars of the raw per-interval readings on the other tab", async () => {
-    const { getByRole, getByTestId, queryByTestId } = renderWith(twoDays());
+    renderWith(twoDays());
 
     // Cumulative opens on the area line.
-    expect(getByTestId("area-chart")).toBeInTheDocument();
+    expect(screen.getByTestId("area-chart")).toBeInTheDocument();
 
-    await userEvent.click(getByRole("tab", { name: "Per day" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Per day" }));
 
     // Per day switches to a bar chart of the unaccumulated daily savings, with no
     // synthetic anchor prepended.
-    expect(queryByTestId("area-chart")).not.toBeInTheDocument();
-    const series = readSeries(getByTestId("bar-chart"));
+    expect(screen.queryByTestId("area-chart")).not.toBeInTheDocument();
+    const series = readSeries(screen.getByTestId("bar-chart"));
     expect(series).toHaveLength(2);
     expect(series[0]).toMatchObject({ Compression: 0.04, "Prompt caching": 0.006 });
     expect(series[1]).toMatchObject({ Compression: 0.1, "Prompt caching": 0.01 });
   });
 
   it("says what the line means and over what range", async () => {
-    const { getByText, getByRole } = renderWith(twoDays());
+    renderWith(twoDays());
 
-    expect(getByText("Running total saved · Jul 1 – Jul 14 (UTC)")).toBeInTheDocument();
-    await userEvent.click(getByRole("tab", { name: "Per day" }));
-    expect(getByText("Saved per day · Jul 1 – Jul 14 (UTC)")).toBeInTheDocument();
+    expect(screen.getByText("Running total saved · Jul 1 – Jul 14 (UTC)")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: "Per day" }));
+    expect(screen.getByText("Saved per day · Jul 1 – Jul 14 (UTC)")).toBeInTheDocument();
   });
 
   it("builds the per-driver donut from the range totals, not the running total", () => {
-    const { getByTestId } = renderWith(twoDays());
+    renderWith(twoDays());
 
-    const slices = JSON.parse(getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
+    const slices = JSON.parse(screen.getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
     expect(slices).toEqual([
       { driver: "Compression", color: "emerald", usd: expect.closeTo(0.14, 5) },
       { driver: "Prompt caching", color: "blue", usd: expect.closeTo(0.016, 5) },
@@ -247,9 +252,9 @@ describe("UsageTab", () => {
   });
 
   it("omits a driver slice when that driver has no savings", () => {
-    const { getByTestId } = renderWith([day("2026-07-12", { compression_savings_spend: 0.04 })]);
+    renderWith([day("2026-07-12", { compression_savings_spend: 0.04 })]);
 
-    const slices = JSON.parse(getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
+    const slices = JSON.parse(screen.getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
     expect(slices).toEqual([{ driver: "Compression", color: "emerald", usd: expect.closeTo(0.04, 5) }]);
   });
 
@@ -257,16 +262,16 @@ describe("UsageTab", () => {
     // Stacking sums the series into one bar. Auto-router savings go negative when a
     // model switch pays for a cold cache, and that segment would be drawn below the
     // axis while the rest of the bar still read as the day's total.
-    const { getByRole, getByTestId } = renderWith([
+    renderWith([
       day("2026-07-12", {
         compression_savings_spend: 0.1,
-        prompt_caching_savings_spend: 0.02,
+        gateway_injected_caching_savings_spend: 0.02,
         autorouter_savings_spend: -0.05,
       }),
     ]);
 
-    await userEvent.click(getByRole("tab", { name: "Per day" }));
-    const bars = getByTestId("bar-chart");
+    await userEvent.click(screen.getByRole("tab", { name: "Per day" }));
+    const bars = screen.getByTestId("bar-chart");
     expect(bars).toHaveAttribute("data-stack", "false");
     expect(readSeries(bars)[0]).toMatchObject({ "Auto-router": -0.05 });
   });
@@ -276,10 +281,10 @@ describe("UsageTab", () => {
     // per day"). Hand-rolled rows made it compete with the legend and the toggle for
     // width, so the header grew a line on one tab and the chart moved with it. CardHeader
     // sizes the action column to its content and gives the rest to the title column.
-    const { getByRole, getByTestId, container } = renderWith(twoDays());
+    const { container } = renderWith(twoDays());
 
     const header = () => {
-      const legend = getByTestId("chart-legend");
+      const legend = screen.getByTestId("chart-legend");
       const action = legend.closest('[data-slot="card-action"]') as HTMLElement;
       const cardHeader = action.parentElement as HTMLElement;
       const description = cardHeader.querySelector('[data-slot="card-description"]') as HTMLElement;
@@ -290,12 +295,12 @@ describe("UsageTab", () => {
     expect(before.action).toBeTruthy();
     expect(before.description).toBeTruthy();
     // the toggle rides in the same action slot as the legend, so neither moves alone
-    expect(before.action.contains(getByRole("tablist"))).toBe(true);
+    expect(before.action.contains(screen.getByRole("tablist"))).toBe(true);
     // the subtitle lives outside that slot, so its length cannot reposition the controls
     expect(before.action.contains(before.description)).toBe(false);
     expect(before.description).toHaveTextContent(/Running total saved/);
 
-    await userEvent.click(getByRole("tab", { name: "Per day" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Per day" }));
 
     const after = header();
     expect(after.action).toBe(before.action);
@@ -309,42 +314,42 @@ describe("UsageTab", () => {
     // Switching models leaves the new one with a cold cache, so a route can cost more
     // than the baseline would have. A negative slice is meaningless in a donut, but the
     // total has to keep the loss or the page can only ever report good news.
-    const { getByText, getByTestId } = renderWith([
+    renderWith([
       day("2026-07-12", {
         compression_savings_spend: 0.1,
-        prompt_caching_savings_spend: 0.02,
+        gateway_injected_caching_savings_spend: 0.02,
         autorouter_savings_spend: -0.05,
       }),
     ]);
 
-    expect(getByText("$0.0700")).toBeInTheDocument();
-    expect(getByText("-$0.0500")).toBeInTheDocument();
+    expect(screen.getByText("$0.0700")).toBeInTheDocument();
+    expect(screen.getByText("-$0.0500")).toBeInTheDocument();
 
-    const slices = JSON.parse(getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
+    const slices = JSON.parse(screen.getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
     expect(slices.map((d: { driver: string }) => d.driver)).toEqual(["Compression", "Prompt caching"]);
-    expect(getByTestId("donut-chart")).toHaveAttribute("data-label", "$0.1200");
+    expect(screen.getByTestId("donut-chart")).toHaveAttribute("data-label", "$0.1200");
   });
 
   it("carries auto-router savings into the summary card, donut slice, and cumulative series", () => {
-    const { getByText, getByTestId } = renderWith([
+    renderWith([
       day("2026-07-12", {
         compression_savings_spend: 0.04,
-        prompt_caching_savings_spend: 0.006,
+        gateway_injected_caching_savings_spend: 0.006,
         autorouter_savings_spend: 0.02,
       }),
       day("2026-07-13", {
         compression_savings_spend: 0.1,
-        prompt_caching_savings_spend: 0.01,
+        gateway_injected_caching_savings_spend: 0.01,
         autorouter_savings_spend: 0.05,
       }),
     ]);
 
     // Total saved now sums three drivers, and the auto-router card carries its own total.
-    expect(getByText("$0.2260")).toBeInTheDocument();
-    expect(getByText("$0.0700")).toBeInTheDocument();
+    expect(screen.getByText("$0.2260")).toBeInTheDocument();
+    expect(screen.getByText("$0.0700")).toBeInTheDocument();
 
     // The driver donut gains a third slice priced from the range totals.
-    const slices = JSON.parse(getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
+    const slices = JSON.parse(screen.getByTestId("donut-chart").getAttribute("data-slices") ?? "[]");
     expect(slices).toEqual([
       { driver: "Compression", color: "emerald", usd: expect.closeTo(0.14, 5) },
       { driver: "Prompt caching", color: "blue", usd: expect.closeTo(0.016, 5) },
@@ -352,7 +357,7 @@ describe("UsageTab", () => {
     ]);
 
     // And the cumulative line accumulates the auto-router series alongside the others.
-    const series = readSeries(getByTestId("area-chart"));
+    const series = readSeries(screen.getByTestId("area-chart"));
     expect(series[2]["Auto-router"]).toBeCloseTo(0.07, 5);
   });
 
@@ -366,9 +371,9 @@ describe("UsageTab", () => {
       start_date: "2026-07-12",
       end_date: "2026-07-12",
     };
-    const { findAllByTestId } = renderWith([day("2026-07-12", {})], { toolSpend });
+    renderWith([day("2026-07-12", {})], { toolSpend });
 
-    const bars = await findAllByTestId("bar-chart");
+    const bars = await screen.findAllByTestId("bar-chart");
     const series = JSON.parse(bars[0].getAttribute("data-series") ?? "[]");
     expect(series[0]).toMatchObject({ tool_name: "search", spend: 4.0 });
     // The 64px bar cap is this card's opt-in; the shared BarChart must not cap
@@ -386,14 +391,16 @@ describe("UsageTab", () => {
       start_date: "2026-07-12",
       end_date: "2026-07-12",
     };
-    const { findAllByTestId, getAllByTestId } = renderWith([day("2026-07-12", {})], { toolSpend });
+    renderWith([day("2026-07-12", {})], { toolSpend });
 
-    const bars = await findAllByTestId("bar-chart");
+    const bars = await screen.findAllByTestId("bar-chart");
     const [totalByTool, dailyByTool] = bars.slice(-2);
     expect(dailyByTool).toHaveAttribute("data-show-legend", "false");
     expect(totalByTool).toHaveAttribute("data-colors", dailyByTool.getAttribute("data-colors"));
 
-    const toolLegends = getAllByTestId("chart-legend").filter((legend) => legend.textContent === "search,read_file");
+    const toolLegends = screen
+      .getAllByTestId("chart-legend")
+      .filter((legend) => legend.textContent === "search,read_file");
     expect(toolLegends).toHaveLength(1);
   });
 
@@ -410,23 +417,23 @@ describe("UsageTab", () => {
     it.each(["Internal User", "Internal Viewer", "Org Admin"])(
       "hides the card and never calls the endpoint for %s",
       async (userRole) => {
-        const { queryByText, getByTestId } = renderWith([day("2026-07-12", { compression_savings_spend: 0.04 })], {
+        renderWith([day("2026-07-12", { compression_savings_spend: 0.04 })], {
           toolSpend,
           userRole,
         });
 
         // Liveness gate: the daily-activity charts still render for this role,
         // so the absence below is the gate, not an empty tab.
-        expect(getByTestId("donut-chart")).toBeInTheDocument();
-        expect(queryByText("Spend by tool")).not.toBeInTheDocument();
+        expect(screen.getByTestId("donut-chart")).toBeInTheDocument();
+        expect(screen.queryByText("Spend by tool")).not.toBeInTheDocument();
         await vi.waitFor(() => expect(mockGetToolSpend).not.toHaveBeenCalled());
       },
     );
 
     it("keeps the card and the endpoint call for an admin", async () => {
-      const { findByText } = renderWith([day("2026-07-12", { compression_savings_spend: 0.04 })], { toolSpend });
+      renderWith([day("2026-07-12", { compression_savings_spend: 0.04 })], { toolSpend });
 
-      expect(await findByText("Spend by tool")).toBeInTheDocument();
+      expect(await screen.findByText("Spend by tool")).toBeInTheDocument();
       expect(mockGetToolSpend).toHaveBeenCalled();
     });
   });

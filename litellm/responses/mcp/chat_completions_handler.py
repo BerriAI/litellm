@@ -1,7 +1,9 @@
 """Helpers for handling MCP-aware `/chat/completions` requests."""
 
 import logging
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final, cast
+
+from typing_extensions import TypedDict, Unpack
 
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
@@ -12,6 +14,10 @@ from litellm.utils import CustomStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
+
+
+class _MCPCompletionKwargs(TypedDict, total=False, extra_items=object):
+    """Extra keywords forwarded verbatim to ``litellm.acompletion``, which owns their contract."""
 
 
 def _add_mcp_metadata_to_response(
@@ -79,7 +85,7 @@ async def acompletion_with_mcp(
     model: str,
     messages: list,
     tools: list | None = None,
-    **kwargs: Any,
+    **kwargs: Unpack[_MCPCompletionKwargs],  # kwargs-ok: forwarded verbatim to litellm.acompletion, which owns them
 ) -> ModelResponse | CustomStreamWrapper:
     """
     Async completion with MCP integration.
@@ -126,7 +132,7 @@ async def acompletion_with_mcp(
     ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
         user_api_key_auth=user_api_key_auth,
         mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
-        litellm_trace_id=kwargs.get("litellm_trace_id"),
+        litellm_trace_id=context.litellm_trace_id,
         mcp_auth_header=mcp_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,
         request_tags=request_tags,
@@ -168,7 +174,7 @@ async def acompletion_with_mcp(
         return response
 
     # For auto-execute: handle streaming vs non-streaming differently
-    stream: Final[bool] = kwargs.get("stream", False)
+    stream: Final[object] = kwargs.get("stream", False)
     mock_tool_calls: Final = base_call_args.pop("mock_tool_calls", None)
 
     if stream:
@@ -490,8 +496,8 @@ async def acompletion_with_mcp(
             mcp_server_auth_headers=mcp_server_auth_headers,
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
-            litellm_call_id=kwargs.get("litellm_call_id"),
-            litellm_trace_id=kwargs.get("litellm_trace_id"),
+            litellm_call_id=context.litellm_call_id,
+            litellm_trace_id=context.litellm_trace_id,
             openai_tools=openai_tools,
             base_call_args=base_call_args,
             request_tags=request_tags,
@@ -604,8 +610,8 @@ async def acompletion_with_mcp(
         mcp_server_auth_headers=mcp_server_auth_headers,
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
-        litellm_call_id=kwargs.get("litellm_call_id"),
-        litellm_trace_id=kwargs.get("litellm_trace_id"),
+        litellm_call_id=context.litellm_call_id,
+        litellm_trace_id=context.litellm_trace_id,
         request_tags=request_tags,
     )
 

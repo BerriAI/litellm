@@ -306,15 +306,15 @@ _UpstreamGrantRejection = Literal["no_access_token", "expired_lifetime"]
 - ``expired_lifetime``: the response reports a parseable, non-positive ``expires_in``, i.e. an upstream
   token that is already dead, so sealing it would forward a bearer the edge cannot use
 An absent or unparseable ``expires_in`` is NOT a rejection; the lifetime is merely unknown and the
-envelope caps it, the by-design behaviour for an upstream that omits the field."""
+envelope uses its fallback lifetime, the by-design behaviour for an upstream that omits the field."""
 
 
 def _classify_upstream_lifetime(raw_expires_in: object) -> "int | Literal['unspecified', 'expired']":
     """Classify an upstream ``expires_in`` into a positive number of seconds, ``"unspecified"`` (absent
-    or unparseable, so the envelope caps it), or ``"expired"`` (a non-positive value the upstream reports
+    or unparseable, so the envelope uses its fallback), or ``"expired"`` (a non-positive value the upstream reports
     as already elapsed). Telling "we do not know the lifetime" apart from "the upstream says it is
-    already dead" is what stops an explicitly-expired token from silently receiving the envelope's 1h
-    cap. The expired decision is made on the parsed numeric value, not on ``int(...)`` of it, so a
+    already dead" is what stops an explicitly-expired token from silently receiving the envelope's
+    one-hour fallback. The expired decision is made on the parsed numeric value, not on ``int(...)`` of it, so a
     positive sub-second lifetime in ``(0, 1)`` is not truncated to ``0`` and misread as elapsed; the
     envelope works in whole seconds, so such a lifetime clamps up to its 1s floor. ``bool`` is excluded
     (an ``int`` subclass but never a real lifetime), and the conversions can raise on ``NaN`` /
@@ -335,7 +335,7 @@ def _bridge_grant_from_token_response(token_response: object) -> "UpstreamTokenG
     """Validate an upstream OAuth token response into a typed grant, or say why it cannot back an
     envelope. Each field is isinstance-checked so nothing untyped from ``response.json()`` reaches the
     grant. ``expires_in`` is read three ways (see :func:`_classify_upstream_lifetime`): an unknown
-    lifetime leaves the grant ``expires_in`` ``None`` for the envelope to cap, a positive value is
+    lifetime leaves the grant ``expires_in`` ``None`` for the envelope fallback, a positive value is
     honoured, and an explicit already-elapsed value is a rejection rather than a silent fall-through to
     the cap."""
     from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (  # noqa: PLC0415  # inline import avoids a module-load circular import
@@ -357,8 +357,8 @@ def _bridge_grant_from_token_response(token_response: object) -> "UpstreamTokenG
         token_type=token_type if isinstance(token_type, str) and token_type else "Bearer",
         # The upstream refresh_token is deliberately NOT sealed: the edge never consumes it (it forwards
         # only token_type + access_token), so it would be dead weight embedding a long-lived upstream
-        # credential in the client-held bearer, and it enlarges the envelope. Refresh support is a
-        # follow-up (a dedicated refresh-envelope); the client re-runs authorization_code at the cap.
+        # credential in the client-held bearer, and it enlarges the envelope. The dedicated refresh
+        # envelope carries that credential separately.
         refresh_token=None,
         scope=scope if isinstance(scope, str) and scope else None,
         expires_in=lifetime if isinstance(lifetime, int) else None,
@@ -387,6 +387,7 @@ _BridgeMintError = Literal[
     "not_configured",
     "no_upstream_token",
     "upstream_token_expired",
+    "upstream_lifetime_unrepresentable",
     "too_large",
 ]
 
@@ -455,6 +456,12 @@ def _bridge_mint_error_response(error: _BridgeMintError) -> JSONResponse:
                 502,
                 "server_error",
                 "the upstream token response reports an already-expired lifetime",
+            )
+        case "upstream_lifetime_unrepresentable":
+            status, code, desc = (
+                502,
+                "server_error",
+                "the upstream token response reports an unrepresentable lifetime",
             )
         case "too_large":
             status, code, desc = (
@@ -619,6 +626,7 @@ def _finish_bridge_mint(
         build_bridge_token_response,
     )
     from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        EnvelopeLifetimeUnrepresentable,
         SealedEnvelope,
         UpstreamTokenGrant,
     )
@@ -627,6 +635,8 @@ def _finish_bridge_mint(
     if not isinstance(grant, UpstreamTokenGrant):
         return _upstream_rejection_to_mint_error(grant)
     sealed: Final = build_bridge_token_response(ready.identity, grant, ready.keys, now)
+    if isinstance(sealed, EnvelopeLifetimeUnrepresentable):
+        return "upstream_lifetime_unrepresentable"
     if not isinstance(sealed, SealedEnvelope):
         return "too_large"
     # Report expires_in from the JWT's own second-truncated exp, rounding the elapsed portion up, so the

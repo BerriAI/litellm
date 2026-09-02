@@ -278,3 +278,59 @@ class TestIsExpectedClientError:
         assert is_expected_client_error(WithCode("invalid_request_error")) is False
         assert is_expected_client_error(Exception("no status")) is False
         assert is_expected_client_error(None) is False
+
+    def test_provider_originated_4xx_is_not_expected(self):
+        """Regression for LIT-6163: a 4xx the provider returned is an upstream or
+        deployment problem, so it keeps its traceback; only the proxy's own
+        pre-call rejections (no llm_provider) are expected client errors."""
+        from litellm.exceptions import AuthenticationError, RateLimitError
+        from litellm.litellm_core_utils.core_helpers import is_expected_client_error
+        from litellm.llms.anthropic.common_utils import AnthropicError
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+        provider_auth_failure = AuthenticationError(
+            message="AnthropicException - API key is invalid.", llm_provider="anthropic", model="claude-haiku-4-5"
+        )
+        assert is_expected_client_error(provider_auth_failure) is False
+
+        provider_rate_limit = RateLimitError(message="rate limited upstream", llm_provider="openai", model="gpt-4o")
+        assert is_expected_client_error(provider_rate_limit) is False
+
+        unmapped_provider_failure = AnthropicError(status_code=401, message='{"type":"authentication_error"}')
+        assert is_expected_client_error(unmapped_provider_failure) is False
+
+        proxy_rate_limit = ProxyRateLimitError(
+            detail={"error": "Max parallel requests reached"}, model="claude-haiku-4-5", llm_provider="anthropic"
+        )
+        assert proxy_rate_limit.llm_provider == "anthropic"
+        assert is_expected_client_error(proxy_rate_limit) is True
+
+        class RouterRejection(Exception):
+            def __init__(self):
+                self.status_code = 429
+                self.llm_provider = ""
+
+        assert is_expected_client_error(RouterRejection()) is True
+
+    def test_budget_rejection_decorated_with_provider_is_expected(self):
+        """The auth handler stamps the requested model's provider onto the proxy's
+        own BudgetExceededError before logging it, which must not turn a key-over-budget
+        429 into a provider error that keeps its traceback."""
+        from litellm.exceptions import BudgetExceededError, RateLimitError, RateLimitErrorCategory
+        from litellm.litellm_core_utils.core_helpers import is_expected_client_error
+
+        over_budget = BudgetExceededError(current_cost=0.01, max_budget=0.0, llm_provider="anthropic")
+        assert over_budget.llm_provider == "anthropic"
+        assert is_expected_client_error(over_budget) is True
+
+        litellm_limit = RateLimitError(
+            message="key over rpm", llm_provider="anthropic", model="claude-haiku-4-5",
+            category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+        )
+        assert is_expected_client_error(litellm_limit) is True
+
+        vendor_limit = RateLimitError(
+            message="rate limited upstream", llm_provider="anthropic", model="claude-haiku-4-5",
+            category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
+        )
+        assert is_expected_client_error(vendor_limit) is False

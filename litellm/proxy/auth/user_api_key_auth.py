@@ -19,12 +19,15 @@ import fastapi
 import orjson
 from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
+from starlette.exceptions import WebSocketException
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import (
     GLOBAL_PROXY_SPEND_CACHE_KEY,
+    INVALID_VIRTUAL_KEY_ERROR_MARKER,
+    INVALID_VIRTUAL_KEY_ERROR_MESSAGE,
     LITELLM_PROXY_BUDGET_NAME,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
 )
@@ -65,6 +68,7 @@ from litellm.proxy.auth.auth_utils import (
     get_model_from_request,
     get_request_route,
     get_request_route_template,
+    is_invalid_virtual_key_error,
     iter_request_fallback_targets,
     normalize_request_route,
     pre_db_read_auth_checks,
@@ -199,13 +203,22 @@ class _UserModelBudgetLimiter(Protocol):
     ) -> bool: ...
 
 
+class _TokenTeamModels(Protocol):
+    @property
+    def team_models(self) -> list[str]: ...
+
+
+def _token_team_models(valid_token: _TokenTeamModels) -> list[str]:
+    return valid_token.team_models
+
+
 async def _read_user_model_max_budget(
     user_id: str | None,
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
-    parent_otel_span: object,
+    parent_otel_span: Span | None,
     proxy_logging_obj: ProxyLogging,
-) -> dict | None:
+) -> Mapping[str, object] | None:
     """The user row's `model_max_budget`, or None when the row cannot be read.
 
     A user whose row is missing must not be refused: this is a budget lookup,
@@ -219,13 +232,13 @@ async def _read_user_model_max_budget(
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             user_id_upsert=False,
-            parent_otel_span=parent_otel_span,  # pyright: ignore[reportArgumentType]  # Span is a runtime union, not usable in an annotation here
+            parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
         )
     except Exception as e:  # noqa: BLE001  # mirrors the main path's tolerance
         verbose_logger.debug("Unable to read user for the per-model budget check: %s", e)
         return None
-    return getattr(user_obj, "model_max_budget", None)
+    return user_obj.model_max_budget if user_obj is not None else None
 
 
 async def _check_user_model_budget(
@@ -530,6 +543,8 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
     try:
         return await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
     except Exception as e:
+        if is_invalid_virtual_key_error(e):
+            raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
         verbose_proxy_logger.exception(e)
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         raise HTTPException(status_code=403, detail=str(e))
@@ -1760,7 +1775,12 @@ async def _user_api_key_auth_builder(
 
             return valid_token
 
-        if valid_token is not None and isinstance(valid_token, UserAPIKeyAuth) and valid_token.team_id is not None:
+        if (
+            valid_token is not None
+            and isinstance(valid_token, UserAPIKeyAuth)
+            and valid_token.team_id is not None
+            and valid_token.team_id != UI_TEAM_ID
+        ):
             ## UPDATE TEAM VALUES BASED ON CACHED TEAM OBJECT - allows `/team/update` values to work for cached token
             try:
                 team_obj: Final[LiteLLM_TeamTableCachedObj] = await get_team_object(
@@ -1853,13 +1873,17 @@ async def _user_api_key_auth_builder(
                 _masked_key: Final = f"{api_key[:4]}****{api_key[-4:]}" if len(api_key) > 8 else "****"
                 if not api_key.startswith("sk-"):
                     _hint = _JWT_AUTH_DISABLED_HINT if not enable_jwt_auth and JWTHandler.is_jwt(token=api_key) else ""
-                    raise HTTPException(
+                    _malformed_key_error = HTTPException(
                         status_code=status.HTTP_401_UNAUTHORIZED,
                         detail=(
-                            f"LiteLLM Virtual Key expected. Received={_masked_key}, "
+                            f"{INVALID_VIRTUAL_KEY_ERROR_MESSAGE}. Received={_masked_key}, "
                             f"expected to start with 'sk-'.{_hint}"
                         ),
                     )  # prevent token hashes from being used
+                    # Stamp provenance here so log routing classifies this 401 by
+                    # where it was raised, never by its message text.
+                    setattr(_malformed_key_error, INVALID_VIRTUAL_KEY_ERROR_MARKER, True)
+                    raise _malformed_key_error
             else:
                 verbose_logger.warning(
                     "litellm.proxy.proxy_server.user_api_key_auth(): Warning - Key is not a string. Got type={}".format(
@@ -1992,7 +2016,7 @@ async def _user_api_key_auth_builder(
                             include={"litellm_budget_table": True},
                         )
                         if _db_member is not None:
-                            team_member_info = LiteLLM_TeamMembership(**_db_member.dict())
+                            team_member_info = LiteLLM_TeamMembership(**_db_member.model_dump())
                             await user_api_key_cache.async_set_cache(
                                 key=_cache_key,
                                 value=team_member_info,
@@ -2140,6 +2164,8 @@ async def _user_api_key_auth_builder(
             # Check 6: Additional Common Checks across jwt + key auth
             if valid_token.team_id is not None:
                 try:
+                    if valid_token.team_id == UI_TEAM_ID:
+                        raise TeamNotFoundError(team_id=UI_TEAM_ID)
                     with tracer.trace("litellm.proxy.auth.get_team_object"):
                         _team_obj = await get_team_object(
                             team_id=valid_token.team_id,
@@ -2149,6 +2175,7 @@ async def _user_api_key_auth_builder(
                             proxy_logging_obj=proxy_logging_obj,
                         )
                 except HTTPException:
+                    token_team_models: Final = _token_team_models(valid_token)
                     _team_obj = LiteLLM_TeamTableCachedObj(
                         team_id=valid_token.team_id,
                         max_budget=valid_token.team_max_budget,
@@ -2157,7 +2184,7 @@ async def _user_api_key_auth_builder(
                         tpm_limit=valid_token.team_tpm_limit,
                         rpm_limit=valid_token.team_rpm_limit,
                         blocked=valid_token.team_blocked,
-                        models=valid_token.team_models,
+                        models=token_team_models,
                         metadata=valid_token.team_metadata,
                         object_permission_id=valid_token.team_object_permission_id,
                         object_permission=await _resolve_object_permission_for_unresolvable_team(
@@ -2301,6 +2328,7 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
     UserAPIKeyAuth. Only called when valid_token.team_id is known to be
     non-None (the caller gates on it)."""
     assert valid_token.team_id is not None
+    token_team_models: Final = _token_team_models(valid_token)
     return LiteLLM_TeamTableCachedObj(
         team_id=valid_token.team_id,
         max_budget=valid_token.team_max_budget,
@@ -2309,7 +2337,7 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
         tpm_limit=valid_token.team_tpm_limit,
         rpm_limit=valid_token.team_rpm_limit,
         blocked=valid_token.team_blocked,
-        models=valid_token.team_models,
+        models=token_team_models,
         metadata=valid_token.team_metadata,
         object_permission_id=valid_token.team_object_permission_id,
     )
@@ -2432,7 +2460,7 @@ async def _run_centralized_common_checks(
         )
 
     fetch_coros: Final = []
-    if user_api_key_auth_obj.team_id is not None:
+    if user_api_key_auth_obj.team_id is not None and user_api_key_auth_obj.team_id != UI_TEAM_ID:
         fetch_coros.append(
             _safe_fetch(
                 "team",
@@ -2556,7 +2584,9 @@ async def _run_centralized_common_checks(
         else:
             raise team_result
     else:
-        team_object = team_result
+        team_object = (
+            _team_obj_from_token(user_api_key_auth_obj) if user_api_key_auth_obj.team_id == UI_TEAM_ID else team_result
+        )
 
     user_object: LiteLLM_UserTable | None = None if isinstance(user_result, BaseException) else user_result
     project_object: Final[LiteLLM_ProjectTableCachedObj | None] = (
@@ -3256,8 +3286,7 @@ async def _run_post_custom_auth_checks(
     # loaded the user row yet. The attach is unconditional because the post-call
     # spend hook reads this field off the token: gating it on the same condition
     # as enforcement would leave the user's counter uncharged whenever this
-    # request was not itself enforceable, which is the untracked-spend bug this
-    # PR exists to fix.
+    # request was not itself enforceable, so its spend would go untracked.
     user_budget: Final = await _read_user_model_max_budget(
         user_id=valid_token.user_id,
         prisma_client=prisma_client,

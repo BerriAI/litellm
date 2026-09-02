@@ -1,10 +1,13 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
-from collections.abc import Mapping
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone, tzinfo
 from types import MappingProxyType
 from typing import Any, Final, Literal, TypedDict, cast
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -72,7 +75,20 @@ def _get_token_detail_value(details: object, key: str) -> int | None:
     return value if isinstance(value, int) else None
 
 
-def _get_web_search_requests(server_tool_use: Any) -> int | None:
+_IMAGE_SIZE_PATTERN: Final = re.compile(r"\d+(?:x|-x-)\d+")
+
+
+def _requested_image_param(optional_params: Mapping[str, object] | None, key: str) -> str | None:
+    value: Final = None if optional_params is None else optional_params.get(key)
+    return value if isinstance(value, str) else None
+
+
+def _requested_image_size(optional_params: Mapping[str, object] | None) -> str | None:
+    value: Final = _requested_image_param(optional_params, "size")
+    return value if value is not None and _IMAGE_SIZE_PATTERN.fullmatch(value) else None
+
+
+def get_web_search_requests(server_tool_use: Any) -> int | None:
     """
     Tolerantly read ``web_search_requests`` from a ``server_tool_use`` value
     that may be ``None``, a ``dict``, a ``ServerToolUse`` pydantic instance,
@@ -90,6 +106,16 @@ def _get_web_search_requests(server_tool_use: Any) -> int | None:
     if isinstance(server_tool_use, dict):
         return server_tool_use.get("web_search_requests")
     return getattr(server_tool_use, "web_search_requests", None)
+
+
+def get_web_search_requests_from_usage(usage: Usage) -> int | None:
+    """Read ``web_search_requests`` from a ``Usage``'s ``server_tool_use``.
+
+    ``Usage`` deletes unset optional fields from ``__dict__`` (see
+    ``SafeAttributeModel``), so direct attribute access can raise
+    ``AttributeError``; ``getattr`` with a default is required here.
+    """
+    return get_web_search_requests(getattr(usage, "server_tool_use", None))
 
 
 def _is_above_128k(tokens: float) -> bool:
@@ -266,10 +292,187 @@ def _get_tiered_base_costs(model_info: ModelInfo, usage: Usage) -> tuple[float, 
     )
 
 
+def _is_within_off_peak_window(off_peak_hours_utc: str | Sequence[str], current_time: datetime | None = None) -> bool:
+    """Return True if current_time (UTC, defaulting to now) falls inside any off-peak window.
+
+    off_peak_hours_utc is a "HH:MM-HH:MM" string in UTC, or a list of such strings for providers
+    with multiple daily windows (e.g. ["16:30-00:30", "04:00-06:00"]). A window may wrap past
+    midnight, and a window whose start equals its end covers the whole day. The start is
+    inclusive and the end is exclusive; malformed windows are ignored.
+
+    An aware current_time is converted to UTC. A naive one is taken to already be UTC rather
+    than being localised, so callers must pass datetime.now(timezone.utc), never datetime.now(),
+    or every window shifts by the host's offset.
+    """
+    reference: Final = current_time if current_time is not None else datetime.now(timezone.utc)
+    now: Final = (reference.astimezone(timezone.utc) if reference.tzinfo is not None else reference).time()
+    windows: Final = (off_peak_hours_utc,) if isinstance(off_peak_hours_utc, str) else off_peak_hours_utc
+    for window in windows:
+        try:
+            start_str, end_str = window.split("-")
+            start = datetime.strptime(start_str.strip(), "%H:%M").replace(tzinfo=timezone.utc).time()
+            end = datetime.strptime(end_str.strip(), "%H:%M").replace(tzinfo=timezone.utc).time()
+        except (ValueError, AttributeError):
+            continue
+        if start < end:
+            if start <= now < end:
+                return True
+        elif now >= start or now < end:
+            return True
+    return False
+
+
+_WEEKDAY_NUMBERS: Final = MappingProxyType(
+    {
+        "mon": 1,
+        "monday": 1,
+        "tue": 2,
+        "tues": 2,
+        "tuesday": 2,
+        "wed": 3,
+        "wednesday": 3,
+        "thu": 4,
+        "thur": 4,
+        "thurs": 4,
+        "thursday": 4,
+        "fri": 5,
+        "friday": 5,
+        "sat": 6,
+        "saturday": 6,
+        "sun": 7,
+        "sunday": 7,
+    }
+)
+
+
+def _normalize_weekday(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 1 <= value <= 7 else None
+    if isinstance(value, str):
+        return _WEEKDAY_NUMBERS.get(value.strip().lower())
+    return None
+
+
+def _weekday_calendar(weekday_timezone: object) -> tzinfo:
+    if isinstance(weekday_timezone, str) and weekday_timezone.strip():
+        try:
+            return ZoneInfo(weekday_timezone.strip())
+        except (ValueError, ZoneInfoNotFoundError):
+            return timezone.utc
+    return timezone.utc
+
+
+def _matches_weekdays(reference_utc: datetime, weekdays: object, weekday_timezone: object) -> bool:
+    """Return True when reference_utc falls on one of the rule's weekdays, read on the calendar
+    named by weekday_timezone (default UTC). An absent weekdays means every day. The calendar
+    matters even when UTC and vendor-local weekdays agree at every currently priced hour: a
+    window past 16:00 UTC is where an Asia/Shanghai weekday diverges from the UTC one.
+    """
+    if weekdays is None:
+        return True
+    if isinstance(weekdays, str) or not isinstance(weekdays, Sequence):
+        return False
+    allowed: Final = frozenset(day for day in map(_normalize_weekday, weekdays) if day is not None)
+    return reference_utc.astimezone(_weekday_calendar(weekday_timezone)).isoweekday() in allowed
+
+
+def _as_window_strings(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, Sequence):
+        return tuple(entry for entry in value if isinstance(entry, str))
+    return ()
+
+
+def _is_off_peak(off_peak: Mapping[str, object], current_time: datetime | None = None) -> bool:
+    """Return True when current_time (UTC, defaulting to now) is off-peak under the block's
+    rules: the flat hours_utc windows, which apply every day, or any entry in windows, whose
+    hours apply only on its weekdays.
+    """
+    reference: Final = current_time if current_time is not None else datetime.now(timezone.utc)
+    reference_utc: Final = (
+        reference.astimezone(timezone.utc) if reference.tzinfo is not None else reference.replace(tzinfo=timezone.utc)
+    )
+    flat_windows: Final = _as_window_strings(off_peak.get("hours_utc"))
+    if flat_windows and _is_within_off_peak_window(flat_windows, reference_utc):
+        return True
+    windows: Final = off_peak.get("windows")
+    if isinstance(windows, str) or not isinstance(windows, Sequence):
+        return False
+    weekday_timezone: Final = off_peak.get("weekday_timezone")
+    for rule in windows:
+        if not isinstance(rule, Mapping):
+            continue
+        rule_windows = _as_window_strings(rule.get("hours_utc"))
+        if not rule_windows:
+            continue
+        if not _matches_weekdays(reference_utc, rule.get("weekdays"), weekday_timezone):
+            continue
+        if _is_within_off_peak_window(rule_windows, reference_utc):
+            return True
+    return False
+
+
+def _coerce_off_peak_rate(value: object, default: float) -> float:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return default
+    return default
+
+
+def _apply_off_peak_pricing(
+    model_info: ModelInfo,
+    current_time: datetime | None,
+    prompt_base_cost: float,
+    completion_base_cost: float,
+    cache_read_cost: float,
+) -> tuple[float, float, float]:
+    """Swap in off-peak per-token rates when the current UTC time is inside one of the model's
+    off_peak_pricing rules, the every-day hours_utc windows or a day-of-week-qualified entry in
+    windows. An off-peak rate replaces the rate that would otherwise apply rather than
+    discounting it, so a model that also has tiered or above-threshold pricing bills the flat
+    off-peak rate for the whole request while the window is open. Any rate left unset in
+    off_peak_pricing falls back to the standard rate.
+    """
+    off_peak: Final = model_info.get("off_peak_pricing")
+    if not isinstance(off_peak, Mapping) or not _is_off_peak(off_peak, current_time):
+        return prompt_base_cost, completion_base_cost, cache_read_cost
+    return (
+        _coerce_off_peak_rate(off_peak.get("input_cost_per_token"), prompt_base_cost),
+        _coerce_off_peak_rate(off_peak.get("output_cost_per_token"), completion_base_cost),
+        _coerce_off_peak_rate(off_peak.get("cache_read_input_token_cost"), cache_read_cost),
+    )
+
+
+def _apply_off_peak_to_base_costs(
+    model_info: ModelInfo,
+    current_time: datetime | None,
+    base_costs: tuple[float, float, float, float, float],
+) -> tuple[float, float, float, float, float]:
+    """Apply off-peak rates to an already-resolved set of base costs, whichever pricing path
+    produced them. Cache-creation rates are passed through untouched, since off_peak_pricing
+    has no field for them.
+    """
+    prompt, completion, cache_creation, cache_creation_above_1hr, cache_read = base_costs
+    off_peak_prompt, off_peak_completion, off_peak_cache_read = _apply_off_peak_pricing(
+        model_info, current_time, prompt, completion, cache_read
+    )
+    return (off_peak_prompt, off_peak_completion, cache_creation, cache_creation_above_1hr, off_peak_cache_read)
+
+
 def _get_token_base_cost(
     model_info: ModelInfo,
     usage: Usage,
     service_tier: str | None = None,
+    current_time: datetime | None = None,
     *,
     threshold_is_inclusive: bool = False,
 ) -> tuple[float, float, float, float, float]:
@@ -287,7 +490,7 @@ def _get_token_base_cost(
     """
     tiered_base_costs: Final = _get_tiered_base_costs(model_info=model_info, usage=usage)
     if tiered_base_costs is not None:
-        return tiered_base_costs
+        return _apply_off_peak_to_base_costs(model_info, current_time, tiered_base_costs)
 
     # Get service tier aware cost keys
     input_cost_key: Final = _get_service_tier_cost_key("input_cost_per_token", service_tier)
@@ -321,12 +524,16 @@ def _get_token_base_cost(
         k for k in model_info if k.startswith("input_cost_per_token_above_") and not k.endswith(_SERVICE_TIER_SUFFIXES)
     ]
     if not threshold_keys:
-        return (
-            prompt_base_cost,
-            completion_base_cost,
-            cache_creation_cost,
-            cache_creation_cost_above_1hr,
-            cache_read_cost,
+        return _apply_off_peak_to_base_costs(
+            model_info,
+            current_time,
+            (
+                prompt_base_cost,
+                completion_base_cost,
+                cache_creation_cost,
+                cache_creation_cost_above_1hr,
+                cache_read_cost,
+            ),
         )
 
     # Only sort the threshold keys (typically 1-2 keys instead of 66+)
@@ -427,12 +634,16 @@ def _get_token_base_cost(
             except Exception:
                 continue
 
-    return (
-        prompt_base_cost,
-        completion_base_cost,
-        cache_creation_cost,
-        cache_creation_cost_above_1hr,
-        cache_read_cost,
+    return _apply_off_peak_to_base_costs(
+        model_info,
+        current_time,
+        (
+            prompt_base_cost,
+            completion_base_cost,
+            cache_creation_cost,
+            cache_creation_cost_above_1hr,
+            cache_read_cost,
+        ),
     )
 
 
@@ -889,11 +1100,22 @@ def generic_cost_per_token(
     total_details: Final = text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens + video_tokens
     has_double_counting: Final = (cache_hit > 0 or cache_creation > 0) and total_details > usage.prompt_tokens
 
-    if (text_tokens == 0 and prompt_tokens_details["image_count"] == 0) or has_double_counting:
-        text_tokens = usage.prompt_tokens - cache_hit - audio_tokens - cache_creation - image_tokens - video_tokens
+    if has_double_counting:
+        # cached and per-modality counts are both subsets of prompt_tokens and may overlap, so a
+        # modality can only bill what the cache did not already cover or the overlap is billed twice
+        uncached_budget: Final = max(usage.prompt_tokens - cache_hit - cache_creation, 0)
+        billable_audio: Final = min(audio_tokens, uncached_budget)
+        billable_image: Final = min(image_tokens, uncached_budget - billable_audio)
+        billable_video: Final = min(video_tokens, uncached_budget - billable_audio - billable_image)
+        prompt_tokens_details["audio_tokens"] = billable_audio
+        prompt_tokens_details["image_tokens"] = billable_image
+        prompt_tokens_details["video_tokens"] = billable_video
+        prompt_tokens_details["text_tokens"] = uncached_budget - billable_audio - billable_image - billable_video
+    elif text_tokens == 0 and prompt_tokens_details["image_count"] == 0:
         # Clamp to zero: inconsistent streaming usage
-        text_tokens = max(text_tokens, 0)
-        prompt_tokens_details["text_tokens"] = text_tokens
+        prompt_tokens_details["text_tokens"] = max(
+            usage.prompt_tokens - cache_hit - audio_tokens - cache_creation - image_tokens - video_tokens, 0
+        )
 
     (
         prompt_base_cost,
@@ -1063,15 +1285,17 @@ def get_token_type_cost_breakdown(
         reasoning_tokens = _coerce_token_count(getattr(usage, "reasoning_tokens", 0))
 
     # Reasoning is billed at the selected tier's reasoning rate for tiered models,
-    # else at the explicit per-reasoning-token rate when the model defines one,
-    # otherwise at the standard output-token rate - this mirrors how the total
-    # completion cost is computed, so the breakdown can never diverge from it.
+    # else at the service-tier-aware per-reasoning-token rate - this mirrors how the
+    # total completion cost is computed, so the breakdown can never diverge from it.
     tiered_reasoning_rate: Final = _get_tiered_reasoning_rate(model_info=model_info, usage=usage)
-    flat_reasoning_rate: Final = _get_cost_per_unit(model_info, "output_cost_per_reasoning_token", None)
     reasoning_rate: Final = (
         tiered_reasoning_rate
         if tiered_reasoning_rate is not None
-        else (flat_reasoning_rate if flat_reasoning_rate is not None else completion_base_cost)
+        else _resolve_reasoning_token_cost(
+            model_info=model_info,
+            service_tier=service_tier,
+            completion_base_cost=completion_base_cost,
+        )
     )
     reasoning_cost = float(reasoning_tokens) * reasoning_rate
 
@@ -1288,12 +1512,13 @@ class CostCalculatorUtils:
             cost_calculator as vertex_ai_image_cost_calculator,
         )
 
-        if size is None:
-            size = completion_response.size or "1024-x-1024"
-        if quality is None:
-            quality = completion_response.quality or "standard"
-        if n is None:
-            n = len(completion_response.data) if completion_response.data else 0
+        resolved_size: Final = (
+            size or completion_response.size or _requested_image_size(optional_params) or "1024-x-1024"
+        )
+        resolved_quality: Final = (
+            quality or completion_response.quality or _requested_image_param(optional_params, "quality") or "standard"
+        )
+        resolved_n: Final = n if n is not None else (len(completion_response.data) if completion_response.data else 0)
 
         if custom_llm_provider == litellm.LlmProviders.VERTEX_AI.value:
             if isinstance(completion_response, ImageResponse):
@@ -1305,7 +1530,7 @@ class CostCalculatorUtils:
             if isinstance(completion_response, ImageResponse):
                 return bedrock_image_cost_calculator(
                     model=model,
-                    size=size,
+                    size=resolved_size,
                     image_response=completion_response,
                     optional_params=optional_params,
                 )
@@ -1401,19 +1626,19 @@ class CostCalculatorUtils:
             # Fall through to default for DALL-E models
             return default_image_cost_calculator(
                 model=model,
-                quality=quality,
+                quality=resolved_quality,
                 custom_llm_provider=custom_llm_provider,
-                n=n,
-                size=size,
+                n=resolved_n,
+                size=resolved_size,
                 optional_params=optional_params,
             )
         else:
             return default_image_cost_calculator(
                 model=model,
-                quality=quality,
+                quality=resolved_quality,
                 custom_llm_provider=custom_llm_provider,
-                n=n,
-                size=size,
+                n=resolved_n,
+                size=resolved_size,
                 optional_params=optional_params,
             )
         return 0.0

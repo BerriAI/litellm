@@ -184,3 +184,26 @@ class TestTogetherApiBaseResolvesProvider:
 
         assert provider == "together_ai"
         assert api_base == "https://api.together.ai/v1"
+
+
+class TestGigachatApiBaseResolvesProvider:
+    """
+    Regression for the GigaChat api_base branch: the provider-mapping chain
+    carried an ``endpoint == "https://gigachat.devices.sberbank.ru/api/v1"``
+    elif, but the URL was never added to ``openai_compatible_endpoints``, so
+    the endpoint loop never fired the branch and a caller-supplied GigaChat
+    api_base raised BadRequestError instead of resolving to ``gigachat``.
+    """
+
+    def test_gigachat_api_base_resolves_to_gigachat(self, monkeypatch):
+        monkeypatch.setenv("GIGACHAT_API_KEY", "gigachat-key-from-env")
+
+        model, provider, dynamic_api_key, returned_api_base = get_llm_provider(
+            model="GigaChat-2",
+            api_base="https://gigachat.devices.sberbank.ru/api/v1",
+        )
+
+        assert provider == "gigachat"
+        assert dynamic_api_key == "gigachat-key-from-env"
+        assert returned_api_base == "https://gigachat.devices.sberbank.ru/api/v1"
+        assert model == "GigaChat-2"

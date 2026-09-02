@@ -416,17 +416,8 @@ class GenericPromptManager(CustomPromptManagement):
             tools=tools,
             prompt_label=prompt_label,
             prompt_version=prompt_version,
-            ignore_prompt_manager_model=(
-                ignore_prompt_manager_model or prompt_spec.litellm_params.ignore_prompt_manager_model
-                if prompt_spec
-                else False
-            ),
-            ignore_prompt_manager_optional_params=(
-                ignore_prompt_manager_optional_params
-                or prompt_spec.litellm_params.ignore_prompt_manager_optional_params
-                if prompt_spec
-                else False
-            ),
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
         )
 
     def get_chat_completion_prompt(
@@ -457,17 +448,8 @@ class GenericPromptManager(CustomPromptManagement):
             prompt_spec=prompt_spec,
             prompt_label=prompt_label,
             prompt_version=prompt_version,
-            ignore_prompt_manager_model=(
-                ignore_prompt_manager_model or prompt_spec.litellm_params.ignore_prompt_manager_model
-                if prompt_spec
-                else False
-            ),
-            ignore_prompt_manager_optional_params=(
-                ignore_prompt_manager_optional_params
-                or prompt_spec.litellm_params.ignore_prompt_manager_optional_params
-                if prompt_spec
-                else False
-            ),
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
         )
 
     def clear_cache(self) -> None:

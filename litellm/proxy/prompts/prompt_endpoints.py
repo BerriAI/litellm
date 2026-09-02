@@ -6,7 +6,7 @@ import tempfile
 from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Final, Protocol, cast
 
 from fastapi import (
     APIRouter,
@@ -93,7 +93,7 @@ class _PromptTableActions(Protocol):
 
     def create(self, *, data: Mapping[str, str | int | None]) -> Awaitable[_PromptRow]: ...
 
-    def update(self, *, where: Mapping[str, str | int], data: Mapping[str, str]) -> Awaitable[_PromptRow]: ...
+    def update(self, *, where: Mapping[str, str | int], data: Mapping[str, str]) -> Awaitable[_PromptRow | None]: ...
 
     def delete_many(self, *, where: Mapping[str, str]) -> Awaitable[int]: ...
 
@@ -323,6 +323,7 @@ def create_versioned_prompt_spec(db_prompt: _PromptRow) -> PromptSpec:
         prompt_info=prompt_info,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        version=row.version,
         environment=row.environment,
         created_by=row.created_by,
     )
@@ -332,6 +333,21 @@ class Prompt(BaseModel):
     prompt_id: str
     litellm_params: PromptLiteLLMParams
     prompt_info: PromptInfo | None = None
+
+
+AMBIGUOUS_PROMPT_DATA_ERROR: Final = (
+    "litellm_params.prompt_id cannot be combined with prompt_data keyed by template name. "
+    'Send a flat template, prompt_data={"content": "...", "metadata": {...}}, together with litellm_params.prompt_id, '
+    'or send prompt_data={"<template_id>": {"content": "...", "metadata": {...}}} without litellm_params.prompt_id.'
+)
+
+
+def is_ambiguous_keyed_prompt_data(litellm_params: PromptLiteLLMParams) -> bool:
+    extra_fields: Final = litellm_params.model_extra or {}
+    prompt_data: Final = extra_fields.get("prompt_data")
+    if not litellm_params.prompt_id or not isinstance(prompt_data, dict):
+        return False
+    return bool(prompt_data) and "content" not in prompt_data
 
 
 class PatchPromptRequest(BaseModel):
@@ -737,11 +753,9 @@ async def create_prompt(
         -d '{
             "prompt_id": "my_prompt",
             "litellm_params": {
-                "prompt_id": "json_prompt",
+                "prompt_id": "my_prompt",
                 "prompt_integration": "dotprompt",
-                ### EITHER prompt_directory OR prompt_data MUST BE PROVIDED
-                "prompt_directory": "/path/to/dotprompt/folder",
-                "prompt_data": {"json_prompt": {"content": "This is a prompt", "metadata": {"model": "gpt-4"}}}
+                "prompt_data": {"content": "This is a prompt", "metadata": {"model": "gpt-4"}}
             },
             "prompt_info": {
                 "prompt_type": "config"
@@ -762,6 +776,9 @@ async def create_prompt(
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+
+    if is_ambiguous_keyed_prompt_data(request.litellm_params):
+        raise HTTPException(status_code=400, detail=AMBIGUOUS_PROMPT_DATA_ERROR)
 
     try:
         # Extract environment from request
@@ -856,6 +873,9 @@ async def update_prompt(
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+
+    if is_ambiguous_keyed_prompt_data(request.litellm_params):
+        raise HTTPException(status_code=400, detail=AMBIGUOUS_PROMPT_DATA_ERROR)
 
     try:
         # Strip version suffix from prompt_id if present (e.g., "jack_success.v1" -> "jack_success")
@@ -1001,19 +1021,7 @@ async def delete_prompt(
         # Delete versions from the database (scoped to environment if provided)
         await _prompt_table(prisma_client).delete_many(where=delete_where)
 
-        # Remove matching prompts from memory — scope to environment if provided
-        if environment:
-            prompts_to_delete: Final = [
-                pid
-                for pid, prompt in IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.items()
-                if get_base_prompt_id(prompt_id=pid) == base_prompt_id and prompt.environment == environment
-            ]
-            for pid in prompts_to_delete:
-                del IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS[pid]
-                if pid in IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt:
-                    del IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt[pid]
-        else:
-            IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id(base_prompt_id)
+        IN_MEMORY_PROMPT_REGISTRY.delete_prompts_by_base_id(base_prompt_id, environment=environment or None)
 
         env_msg: Final = f" from {environment}" if environment else ""
         return {"message": f"Prompt {base_prompt_id} deleted successfully{env_msg}"}
@@ -1025,15 +1033,8 @@ async def delete_prompt(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _reload_prompt_in_registry(
-    registry: "InMemoryPromptRegistry", versioned_id: str, updated_prompt_spec: PromptSpec
-) -> PromptSpec:
-    """Remove stale entry and re-initialize the prompt in the in-memory registry."""
-    if versioned_id in registry.IN_MEMORY_PROMPTS:
-        del registry.IN_MEMORY_PROMPTS[versioned_id]
-    if versioned_id in registry.prompt_id_to_custom_prompt:
-        del registry.prompt_id_to_custom_prompt[versioned_id]
-    initialized: Final = registry.initialize_prompt(prompt=updated_prompt_spec, config_file_path=None)
+def _reload_prompt_in_registry(registry: "InMemoryPromptRegistry", updated_prompt_spec: PromptSpec) -> PromptSpec:
+    initialized: Final = registry.reload_prompt(prompt=updated_prompt_spec)
     if initialized is None:
         raise HTTPException(status_code=500, detail="Failed to patch prompt")
     return initialized
@@ -1086,6 +1087,9 @@ async def patch_prompt(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
+    if request.litellm_params is not None and is_ambiguous_keyed_prompt_data(request.litellm_params):
+        raise HTTPException(status_code=400, detail=AMBIGUOUS_PROMPT_DATA_ERROR)
+
     try:
         # Resolve the target row: find the latest version in the given environment
         base_prompt_id: Final = get_base_prompt_id(prompt_id=prompt_id)
@@ -1123,25 +1127,15 @@ async def patch_prompt(
                 detail="Cannot update config prompts.",
             )
 
-        # Use existing prompt from memory or build from DB row for field merging
-        if existing_prompt:
-            current_litellm_params = existing_prompt.litellm_params
-            current_prompt_info = existing_prompt.prompt_info
-        else:
-            current_spec: Final = create_versioned_prompt_spec(db_prompt=target_row)
-            current_litellm_params = current_spec.litellm_params
-            current_prompt_info = current_spec.prompt_info
+        current_spec: Final = create_versioned_prompt_spec(db_prompt=target_row)
 
-        # Update fields if provided
         updated_litellm_params: Final = (
-            request.litellm_params if request.litellm_params is not None else current_litellm_params
+            request.litellm_params if request.litellm_params is not None else current_spec.litellm_params
         )
 
-        updated_prompt_info: Final = request.prompt_info if request.prompt_info is not None else current_prompt_info
-
-        # Ensure we have valid litellm_params
-        if updated_litellm_params is None:
-            raise HTTPException(status_code=400, detail="litellm_params cannot be None")
+        updated_prompt_info: Final = (
+            request.prompt_info if request.prompt_info is not None else current_spec.prompt_info
+        )
 
         # Build update data dict
         update_data: Final[dict[str, str]] = {
@@ -1157,9 +1151,15 @@ async def patch_prompt(
             data=update_data,
         )
 
+        if updated_prompt_db_entry is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Prompt with ID {base_prompt_id} not found in environment {env}",
+            )
+
         updated_prompt_spec: Final = create_versioned_prompt_spec(db_prompt=updated_prompt_db_entry)
 
-        return _reload_prompt_in_registry(IN_MEMORY_PROMPT_REGISTRY, versioned_id, updated_prompt_spec)
+        return _reload_prompt_in_registry(IN_MEMORY_PROMPT_REGISTRY, updated_prompt_spec)
 
     except HTTPException as e:
         raise e
@@ -1317,7 +1317,7 @@ async def test_prompt(
 async def convert_prompt_file_to_json(
     file: UploadFile = File(...),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> dict[str, Any]:
+) -> Mapping[str, object]:
     """
     Convert a .prompt file to JSON format.
 

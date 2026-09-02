@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import json
 from datetime import timezone
+from collections.abc import Mapping
 from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -3274,6 +3275,82 @@ def test_user_traffic_carries_no_internal_call_origin():
     assert metadata["internal_call_origin"] is None
 
 
+def _spend_log_for_call_type(
+    call_type: str, internal_call_origin: str | None = None, background: bool | None = None
+) -> dict:
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    return cast(
+        dict,
+        get_logging_payload(
+            kwargs={
+                "model": "gpt-4o",
+                "call_type": call_type,
+                "response_cost": 0.0,
+                "litellm_params": {
+                    "metadata": {
+                        "user_api_key": "test-key",
+                        "internal_call_origin": internal_call_origin,
+                    }
+                },
+            },
+            response_obj=ResponsesAPIResponse(
+                id="resp_lit5602",
+                created_at=1234567890,
+                model="gpt-4o",
+                output=[],
+                usage={"input_tokens": 4000, "output_tokens": 2000, "total_tokens": 6000},
+                background=background,
+            ),
+            start_time=datetime.datetime.now(timezone.utc),
+            end_time=datetime.datetime.now(timezone.utc),
+        ),
+    )
+
+
+def test_spend_log_for_response_retrieval_does_not_replay_the_created_responses_tokens():
+    """A retrieved response carries the usage of the call that created it, so counting it again
+    bills the same tokens twice. Regression test for LIT-5602."""
+    payload = _spend_log_for_call_type("aget_responses")
+
+    assert payload["prompt_tokens"] == 0
+    assert payload["completion_tokens"] == 0
+    assert payload["total_tokens"] == 0
+    assert payload["spend"] == 0.0
+
+
+def test_spend_log_for_background_response_cost_poll_counts_tokens():
+    """The poller's read is where a background job's usage first shows up, so dropping it there
+    leaves the job unbilled forever."""
+    payload = _spend_log_for_call_type("aget_responses", internal_call_origin="background_response_cost_poll")
+
+    assert payload["total_tokens"] == 6000
+
+
+def test_spend_log_for_background_response_retrieval_counts_tokens():
+    """A background create answers queued carrying no usage, so its retrieval is the first and only
+    place the job's tokens are ever visible. Zeroing that read bills the whole job nothing on any
+    proxy that is not running the enterprise cost poller."""
+    payload = _spend_log_for_call_type("aget_responses", background=True)
+
+    assert payload["total_tokens"] == 6000
+
+
+def test_spend_log_for_foreground_response_retrieval_still_counts_nothing():
+    """Guards the test above against a blanket exemption: an explicit background=false read was
+    already billed by its create and must stay at zero."""
+    payload = _spend_log_for_call_type("aget_responses", background=False)
+
+    assert payload["total_tokens"] == 0
+
+
+def test_spend_log_for_response_creation_still_counts_tokens():
+    """Guards the test above: the same response object must still be counted on the create path."""
+    payload = _spend_log_for_call_type("aresponses")
+
+    assert payload["total_tokens"] == 6000
+
+
 REDACTED_RESPONSE_PLACEHOLDER: Final = {"text": "redacted-by-litellm"}
 CONSTANT_ID_FROM_HASHED_PLACEHOLDER: Final = "00fcbef15a3b0097e14b0ca016ed30a0"
 
@@ -3642,3 +3719,309 @@ def test_caller_forged_autorouter_savings_is_discarded(bucket):
     )
     metadata = json.loads(payload["metadata"])
     assert metadata["autorouter_savings"] is None
+
+
+def test_get_logging_payload_includes_fallback_info_in_spend_logs_metadata():
+    """
+    Test that fallback info (attempted_fallbacks, original_model_group) from metadata
+    is included in the spend logs metadata JSON.
+    """
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test-key",
+                "attempted_fallbacks": 2,
+                "original_model_group": "azure-gpt-fallback",
+            }
+        },
+        "standard_logging_object": StandardLoggingPayload(
+            id="test-fallback-123",
+            call_type="completion",
+            stream=False,
+            response_cost=0.001,
+            status="success",
+            total_tokens=100,
+            prompt_tokens=50,
+            completion_tokens=50,
+            startTime=1234567890.0,
+            endTime=1234567891.0,
+            completionStartTime=None,
+            model_map_information=StandardLoggingModelInformation(
+                model_map_key="gpt-3.5-turbo", model_map_value=None
+            ),
+            model="gpt-3.5-turbo",
+            model_id="model-123",
+            model_group="openai",
+            custom_llm_provider="openai",
+            api_base="https://api.openai.com",
+            metadata=StandardLoggingMetadata(
+                user_api_key_hash="test_hash",
+                user_api_key_alias=None,
+                user_api_key_team_id=None,
+                user_api_key_org_id=None,
+                user_api_key_user_id=None,
+                user_api_key_team_alias=None,
+                spend_logs_metadata=None,
+                requester_ip_address=None,
+                requester_metadata=None,
+                user_api_key_end_user_id=None,
+            ),
+            cache_hit=False,
+            cache_key=None,
+            saved_cache_cost=0.0,
+            request_tags=[],
+            end_user=None,
+            requester_ip_address=None,
+            messages=[],
+            response={},
+            error_str=None,
+            model_parameters={},
+            hidden_params=StandardLoggingHiddenParams(
+                model_id="model-123",
+                cache_key=None,
+                api_base="https://api.openai.com",
+                response_cost="0.001",
+                litellm_overhead_time_ms=None,
+                additional_headers=None,
+                batch_models=None,
+                litellm_model_name=None,
+                usage_object=None,
+            ),
+        ),
+    }
+
+    response_obj = {
+        "id": "test-response-retry",
+        "choices": [{"message": {"content": "Hello!"}}],
+        "usage": {
+            "total_tokens": 100,
+            "prompt_tokens": 50,
+            "completion_tokens": 50,
+        },
+    }
+
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    metadata = json.loads(payload["metadata"])
+
+    assert (
+        metadata.get("attempted_fallbacks") == 2
+    ), f"Expected attempted_fallbacks=2, got {metadata.get('attempted_fallbacks')}"
+    assert (
+        metadata.get("original_model_group") == "azure-gpt-fallback"
+    ), f"Expected original_model_group=azure-gpt-fallback, got {metadata.get('original_model_group')}"
+
+
+def test_get_logging_payload_handles_missing_fallback_info_gracefully():
+    """
+    Test that fallback fields are None when not present in metadata (backward compatibility).
+    """
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test-key",
+            }
+        },
+        "standard_logging_object": StandardLoggingPayload(
+            id="test-no-fallback-456",
+            call_type="completion",
+            stream=False,
+            response_cost=0.001,
+            status="success",
+            total_tokens=100,
+            prompt_tokens=50,
+            completion_tokens=50,
+            startTime=1234567890.0,
+            endTime=1234567891.0,
+            completionStartTime=None,
+            model_map_information=StandardLoggingModelInformation(
+                model_map_key="gpt-3.5-turbo", model_map_value=None
+            ),
+            model="gpt-3.5-turbo",
+            model_id="model-123",
+            model_group="openai",
+            custom_llm_provider="openai",
+            api_base="https://api.openai.com",
+            metadata=StandardLoggingMetadata(
+                user_api_key_hash="test_hash",
+                user_api_key_alias=None,
+                user_api_key_team_id=None,
+                user_api_key_org_id=None,
+                user_api_key_user_id=None,
+                user_api_key_team_alias=None,
+                spend_logs_metadata=None,
+                requester_ip_address=None,
+                requester_metadata=None,
+                user_api_key_end_user_id=None,
+            ),
+            cache_hit=False,
+            cache_key=None,
+            saved_cache_cost=0.0,
+            request_tags=[],
+            end_user=None,
+            requester_ip_address=None,
+            messages=[],
+            response={},
+            error_str=None,
+            model_parameters={},
+            hidden_params=StandardLoggingHiddenParams(
+                model_id="model-123",
+                cache_key=None,
+                api_base="https://api.openai.com",
+                response_cost="0.001",
+                litellm_overhead_time_ms=None,
+                additional_headers=None,
+                batch_models=None,
+                litellm_model_name=None,
+                usage_object=None,
+            ),
+        ),
+    }
+
+    response_obj = {
+        "id": "test-response-no-fallback",
+        "choices": [{"message": {"content": "Hello!"}}],
+        "usage": {
+            "total_tokens": 100,
+            "prompt_tokens": 50,
+            "completion_tokens": 50,
+        },
+    }
+
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    metadata = json.loads(payload["metadata"])
+
+    assert (
+        metadata.get("attempted_fallbacks") is None
+    ), "attempted_fallbacks should be None when not provided"
+    assert (
+        metadata.get("original_model_group") is None
+    ), "original_model_group should be None when not provided"
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+def test_injected_cache_breakpoints_survive_into_spend_log_metadata(bucket):
+    """The injection marker only gates savings if it reaches the spend-log row.
+
+    _get_spend_logs_metadata projects onto SpendLogsMetadata.__annotations__, so an
+    undeclared key is dropped silently. Both buckets are covered because chat routes
+    stamp metadata while /v1/messages routes stamp litellm_metadata, and
+    record_gateway_injection writes into whichever the request carries.
+    """
+    payload = get_logging_payload(
+        kwargs={
+            "model": "claude-sonnet-5",
+            "litellm_params": {
+                bucket: {
+                    "user_api_key": "test-key",
+                    "litellm_gateway_injected_cache": "dep-of-this-row",
+                }
+            },
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-injected", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["litellm_gateway_injected_cache"] == "dep-of-this-row"
+
+
+def test_passthrough_caching_carries_no_injection_marker():
+    """The negative class the gate depends on: a request whose cache_control the client
+    supplied must read as unmarked, not merely unlabelled by accident."""
+    payload = get_logging_payload(
+        kwargs={
+            "model": "claude-sonnet-5",
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-passthrough", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["litellm_gateway_injected_cache"] is None
+
+
+def _routed_call_kwargs(model_info: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "model": "claude-haiku-4-5",
+        "custom_llm_provider": "azure_ai",
+        "litellm_call_id": "router-corr-123",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "test-key",
+                "model_group": "internal-router/gpt-5.4",
+                "deployment": "azure_ai/claude-haiku-4-5",
+                "model_info": model_info,
+            }
+        },
+    }
+
+
+def test_router_metadata_stamped_for_internal_router_model_deployment():
+    """A deployment flagged model_info.internal_router_model gets a router_metadata
+    block correlating the requested model group with the selected deployment."""
+    payload = get_logging_payload(
+        kwargs=_routed_call_kwargs({"id": "mi-1", "internal_router_model": True}),
+        response_obj=litellm.ModelResponse(id="chatcmpl-router-meta", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["router_metadata"] == {
+        "requested_model": "internal-router/gpt-5.4",
+        "selected_model": "azure_ai/claude-haiku-4-5",
+        "selected_provider": "azure_ai",
+        "router_correlation_id": "router-corr-123",
+    }
+
+
+def test_router_metadata_absent_without_internal_router_model_flag():
+    payload = get_logging_payload(
+        kwargs=_routed_call_kwargs({"id": "mi-1"}),
+        response_obj=litellm.ModelResponse(id="chatcmpl-unflagged", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["router_metadata"] is None
+
+
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+def test_caller_forged_router_metadata_is_discarded(bucket):
+    """The raw request bucket is client-writable and _get_spend_logs_metadata projects
+    every SpendLogsMetadata key from it, so the server-derived value must overwrite
+    unconditionally or a caller could plant router provenance the router never produced."""
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_params": {
+                bucket: {
+                    "user_api_key": "test-key",
+                    "router_metadata": {"requested_model": "forged", "router_correlation_id": "forged-id"},
+                }
+            },
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-forged-router-meta", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["router_metadata"] is None

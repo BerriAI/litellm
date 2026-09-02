@@ -58,14 +58,55 @@ def safe_divide(
     return numerator / denominator
 
 
+def _is_litellm_limit_rejection(exception: BaseException) -> bool:
+    from litellm.exceptions import RateLimitErrorCategory
+
+    litellm_limit_categories: Final = frozenset(
+        (RateLimitErrorCategory.LITELLM_RATE_LIMIT.value, RateLimitErrorCategory.LITELLM_BATCH_RATE_LIMIT.value)
+    )
+    return getattr(exception, "category", None) in litellm_limit_categories
+
+
+def _is_proxy_rejection(exception: BaseException) -> bool:
+    if _is_litellm_limit_rejection(exception):
+        return True
+    try:
+        from starlette.exceptions import HTTPException
+    except ImportError:
+        return False
+    return isinstance(exception, HTTPException)
+
+
+def _is_provider_originated(exception: BaseException) -> bool:
+    if _is_proxy_rejection(exception):
+        return False
+    if getattr(exception, "llm_provider", None):
+        return True
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    return isinstance(exception, BaseLLMException)
+
+
 def is_expected_client_error(exception: BaseException | None) -> bool:
     """
-    True when the exception maps to an HTTP 4xx status.
+    True when the proxy itself rejected the request with an HTTP 4xx before any
+    provider call (bad key, budget, unknown model, guardrail). A 4xx returned by
+    a provider is an upstream or deployment problem, so it is never an expected
+    client error and keeps its traceback: a mapped litellm exception carries
+    ``llm_provider``, and the raw ``BaseLLMException`` that provider handlers
+    raise before mapping (the /v1/messages route surfaces it as-is) is one too.
+    The proxy's own limiters raise ``HTTPException`` subclasses that also carry
+    an ``llm_provider``, so any ``HTTPException`` stays a proxy rejection, and
+    so does any exception whose unified rate-limit ``category`` names litellm's
+    own limiter (``BudgetExceededError`` is a plain ``Exception`` that the auth
+    handler decorates with the requested model's provider).
 
     ProxyException stores the status on .code (as a str), HTTPException and
     litellm exceptions on .status_code.
     """
     if exception is None:
+        return False
+    if _is_provider_originated(exception):
         return False
     code: Final[object] = getattr(exception, "code", None)
     status_code: Final[object] = code if code is not None else getattr(exception, "status_code", None)
@@ -411,6 +452,62 @@ def safe_deep_copy(data):
         if "litellm_metadata" in data and "litellm_parent_otel_span" in data["litellm_metadata"]:
             data["litellm_metadata"]["litellm_parent_otel_span"] = litellm_parent_otel_span
     return new_data
+
+
+def independent_snapshot(
+    data: dict,  # mutable-ok: caller-defined request-payload shape
+) -> dict:  # mutable-ok: caller-defined request-payload shape
+    """
+    A copy of ``data`` whose top-level keys are deep-copied independently
+    where possible -- always attempted, regardless of
+    ``litellm.safe_memory_mode``. Unlike ``safe_deep_copy``, which can return
+    the *original* object outright under that mode (defeating any isolation
+    guarantee for every key, not just the ones that need it), this never
+    skips copying wholesale.
+
+    Real proxy requests carry ``data["litellm_logging_obj"]`` (a ``Logging``
+    instance nesting a live OTel span with a real lock) by the time
+    ``pre_call_hook`` runs, which can never be deep-copied. Any individual
+    key that fails to deep-copy falls back to sharing its original
+    reference, same crash tolerance as ``safe_deep_copy``'s own per-key
+    fallback; callers needing true isolation (e.g. a guardrail's
+    ``scan_raw_request`` snapshot) only depend on the keys that are plain,
+    cleanly-copyable structures (``messages``/``input``,
+    ``metadata``/``litellm_metadata``).
+    """
+    sanitized: Final = {
+        key: (
+            {  # mutable-ok: same request-payload shape as data
+                inner_key: ("placeholder" if inner_key == "litellm_parent_otel_span" else inner_value)
+                for inner_key, inner_value in value.items()
+            }
+            if key in ("metadata", "litellm_metadata") and isinstance(value, dict)
+            else value
+        )
+        for key, value in data.items()
+    }
+
+    def _copied_value(key: str, sanitized_value: object) -> object:
+        try:
+            copied_value: Final = copy.deepcopy(sanitized_value)
+        except Exception:  # noqa: BLE001  # any unpicklable value falls back to the original reference for this key only
+            return data.get(key)
+        original_value: Final = data.get(key)
+        if (
+            key in ("metadata", "litellm_metadata")
+            and isinstance(copied_value, dict)
+            and isinstance(original_value, dict)
+            and "litellm_parent_otel_span" in original_value
+        ):
+            return {  # mutable-ok: same request-payload shape as data
+                **copied_value,
+                "litellm_parent_otel_span": original_value["litellm_parent_otel_span"],
+            }
+        return copied_value
+
+    return {  # mutable-ok: same request-payload shape as data
+        key: _copied_value(key, value) for key, value in sanitized.items()
+    }
 
 
 def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:

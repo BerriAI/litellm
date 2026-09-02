@@ -1,9 +1,9 @@
 import { AccessGroupResponse, useAccessGroups } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 import { useDeleteAccessGroup } from "@/app/(dashboard)/hooks/accessGroups/useDeleteAccessGroup";
-import { Plus, SearchIcon, X } from "lucide-react";
+import { Boxes, Plus, SearchIcon, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import { LegacyPageHeader } from "@/components/shared/LegacyPageHeader";
+import { PageHeader } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { AccessGroupDetail } from "./AccessGroupsDetailsPage";
@@ -59,23 +59,22 @@ export function AccessGroupsPage() {
   }
 
   return (
-    <div className="p-6 px-12">
-      <div className="mb-4">
-        <LegacyPageHeader
-          title="Access Groups"
-          subtitle="Manage resource permissions for your organization"
-          actions={
-            canModify ? (
-              <Button onClick={() => setIsCreateModalVisible(true)}>
-                <Plus className="size-4" />
-                Create Access Group
-              </Button>
-            ) : undefined
-          }
-        />
-      </div>
+    <div className="p-8">
+      <PageHeader
+        icon={<Boxes />}
+        title="Access Groups"
+        subtitle="Manage resource permissions for your organization"
+        primaryAction={
+          canModify ? (
+            <Button onClick={() => setIsCreateModalVisible(true)}>
+              <Plus className="size-4" />
+              Create Access Group
+            </Button>
+          ) : undefined
+        }
+      />
 
-      <div className="mb-3 flex items-center">
+      <div className="mt-6 mb-3 flex items-center">
         <InputGroup className="max-w-[400px]">
           <InputGroupAddon>
             <SearchIcon className="size-4 text-muted-foreground" />

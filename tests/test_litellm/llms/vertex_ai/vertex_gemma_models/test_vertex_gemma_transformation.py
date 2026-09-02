@@ -238,7 +238,7 @@ class TestVertexGemmaCompletion:
 
         Expected: Proper error handling when 'predictions' field is missing
         """
-        from litellm.exceptions import APIConnectionError
+        from litellm.exceptions import BadRequestError
 
         # Invalid response without predictions field
         invalid_response = {
@@ -260,8 +260,8 @@ class TestVertexGemmaCompletion:
             mock_client.post = AsyncMock(return_value=mock_response)
             mock_get_client.return_value = mock_client
 
-            # Should raise exception (wrapped as APIConnectionError by LiteLLM)
-            with pytest.raises(APIConnectionError) as exc_info:
+            # Should raise exception (wrapped as BadRequestError by LiteLLM)
+            with pytest.raises(BadRequestError) as exc_info:
                 await litellm.acompletion(
                     model="vertex_ai/gemma/gemma-3-12b-it",
                     messages=[{"role": "user", "content": "Test"}],

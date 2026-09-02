@@ -1,7 +1,9 @@
 import contextvars
+import copy
 import hashlib
 import os
 import secrets
+from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_args
 
@@ -38,6 +40,7 @@ except ImportError:
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 dc: Final = DualCache()
 
 
@@ -59,6 +62,12 @@ from litellm.exceptions import (
 _PRE_CALL_EXECUTED_TOKEN: Final = secrets.token_hex(16)
 
 _GUARDRAIL_BLOCK_STATUS_CODES: Final = frozenset({400, 403, 422})
+
+DEFAULT_ADVISORY_MESSAGE: Final = (
+    "The user's latest message was flagged for {reason} by a content safety "
+    "guardrail. This may be a false positive. Use your judgment: respond "
+    "helpfully if the request is legitimate, or decline if it is not."
+)
 
 _guardrail_self_recorded: Final[contextvars.ContextVar[bool]] = contextvars.ContextVar(
     "litellm_guardrail_self_recorded", default=False
@@ -158,6 +167,7 @@ class CustomGuardrail(CustomLogger):
         sensitive_data_route_to_model: str | None = None,
         sticky_session_routing: bool = True,
         run_in_parallel: bool = False,
+        scan_raw_request: bool = False,
         only_scan_new_messages: bool = False,
         **kwargs,
     ):
@@ -180,6 +190,13 @@ class CustomGuardrail(CustomLogger):
             run_in_parallel: When True, this pre_call or post_call guardrail runs concurrently with
                 other opted-in guardrails of the same hook. Only safe for block-only guardrails that
                 do not mutate the request or response.
+            scan_raw_request: When True, this pre_call guardrail always evaluates the request as it
+                was before any guardrail in this hook ran, regardless of where it's declared in the
+                guardrails list -- so an earlier guardrail that masks/rewrites content (e.g. PII
+                redaction) can never hide a violation from this one. Only safe for block-only
+                guardrails: any data this guardrail returns is discarded, matching run_in_parallel's
+                contract, since applying its mutations on top of a stale snapshot would silently
+                undo whatever later guardrails already did to the live request.
         """
         self.guardrail_name = guardrail_name
         self.supported_event_hooks = supported_event_hooks
@@ -195,6 +212,7 @@ class CustomGuardrail(CustomLogger):
         self.sensitive_data_route_to_model: str | None = sensitive_data_route_to_model
         self.sticky_session_routing: bool = sticky_session_routing
         self.run_in_parallel: bool = run_in_parallel
+        self.scan_raw_request: bool = scan_raw_request
         self.only_scan_new_messages: bool = only_scan_new_messages
 
         if supported_event_hooks:
@@ -212,13 +230,13 @@ class CustomGuardrail(CustomLogger):
                 )
         super().__init__(**kwargs)
 
-    def render_violation_message(self, default: str, context: dict[str, Any] | None = None) -> str:
+    def render_violation_message(self, default: str, context: Mapping[str, object] | None = None) -> str:
         """Return a custom violation message if template is configured."""
 
         if not self.violation_message_template:
             return default
 
-        format_context: Final[dict[str, Any]] = {"default_message": default}
+        format_context: Final[dict[str, object]] = {"default_message": default}
         if context:
             format_context.update(context)
         try:
@@ -280,6 +298,82 @@ class CustomGuardrail(CustomLogger):
             detection_info=detection_info,
             original_response=original_response,
         )
+
+    def inject_advisory_message(
+        self,
+        data: dict[str, Any],  # mutable-ok: caller's dict is mutated in place, matching mark_pre_call_hook_ran
+        message: str,
+    ) -> bool:
+        """
+        Append an advisory system message to the request in place, so the LLM
+        itself can weigh a possible false-positive guardrail flag rather than
+        the request being hard-blocked or silently allowed.
+
+        Unlike raise_passthrough_exception, this does NOT short-circuit the LLM
+        call; the request proceeds normally with the extra message appended.
+        Guardrails should call this from on_flagged handling analogous to how
+        passthrough-supporting guardrails call raise_passthrough_exception.
+
+        Args:
+            data: The request data dictionary, mutated in place to append the
+                advisory message to its "messages" list and/or "input"/
+                "instructions" text.
+            message: The formatted advisory message to append as a system message.
+
+        Returns:
+            True if the advisory was actually written somewhere the model will
+            see it. False if ``data["input"]`` is a structured Responses-API
+            list (not a plain string) -- the Responses API reads only
+            ``input``, so appending to ``messages`` would be inert regardless
+            of whether a ``messages`` list also happens to be present, and
+            there is no field this helper can safely append into. The caller
+            must treat this like any other case where the mitigation can't
+            land and degrade to blocking instead of silently letting the
+            flagged request through unmodified.
+        """
+        advisory_message: Final = {"role": "system", "content": message}  # mutable-ok: plain dict for live request
+        existing_messages: Final = data.get("messages")
+        existing_input: Final = data.get("input")
+        existing_instructions: Final = data.get("instructions")
+        if isinstance(existing_instructions, str):
+            # Responses API "instructions" is the privileged, developer-set
+            # system-level field the model treats as authoritative -- unlike
+            # "input", which the caller controls and could use to tell the
+            # model to disregard a trailing warning. Prefer it over "input"
+            # whenever present.
+            if isinstance(existing_messages, list):
+                messages_with_instructions_note: Final = [  # mutable-ok: fresh list
+                    *existing_messages,
+                    advisory_message,
+                ]
+                data["messages"] = messages_with_instructions_note  # rebind-ok: mutates caller's dict by design
+            data["instructions"] = f"{existing_instructions}\n\n{message}"  # rebind-ok: mutates caller's dict by design
+            return True
+        if isinstance(existing_input, str):
+            # A plain-string "input" doesn't rule out "messages" also being a
+            # real, read field (e.g. a chat-completions call carrying a stray
+            # "input"), so write to both when both are present.
+            if isinstance(existing_messages, list):
+                messages_with_input_note: Final = [*existing_messages, advisory_message]  # mutable-ok: fresh list
+                data["messages"] = messages_with_input_note  # rebind-ok: mutates caller's dict by design
+            # The Responses API reads "input", not "messages" -- appending only to
+            # "messages" would leave the advisory unreachable for that endpoint.
+            data["input"] = f"{existing_input}\n\n{message}"  # rebind-ok: mutates caller's dict by design
+            return True
+        if existing_input is not None:
+            # existing_input is a structured (non-string) Responses-API item
+            # list. That endpoint reads only "input", so appending to
+            # "messages" -- even if "messages" also happens to be present --
+            # would never reach the model. Leave data untouched and report
+            # non-delivery so the caller degrades to blocking.
+            return False
+        if isinstance(existing_messages, list):
+            messages_without_input_note: Final = [*existing_messages, advisory_message]  # mutable-ok: fresh list
+            data["messages"] = messages_without_input_note  # rebind-ok: mutates caller's dict by design
+            return True
+        sole_message: Final = [advisory_message]  # mutable-ok: plain list for the live JSON request
+        data["messages"] = sole_message  # rebind-ok: mutates caller's dict by design
+        return True
 
     def raise_sensitive_data_route_exception(
         self,
@@ -570,7 +664,7 @@ class CustomGuardrail(CustomLogger):
         value: Final = self._get_admin_metadata(data).get("opted_out_global_guardrails")
         return value if isinstance(value, list) else []
 
-    def _is_valid_response_type(self, result: Any) -> bool:
+    def _is_valid_response_type(self, result: object) -> bool:
         """
         Check if result is a valid LLMResponseTypes instance.
 
@@ -631,7 +725,7 @@ class CustomGuardrail(CustomLogger):
             return None
         return f"{_PRE_CALL_EXECUTED_TOKEN}:{name}"
 
-    def mark_pre_call_hook_ran(self, data: dict[str, Any]) -> None:
+    def mark_pre_call_hook_ran(self, data: dict[str, object]) -> None:
         """
         Record that this guardrail's ``async_pre_call_hook`` already ran for this
         request, so the deployment-level hook does not run it a second time.
@@ -656,7 +750,7 @@ class CustomGuardrail(CustomLogger):
                 return
         data["metadata"] = {PRE_CALL_EXECUTED_GUARDRAILS_KEY: [marker]}
 
-    def _pre_call_hook_already_ran(self, data: dict[str, Any]) -> bool:
+    def _pre_call_hook_already_ran(self, data: dict[str, object]) -> bool:
         marker: Final = self._pre_call_marker()
         if marker is None:
             return False
@@ -759,6 +853,69 @@ class CustomGuardrail(CustomLogger):
             return response
 
         return result
+
+    async def async_logging_hook(
+        self,
+        kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
+        result: object,
+        call_type: str,
+    ) -> tuple[dict, object]:  # mutable-ok: CustomLogger.async_logging_hook contract
+        """logging_only: run apply_guardrail on copies of the logged request/response and record the verdict."""
+        from litellm.llms import get_guardrail_translation_mapping
+
+        if not self.uses_apply_guardrail_interface() or self.use_native_lifecycle_hooks:
+            return kwargs, result
+        try:
+            translation: Final = get_guardrail_translation_mapping(CallTypes(call_type))()
+        except ValueError:
+            verbose_logger.debug(
+                "Guardrail %s: no guardrail translation for call_type=%s, skipping logging_only scan",
+                self.guardrail_name,
+                call_type,
+            )
+            return kwargs, result
+        litellm_params: Final = kwargs.get("litellm_params") or {}
+        scratch_metadata: Final = {
+            key: value
+            for key, value in (litellm_params.get("metadata") or {}).items()
+            if key != "standard_logging_guardrail_information"
+        }
+        try:
+            await self._scan_logged_call(kwargs, result, translation, scratch_metadata)
+        except Exception as e:
+            verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
+        recorded: Final = scratch_metadata.get("standard_logging_guardrail_information")
+        standard_logging_object: Final = kwargs.get("standard_logging_object")
+        if not recorded or not isinstance(standard_logging_object, dict):
+            return kwargs, result
+        entries: Final = recorded if isinstance(recorded, list) else [recorded]
+        existing: Final = standard_logging_object.get("guardrail_information") or []
+        return {
+            **kwargs,
+            "standard_logging_object": {**standard_logging_object, "guardrail_information": [*existing, *entries]},
+        }, result
+
+    async def _scan_logged_call(
+        self,
+        kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
+        result: object,
+        translation: "BaseTranslation",
+        scratch_metadata: dict,  # mutable-ok: apply_guardrail records its verdict into request metadata
+    ) -> None:
+        optional_params: Final = kwargs.get("optional_params") or {}
+        scratch_input: Final = copy.deepcopy(kwargs.get("messages") or kwargs.get("input"))
+        scratch_request: Final = {
+            "model": kwargs.get("model"),
+            "messages": scratch_input,
+            "input": scratch_input,
+            "tools": copy.deepcopy(optional_params.get("tools")),
+            "litellm_call_id": kwargs.get("litellm_call_id"),
+            "metadata": scratch_metadata,
+        }
+        await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
+        await translation.process_output_response(
+            response=copy.deepcopy(result), guardrail_to_apply=self, request_data=scratch_request
+        )
 
     def supports_scan_only_tool_results(self) -> bool:
         """Whether this guardrail can scan tool-result content.
@@ -1079,7 +1236,7 @@ class CustomGuardrail(CustomLogger):
         This gets logged on downsteam Langfuse, DataDog, etc.
         """
         # Convert None to empty dict to satisfy type requirements
-        guardrail_response: dict[str, Any] | str = {} if response is None else response
+        guardrail_response: dict[str, object] | str = {} if response is None else response
 
         # For apply_guardrail functions in custom_code_guardrail scenario,
         # simplify the logged response to "allow", "deny", or "mask"
