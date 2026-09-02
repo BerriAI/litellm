@@ -23,6 +23,14 @@ rust_ocr_enabled = _configuration.rust_ocr_enabled
 use_litellm_rust = _configuration.use_litellm_rust
 
 
+class _OcrProviderError(Exception):
+    def __init__(self, status_code: int, message: str, request_url: str | None) -> None:
+        super().__init__(message)
+        self.status_code: Final = status_code
+        request: Final = httpx.Request("POST", request_url) if request_url is not None else None
+        self.response: Final = httpx.Response(status_code=status_code, request=request)
+
+
 class RustOcr(Protocol):
     def __call__(
         self,
@@ -84,6 +92,7 @@ def ocr(
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
+    request_url: str | None = None,
 ) -> dict[str, object] | None:
     rust_ocr: Final = load_rust_ocr()
     native_call: Final = (
@@ -105,7 +114,12 @@ def ocr(
         fallback=lambda: None,
         adapt=identity,
         mode=FallbackMode.PYTHON,
-        context=BridgeErrorContext(route="ocr", provider=custom_llm_provider or "", model=model),
+        context=BridgeErrorContext(
+            route="ocr",
+            provider=custom_llm_provider or "",
+            model=model,
+            upstream_error=lambda status, message: _OcrProviderError(status, message, request_url),
+        ),
     ).value
 
 
@@ -119,6 +133,7 @@ async def aocr(
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
+    request_url: str | None = None,
 ) -> dict[str, object] | None:
     rust_aocr: Final = load_rust_aocr()
     native_call: Final = (
@@ -141,6 +156,11 @@ async def aocr(
             fallback=async_none,
             adapt=identity,
             mode=FallbackMode.PYTHON,
-            context=BridgeErrorContext(route="ocr", provider=custom_llm_provider or "", model=model),
+            context=BridgeErrorContext(
+                route="ocr",
+                provider=custom_llm_provider or "",
+                model=model,
+                upstream_error=lambda status, message: _OcrProviderError(status, message, request_url),
+            ),
         )
     ).value

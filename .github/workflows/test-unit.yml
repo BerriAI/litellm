@@ -106,6 +106,7 @@ jobs:
               tests/test_litellm/endpoints
               tests/test_litellm/experimental_mcp_client
               tests/test_litellm/models
+              tests/route_parity
               tests/test_litellm/repositories
               tests/test_litellm/images
               tests/test_litellm/interactions

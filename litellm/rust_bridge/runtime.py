@@ -55,6 +55,7 @@ class BridgeErrorContext:
     route: str
     provider: str
     model: str
+    upstream_error: Callable[[int, str], Exception] | None = None
 
 
 def execution_headers(source: CoreEngine) -> dict[str, str]:
@@ -221,11 +222,15 @@ def _raise_upstream(error: BaseException, context: BridgeErrorContext) -> NoRetu
     message_value: Final = args[1] if len(args) > 1 else str(error)
     status: Final = status_value if isinstance(status_value, int) else 0
     message: Final = message_value if isinstance(message_value, str) else str(message_value)
-    api_error: Final = APIError(
-        status_code=status or 500,
-        message=f"litellm rust {context.route}: {message}",
-        llm_provider=context.provider,
-        model=context.model,
+    api_error: Final = (
+        context.upstream_error(status or 500, message)
+        if context.upstream_error is not None
+        else APIError(
+            status_code=status or 500,
+            message=f"litellm rust {context.route}: {message}",
+            llm_provider=context.provider,
+            model=context.model,
+        )
     )
     api_error.headers = execution_headers(  # pyright: ignore[reportAttributeAccessIssue]  # proxy reads exception headers
         CoreEngine.RUST
