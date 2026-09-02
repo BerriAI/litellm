@@ -1,1 +1,1 @@
-"""Gateway trace strategy for endpoint execution tracing."""
+"""Gateway trace strategy - mirrors litellm-rust/crates/ structure."""

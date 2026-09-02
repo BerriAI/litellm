@@ -1,8 +1,22 @@
 {
-  "name": "gateway_trace",
-  "description": "Gateway-level endpoint execution tracing",
-  "test_files": [
-    "test_chat_completions.py",
-    "test_ocr.py"
-  ]
+  "id": "gateway_trace",
+  "label": "Gateway Trace",
+  "description": "Gateway endpoint execution tracing",
+  "order": 4,
+  "functions": {
+    "ocr": {
+      "coverage": "partial",
+      "selectors": ["tests/rust-python-harness/gateway_trace/ai-gateway/test_ocr_endpoint.py"]
+    },
+    "messages": {
+      "coverage": "partial",
+      "selectors": ["tests/rust-python-harness/gateway_trace/ai-gateway/test_messages_endpoint.py"]
+    },
+    "responses": {
+      "coverage": "not_applicable"
+    },
+    "count_tokens": {
+      "coverage": "not_applicable"
+    }
+  }
 }
