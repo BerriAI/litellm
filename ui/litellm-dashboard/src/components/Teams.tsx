@@ -17,7 +17,7 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChevronDown, Plus, Users } from "lucide-react";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod/v4";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -264,13 +264,10 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
     ? `Default: ${getBudgetDurationLabel(defaultBudgetDuration)} (${defaultBudgetDuration})`
     : "n/a";
 
-  useEffect(() => {
-    form.setValue("models", []);
-  }, [currentOrgForCreateTeam, userModels]);
-
   // Handle organization preselection when modal opens
+  const wasTeamModalVisible = useRef(false);
   useEffect(() => {
-    if (isTeamModalVisible) {
+    if (isTeamModalVisible && !wasTeamModalVisible.current) {
       const adminOrgs = getAdminOrganizations(userRole, userID, organizations);
 
       // Org admins must scope a team to an org, so with exactly one we preselect it.
@@ -284,6 +281,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
         setCurrentOrgForCreateTeam(currentOrg);
       }
     }
+    wasTeamModalVisible.current = isTeamModalVisible;
   }, [isTeamModalVisible, isOrgAdmin, userRole, userID, organizations, currentOrg]);
 
   // Add this useEffect to fetch guardrails
@@ -686,6 +684,11 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                     const adminOrgs = getAdminOrganizations(userRole, userID, organizations);
                     const isSingleOrg = adminOrgs.length === 1;
                     const hasNoOrgs = adminOrgs.length === 0;
+                    const handleCreateTeamOrgChange = (next: string, onChange: (value: string | null) => void) => {
+                      onChange(next === "" ? null : next);
+                      setCurrentOrgForCreateTeam(adminOrgs.find((org) => org.organization_id === next) ?? null);
+                      form.setValue("models", []);
+                    };
 
                     return (
                       <>
@@ -721,12 +724,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                                 hasNoOrgs ? "No organizations available" : "Search or select an Organization"
                               }
                               emptyText="No organizations available"
-                              onValueChange={(next) => {
-                                onChange(next === "" ? null : next);
-                                setCurrentOrgForCreateTeam(
-                                  adminOrgs.find((org) => org.organization_id === next) ?? null,
-                                );
-                              }}
+                              onValueChange={(next) => handleCreateTeamOrgChange(next, onChange)}
                             />
                           )}
                         </FormField>
