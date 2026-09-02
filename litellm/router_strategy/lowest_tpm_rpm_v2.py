@@ -1,7 +1,8 @@
 #### What this does ####
 #   identifies lowest tpm deployment
 import random
-from typing import TYPE_CHECKING, Any, Final, Sequence
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 

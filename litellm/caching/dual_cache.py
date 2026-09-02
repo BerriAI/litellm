@@ -10,8 +10,9 @@ Has 4 primary methods:
 
 import time
 import traceback
+from collections.abc import Sequence
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Final, Sequence
+from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
     from litellm.types.caching import RedisPipelineIncrementOperation
