@@ -16,6 +16,28 @@ from litellm.proxy.common_utils.path_utils import safe_filename
 MB: Final = 1024 * 1024
 
 
+def coerce_optional_int_setting(raw: object) -> int | None:
+    """A general_settings value declared as an optional integer, e.g. max_file_size_mb.
+
+    bool is an int subclass, so an explicit isinstance(raw, bool) exclusion is needed
+    or a YAML `true`/`false` would silently pass as 1/0.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        return raw
+    raise TypeError(f"expected an integer, got {raw!r}")
+
+
+def coerce_optional_str_list_setting(raw: object) -> tuple[str, ...]:
+    """A general_settings value declared as an optional list of strings, e.g. blocked_file_extensions."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        raise TypeError(f"expected a list of strings, got {raw!r}")
+    return tuple(raw)
+
+
 @dataclass(frozen=True, slots=True)
 class UploadedFileTooLarge:
     size_bytes: int

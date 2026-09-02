@@ -75,6 +75,8 @@ from litellm.proxy.openai_files_endpoints.general_upload_validation import (
     check_blocked_extension,
     check_unsafe_filename,
     check_upload_file_size,
+    coerce_optional_int_setting,
+    coerce_optional_str_list_setting,
     raise_upload_validation_failure,
 )
 from litellm.proxy.utils import ProxyLogging, is_known_model
@@ -90,8 +92,6 @@ from litellm.types.llms.openai import (
 router: Final = APIRouter()
 
 _MAX_BATCH_FILE_SIZE_MB_ADAPTER: Final = TypeAdapter(int | None)
-_MAX_FILE_SIZE_MB_ADAPTER: Final = TypeAdapter(int | None)
-_BLOCKED_FILE_EXTENSIONS_ADAPTER: Final = TypeAdapter(list[str] | None)
 
 
 class UploadedFileInfo(TypedDict):
@@ -410,10 +410,7 @@ async def create_file(
         if unsafe_filename_failure is not None:
             raise_upload_validation_failure(unsafe_filename_failure)
 
-        max_file_size_mb: Final = cast(
-            "int | None",
-            _MAX_FILE_SIZE_MB_ADAPTER.validate_python(general_settings.get("max_file_size_mb")),
-        )
+        max_file_size_mb: Final = coerce_optional_int_setting(general_settings.get("max_file_size_mb"))
 
         # Batch uploads can be gigabytes. Starlette has already spooled the upload
         # to disk, so stream from that handle instead of reading it into memory.
@@ -468,9 +465,7 @@ async def create_file(
         if general_size_failure is not None:
             raise_upload_validation_failure(general_size_failure)
 
-        blocked_extensions: Final = tuple(
-            _BLOCKED_FILE_EXTENSIONS_ADAPTER.validate_python(general_settings.get("blocked_file_extensions")) or ()
-        )
+        blocked_extensions: Final = coerce_optional_str_list_setting(general_settings.get("blocked_file_extensions"))
         blocked_extension_failure: Final = check_blocked_extension(file.filename, blocked_extensions)
         if blocked_extension_failure is not None:
             raise_upload_validation_failure(blocked_extension_failure)
