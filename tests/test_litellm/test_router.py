@@ -2297,6 +2297,82 @@ async def test_acompletion_streaming_iterator_preserves_hidden_params():
     assert result._hidden_params.get("_response_ms") == 500.0
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(
+    "response_headers",
+    [
+        None,
+        {"X-Request-ID": "request-123", "x-litellm-model-group": "spoofed"},
+        httpx.Headers({"x-request-id": "request-123", "x-litellm-model-group": "spoofed"}),
+    ],
+)
+async def test_completion_streaming_iterator_preserves_response_headers(
+    response_headers: dict[str, str] | httpx.Headers | None,
+    is_async: bool,
+) -> None:
+    from typing import Final
+    from unittest.mock import Mock
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+    client: Final = AsyncMock(spec=AsyncHTTPHandler) if is_async else Mock(spec=HTTPHandler)
+    client.post.return_value = httpx.Response(
+        200,
+        content=(
+            b'data: {"id":"test","object":"chat.completion.chunk","created":1,'
+            b'"model":"test-model","choices":[{"index":0,"delta":{"content":"Hello"},'
+            b'"finish_reason":null}]}\n\n'
+            b"data: [DONE]\n\n"
+        ),
+        request=httpx.Request("POST", "https://provider.test/v1/chat/completions"),
+    )
+    request: Final = dict(
+        model="hosted_vllm/test-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_base="https://provider.test/v1",
+        api_key="fake-key",
+        stream=True,
+        client=client,
+    )
+    original: Final = await litellm.acompletion(**request) if is_async else litellm.completion(**request)
+    upstream: Final = CustomStreamWrapper(
+        completion_stream=original.completion_stream,
+        model=original.model,
+        custom_llm_provider=original.custom_llm_provider,
+        logging_obj=original.logging_obj,
+        _response_headers=response_headers,
+    )
+    router: Final = Router(model_list=[])
+    upstream._hidden_params["additional_headers"]["x-litellm-model-group"] = "real-group"
+    iterator_kwargs: Final = dict(
+        model_response=upstream,
+        messages=[{"role": "user", "content": "Hello"}],
+        initial_kwargs={"model": "real-group", "stream": True},
+    )
+    wrapped: Final = (
+        await router._acompletion_streaming_iterator(**iterator_kwargs)
+        if is_async
+        else router._completion_streaming_iterator(**iterator_kwargs)
+    )
+
+    assert wrapped._response_headers == response_headers
+    expected: Final = {
+        **{f"llm_provider-{name}": value for name, value in (response_headers or {}).items()},
+        "x-litellm-model-group": "real-group",
+    }
+    assert wrapped._hidden_params["additional_headers"] == expected
+    chunks: Final = [chunk async for chunk in wrapped] if is_async else list(wrapped)
+    assert chunks
+    assert all(chunk._hidden_params["additional_headers"] == expected for chunk in chunks)
+    complete: Final = litellm.stream_chunk_builder(chunks)
+    assert complete.choices[0].message.content == "Hello"
+    assert complete._hidden_params["additional_headers"] == expected
+    assert StandardLoggingPayloadSetup.get_hidden_params(complete._hidden_params)["additional_headers"] == expected
+
+
 def test_completion_streaming_iterator_fallback_on_429():
     """Sync streaming: MidStreamFallbackError (429 pre-first-chunk) triggers fallback.
 
