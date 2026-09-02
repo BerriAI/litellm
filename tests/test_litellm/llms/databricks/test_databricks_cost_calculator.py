@@ -62,6 +62,8 @@ PUBLISHED_DBU_PER_MILLION: Final = {
     "databricks/databricks-gemini-2-5-pro": ("22.321", "178.571", "22.321", "2.232"),
     "databricks/databricks-gemini-2-5-flash": ("5.357", "44.643", "5.357", "0.536"),
     "databricks/databricks-kimi-k3": ("42.857", "214.286", "42.857", "4.286"),
+    "databricks/databricks-deepseek-v4-flash-0731": ("2.000", "4.000", "2.000", "0.400"),
+    "databricks/databricks-deepseek-v4-pro-0813": ("18.857", "56.571", "18.857", "1.886"),
     "databricks/databricks-glm-5-2": ("20.000", "62.857", "20.000", "3.714"),
 }
 PROMOTIONAL_DISCOUNT: Final = 0.80

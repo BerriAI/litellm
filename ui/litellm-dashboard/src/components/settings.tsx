@@ -293,6 +293,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     llm_too_slow: "LLM Responses Too Slow",
     llm_requests_hanging: "LLM Requests Hanging",
     budget_alerts: "Budget Alerts (API Keys, Users)",
+    user_spend_thresholds: "User Spend Thresholds (Daily/Monthly)",
+    user_spend_anomalies: "User Spend Anomaly Detection",
     db_exceptions: "Database Exceptions (Read/Write)",
     daily_reports: "Weekly/Monthly Spend Reports",
     outage_alerts: "Outage Alerts",
@@ -522,7 +524,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           <TabsContent value="alerting-types" keepMounted>
             <Card className="p-6">
               <p className="my-2">
-                Alerts are only supported for Slack Webhook URLs. Get your webhook urls from{" "}
+                Alerts are sent to any Slack-compatible incoming webhook URL (Slack, Rocket.Chat, Mattermost, etc.). Get
+                Slack webhook urls from{" "}
                 <a href="https://api.slack.com/messaging/webhooks" target="_blank" style={{ color: "blue" }}>
                   here
                 </a>
@@ -532,7 +535,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                   <TableRow>
                     <TableHead></TableHead>
                     <TableHead></TableHead>
-                    <TableHead>Slack Webhook URL</TableHead>
+                    <TableHead>Webhook URL (Slack-compatible)</TableHead>
                   </TableRow>
                 </TableHeader>
 

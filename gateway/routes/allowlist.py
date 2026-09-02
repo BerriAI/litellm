@@ -86,6 +86,7 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/comprehendmedical",
     "/cohere/",
     "/gemini/",
+    "/gigachat/",
     "/google/",
     "/vertex_ai/",
     "/vertex-ai/",

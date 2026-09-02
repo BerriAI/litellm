@@ -13,7 +13,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.prompts.init_prompts import PromptSpec
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.types.utils import CallTypes, StandardCallbackDynamicParams
 from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStore,
     VectorStoreResultContent,
@@ -226,7 +226,7 @@ class VectorStorePreCallHook(CustomLogger):
         self,
         request_data: dict,
         response: Any,
-        call_type: Any | None,
+        call_type: CallTypes | None,
     ) -> Any | None:
         """
         Add search results to the response after successful LLM call.
@@ -283,7 +283,7 @@ class VectorStorePreCallHook(CustomLogger):
         self,
         request_data: dict,
         response_chunk: Any,
-        call_type: Any | None,
+        call_type: CallTypes | None,
     ) -> Any | None:
         """
         Add search results to the final streaming chunk.
