@@ -13,6 +13,7 @@ pub type GuardrailFuture<'a> =
 pub enum GuardrailEventHook {
     PreCall,
     DuringCall,
+    PostCall,
 }
 
 impl GuardrailEventHook {
@@ -20,6 +21,7 @@ impl GuardrailEventHook {
         match self {
             Self::PreCall => "pre_call",
             Self::DuringCall => "during_call",
+            Self::PostCall => "post_call",
         }
     }
 }

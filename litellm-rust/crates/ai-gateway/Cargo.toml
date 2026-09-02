@@ -15,6 +15,7 @@ required-features = ["server"]
 
 [dependencies]
 litellm-core = { workspace = true, features = ["bedrock-auth"] }
+litellm-python-extension-protocol.workspace = true
 # reqwest (rustls + json) is used by io/ocr and ships realtime logs to the
 # Python proxy callbacks API.
 reqwest.workspace = true
@@ -22,6 +23,8 @@ reqwest.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
 tokio-tungstenite.workspace = true
 futures-util.workspace = true
+tokio-stream.workspace = true
+tonic = { workspace = true, features = ["transport", "router"] }
 serde_json.workspace = true
 base64.workspace = true
 axum = { workspace = true, features = ["ws"], optional = true }

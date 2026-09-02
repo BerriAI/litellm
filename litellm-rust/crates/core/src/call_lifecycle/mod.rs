@@ -25,6 +25,13 @@ pub trait CallLifecycleHooks<InitialReq, ProviderReq, Resp>: Send + Sync {
         ProviderReq: 'a,
         Resp: 'a;
 
+    type PostCallFuture<'a>: Future<Output = CoreResult<Resp>> + Send + 'a
+    where
+        Self: 'a,
+        InitialReq: 'a,
+        ProviderReq: 'a,
+        Resp: 'a;
+
     type SuccessFuture<'a>: Future<Output = ()> + Send + 'a
     where
         Self: 'a,
@@ -45,6 +52,12 @@ pub trait CallLifecycleHooks<InitialReq, ProviderReq, Resp>: Send + Sync {
         context: &'a CallLifecycleContext,
         request: InitialReq,
     ) -> Self::DuringCallFuture<'a>;
+
+    fn async_post_call_hook<'a>(
+        &'a self,
+        context: &'a CallLifecycleContext,
+        response: Resp,
+    ) -> Self::PostCallFuture<'a>;
 
     fn async_log_success_event<'a>(
         &'a self,
@@ -143,6 +156,25 @@ impl<'a> CallLifecycle<'a> {
         let provider_phase = self.start_phase(&context, CallLifecyclePhase::ProviderCall);
         let result = provider_call(provider_request).await;
         phases.push(self.finish_phase(&context, provider_phase));
+
+        let result = match result {
+            Ok(response) => {
+                let post_call = self.start_phase(&context, CallLifecyclePhase::PostCall);
+                match hooks.async_post_call_hook(&context, response).await {
+                    Ok(response) => {
+                        phases.push(self.finish_phase(&context, post_call));
+                        Ok(response)
+                    }
+                    Err(error) => {
+                        phases.push(self.finish_phase(&context, post_call));
+                        self.log_failure(&context, hooks, &error, call_start, &mut phases)
+                            .await;
+                        return Err(error);
+                    }
+                }
+            }
+            Err(error) => Err(error),
+        };
 
         match &result {
             Ok(response) => {
@@ -253,6 +285,7 @@ mod tests {
     impl CallLifecycleHooks<String, String, String> for RecordingHooks {
         type PreCallFuture<'a> = BoxFuture<'a, CoreResult<String>>;
         type DuringCallFuture<'a> = BoxFuture<'a, CoreResult<String>>;
+        type PostCallFuture<'a> = BoxFuture<'a, CoreResult<String>>;
         type SuccessFuture<'a> = BoxFuture<'a, ()>;
         type FailureFuture<'a> = BoxFuture<'a, ()>;
 
@@ -278,6 +311,17 @@ mod tests {
             })
         }
 
+        fn async_post_call_hook<'a>(
+            &'a self,
+            _context: &'a CallLifecycleContext,
+            response: String,
+        ) -> Self::PostCallFuture<'a> {
+            Box::pin(async move {
+                self.events.lock().unwrap().push("post_call");
+                Ok(format!("{response}:post"))
+            })
+        }
+
         fn async_log_success_event<'a>(
             &'a self,
             _context: &'a CallLifecycleContext,
@@ -286,7 +330,7 @@ mod tests {
         ) -> Self::SuccessFuture<'a> {
             Box::pin(async move {
                 assert!(timing.end_time >= timing.start_time);
-                assert_eq!(timing.phases.len(), 3);
+                assert_eq!(timing.phases.len(), 4);
                 self.events.lock().unwrap().push("success");
             })
         }
@@ -306,6 +350,7 @@ mod tests {
     impl CallLifecycleHooks<RecordingRequest, String, String> for RecordingHooks {
         type PreCallFuture<'a> = BoxFuture<'a, CoreResult<RecordingRequest>>;
         type DuringCallFuture<'a> = BoxFuture<'a, CoreResult<String>>;
+        type PostCallFuture<'a> = BoxFuture<'a, CoreResult<String>>;
         type SuccessFuture<'a> = BoxFuture<'a, ()>;
         type FailureFuture<'a> = BoxFuture<'a, ()>;
 
@@ -328,6 +373,17 @@ mod tests {
             Box::pin(async move {
                 self.events.lock().unwrap().push("during_call");
                 Ok(format!("{}:during", request.0))
+            })
+        }
+
+        fn async_post_call_hook<'a>(
+            &'a self,
+            _context: &'a CallLifecycleContext,
+            response: String,
+        ) -> Self::PostCallFuture<'a> {
+            Box::pin(async move {
+                self.events.lock().unwrap().push("post_call");
+                Ok(format!("{response}:post"))
             })
         }
 
@@ -370,8 +426,11 @@ mod tests {
             .await
             .expect("call succeeds");
 
-        assert_eq!(response, "response");
-        assert_eq!(hooks.events(), vec!["pre_call", "during_call", "success"]);
+        assert_eq!(response, "response:post");
+        assert_eq!(
+            hooks.events(),
+            vec!["pre_call", "during_call", "post_call", "success"]
+        );
     }
 
     #[tokio::test]
@@ -408,7 +467,10 @@ mod tests {
             .await
             .expect("call succeeds");
 
-        assert_eq!(response, "response");
-        assert_eq!(hooks.events(), vec!["pre_call", "during_call", "success"]);
+        assert_eq!(response, "response:post");
+        assert_eq!(
+            hooks.events(),
+            vec!["pre_call", "during_call", "post_call", "success"]
+        );
     }
 }

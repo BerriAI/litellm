@@ -39,6 +39,15 @@ pub trait CustomGuardrail: Send + Sync {
     ) -> GuardrailFuture<'a> {
         Box::pin(async move { Ok(GuardrailDecision::Allow(request)) })
     }
+
+    /// Python 1:1 name: `async_post_call_success_hook(data, user_api_key_dict, response)`.
+    fn async_post_call_success_hook<'a>(
+        &'a self,
+        _context: &'a GuardrailContext,
+        response: GuardrailRequest,
+    ) -> GuardrailFuture<'a> {
+        Box::pin(async move { Ok(GuardrailDecision::Allow(response)) })
+    }
 }
 
 pub struct CustomGuardrailRunner {
@@ -69,6 +78,15 @@ impl CustomGuardrailRunner {
         request: GuardrailRequest,
     ) -> Result<(GuardrailRequest, GuardrailDispatchReport), GuardrailError> {
         self.run_hook(GuardrailEventHook::DuringCall, context, request)
+            .await
+    }
+
+    pub async fn run_post_call(
+        &self,
+        context: &GuardrailContext,
+        response: GuardrailRequest,
+    ) -> Result<(GuardrailRequest, GuardrailDispatchReport), GuardrailError> {
+        self.run_hook(GuardrailEventHook::PostCall, context, response)
             .await
     }
 
@@ -143,6 +161,11 @@ impl CustomGuardrailRunner {
                 GuardrailEventHook::DuringCall => {
                     guardrail
                         .async_moderation_hook(context, request.clone())
+                        .await?
+                }
+                GuardrailEventHook::PostCall => {
+                    guardrail
+                        .async_post_call_success_hook(context, request.clone())
                         .await?
                 }
             };

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-litellm-rust has exactly THREE crates. A crate is a LAYER, not a route. Routes (ocr, realtime, chat) and providers (mistral, openai) are MODULES inside the layers.
+litellm-rust has exactly FOUR crates. A crate is a LAYER, not a route. Routes (ocr, realtime, chat) and providers (mistral, openai) are MODULES inside the layers.
 
 ## Crates
 
@@ -9,8 +9,9 @@ litellm-rust has exactly THREE crates. A crate is a LAYER, not a route. Routes (
 | litellm-core | The LiteLLM SDK in Rust. One public entrypoint per top-level call (`messages::messages()`), owning types, transforms, provider resolution, auth, and the provider HTTP call. Call it, get a typed response. |
 | litellm-ai-gateway | The axum server (behind the `server` feature) plus the WebSocket hosts. Translates HTTP/WS to core entrypoints; owns no provider logic and no handlers. |
 | litellm-python-bridge | PyO3 cdylib exposing Rust to the litellm Python SDK — marshals Python objects and calls core entrypoints. |
+| litellm-python-extension-protocol | Shared generated protobuf types for the external callback and guardrail host. It owns no transport or dispatch. |
 
-Dependency direction (acyclic): litellm-core ← litellm-ai-gateway ← litellm-python-bridge.
+Dependency direction (acyclic): litellm-python-extension-protocol → litellm-ai-gateway, and litellm-core ← litellm-ai-gateway ← litellm-python-bridge.
 
 ## Where a route lives
 

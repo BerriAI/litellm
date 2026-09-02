@@ -3,7 +3,9 @@ use std::sync::Arc;
 use crate::io::realtime_pool::RealtimePool;
 use litellm_core::router::Router;
 
+use crate::integrations::custom_guardrail::CustomGuardrail;
 use crate::integrations::custom_logger::CustomLogger;
+use crate::integrations::python_extension_host::PythonExtensionClient;
 
 /// Shared application state handed to every route handler.
 #[derive(Clone)]
@@ -14,6 +16,9 @@ pub struct AppState {
     pub master_key: Option<Arc<str>>,
     /// Logging callbacks fanned out at the end of each realtime session.
     pub loggers: Arc<Vec<Arc<dyn CustomLogger>>>,
+    pub guardrails: Arc<Vec<Arc<dyn CustomGuardrail>>>,
+    /// Shared long-lived HTTP/2 client. `None` keeps the extension feature fully disabled.
+    pub python_extension_host: Option<Arc<PythonExtensionClient>>,
     /// Pre-warmed upstream realtime connection pool. Disabled
     /// (`RealtimePool::disabled()`) when `REALTIME_POOL_SIZE=0`, in which case
     /// every realtime connect fresh-dials exactly as before.

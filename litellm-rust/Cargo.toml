@@ -3,6 +3,7 @@ members = [
     "crates/core",
     "crates/ai-gateway",
     "crates/python-bridge",
+    "crates/python-extension-protocol",
 ]
 resolver = "2"
 
@@ -15,7 +16,9 @@ repository = "https://github.com/BerriAI/litellm"
 [workspace.dependencies]
 litellm-core = { path = "crates/core" }
 litellm-ai-gateway = { path = "crates/ai-gateway", default-features = false }
+litellm-python-extension-protocol = { path = "crates/python-extension-protocol" }
 axum = "0.7"
+prost = "0.14.4"
 pyo3 = "0.29.0"
 pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"] }
 pythonize = "0.29.0"
@@ -28,7 +31,10 @@ subtle = "2"
 thiserror = "2.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+tonic = { version = "0.14.6", default-features = false, features = ["codegen"] }
+tonic-prost = "0.14.6"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+tokio-stream = "0.1"
 base64 = "0.22"
 
 [profile.release]

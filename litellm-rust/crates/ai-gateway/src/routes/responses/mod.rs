@@ -317,6 +317,8 @@ mod tests {
             router: Arc::new(ModelRouter::default()),
             master_key: Some(Arc::from("master-key")),
             loggers: Arc::new(Vec::new()),
+            guardrails: Arc::new(Vec::new()),
+            python_extension_host: None,
             realtime_pool: RealtimePool::disabled(),
         }
     }

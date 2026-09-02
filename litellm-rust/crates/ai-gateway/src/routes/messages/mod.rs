@@ -167,6 +167,8 @@ mod tests {
             }])),
             master_key: master_key.map(Arc::from),
             loggers: Arc::new(Vec::new()),
+            guardrails: Arc::new(Vec::new()),
+            python_extension_host: None,
             realtime_pool: RealtimePool::disabled(),
         }
     }

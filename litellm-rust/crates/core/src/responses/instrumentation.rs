@@ -210,6 +210,7 @@ type LifecycleFuture<'a, T> = Pin<Box<dyn Future<Output = CoreResult<T>> + Send 
 impl CallLifecycleHooks<(), (), ()> for ResponsesWsInstrumentation {
     type PreCallFuture<'a> = LifecycleFuture<'a, ()>;
     type DuringCallFuture<'a> = LifecycleFuture<'a, ()>;
+    type PostCallFuture<'a> = LifecycleFuture<'a, ()>;
     type SuccessFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
     type FailureFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 
@@ -227,6 +228,14 @@ impl CallLifecycleHooks<(), (), ()> for ResponsesWsInstrumentation {
         request: (),
     ) -> Self::DuringCallFuture<'a> {
         Box::pin(async move { Ok(request) })
+    }
+
+    fn async_post_call_hook<'a>(
+        &'a self,
+        _context: &'a CallLifecycleContext,
+        response: (),
+    ) -> Self::PostCallFuture<'a> {
+        Box::pin(async move { Ok(response) })
     }
 
     fn async_log_success_event<'a>(

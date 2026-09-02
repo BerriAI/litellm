@@ -172,6 +172,7 @@ impl OcrLifecycleHooks {
 impl CallLifecycleHooks<PreparedOcrRequest, ProviderOcrRequest, Value> for OcrLifecycleHooks {
     type PreCallFuture<'a> = OcrFuture<'a, PreparedOcrRequest>;
     type DuringCallFuture<'a> = OcrFuture<'a, ProviderOcrRequest>;
+    type PostCallFuture<'a> = OcrFuture<'a, Value>;
     type SuccessFuture<'a> = OcrLogFuture<'a>;
     type FailureFuture<'a> = OcrLogFuture<'a>;
 
@@ -189,6 +190,25 @@ impl CallLifecycleHooks<PreparedOcrRequest, ProviderOcrRequest, Value> for OcrLi
         request: PreparedOcrRequest,
     ) -> Self::DuringCallFuture<'a> {
         Box::pin(async move { self.prepare_provider_request(request).await })
+    }
+
+    fn async_post_call_hook<'a>(
+        &'a self,
+        _context: &'a CallLifecycleContext,
+        response: Value,
+    ) -> Self::PostCallFuture<'a> {
+        Box::pin(async move {
+            if self.guardrail_runner.is_empty() {
+                return Ok(response);
+            }
+            let context = guardrail_context(&self.request_metadata);
+            let (response, _) = self
+                .guardrail_runner
+                .run_post_call(&context, GuardrailRequest::new(response))
+                .await
+                .map_err(guardrail_error_to_core_error)?;
+            Ok(response.data)
+        })
     }
 
     fn async_log_success_event<'a>(

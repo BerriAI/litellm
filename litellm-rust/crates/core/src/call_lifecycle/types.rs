@@ -33,6 +33,7 @@ pub enum CallLifecyclePhase {
     PreCall,
     DuringCall,
     ProviderCall,
+    PostCall,
     SuccessCallback,
     FailureCallback,
 }
@@ -43,6 +44,7 @@ impl CallLifecyclePhase {
             Self::PreCall => "pre_call",
             Self::DuringCall => "during_call",
             Self::ProviderCall => "provider_call",
+            Self::PostCall => "post_call",
             Self::SuccessCallback => "success_callback",
             Self::FailureCallback => "failure_callback",
         }

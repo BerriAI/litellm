@@ -197,6 +197,7 @@ impl CallLifecycleHooks<PreparedAudioTranscriptionRequest, ProviderAudioTranscri
 {
     type PreCallFuture<'a> = AudioFuture<'a, PreparedAudioTranscriptionRequest>;
     type DuringCallFuture<'a> = AudioFuture<'a, ProviderAudioTranscriptionRequest>;
+    type PostCallFuture<'a> = AudioFuture<'a, Value>;
     type SuccessFuture<'a> = AudioLogFuture<'a>;
     type FailureFuture<'a> = AudioLogFuture<'a>;
 
@@ -214,6 +215,14 @@ impl CallLifecycleHooks<PreparedAudioTranscriptionRequest, ProviderAudioTranscri
         request: PreparedAudioTranscriptionRequest,
     ) -> Self::DuringCallFuture<'a> {
         Box::pin(async move { self.prepare_provider_request(request).await })
+    }
+
+    fn async_post_call_hook<'a>(
+        &'a self,
+        _context: &'a CallLifecycleContext,
+        response: Value,
+    ) -> Self::PostCallFuture<'a> {
+        Box::pin(async move { Ok(response) })
     }
 
     fn async_log_success_event<'a>(

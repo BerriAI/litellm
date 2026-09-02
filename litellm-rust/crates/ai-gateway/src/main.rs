@@ -16,8 +16,15 @@ use litellm_ai_gateway::routes;
 use litellm_ai_gateway::state::AppState;
 use litellm_core::router::{Deployment, LiteLLMParams, Router};
 
+use litellm_ai_gateway::integrations::custom_guardrail::CustomGuardrail;
 use litellm_ai_gateway::integrations::custom_logger::CustomLogger;
 use litellm_ai_gateway::integrations::litellm_python_proxy_api::LiteLLMPythonProxyAPILogger;
+use litellm_ai_gateway::integrations::python_extension_host::config::{
+    PythonExtensionManifest, PythonExtensionSettings,
+};
+use litellm_ai_gateway::integrations::python_extension_host::{
+    ActivationState, PythonExtensionClient, RemoteExtensions,
+};
 #[cfg(feature = "python-config")]
 use litellm_ai_gateway::python;
 
@@ -45,9 +52,14 @@ async fn main() {
     // Python proxy's /v1/callbacks/logs). Built here so the spawn lands on the
     // tokio runtime. `from_env` reads LITELLM_PROXY_BASE_URL + LITELLM_MASTER_KEY.
     let proxy_logger = LiteLLMPythonProxyAPILogger::from_env();
-    let loggers: Vec<Arc<dyn CustomLogger>> = vec![proxy_logger];
+    let mut loggers: Vec<Arc<dyn CustomLogger>> = vec![proxy_logger];
 
-    let router = Arc::new(build_router());
+    let (router, extension_manifest) = build_gateway_config();
+    let router = Arc::new(router);
+    let (python_extension_host, remote_extensions) =
+        initialize_python_extensions(extension_manifest).await;
+    loggers.extend(remote_extensions.loggers);
+    let guardrails: Vec<Arc<dyn CustomGuardrail>> = remote_extensions.guardrails;
 
     // Build the pre-warmed realtime pool and register each deployment's upstream
     // so the background replenisher starts warming it. `REALTIME_POOL_SIZE=0`
@@ -71,6 +83,8 @@ async fn main() {
         router,
         master_key,
         loggers: Arc::new(loggers),
+        guardrails: Arc::new(guardrails),
+        python_extension_host,
         realtime_pool,
     };
 
@@ -121,20 +135,55 @@ fn resolve_port() -> u16 {
 /// Build the router. With the `python-config` feature and `LITELLM_CONFIG_PATH`
 /// set, load the resolved `model_list` from the proxy config via the embedded
 /// Python reader (load time only). Otherwise fall back to the env stand-in.
-fn build_router() -> Router {
+fn build_gateway_config() -> (Router, Option<PythonExtensionManifest>) {
     #[cfg(feature = "python-config")]
     if let Ok(config_path) = std::env::var("LITELLM_CONFIG_PATH") {
-        match python::config::load_router_from_config(&config_path) {
-            Ok(router) => {
+        match python::config::load_gateway_config_from_config(&config_path) {
+            Ok(config) => {
                 eprintln!("loaded model_list from {config_path} via python config reader");
-                return router;
+                return (config.router, Some(config.extension_manifest));
             }
             Err(err) => {
+                if std::env::var("LITELLM_PYTHON_EXTENSION_HOST_ENDPOINT")
+                    .is_ok_and(|endpoint| !endpoint.trim().is_empty())
+                {
+                    panic!("config load failed while Python extensions are enabled: {err}");
+                }
                 eprintln!("config load failed ({err}); falling back to env deployment");
             }
         }
     }
-    build_router_from_env()
+    (build_router_from_env(), None)
+}
+
+async fn initialize_python_extensions(
+    manifest: Option<PythonExtensionManifest>,
+) -> (Option<Arc<PythonExtensionClient>>, RemoteExtensions) {
+    let empty = RemoteExtensions {
+        guardrails: Vec::new(),
+        loggers: Vec::new(),
+    };
+    let settings = PythonExtensionSettings::from_env()
+        .unwrap_or_else(|error| panic!("invalid Python extension settings: {error}"));
+    let Some(settings) = settings else {
+        return (None, empty);
+    };
+    let manifest = manifest.unwrap_or(PythonExtensionManifest {
+        revision_id: "rust-empty-v1".to_string(),
+        extensions: Vec::new(),
+    });
+    let (client, activation) = PythonExtensionClient::connect(settings, manifest.clone())
+        .await
+        .unwrap_or_else(|error| panic!("Python extension host initialization failed: {error}"));
+    let descriptors = match activation {
+        ActivationState::Active(descriptors) => descriptors,
+        ActivationState::Degraded(reason) => {
+            eprintln!("Python extension host unavailable at startup; fail-open active: {reason}");
+            Vec::new()
+        }
+    };
+    let extensions = RemoteExtensions::from_manifest(&manifest, &descriptors, client.clone());
+    (Some(client), extensions)
 }
 
 /// Build a minimal single-deployment `model_list` from the environment.
