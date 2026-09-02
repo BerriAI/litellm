@@ -7,7 +7,9 @@ login endpoints (e.g., /login and /v2/login).
 
 import os
 import secrets
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import Final, Literal, cast
 
 import jwt
@@ -24,6 +26,7 @@ from litellm.proxy._types import (
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_utils import is_sso_provider_fully_configured
 from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
@@ -111,6 +114,7 @@ async def authenticate_user(
     password: str,
     master_key: str | None,
     prisma_client: PrismaClient | None,
+    general_settings: Mapping[str, object] = MappingProxyType({}),
 ) -> LoginResult:
     """
     Authenticate a user and generate an API key for UI access.
@@ -124,13 +128,40 @@ async def authenticate_user(
         password: Password from the login form
         master_key: Master key for the proxy (required)
         prisma_client: Prisma database client (optional)
+        general_settings: Proxy general_settings, checked for
+            `disable_password_login_when_sso_enabled`
 
     Returns:
         LoginResult: Object containing authentication data
 
     Raises:
-        ProxyException: If authentication fails or required configuration is missing
+        ProxyException: If authentication fails or required configuration is missing,
+            or if username/password login is disabled while SSO is configured
+
+    Recovery: an admin locked out of the UI by
+    `disable_password_login_when_sso_enabled` can still administer the proxy over
+    the API with the master key (Authorization: Bearer <master_key>), which never
+    goes through this function. To restore UI username/password login, unset the
+    setting in config.yaml (or the DB-persisted general_settings) and restart the
+    proxy; this is a deliberate, auditable config change rather than a hidden
+    bypass.
+
+    The gate below requires the SSO provider to be FULLY configured (every
+    companion secret/endpoint an actual sign-in needs), not merely that a
+    client id is present, so an incomplete SSO setup can never disable the
+    only working login path.
     """
+    if general_settings.get("disable_password_login_when_sso_enabled") is True and is_sso_provider_fully_configured():
+        raise ProxyException(
+            message=(
+                "Username/password login is disabled because SSO is configured "
+                "and 'disable_password_login_when_sso_enabled' is set. Sign in via SSO."
+            ),
+            type=ProxyErrorTypes.auth_error,
+            param="disable_password_login_when_sso_enabled",
+            code=403,
+        )
+
     if master_key is None:
         raise ProxyException(
             message="Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
