@@ -5,19 +5,31 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Final, cast
 
+from pydantic import BaseModel, ValidationError
+
 from litellm._logging import _redact_string, verbose_proxy_logger
-from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.constants import (
+    REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS,
+    REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+)
 from litellm.types.realtime import RealtimeQueryParams
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from ....litellm_core_utils.realtime_errors import websocket_close_reason
 from ....litellm_core_utils.realtime_streaming import RealTimeStreaming
 from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
+from ....llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from ..azure import AzureChatCompletion
+from .http_transformation import AzureRealtimeHTTPConfig
 
 # BACKEND_WS_URL = "ws://localhost:8080/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
+
+_http_handler: Final = BaseLLMHTTPHandler()
+_azure_realtime_http_config: Final = AzureRealtimeHTTPConfig()
 
 
 async def forward_messages(client_ws: Any, backend_ws: Any):
@@ -29,6 +41,24 @@ async def forward_messages(client_ws: Any, backend_ws: Any):
             await client_ws.send_text(message)
     except websockets.exceptions.ConnectionClosed:
         pass
+
+
+@dataclass(frozen=True, slots=True)
+class _EphemeralKey:
+    value: str
+
+
+@dataclass(frozen=True, slots=True)
+class _EphemeralMintError:
+    reason: str
+
+
+class _AzureClientSecret(BaseModel):
+    value: str
+
+
+class _AzureTranscriptionSessionResponse(BaseModel):
+    client_secret: _AzureClientSecret
 
 
 class AzureOpenAIRealtime(AzureChatCompletion):
@@ -101,6 +131,52 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         qs: Final = "&".join(query_parts)
         return f"{api_base}{path}?{qs}" if qs else f"{api_base}{path}"
 
+    async def _mint_transcription_session_key(
+        self,
+        api_base: str,
+        model: str,
+        api_key: str | None,
+        azure_ad_token: str | None,
+        api_version: str | None,
+        timeout: float | None,
+        logging_obj: LiteLLMLogging,
+        http_handler: BaseLLMHTTPHandler | None,
+    ) -> _EphemeralKey | _EphemeralMintError:
+        """
+        Azure rejects a standing api-key on the realtime transcription socket with
+        "This operation requires ephemeral authentication". Exchange the standing
+        credential for a short-lived client secret via POST
+        /openai/realtime/transcription_sessions and connect the socket with that.
+        """
+        if not api_key and not azure_ad_token:
+            return _EphemeralMintError(
+                "Missing Azure credentials to mint a realtime transcription session. "
+                "Set an api_key, or configure Azure AD auth"
+            )
+        bearer: Final[dict[str, object]] = {"Authorization": f"Bearer {azure_ad_token}"}  # mutable-ok: request headers
+        handler: Final = http_handler if http_handler is not None else _http_handler
+        try:
+            response: Final = await handler.async_realtime_transcription_session_handler(
+                api_base=api_base,
+                api_key=api_key or "",
+                request_data={"input_audio_transcription": {"model": model}},  # mutable-ok: one-shot httpx request body
+                logging_obj=logging_obj,
+                timeout=timeout or REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS,
+                provider_config=_azure_realtime_http_config,
+                model=model,
+                extra_headers=None if api_key else bearer,
+                api_version=api_version,
+            )
+        except Exception as e:  # noqa: BLE001  # upstream failure is surfaced to the client as a socket close reason
+            return _EphemeralMintError(f"Azure realtime transcription session request failed: {_redact_string(str(e))}")
+        try:
+            parsed: Final = _AzureTranscriptionSessionResponse.model_validate(response.json())
+        except (ValidationError, ValueError) as e:
+            return _EphemeralMintError(
+                f"Azure realtime transcription session response was not understood: {_redact_string(str(e))}"
+            )
+        return _EphemeralKey(parsed.client_secret.value)
+
     async def async_realtime(
         self,
         model: str,
@@ -116,6 +192,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         query_params: RealtimeQueryParams | None = None,
         user_api_key_dict: Any | None = None,
         litellm_metadata: dict | None = None,
+        http_handler: BaseLLMHTTPHandler | None = None,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
@@ -126,6 +203,31 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         if api_version is None and backend_uses_beta_protocol:
             raise ValueError("api_version is required for Azure OpenAI calls")
 
+        is_transcription: Final = (query_params or {}).get("intent") == "transcription"
+
+        minted: Final = (
+            await self._mint_transcription_session_key(
+                api_base=api_base,
+                model=model,
+                api_key=api_key,
+                azure_ad_token=azure_ad_token,
+                api_version=api_version,
+                timeout=timeout,
+                logging_obj=logging_obj,
+                http_handler=http_handler,
+            )
+            if is_transcription
+            else None
+        )
+        if isinstance(minted, _EphemeralMintError):
+            await websocket.close(
+                code=1008,
+                reason=websocket_close_reason(
+                    _redact_string(minted.reason), fallback="Realtime transcription session error"
+                ),
+            )
+            return
+
         url: Final = self._construct_url(
             api_base,
             model,
@@ -134,7 +236,11 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             query_params=query_params,
         )
 
-        auth_headers: Final = self.get_auth_headers(api_key=api_key, azure_ad_token=azure_ad_token)
+        auth_headers: Final = (
+            self.get_auth_headers(api_key=minted.value, azure_ad_token=None)
+            if isinstance(minted, _EphemeralKey)
+            else self.get_auth_headers(api_key=api_key, azure_ad_token=azure_ad_token)
+        )
 
         try:
             ssl_context: Final = get_shared_realtime_ssl_context()
@@ -152,13 +258,14 @@ class AzureOpenAIRealtime(AzureChatCompletion):
                     user_api_key_dict=user_api_key_dict,
                     request_data={"litellm_metadata": litellm_metadata or {}},
                     backend_uses_beta_protocol=backend_uses_beta_protocol,
-                    force_transcription_model=(
-                        model if (query_params or {}).get("intent") == "transcription" else None
-                    ),
+                    force_transcription_model=(model if is_transcription else None),
                 )
                 await realtime_streaming.bidirectional_forward()
 
         except websockets.exceptions.InvalidStatusCode as e:
-            await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
+            await websocket.close(
+                code=e.status_code,
+                reason=websocket_close_reason(_redact_string(str(e)), fallback="Invalid status code"),
+            )
         except Exception:
             verbose_proxy_logger.exception("Error in AzureOpenAIRealtime.async_realtime")
