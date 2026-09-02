@@ -1,5 +1,7 @@
+mod constants;
 mod diagnostics;
 mod errors;
+pub mod function_trace;
 mod marshal;
 mod routes;
 
