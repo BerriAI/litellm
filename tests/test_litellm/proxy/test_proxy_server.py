@@ -12204,6 +12204,20 @@ def test_docs_redoc_openapi_are_reachable_by_default():
     assert "paths" in openapi_response.json()
 
 
+def test_production_app_docs_urls_are_wired_to_the_real_env_helpers():
+    """
+    LIT-6745: pins the actual `FastAPI(docs_url=..., redoc_url=..., openapi_url=...)`
+    construction in proxy_server.py to _get_docs_url/_get_redoc_url/_get_openapi_url,
+    so a hardcoded or drifted value at that call site fails this test even though
+    the helpers themselves are covered separately.
+    """
+    from litellm.proxy import utils as proxy_utils
+
+    assert app.docs_url == proxy_utils._get_docs_url()
+    assert app.redoc_url == proxy_utils._get_redoc_url()
+    assert app.openapi_url == proxy_utils._get_openapi_url()
+
+
 def _build_app_with_docs_env(monkeypatch, *, disabled: bool) -> FastAPI:
     from litellm.proxy import utils as proxy_utils
     from litellm.proxy.health_endpoints._health_endpoints import router as health_router
