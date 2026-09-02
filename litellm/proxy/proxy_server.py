@@ -6981,11 +6981,18 @@ class ProxyConfig:
                     db_general_settings=db_general_settings.param_value,
                 )
 
-            # initialize vector stores, guardrails, etc. table in db
-            await self._init_non_llm_objects_in_db(prisma_client=prisma_client)
-
         except Exception as e:
             verbose_proxy_logger.exception("litellm.proxy.proxy_server.py::ProxyConfig:add_deployment - %s", e)
+
+        # Own try: the model reconcile above must not decide whether guardrails, vector
+        # stores, MCP servers and agents get hydrated. They read their own tables.
+        try:
+            # initialize vector stores, guardrails, etc. table in db
+            await self._init_non_llm_objects_in_db(prisma_client=prisma_client)
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:add_deployment non-LLM objects - %s", e
+            )
 
         # Read while the lock is still held: once it is released the next reconcile can
         # begin, and clear_cache's leading wipe would make this look like a mass drop.

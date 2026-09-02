@@ -928,6 +928,80 @@ async def test_initialize_scheduled_jobs_hydrates_mcp_when_store_model_in_db_fal
 
 
 @pytest.mark.asyncio
+async def test_add_deployment_hydrates_non_llm_objects_when_model_reconcile_fails():
+    """
+    Regression: _add_deployment_locked ran the model reconcile and the non-LLM object
+    hydration inside one try/except. A failure in the reconcile skipped guardrails,
+    vector stores, MCP servers, agents and pass-through endpoints for that pass, and
+    the swallowed exception left only a log line behind. add_deployment also runs on a
+    timer, so a transient DB error dropped every non-LLM object until a later pass.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.utils import ProxyLogging
+
+    class FailingReconcileProxyConfig(ProxyConfig):
+        """Reconcile fails the way a DB outage makes it fail; hydration records itself."""
+
+        def __init__(self):
+            super().__init__()
+            self.non_llm_hydrations = 0
+
+        async def _get_models_from_db(self, prisma_client):
+            raise RuntimeError("db unavailable")
+
+        async def _init_non_llm_objects_in_db(self, prisma_client):
+            self.non_llm_hydrations += 1
+
+    proxy_config = FailingReconcileProxyConfig()
+
+    outcome = await proxy_config._add_deployment_locked(
+        prisma_client=MagicMock(),
+        proxy_logging_obj=MagicMock(spec=ProxyLogging),
+    )
+
+    assert proxy_config.non_llm_hydrations == 1
+    assert outcome.still_desired is None
+
+
+@pytest.mark.asyncio
+async def test_add_deployment_survives_a_non_llm_hydration_failure():
+    """
+    The new hydration boundary must behave like the reconcile one: log the error and
+    carry on, so a failing guardrail or vector-store table cannot take down the whole
+    reconcile pass or escape into the scheduler job that calls it.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.utils import ProxyLogging
+
+    class FailingHydrationProxyConfig(ProxyConfig):
+        """Reconcile succeeds, hydration raises the way an unavailable table does."""
+
+        def __init__(self):
+            super().__init__()
+            self.reconcile_ran = False
+
+        async def _get_models_from_db(self, prisma_client):
+            return []
+
+        async def _update_llm_router(self, new_models, proxy_logging_obj):
+            self.reconcile_ran = True
+            return frozenset()
+
+        async def _init_non_llm_objects_in_db(self, prisma_client):
+            raise RuntimeError("guardrail table unavailable")
+
+    proxy_config = FailingHydrationProxyConfig()
+
+    outcome = await proxy_config._add_deployment_locked(
+        prisma_client=MagicMock(),
+        proxy_logging_obj=MagicMock(spec=ProxyLogging),
+    )
+
+    assert proxy_config.reconcile_ran is True
+    assert outcome.still_desired == frozenset()
+
+
+@pytest.mark.asyncio
 async def test_init_mcp_servers_from_db_respects_supported_db_objects(monkeypatch):
     """
     init_mcp_servers_from_db hydrates MCP from the DB by default but skips it when
