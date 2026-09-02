@@ -208,7 +208,7 @@ async def list_containers(
 
     # Read query parameters
     query_params: Final = dict(request.query_params)
-    data: Final[dict[str, object]] = {"query_params": query_params}
+    data: Final[dict[str, object]] = {"query_params": query_params, "model": query_params.get("model")}
 
     # Extract custom_llm_provider using priority chain
     custom_llm_provider: Final = (
