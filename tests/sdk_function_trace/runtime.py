@@ -222,8 +222,8 @@ def trace_diff(python: tuple[FunctionTraceEvent, ...], rust: tuple[FunctionTrace
 
 
 _PYTHON_COLUMN_WIDTH: Final = 52
-_PYTHON_ONLY_COLOR: Final = "\033[33m"
-_RUST_ONLY_COLOR: Final = "\033[36m"
+_PYTHON_ONLY_COLOR: Final = "\033[34m"
+_RUST_ONLY_COLOR: Final = "\033[33m"
 _RESET: Final = "\033[0m"
 
 
