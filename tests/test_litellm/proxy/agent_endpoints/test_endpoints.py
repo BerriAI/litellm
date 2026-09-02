@@ -760,6 +760,32 @@ class TestAgentSecretsNeverReturned:
         written = self.mock_registry.patch_agent_in_db.await_args.kwargs["agent"]["litellm_params"]
         assert written["aws_secret_access_key"] == "ROTATED_SECRET_zyxwvu9876"
 
+    def test_patch_with_agent_card_keeps_stored_secret_over_masked_echo(self):
+        self.mock_registry.patch_agent_in_db = AsyncMock(return_value=self.stored_agent)
+
+        self._request(
+            "PATCH",
+            "/v1/agents/agent-123",
+            json={
+                "agent_card_params": {**_sample_agent_card_params(), "description": "edited"},
+                "litellm_params": _agentcore_litellm_params(MASKED_SENTINEL),
+            },
+        )
+
+        written = self.mock_registry.patch_agent_in_db.await_args.kwargs["agent"]
+        assert written["litellm_params"]["aws_secret_access_key"] == SENTINEL_SECRET
+        assert written["agent_card_params"]["description"] == "edited"
+
+    def test_get_by_id_without_litellm_params_returns_agent_unchanged(self):
+        self.stored_agent.litellm_params = {}
+        self.mock_registry.get_agent_by_id = MagicMock(return_value=self.stored_agent)
+        self.existing_row = MagicMock(spend=0.0)
+
+        resp = self._request("GET", "/v1/agents/agent-123")
+
+        assert resp.status_code == 200
+        assert resp.json()["litellm_params"] == {}
+
     def test_patch_without_litellm_params_does_not_touch_them(self):
         self.mock_registry.patch_agent_in_db = AsyncMock(return_value=self.stored_agent)
 
