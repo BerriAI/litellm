@@ -130,6 +130,7 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
         password="secret",
         master_key="test-master-key",
         prisma_client=mock_prisma_client,
+        general_settings={},
     )
     mock_create_ui_token_object.assert_called_once_with(
         login_result=mock_login_result,
@@ -10446,6 +10447,75 @@ async def test_update_config_general_settings_emits_audit_log(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_config_field_rejects_out_of_range_alerting_args(monkeypatch):
+    """Out-of-range alerting_args must be rejected at save time. If they land in the
+    DB, SlackAlertingArgs raises during the config reload and alerting breaks."""
+    from unittest.mock import MagicMock
+
+    from fastapi import HTTPException
+
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", MagicMock())
+
+    admin = UserAPIKeyAuth(
+        api_key="hashed-admin",
+        user_id="admin-1",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await update_config_general_settings(
+            data=ConfigFieldUpdate(
+                field_name="alerting_args",
+                field_value={
+                    "daily_spend_per_user_threshold": -5.0,
+                    "user_spend_check_interval": 20,
+                },
+                config_type="general_settings",
+            ),
+            user_api_key_dict=admin,
+        )
+
+    assert exc_info.value.status_code == 400
+    error_msg = exc_info.value.detail["error"]
+    assert "daily_spend_per_user_threshold" in error_msg
+    assert "user_spend_check_interval" in error_msg
+
+
+@pytest.mark.asyncio
+async def test_update_config_field_accepts_valid_alerting_args(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    fake = _fake_prisma_with_config({})
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+
+    admin = UserAPIKeyAuth(
+        api_key="hashed-admin",
+        user_id="admin-1",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="alerting_args",
+            field_value={
+                "daily_spend_per_user_threshold": 5.0,
+                "user_spend_check_interval": 60,
+            },
+            config_type="general_settings",
+        ),
+        user_api_key_dict=admin,
+    )
+
+    written = json.loads(fake.db.litellm_config.upsert.call_args.kwargs["data"]["update"]["param_value"])
+    assert written["alerting_args"]["daily_spend_per_user_threshold"] == 5.0
+
+
+@pytest.mark.asyncio
 async def test_update_config_general_settings_applies_ssrf_globals(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import ConfigFieldUpdate
@@ -10713,10 +10783,53 @@ def test_update_config_redacts_all_environment_variable_values(_update_config_se
 class _EnvBuiltRedisCache(RedisCache):
     """RedisCache stand-in that records its constructor kwargs and never
     opens a network connection, so tests can assert which connection params
-    the proxy used to build its coordination Redis."""
+    the proxy used to build its coordination Redis. `ping()` reports reachable
+    by default, matching a real Redis the env fallback should adopt."""
 
     def __init__(self, **kwargs):
         self.init_kwargs = kwargs
+
+    async def ping(self) -> bool:
+        return True
+
+
+class _UnreachableRedisCache(_EnvBuiltRedisCache):
+    """Same stand-in, but `ping()` fails like a REDIS_* env var naming a Redis
+    that is not actually reachable (wrong host, no service running, ...)."""
+
+    async def ping(self) -> bool:
+        raise ConnectionError("connection refused")
+
+
+@contextlib.contextmanager
+def _patched_coordination_redis_module_state(
+    *,
+    spend_cache: DualCache,
+    config_cache: types.SimpleNamespace,
+    redis_cache_class: type = _EnvBuiltRedisCache,
+):
+    """Stub every `litellm.proxy.proxy_server` global that
+    `_attach_redis_usage_cache` (and its callers) can write to, shared by the
+    whole coordination-Redis test family below.
+
+    Centralizing this is not just DRY: `_attach_redis_usage_cache` always sets
+    `cli_sso_session_cache.redis_cache` unconditionally, and a call site that
+    forgets to patch that one real (persistent) global leaks a throwaway
+    Redis stand-in into it for the rest of the pytest session, breaking
+    unrelated tests that run later. One patched-state helper means a new call
+    site cannot forget a global this family already knows to isolate.
+    """
+    with (
+        patch.object(proxy_server_module, "redis_usage_cache", None),
+        patch.object(proxy_server_module, "spend_counter_cache", spend_cache),
+        patch.object(proxy_server_module, "user_api_key_cache", DualCache()),
+        patch.object(proxy_server_module, "cli_sso_session_cache", DualCache()),
+        patch.object(proxy_server_module, "llm_router", None),
+        patch.object(proxy_server_module, "litellm_config_cache", config_cache),
+        patch.object(proxy_server_module, "RedisCache", redis_cache_class),
+        patch.object(proxy_server_module, "RedisClusterCache", _EnvBuiltClusterCache),
+    ):
+        yield
 
 
 def _run_init_cache_with_backend(cache_backend, redis_env_kwargs):
@@ -10729,12 +10842,7 @@ def _run_init_cache_with_backend(cache_backend, redis_env_kwargs):
     fresh_config_cache = types.SimpleNamespace(redis_cache=None)
 
     with (
-        patch.object(proxy_server_module, "redis_usage_cache", None),
-        patch.object(proxy_server_module, "spend_counter_cache", fresh_spend_cache),
-        patch.object(proxy_server_module, "user_api_key_cache", DualCache()),
-        patch.object(proxy_server_module, "llm_router", None),
-        patch.object(proxy_server_module, "litellm_config_cache", fresh_config_cache),
-        patch.object(proxy_server_module, "RedisCache", _EnvBuiltRedisCache),
+        _patched_coordination_redis_module_state(spend_cache=fresh_spend_cache, config_cache=fresh_config_cache),
         patch(
             "litellm._redis._redis_kwargs_from_environment",
             return_value=redis_env_kwargs,
@@ -10809,12 +10917,7 @@ def _run_init_coordination_redis(config, env=None):
     fresh_config_cache = types.SimpleNamespace(redis_cache=None)
 
     with (
-        patch.object(proxy_server_module, "redis_usage_cache", None),
-        patch.object(proxy_server_module, "spend_counter_cache", fresh_spend_cache),
-        patch.object(proxy_server_module, "user_api_key_cache", DualCache()),
-        patch.object(proxy_server_module, "litellm_config_cache", fresh_config_cache),
-        patch.object(proxy_server_module, "RedisCache", _EnvBuiltRedisCache),
-        patch.object(proxy_server_module, "RedisClusterCache", _EnvBuiltClusterCache),
+        _patched_coordination_redis_module_state(spend_cache=fresh_spend_cache, config_cache=fresh_config_cache),
         mock.patch.dict(os.environ, env or {}, clear=False),
     ):
         built = proxy_server_module.ProxyConfig()._init_coordination_redis(config=config)
@@ -10902,13 +11005,7 @@ def test_explicit_coordination_redis_takes_precedence_over_cache_backend():
     mock_litellm_cache.cache = cache_backend
 
     with (
-        patch.object(proxy_server_module, "redis_usage_cache", None),
-        patch.object(proxy_server_module, "spend_counter_cache", fresh_spend_cache),
-        patch.object(proxy_server_module, "user_api_key_cache", DualCache()),
-        patch.object(proxy_server_module, "llm_router", None),
-        patch.object(proxy_server_module, "litellm_config_cache", fresh_config_cache),
-        patch.object(proxy_server_module, "RedisCache", _EnvBuiltRedisCache),
-        patch.object(proxy_server_module, "RedisClusterCache", _EnvBuiltClusterCache),
+        _patched_coordination_redis_module_state(spend_cache=fresh_spend_cache, config_cache=fresh_config_cache),
         patch("litellm.Cache", return_value=mock_litellm_cache),
     ):
         litellm.cache = None
@@ -10924,6 +11021,95 @@ def test_explicit_coordination_redis_takes_precedence_over_cache_backend():
         assert usage_cache is not cache_backend
         assert usage_cache.init_kwargs["host"] == "explicit-coord-host"
         assert fresh_spend_cache.redis_cache is usage_cache
+
+
+async def _run_init_coordination_redis_env_fallback(
+    litellm_settings, redis_env_kwargs, redis_cache_class=_EnvBuiltRedisCache
+):
+    """Run ProxyConfig._init_coordination_redis_env_fallback against a
+    stubbed module state and a controlled REDIS_* environment, returning
+    (built, spend_counter redis)."""
+    fresh_spend_cache = DualCache()
+    fresh_config_cache = types.SimpleNamespace(redis_cache=None)
+
+    with (
+        _patched_coordination_redis_module_state(
+            spend_cache=fresh_spend_cache, config_cache=fresh_config_cache, redis_cache_class=redis_cache_class
+        ),
+        patch(
+            "litellm._redis._redis_kwargs_from_environment",
+            return_value=redis_env_kwargs,
+        ),
+    ):
+        built = await proxy_server_module.ProxyConfig._init_coordination_redis_env_fallback(
+            litellm_settings=litellm_settings
+        )
+        return built, fresh_spend_cache.redis_cache
+
+
+@pytest.mark.asyncio
+async def test_init_coordination_redis_env_fallback_builds_from_environment():
+    """A deployment with no coordination_redis block and no litellm_settings.cache
+    but with bare REDIS_HOST/REDIS_PORT env vars must still get a coordination
+    Redis: otherwise spend counters, budget-window enforcement, and the
+    reset_spend cache-eviction broadcast stay per-pod local and a reset issued
+    on one pod never clears another pod's stale enforcement."""
+    built, spend_redis = await _run_init_coordination_redis_env_fallback(
+        litellm_settings={},
+        redis_env_kwargs={"host": "env-fallback-host", "port": "6390"},
+    )
+
+    assert isinstance(built, _EnvBuiltRedisCache)
+    assert built.init_kwargs["host"] == "env-fallback-host"
+    assert spend_redis is built
+
+
+@pytest.mark.asyncio
+async def test_init_coordination_redis_env_fallback_without_redis_env_returns_none():
+    """With no REDIS_* connection info at all, the fallback must leave the
+    coordination Redis unset rather than building a broken client."""
+    built, spend_redis = await _run_init_coordination_redis_env_fallback(
+        litellm_settings={},
+        redis_env_kwargs={},
+    )
+
+    assert built is None
+    assert spend_redis is None
+
+
+@pytest.mark.asyncio
+async def test_init_coordination_redis_env_fallback_unreachable_stays_in_memory():
+    """REDIS_* env vars can name a Redis that is not actually reachable (wrong
+    host, leftover from an unrelated job/service). Guessing "coordination
+    available" from bare env vars must not turn a previously harmless
+    in-memory-only proxy into one that raises on its next cache write, so an
+    unreachable ping must leave everything exactly as if no REDIS_* vars were
+    set at all."""
+    built, spend_redis = await _run_init_coordination_redis_env_fallback(
+        litellm_settings={},
+        redis_env_kwargs={"host": "unreachable-host", "port": "6390"},
+        redis_cache_class=_UnreachableRedisCache,
+    )
+
+    assert built is None
+    assert spend_redis is None
+
+
+@pytest.mark.asyncio
+async def test_init_coordination_redis_env_fallback_malformed_cluster_nodes_stays_in_memory():
+    """REDIS_CLUSTER_NODES can be set to a malformed value nothing here ever
+    asked to be parsed. Unlike the explicit coordination_redis block (a
+    deliberate opt-in, so a bad value there should fail loudly), this
+    inferred fallback must not abort proxy startup over it -- it has to
+    decline the same way it does for an absent or unreachable Redis."""
+    with mock.patch.dict(os.environ, {"REDIS_CLUSTER_NODES": "not-valid-json"}, clear=False):
+        built, spend_redis = await _run_init_coordination_redis_env_fallback(
+            litellm_settings={},
+            redis_env_kwargs={},
+        )
+
+    assert built is None
+    assert spend_redis is None
 
 
 def test_env_fallback_builds_cluster_client_from_cluster_nodes_env():
@@ -10967,11 +11153,7 @@ async def test_startup_applies_coordination_redis_saved_in_database():
     fresh_config_cache = types.SimpleNamespace(redis_cache=None)
 
     with (
-        patch.object(proxy_server_module, "spend_counter_cache", fresh_spend_cache),
-        patch.object(proxy_server_module, "user_api_key_cache", DualCache()),
-        patch.object(proxy_server_module, "litellm_config_cache", fresh_config_cache),
-        patch.object(proxy_server_module, "RedisCache", _EnvBuiltRedisCache),
-        patch.object(proxy_server_module, "RedisClusterCache", _EnvBuiltClusterCache),
+        _patched_coordination_redis_module_state(spend_cache=fresh_spend_cache, config_cache=fresh_config_cache),
         patch.object(
             proxy_server_module,
             "get_persisted_coordination_redis_settings",

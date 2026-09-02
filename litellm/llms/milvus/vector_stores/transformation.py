@@ -19,6 +19,7 @@ from litellm.types.vector_stores import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.router import Router
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -123,6 +124,7 @@ class MilvusVectorStoreConfig(BaseVectorStoreConfig):
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         extra_body: dict[str, Any] | None = None,
+        router: "Router | None" = None,
     ) -> tuple[str, dict[str, Any]]:
         """
         Transform search request for Azure AI Search API

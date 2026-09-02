@@ -806,6 +806,7 @@ class LiteLLMParamsBody(BaseModel):
     mock_response: str | None = None
     timeout: float | None = None
     tpm: int | None = None
+    weight: int | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
@@ -820,6 +821,7 @@ class ModelInfoBody(BaseModel):
     mode: ModelMode | None = None
     access_groups: list[str] | None = None
     team_id: str | None = None
+    allowed_fails_policy: dict[str, int] | None = None
 
 
 class ModelNewBody(BaseModel):
