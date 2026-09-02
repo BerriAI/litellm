@@ -50,15 +50,8 @@ def test_add_fallback_headers_serializes_fallback_errors():
     )
 
     assert result is response
-    assert response._hidden_params["additional_headers"][
-        "x-litellm-attempted-fallbacks"
-    ] == 1
-    assert (
-        json.loads(
-            response._hidden_params["additional_headers"]["x-litellm-fallback-errors"]
-        )
-        == fallback_errors
-    )
+    assert response._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"] == 1
+    assert json.loads(response._hidden_params["additional_headers"]["x-litellm-fallback-errors"]) == fallback_errors
 
 
 def test_add_retry_headers_to_streaming_wrapper():
@@ -84,9 +77,7 @@ def test_get_hidden_params_dict_with_pydantic_model_hidden_params():
 
     class Response:
         def __init__(self):
-            self._hidden_params = InnerHiddenParams(
-                additional_headers={"x-custom": "value"}
-            )
+            self._hidden_params = InnerHiddenParams(additional_headers={"x-custom": "value"})
 
     result = get_hidden_params_dict(Response())
     assert result == {"additional_headers": {"x-custom": "value"}}
@@ -133,9 +124,7 @@ def test_get_fallback_errors_from_headers_existing_list_passthrough():
 
 
 def test_get_fallback_errors_from_headers_invalid_json_returns_empty():
-    result = get_fallback_errors_from_headers(
-        {"x-litellm-fallback-errors": "not-valid-json-{"}
-    )
+    result = get_fallback_errors_from_headers({"x-litellm-fallback-errors": "not-valid-json-{"})
     assert result == []
 
 
@@ -175,3 +164,16 @@ def test_safe_header_value_percent_encodes_non_latin1_values():
 
     assert result.encode("latin-1")
     assert unquote(result) == "azure/中文模型名稱"
+
+
+def test_safe_header_value_escapes_a_literal_percent_sign_too():
+    """
+    A latin-1-safe value that happens to contain a literal "%" (e.g.
+    "model%20name") must not pass through unchanged: it would then be
+    indistinguishable from a genuinely percent-encoded value, and a caller
+    that always unquotes would silently decode it into the wrong string.
+    """
+    result = safe_header_value("model%20name")
+
+    assert "%" not in result.replace("%25", "")
+    assert unquote(result) == "model%20name"
