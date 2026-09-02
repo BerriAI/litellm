@@ -166,6 +166,24 @@ class TestExceptionCheckers:
             is True
         )
 
+    @pytest.mark.parametrize("response_text", ["not-json", '["invalid_request_error"]'])
+    def test_rate_limit_classifier_falls_back_when_response_is_not_an_object(self, response_text):
+        """Unusable response JSON must not disable the legacy phrase fallback."""
+
+        response = httpx.Response(
+            status_code=400,
+            request=httpx.Request("POST", "https://example.invalid"),
+            text=response_text,
+        )
+        assert (
+            ExceptionCheckers.is_error_str_rate_limit(
+                "Provider validation failed: too many requests",
+                status_code=400,
+                response=response,
+            )
+            is True
+        )
+
     def test_rate_limit_provider_specific_phrases(self):
         """Test that common vendor rate-limit and quota exhaustion phrases are properly recognized."""
         vendor_phrases: Final = (
@@ -1156,7 +1174,7 @@ def test_structured_provider_rate_limit_reaches_dispatch_boundary(
         ),
         (
             "vertex_ai",
-            '{"error": {"code": 400, "status": "INVALID_ARGUMENT", "message": "Invalid value: too many requests"}}',
+            '{"error": {"code": 400, "status": "INVALID_ARGUMENT", "message": "Invalid request: Quota exceeded for the echoed field"}}',
             None,
         ),
         (
@@ -1173,6 +1191,21 @@ def test_structured_provider_rate_limit_reaches_dispatch_boundary(
             "anthropic",
             '{"type": "error", "error": {"type": "invalid_request_error", "message": "Invalid request: too many requests"}}',
             None,
+        ),
+        (
+            "openai",
+            "{'error': {'type': 'invalid_request_error', 'message': 'Invalid request: too many requests'}}",
+            {
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "Invalid request: too many requests",
+                }
+            },
+        ),
+        (
+            "together_ai",
+            "{'error': {'message': 'Invalid request: too many requests'}, 'error_type': 'validation'}",
+            {"error_type": "validation", "error": "Invalid request: too many requests"},
         ),
     ],
 )

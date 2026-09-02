@@ -33,6 +33,7 @@ _VALIDATION_STRUCTURED_MARKERS: Final = frozenset(
         "invalid_argument",
         "invalid_request",
         "invalid_request_error",
+        "validation",
         "validation_error",
         "validation_exception",
     }
@@ -137,7 +138,8 @@ class ExceptionCheckers:
             status_code: The HTTP status the provider returned, when known. Gates only the
                 bare-number branch: providers echo the request back in validation errors and
                 429 is an ordinary token id, so an echoed prompt can put a standalone 429 in
-                the body of a 400. The phrase branches stay ungated (#11455).
+                the body of a 400. Phrase branches stay ungated (#11455) when no structured
+                validation signal is present.
             response: The provider response, when available, for structured error fields.
             error_body: The parsed provider error body, when available.
 
@@ -406,7 +408,10 @@ def _map_openai_exception(
         exception_provider = custom_llm_provider[0].upper() + custom_llm_provider[1:] + "Exception"
 
     if ExceptionCheckers.is_error_str_rate_limit(
-        error_str, status_code=getattr(original_exception, "status_code", None)
+        error_str,
+        status_code=getattr(original_exception, "status_code", None),
+        response=getattr(original_exception, "response", None),
+        error_body=getattr(original_exception, "body", None),
     ):
         raise RateLimitError(
             message=f"RateLimitError: {exception_provider} - {message}",
@@ -1345,16 +1350,23 @@ def _map_vertex_exception(
             ),
         )
     elif (
-        "429 Quota exceeded" in error_str
-        or "Quota exceeded for" in error_str
-        or "Resource exhausted" in error_str
-        or "IndexError: list index out of range" in error_str
-        or "429 Unable to submit request because the service is temporarily out of capacity." in error_str
-        or ExceptionCheckers.is_error_str_rate_limit(
-            error_str,
-            status_code=getattr(original_exception, "status_code", None),
+        not _structured_validation_signal(
+            error_str=error_str,
             response=getattr(original_exception, "response", None),
             error_body=getattr(original_exception, "body", None),
+        )
+        and (
+            "429 Quota exceeded" in error_str
+            or "Quota exceeded for" in error_str
+            or "Resource exhausted" in error_str
+            or "IndexError: list index out of range" in error_str
+            or "429 Unable to submit request because the service is temporarily out of capacity." in error_str
+            or ExceptionCheckers.is_error_str_rate_limit(
+                error_str,
+                status_code=getattr(original_exception, "status_code", None),
+                response=getattr(original_exception, "response", None),
+                error_body=getattr(original_exception, "body", None),
+            )
         )
     ):
         raise RateLimitError(
@@ -1878,7 +1890,10 @@ def _map_together_ai_exception(
             llm_provider="together_ai",
         )
     elif ExceptionCheckers.is_error_str_rate_limit(
-        error_str, status_code=getattr(original_exception, "status_code", None)
+        error_str,
+        status_code=getattr(original_exception, "status_code", None),
+        response=getattr(original_exception, "response", None),
+        error_body=getattr(original_exception, "body", None),
     ):
         raise RateLimitError(
             message=f"TogetherAIException - {error_str}",
