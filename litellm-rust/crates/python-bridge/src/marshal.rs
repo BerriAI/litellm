@@ -1,22 +1,76 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use litellm_python_interop::from_py;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
 
-pub(crate) fn optional_object_to_map(
-    py: Python<'_>,
+pub(crate) struct RouteOptions {
+    pub(crate) model: String,
+    pub(crate) api_key: Option<String>,
+    pub(crate) api_base: Option<String>,
+    pub(crate) custom_llm_provider: Option<String>,
+    pub(crate) extra_headers: Option<Map<String, Value>>,
+    pub(crate) timeout: Option<Duration>,
+}
+
+pub(crate) struct RouteOptionsInputs {
+    pub(crate) model: String,
+    pub(crate) api_key: Option<String>,
+    pub(crate) api_base: Option<String>,
+    pub(crate) custom_llm_provider: Option<String>,
+    pub(crate) extra_headers: Option<Value>,
+    pub(crate) timeout_seconds: Option<f64>,
+}
+
+impl RouteOptions {
+    pub(crate) fn from_python(inputs: RouteOptionsInputs) -> PyResult<Self> {
+        Ok(Self {
+            model: inputs.model,
+            api_key: inputs.api_key,
+            api_base: inputs.api_base,
+            custom_llm_provider: inputs.custom_llm_provider,
+            extra_headers: optional_object("extra_headers", inputs.extra_headers)?,
+            timeout: optional_timeout(inputs.timeout_seconds),
+        })
+    }
+}
+
+pub(crate) fn required_value(
     name: &'static str,
-    value: Option<Py<PyAny>>,
+    value: Value,
+    expected: fn(&Value) -> bool,
+    expected_name: &'static str,
+) -> PyResult<Value> {
+    if expected(&value) {
+        return Ok(value);
+    }
+    Err(PyValueError::new_err(format!(
+        "{name} must be a {expected_name}"
+    )))
+}
+
+pub(crate) fn object_or_empty(
+    name: &'static str,
+    value: Option<Value>,
 ) -> PyResult<Map<String, Value>> {
     match value {
-        Some(value) => match from_py(value.bind(py))? {
-            Value::Object(map) => Ok(map),
-            _ => Err(PyValueError::new_err(format!("{name} must be a dict"))),
-        },
+        Some(value) => object(name, value),
         None => Ok(Map::new()),
+    }
+}
+
+fn optional_object(
+    name: &'static str,
+    value: Option<Value>,
+) -> PyResult<Option<Map<String, Value>>> {
+    value.map(|value| object(name, value)).transpose()
+}
+
+fn object(name: &'static str, value: Value) -> PyResult<Map<String, Value>> {
+    match value {
+        Value::Object(map) => Ok(map),
+        _ => Err(PyValueError::new_err(format!("{name} must be a dict"))),
     }
 }
 
