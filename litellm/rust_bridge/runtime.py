@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Final, Generic, NoReturn, TypeAlias, TypeVar, cast
+from typing import Final, Generic, NoReturn, TypeAlias, TypeVar
 
 from litellm.exceptions import APIError
 from litellm.rust_bridge.bindings import native_exception_types
@@ -139,7 +139,7 @@ async def acall(operation: Callable[[], Awaitable[ResultT]], context: BridgeErro
 
 
 def _decline_reason(error: BaseException) -> str:
-    reason: Final = error.args[0] if error.args else str(error)
+    reason: Final[object] = error.args[0] if error.args else str(error)
     return reason if isinstance(reason, str) else str(reason)
 
 
@@ -159,7 +159,7 @@ def _required_reason(result: RustDeclined | RustUnavailable) -> str:
 
 
 def _raise_upstream(error: BaseException, context: BridgeErrorContext) -> NoReturn:
-    args: Final = cast(tuple[object, ...], error.args)
+    args: Final[tuple[object, ...]] = error.args
     status_value: Final = args[0] if args else 0
     message_value: Final = args[1] if len(args) > 1 else str(error)
     status: Final = status_value if isinstance(status_value, int) else 0
