@@ -2,16 +2,28 @@
 
 import math
 from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Final
 
 from pydantic import BaseModel, ConfigDict
 
-from .config import CapabilityClassifierVerdict, CapabilityRouterConfig, CapabilitySelectionReason
+from .config import (
+    CapabilityBoundary,
+    CapabilityClassifierVerdict,
+    CapabilityRouterConfig,
+    CapabilitySelectionReason,
+)
+
+BOUNDARY_THRESHOLD_STEPS: Final[Mapping[CapabilityBoundary, int]] = MappingProxyType(
+    {"supported": 0, "uncertain": 1, "unmatched": 1, "unsupported": 2}
+)
 
 
 class CapabilityCandidateAssessment(BaseModel):
     model: str
     p_solve: float
     reason: str
+    capability_boundary: CapabilityBoundary
     estimated_cost: float | None
     qualified: bool
 
@@ -43,7 +55,7 @@ def select_capability_model(
     verdict: CapabilityClassifierVerdict,
     estimated_costs: Mapping[str, float | None],
 ) -> CapabilityRoutingDecision:
-    """Choose the cheapest candidate above the configured probability."""
+    """Choose the cheapest candidate whose p_solve clears its boundary-stepped threshold."""
     configured_models = tuple(candidate.model for candidate in config.candidates)
     scores = {candidate.model: candidate for candidate in verdict.candidates}
     if set(scores) != set(configured_models):
@@ -54,8 +66,14 @@ def select_capability_model(
             model=model,
             p_solve=scores[model].p_solve,
             reason=scores[model].reason,
+            capability_boundary=scores[model].capability_boundary,
             estimated_cost=estimated_costs.get(model),
-            qualified=scores[model].p_solve > config.probability_threshold,
+            qualified=scores[model].p_solve
+            > round(
+                config.probability_threshold
+                + BOUNDARY_THRESHOLD_STEPS[scores[model].capability_boundary] * config.threshold_step,
+                9,
+            ),
         )
         for model in configured_models
     )

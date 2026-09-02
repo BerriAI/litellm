@@ -10,6 +10,7 @@ from litellm.router_strategy.capability_router.config import (
     CapabilityRouterConfig,
 )
 from litellm.router_strategy.capability_router.policy import select_capability_model
+from litellm.router_strategy.capability_router.prompts import build_classifier_response_schema
 
 
 def config() -> dict:
@@ -45,8 +46,8 @@ def test_policy_selects_cheapest_model_above_global_threshold() -> None:
     verdict = CapabilityClassifierVerdict.model_validate(
         {
             "candidates": [
-                {"model": "small", "p_solve": 0.78, "reason": "clear bounded task"},
-                {"model": "frontier", "p_solve": 0.95, "reason": "more capable"},
+                {"model": "small", "capability_boundary": "supported", "p_solve": 0.78, "reason": "clear bounded task"},
+                {"model": "frontier", "capability_boundary": "supported", "p_solve": 0.95, "reason": "more capable"},
             ]
         }
     )
@@ -63,8 +64,8 @@ def test_policy_falls_back_if_no_model_qualifies_or_price_is_unknown() -> None:
     verdict = CapabilityClassifierVerdict.model_validate(
         {
             "candidates": [
-                {"model": "small", "p_solve": 0.4, "reason": "too hard"},
-                {"model": "frontier", "p_solve": 0.6, "reason": "uncertain"},
+                {"model": "small", "capability_boundary": "supported", "p_solve": 0.4, "reason": "too hard"},
+                {"model": "frontier", "capability_boundary": "supported", "p_solve": 0.6, "reason": "uncertain"},
             ]
         }
     )
@@ -75,7 +76,8 @@ def test_policy_falls_back_if_no_model_qualifies_or_price_is_unknown() -> None:
     qualified = verdict.model_copy(
         update={
             "candidates": tuple(
-                candidate.model_copy(update={"p_solve": 0.9}) for candidate in verdict.candidates
+                candidate.model_copy(update={"capability_boundary": "supported", "p_solve": 0.9})
+                for candidate in verdict.candidates
             )
         }
     )
@@ -89,8 +91,8 @@ def test_probability_must_be_strictly_above_threshold() -> None:
     verdict = CapabilityClassifierVerdict.model_validate(
         {
             "candidates": [
-                {"model": "small", "p_solve": 0.7, "reason": "on the boundary"},
-                {"model": "frontier", "p_solve": 0.7, "reason": "on the boundary"},
+                {"model": "small", "capability_boundary": "supported", "p_solve": 0.7, "reason": "on the boundary"},
+                {"model": "frontier", "capability_boundary": "supported", "p_solve": 0.7, "reason": "on the boundary"},
             ]
         }
     )
@@ -130,8 +132,13 @@ async def test_same_user_turn_reuses_cached_decision() -> None:
                 CapabilityClassifierVerdict.model_validate(
                     {
                         "candidates": [
-                            {"model": "small", "p_solve": 0.9, "reason": "fits"},
-                            {"model": "frontier", "p_solve": 0.95, "reason": "fits"},
+                            {"model": "small", "capability_boundary": "supported", "p_solve": 0.9, "reason": "fits"},
+                            {
+                                "model": "frontier",
+                                "capability_boundary": "supported",
+                                "p_solve": 0.95,
+                                "reason": "fits",
+                            },
                         ]
                     }
                 ),
@@ -154,3 +161,59 @@ async def test_same_user_turn_reuses_cached_decision() -> None:
     assert first.routing_decision is not None and first.routing_decision["cached"] is False
     assert second.routing_decision is not None and second.routing_decision["cached"] is True
     strategy._new_decision.assert_awaited_once()
+
+
+def test_boundary_buckets_step_the_effective_threshold() -> None:
+    parsed = CapabilityRouterConfig.model_validate(config())
+    verdict = CapabilityClassifierVerdict.model_validate(
+        {
+            "candidates": [
+                {"model": "small", "capability_boundary": "uncertain", "p_solve": 0.78, "reason": "ambiguous scope"},
+                {"model": "frontier", "capability_boundary": "supported", "p_solve": 0.78, "reason": "covered"},
+            ]
+        }
+    )
+
+    decision = select_capability_model(parsed, verdict, {"small": 0.01, "frontier": 0.05})
+
+    assert decision.selected_model == "frontier"
+    assert [candidate.qualified for candidate in decision.candidates] == [False, True]
+
+
+def test_unsupported_boundary_requires_two_threshold_steps() -> None:
+    parsed = CapabilityRouterConfig.model_validate({**config(), "threshold_step": 0.1})
+    unsupported = {"model": "small", "capability_boundary": "unsupported", "reason": "excluded"}
+    supported = {"model": "frontier", "capability_boundary": "supported", "p_solve": 0.95, "reason": "covered"}
+    costs = {"small": 0.01, "frontier": 0.05}
+
+    below = CapabilityClassifierVerdict.model_validate({"candidates": [{**unsupported, "p_solve": 0.9}, supported]})
+    above = CapabilityClassifierVerdict.model_validate({"candidates": [{**unsupported, "p_solve": 0.91}, supported]})
+
+    assert select_capability_model(parsed, below, costs).selected_model == "frontier"
+    assert select_capability_model(parsed, above, costs).selected_model == "small"
+
+
+def test_classifier_payload_caps_long_message_values() -> None:
+    strategy = CapabilityRouter("cost-router", Router(model_list=[]), config())
+    messages = [
+        {"role": "user", "content": "Fix the failing build"},
+        {"role": "assistant", "content": [{"type": "text", "text": "x" * 50_000}]},
+        {"role": "user", "content": "now fix the tests"},
+    ]
+
+    payload = strategy._classifier_payload(messages, {})
+
+    assert len(payload) < 10_000
+    assert "[truncated 48000 chars]" in payload
+    assert "newest user message is the task" in payload
+
+
+def test_response_schema_orders_reasoning_before_probability() -> None:
+    schema = build_classifier_response_schema(CapabilityRouterConfig.model_validate(config()))
+    item = schema["properties"]["candidates"]["items"]
+    fields = list(item["properties"])
+
+    assert fields.index("reason") < fields.index("p_solve")
+    assert fields.index("capability_boundary") < fields.index("p_solve")
+    assert "capability_boundary" in item["required"]
+    assert item["properties"]["capability_boundary"]["enum"] == ["supported", "uncertain", "unsupported", "unmatched"]

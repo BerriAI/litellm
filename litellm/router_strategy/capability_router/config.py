@@ -46,6 +46,7 @@ class CapabilityClassifierConfig(BaseModel):
     model: str
     timeout_ms: int = Field(default=3000, ge=1)
     max_output_tokens: int = Field(default=1024, ge=1)
+    max_message_chars: int = Field(default=2000, ge=1)
 
     model_config = ConfigDict(extra="forbid")
 
@@ -61,6 +62,7 @@ class CapabilityRouterConfig(BaseModel):
     candidates: tuple[CapabilityRouterCandidate, ...] = Field(min_length=2)
     classifier: CapabilityClassifierConfig
     probability_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    threshold_step: float = Field(default=0.1, ge=0.0, le=1.0)
     fallback_model: str
     estimated_output_tokens: int = Field(default=1000, ge=1)
     cache_ttl_seconds: int = Field(default=3600, ge=1)
@@ -72,11 +74,11 @@ class CapabilityRouterConfig(BaseModel):
     def validate_fallback_model(cls, value: str) -> str:
         return _provider_model(value, "fallback_model")
 
-    @field_validator("probability_threshold", mode="before")
+    @field_validator("probability_threshold", "threshold_step", mode="before")
     @classmethod
     def validate_finite_threshold(cls, value: object) -> object:
         if isinstance(value, (int, float)) and not math.isfinite(value):
-            raise ValueError("probability_threshold must be finite")
+            raise ValueError("threshold values must be finite")
         return value
 
     @model_validator(mode="after")
@@ -89,12 +91,16 @@ class CapabilityRouterConfig(BaseModel):
         return self
 
 
+CapabilityBoundary = Literal["supported", "uncertain", "unsupported", "unmatched"]
+
+
 class CapabilityCandidateScore(BaseModel):
     """One classifier estimate for the current task."""
 
     model: str
-    p_solve: float = Field(ge=0.0, le=1.0)
     reason: str
+    capability_boundary: CapabilityBoundary
+    p_solve: float = Field(ge=0.0, le=1.0)
 
     model_config = ConfigDict(extra="forbid")
 
