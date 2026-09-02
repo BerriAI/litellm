@@ -57,7 +57,7 @@
     "limit": 5601
   },
   "reportMissingTypeArgument": {
-    "limit": 15292
+    "limit": 15290
   },
   "reportMissingTypeStubs": {
     "limit": 40
@@ -105,13 +105,13 @@
     "limit": 109
   },
   "reportUnknownMemberType": {
-    "limit": 38335
+    "limit": 38332
   },
   "reportUnknownParameterType": {
     "limit": 19625
   },
   "reportUnknownVariableType": {
-    "limit": 29865
+    "limit": 29861
   },
   "reportUnnecessaryCast": {
     "limit": 111
