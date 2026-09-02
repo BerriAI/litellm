@@ -577,17 +577,18 @@ class Deployment(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class DeploymentModelListingInfo:
-    """What a concrete deployment contributes to its OpenAI-compatible listing entry.
+    """What the deployments behind a model name contribute to its OpenAI-compatible listing entry.
 
-    ``cost_map_key`` is the name the deployment's underlying model is known by in
-    ``litellm.model_cost`` (``model_info.base_model`` when set, else
-    ``litellm_params.model``), which is what the request actually reaches; the public
-    model name it is listed under is an arbitrary alias and often absent from the cost
-    map. The token limits are the ones explicitly set in ``model_info``, which outrank
-    anything the cost map says.
+    ``cost_map_keys`` are the names those deployments' underlying models are known by in
+    ``litellm.model_cost`` (``base_model`` when set, else ``litellm_params.model``), which
+    is what a request actually reaches; the public model name they are listed under is an
+    arbitrary alias and often absent from the cost map. Keys are deduplicated in config
+    order, so the ordinary group -- several interchangeable deployments of one model --
+    carries exactly one. The token limits are the widest explicitly set in any
+    deployment's ``model_info``, which outrank anything the cost map says.
     """
 
-    cost_map_key: str
+    cost_map_keys: tuple[str, ...]
     max_input_tokens: int | None
     max_output_tokens: int | None
 
