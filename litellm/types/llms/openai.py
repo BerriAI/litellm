@@ -1156,6 +1156,10 @@ OpenAIImageGenerationOptionalParams = Literal[
     "image_url",
     "image_prompt_strength",
     "aspect_ratio",
+    "width",
+    "height",
+    "guidance",
+    "steps",
     "imageConfig",
 ]
 

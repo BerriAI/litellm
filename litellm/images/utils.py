@@ -1,3 +1,4 @@
+from collections.abc import Collection
 from io import BufferedReader, BytesIO
 from typing import Any, Final, cast, get_type_hints
 
@@ -62,6 +63,7 @@ class ImageEditRequestUtils:
     @staticmethod
     def get_requested_image_edit_optional_param(
         params: dict[str, Any],
+        provider_supported_params: Collection[str] = (),
     ) -> ImageEditOptionalRequestParams:
         """
         Filter parameters to only include those defined in ImageEditOptionalRequestParams.
@@ -72,7 +74,9 @@ class ImageEditRequestUtils:
         Returns:
             ImageEditOptionalRequestParams instance with only the valid parameters
         """
-        valid_keys: Final = get_type_hints(ImageEditOptionalRequestParams).keys()
+        valid_keys: Final = frozenset(get_type_hints(ImageEditOptionalRequestParams)) | frozenset(
+            provider_supported_params
+        )
         filtered_params: Final = {k: v for k, v in params.items() if k in valid_keys and v is not None}
         return cast(ImageEditOptionalRequestParams, filtered_params)
 
