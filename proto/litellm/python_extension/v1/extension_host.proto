@@ -1,0 +1,231 @@
+syntax = "proto3";
+
+package litellm.python_extension.v1;
+
+service PythonExtensionHost {
+  rpc GetCapabilities(GetCapabilitiesRequest) returns (HostCapabilities);
+  rpc PrepareRevision(PrepareRevisionRequest) returns (PrepareRevisionResponse);
+  rpc CommitRevision(CommitRevisionRequest) returns (OperationResult);
+  rpc RetireRevision(RetireRevisionRequest) returns (OperationResult);
+  rpc ExecuteGuardrail(GuardrailInvocation) returns (GuardrailResult);
+  rpc PublishCallbackEvents(PublishCallbackEventsRequest) returns (PublishCallbackEventsResponse);
+  rpc TransformStream(stream StreamFrame) returns (stream StreamFrame);
+}
+
+// Served by the gateway and called by the extension host. CacheRef handles are
+// scoped to one invocation and must be revoked when that invocation finishes.
+service GatewayServices {
+  rpc CacheGet(CacheGetRequest) returns (CacheGetResponse);
+  rpc CacheSet(CacheSetRequest) returns (OperationResult);
+}
+
+enum ExtensionKind {
+  EXTENSION_KIND_UNSPECIFIED = 0;
+  EXTENSION_KIND_CALLBACK = 1;
+  EXTENSION_KIND_GUARDRAIL = 2;
+}
+
+enum HookPhase {
+  HOOK_PHASE_UNSPECIFIED = 0;
+  HOOK_PHASE_PRE_CALL = 1;
+  HOOK_PHASE_DURING_CALL = 2;
+  HOOK_PHASE_POST_CALL = 3;
+}
+
+enum GuardrailDecision {
+  GUARDRAIL_DECISION_UNSPECIFIED = 0;
+  GUARDRAIL_DECISION_ALLOW = 1;
+  GUARDRAIL_DECISION_REPLACE_REQUEST = 2;
+  GUARDRAIL_DECISION_REPLACE_RESPONSE = 3;
+  GUARDRAIL_DECISION_BLOCK = 4;
+  GUARDRAIL_DECISION_ERROR = 5;
+}
+
+enum CallbackEventKind {
+  CALLBACK_EVENT_KIND_UNSPECIFIED = 0;
+  CALLBACK_EVENT_KIND_SUCCESS = 1;
+  CALLBACK_EVENT_KIND_FAILURE = 2;
+}
+
+enum StreamFrameKind {
+  STREAM_FRAME_KIND_UNSPECIFIED = 0;
+  STREAM_FRAME_KIND_OPEN = 1;
+  STREAM_FRAME_KIND_INPUT_CHUNK = 2;
+  STREAM_FRAME_KIND_OUTPUT_CHUNK = 3;
+  STREAM_FRAME_KIND_END = 4;
+  STREAM_FRAME_KIND_ERROR = 5;
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_INVALID_ARGUMENT = 1;
+  ERROR_CODE_ALREADY_EXISTS = 2;
+  ERROR_CODE_NOT_FOUND = 3;
+  ERROR_CODE_NOT_ACTIVE = 4;
+  ERROR_CODE_LOAD_FAILED = 5;
+  ERROR_CODE_EXTENSION_FAILED = 6;
+  ERROR_CODE_UNSUPPORTED_CAPABILITY = 7;
+  ERROR_CODE_UNSUPPORTED_HOOK = 8;
+  ERROR_CODE_SERIALIZATION_FAILED = 9;
+  ERROR_CODE_TRANSPORT_FAILED = 10;
+  ERROR_CODE_UNAUTHENTICATED = 11;
+  ERROR_CODE_VERSION_MISMATCH = 12;
+}
+
+message GetCapabilitiesRequest {
+  uint32 protocol_major = 1;
+  uint32 protocol_minor = 2;
+}
+
+message HostCapabilities {
+  uint32 protocol_major = 1;
+  uint32 protocol_minor = 2;
+  repeated string supported_hooks = 3;
+  bool supports_duplex_streaming = 4;
+  bool supports_callback_batching = 5;
+  bool supports_cache = 6;
+  uint32 max_callback_batch_size = 7;
+}
+
+message ExtensionSpec {
+  string id = 1;
+  ExtensionKind kind = 2;
+  string entrypoint = 3;
+  bytes constructor_json = 4;
+}
+
+message ExtensionDescriptor {
+  string id = 1;
+  ExtensionKind kind = 2;
+  repeated string hooks = 3;
+  bool callable = 4;
+  bool async_callable = 5;
+}
+
+message PrepareRevisionRequest {
+  string revision_id = 1;
+  repeated ExtensionSpec extensions = 2;
+}
+
+message PrepareRevisionResponse {
+  OperationResult operation = 1;
+  repeated ExtensionDescriptor extensions = 2;
+}
+
+message CommitRevisionRequest {
+  string revision_id = 1;
+}
+
+message RetireRevisionRequest {
+  string revision_id = 1;
+}
+
+message InvocationContext {
+  string request_id = 1;
+  string invocation_id = 2;
+  string active_revision = 3;
+  string api_surface = 4;
+  string call_type = 5;
+  map<string, string> trace_context = 6;
+}
+
+message AuthContext {
+  string key_hash = 1;
+  string user_id = 2;
+  string team_id = 3;
+  map<string, string> request_metadata = 4;
+}
+
+message CacheRef {
+  string invocation_id = 1;
+  string opaque_handle = 2;
+}
+
+message GuardrailInvocation {
+  InvocationContext context = 1;
+  string plugin_id = 2;
+  HookPhase hook_phase = 3;
+  bytes request_json = 4;
+  optional bytes response_json = 5;
+  AuthContext auth = 6;
+  optional CacheRef cache = 7;
+}
+
+message PublicError {
+  string type = 1;
+  string message = 2;
+  optional int32 status_code = 3;
+  optional string param = 4;
+}
+
+message GuardrailResult {
+  OperationResult operation = 1;
+  GuardrailDecision decision = 2;
+  optional bytes request_json = 3;
+  optional bytes response_json = 4;
+  optional PublicError public_error = 5;
+}
+
+message CallbackEvent {
+  InvocationContext context = 1;
+  string plugin_id = 2;
+  CallbackEventKind kind = 3;
+  bytes standard_logging_payload_json = 4;
+  optional bytes response_json = 5;
+  optional bytes error_json = 6;
+  double start_time_seconds = 7;
+  double end_time_seconds = 8;
+  AuthContext auth = 9;
+  optional CacheRef cache = 10;
+  bool streaming = 11;
+}
+
+message PublishCallbackEventsRequest {
+  repeated CallbackEvent events = 1;
+}
+
+message PublishCallbackEventsResponse {
+  repeated OperationResult operations = 1;
+}
+
+message StreamOpen {
+  InvocationContext context = 1;
+  string plugin_id = 2;
+  bytes request_json = 3;
+  AuthContext auth = 4;
+  optional CacheRef cache = 5;
+  bool iterator_hook = 6;
+}
+
+message StreamFrame {
+  StreamFrameKind kind = 1;
+  string stream_id = 2;
+  optional StreamOpen open = 3;
+  optional bytes chunk_json = 4;
+  optional PublicError error = 5;
+}
+
+message CacheGetRequest {
+  CacheRef cache = 1;
+  string key = 2;
+  bool local_only = 3;
+}
+
+message CacheGetResponse {
+  OperationResult operation = 1;
+  optional bytes value_json = 2;
+}
+
+message CacheSetRequest {
+  CacheRef cache = 1;
+  string key = 2;
+  bytes value_json = 3;
+  optional double ttl_seconds = 4;
+  bool local_only = 5;
+}
+
+message OperationResult {
+  bool ok = 1;
+  ErrorCode error_code = 2;
+  string error_message = 3;
+}

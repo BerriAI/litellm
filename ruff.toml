@@ -27,11 +27,16 @@ lint.external = [
 ]
 line-length = 120
 
-format.exclude = ["**/enterprise/**"]
+format.exclude = ["**/enterprise/**", "litellm/python_extension/generated/**"]
 
 # Was the top-level `exclude`. Scoped to lint so `ruff format` still formats these paths
 # (Black did) while `ruff check` keeps skipping them.
-lint.exclude = ["litellm/__init__.py", "litellm/proxy/example_config_yaml/*", "tests/*"]
+lint.exclude = [
+    "litellm/__init__.py",
+    "litellm/proxy/example_config_yaml/*",
+    "litellm/python_extension/generated/**",
+    "tests/*",
+]
 
 
 [lint.per-file-ignores]

@@ -124,6 +124,7 @@ mlflow = ["mlflow>=3.11.1,<4.0"]
 grpc = [
     # Newest non-yanked release older than the 30-day cutoff.
     "grpcio==1.78.0",
+    "protobuf>=5.29.0,<6.0",
 ]
 stt-nvidia-riva = [
     # NVIDIA Riva STT provider (gRPC). These are imported lazily inside the
@@ -170,6 +171,7 @@ proxy-runtime = [
 litellm = "litellm:run_server"
 lite = "litellm.proxy.client.cli:cli"
 litellm-proxy = "litellm.proxy.client.cli:cli"
+litellm-python-extension-host = "litellm.python_extension_host.server:main"
 
 [dependency-groups]
 dev = [
@@ -210,6 +212,7 @@ dev = [
     "pytest-timeout==2.4.0",
     "vcrpy==8.2.1",
     "pytest-recording==0.13.4",
+    "grpcio-tools==1.71.2",
 ]
 e2e-dev = [
     "playwright==1.61.0",

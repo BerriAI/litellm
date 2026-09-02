@@ -10,7 +10,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-08-29T17:58:57.633306Z"
+exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -4316,6 +4316,7 @@ google = [
 ]
 grpc = [
     { name = "grpcio" },
+    { name = "protobuf" },
 ]
 mcp = [
     { name = "mcp" },
@@ -4430,6 +4431,7 @@ dev = [
     { name = "diff-cover" },
     { name = "fakeredis" },
     { name = "fastapi-offline" },
+    { name = "grpcio-tools" },
     { name = "keyring" },
     { name = "langfuse" },
     { name = "openapi-core" },
@@ -4546,6 +4548,7 @@ requires-dist = [
     { name = "polars", marker = "extra == 'proxy'", specifier = ">=1.38.1,<2.0" },
     { name = "prisma", marker = "extra == 'extra-proxy'", specifier = ">=0.11.0,<1.0" },
     { name = "prometheus-client", marker = "extra == 'proxy-runtime'", specifier = ">=0.20.0,<1.0" },
+    { name = "protobuf", marker = "extra == 'grpc'", specifier = ">=5.29.0,<6.0" },
     { name = "psycopg", marker = "extra == 'extra-proxy'", specifier = ">=3.2,<4.0" },
     { name = "psycopg-binary", marker = "extra == 'extra-proxy'", specifier = ">=3.2,<4.0" },
     { name = "pydantic", specifier = ">=2.10.0,<3.0.0" },
@@ -4615,6 +4618,7 @@ dev = [
     { name = "diff-cover", specifier = "==9.7.2" },
     { name = "fakeredis", specifier = "==2.34.1" },
     { name = "fastapi-offline", specifier = "==1.7.6" },
+    { name = "grpcio-tools", specifier = "==1.71.2" },
     { name = "keyring", specifier = "==25.7.0" },
     { name = "langfuse", specifier = "==2.59.7" },
     { name = "openapi-core", specifier = "==0.22.0" },
