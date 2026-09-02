@@ -383,6 +383,18 @@ class TestFilterWebSearchDeployments:
         assert tuple(d["model_info"]["id"] for d in search_result) == ("supported",)
         assert tuple(d["model_info"]["id"] for d in fetch_result) == ("supported",)
 
+    def test_openai_dated_web_search_types_filter_unsupported(self, sample_deployments):
+        dated_search: Final = filter_web_search_deployments(
+            sample_deployments, {"tools": [{"type": "web_search_2025_08_26"}]}
+        )
+        dated_preview: Final = filter_web_search_deployments(
+            sample_deployments, {"tools": [{"type": "web_search_preview_2025_03_11"}]}
+        )
+        assert isinstance(dated_search, list)
+        assert isinstance(dated_preview, list)
+        assert "deployment-3" not in tuple(d["model_info"]["id"] for d in dated_search)
+        assert "deployment-3" not in tuple(d["model_info"]["id"] for d in dated_preview)
+
     def test_custom_server_tool_prefixes_do_not_trigger_native_filtering(self):
         deployments: Final = [
             {"model_info": {"id": "custom", "supports_web_search": False, "supports_web_fetch": False}}

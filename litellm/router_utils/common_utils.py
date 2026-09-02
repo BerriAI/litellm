@@ -175,7 +175,20 @@ def _is_server_tool_type(tool: object, family: str) -> bool:
         return True
     prefix: Final = f"{family}_"
     version_suffix: Final = tool_type[len(prefix) :] if tool_type.startswith(prefix) else ""
-    return bool(version_suffix) and version_suffix.isdigit()
+    preview_prefix: Final = "preview_"
+    version_value: Final = (
+        version_suffix[len(preview_prefix) :]
+        if family == "web_search" and version_suffix.startswith(preview_prefix)
+        else version_suffix
+    )
+    date_parts: Final = version_value.split("_")
+    compact_date: Final = len(version_value) == 8 and version_value.isdigit()
+    underscored_date: Final = (
+        len(date_parts) == 3
+        and tuple(len(part) for part in date_parts) == (4, 2, 2)
+        and all(part.isdigit() for part in date_parts)
+    )
+    return compact_date or underscored_date
 
 
 def _deployment_supports_web_search(deployment: dict) -> bool:
