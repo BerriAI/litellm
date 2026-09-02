@@ -17,6 +17,9 @@ from litellm.types.utils import StandardPassThroughResponseObject
 from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
+from .llm_provider_handlers.gemini_passthrough_logging_handler import (
+    GeminiPassthroughLoggingHandler,
+)
 from .llm_provider_handlers.openai_passthrough_logging_handler import (
     OpenAIPassthroughLoggingHandler,
 )
@@ -62,6 +65,19 @@ class PassThroughStreamingHandler:
             route_streaming_logging or PassThroughStreamingHandler._route_streaming_logging_to_handler
         )
         raw_bytes: Final[list[bytes]] = []
+
+        def _build_logging_coroutine() -> Coroutine[None, None, None]:
+            return resolved_route_streaming_logging(
+                litellm_logging_obj=litellm_logging_obj,
+                passthrough_success_handler_obj=passthrough_success_handler_obj,
+                url_route=url_route,
+                request_body=request_body or {},
+                endpoint_type=endpoint_type,
+                start_time=start_time,
+                raw_bytes=raw_bytes,
+                end_time=datetime.now(),
+            )
+
         logging_scheduled = False
         model_name: Final = PassThroughStreamingHandler._extract_model_for_cost_injection(
             request_body=request_body,
@@ -111,6 +127,21 @@ class PassThroughStreamingHandler:
                         )
                 if pending:
                     yield pending
+            # Stream completed cleanly.  When the proxy armed deferred
+            # dispatch (post-call guardrails active), park the logging
+            # coroutine on logging_obj instead of enqueueing now, so
+            # ProxyLogging._fire_deferred_stream_logging fires it after
+            # guardrail end-of-stream blocks populate guardrail_information.
+            # Disconnect/exception paths skip this and fall through to the
+            # immediate enqueue in ``finally`` to keep partial billing
+            # (LIT-2642).
+            if (
+                getattr(litellm_logging_obj, "_on_deferred_stream_complete", None) is not None
+                and raw_bytes
+                and response.status_code < 400
+            ):
+                logging_scheduled = True
+                litellm_logging_obj._deferred_stream_complete_args = (_build_logging_coroutine(),)
         except Exception as e:
             verbose_proxy_logger.error("Error in chunk_processor: %s", e)
             raise
@@ -125,18 +156,7 @@ class PassThroughStreamingHandler:
             if not logging_scheduled and raw_bytes and response.status_code < 400:
                 logging_scheduled = True
                 try:
-                    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-                        async_coroutine=resolved_route_streaming_logging(
-                            litellm_logging_obj=litellm_logging_obj,
-                            passthrough_success_handler_obj=passthrough_success_handler_obj,
-                            url_route=url_route,
-                            request_body=request_body or {},
-                            endpoint_type=endpoint_type,
-                            start_time=start_time,
-                            raw_bytes=raw_bytes,
-                            end_time=datetime.now(),
-                        )
-                    )
+                    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=_build_logging_coroutine())
                 except Exception as e:
                     verbose_proxy_logger.error("Error scheduling chunk_processor logging: %s", e)
 
@@ -243,6 +263,26 @@ class PassThroughStreamingHandler:
             )
             standard_logging_response_object = vertex_passthrough_logging_handler_result["result"]
             kwargs = vertex_passthrough_logging_handler_result["kwargs"]
+        elif endpoint_type == EndpointType.GEMINI:
+            gemini_passthrough_logging_handler_result: Final = (
+                GeminiPassthroughLoggingHandler._handle_logging_gemini_collected_chunks(  # pyright: ignore[reportPrivateUsage]  # mirrors sibling handler dispatch
+                    litellm_logging_obj=litellm_logging_obj,
+                    passthrough_success_handler_obj=passthrough_success_handler_obj,
+                    url_route=url_route,
+                    request_body=request_body,
+                    endpoint_type=endpoint_type,
+                    start_time=start_time,
+                    all_chunks=all_chunks,
+                    end_time=end_time,
+                    model=model,
+                )
+            )
+            standard_logging_response_object = (  # rebind-ok: branch bind in shared if/elif dispatch
+                gemini_passthrough_logging_handler_result["result"]
+            )
+            kwargs = (  # rebind-ok: branch bind in shared if/elif dispatch
+                gemini_passthrough_logging_handler_result["kwargs"]
+            )
         elif endpoint_type == EndpointType.OPENAI:
             openai_passthrough_logging_handler_result: Final = (
                 OpenAIPassthroughLoggingHandler._handle_logging_openai_collected_chunks(

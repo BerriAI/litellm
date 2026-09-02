@@ -1,3 +1,4 @@
+import base64
 import contextlib
 import json
 import os
@@ -11,11 +12,14 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import pytest
 from fastapi import HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from starlette.datastructures import FormData
 
 
 import litellm
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
     RouteChecks,
@@ -28,6 +32,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     get_azure_ai_search_index_from_endpoint,
     get_vertex_base_url,
     is_azure_ai_search_service_level_index_create,
+    gigachat_proxy_route,
     llm_passthrough_factory_proxy_route,
     milvus_proxy_route,
     mistral_proxy_route,
@@ -37,6 +42,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     vllm_proxy_route,
 )
 from litellm.proxy._types import LitellmUserRoles, SpecialHeaders, UserAPIKeyAuth
+from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
 
@@ -175,7 +181,7 @@ class TestBaseOpenAIPassThroughHandler:
             assert result["api-key"] == "test_api_key"
             assert result["test-header"] == "value"
 
-    @patch(
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
     )
     async def test_base_openai_pass_through_handler(self, mock_create_pass_through):
@@ -592,7 +598,7 @@ class TestVertexAIPassThroughHandler:
                 "method": "POST",
                 "path": endpoint,
                 "headers": [
-                    (b"authorization", b"Bearer test-creds"),
+                    (b"authorization", b"Bearer sk-test-creds"),
                 ],
             }
         )
@@ -617,7 +623,7 @@ class TestVertexAIPassThroughHandler:
         ):
             mock_ensure_token.return_value = ("test-auth-header", test_project)
             mock_get_token.return_value = (test_token, "")
-            mock_auth.return_value = MagicMock()
+            mock_auth.return_value = UserAPIKeyAuth(api_key="sk-test-creds")
 
             with pytest.raises(HTTPException) as exc_info:
                 await vertex_proxy_route(
@@ -1867,7 +1873,10 @@ class TestBedrockAgentRuntimePassthroughToggle:
 
         with (
             patch("litellm.proxy.proxy_server.general_settings", general_settings),
-            patch("litellm.utils.get_secret", return_value="us-east-1"),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
+                return_value="us-east-1",
+            ),
             patch("litellm.llms.bedrock.chat.BedrockConverseLLM", return_value=bedrock_llm),
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_request_copy",
@@ -1917,7 +1926,10 @@ class TestBedrockAgentRuntimePassthroughToggle:
     async def test_model_invoke_still_routed_when_agent_runtime_disabled(self):
         with (
             patch("litellm.proxy.proxy_server.general_settings", self.DISABLED),
-            patch("litellm.utils.get_secret", return_value="us-east-1"),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
+                return_value="us-east-1",
+            ),
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_request_copy",
                 Mock(),
@@ -2013,15 +2025,15 @@ class TestLLMPassthroughFactoryProxyRoute:
 
 class TestVLLMProxyRoute:
     @pytest.mark.asyncio
-    @patch(
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
         return_value={"model": "router-model", "stream": False},
     )
-    @patch(
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
         return_value=True,
     )
-    @patch("litellm.proxy.proxy_server.llm_router")
+    @patch("litellm.proxy.proxy_server.llm_router")  # test-quality-ok: patching litellm internal for unit test isolation
     async def test_vllm_proxy_route_with_router_model(
         self, mock_llm_router, mock_is_router, mock_get_body
     ):
@@ -2046,15 +2058,15 @@ class TestVLLMProxyRoute:
         mock_llm_router.allm_passthrough_route.assert_awaited_once()
 
     @pytest.mark.asyncio
-    @patch(
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
         return_value={"model": "other-model"},
     )
-    @patch(
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
         return_value=False,
     )
-    @patch(
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.llm_passthrough_factory_proxy_route"
     )
     async def test_vllm_proxy_route_fallback_to_factory(
@@ -2074,6 +2086,312 @@ class TestVLLMProxyRoute:
 
         assert result == "factory_success"
         mock_factory_route.assert_awaited_once()
+
+
+class TestGigachatProxyRoute:
+    @pytest.mark.asyncio
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
+        return_value={"model": "router-model", "stream": False},
+    )
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+        return_value=True,
+    )
+    @patch("litellm.proxy.proxy_server.llm_router")  # test-quality-ok: patching litellm internal for unit test isolation
+    async def test_gigachat_proxy_route_with_router_model(
+        self, mock_llm_router, mock_is_router, mock_get_body
+    ):
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.query_params = {}
+        mock_fastapi_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+        mock_llm_router.allm_passthrough_route = AsyncMock(
+            return_value=httpx.Response(200, json={"response": "success"})
+        )
+
+        result = await gigachat_proxy_route(
+            endpoint="/chat/completions",
+            request=mock_request,
+            fastapi_response=mock_fastapi_response,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        mock_is_router.assert_called_once()
+        mock_llm_router.allm_passthrough_route.assert_awaited_once()
+        assert isinstance(result, Response)
+
+    @pytest.mark.asyncio
+    async def test_gigachat_router_handler_keeps_cached_body_and_payload_metadata_pristine(self):
+        """Regression: auth-metadata injection must not leak into the cached parsed body or the upstream payload."""
+        from litellm.proxy.common_utils.http_parsing_utils import get_request_body
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            handle_gigachat_passthrough_router_model,
+        )
+
+        body = json.dumps(
+            {
+                "model": "gigachat-router",
+                "messages": [{"role": "user", "content": "hi"}],
+                "metadata": {"client_tag": "user-supplied"},
+            }
+        ).encode()
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "headers": [(b"content-type", b"application/json")],
+            "query_string": b"",
+            "path": "/gigachat/chat/completions",
+        }
+
+        async def receive():
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        request = Request(scope, receive)
+        request_body = await get_request_body(request)
+
+        captured: dict = {}
+
+        class _CapturingProcessor:
+            def __init__(self, data: dict):
+                captured["data"] = data
+
+            async def base_passthrough_process_llm_request(self, **kwargs):
+                return Response(content=b"{}", status_code=200)
+
+        with patch(  # test-quality-ok: patching litellm internal for unit test isolation
+            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+            _CapturingProcessor,
+        ):
+            await handle_gigachat_passthrough_router_model(
+                model="gigachat-router",
+                endpoint="/chat/completions",
+                request=request,
+                request_body=request_body,
+                fastapi_response=Response(),
+                llm_router=MagicMock(),
+                user_api_key_dict=UserAPIKeyAuth(user_id="user-1", team_id="team-1"),
+                proxy_logging_obj=MagicMock(),
+                general_settings={},
+                proxy_config=MagicMock(),
+                select_data_generator=MagicMock(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                version=None,
+            )
+
+        data = captured["data"]
+        assert data["json"] is request_body
+        assert request_body["metadata"] == {"client_tag": "user-supplied"}
+        assert data["metadata"]["client_tag"] == "user-supplied"
+        assert data["metadata"]["user_api_key_user_id"] == "user-1"
+        assert data["metadata"]["user_api_key_team_id"] == "team-1"
+        cached_reread = await get_request_body(request)
+        assert cached_reread["metadata"] == {"client_tag": "user-supplied"}
+
+    @pytest.mark.asyncio
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
+        return_value={"model": "other-model"},
+    )
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+        return_value=False,
+    )
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn",
+        new_callable=AsyncMock,
+        return_value=False,
+    )
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
+        "litellm.llms.gigachat.authenticator.get_access_token",
+        return_value="gigachat-test-token",
+    )
+    async def test_gigachat_proxy_route_fallback_forwards_to_gigachat_api(
+        self,
+        mock_get_token,
+        mock_is_streaming,
+        mock_is_router,
+        mock_get_body,
+        monkeypatch,
+    ):
+        monkeypatch.delenv("GIGACHAT_API_BASE", raising=False)
+        mock_request = MagicMock(spec=Request)
+        mock_fastapi_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        captured_kwargs = {}
+
+        async def fake_endpoint(request, fastapi_response, user_api_key_dict):
+            return Response(content=b'{"response": "success"}', status_code=200)
+
+        def fake_create_pass_through_route(**kwargs):
+            captured_kwargs.update(kwargs)
+            return fake_endpoint
+
+        with patch(  # test-quality-ok: patching litellm internal for unit test isolation
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            side_effect=fake_create_pass_through_route,
+        ):
+            result = await gigachat_proxy_route(
+                endpoint="/chat/completions",
+                request=mock_request,
+                fastapi_response=mock_fastapi_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+        assert isinstance(result, Response)
+        assert result.status_code == 200
+        assert captured_kwargs["target"] == "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
+        assert captured_kwargs["custom_headers"] == {"Authorization": "Bearer gigachat-test-token"}
+
+    @pytest.mark.asyncio
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
+        return_value={},
+    )
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_streaming_request_fn",
+        new_callable=AsyncMock,
+        return_value=False,
+    )
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
+        "litellm.llms.gigachat.authenticator.get_access_token",
+        return_value="gigachat-test-token",
+    )
+    async def test_gigachat_proxy_route_models_endpoint_without_model(
+        self,
+        mock_get_token,
+        mock_is_streaming,
+        mock_get_body,
+        monkeypatch,
+    ):
+        monkeypatch.delenv("GIGACHAT_API_BASE", raising=False)
+        mock_request = MagicMock(spec=Request)
+        mock_fastapi_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        captured_kwargs = {}
+
+        async def fake_endpoint(request, fastapi_response, user_api_key_dict):
+            return Response(content=b'{"data": []}', status_code=200)
+
+        def fake_create_pass_through_route(**kwargs):
+            captured_kwargs.update(kwargs)
+            return fake_endpoint
+
+        with patch(  # test-quality-ok: patching litellm internal for unit test isolation
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            side_effect=fake_create_pass_through_route,
+        ):
+            result = await gigachat_proxy_route(
+                endpoint="models",
+                request=mock_request,
+                fastapi_response=mock_fastapi_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+        assert isinstance(result, Response)
+        assert result.status_code == 200
+        assert captured_kwargs["target"] == "https://gigachat.devices.sberbank.ru/api/v1/models"
+        assert captured_kwargs["custom_headers"] == {"Authorization": "Bearer gigachat-test-token"}
+
+    @pytest.mark.asyncio
+    async def test_allm_passthrough_streaming_preserves_upstream_headers(self):
+        async def _stream() -> bytes:
+            yield b'data: {"id":"1"}\n\n'
+
+        class MockPassthroughStreamingResponse:
+            def __init__(self):
+                self.status_code = 201
+                self.headers = {
+                    "content-type": "text/event-stream; charset=utf-8",
+                    "x-request-id": "req-123",
+                    "x-ratelimit-remaining-requests": "77",
+                    "transfer-encoding": "chunked",
+                    "content-encoding": "gzip",
+                }
+                self._iterator = _stream()
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                return await self._iterator.__anext__()
+
+        processor = ProxyBaseLLMRequestProcessing(
+            data={
+                "model": "some-provider/model",
+                "stream": True,
+                "litellm_call_id": "call-123",
+                "litellm_logging_obj": MagicMock(litellm_call_id="call-123"),
+            }
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {"content-type": "application/json"}
+        mock_fastapi_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict.allowed_model_region = ""
+        mock_user_api_key_dict.spend = 0.0
+        mock_proxy_logging_obj = MagicMock()
+        mock_proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        mock_proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        mock_proxy_logging_obj.post_call_response_headers_hook = AsyncMock(
+            return_value={"x-test-callback-header": "callback-value"}
+        )
+
+        streaming_response = MockPassthroughStreamingResponse()
+
+        async def _fake_route_request(*args, **kwargs):
+            async def _inner():
+                return streaming_response
+
+            return _inner()
+
+        with patch.object(
+            processor,
+            "common_processing_pre_call_logic",
+            new=AsyncMock(
+                return_value=(
+                    processor.data,
+                    processor.data["litellm_logging_obj"],
+                )
+            ),
+        ), patch(  # test-quality-ok: patching litellm internal for unit test isolation
+            "litellm.proxy.common_request_processing.route_request",
+            new=_fake_route_request,
+        ), patch(  # test-quality-ok: patching litellm internal for unit test isolation
+            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing.get_custom_headers",
+            return_value={"x-litellm-call-id": "call-123"},
+        ):
+            result = await processor.base_passthrough_process_llm_request(
+                request=mock_request,
+                fastapi_response=mock_fastapi_response,
+                user_api_key_dict=mock_user_api_key_dict,
+                proxy_logging_obj=mock_proxy_logging_obj,
+                general_settings={},
+                proxy_config=MagicMock(),
+                select_data_generator=MagicMock(),
+                llm_router=None,
+                model="some-provider/model",
+                version="test-version",
+            )
+
+        assert isinstance(result, StreamingResponse)
+        assert result.status_code == 201
+        assert result.headers["content-type"] == "text/event-stream; charset=utf-8"
+        assert result.headers["x-request-id"] == "req-123"
+        assert result.headers["x-ratelimit-remaining-requests"] == "77"
+        assert result.headers["x-litellm-call-id"] == "call-123"
+        assert result.headers["x-test-callback-header"] == "callback-value"
+        assert "transfer-encoding" not in result.headers
+        assert "content-encoding" not in result.headers
 
 
 class TestForwardHeaders:
@@ -3342,14 +3660,14 @@ class TestVertexRawPredictStreamingClassification:
             ),
             mock.patch(f"{module}.create_pass_through_route", side_effect=fake_create_pass_through_route),
             mock.patch(f"{module}.get_litellm_virtual_key", return_value="Bearer test-key"),
-            mock.patch(f"{module}.user_api_key_auth", new=AsyncMock(return_value={"api_key": "test-key"})),
+            mock.patch(f"{module}.user_api_key_auth", new=AsyncMock(return_value=UserAPIKeyAuth(api_key="test-key"))),
             mock.patch(f"{module}.get_vertex_pass_through_handler", return_value=mock_handler),
         ):
             await vertex_proxy_route(
                 endpoint=endpoint,
                 request=request,
                 fastapi_response=Response(),
-                user_api_key_dict=UserAPIKeyAuth(token="test-key"),
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
             )
 
         assert captured, "create_pass_through_route was never called"
@@ -3447,6 +3765,13 @@ def test_is_passthrough_request_streaming_tolerates_non_object_bodies(request_bo
     assert is_passthrough_request_streaming(request_body) is expected
 
 
+def _unsigned_jwt(claims: Mapping[str, str]) -> str:
+    def segment(payload: Mapping[str, str]) -> str:
+        return base64.urlsafe_b64encode(json.dumps(dict(payload)).encode()).rstrip(b"=").decode()
+
+    return ".".join((segment({"alg": "RS256", "typ": "JWT"}), segment(claims), "c2lnbmF0dXJl"))
+
+
 class TestVertexCredentiallessPassthroughVirtualKeyLeak:
     """Regression coverage for LIT-5997.
 
@@ -3466,6 +3791,12 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
     genuine bring-your-own Google credential that must still pass through. The
     by-value strip also covers a virtual key sent in the operator-configured
     ``general_settings.litellm_key_header_name``, whatever that header is named.
+
+    The by-value strip keys off what actually authenticated the caller (the
+    master key, or the LiteLLM key whose hash ``user_api_key_auth`` resolved as
+    ``api_key``), never off header precedence: a custom auth or JWT that
+    authenticated the caller without consuming ``Authorization`` leaves the
+    caller's own Google token there, and it must keep flowing.
     """
 
     VKEY = "sk-litellm-victim-key"
@@ -3475,8 +3806,14 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
     )
 
     async def _run(
-        self, monkeypatch, headers: list[tuple[bytes, bytes]]
+        self,
+        monkeypatch,
+        headers: list[tuple[bytes, bytes]],
+        authenticated: UserAPIKeyAuth | None = None,
+        master_key: str | None = "sk-master-1234",
     ) -> tuple[HTTPException | None, dict | None]:
+        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", master_key)
+        caller: Final = authenticated if authenticated is not None else UserAPIKeyAuth(api_key=self.VKEY)
         from litellm.proxy.pass_through_endpoints.passthrough_endpoint_router import (
             PassthroughEndpointRouter,
         )
@@ -3509,7 +3846,7 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         raised: HTTPException | None = None
         with (
             mock.patch(f"{module}.create_pass_through_route", side_effect=fake_create_pass_through_route),
-            mock.patch(f"{module}.user_api_key_auth", new=AsyncMock(return_value=UserAPIKeyAuth(token="hashed"))),
+            mock.patch(f"{module}.user_api_key_auth", new=AsyncMock(return_value=caller)),
             mock.patch(f"{module}.get_vertex_pass_through_handler", return_value=mock_handler),
         ):
             try:
@@ -3517,7 +3854,7 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
                     endpoint=self.ENDPOINT,
                     request=request,
                     fastapi_response=Response(),
-                    user_api_key_dict=UserAPIKeyAuth(token="hashed"),
+                    user_api_key_dict=caller,
                 )
             except HTTPException as exc:
                 raised = exc
@@ -3766,6 +4103,135 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
         )
         assert forwarded is None, "a virtual key in the mapped-route litellm_user_api_key header must be dropped, not forwarded"
         assert raised is not None and raised.status_code == 401
+
+    GOOGLE_OAUTH_TOKEN = "ya29.byo-google-oauth-token"
+
+    LITELLM_JWT_CLAIMS = MappingProxyType({"sub": "jwt-subject", "iss": "https://idp.example.com"})
+    LITELLM_JWT = _unsigned_jwt(LITELLM_JWT_CLAIMS)
+    GOOGLE_SERVICE_ACCOUNT_JWT = _unsigned_jwt(
+        {
+            "sub": "vertex-caller@my-proj.iam.gserviceaccount.com",
+            "iss": "vertex-caller@my-proj.iam.gserviceaccount.com",
+            "aud": "https://aiplatform.googleapis.com/",
+        }
+    )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("master_key", "authenticated"),
+        [
+            pytest.param(
+                "sk-master-1234",
+                UserAPIKeyAuth(api_key="best-api-key-ever", user_role=LitellmUserRoles.PROXY_ADMIN),
+                id="custom-auth-returning-its-own-identifier",
+            ),
+            pytest.param(
+                "sk-master-1234",
+                UserAPIKeyAuth(api_key=None, user_id="jwt-subject", jwt_claims=dict(LITELLM_JWT_CLAIMS)),
+                id="jwt-auth",
+            ),
+            pytest.param(None, UserAPIKeyAuth(api_key=GOOGLE_OAUTH_TOKEN), id="no-master-key-echoes-raw-header"),
+        ],
+    )
+    async def test_google_token_in_authorization_is_forwarded_when_auth_did_not_consume_it(
+        self, monkeypatch, master_key: str | None, authenticated: UserAPIKeyAuth
+    ):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"authorization", f"Bearer {self.GOOGLE_OAUTH_TOKEN}".encode()),
+                (b"content-type", b"application/json"),
+            ],
+            authenticated=authenticated,
+            master_key=master_key,
+        )
+        assert raised is None, f"the caller's own Google token must not be mistaken for a LiteLLM key: {raised}"
+        assert forwarded is not None
+        assert forwarded.get("authorization") == f"Bearer {self.GOOGLE_OAUTH_TOKEN}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("credential", "authenticated"),
+        [
+            pytest.param("modified_key", UserAPIKeyAuth(api_key="modified_key"), id="custom-auth-echoing-opaque-credential"),
+            pytest.param(
+                LITELLM_JWT,
+                UserAPIKeyAuth(api_key=LITELLM_JWT, user_id="jwt-subject"),
+                id="custom-auth-echoing-jwt",
+            ),
+            pytest.param(
+                LITELLM_JWT,
+                UserAPIKeyAuth(api_key=None, user_id="jwt-subject", jwt_claims=dict(LITELLM_JWT_CLAIMS)),
+                id="jwt-auth",
+            ),
+            pytest.param(
+                LITELLM_JWT,
+                UserAPIKeyAuth(
+                    api_key=None,
+                    user_id="jwt-subject",
+                    jwt_claims={
+                        **LITELLM_JWT_CLAIMS,
+                        JWTHandler.LITELLM_JWT_ISSUER_CLAIM: "https://idp.example.com",
+                        JWTHandler.LITELLM_USER_ID_CLAIM: "jwt-subject",
+                    },
+                ),
+                id="multi-issuer-jwt-auth-normalized-claims",
+            ),
+        ],
+    )
+    async def test_non_sk_litellm_credential_that_authenticated_is_rejected_not_forwarded(
+        self, monkeypatch, credential: str, authenticated: UserAPIKeyAuth
+    ):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"authorization", f"Bearer {credential}".encode()), (b"content-type", b"application/json")],
+            authenticated=authenticated,
+        )
+        assert forwarded is None, "the credential that authenticated the caller must never reach the upstream forwarder"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_jwt_authenticated_caller_keeps_a_different_byo_google_jwt(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"x-litellm-api-key", self.LITELLM_JWT.encode()),
+                (b"authorization", f"Bearer {self.GOOGLE_SERVICE_ACCOUNT_JWT}".encode()),
+                (b"content-type", b"application/json"),
+            ],
+            authenticated=UserAPIKeyAuth(api_key=None, user_id="jwt-subject", jwt_claims=dict(self.LITELLM_JWT_CLAIMS)),
+        )
+        assert raised is None, f"a Google JWT that is not the one that authenticated must keep flowing: {raised}"
+        assert forwarded is not None
+        assert forwarded.get("authorization") == f"Bearer {self.GOOGLE_SERVICE_ACCOUNT_JWT}"
+        assert "x-litellm-api-key" not in forwarded
+
+    @pytest.mark.asyncio
+    async def test_master_key_in_authorization_alone_is_rejected(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [(b"authorization", b"Bearer sk-master-1234"), (b"content-type", b"application/json")],
+            authenticated=UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS, user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        assert forwarded is None, "the master key must never reach the upstream forwarder"
+        assert raised is not None and raised.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_master_key_is_stripped_and_byo_x_goog_api_key_forwards(self, monkeypatch):
+        raised, forwarded = await self._run(
+            monkeypatch,
+            [
+                (b"authorization", b"Bearer sk-master-1234"),
+                (b"x-goog-api-key", b"AIza-real-google-api-key"),
+                (b"content-type", b"application/json"),
+            ],
+            authenticated=UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS, user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        assert raised is None
+        assert forwarded is not None
+        assert forwarded.get("x-goog-api-key") == "AIza-real-google-api-key"
+        assert "authorization" not in forwarded
+        assert "sk-master-1234" not in " ".join(f"{name}:{value}" for name, value in forwarded.items())
 
 
 class TestGetAzureAISearchIndexFromEndpoint:
@@ -4470,3 +4936,76 @@ class TestPassthroughRouterModelBudgetReservation:
         )
 
         self._assert_metadata_carries_attribution(captured, user_api_key_dict)
+
+
+class TestAzureRouterModelStreamingDispatch:
+    """
+    Regression: ``llm_router.allm_passthrough_route`` returns an awaited
+    ``AsyncPassthroughStreamingResponse`` for streaming calls, which is no
+    longer an async generator under ``inspect.isasyncgen``. The dispatch's
+    else branch therefore calls ``.aiter_bytes()`` / ``.status_code`` /
+    ``.headers`` on it. The router's ``set_response_headers`` also runs the
+    result through ``prepare_response_for_header_attachment``, which used to
+    wrap it in ``HiddenParamsAsyncIteratorWrapper`` (no ``aiter_bytes``), so
+    every streaming Azure router-model request 500'd with
+    ``AttributeError: aiter_bytes``; ``_hidden_params`` on the streaming
+    response keeps it unwrapped.
+    """
+
+    @pytest.mark.asyncio
+    async def test_azure_router_model_streaming_returns_streaming_response(self, monkeypatch):
+        import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.passthrough.main import AsyncPassthroughStreamingResponse
+
+        upstream_body = b"data: hello\n\n"
+
+        async def _upstream_response() -> httpx.Response:
+            upstream_request = httpx.Request(
+                "POST",
+                "https://my-azure.openai.azure.com/openai/deployments/gpt-5/chat/completions",
+            )
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=upstream_body,
+                request=upstream_request,
+            )
+
+        logging_obj = MagicMock()
+        logging_obj.async_flush_passthrough_collected_chunks = AsyncMock()
+
+        from litellm.router_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
+
+        class StreamingRouter:
+            async def allm_passthrough_route(self, **kwargs):
+                streaming_response = await AsyncPassthroughStreamingResponse(
+                    response=_upstream_response(),
+                    litellm_logging_obj=logging_obj,
+                    provider_config=MagicMock(),
+                )
+                return prepare_response_for_header_attachment(streaming_response)
+
+        async def fake_get_request_body(_request):
+            return {"model": "gpt-5", "stream": True}
+
+        monkeypatch.setattr(proxy_server, "llm_router", StreamingRouter())
+        monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
+        monkeypatch.setattr(ep, "is_passthrough_request_using_router_model", lambda *a, **k: True)
+
+        request = MagicMock(spec=Request)
+        request.method = "POST"
+        request.headers = {"content-type": "application/json"}
+        request.query_params = {}
+
+        result = await azure_proxy_route(
+            endpoint="openai/deployments/gpt-5/chat/completions",
+            request=request,
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        assert isinstance(result, StreamingResponse)
+        assert result.status_code == 200
+        body = b"".join([chunk async for chunk in result.body_iterator])
+        assert body == upstream_body

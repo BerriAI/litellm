@@ -108,7 +108,7 @@ beforeEach(() => {
 test("renders organization view after loading data", async () => {
   mockUseOrganization.mockReturnValue({ data: mockOrg, isLoading: false } as any);
 
-  const { findAllByText } = renderWithProviders(
+  renderWithProviders(
     <OrganizationInfoView
       organizationId="org_123"
       onClose={() => {}}
@@ -120,7 +120,7 @@ test("renders organization view after loading data", async () => {
     />,
   );
 
-  const [orgName] = await findAllByText("Acme Corp");
+  const [orgName] = await screen.findAllByText("Acme Corp");
   expect(orgName).toBeInTheDocument();
 });
 

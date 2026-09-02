@@ -33,6 +33,15 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     TeamMappings,
 )
 
+_SSO_PROVIDER_ENV_VARS = (
+    "DISABLE_ADMIN_UI",
+    "MICROSOFT_CLIENT_ID",
+    "GOOGLE_CLIENT_ID",
+    "GENERIC_CLIENT_ID",
+    "SAML_IDP_METADATA_URL",
+    "SAML_IDP_METADATA_XML",
+)
+
 
 def _wire_team_create_tx(prisma_client):
     """`/team/new` inserts the team and mirrors it onto the access groups in one transaction,
@@ -2796,10 +2805,15 @@ class TestCLIKeyRegenerationFlow:
         mock_request.base_url = "https://proxy.example.com/"
         mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {"poll_secret_hash": "h"}
+        env_without_sso_providers = {
+            name: value
+            for name, value in os.environ.items()
+            if name not in _SSO_PROVIDER_ENV_VARS
+        }
 
         async def drive(enabled: bool):
             with (
-                patch.dict(os.environ, {}, clear=True),
+                patch.dict(os.environ, env_without_sso_providers, clear=True),
                 patch("litellm.proxy.proxy_server.premium_user", True),
                 patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
                 patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
@@ -2825,15 +2839,13 @@ class TestCLIKeyRegenerationFlow:
                     return_value=None,
                 ) as mock_get_cli_state,
             ):
-                try:
-                    await google_login(
-                        request=mock_request,
-                        source="litellm-cli",
-                        key="cli-validsessionkey123456",
-                        user_code="WXYZ-2345",
-                    )
-                except Exception:
-                    pass
+                await google_login(
+                    request=mock_request,
+                    source="litellm-cli",
+                    key="cli-validsessionkey123456",
+                    user_code="WXYZ-2345",
+                )
+            assert mock_get_cli_state.called
             return mock_get_cli_state.call_args.kwargs["user_code"]
 
         assert await drive(enabled=True) == "WXYZ-2345"
