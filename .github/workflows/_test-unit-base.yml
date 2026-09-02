@@ -57,9 +57,15 @@ permissions:
 
 jobs:
   run:
-    name: Run tests
+    name: ${{ matrix.python-version == '3.12' && 'Run tests' || format('Run tests (Python {0})', matrix.python-version) }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job-timeout-minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
     permissions:
       contents: read
       pull-requests: read
@@ -82,7 +88,7 @@ jobs:
         timeout-minutes: 3
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
       - name: Set up uv
         if: steps.changes.outputs.decision != 'skip'
@@ -99,9 +105,9 @@ jobs:
           path: |
             ~/.cache/uv
             .venv
-          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
+          key: ${{ runner.os }}-uv-py${{ matrix.python-version }}-${{ hashFiles('uv.lock') }}
           restore-keys: |
-            ${{ runner.os }}-uv-
+            ${{ runner.os }}-uv-py${{ matrix.python-version }}-
 
       - name: Cache the Rust build
         if: steps.changes.outputs.decision != 'skip'
@@ -113,6 +119,7 @@ jobs:
         timeout-minutes: 8
         run: |
           .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml
+          uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
 
       - name: Cache Prisma binaries
         if: steps.changes.outputs.decision != 'skip'
@@ -134,13 +141,7 @@ jobs:
           WORKERS: ${{ inputs.workers }}
           RERUNS: ${{ inputs.reruns }}
           DIST: ${{ inputs.dist }}
-          # coverage.py's sys.monitoring backend (PEP 669), the cheapest core it has.
-          # It is only the default from Python 3.14, and these shards run 3.12, so it
-          # has to be asked for. Coverage refuses it when branch measurement is on
-          # (`branch_right_left` needs > 3.14.0a5) and falls back to the slow core with
-          # a `no-sysmon` warning, so turning on `branch = true` here means giving this
-          # back until the runners move to 3.14.
-          COVERAGE_CORE: sysmon
+          COVERAGE_CORE: ${{ contains(fromJSON('["3.10", "3.11"]'), matrix.python-version) && 'ctrace' || 'sysmon' }}
         run: |
           if [ "${WORKERS}" = "0" ]; then
             uv run --no-sync pytest ${TEST_PATH:?} \
@@ -167,7 +168,7 @@ jobs:
           fi
 
       - name: Save coverage report
-        if: always() && steps.changes.outputs.decision != 'skip'
+        if: always() && matrix.python-version == '3.12' && steps.changes.outputs.decision != 'skip'
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: coverage-${{ inputs.artifact-name }}-${{ github.run_id }}-${{ github.run_attempt }}
