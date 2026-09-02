@@ -5260,6 +5260,20 @@ def test_assistant_turn_without_a_content_key_does_not_gain_one() -> None:
     assert "content" not in sent, f"content was invented for a caller that never sent the key: {sent}"
 
 
+def test_assistant_turn_that_did_write_prose_forwards_that_prose() -> None:
+    """Exempting content from the None cleanup must not touch a turn that has real text, whether the
+    caller sends a dict or the Pydantic message it got back from a previous call."""
+    from_dict: Final = _assistant_turn_reaching_the_openai_sdk(
+        {"role": "assistant", "content": "calling calc", "tool_calls": _TOOL_CALL_ONLY_TURN_TOOL_CALLS}
+    )
+    from_pydantic: Final = _assistant_turn_reaching_the_openai_sdk(
+        Message(role="assistant", content="calling calc", tool_calls=_TOOL_CALL_ONLY_TURN_TOOL_CALLS)
+    )
+
+    assert from_dict["content"] == "calling calc"
+    assert from_pydantic["content"] == "calling calc"
+
+
 def test_message_fields_other_than_content_are_still_stripped_when_none() -> None:
     """None-valued message fields are dropped because providers reject e.g. function_call: None. Only
     content is exempt, so widening the exemption would regress that."""

@@ -7803,7 +7803,7 @@ def convert_to_dict(message: BaseModel | dict) -> dict:
     """
     Converts a message to a dictionary if it's a Pydantic model.
 
-    An explicitly set content=None survives the dump: OpenAI's schema makes content nullable on an
+    A content=None dropped by the dump comes back: OpenAI's schema makes content nullable on an
     assistant tool-call turn, and strict deserializers reject the key being absent
     (https://github.com/BerriAI/litellm/issues/37711).
 
@@ -7815,9 +7815,7 @@ def convert_to_dict(message: BaseModel | dict) -> dict:
     """
     if isinstance(message, BaseModel):
         dumped: Final = message.model_dump(exclude_none=True)
-        if "content" in dumped or "content" not in message.model_fields_set:
-            return dumped
-        return {**dumped, "content": None}
+        return dumped if "content" in dumped else {**dumped, "content": None}
     elif isinstance(message, dict):
         return message
     else:
