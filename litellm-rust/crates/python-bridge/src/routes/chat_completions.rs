@@ -1,64 +1,62 @@
-use std::time::Duration;
+use std::future::Future;
 
-use litellm_core::chat_completions::types::ChatCompletionsRequest;
+use litellm_core::chat_completions::types::{ChatCompletionsRequest, ChatCompletionsResponse};
 use litellm_core::chat_completions::{
     chat_completions as run_chat_completions, chat_completions_decline_reason,
 };
-use litellm_python_interop::from_py;
-use pyo3::exceptions::PyValueError;
+use litellm_core::error::CoreResult;
 use pyo3::prelude::*;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::errors::chat_completions_error_to_pyerr;
-use crate::marshal::{optional_object_to_map, optional_timeout};
+use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty, required_value};
 
-use super::runtime::{run_async, run_sync};
+fn prepare_chat_completions(
+    inputs: ChatCompletionsInputs,
+) -> PyResult<impl Future<Output = CoreResult<ChatCompletionsResponse>> + Send + 'static> {
+    let messages = required_value("messages", inputs.messages, Value::is_array, "list")?;
+    let optional_params = object_or_empty("optional_params", inputs.optional_params)?;
+    let options = RouteOptions::from_python(RouteOptionsInputs {
+        model: inputs.model,
+        api_key: inputs.api_key,
+        api_base: inputs.api_base,
+        custom_llm_provider: inputs.custom_llm_provider,
+        extra_headers: inputs.extra_headers,
+        timeout_seconds: inputs.timeout_seconds,
+    })?;
 
-type MarshaledChatCompletionsInputs = (
-    Value,
-    Map<String, Value>,
-    Option<Map<String, Value>>,
-    Option<Duration>,
-);
-
-fn marshal_chat_completions_inputs(
-    py: Python<'_>,
-    messages: Py<PyAny>,
-    optional_params: Option<Py<PyAny>>,
-    extra_headers: Option<Py<PyAny>>,
-    timeout_seconds: Option<f64>,
-) -> PyResult<MarshaledChatCompletionsInputs> {
-    let messages: Value = from_py(messages.bind(py))?;
-    if !messages.is_array() {
-        return Err(PyValueError::new_err("messages must be a list"));
-    }
-    let optional_params = optional_object_to_map(py, "optional_params", optional_params)?;
-    let extra_headers = match extra_headers {
-        Some(headers) => Some(optional_object_to_map(py, "extra_headers", Some(headers))?),
-        None => None,
-    };
-    Ok((
-        messages,
-        optional_params,
-        extra_headers,
-        optional_timeout(timeout_seconds),
-    ))
+    Ok(async move {
+        let RouteOptions {
+            model,
+            api_key,
+            api_base,
+            custom_llm_provider,
+            extra_headers,
+            timeout,
+        } = options;
+        run_chat_completions(ChatCompletionsRequest {
+            model: &model,
+            messages,
+            optional_params,
+            api_key: api_key.as_deref(),
+            api_base: api_base.as_deref(),
+            custom_llm_provider: custom_llm_provider.as_deref(),
+            extra_headers,
+            timeout,
+        })
+        .await
+    })
 }
 
-/// The decline reason for this request, or `None` when the Rust path accepts
-/// it. Resolves no credentials and performs no I/O, so a host can ask before
-/// committing to either path.
 #[pyfunction]
 #[pyo3(signature = (model, messages, optional_params=None, custom_llm_provider=None))]
 fn chat_completions_decline(
-    py: Python<'_>,
     model: String,
-    messages: Py<PyAny>,
-    optional_params: Option<Py<PyAny>>,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] messages: Value,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
     custom_llm_provider: Option<String>,
 ) -> PyResult<Option<String>> {
-    let messages = from_py(messages.bind(py))?;
-    let optional_params = optional_object_to_map(py, "optional_params", optional_params)?;
+    let optional_params = object_or_empty("optional_params", optional_params)?;
     Ok(chat_completions_decline_reason(
         &model,
         custom_llm_provider.as_deref(),
@@ -68,90 +66,26 @@ fn chat_completions_decline(
     .map(str::to_string))
 }
 
-#[pyfunction]
-#[pyo3(signature = (model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
-#[allow(clippy::too_many_arguments)]
-fn chat_completions(
-    py: Python<'_>,
-    model: String,
-    messages: Py<PyAny>,
-    optional_params: Option<Py<PyAny>>,
-    api_key: Option<String>,
-    api_base: Option<String>,
-    custom_llm_provider: Option<String>,
-    extra_headers: Option<Py<PyAny>>,
-    timeout_seconds: Option<f64>,
-) -> PyResult<Py<PyAny>> {
-    let (messages, optional_params, extra_headers, timeout) = marshal_chat_completions_inputs(
-        py,
-        messages,
-        optional_params,
-        extra_headers,
-        timeout_seconds,
-    )?;
-
-    run_sync(
-        py,
-        async move {
-            run_chat_completions(ChatCompletionsRequest {
-                model: &model,
-                messages,
-                optional_params,
-                api_key: api_key.as_deref(),
-                api_base: api_base.as_deref(),
-                custom_llm_provider: custom_llm_provider.as_deref(),
-                extra_headers,
-                timeout,
-            })
-            .await
-        },
-        chat_completions_error_to_pyerr,
-    )
-}
-
-#[pyfunction]
-#[pyo3(signature = (model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
-#[allow(clippy::too_many_arguments)]
-fn achat_completions(
-    py: Python<'_>,
-    model: String,
-    messages: Py<PyAny>,
-    optional_params: Option<Py<PyAny>>,
-    api_key: Option<String>,
-    api_base: Option<String>,
-    custom_llm_provider: Option<String>,
-    extra_headers: Option<Py<PyAny>>,
-    timeout_seconds: Option<f64>,
-) -> PyResult<Bound<'_, PyAny>> {
-    let (messages, optional_params, extra_headers, timeout) = marshal_chat_completions_inputs(
-        py,
-        messages,
-        optional_params,
-        extra_headers,
-        timeout_seconds,
-    )?;
-
-    run_async(
-        py,
-        async move {
-            run_chat_completions(ChatCompletionsRequest {
-                model: &model,
-                messages,
-                optional_params,
-                api_key: api_key.as_deref(),
-                api_base: api_base.as_deref(),
-                custom_llm_provider: custom_llm_provider.as_deref(),
-                extra_headers,
-                timeout,
-            })
-            .await
-        },
-        chat_completions_error_to_pyerr,
-    )
-}
-
-pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(chat_completions_decline, module)?)?;
-    module.add_function(wrap_pyfunction!(chat_completions, module)?)?;
-    module.add_function(wrap_pyfunction!(achat_completions, module)?)
+bridge_route! {
+    sync = chat_completions,
+    asynchronous = achat_completions,
+    inputs = ChatCompletionsInputs,
+    required = {
+        model: String,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)]
+        messages: Value,
+    },
+    optional = {
+        #[pyo3(from_py_with = litellm_python_interop::from_py)]
+        optional_params: Option<Value>,
+        api_key: Option<String>,
+        api_base: Option<String>,
+        custom_llm_provider: Option<String>,
+        #[pyo3(from_py_with = litellm_python_interop::from_py)]
+        extra_headers: Option<Value>,
+        timeout_seconds: Option<f64>,
+    },
+    prepare = prepare_chat_completions,
+    errors = chat_completions_error_to_pyerr,
+    extra = [chat_completions_decline],
 }
