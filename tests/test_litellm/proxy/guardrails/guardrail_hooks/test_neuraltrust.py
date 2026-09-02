@@ -102,14 +102,16 @@ class TestNeuralTrustGuardrail:
     @pytest.mark.asyncio
     async def test_omits_session_id_without_conversation_session(self) -> None:
         guardrail = _guardrail()
+        inputs: GenericGuardrailAPIInputs = {"texts": ["hello"]}
         mock_post = AsyncMock(return_value=_response({"status": "allow"}))
         with patch.object(guardrail.async_handler, "post", mock_post):
-            await guardrail.apply_guardrail(
-                inputs={"texts": ["hello"]},
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
                 request_data={},
                 input_type="request",
                 logging_obj=_logging(),
             )
+        assert result == inputs
         assert "session_id" not in mock_post.call_args.kwargs["json"]
 
     @pytest.mark.asyncio
@@ -119,14 +121,16 @@ class TestNeuralTrustGuardrail:
             guardrail_name="neuraltrust",
             event_hook="pre_call",
         )
+        inputs: GenericGuardrailAPIInputs = {"texts": ["hello"]}
         mock_post = AsyncMock(return_value=_response({"status": "allow"}))
         with patch.object(guardrail.async_handler, "post", mock_post):
-            await guardrail.apply_guardrail(
-                inputs={"texts": ["hello"]},
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
                 request_data={},
                 input_type="request",
                 logging_obj=_logging(),
             )
+        assert result == inputs
         assert "collector_key" not in mock_post.call_args.kwargs["json"]
 
     @pytest.mark.asyncio
@@ -404,14 +408,16 @@ class TestNeuralTrustGuardrail:
     async def test_forwards_tools(self) -> None:
         guardrail = _guardrail()
         tools = [{"type": "function", "function": {"name": "search", "parameters": {}}}]
+        inputs: GenericGuardrailAPIInputs = {"texts": ["hello"], "tools": tools}
         mock_post = AsyncMock(return_value=_response({"status": "allow"}))
         with patch.object(guardrail.async_handler, "post", mock_post):
-            await guardrail.apply_guardrail(
-                inputs={"texts": ["hello"], "tools": tools},
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
                 request_data={},
                 input_type="request",
                 logging_obj=_logging(),
             )
+        assert result == inputs
         assert mock_post.call_args.kwargs["json"]["payload"]["tools"] == tools
 
     @pytest.mark.asyncio
@@ -568,14 +574,16 @@ class TestNeuralTrustGuardrail:
     @pytest.mark.asyncio
     async def test_custom_timeout_is_passed_to_client(self) -> None:
         guardrail = _guardrail(timeout=12)
+        inputs: GenericGuardrailAPIInputs = {"texts": ["hello"]}
         mock_post = AsyncMock(return_value=_response({"status": "allow"}))
         with patch.object(guardrail.async_handler, "post", mock_post):
-            await guardrail.apply_guardrail(
-                inputs={"texts": ["hello"]},
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
                 request_data={},
                 input_type="request",
                 logging_obj=_logging(),
             )
+        assert result == inputs
         assert mock_post.call_args.kwargs["timeout"] == 12.0
 
     def test_get_config_model(self) -> None:

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping, Sequence
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
@@ -52,10 +51,15 @@ def _message_text(message: Mapping[str, object]) -> str | None:
     return content if isinstance(content, str) and content else None
 
 
-def _copy_messages(messages: Sequence[object]) -> tuple[Mapping[str, object], ...] | None:
-    if not all(isinstance(message, Mapping) for message in messages):
+def _copy_message(value: object) -> Mapping[str, object] | None:
+    if not isinstance(value, Mapping):
         return None
-    return tuple(dict(message) for message in messages)  # mutable-ok: shallow copies for write-back
+    return {str(key): item for key, item in value.items()}  # mutable-ok: shallow copy for write-back
+
+
+def _copy_messages(messages: Sequence[object]) -> tuple[Mapping[str, object], ...] | None:
+    copied: Final = tuple(copy for message in messages if (copy := _copy_message(message)) is not None)
+    return copied if len(copied) == len(messages) else None
 
 
 def _texts_from_messages(messages: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
@@ -161,8 +165,8 @@ class NeuralTrustGuardrail(CustomGuardrail):
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         timeout: float | None = None,
         guardrail_name: str | None = None,
-        event_hook: GuardrailEventHooks | Sequence[GuardrailEventHooks] | Mode | None = None,
-        default_on: bool = False,
+        event_hook: GuardrailEventHooks | Mode | str | Sequence[str] | None = None,
+        default_on: bool | None = None,
     ) -> None:
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
@@ -180,8 +184,9 @@ class NeuralTrustGuardrail(CustomGuardrail):
         super().__init__(
             guardrail_name=guardrail_name,
             supported_event_hooks=self.get_supported_event_hooks(),
-            event_hook=event_hook,
-            default_on=default_on,
+            # LitellmParams.mode is str | list[str] | Mode, which CustomGuardrail narrows to the enum
+            event_hook=event_hook,  # pyright: ignore[reportArgumentType]  # config supplies the raw mode string
+            default_on=bool(default_on),
         )
 
     @log_guardrail_information
@@ -262,12 +267,10 @@ class NeuralTrustGuardrail(CustomGuardrail):
 
     async def _call_evaluate(self, body: dict[str, object]) -> dict[str, object]:  # mutable-ok: TrustGuard JSON
         url: Final = f"{self.api_base}{EVALUATE_PATH}"
-        headers: Final = MappingProxyType(
-            {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            }
-        )
+        headers: Final = {  # mutable-ok: AsyncHTTPHandler.post declares headers as dict
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
         try:
             response: Final = await self.async_handler.post(
                 url,
