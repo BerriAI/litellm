@@ -39,24 +39,6 @@ def apply_server_side_tool_usage_details_to_usage(usage: Usage, details: Mapping
 
 
 def _cost_reported_by_xai(usage: "Usage") -> float | None:
-    """
-    Return what xAI billed for the request in USD, or None if it reported nothing usable.
-
-    The xAI transformations restate ``usage.cost_in_usd_ticks`` as ``usage.cost``, the
-    field litellm already carries a provider stated cost in and the same one
-    ``llms/perplexity/cost_calculator.py`` bills from. That figure is the total for the
-    whole request, tokens and every server side tool invocation together, so nothing may
-    be added on top of it.
-
-    A negative amount is refused rather than billed: a caller who can point litellm at an
-    api_base they control also controls the response body, and a negative cost would
-    subtract from their own recorded spend. Those requests are priced from tokens instead.
-
-    NaN and the infinities are refused for the same reason and are the worse case, because
-    ``Usage`` stores a provider supplied ``cost`` without validating it and NaN compares
-    false against every budget threshold. Billing one would disable spend enforcement for
-    the key rather than mispricing a single request.
-    """
     reported_cost: Final[object] = getattr(usage, "cost", None)
     if not isinstance(reported_cost, (int, float)) or isinstance(reported_cost, bool):
         return None
@@ -69,11 +51,8 @@ def _cost_reported_by_xai(usage: "Usage") -> float | None:
 
 def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
     """
-    Prefers the amount xAI reported for the request, matching how the perplexity
-    calculator treats a provider-stated cost. That total is returned as completion
-    cost because xAI does not break it down by direction. Without one, falls back to
-    the generic cost calculator for all pricing logic, with XAI-specific reasoning
-    token handling.
+    Calculates the cost per token for a given XAI model, prompt tokens, and completion tokens.
+    Uses the generic cost calculator for all pricing logic, with XAI-specific reasoning token handling.
 
     Input:
         - model: str, the model name without provider prefix
@@ -146,11 +125,9 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
     """
     Calculate the cost of web search requests for X.AI models.
 
-    When xAI reports what it billed, that figure already covers the server-side
-    search calls and ``cost_per_token`` has returned it, so there is nothing to add
-    here. Otherwise price the invocations from
-    usage.server_side_tool_usage_details.web_search_calls at the per-call rate
-    (model_info.search_context_cost_per_query when set, else the default $5 / 1k).
+    Counts invocations from usage.server_side_tool_usage_details.web_search_calls.
+    Per-call rate comes from model_info.search_context_cost_per_query when set,
+    otherwise the default xAI tools rate ($5 / 1k calls).
     """
     if _cost_reported_by_xai(usage) is not None:
         return 0.0

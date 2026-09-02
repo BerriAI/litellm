@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator, Iterator, Mapping
+from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
@@ -30,31 +31,11 @@ from ...openai.chat.gpt_transformation import (
 )
 
 
-def _adopt_cost_reported_by_xai(usage: Usage | dict[str, Any] | None) -> None:  # mutable-ok: streaming dict write
-    """Bill what xAI charged instead of repricing the request locally.
-
-    xAI reports the amount on ``cost_in_usd_ticks``; restate it in USD on ``cost``,
-    the field litellm already carries a provider stated cost in and the one
-    ``llms/xai/cost_calculator.py`` prices from. When xAI reported nothing usable,
-    ``cost`` is left alone and the request falls back to token pricing.
-
-    Accepts a ``Usage`` (non-streaming) or a raw usage ``dict`` (streaming chunk),
-    matching ``_fold_reasoning_tokens_into_completion``, so both paths stay in sync.
-    Streaming needs the dict form because chunk aggregation rebuilds usage from the
-    fields it models plus ``cost``, dropping everything else xAI sent.
-    """
-    if usage is None:
-        return
-
-    if isinstance(usage, dict):
-        chunk_cost: Final = xai_reported_cost_in_usd(usage.get("cost_in_usd_ticks"))
-        if chunk_cost is not None:
-            usage["cost"] = chunk_cost
-        return
-
+def _usage_restated_from_xai_ticks(usage: Usage | None) -> Usage | None:
     reported_cost: Final = xai_reported_cost_in_usd(getattr(usage, "cost_in_usd_ticks", None))
-    if reported_cost is not None:
-        usage.cost = reported_cost
+    if usage is None or reported_cost is None:
+        return None
+    return usage.model_copy(update=MappingProxyType({"cost": reported_cost}))
 
 
 class XAIChatConfig(OpenAIGPTConfig):
@@ -310,7 +291,9 @@ class XAIChatConfig(OpenAIGPTConfig):
 
         self._fold_reasoning_tokens_into_completion(response)
         self._normalize_openai_compatible_usage_totals(getattr(response, "usage", None))
-        _adopt_cost_reported_by_xai(getattr(response, "usage", None))
+        restated_usage: Final = _usage_restated_from_xai_ticks(getattr(response, "usage", None))
+        if restated_usage is not None:
+            response.usage = restated_usage
         return response
 
     @staticmethod
@@ -438,6 +421,9 @@ class XAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
         if "usage" in chunk and chunk["usage"] is not None:
             XAIChatConfig._fold_reasoning_tokens_into_completion(chunk["usage"])
             XAIChatConfig._normalize_openai_compatible_usage_totals(chunk["usage"])
-            _adopt_cost_reported_by_xai(chunk["usage"])
 
-        return super().chunk_parser(chunk)
+        parsed_chunk: Final = super().chunk_parser(chunk)
+        restated_usage: Final = _usage_restated_from_xai_ticks(getattr(parsed_chunk, "usage", None))
+        if restated_usage is not None:
+            parsed_chunk.usage = restated_usage
+        return parsed_chunk

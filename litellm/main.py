@@ -8592,10 +8592,11 @@ def stream_chunk_builder_text_completion(chunks: list, messages: list | None = N
 
 def _stream_builder_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> float | None:
     usage_cost: Final = getattr(getattr(response, "usage", None), "cost", None)
-    if isinstance(usage_cost, (int, float)):
-        return float(usage_cost)
+    numeric_usage_cost: Final = float(usage_cost) if isinstance(usage_cost, (int, float)) else None
     if logging_obj is not None:
-        return None
+        return numeric_usage_cost if litellm.include_cost_in_streaming_usage else None
+    if numeric_usage_cost is not None:
+        return numeric_usage_cost
     provider_hint: Final = response._hidden_params.get(  # pyright: ignore[reportPrivateUsage]  # no public accessor
         "custom_llm_provider"
     )

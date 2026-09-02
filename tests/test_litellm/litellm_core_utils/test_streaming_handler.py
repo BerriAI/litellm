@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.streaming_handler import (
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     Delta,
+    ModelResponse,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
     StandardLoggingPayload,
@@ -1750,7 +1751,7 @@ def test_openrouter_streaming_cost_propagates_to_hidden_params():
     assert complete_response.usage.cost == 0.00025
 
     # Use the real propagation method from CustomStreamWrapper
-    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response)
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response, "openrouter")
 
     assert "additional_headers" in complete_response._hidden_params
     assert (
@@ -1769,14 +1770,12 @@ def test_openrouter_streaming_cost_propagates_to_hidden_params():
     assert provider_cost == 0.00025
 
 
-def test_perplexity_streaming_dict_cost_propagates_to_hidden_params():
-    """
-    Regression: Perplexity reports usage.cost as a breakdown object, which used to
-    blow up the end of the stream with
-    `float() argument must be a string or a real number, not 'dict'`.
-    """
+def test_perplexity_streaming_dict_cost_bills_through_its_own_calculator():
     import litellm
-    from litellm.cost_calculator import get_response_cost_from_hidden_params
+    from litellm.cost_calculator import (
+        get_response_cost_from_hidden_params,
+        response_cost_calculator,
+    )
 
     chunks = [
         ModelResponseStream(
@@ -1828,12 +1827,80 @@ def test_perplexity_streaming_dict_cost_propagates_to_hidden_params():
 
     assert complete_response is not None
 
-    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response)
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response, "perplexity")
 
-    assert (
-        get_response_cost_from_hidden_params(complete_response._hidden_params)
-        == 0.00503
+    assert get_response_cost_from_hidden_params(complete_response._hidden_params) is None
+    assert response_cost_calculator(
+        response_object=complete_response,
+        model="perplexity/sonar",
+        custom_llm_provider="perplexity",
+        call_type="completion",
+        optional_params={},
+    ) == pytest.approx(0.00503)
+
+
+def test_openai_compatible_streaming_cost_is_priced_from_the_cost_map():
+    import litellm
+    from litellm.cost_calculator import (
+        get_response_cost_from_hidden_params,
+        response_cost_calculator,
     )
+
+    model = "openai/streams-cost-in-nanodollars"
+    litellm.register_model(
+        {
+            model: {
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            }
+        }
+    )
+    complete_response = ModelResponse(
+        id="chatcmpl-openai-compatible",
+        model=model,
+        choices=[],
+        usage=Usage(completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=3_144_000),
+    )
+
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response, "openai")
+
+    assert get_response_cost_from_hidden_params(complete_response._hidden_params) is None
+    assert response_cost_calculator(
+        response_object=complete_response,
+        model=model,
+        custom_llm_provider="openai",
+        call_type="completion",
+        optional_params={},
+    ) == pytest.approx(2e-5)
+
+
+def test_xai_streaming_reported_cost_still_takes_the_margin(monkeypatch):
+    import litellm
+    from litellm.cost_calculator import (
+        get_response_cost_from_hidden_params,
+        response_cost_calculator,
+    )
+
+    complete_response = ModelResponse(
+        id="chatcmpl-xai",
+        model="grok-4-latest",
+        choices=[],
+        usage=Usage(completion_tokens=353, prompt_tokens=198, total_tokens=551, cost=0.0009956),
+    )
+
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response, "xai")
+
+    assert get_response_cost_from_hidden_params(complete_response._hidden_params) is None
+    monkeypatch.setattr(litellm, "cost_margin_config", {"xai": 0.5})
+    assert response_cost_calculator(
+        response_object=complete_response,
+        model="xai/grok-4-latest",
+        custom_llm_provider="xai",
+        call_type="completion",
+        optional_params={},
+    ) == pytest.approx(0.0009956 * 1.5)
 
 
 def test_provider_reported_cost_ignores_unusable_shapes():
