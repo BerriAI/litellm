@@ -63,6 +63,14 @@ Rule-conditioned calibration improved held-out Brier score from 0.3047 to 0.1974
 
 The repository holdout exposed that model-wide calibration alone removed too much task discrimination. Attaching a smoothed outcome probability to the matched capability rule raised the learned `0.9`-weight route from 67.86% to 70.54% solve rate and from 0.7107 to 0.7204 utility. It still did not beat the original cards on test routing utility, so this result supports the calibration and evaluation machinery rather than a coding preset quality claim
 
+### Agentic card optimization study
+
+Three coding-card revisions were developed on SWE-bench Verified. Broad process rules collapsed into catch-all semantic categories. Tier-specific rules overqualified bounded tasks for the efficient model. A final hybrid kept the original card structure and added narrow rules for lifecycle state, compatibility, formal semantics, and long-horizon recovery
+
+The hybrid revision was frozen before one comparison on all 300 SWE-bench Multilingual issues. This suite used public Haiku 4.5, Sonnet 4.5, and Opus 4.5 outcomes from the same mini-SWE-agent v2.0.0a0 harness. The original raw cards reached 70.67% solve rate at 0.7953 mean recorded cost and 0.6847 quality-cost utility with a `0.95` quality weight. The trained hybrid reached 70.33% solve rate at 0.8281 cost and 0.6783 utility
+
+The trained cards reduced Brier error from 0.3371 to 0.2231 but did not beat the original cards on end-to-end routing. The hybrid is therefore not published as an agentic preset. This negative holdout result shows why calibration gains and development-set routing gains are insufficient acceptance criteria for capability-card changes
+
 ### tau2-bench pipeline run
 
 The pipeline was exercised against public tau2-bench trajectories for `claude-sonnet-4-5` and `claude-opus-4-5`, with four recorded end-to-end attempts aggregated per task. Entire domains were held apart: 50 airline tasks trained the artifact, 113 retail tasks selected the operating point, and 110 telecom tasks were evaluated once. A local `mlx-community/Qwen3-4B-Instruct-2507-4bit` model produced the capability forecasts
