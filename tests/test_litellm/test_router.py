@@ -7271,6 +7271,71 @@ def test_get_configured_token_limits_coerces_numeric_strings():
     assert router.get_configured_token_limits("quoted-limits-model") == (32000, 8000)
 
 
+def test_get_configured_display_name_reads_deployment_model_info():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "Kimi K3-claude-compatible",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"display_name": "Kimi K3"},
+            }
+        ]
+    )
+
+    assert router.get_configured_display_name("Kimi K3-claude-compatible") == "Kimi K3"
+
+
+def test_get_configured_display_name_returns_none_for_unset_or_unknown():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "no-display-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+            }
+        ]
+    )
+
+    assert router.get_configured_display_name("no-display-model") is None
+    assert router.get_configured_display_name("not-a-real-model") is None
+
+
+def test_get_configured_display_name_skips_wildcard_pattern_matching():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*"},
+                "model_info": {"display_name": "Bedrock"},
+            }
+        ]
+    )
+
+    with patch.object(
+        router.pattern_router, "route", side_effect=AssertionError("pattern route called")
+    ):
+        assert (
+            router.get_configured_display_name("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0")
+            is None
+        )
+
+
+def test_get_configured_display_name_treats_malformed_values_as_absent():
+    malformed = ["", "   ", 12345, ["Kimi K3"], {"name": "Kimi K3"}, True]
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": f"bad-display-{i}",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"display_name": bad},
+            }
+            for i, bad in enumerate(malformed)
+        ]
+    )
+
+    for i in range(len(malformed)):
+        assert router.get_configured_display_name(f"bad-display-{i}") is None
+
+
 @pytest.mark.asyncio
 async def test_acreate_batch_disable_fallbacks_surfaces_owning_provider_error():
     router = litellm.Router(
@@ -7508,6 +7573,118 @@ async def test_acreate_batch_request_bedrock_tags_override_deployment_tags():
             bedrock_tags=request_tags,
         )
         assert mock_sign.call_args.kwargs["data"]["tags"] == request_tags
+
+
+@pytest.mark.asyncio
+async def test_avector_store_search_injects_router():
+    """
+    Regression: router.avector_store_search must pass the router down to the
+    SDK search call so provider transforms can resolve router-managed
+    embedding models (e.g. S3 Vectors query embeddings).
+    """
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    expected_response = VectorStoreSearchResponse(
+        object="vector_store.search_results.page", search_query="q", data=[]
+    )
+    mock_asearch = AsyncMock(return_value=expected_response)
+    # Router.__init__ binds asearch via a local import, so patch the module
+    # attribute before constructing the Router.
+    with patch("litellm.vector_stores.main.asearch", new=mock_asearch):  # test-quality-ok: the SDK call is the only place the injected router kwarg is observable
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-3.5-turbo",
+                    "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "test-key"},
+                }
+            ]
+        )
+        search_response = await router.avector_store_search(
+            vector_store_id="v", query="q", custom_llm_provider="s3_vectors"
+        )
+
+    assert search_response is expected_response
+    mock_asearch.assert_awaited_once()
+    assert mock_asearch.await_args.kwargs["router"] is router
+
+
+@pytest.mark.asyncio
+async def test_avector_store_create_does_not_inject_router():
+    """The router injection is gated on the search call type: the create path
+    must keep calling the SDK without a router kwarg."""
+    expected_response = {"id": "vs_1", "object": "vector_store"}
+    mock_acreate = AsyncMock(return_value=expected_response)
+    # avector_store_create(model=None) resolves acreate via a local import at
+    # call time, so patching after Router construction works here.
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "test-key"},
+            }
+        ]
+    )
+    with patch("litellm.vector_stores.main.acreate", new=mock_acreate):  # test-quality-ok: the SDK call is the only place a leaked router kwarg would surface
+        create_response = await router.avector_store_create(model=None, custom_llm_provider="openai")
+
+    assert create_response is expected_response
+    mock_acreate.assert_awaited_once()
+    assert "router" not in mock_acreate.await_args.kwargs
+
+
+def test_vector_store_search_injects_router():
+    """
+    Sync parity for the router injection: router.vector_store_search must pass
+    the router down to the SDK search call so provider transforms can resolve
+    router-managed embedding models, same as avector_store_search.
+    """
+    from litellm.types.vector_stores import VectorStoreSearchResponse
+
+    expected_response = VectorStoreSearchResponse(
+        object="vector_store.search_results.page", search_query="q", data=[]
+    )
+    mock_search = MagicMock(return_value=expected_response)
+    # Router.__init__ binds search via a local import, so patch the module
+    # attribute before constructing the Router.
+    with patch("litellm.vector_stores.main.search", new=mock_search):  # test-quality-ok: the SDK call is the only place the injected router kwarg is observable
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-3.5-turbo",
+                    "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "test-key"},
+                }
+            ]
+        )
+        search_response = router.vector_store_search(
+            vector_store_id="v", query="q", custom_llm_provider="s3_vectors"
+        )
+
+    assert search_response is expected_response
+    mock_search.assert_called_once()
+    assert mock_search.call_args.kwargs["router"] is router
+    assert mock_search.call_args.kwargs["custom_llm_provider"] == "s3_vectors"
+
+
+def test_vector_store_create_does_not_inject_router():
+    """The sync create path must keep calling the SDK without a router kwarg."""
+    expected_response = {"id": "vs_1", "object": "vector_store"}
+    mock_create = MagicMock(return_value=expected_response)
+    # Router.__init__ binds create via a local import, so patch the module
+    # attribute before constructing the Router.
+    with patch("litellm.vector_stores.main.create", new=mock_create):  # test-quality-ok: the SDK call is the only place a leaked router kwarg would surface
+        router = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-3.5-turbo",
+                    "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "test-key"},
+                }
+            ]
+        )
+        create_response = router.vector_store_create(custom_llm_provider="openai")
+
+    assert create_response is expected_response
+    mock_create.assert_called_once()
+    assert "router" not in mock_create.call_args.kwargs
 
 
 class TestPreRoutingStrategyRegistryLifecycle:

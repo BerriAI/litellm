@@ -1442,7 +1442,7 @@ class BaseAWSLLM:
     @tracer.wrap()
     def get_request_headers(
         self,
-        credentials: Credentials,
+        credentials: Credentials | None,
         aws_region_name: str,
         extra_headers: dict | None,
         endpoint_url: str,
@@ -1469,8 +1469,12 @@ class BaseAWSLLM:
             try:
                 from botocore.auth import SigV4Auth
                 from botocore.awsrequest import AWSRequest
+                from botocore.exceptions import NoCredentialsError
             except ImportError:
                 raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+
+            if credentials is None:
+                raise NoCredentialsError()
 
             # Filter headers for AWS signature calculation
             # AWS SigV4 only includes specific headers in signature calculation
