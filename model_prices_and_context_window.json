@@ -20820,6 +20820,307 @@
         ],
         "supports_vision": true
     },
+    "fal_ai/minimax/h3/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.13,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_768p": 0.06,
+        "output_cost_per_second_4k": 0.16,
+        "source": "https://fal.ai/models/minimax/h3/text-to-video",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "default resolution 2K; 480P, 768P and 4K priced per tier"
+        }
+    },
+    "fal_ai/minimax/h3/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.13,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_768p": 0.06,
+        "output_cost_per_second_4k": 0.16,
+        "source": "https://fal.ai/models/minimax/h3/image-to-video",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "default resolution 2K; 480P, 768P and 4K priced per tier"
+        }
+    },
+    "fal_ai/minimax/h3/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.13,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_768p": 0.06,
+        "output_cost_per_second_4k": 0.16,
+        "source": "https://fal.ai/models/minimax/h3/reference-to-video",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "default resolution 2K; 480P, 768P and 4K priced per tier"
+        }
+    },
+    "fal_ai/bytedance/seedance-2.0/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.3034,
+        "output_cost_per_second_1080p": 0.682,
+        "source": "https://fal.ai/models/bytedance/seedance-2.0/text-to-video",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "default resolution 720p"
+        }
+    },
+    "fal_ai/bytedance/seedance-2.0/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.3024,
+        "source": "https://fal.ai/models/bytedance/seedance-2.0/image-to-video",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "default resolution 720p"
+        }
+    },
+    "fal_ai/bytedance/seedance-2.0/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.3024,
+        "source": "https://fal.ai/models/bytedance/seedance-2.0/reference-to-video",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "default resolution 720p"
+        }
+    },
+    "fal_ai/alibaba/happy-horse/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.28,
+        "output_cost_per_second_720p": 0.14,
+        "source": "https://fal.ai/models/alibaba/happy-horse/text-to-video",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "default resolution 1080p"
+        }
+    },
+    "fal_ai/alibaba/happy-horse/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.28,
+        "output_cost_per_second_720p": 0.14,
+        "source": "https://fal.ai/models/alibaba/happy-horse/image-to-video",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "default resolution 1080p"
+        }
+    },
+    "fal_ai/alibaba/happy-horse/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.28,
+        "output_cost_per_second_720p": 0.14,
+        "source": "https://fal.ai/models/alibaba/happy-horse/reference-to-video",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "default resolution 1080p"
+        }
+    },
+    "fal_ai/alibaba/happy-horse/video-edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.28,
+        "output_cost_per_second_720p": 0.14,
+        "source": "https://fal.ai/models/alibaba/happy-horse/video-edit",
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "default resolution 1080p; billed per second of output"
+        }
+    },
+    "fal_ai/blackforestlabs/flux-3/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.17,
+        "output_cost_per_second_1080p": 0.29,
+        "source": "https://fal.ai/models/blackforestlabs/flux-3/text-to-video",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "default resolution 720p"
+        }
+    },
+    "fal_ai/blackforestlabs/flux-3/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.17,
+        "output_cost_per_second_1080p": 0.29,
+        "source": "https://fal.ai/models/blackforestlabs/flux-3/image-to-video",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "default resolution 720p"
+        }
+    },
+    "fal_ai/blackforestlabs/flux-3/extend-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.205,
+        "source": "https://fal.ai/models/blackforestlabs/flux-3/extend-video",
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "default resolution 720p"
+        }
+    },
+    "fal_ai/xai/grok-imagine-video/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "output_cost_per_second_480p": 0.05,
+        "source": "https://fal.ai/models/xai/grok-imagine-video/text-to-video",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "default resolution 720p"
+        }
+    },
+    "fal_ai/xai/grok-imagine-video/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "output_cost_per_second_480p": 0.05,
+        "source": "https://fal.ai/models/xai/grok-imagine-video/image-to-video",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "default resolution 720p"
+        }
+    },
+    "fal_ai/xai/grok-imagine-video/edit-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_480p": 0.06,
+        "source": "https://fal.ai/models/xai/grok-imagine-video/edit-video",
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "default resolution 720p; input video seconds included in the rate"
+        }
+    },
+    "fal_ai/fal-ai/ltx-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.004,
+        "source": "https://fal.ai/models/fal-ai/ltx-video",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "$0.02 flat per video; billed as 5 seconds at $0.004 per second"
+        }
+    },
+    "fal_ai/fal-ai/ltx-video/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.004,
+        "source": "https://fal.ai/models/fal-ai/ltx-video/image-to-video",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "$0.02 flat per video; billed as 5 seconds at $0.004 per second"
+        }
+    },
     "featherless_ai/featherless-ai/Qwerky-72B": {
         "litellm_provider": "featherless_ai",
         "max_input_tokens": 32768,

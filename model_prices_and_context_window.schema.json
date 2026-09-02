@@ -458,6 +458,14 @@
           "type": "number",
           "minimum": 0
         },
+        "output_cost_per_second_720p": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_second_768p": {
+          "type": "number",
+          "minimum": 0
+        },
         "output_cost_per_token": {
           "type": "number",
           "minimum": 0,
