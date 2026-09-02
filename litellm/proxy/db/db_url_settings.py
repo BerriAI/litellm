@@ -60,6 +60,11 @@ AzureTokenAuthFlag = Annotated[
     bool, BeforeValidator(partial(token_auth_flag_enabled, env_var=AZURE_POSTGRESQL_AUTH_ENV_VAR))
 ]
 
+DISABLE_PREPARED_STATEMENTS_ENV_VAR: Final = "DATABASE_DISABLE_PREPARED_STATEMENTS"
+DisablePreparedStatementsFlag = Annotated[
+    bool, BeforeValidator(partial(token_auth_flag_enabled, env_var=DISABLE_PREPARED_STATEMENTS_ENV_VAR))
+]
+
 # schema.prisma pins `provider = "postgresql"`, so these are the only schemes
 # Prisma can actually connect with.
 SUPPORTED_DB_SCHEMES: Final[frozenset[str]] = frozenset({"postgresql", "postgres"})
@@ -77,9 +82,29 @@ CONNECTION_PARAM_KEYS: Final[frozenset[str]] = frozenset(
         "pool_timeout",
         "connect_timeout",
         "socket_timeout",
+        "max_idle_connection_lifetime",
         "pgbouncer",
     }
 )
+
+# Quaint never tests pooled connections on checkout and keeps them idle for
+# 300s by default, past many infra idle timeouts, so dead sockets surface as
+# `Error { kind: Closed }`. 60s recycles them first; explicit values win.
+DEFAULT_MAX_IDLE_CONNECTION_LIFETIME: Final = 60
+IDLE_LIFETIME_DEFAULT_PARAMS: Final[Mapping[str, int]] = MappingProxyType(
+    {"max_idle_connection_lifetime": DEFAULT_MAX_IDLE_CONNECTION_LIFETIME}
+)
+
+
+def idle_lifetime_params(configured: float | None) -> Mapping[str, str | int | float]:
+    """The `max_idle_connection_lifetime` to add to URLs that do not pin one.
+
+    Applied via ``add_missing_query_params`` so a URL-pinned value always wins,
+    whether the operator configured `database_max_idle_connection_lifetime` or not.
+    """
+    if configured is None:
+        return IDLE_LIFETIME_DEFAULT_PARAMS
+    return MappingProxyType({"max_idle_connection_lifetime": configured})
 
 
 def add_missing_query_params(url: str, params: Mapping[str, str | int | float]) -> str:
@@ -153,6 +178,9 @@ class DatabaseURLSettings(BaseSettings):
 
     iam_token_db_auth: IamTokenAuthFlag = Field(default=False, validation_alias=IAM_TOKEN_DB_AUTH_ENV_VAR)
     azure_postgresql_auth: AzureTokenAuthFlag = Field(default=False, validation_alias=AZURE_POSTGRESQL_AUTH_ENV_VAR)
+    disable_prepared_statements: DisablePreparedStatementsFlag = Field(
+        default=False, validation_alias=DISABLE_PREPARED_STATEMENTS_ENV_VAR
+    )
 
     # Writer
     database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
@@ -374,6 +402,15 @@ class DatabaseURLSettings(BaseSettings):
         """
         self._raise_for_unsupported_scheme()
         wrote_writer: Final = self.apply_writer_url_to_env()
+
+        # DATABASE_DISABLE_PREPARED_STATEMENTS maps to Prisma's `pgbouncer=true`
+        # URL param, same as the CLI's `database_disable_prepared_statements`
+        # config key. An explicit `pgbouncer` value already on the URL wins.
+        if self.disable_prepared_statements:
+            for env_var in ("DATABASE_URL", "DIRECT_URL"):
+                url = os.environ.get(env_var)
+                if url:
+                    os.environ[env_var] = add_missing_query_params(url, MappingProxyType({"pgbouncer": "true"}))
 
         # The reader inherits the writer's connection params (pool size, timeouts,
         # pgbouncer mode). Without this the reader pool ignores the configured cap

@@ -124,6 +124,61 @@ def blocked_responses_api_usage(original_response: object) -> ResponseAPIUsage:
     )
 
 
+def stream_item_field(item: object, field: str) -> object | None:
+    if isinstance(item, dict):
+        return item.get(field)
+    return getattr(item, field, None)
+
+
+def blocked_chat_stream_usage(original_response: object) -> tuple[int, int]:
+    """
+    ``(prompt_tokens, completion_tokens)`` for a synthetic guardrail-blocked
+    chat completions stream.
+
+    A mid-stream block carries the chunks received so far as a list; real usage
+    rides on the final chunk when the upstream sent one
+    (``stream_options.include_usage``). Non-list originals defer to
+    ``blocked_response_usage``.
+    """
+    if not isinstance(original_response, list):
+        usage: Final = blocked_response_usage(original_response)
+        return usage.get("input_tokens", 0), usage.get("output_tokens", 0)
+    usage_obj: Final = next(
+        (
+            chunk_usage
+            for item in reversed(original_response)
+            if (chunk_usage := stream_item_field(item, "usage")) is not None
+        ),
+        None,
+    )
+    return (
+        _usage_tokens(usage_obj, "prompt_tokens", "input_tokens"),
+        _usage_tokens(usage_obj, "completion_tokens", "output_tokens"),
+    )
+
+
+def blocked_responses_stream_usage(original_response: object) -> ResponseAPIUsage:
+    """
+    ``ResponseAPIUsage`` for a synthetic guardrail-blocked /v1/responses stream.
+
+    A mid-stream block carries the events received so far as a list; real usage
+    rides on the ``response.completed`` event's response when the upstream sent
+    one. Non-list originals defer to ``blocked_responses_api_usage``.
+    """
+    if not isinstance(original_response, list):
+        return blocked_responses_api_usage(original_response)
+    completed: Final = next(
+        (
+            response
+            for item in reversed(original_response)
+            if stream_item_field(item, "type") == "response.completed"
+            and (response := stream_item_field(item, "response")) is not None
+        ),
+        None,
+    )
+    return blocked_responses_api_usage(completed)
+
+
 def effective_skip_system_message_for_guardrail(guardrail_to_apply: Any) -> bool:
     per: Final = getattr(guardrail_to_apply, "skip_system_message_in_guardrail", None)
     if per is not None:
@@ -156,6 +211,22 @@ def openai_messages_without_tool(
     messages: Sequence[AllMessageValues],
 ) -> tuple[AllMessageValues, ...]:
     return tuple(m for m in messages if _message_role(m) != "tool")
+
+
+def filter_messages_by_skip_flags(
+    guardrail_to_apply: object, messages: Sequence[AllMessageValues]
+) -> tuple[tuple[AllMessageValues, ...], bool]:
+    system_filtered = (
+        openai_messages_without_system(messages)
+        if effective_skip_system_message_for_guardrail(guardrail_to_apply)
+        else tuple(messages)
+    )
+    fully_filtered = (
+        openai_messages_without_tool(system_filtered)
+        if effective_skip_tool_message_for_guardrail(guardrail_to_apply)
+        else system_filtered
+    )
+    return fully_filtered, len(fully_filtered) != len(messages)
 
 
 def effective_scan_only_tool_results_for_guardrail(guardrail_to_apply: object) -> bool:
@@ -209,9 +280,20 @@ def openai_tool_name(tool: object) -> str | None:
     return flat_name if isinstance(flat_name, str) else None
 
 
+def anthropic_tool_names(tool: object) -> tuple[str, ...]:
+    """Every name a /v1/messages tool dict can act under: the flat Anthropic ``name`` plus
+    ``function.name`` for OpenAI-format tools the bridge forwards verbatim. Allowlist checks
+    must see both, or a decoy flat name could smuggle a disallowed ``function.name`` through."""
+    if not isinstance(tool, dict):
+        return ()
+    function: Final = tool.get("function") if tool.get("type") == "function" else None
+    function_name: Final = function.get("name") if isinstance(function, dict) else None
+    return tuple(name for name in (tool.get("name"), function_name) if isinstance(name, str) and name)
+
+
 def anthropic_tool_name(tool: object) -> str | None:
-    name: Final = tool.get("name") if isinstance(tool, dict) else None
-    return name if isinstance(name, str) else None
+    names: Final = anthropic_tool_names(tool)
+    return names[0] if names else None
 
 
 def merge_returned_tools_into_request_tools(

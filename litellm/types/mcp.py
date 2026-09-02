@@ -1,6 +1,11 @@
 import enum
+import re
+from collections.abc import Awaitable, Callable, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
+from urllib.parse import urlsplit
 
+import httpx
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
@@ -190,6 +195,15 @@ class MCPCredentials(TypedDict, total=False):
     ``audience``, which is the RFC 8693 token-exchange parameter.
     """
 
+    upstream_token_header: str | None  # writable-ok: pydantic warns it cannot honour ReadOnly here
+    """
+    Which upstream header carries the credential LiteLLM resolves for this server. Omitted when
+    unset, which keeps RFC 6750's default of ``Authorization``. Set it when the upstream expects the
+    gateway's token somewhere else (an ESB terminating its own credential on e.g. ``esb-oauth``), so
+    a separate operator-configured ``Authorization`` reaches the origin untouched. Non-secret, so it
+    is stored in plaintext and returned on admin reads.
+    """
+
     client_private_key: str | None
     """
     PEM private key used to sign the private-key-JWT client_assertion (RFC 7523)
@@ -232,7 +246,92 @@ class MCPCredentials(TypedDict, total=False):
     """
 
 
-MCP_ADMIN_CONFIG_CREDENTIAL_KEYS: Final[tuple[str, ...]] = ("upstream_resource",)
+DEFAULT_CREDENTIAL_HEADER: Final = "Authorization"
+
+_HEADER_NAME_TOKEN: Final = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+
+
+def normalize_upstream_header_name(raw: str) -> str | None:
+    """The trimmed header name if it is a usable RFC 7230 ``token``, else None.
+
+    One owner for the grammar; each caller picks its own failure shape (a config-load raise, an
+    API 400, a typed CredError). An operator-supplied name reaches egress verbatim, so a value
+    carrying CR/LF, spaces or separators must never get that far.
+    """
+    stripped: Final = raw.strip()
+    return stripped if stripped and _HEADER_NAME_TOKEN.match(stripped) else None
+
+
+def same_header(name: str, other: str) -> bool:
+    """Whether two HTTP header names are the same one. They are case-insensitive (RFC 7230 3.2)."""
+    return name.lower() == other.lower()
+
+
+def has_header(headers: Mapping[str, str] | None, name: str) -> bool:
+    """Whether ``headers`` carries ``name`` under any casing."""
+    return bool(headers) and any(same_header(key, name) for key in headers or {})
+
+
+def without_header(headers: Mapping[str, str] | None, name: str) -> dict[str, str] | None:
+    """A copy of ``headers`` with every casing of ``name`` removed, or None if nothing remains.
+
+    The one owner of "drop this credential's header". Both MCP stacks and the upstream-credential
+    resolver share it so a slot can never be dropped case-sensitively in one place and
+    case-insensitively in another, which is how an injected header came to shadow a resolved
+    credential on the v1 path.
+    """
+    if not headers:
+        return None
+    filtered: Final = {key: value for key, value in headers.items() if not same_header(key, name)}
+    return filtered or None
+
+
+_DEFAULT_PORTS: Final[Mapping[str, int]] = MappingProxyType({"http": 80, "https": 443})
+
+
+def crosses_origin(configured: str, target: str) -> bool:
+    """Whether ``target`` leaves ``configured``'s origin, by the rule HTTP clients use.
+
+    Origin is scheme, host and port, not host alone, so a same-host HTTPS downgrade or a port change
+    counts as crossing it. A plain http -> https upgrade of the same host is exempt, matching what
+    httpx exempts when it decides whether to keep ``Authorization`` across a redirect.
+    """
+    a: Final = urlsplit(configured)
+    b: Final = urlsplit(target)
+    port_a: Final = a.port or _DEFAULT_PORTS.get(a.scheme)
+    port_b: Final = b.port or _DEFAULT_PORTS.get(b.scheme)
+    if a.scheme == b.scheme and a.hostname == b.hostname and port_a == port_b:
+        return False
+    return not (
+        a.hostname == b.hostname and a.scheme == "http" and port_a == 80 and b.scheme == "https" and port_b == 443
+    )
+
+
+def custom_credential_slot(headers: Mapping[str, str] | None) -> str | None:
+    """The first header carrying a credential somewhere other than ``Authorization``, if any."""
+    return next((name for name in headers or {} if not same_header(name, DEFAULT_CREDENTIAL_HEADER)), None)
+
+
+def credential_redirect_hook(
+    configured_url: str, slot: str | None
+) -> Callable[[httpx.Request], Awaitable[None]] | None:
+    """An httpx request hook dropping ``slot`` once a redirect leaves ``configured_url``'s origin.
+
+    None when no guard is needed, so callers do not each repeat the exemption: HTTP clients already
+    strip ``Authorization`` across origins, but forward every other header, so only a credential an
+    operator moved to its own slot can be replayed to whatever host the upstream redirects to.
+    """
+    if not configured_url or not slot or same_header(slot, DEFAULT_CREDENTIAL_HEADER):
+        return None
+
+    async def guard(request: httpx.Request) -> None:
+        if slot in request.headers and crosses_origin(configured_url, str(request.url)):
+            del request.headers[slot]
+
+    return guard
+
+
+MCP_ADMIN_CONFIG_CREDENTIAL_KEYS: Final[tuple[str, ...]] = ("upstream_resource", "upstream_token_header")
 """Non-secret credential keys returned on read so the admin form can show and clear them. Mirrors
 ``ADMIN_CONFIG_CREDENTIAL_KEYS`` in ``ui/litellm-dashboard/src/components/mcp_tools/types.tsx``."""
 

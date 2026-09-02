@@ -1,5 +1,4 @@
 import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
@@ -9,9 +8,6 @@ import io
 
 from unittest.mock import patch
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm.types.router import LiteLLM_Params
@@ -158,6 +154,11 @@ def test_default_api_base():
                     if provider == "codestral" and other_provider.value == "mistral":
                         continue
                     elif provider == "github" and other_provider.value == "azure":
+                        continue
+                    elif (
+                        provider in ("qwencloud", "qwen_ai_platform")
+                        and other_provider.value == "dashscope"
+                    ):
                         continue
                     assert other_provider.value not in api_base.replace("/openai", "")
 

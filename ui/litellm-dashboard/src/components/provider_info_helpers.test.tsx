@@ -62,6 +62,17 @@ describe("provider_info_helpers", () => {
       expect(result.logo).toBe(providerLogoMap[Providers.Groq]);
     });
 
+    it("should map scx-ai slug and SCX_AI enum key to the SCX.ai display name and logo", () => {
+      const fromSlug = getProviderLogoAndName("scx-ai");
+      expect(fromSlug.displayName).toBe(Providers.SCX_AI);
+      expect(fromSlug.logo).toBe(providerLogoMap[Providers.SCX_AI]);
+      expect(fromSlug.logo).toBeTruthy();
+
+      const fromEnumKey = getProviderLogoAndName("SCX_AI");
+      expect(fromEnumKey.displayName).toBe(Providers.SCX_AI);
+      expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.SCX_AI]);
+    });
+
     it("should map bedrock_mantle slug to Bedrock Mantle display name and logo", () => {
       const result = getProviderLogoAndName("bedrock_mantle");
       expect(result.displayName).toBe(Providers.BedrockMantle);
@@ -178,6 +189,10 @@ describe("provider_info_helpers", () => {
 
     it("should return gemini-pro placeholder for Vertex_AI provider", () => {
       expect(getPlaceholder(Providers.Vertex_AI)).toBe("gemini-pro");
+    });
+
+    it("should return an scx-ai model placeholder for SCX_AI provider", () => {
+      expect(getPlaceholder(Providers.SCX_AI)).toBe("scx-ai/GLM-5.2");
     });
 
     it("should return claude-3-opus placeholder for Anthropic provider", () => {

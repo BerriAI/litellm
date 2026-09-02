@@ -195,7 +195,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
                 variant="ghost"
                 size="icon-xs"
                 onClick={() => copyToClipboard(basePromptId, "prompt-id")}
-                className={`left-2 z-10 transition-all duration-200 ${
+                className={`left-2 z-raised transition-all duration-200 ${
                   copiedStates["prompt-id"]
                     ? "text-success bg-success/10 border-success/20"
                     : "text-muted-foreground hover:text-foreground hover:bg-accent"

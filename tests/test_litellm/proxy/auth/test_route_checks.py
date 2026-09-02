@@ -1,11 +1,7 @@
 import os
-import sys
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import pytest
 from fastapi import HTTPException, Request
@@ -428,6 +424,29 @@ def test_virtual_key_llm_api_routes_rejects_non_get_mcp_server_discovery(route, 
     assert exc_info.value.status_code == 403
 
 
+def test_virtual_key_llm_api_routes_allows_model_group_info():
+    """Regression test: the UI mints virtual keys with key_type="llm_api", which
+    maps to allowed_routes=["llm_api_routes"]. The Playground model picker loads
+    its options from GET /model_group/info, so that key must reach the route or
+    no model can be selected. The handler already scopes the response to the
+    models the key can call.
+    """
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    assert (
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route="/model_group/info",
+            valid_token=valid_token,
+            request=_mock_request("GET"),
+        )
+        is True
+    )
+
+
 @pytest.mark.parametrize(
     "route",
     [
@@ -527,7 +546,7 @@ def test_virtual_key_llm_api_routes_allows_model_info(route):
     assert result is True
 
 
-@pytest.mark.parametrize("route", ["/model/info", "/v1/model/info"])
+@pytest.mark.parametrize("route", ["/model/info", "/v1/model/info", "/model_group/info"])
 def test_model_info_not_classified_as_llm_api(route):
     """Membership in `llm_api_routes` must not promote /model/info to an
     `is_llm_api_route()`. That predicate gates DISABLE_LLM_API_ENDPOINTS,
@@ -539,10 +558,10 @@ def test_model_info_not_classified_as_llm_api(route):
     assert RouteChecks.is_llm_api_route(route=route) is False
 
 
-@pytest.mark.parametrize("route", ["/v2/model/info", "/model_group/info"])
+@pytest.mark.parametrize("route", ["/v2/model/info"])
 def test_virtual_key_llm_api_routes_denies_other_model_info_routes(route):
-    """The grant is scoped to the two /model/info paths. The paginated Admin UI
-    listing and the model-group endpoint stay outside it.
+    """The grant covers the model metadata reads an AI API key needs. The
+    paginated Admin UI listing stays outside it.
     """
 
     valid_token = UserAPIKeyAuth(
@@ -1791,7 +1810,6 @@ def test_proxy_admin_viewer_can_access_global_spend_tags():
 # Routes returning proxy-wide spend across every team / customer / api_key.
 # Sourced from `LiteLLMRoutes.global_spend_tracking_routes` so any future
 # additions to that list are exercised by these tests automatically.
-from litellm.proxy._types import LiteLLMRoutes
 
 GLOBAL_SPEND_ROUTES = LiteLLMRoutes.global_spend_tracking_routes.value
 
@@ -2617,10 +2635,7 @@ def test_available_roles_accessible_to_non_admin_users(user_role):
 
 # ── _user_is_org_admin tests ──────────────────────────────────────────────────
 
-from datetime import datetime
 
-from litellm.proxy._types import LiteLLM_OrganizationMembershipTable
-from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
 
 
 def _make_org_admin_user(org_id: str) -> LiteLLM_UserTable:

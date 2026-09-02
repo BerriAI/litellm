@@ -1,8 +1,9 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { chooseSelectOption, renderWithProviders } from "../../../tests/test-utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
+import { MODEL_MAX_BUDGET_PREMIUM_HINT } from "../key_team_helpers/ModelMaxBudgetEditor";
 import {
   getPassThroughEndpointsCall,
   getPoliciesList,
@@ -299,7 +300,7 @@ describe("KeyEditView", () => {
   });
 
   it("should render", async () => {
-    const { getByText } = renderWithProviders(
+    renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
         onCancel={() => {}}
@@ -312,12 +313,12 @@ describe("KeyEditView", () => {
     );
 
     await waitFor(() => {
-      expect(getByText("Save Changes")).toBeInTheDocument();
+      expect(screen.getByText("Save Changes")).toBeInTheDocument();
     });
   });
 
   it("should render tags", async () => {
-    const { getByText } = renderWithProviders(
+    renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
         onCancel={() => {}}
@@ -330,12 +331,12 @@ describe("KeyEditView", () => {
     );
 
     await waitFor(() => {
-      expect(getByText("test-tag")).toBeInTheDocument();
+      expect(screen.getByText("test-tag")).toBeInTheDocument();
     });
   });
 
   it("should not render tags in metadata textarea", async () => {
-    const { getByLabelText } = renderWithProviders(
+    renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
         onCancel={() => {}}
@@ -347,7 +348,7 @@ describe("KeyEditView", () => {
       />,
     );
 
-    const metadataTextarea = getByLabelText("Metadata") as HTMLTextAreaElement;
+    const metadataTextarea = screen.getByLabelText("Metadata") as HTMLTextAreaElement;
     await waitFor(() => {
       expect(metadataTextarea).toHaveValue("{}");
     });
@@ -962,10 +963,7 @@ describe("KeyEditView", () => {
       />,
     );
 
-    await userEvent.click(await screen.findByLabelText("Reset Budget"));
-
-    const weeklyOption = await screen.findByText("weekly");
-    await userEvent.click(weeklyOption);
+    await chooseSelectOption(userEvent, await screen.findByLabelText("Reset Budget"), "weekly");
 
     const submitButton = screen.getByRole("button", { name: /save changes/i });
     await userEvent.click(submitButton);
@@ -1041,8 +1039,7 @@ describe("KeyEditView", () => {
     );
 
     const resetBudget = await screen.findByLabelText("Reset Budget");
-    await userEvent.click(resetBudget);
-    await userEvent.click(await screen.findByText("Never resets"));
+    await chooseSelectOption(userEvent, resetBudget, "Never resets");
 
     await waitFor(() => {
       expect(resetBudget).toHaveTextContent("Never resets");
@@ -1073,8 +1070,7 @@ describe("KeyEditView", () => {
       />,
     );
 
-    await userEvent.click(await screen.findByLabelText("Reset Budget"));
-    await userEvent.click(await screen.findByText("Never resets"));
+    await chooseSelectOption(userEvent, await screen.findByLabelText("Reset Budget"), "Never resets");
 
     await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -1202,6 +1198,94 @@ describe("KeyEditView", () => {
       expect(onSubmitMock).toHaveBeenCalled();
       const callArgs = onSubmitMock.mock.calls[0][0];
       expect(callArgs.budget_limits).toBeUndefined();
+    });
+  });
+
+  describe("per-model budgets", () => {
+    const keyDataWithBudgets = {
+      ...MOCK_KEY_DATA,
+      model_max_budget: { "gpt-4": { budget_limit: 5, time_period: "30d" } },
+    };
+
+    const renderWith = (premiumUser: boolean) => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderWithProviders(
+        <KeyEditView
+          keyData={keyDataWithBudgets}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"admin"}
+          premiumUser={premiumUser}
+        />,
+      );
+      return onSubmit;
+    };
+
+    // Same hazard as the user edit form: keyData changes while this component
+    // stays mounted (the effect re-seeds the form for exactly that reason), and
+    // the editor's rows live in state seeded once.
+    it("re-seeds the editor when a different key is loaded", async () => {
+      const withBudget = (limit: number, token: string) => ({
+        ...MOCK_KEY_DATA,
+        token,
+        model_max_budget: { "gpt-4": { budget_limit: limit, time_period: "1h" } },
+      });
+
+      const { rerender } = renderWithProviders(
+        <KeyEditView
+          keyData={withBudget(5, "tok-a")}
+          onCancel={() => {}}
+          onSubmit={vi.fn().mockResolvedValue(undefined)}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"admin"}
+          premiumUser={true}
+        />,
+      );
+      expect(await screen.findByPlaceholderText("Max spend ($)")).toHaveValue(5);
+
+      rerender(
+        <KeyEditView
+          keyData={withBudget(99, "tok-b")}
+          onCancel={() => {}}
+          onSubmit={vi.fn().mockResolvedValue(undefined)}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"admin"}
+          premiumUser={true}
+        />,
+      );
+
+      expect(await screen.findByPlaceholderText("Max spend ($)")).toHaveValue(99);
+    });
+
+    it("should say why the editor is locked when the proxy has no enterprise license", async () => {
+      renderWith(false);
+
+      expect(await screen.findByText(MODEL_MAX_BUDGET_PREMIUM_HINT)).toBeInTheDocument();
+    });
+
+    it("should leave the editor usable when the proxy has one", async () => {
+      renderWith(true);
+
+      expect(await screen.findByText(/Cap spend per model over its own window/)).toBeInTheDocument();
+      expect(screen.queryByText(MODEL_MAX_BUDGET_PREMIUM_HINT)).not.toBeInTheDocument();
+    });
+
+    // /key/update validates model_max_budget whenever the field is present and
+    // rejects it without a license, so re-sending an untouched budget would turn
+    // every unrelated edit into a 400.
+    it("should leave model_max_budget out of an edit that did not touch it", async () => {
+      const onSubmit = renderWith(true);
+
+      await userEvent.click(await screen.findByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("model_max_budget");
     });
   });
 
@@ -1857,8 +1941,7 @@ describe("KeyEditView", () => {
       await userEvent.clear(duration);
       await userEvent.type(duration, "45d");
 
-      await userEvent.click(screen.getByLabelText(/TPM Rate Limit Type/));
-      await userEvent.click(await screen.findByTitle("Guaranteed throughput"));
+      await chooseSelectOption(userEvent, screen.getByLabelText(/TPM Rate Limit Type/), /^Guaranteed throughput/);
 
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -2014,8 +2097,7 @@ describe("KeyEditView", () => {
       renderForPayload(onSubmitMock);
       await screen.findByRole("button", { name: /save changes/i });
 
-      await userEvent.click(screen.getByLabelText(/RPM Rate Limit Type/));
-      await userEvent.click(await screen.findByTitle("Guaranteed throughput"));
+      await chooseSelectOption(userEvent, screen.getByLabelText(/RPM Rate Limit Type/), /^Guaranteed throughput/);
 
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 

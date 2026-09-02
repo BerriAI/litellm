@@ -9,13 +9,9 @@
 
 import importlib
 import os
-import sys
 from pathlib import Path
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 
 import litellm
@@ -186,6 +182,25 @@ class FakeSecretVault:
 def secret_vault_factory():
     """Build FakeSecretVault instances; see its docstring for the failure modes it can model."""
     return FakeSecretVault
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    """Force the bundled in-repo cost map so capability and pricing assertions do not
+    depend on the network-fetched ``main`` copy, which lags this branch until merge.
+
+    ``get_model_info`` is lru_cached, so swapping ``model_cost`` is not enough on its
+    own; clear on the way in and out so entries warmed against either map never leak
+    across tests."""
+    original_model_cost = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
 
 
 def _run_coroutine_if_needed(result):
@@ -360,6 +375,9 @@ def isolate_litellm_state():
         litellm.in_memory_llm_clients_cache.flush_cache()
     image_handling_module.in_memory_cache.flush_cache()
     _reset_module_level_aws_auth_caches()
+    # litellm.get_model_info() memoizes ModelInfo built from litellm.model_cost, so a
+    # test that rebinds the cost map leaves later tests pricing against the old map.
+    litellm_utils_module._invalidate_model_cost_lowercase_map()
 
     # Clear all callback lists to prevent cross-test contamination
     if hasattr(litellm, "callbacks"):
@@ -403,6 +421,7 @@ def isolate_litellm_state():
 
     litellm_utils_module._runtime_registered_model_cost.clear()
     litellm_utils_module._runtime_registered_model_cost.update(original_runtime_registered_model_cost)
+    litellm_utils_module._invalidate_model_cost_lowercase_map()
 
     for _router in tuple(litellm_router_module._live_routers):
         litellm_router_module._live_routers.discard(_router)
@@ -443,7 +462,6 @@ def setup_and_teardown():
     Use this sparingly - most state should be handled by isolate_litellm_state.
     Only reload modules here if absolutely necessary.
     """
-    sys.path.insert(0, os.path.abspath("../.."))
 
     import litellm
 

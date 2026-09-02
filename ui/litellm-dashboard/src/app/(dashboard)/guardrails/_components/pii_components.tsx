@@ -179,7 +179,7 @@ export const PiiEntityList: React.FC<PiiEntityListProps> = ({
                     <SelectTrigger className={`w-[120px] ${isSelected ? "" : "opacity-50"}`} aria-label="Action">
                       <SelectValue />
                     </SelectTrigger>
-                    <SelectContent alignItemWithTrigger={false}>
+                    <SelectContent>
                       {actions.map((action) => (
                         <SelectItem key={action} value={action}>
                           <span className="flex items-center">
