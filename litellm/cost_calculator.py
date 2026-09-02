@@ -1901,7 +1901,8 @@ def ocr_cost(
         response: Optional[Any] - response object
 
     Returns:
-        Tuple[float, float]: (prompt cost, completion cost) when priced per token, otherwise the page cost in the first element
+        Tuple[float, float]: (prompt cost, completion cost) when priced per token,
+        otherwise the page cost in the first element
     """
     from litellm.llms.base_llm.ocr.transformation import OCRResponse
 
