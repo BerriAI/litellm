@@ -25664,6 +25664,12 @@ export interface components {
              */
             pass_through_request_timeout?: number | null;
             /**
+             * Persist Background Health Check Results
+             * @description persist background health check results to the database
+             * @default true
+             */
+            persist_background_health_check_results: boolean;
+            /**
              * Plugins
              * @description external services registered as embeddable UI plugins
              */
