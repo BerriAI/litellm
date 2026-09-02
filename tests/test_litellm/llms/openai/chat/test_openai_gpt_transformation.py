@@ -157,7 +157,12 @@ class TestGetOptionalParamsIntegration:
 
     def test_reasoning_effort_not_supported_for_known_non_reasoning_models(self):
         """Known OpenAI models keep failing closed client-side."""
+        import litellm
         from litellm.llms.openai.openai import OpenAIConfig
+
+        gpt4o_entry = litellm.model_cost.get("gpt-4o")
+        if isinstance(gpt4o_entry, dict) and gpt4o_entry.get("supports_reasoning"):
+            litellm.model_cost["gpt-4o"] = {**gpt4o_entry, "supports_reasoning": False}
 
         config = OpenAIConfig()
         assert "reasoning_effort" not in config.get_supported_openai_params("gpt-4o")
@@ -199,7 +204,12 @@ class TestGetOptionalParamsIntegration:
 
     def test_reasoning_effort_still_rejected_for_known_non_reasoning_model(self):
         """A real OpenAI model that doesn't reason still rejects the param client-side."""
+        import litellm
         from litellm.utils import get_optional_params
+
+        gpt4o_entry = litellm.model_cost.get("gpt-4o")
+        if isinstance(gpt4o_entry, dict) and gpt4o_entry.get("supports_reasoning"):
+            litellm.model_cost["gpt-4o"] = {**gpt4o_entry, "supports_reasoning": False}
 
         with pytest.raises(litellm.utils.UnsupportedParamsError):
             get_optional_params(
@@ -207,6 +217,41 @@ class TestGetOptionalParamsIntegration:
                 custom_llm_provider="openai",
                 reasoning_effort="low",
             )
+
+    def test_reasoning_effort_allowed_when_catalog_model_declares_supports_reasoning(
+        self,
+    ):
+        """openai/ catalog models with supports_reasoning=true in model metadata should
+        accept reasoning_effort and pass it through unchanged."""
+        import litellm
+        from litellm.llms.openai.openai import OpenAIConfig
+        from litellm.utils import get_optional_params
+
+        model = "gpt-4o"
+        original_entry = litellm.model_cost.get(model)
+        litellm.model_cost[model] = {
+            **(original_entry or {}),
+            "supports_reasoning": True,
+            "litellm_provider": "openai",
+            "reasoning_effort_levels": ["low", "high", "max"],
+        }
+
+        try:
+            supported_params = OpenAIConfig().get_supported_openai_params(model)
+            assert "reasoning_effort" in supported_params
+
+            for effort in ("low", "high", "max"):
+                optional_params = get_optional_params(
+                    model=model,
+                    custom_llm_provider="openai",
+                    reasoning_effort=effort,
+                )
+                assert optional_params.get("reasoning_effort") == effort
+        finally:
+            if original_entry is None:
+                litellm.model_cost.pop(model, None)
+            else:
+                litellm.model_cost[model] = original_entry
 
 
 class TestOpenAIChatCompletionStreamingHandler:

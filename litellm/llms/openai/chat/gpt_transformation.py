@@ -179,7 +179,12 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             model_specific_params.append(
                 "user"
             )  # user is not a param supported by all openai-compatible endpoints - e.g. azure ai
-        return base_params + model_specific_params
+        supported_params = base_params + model_specific_params
+        from litellm.utils import supports_reasoning
+
+        if supports_reasoning(model=model, custom_llm_provider="openai") and "reasoning_effort" not in supported_params:
+            supported_params.append("reasoning_effort")
+        return supported_params
 
     @staticmethod
     def is_openai_catalog_model(model: str) -> bool:
