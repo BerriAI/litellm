@@ -153,13 +153,18 @@ def test_explicit_session_token_tuple_not_cached_in_iam_cache():
 def test_aws_profile_path_is_cached_in_iam_cache():
     """Regression test for #38689."""
     base = BaseAWSLLM()
+    credentials = Credentials("prof-ak", "prof-sk", None)
+
     with patch.object(
         base,
         "_auth_with_aws_profile",
-        return_value=(Credentials("prof-ak", "prof-sk", None), 3600),
+        return_value=(credentials, 3600),
     ) as mock_profile:
-        base.get_credentials(aws_profile_name="my-profile")
-        base.get_credentials(aws_profile_name="my-profile")
+        first = base.get_credentials(aws_profile_name="my-profile")
+        second = base.get_credentials(aws_profile_name="my-profile")
+
+        assert first is credentials
+        assert second is credentials
         assert mock_profile.call_count == 1
 
 
@@ -211,9 +216,13 @@ def test_aws_profile_path_boto3_session_constructed_once_when_cached():
     real_creds = MagicMock(name="RefreshableCredentials-like")
     mock_session_instance = MagicMock()
     mock_session_instance.get_credentials.return_value = real_creds
+
     with patch("boto3.Session", return_value=mock_session_instance) as mock_session_cls:
-        base_a.get_credentials(aws_profile_name="saml-pub")
-        base_b.get_credentials(aws_profile_name="saml-pub")
+        first = base_a.get_credentials(aws_profile_name="saml-pub")
+        second = base_b.get_credentials(aws_profile_name="saml-pub")
+
+        assert first is real_creds
+        assert second is real_creds
         mock_session_cls.assert_called_once()
 
 
