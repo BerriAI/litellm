@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { deletePromptCall, getPromptsList } from "@/components/networking";
 
 import PromptsPanel from "./index";
+import { chooseSelectOption } from "../../../../../tests/test-utils";
 
 vi.mock("@/components/networking", () => ({
   getPromptsList: vi.fn(),
@@ -118,8 +119,7 @@ describe("PromptsPanel toolbar", () => {
 
     expect(screen.getByText("All Environments")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByText("Production"));
+    await chooseSelectOption(user, screen.getByRole("combobox"), "Production");
 
     await waitFor(() => expect(mockGetPromptsList).toHaveBeenLastCalledWith("sk-test", "production"));
   });
@@ -131,12 +131,10 @@ describe("PromptsPanel toolbar", () => {
     renderPanel("Admin");
     await screen.findByText("table-loaded");
 
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByText("Production"));
+    await chooseSelectOption(user, screen.getByRole("combobox"), "Production");
     await waitFor(() => expect(screen.getByRole("combobox")).toHaveTextContent("Production"));
 
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByText("All Environments"));
+    await chooseSelectOption(user, screen.getByRole("combobox"), "All Environments");
 
     await waitFor(() => expect(screen.getByRole("combobox")).toHaveTextContent("All Environments"));
     await waitFor(() => expect(mockGetPromptsList).toHaveBeenLastCalledWith("sk-test", undefined));

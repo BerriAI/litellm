@@ -21,12 +21,20 @@ interface AutoRoutersPanelProps {
   accessToken: string;
   userRole: string;
   userID: string | null;
+  isViewOnly: boolean;
   teams: Team[] | null;
   /** Owned by the page, which knows how this caller must scope what they create. */
   createScope: ModelWriteScope;
 }
 
-export function AutoRoutersPanel({ accessToken, userRole, userID, teams, createScope }: AutoRoutersPanelProps) {
+export function AutoRoutersPanel({
+  accessToken,
+  userRole,
+  userID,
+  isViewOnly,
+  teams,
+  createScope,
+}: AutoRoutersPanelProps) {
   const canCreate = createScope !== "forbidden";
   const { data: deployments, isLoading } = useAutoRouters();
   const invalidateAutoRouters = useInvalidateAutoRouters();
@@ -39,8 +47,8 @@ export function AutoRoutersPanel({ accessToken, userRole, userID, teams, createS
   const [isDeleting, setIsDeleting] = useState(false);
 
   const routers = useMemo(
-    () => toAutoRouterRows(deployments ?? [], { userRole, userID }, teams),
-    [deployments, userRole, userID, teams],
+    () => toAutoRouterRows(deployments ?? [], { userRole, userID, isViewOnly }, teams),
+    [deployments, userRole, userID, isViewOnly, teams],
   );
 
   const handleCreated = () => {

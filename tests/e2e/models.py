@@ -114,6 +114,7 @@ class KeyInfo(BaseModel):
     budget_id: str | None = None
     litellm_budget_table: LiteLLMBudgetTable | None = None
     budget_limits: list[BudgetWindowState] | None = None
+    object_permission: ObjectPermission | None = None
 
 
 class KeyInfoResponse(BaseModel):
@@ -256,6 +257,7 @@ class ChatBody(BaseModel):
     reasoning_effort: str | None = None
     thinking: ThinkingParam | None = None
     service_tier: str | None = None
+    prompt_cache_key: str | None = None
     tools: Sequence[ChatTool | McpChatTool] | None = None
     tool_choice: str | None = None
     guardrails: list[str] | None = None
@@ -332,6 +334,7 @@ class OutMessage(BaseModel):
 
 class ChatChoice(BaseModel):
     message: OutMessage | None = None
+    finish_reason: str | None = None
 
 
 class PromptTokensDetails(BaseModel):
@@ -420,6 +423,7 @@ class AnthropicContentBlock(BaseModel):
     text: str | None = None
     id: str | None = None
     name: str | None = None
+    input: dict[str, object] | None = None
 
 
 class AnthropicToolResultBlock(BaseModel):
@@ -802,6 +806,7 @@ class LiteLLMParamsBody(BaseModel):
     mock_response: str | None = None
     timeout: float | None = None
     tpm: int | None = None
+    weight: int | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
@@ -816,6 +821,7 @@ class ModelInfoBody(BaseModel):
     mode: ModelMode | None = None
     access_groups: list[str] | None = None
     team_id: str | None = None
+    allowed_fails_policy: dict[str, int] | None = None
 
 
 class ModelNewBody(BaseModel):
@@ -892,7 +898,10 @@ class CredentialCreateResponse(BaseModel):
 
 class KeyUpdateBody(BaseModel):
     key: str
-    models: list[str]
+    models: list[str] | None = None
+    key_alias: str | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
 
 
 class KeyBlockBody(BaseModel):
@@ -905,6 +914,27 @@ class KeyListParams(BaseModel):
 
 class KeyListResponse(BaseModel):
     total_count: int
+
+
+# ---------- admin UI session ----------
+
+
+class UiLoginBody(BaseModel):
+    username: str
+    password: str
+
+
+class UiLoginResponse(BaseModel):
+    token: str
+    redirect_url: str
+
+
+class UiSessionClaims(BaseModel):
+    user_id: str
+    key: str
+    user_role: str
+    login_method: Literal["sso", "username_password"]
+    exp: int
 
 
 class TeamMemberEntry(BaseModel):

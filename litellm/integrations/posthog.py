@@ -12,7 +12,10 @@ For batching specific details see CustomBatchLogger class
 import asyncio
 import atexit
 import os
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Final
+
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -32,6 +35,21 @@ from litellm.types.integrations.posthog import (
     PostHogEventPayload,
 )
 from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPayload
+
+
+class PostHogBatchPayload(TypedDict):
+    api_key: ReadOnly[str]
+    batch: ReadOnly[Sequence[PostHogEventPayload]]
+
+
+class PostHogLiteLLMParams(TypedDict, total=False):
+    metadata: ReadOnly[Mapping[str, object]]
+
+
+class PostHogLogKwargs(TypedDict, total=False):
+    standard_logging_object: ReadOnly[StandardLoggingPayload]
+    standard_callback_dynamic_params: ReadOnly[StandardCallbackDynamicParams]
+    litellm_params: ReadOnly[PostHogLiteLLMParams]
 
 
 class PostHogLogger(CustomBatchLogger):
@@ -137,7 +155,7 @@ class PostHogLogger(CustomBatchLogger):
         if len(self.log_queue) >= self.batch_size:
             await self.flush_queue()
 
-    def create_posthog_event_payload(self, kwargs: dict[str, Any]) -> PostHogEventPayload:
+    def create_posthog_event_payload(self, kwargs: PostHogLogKwargs) -> PostHogEventPayload:
         """
         Helper function to create a PostHog event payload for logging
 
@@ -171,11 +189,11 @@ class PostHogLogger(CustomBatchLogger):
     def _create_posthog_properties(
         self,
         standard_logging_object: StandardLoggingPayload,
-        kwargs: dict[str, Any],
+        kwargs: PostHogLogKwargs,
         event_name: str,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """Create PostHog properties following LLM Analytics spec"""
-        properties: Final = {}
+        properties: Final[dict[str, object]] = {}
 
         # Core model information
         properties["$ai_model"] = self._safe_get(standard_logging_object, "model", "")
@@ -211,16 +229,19 @@ class PostHogLogger(CustomBatchLogger):
                 properties["$ai_error"] = error_str
 
         # Add trace properties
-        self._add_trace_properties(properties, kwargs)
+        self._add_trace_properties(properties, standard_logging_object, kwargs)
 
         # Add custom metadata fields
         self._add_custom_metadata_properties(properties, kwargs)
 
         return properties
 
-    def _add_trace_properties(self, properties: dict[str, Any], kwargs: dict[str, Any]):
-        standard_logging_object: Final = self._safe_get(kwargs, "standard_logging_object", {})
-
+    def _add_trace_properties(
+        self,
+        properties: dict[str, object],
+        standard_logging_object: StandardLoggingPayload,
+        kwargs: PostHogLogKwargs,
+    ) -> None:
         trace_id: Final = self._safe_get(standard_logging_object, "trace_id", self._safe_uuid())
         properties["$ai_trace_id"] = trace_id
 
@@ -232,7 +253,7 @@ class PostHogLogger(CustomBatchLogger):
         if parent_id:
             properties["$ai_parent_id"] = parent_id
 
-    def _add_custom_metadata_properties(self, properties: dict[str, Any], kwargs: dict[str, Any]):
+    def _add_custom_metadata_properties(self, properties: dict[str, object], kwargs: PostHogLogKwargs) -> None:
         """Add custom metadata fields to PostHog properties"""
         metadata: Final = self._extract_metadata(kwargs)
         if not isinstance(metadata, dict):
@@ -277,7 +298,7 @@ class PostHogLogger(CustomBatchLogger):
             if key not in litellm_internal_fields:
                 properties[key] = value
 
-    def _get_distinct_id(self, standard_logging_object: StandardLoggingPayload, kwargs: dict[str, Any]) -> str:
+    def _get_distinct_id(self, standard_logging_object: StandardLoggingPayload, kwargs: PostHogLogKwargs) -> str:
         metadata: Final = self._extract_metadata(kwargs)
         user_id: Final = self._safe_get(metadata, "user_id")
         if user_id:
@@ -291,7 +312,7 @@ class PostHogLogger(CustomBatchLogger):
 
         return self._safe_uuid()
 
-    def _get_credentials_for_request(self, kwargs: dict[str, Any]) -> tuple[str | None, str | None]:
+    def _get_credentials_for_request(self, kwargs: PostHogLogKwargs) -> tuple[str | None, str | None]:
         """
         Get PostHog credentials for this request.
 
@@ -334,7 +355,7 @@ class PostHogLogger(CustomBatchLogger):
                 verbose_logger.debug("[POSTHOG MOCK] Mock mode enabled - API calls will be intercepted")
 
             # Group events by credentials for batch sending
-            batches_by_credentials: Final[dict[tuple[str, str], list]] = {}
+            batches_by_credentials: Final[dict[tuple[str, str], list[PostHogEventPayload]]] = {}
             for item in self.log_queue:
                 key = (item["api_key"], item["api_url"])
                 if key not in batches_by_credentials:
@@ -380,18 +401,19 @@ class PostHogLogger(CustomBatchLogger):
                 verbose_logger.error("PostHog: Failed to initialize async components: %s", e)
                 raise
 
-    def _extract_metadata(self, kwargs: dict[str, Any]) -> dict[str, Any]:
-        litellm_params: Final = kwargs.get("litellm_params", {}) or {}
-        return litellm_params.get("metadata", {}) or {}
+    def _extract_metadata(self, kwargs: PostHogLogKwargs) -> Mapping[str, object]:
+        litellm_params: Final[PostHogLiteLLMParams] = kwargs.get("litellm_params", {}) or {}
+        metadata: Final[Mapping[str, object]] = litellm_params.get("metadata", {}) or {}
+        return metadata
 
     def _safe_uuid(self) -> str:
         return str(uuid.uuid4())
 
-    def _create_posthog_payload(self, events: list, api_key: str) -> dict[str, Any]:
+    def _create_posthog_payload(self, events: Sequence[PostHogEventPayload], api_key: str) -> PostHogBatchPayload:
         return {"api_key": api_key, "batch": events}
 
-    def _safe_get(self, obj: Any, key: str, default: Any = None) -> Any:
-        if obj is None or not hasattr(obj, "get"):
+    def _safe_get(self, obj: Mapping[str, object] | None, key: str, default: object = None) -> object:
+        if not isinstance(obj, Mapping):
             return default
         return obj.get(key, default)
 
@@ -412,7 +434,7 @@ class PostHogLogger(CustomBatchLogger):
 
         try:
             # Group events by credentials (same logic as async_send_batch)
-            batches_by_credentials: Final[dict[tuple[str, str], list]] = {}
+            batches_by_credentials: Final[dict[tuple[str, str], list[PostHogEventPayload]]] = {}
             for item in self.log_queue:
                 key = (item["api_key"], item["api_url"])
                 if key not in batches_by_credentials:

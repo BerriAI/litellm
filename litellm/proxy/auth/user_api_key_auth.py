@@ -19,12 +19,15 @@ import fastapi
 import orjson
 from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
+from starlette.exceptions import WebSocketException
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import (
     GLOBAL_PROXY_SPEND_CACHE_KEY,
+    INVALID_VIRTUAL_KEY_ERROR_MARKER,
+    INVALID_VIRTUAL_KEY_ERROR_MESSAGE,
     LITELLM_PROXY_BUDGET_NAME,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
 )
@@ -65,6 +68,7 @@ from litellm.proxy.auth.auth_utils import (
     get_model_from_request,
     get_request_route,
     get_request_route_template,
+    is_invalid_virtual_key_error,
     iter_request_fallback_targets,
     normalize_request_route,
     pre_db_read_auth_checks,
@@ -539,6 +543,8 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
     try:
         return await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
     except Exception as e:
+        if is_invalid_virtual_key_error(e):
+            raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION)
         verbose_proxy_logger.exception(e)
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         raise HTTPException(status_code=403, detail=str(e))
@@ -1769,7 +1775,12 @@ async def _user_api_key_auth_builder(
 
             return valid_token
 
-        if valid_token is not None and isinstance(valid_token, UserAPIKeyAuth) and valid_token.team_id is not None:
+        if (
+            valid_token is not None
+            and isinstance(valid_token, UserAPIKeyAuth)
+            and valid_token.team_id is not None
+            and valid_token.team_id != UI_TEAM_ID
+        ):
             ## UPDATE TEAM VALUES BASED ON CACHED TEAM OBJECT - allows `/team/update` values to work for cached token
             try:
                 team_obj: Final[LiteLLM_TeamTableCachedObj] = await get_team_object(
@@ -1862,13 +1873,17 @@ async def _user_api_key_auth_builder(
                 _masked_key: Final = f"{api_key[:4]}****{api_key[-4:]}" if len(api_key) > 8 else "****"
                 if not api_key.startswith("sk-"):
                     _hint = _JWT_AUTH_DISABLED_HINT if not enable_jwt_auth and JWTHandler.is_jwt(token=api_key) else ""
-                    raise HTTPException(
+                    _malformed_key_error = HTTPException(
                         status_code=status.HTTP_401_UNAUTHORIZED,
                         detail=(
-                            f"LiteLLM Virtual Key expected. Received={_masked_key}, "
+                            f"{INVALID_VIRTUAL_KEY_ERROR_MESSAGE}. Received={_masked_key}, "
                             f"expected to start with 'sk-'.{_hint}"
                         ),
                     )  # prevent token hashes from being used
+                    # Stamp provenance here so log routing classifies this 401 by
+                    # where it was raised, never by its message text.
+                    setattr(_malformed_key_error, INVALID_VIRTUAL_KEY_ERROR_MARKER, True)
+                    raise _malformed_key_error
             else:
                 verbose_logger.warning(
                     "litellm.proxy.proxy_server.user_api_key_auth(): Warning - Key is not a string. Got type={}".format(
@@ -2149,6 +2164,8 @@ async def _user_api_key_auth_builder(
             # Check 6: Additional Common Checks across jwt + key auth
             if valid_token.team_id is not None:
                 try:
+                    if valid_token.team_id == UI_TEAM_ID:
+                        raise TeamNotFoundError(team_id=UI_TEAM_ID)
                     with tracer.trace("litellm.proxy.auth.get_team_object"):
                         _team_obj = await get_team_object(
                             team_id=valid_token.team_id,
@@ -2443,7 +2460,7 @@ async def _run_centralized_common_checks(
         )
 
     fetch_coros: Final = []
-    if user_api_key_auth_obj.team_id is not None:
+    if user_api_key_auth_obj.team_id is not None and user_api_key_auth_obj.team_id != UI_TEAM_ID:
         fetch_coros.append(
             _safe_fetch(
                 "team",
@@ -2567,7 +2584,9 @@ async def _run_centralized_common_checks(
         else:
             raise team_result
     else:
-        team_object = team_result
+        team_object = (
+            _team_obj_from_token(user_api_key_auth_obj) if user_api_key_auth_obj.team_id == UI_TEAM_ID else team_result
+        )
 
     user_object: LiteLLM_UserTable | None = None if isinstance(user_result, BaseException) else user_result
     project_object: Final[LiteLLM_ProjectTableCachedObj | None] = (

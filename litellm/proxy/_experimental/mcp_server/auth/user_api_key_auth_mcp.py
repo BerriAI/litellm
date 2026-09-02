@@ -1,5 +1,5 @@
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -65,6 +65,9 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
+
+
+_EMPTY_TOOLSET_GRANTS: Final[Mapping[str, Sequence[str]]] = MappingProxyType({})
 
 
 def _as_list(values: Sequence[str] | None) -> list[str] | None:  # mutable-ok: resolver returns a list
@@ -900,8 +903,9 @@ class MCPRequestHandler:
             NotSessionBearer,
             SessionBearerAdmitted,
             SessionBearerInvalid,
+            SessionSigningConfigError,
+            active_session_signing_keys,
             resolve_session_bearer,
-            session_keys_from_master_key,
         )
         from litellm.proxy.proxy_server import master_key
 
@@ -910,7 +914,10 @@ class MCPRequestHandler:
 
         await MCPRequestHandler._run_pre_db_read_auth_checks(request=request, route=route)
 
-        keys: Final = session_keys_from_master_key(master_key)
+        keys: Final = active_session_signing_keys(master_key)
+        if isinstance(keys, SessionSigningConfigError):
+            verbose_logger.error("mcp gateway session admission rejected: %s", keys.detail)
+            raise HTTPException(status_code=500, detail="Server misconfigured: mcp_session_token_signing is invalid")
         result: Final = resolve_session_bearer(authorization_value, keys, datetime.now(timezone.utc))
         match result:
             case SessionBearerAdmitted():
@@ -1497,7 +1504,11 @@ class MCPRequestHandler:
             team_set: Final = set(allowed_mcp_servers_for_team)
             grants_set: Final = set(key_access_group_grants)
 
-            has_lower_level_mcp_restrictions = bool(key_set or team_set or grants_set)
+            # A DECLARED toolset restricts even when it resolves to no servers: the org
+            # ceiling below may only cap it, never substitute the org's full server list.
+            has_lower_level_mcp_restrictions = bool(key_set or team_set or grants_set) or (
+                await MCPRequestHandler._key_or_team_declares_toolsets(user_api_key_auth)
+            )
 
             # 1. Key/team ceiling. An empty set means "this level does not restrict".
             if not team_set:
@@ -1942,6 +1953,105 @@ class MCPRequestHandler:
         return team_obj.object_permission
 
     @staticmethod
+    async def _toolset_tool_permissions(
+        object_permission: LiteLLM_ObjectPermissionTable | None,
+    ) -> Mapping[str, Sequence[str]]:
+        """The ``server_id -> tool names`` grants of this permission row's toolsets, empty when it
+        declares none. The shared resolver for the team, org, and internal-user levels, so a toolset
+        behaves identically wherever it is attached.
+
+        RAISES ``UnloadableEntitlementError`` when the row DECLARES toolsets but resolution yields
+        nothing (deleted or unknown ids, a swallowed DB fault, or a toolset with no tools): that is a
+        KNOWN restriction with unknown contents, and every caller already turns this error into deny
+        rather than letting the level read as unrestricted."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        if object_permission is None or not object_permission.mcp_toolsets:
+            return _EMPTY_TOOLSET_GRANTS
+        resolved: Final = await global_mcp_server_manager.resolve_toolset_tool_permissions(
+            toolset_ids=object_permission.mcp_toolsets
+        )
+        if not resolved:
+            raise UnloadableEntitlementError(
+                f"declared mcp_toolsets {object_permission.mcp_toolsets!r} resolved to no grants"
+            )
+        return resolved
+
+    @staticmethod
+    async def _toolset_tools_for_server(
+        object_permission: LiteLLM_ObjectPermissionTable | None,
+        server_id: str,
+    ) -> Sequence[str] | None:
+        """Tool names this row's toolsets grant on ``server_id``, ``None`` when its toolsets place
+        no restriction on that server (it declares no toolsets, or none of them name it)."""
+        return (await MCPRequestHandler._toolset_tool_permissions(object_permission)).get(server_id)
+
+    @staticmethod
+    def _union_tool_grants(
+        direct: Sequence[str] | None,
+        via_toolsets: Sequence[str] | None,
+    ) -> Sequence[str] | None:
+        """Union of one level's direct tool grants and its toolset-granted tools on one server,
+        ``None`` when neither source restricts (allow-all from this level)."""
+        if direct is None and via_toolsets is None:
+            return None
+        return tuple({*(direct or ()), *(via_toolsets or ())})
+
+    @staticmethod
+    async def _key_object_permission_hydrated(
+        user_api_key_auth: UserAPIKeyAuth,
+    ) -> LiteLLM_ObjectPermissionTable | None:
+        """The key's object_permission, loading it by ``object_permission_id`` when the main auth
+        flow cached the key with the relation unhydrated (its loader swallows a failed read and
+        caches the partial object)."""
+        loaded: Final = MCPRequestHandler._get_key_object_permission(user_api_key_auth)
+        if loaded is not None or not user_api_key_auth.object_permission_id:
+            return loaded
+        from litellm.proxy.auth.auth_checks import get_object_permission
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        if prisma_client is None:
+            return None
+        return await get_object_permission(
+            object_permission_id=user_api_key_auth.object_permission_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=user_api_key_auth.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    @staticmethod
+    async def _key_or_team_declares_toolsets(user_api_key_auth: UserAPIKeyAuth | None) -> bool:
+        """Whether the key or its team GRANTS any toolset, resolvable or not. A declared toolset is
+        a lower-level restriction even when it resolves to no servers (deleted or unknown ids), so the
+        org ceiling may only cap it; reading an empty resolution as "no restriction" would substitute
+        the org's entire server list for the narrowest grant an operator can write.
+
+        Falls back to the DB when the auth object carries ``object_permission_id`` unhydrated (the
+        main auth flow swallows a failed load and caches the partial object). An INDETERMINATE fault
+        answers False — no gate, org substitution as before the fault — mirroring how the org ceiling
+        keeps key auth open on a fault it cannot classify."""
+        if user_api_key_auth is None:
+            return False
+        try:
+            key_obj_perm: Final = await MCPRequestHandler._key_object_permission_hydrated(user_api_key_auth)
+            if key_obj_perm is not None and key_obj_perm.mcp_toolsets:
+                return True
+            if not user_api_key_auth.team_id:
+                return False
+            team_obj_perm: Final = await MCPRequestHandler._get_team_object_permission(user_api_key_auth)
+            return bool(team_obj_perm is not None and team_obj_perm.mcp_toolsets)
+        except Exception as e:  # noqa: BLE001  # indeterminate fault: no gate, as before this level existed
+            verbose_logger.warning("Failed to check declared MCP toolsets, org ceiling unchanged: %s", e)
+            return False
+
+    @staticmethod
     async def get_allowed_tools_for_server(
         server_id: str,
         user_api_key_auth: UserAPIKeyAuth | None = None,
@@ -2004,11 +2114,16 @@ class MCPRequestHandler:
                 if key_direct_tools is not None or key_toolset_tools is not None
                 else None
             )
-            team_tools: Final = (
+            team_direct_tools: Final = (
                 global_mcp_server_manager.expand_tool_permissions(team_obj_perm.mcp_tool_permissions).get(server_id)
                 if team_obj_perm
                 else None
             )
+
+            # Tools granted through the team's toolsets restrict this server exactly
+            # as the team's direct tool permissions do, mirroring the key path above
+            team_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(team_obj_perm, server_id)
+            team_tools: Final = MCPRequestHandler._union_tool_grants(team_direct_tools, team_toolset_tools)
 
             # Apply same inheritance logic as get_allowed_mcp_servers
             if team_tools:
@@ -2094,11 +2209,13 @@ class MCPRequestHandler:
                     e,
                 )
                 return allowed_tools
-            org_tools: Final = (
+            org_direct_tools: Final = (
                 global_mcp_server_manager.expand_tool_permissions(org_obj_perm.mcp_tool_permissions).get(server_id)
                 if org_obj_perm and org_obj_perm.mcp_tool_permissions
                 else None
             )
+            org_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(org_obj_perm, server_id)
+            org_tools: Final = MCPRequestHandler._union_tool_grants(org_direct_tools, org_toolset_tools)
             if org_tools is not None:
                 allowed_tools = (
                     list(set(allowed_tools) & set(org_tools)) if allowed_tools is not None else list(org_tools)
@@ -2340,7 +2457,8 @@ class MCPRequestHandler:
     async def _team_granted_servers(team_obj: LiteLLM_TeamTable, team_access_group_servers: list[str]) -> set[str]:
         """The raw MCP-server set a team grants (before any org ceiling): its object_permission (direct
         ``mcp_servers``, the ``all_proxy_servers`` sentinel → the full registry, legacy access groups,
-        tool-perm-referenced servers) unioned with its unified ``access_group_ids`` servers."""
+        tool-perm-referenced servers, toolset-referenced servers) unioned with its unified
+        ``access_group_ids`` servers."""
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
@@ -2357,6 +2475,7 @@ class MCPRequestHandler:
             set(global_mcp_server_manager.expand_permission_list(object_permissions.mcp_servers or []))
             | set(legacy_access_group_servers)
             | set(global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys())
+            | (await MCPRequestHandler._toolset_tool_permissions(object_permissions)).keys()
             | set(team_access_group_servers)
         )
 
@@ -2415,6 +2534,8 @@ class MCPRequestHandler:
             servers: Final = await MCPRequestHandler._team_granted_servers(team_obj, team_access_group_servers)
             return list(servers)
         except Exception as e:
+            if isinstance(e, UnloadableEntitlementError):
+                raise
             verbose_logger.warning("Failed to get allowed MCP servers for team: %s", e)
             return []
 
@@ -2546,7 +2667,13 @@ class MCPRequestHandler:
                 global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys()
             )
 
-            all_servers: Final = direct_mcp_servers + access_group_servers + tool_perm_servers
+            # servers referenced by the org's toolset grants are part of the org ceiling,
+            # exactly as servers referenced by its inline tool permissions are
+            toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(object_permissions)
+
+            all_servers: Final = tuple(
+                {*direct_mcp_servers, *access_group_servers, *tool_perm_servers, *toolset_grants}
+            )
             return list(set(all_servers))
         except Exception as e:
             # None = ceiling UNRESOLVED, distinct from [] = org places no restriction. Collapsing them
@@ -2740,8 +2867,8 @@ class MCPRequestHandler:
 
         ``[]`` means this human places no restriction (allow-all from this level); ``None`` means the
         ceiling is UNRESOLVED, which the caller denies on. Servers named only under
-        ``mcp_tool_permissions`` count as entitled, exactly as they do for a key or a team, so
-        granting one tool never requires naming its server twice.
+        ``mcp_tool_permissions`` or reached through ``mcp_toolsets`` count as entitled, exactly as
+        they do for a key or a team, so granting one tool never requires naming its server twice.
         """
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
@@ -2759,7 +2886,8 @@ class MCPRequestHandler:
             tool_perm_servers: Final = list(
                 global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys()
             )
-            return list(set(direct_mcp_servers + access_group_servers + tool_perm_servers))
+            toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(object_permissions)
+            return tuple({*direct_mcp_servers, *access_group_servers, *tool_perm_servers, *toolset_grants})
         except Exception as e:  # noqa: BLE001  # any resolution fault is an unresolved ceiling, never "no ceiling"
             verbose_logger.warning("Failed to get allowed MCP servers for user: %s", e)
             return None
@@ -2860,12 +2988,14 @@ class MCPRequestHandler:
             verbose_logger.warning("MCP user tool ceiling unresolvable, denying tools on %r: %s", server_id, e)
             return []
 
-        if object_permissions is None or not object_permissions.mcp_tool_permissions:
+        if object_permissions is None:
             return allowed_tools
 
-        user_tools = global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).get(
-            server_id
-        )
+        user_direct_tools: Final = global_mcp_server_manager.expand_tool_permissions(
+            object_permissions.mcp_tool_permissions
+        ).get(server_id)
+        user_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(object_permissions, server_id)
+        user_tools: Final = MCPRequestHandler._union_tool_grants(user_direct_tools, user_toolset_tools)
         if user_tools is None:
             return allowed_tools
         if allowed_tools is None:

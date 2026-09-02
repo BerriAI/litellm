@@ -7,6 +7,7 @@ import base64
 import os
 from collections.abc import Awaitable, Callable, Generator
 from datetime import timedelta
+from functools import partial
 from importlib import metadata
 from typing import Any, Final, TypeVar
 
@@ -47,7 +48,8 @@ from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl
 
 from litellm._logging import verbose_logger
-from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR
+from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR, MCP_TOOL_LISTING_TIMEOUT
+from litellm.experimental_mcp_client.tools import list_tools_with_pagination
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.types.llms.custom_http import VerifyTypes
 from litellm.types.mcp import (
@@ -56,6 +58,9 @@ from litellm.types.mcp import (
     MCPStdioConfig,
     MCPTransport,
     MCPTransportType,
+    credential_redirect_hook,
+    has_header,
+    without_header,
 )
 
 
@@ -273,6 +278,7 @@ class MCPClient:
         transport_type: MCPTransportType = MCPTransport.http,
         auth_type: MCPAuthType = None,
         auth_value: str | dict[str, str] | None = None,
+        auth_header_name: str | None = None,
         timeout: float | None = None,
         stdio_config: MCPStdioConfig | None = None,
         extra_headers: dict[str, str] | None = None,
@@ -288,6 +294,11 @@ class MCPClient:
         self.auth_type: MCPAuthType = auth_type
         self.timeout: float = timeout if timeout is not None else MCP_CLIENT_TIMEOUT
         self._mcp_auth_value: str | dict[str, str] | None = None
+        # The one place this client decides which header its credential occupies: the operator's
+        # configured slot on the v1 path, or the slot the v2 resolver's auth object already owns.
+        # Every consumer reads this rather than re-deriving it, since each re-derivation so far
+        # picked up a different bug.
+        self._credential_slot: str | None = auth_header_name or getattr(resolved_auth, "header_name", None)
         self.stdio_config: MCPStdioConfig | None = stdio_config
         self.extra_headers: dict[str, str] | None = extra_headers
         self.ssl_verify: VerifyTypes | None = ssl_verify
@@ -501,26 +512,33 @@ class MCPClient:
         else:
             self._mcp_auth_value = mcp_auth_value
 
+    def _header_slot(self, default: str) -> str:
+        return self._credential_slot or default
+
     def _get_auth_headers(self) -> dict:
         """Generate authentication headers based on auth type."""
         headers: Final = {}
         if self._mcp_auth_value:
             if isinstance(self._mcp_auth_value, str):
                 if self.auth_type == MCPAuth.bearer_token:
-                    headers["Authorization"] = f"Bearer {strip_auth_scheme(self._mcp_auth_value, 'Bearer')}"
+                    static_bearer: Final = strip_auth_scheme(self._mcp_auth_value, "Bearer")
+                    headers[self._header_slot("Authorization")] = f"Bearer {static_bearer}"
                 elif self.auth_type == MCPAuth.basic:
-                    headers["Authorization"] = f"Basic {self._mcp_auth_value}"
+                    headers[self._header_slot("Authorization")] = f"Basic {self._mcp_auth_value}"
                 elif self.auth_type == MCPAuth.api_key:
-                    headers["X-API-Key"] = self._mcp_auth_value
+                    headers[self._header_slot("X-API-Key")] = self._mcp_auth_value
                 elif self.auth_type == MCPAuth.authorization:
                     # This auth type means the caller owns the whole header value.
-                    headers["Authorization"] = self._mcp_auth_value
+                    headers[self._header_slot("Authorization")] = self._mcp_auth_value
                 elif self.auth_type == MCPAuth.oauth2:
-                    headers["Authorization"] = f"Bearer {strip_auth_scheme(self._mcp_auth_value, 'Bearer')}"
+                    oauth2_bearer: Final = strip_auth_scheme(self._mcp_auth_value, "Bearer")
+                    headers[self._header_slot("Authorization")] = f"Bearer {oauth2_bearer}"
                 elif self.auth_type == MCPAuth.token:
-                    headers["Authorization"] = f"token {strip_auth_scheme(self._mcp_auth_value, 'token')}"
+                    scheme_token: Final = strip_auth_scheme(self._mcp_auth_value, "token")
+                    headers[self._header_slot("Authorization")] = f"token {scheme_token}"
                 elif self.auth_type == MCPAuth.oauth2_token_exchange:
-                    headers["Authorization"] = f"Bearer {strip_auth_scheme(self._mcp_auth_value, 'Bearer')}"
+                    exchanged_bearer: Final = strip_auth_scheme(self._mcp_auth_value, "Bearer")
+                    headers[self._header_slot("Authorization")] = f"Bearer {exchanged_bearer}"
             elif isinstance(self._mcp_auth_value, dict):
                 headers.update(self._mcp_auth_value)
         # Note: aws_sigv4 auth is not handled here — SigV4 requires per-request
@@ -528,7 +546,14 @@ class MCPClient:
         # of static headers. See MCPSigV4Auth and _create_httpx_client_factory().
         # update the headers with the extra headers
         if self.extra_headers:
-            headers.update(self.extra_headers)
+            # Mirrors _resolve_v2_auth: when the operator named a slot for the credential the
+            # gateway resolved, no injected header may shadow it, case-insensitively, since HTTP
+            # header names are. Without a configured slot the old precedence stands unchanged.
+            slot: Final = self._credential_slot
+            injected: Final = (
+                without_header(self.extra_headers, slot) if slot and has_header(headers, slot) else self.extra_headers
+            )
+            headers.update(injected or {})
         return _strip_header_whitespace(headers)
 
     def _create_httpx_client_factory(self) -> Callable[..., httpx.AsyncClient]:
@@ -556,12 +581,14 @@ class MCPClient:
             # SigV4 aws_auth. Both are None for the common case — no behavior change.
             fallback_auth: Final = self._resolved_auth if self._resolved_auth is not None else self._aws_auth
             effective_auth: Final = auth if auth is not None else fallback_auth
+            guard: Final = credential_redirect_hook(self.server_url, self._credential_slot)
             return httpx.AsyncClient(
                 headers=headers,
                 timeout=timeout,
                 auth=effective_auth,
                 verify=ssl_config,
                 follow_redirects=True,
+                event_hooks={"request": [guard]} if guard else {},
             )
 
         return factory
@@ -578,17 +605,19 @@ class MCPClient:
         """
         verbose_logger.debug("MCP client listing tools from %s", self.server_url or "stdio")
 
-        async def _list_tools_operation(session: ClientSession):
-            return await session.list_tools()
-
         try:
-            result: Final = await self.run_with_session(_list_tools_operation, quiet_on_error=raise_on_error)
-            tool_count: Final = len(result.tools)
-            tool_names: Final = [tool.name for tool in result.tools]
+            # A per-server timeout above the global default extends the whole-walk deadline
+            listing_deadline: Final = max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)
+            tools: Final = await self.run_with_session(
+                partial(list_tools_with_pagination, listing_deadline=listing_deadline),
+                quiet_on_error=raise_on_error,
+            )
+            tool_count: Final = len(tools)
+            tool_names: Final = tuple(tool.name for tool in tools)
             verbose_logger.info(
                 "MCP client listed %s tools from %s: %s", tool_count, self.server_url or "stdio", tool_names
             )
-            return result.tools
+            return tools
         except asyncio.CancelledError:
             verbose_logger.warning("MCP client list_tools was cancelled")
             raise
