@@ -1411,6 +1411,97 @@ def flatten_unencrypted_web_search_results_in_anthropic_messages(  # mutable-ok:
     return [_flatten_web_search_results_in_message(m) for m in messages]  # mutable-ok: JSON wire format
 
 
+def _normalized_cache_control(cache_control: object) -> dict[str, str] | None:  # mutable-ok: JSON wire format
+    if not isinstance(cache_control, Mapping):
+        return None
+    cache_type: Final = cache_control.get("type")
+    return {"type": cache_type if isinstance(cache_type, str) else "ephemeral"}  # mutable-ok: JSON wire format
+
+
+def _with_portable_cache_control(block: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: JSON wire format
+    if "cache_control" not in block:
+        return dict(block)  # mutable-ok: JSON wire format
+    normalized: Final = _normalized_cache_control(block["cache_control"])
+    rest: Final = {key: value for key, value in block.items() if key != "cache_control"}  # mutable-ok: JSON wire format
+    return rest if normalized is None else {**rest, "cache_control": normalized}  # mutable-ok: JSON wire format
+
+
+def _with_portable_cache_control_in_blocks(blocks: object) -> object:
+    if isinstance(blocks, str) or not isinstance(blocks, Sequence):
+        return blocks
+    return [  # mutable-ok: JSON wire format
+        _with_portable_cache_control(block) if isinstance(block, Mapping) else block for block in blocks
+    ]
+
+
+def _with_portable_cache_control_in_content_block(block: object) -> object:
+    if not isinstance(block, Mapping):
+        return block
+    portable: Final = _with_portable_cache_control(block)
+    if portable.get("type") != "tool_result" or "content" not in portable:
+        return portable
+    return {  # mutable-ok: JSON wire format
+        **portable,
+        "content": _with_portable_cache_control_in_blocks(portable["content"]),
+    }
+
+
+def _with_portable_cache_control_in_message(message: object) -> object:
+    if not isinstance(message, Mapping) or "content" not in message:
+        return message
+    content: Final = message["content"]
+    if isinstance(content, str) or not isinstance(content, Sequence):
+        return message
+    return {  # mutable-ok: JSON wire format
+        **message,
+        "content": [  # mutable-ok: JSON wire format
+            _with_portable_cache_control_in_content_block(block) for block in content
+        ],
+    }
+
+
+def _with_portable_cache_control_in_messages(messages: object) -> object:
+    if isinstance(messages, str) or not isinstance(messages, Sequence):
+        return messages
+    return [  # mutable-ok: JSON wire format
+        _with_portable_cache_control_in_message(message) for message in messages
+    ]
+
+
+def _with_portable_cache_control_in_scoped_value(key: str, value: object) -> object:
+    match key:
+        case "system" | "tools":
+            return _with_portable_cache_control_in_blocks(value)
+        case "messages":
+            return _with_portable_cache_control_in_messages(value)
+        case _:
+            return value
+
+
+def normalize_cache_control_in_anthropic_payload(
+    payload: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: JSON wire format
+    """
+    Return a copy of an Anthropic /v1/messages payload with every
+    ``cache_control`` entry reduced to ``{"type": <its type, or "ephemeral">}``
+    at the places the Messages API defines it: the request itself, system
+    blocks, tools, message content blocks, and ``tool_result`` content blocks.
+    Application data such as ``tool_use.input`` and tool ``input_schema`` is
+    never touched, even when it happens to contain a ``cache_control`` key.
+
+    Anthropic itself accepts prompt-caching extensions such as ``ttl``, but
+    strict non-Anthropic implementations of the Messages API validate the field
+    literally and reject the whole request (``cache_control.ttl: 1h is not
+    supported``, ``cache_control.type is required``), which 400s clients like
+    Claude Code that send cache hints. Non-dict ``cache_control`` values are
+    dropped entirely. The caller's payload is never mutated.
+    """
+    portable: Final = _with_portable_cache_control(payload)
+    return {  # mutable-ok: JSON wire format
+        key: _with_portable_cache_control_in_scoped_value(key, value) for key, value in portable.items()
+    }
+
+
 def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
     openai_headers: Final = {}
     if "anthropic-ratelimit-requests-limit" in headers:
