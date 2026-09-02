@@ -301,15 +301,15 @@ class TestModelManagementAuthChecks:
 
         mock_prisma = MagicMock()
         with (
-            patch(
+            patch(  # test-quality-ok: endpoint reads proxy server globals with no injection seam
                 "litellm.proxy.proxy_server.prisma_client", mock_prisma
-            ),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
-            patch(
+            ),
+            patch(  # test-quality-ok: endpoint reads proxy server globals with no injection seam
                 "litellm.proxy.proxy_server.store_model_in_db", True
-            ),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
-            patch(
+            ),
+            patch(  # test-quality-ok: endpoint reads proxy server globals with no injection seam
                 "litellm.proxy.proxy_server.premium_user", True
-            ),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            ),
             patch(  # test-quality-ok: prior auth check needs a live DB; only the credential check is under test
                 "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
                 new=AsyncMock(return_value=None),
@@ -344,18 +344,18 @@ class TestModelManagementAuthChecks:
             model_info={"id": model_id},
         )
         with (
-            patch(
+            patch(  # test-quality-ok: endpoint reads proxy server globals with no injection seam
                 "litellm.proxy.proxy_server.prisma_client", MagicMock()
-            ),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
-            patch(
+            ),
+            patch(  # test-quality-ok: endpoint reads proxy server globals with no injection seam
                 "litellm.proxy.proxy_server.llm_router", MagicMock()
-            ),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
-            patch(
+            ),
+            patch(  # test-quality-ok: endpoint reads proxy server globals with no injection seam
                 "litellm.proxy.proxy_server.store_model_in_db", True
-            ),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
-            patch(
+            ),
+            patch(  # test-quality-ok: endpoint reads proxy server globals with no injection seam
                 "litellm.proxy.proxy_server.premium_user", True
-            ),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            ),
             patch(  # test-quality-ok: stubs the DB row fetch; only the credential check is under test
                 "litellm.proxy.management_endpoints.model_management_endpoints.get_db_model",
                 new=AsyncMock(return_value=db_model),
@@ -3497,18 +3497,18 @@ class TestPatchModelRowDeletedBeforeWrite:
         mock_prisma.db.litellm_proxymodeltable.update = AsyncMock(return_value=None)
 
         with (
-            patch(
+            patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
                 "litellm.proxy.proxy_server.prisma_client", mock_prisma
-            ),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
-            patch(
+            ),
+            patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
                 "litellm.proxy.proxy_server.llm_router", MagicMock(**{"get_model_ids.return_value": ["m1"]})
-            ),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
-            patch(
+            ),
+            patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
                 "litellm.proxy.proxy_server.store_model_in_db", True
-            ),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
-            patch(
+            ),
+            patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
                 "litellm.proxy.proxy_server.premium_user", True
-            ),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            ),
             patch(  # test-quality-ok: stubs the auth gate so the test exercises the not-found branch under test
                 "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
                 new=AsyncMock(return_value=None),
@@ -4657,19 +4657,19 @@ class TestBlockModelResponseSerialization:
         app.dependency_overrides[ps.user_api_key_auth] = lambda: admin
         try:
             with (
-                patch(
+                patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
                     "litellm.proxy.proxy_server.prisma_client", mock_prisma
-                ),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
-                patch(
+                ),
+                patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
                     "litellm.proxy.proxy_server.store_model_in_db", True
-                ),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+                ),
                 patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
                     "litellm.proxy.proxy_server.llm_router",
                     MagicMock(**{"get_model_ids.return_value": ["m-block-1"]}),
                 ),
-                patch(
+                patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
                     "litellm.proxy.proxy_server.redis_usage_cache", None
-                ),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+                ),
                 patch(  # test-quality-ok: stubs the cache write so the test observes only response serialization
                     "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
                     new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
