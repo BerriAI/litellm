@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import reduce
 from typing import Final, Literal
 
 from tests.sdk_function_trace.profiler import FunctionTraceEvent
@@ -141,32 +142,40 @@ def _canonical_name(route: str, engine: Engine, function: str) -> str | None:
     return function if engine == "rust" else None
 
 
-def pipeline_steps(route: str, engine: Engine, events: Sequence[FunctionTraceEvent]) -> tuple[FunctionTraceEvent, ...]:
-    shown: list[FunctionTraceEvent] = []
-    stack: list[tuple[int, int]] = []
-    seen: set[str] = set()
-    for event in events:
-        while stack and event.depth <= stack[-1][0]:
-            stack.pop()
-        name = _canonical_name(route, engine, event.function)
-        if name is None or name in seen:
-            continue
-        seen.add(name)
-        depth = (
-            next(
-                (
-                    kept.depth + 1
-                    for ancestor in event.ancestors
-                    for kept in shown
-                    if kept.function == _canonical_name(route, engine, ancestor)
-                ),
-                0,
-            )
-            if event.ancestors is not None
-            else stack[-1][1] + 1
-            if stack
-            else 0
+@dataclass(frozen=True, slots=True)
+class _Projection:
+    shown: tuple[FunctionTraceEvent, ...] = ()
+    stack: tuple[tuple[int, int], ...] = ()
+    seen: frozenset[str] = frozenset()
+
+
+def _project(route: str, engine: Engine, state: _Projection, event: FunctionTraceEvent) -> _Projection:
+    stack: Final = tuple(pair for pair in state.stack if event.depth > pair[0])
+    name: Final = _canonical_name(route, engine, event.function)
+    if name is None or name in state.seen:
+        return _Projection(state.shown, stack, state.seen)
+    depth: Final = (
+        next(
+            (
+                kept.depth + 1
+                for ancestor in event.ancestors
+                for kept in state.shown
+                if kept.function == _canonical_name(route, engine, ancestor)
+            ),
+            0,
         )
-        stack.append((event.depth, depth))
-        shown.append(FunctionTraceEvent(function=name, depth=depth))
-    return tuple(shown)
+        if event.ancestors is not None
+        else stack[-1][1] + 1
+        if stack
+        else 0
+    )
+    return _Projection(
+        state.shown + (FunctionTraceEvent(function=name, depth=depth),),
+        stack + ((event.depth, depth),),
+        state.seen | {name},
+    )
+
+
+def pipeline_steps(route: str, engine: Engine, events: Sequence[FunctionTraceEvent]) -> tuple[FunctionTraceEvent, ...]:
+    projection: Final = reduce(lambda state, event: _project(route, engine, state, event), events, _Projection())
+    return projection.shown
