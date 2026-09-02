@@ -705,6 +705,105 @@ def test_terminal_only_call_is_not_conflated_with_later_streamed_call():
     ]
 
 
+def test_completed_snapshot_correlates_function_after_server_tool_replacement():
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+    iterator._queue_tool_call_delta_events(
+        [
+            {
+                "index": 0,
+                "id": "call_exec_stream",
+                "type": "function",
+                "function": {
+                    "name": "bash_code_execution",
+                    "arguments": '{"command":"printf server"}',
+                },
+            },
+            {
+                "index": 1,
+                "id": "call_regular_stream",
+                "type": "function",
+                "function": {
+                    "name": "lookup_weather",
+                    "arguments": '{"city":"Paris"}',
+                },
+            },
+        ]
+    )
+    iterator._pending_tool_events.clear()
+    terminal_response = ModelResponse(
+        id="chatcmpl-terminal",
+        created=123,
+        model="test-model",
+        object="chat.completion",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "srvtoolu_exec_terminal",
+                            "type": "function",
+                            "function": {
+                                "name": "bash_code_execution",
+                                "arguments": '{"command":"printf server"}',
+                            },
+                        },
+                        {
+                            "id": "call_regular_terminal",
+                            "type": "function",
+                            "function": {
+                                "name": "lookup_weather",
+                                "arguments": '{"city":"Paris"}',
+                            },
+                        },
+                    ],
+                    "provider_specific_fields": {
+                        "code_interpreter_results": [
+                            {
+                                "type": "code_interpreter_call",
+                                "id": "srvtoolu_exec_terminal",
+                                "code": "printf server",
+                                "container_id": None,
+                                "status": "completed",
+                                "outputs": [{"type": "logs", "logs": "server"}],
+                            }
+                        ]
+                    },
+                },
+            }
+        ],
+    )
+
+    iterator._queue_final_tool_call_done_events(terminal_response)
+    completed = iterator._emit_response_completed_event(terminal_response)
+
+    assert completed is not None
+    code_calls = [item for item in completed.response.output if item.type == "code_interpreter_call"]
+    function_calls = [item for item in completed.response.output if item.type == "function_call"]
+    assert len(code_calls) == 1
+    assert len(function_calls) == 1
+    code_call = code_calls[0]
+    assert code_call.id == "srvtoolu_exec_terminal"
+    assert code_call.code == "printf server"
+    assert code_call.container_id is None
+    assert code_call.outputs[0].logs == "server"
+    function_call = function_calls[0]
+    assert (function_call.id, function_call.call_id) == (
+        "fc_call_regular_stream",
+        "call_regular_stream",
+    )
+    assert function_call.name == "lookup_weather"
+    assert function_call.arguments == '{"city":"Paris"}'
+
+
 def test_reused_index_with_new_call_id_marks_fallback_ambiguous():
     iterator = LiteLLMCompletionStreamingIterator(
         model="test-model",
