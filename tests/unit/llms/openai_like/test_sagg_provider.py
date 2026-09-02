@@ -5,13 +5,6 @@ SAGG (https://api.privatedeskai.com) is an OpenAI-compatible LLM
 inference gateway with automatic multi-provider failover.
 """
 
-import os
-import sys
-
-# Add workspace to path
-workspace_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
-sys.path.insert(0, workspace_path)
-
 import litellm
 
 
@@ -91,33 +84,3 @@ class TestSaggProviderConfig:
         assert result["max_tokens"] == 100
         assert "max_completion_tokens" not in result
         assert result["temperature"] == 0.7
-
-
-if __name__ == "__main__":
-    print("Testing SAGG Provider...")
-
-    test_config = TestSaggProviderConfig()
-
-    print("\n1. Testing provider in list...")
-    test_config.test_sagg_in_provider_list()
-    print("   ✓ sagg in provider list")
-
-    print("\n2. Testing JSON config...")
-    test_config.test_sagg_json_config_exists()
-    print("   ✓ sagg JSON config loaded")
-
-    print("\n3. Testing provider resolution...")
-    test_config.test_sagg_provider_resolution()
-    print("   ✓ Provider resolution works")
-
-    print("\n4. Testing router configuration...")
-    test_config.test_sagg_router_config()
-    print("   ✓ Router configuration works")
-
-    print("\n5. Testing parameter mapping...")
-    test_config.test_sagg_parameter_mapping()
-    print("   ✓ Parameter mapping works")
-
-    print("\n" + "=" * 50)
-    print("✓ All configuration tests passed!")
-    print("=" * 50)
