@@ -7748,6 +7748,7 @@ class Router:
                 await self.cache.async_increment_cache_pipeline(
                     increment_list=pipeline_operations,
                     parent_otel_span=parent_otel_span,
+                    fail_on_redis_error=True,
                 )
 
                 return tpm_key
@@ -7907,6 +7908,7 @@ class Router:
             value=1,
             parent_otel_span=parent_otel_span,
             ttl=RoutingArgs.ttl.value,
+            fail_on_redis_error=True,
         )
 
     def _get_metadata_variable_name_from_kwargs(self, kwargs: dict) -> Literal["metadata", "litellm_metadata"]:

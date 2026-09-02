@@ -384,6 +384,7 @@ class DualCache(BaseCache):
         parent_otel_span: Span | None = None,
         local_only: bool = False,
         refresh_ttl: bool = False,
+        fail_on_redis_error: bool = False,
         **kwargs,
     ) -> float | None:
         """
@@ -393,6 +394,10 @@ class DualCache(BaseCache):
 
         Refresh_ttl - bool - if True, resets the Redis TTL on every write.
         Default False preserves window-style semantics.
+
+        Fail_on_redis_error - bool - if True, propagate Redis failures instead
+        of treating the in-memory result as authoritative. Use this for
+        security-sensitive shared counters such as rate limits and replay guards.
 
         Returns - the incremented value, or None if no cache backend is
         available (in_memory_cache is None and Redis failed/is absent).
@@ -418,6 +423,8 @@ class DualCache(BaseCache):
 
             return result
         except Exception as e:
+            if fail_on_redis_error:
+                raise
             verbose_logger.warning(
                 "Redis async_increment_cache failed, falling back to in-memory result: %s",
                 e,
@@ -429,6 +436,7 @@ class DualCache(BaseCache):
         increment_list: list["RedisPipelineIncrementOperation"],
         local_only: bool = False,
         parent_otel_span: Span | None = None,
+        fail_on_redis_error: bool = False,
         **kwargs,
     ) -> list[float] | None:
         if self.redis_cache is not None and local_only is False:
@@ -452,6 +460,8 @@ class DualCache(BaseCache):
 
             return result
         except Exception as e:
+            if fail_on_redis_error:
+                raise
             verbose_logger.warning(
                 "Redis async_increment_cache_pipeline failed, falling back to in-memory result: %s",
                 e,

@@ -403,7 +403,10 @@ class SAMLAuthHandler:
             )
         consumed_key: Final = f"{_SAML_CONSUMED_ASSERTION_CACHE_PREFIX}:{assertion_id}"
         consumed_count: Final = await cache.async_increment_cache(
-            key=consumed_key, value=1, ttl=SAMLAuthHandler._replay_guard_ttl(auth)
+            key=consumed_key,
+            value=1,
+            ttl=SAMLAuthHandler._replay_guard_ttl(auth),
+            fail_on_redis_error=True,
         )
         if consumed_count is not None and consumed_count > 1:
             raise HTTPException(
