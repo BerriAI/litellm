@@ -31,6 +31,7 @@ _THRESHOLD_STEPS: Final = (0.0, 0.05, 0.1, 0.15)
 class CapabilityTrainingRecord(BaseModel):
     benchmark: str = Field(min_length=1)
     task_id: str = Field(min_length=1)
+    task_family: str | None = Field(default=None, min_length=1)
     split: Literal["train", "validation", "test"]
     model: str = Field(min_length=1)
     primary_rule: str = Field(default="none", min_length=1)
@@ -472,6 +473,19 @@ def train_capability_artifact(
     )
     if any(len(splits) != 1 for splits in task_splits):
         raise ValueError("a benchmark task must not cross splits")
+    family_splits: Final = tuple(
+        frozenset(record.split for record in family_records)
+        for _, grouped in groupby(
+            sorted(
+                (record for record in records if record.task_family is not None),
+                key=lambda record: (record.benchmark, record.task_family),
+            ),
+            key=lambda record: (record.benchmark, record.task_family),
+        )
+        for family_records in (tuple(grouped),)
+    )
+    if any(len(splits) != 1 for splits in family_splits):
+        raise ValueError("a benchmark task family must not cross splits")
     configured_models: Final = frozenset(candidate.model for candidate in config.candidates)
     if frozenset(record.model for record in records) != configured_models:
         raise ValueError("record models must exactly match configured candidates")
@@ -523,6 +537,7 @@ def train_capability_artifact(
                     key=lambda record: (
                         record.benchmark,
                         record.task_id,
+                        record.task_family or "",
                         record.split,
                         record.model,
                         record.primary_rule,
@@ -533,7 +548,7 @@ def train_capability_artifact(
                 )
             ).encode()
         ).hexdigest(),
-        split_contract="split is explicit; task_id must not cross splits",
+        split_contract="split is explicit; task_id and task_family must not cross splits",
     )
     return CapabilityTrainingResult(
         artifact=artifact,
