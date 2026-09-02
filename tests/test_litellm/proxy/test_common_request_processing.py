@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
-from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY
+from litellm.constants import MAX_LITELLM_CALL_ID_LENGTH, RETURN_RAW_MODEL_NAME_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.opentelemetry import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import (
@@ -30,6 +30,7 @@ from litellm.proxy.common_request_processing import (
     _has_attribute_error_in_chain,
     _is_azure_model_router_request,
     open_sse_before_first_byte,
+    resolve_litellm_call_id,
     ttft_keepalive_interval,
     _override_openai_response_model,
     _parse_event_data_for_error,
@@ -7665,3 +7666,16 @@ def test_log_llm_api_exception_traceback_only_for_unexpected_errors(exc, expect_
     records = [r for r in caplog.records if "_handle_llm_api_exception(): Exception occured" in r.getMessage()]
     assert len(records) == 1
     assert (records[0].exc_info is not None) is expect_traceback
+
+
+class TestResolveLitellmCallId:
+    def test_client_call_id_within_the_bound_is_kept(self):
+        assert resolve_litellm_call_id("req-abc-123") == "req-abc-123"
+        at_bound: Final = "y" * MAX_LITELLM_CALL_ID_LENGTH
+        assert resolve_litellm_call_id(at_bound) == at_bound
+
+    @pytest.mark.parametrize("client_call_id", [None, "", "x" * (MAX_LITELLM_CALL_ID_LENGTH + 1), "z" * 3000])
+    def test_missing_empty_or_oversized_client_call_id_gets_a_generated_uuid(self, client_call_id):
+        resolved: Final = resolve_litellm_call_id(client_call_id)
+        assert resolved != client_call_id
+        assert uuid.UUID(resolved).version == 4
