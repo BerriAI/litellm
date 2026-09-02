@@ -124,12 +124,10 @@ class AnthropicResponsesStreamWrapper:
         self._current_block_index += 1
         return self._current_block_index
 
-    def _make_error_chunk(
-        self, message: str
-    ) -> dict[str, Any]:  # mutable-ok: queued into _chunk_queue and returned from __anext__, both typed dict[str, Any]
+    def _make_error_chunk(self, message: str) -> dict[str, Any]:  # mutable-ok: queued chunk
         return {
             "type": "error",
-            "error": {"type": "api_error", "message": message},
+            "error": {"type": "api_error", "message": message},  # mutable-ok: queued chunk
         }
 
     def _open_block(self, item_id: str | None, content_block: Mapping[str, Any]) -> int:
