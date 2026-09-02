@@ -6714,7 +6714,10 @@ class Router:
         metadata. When present, decode the ID, replace ``container_id`` with the
         upstream value, and route through ``_ageneric_api_call_with_fallbacks`` so
         deployment credentials (e.g. regional ``api_base`` for Azure) match
-        :meth:`_init_responses_api_endpoints`. Otherwise call the handler directly.
+        :meth:`_init_responses_api_endpoints`. Create/list calls carry no container ID, so
+        they route through the deployment named by ``model`` when the caller passes one,
+        falling back to the direct call when no deployment matches. Otherwise call the
+        handler directly with global provider credentials.
         """
         if custom_llm_provider and "custom_llm_provider" not in kwargs:
             kwargs["custom_llm_provider"] = custom_llm_provider
@@ -6745,6 +6748,14 @@ class Router:
                     original_function=original_function,
                     **kwargs,
                 )
+
+        requested_model: Final = kwargs.get("model")
+        if isinstance(requested_model, str) and requested_model.strip():
+            return await self._ageneric_api_call_with_fallbacks(
+                original_function=original_function,
+                passthrough_on_no_deployment=True,
+                **kwargs,
+            )
 
         return await original_function(**kwargs)
 
