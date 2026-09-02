@@ -5,13 +5,10 @@ Validates that litellm.transcription transforms requests correctly for WatsonX.
 """
 
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
 from litellm.llms.watsonx.audio_transcription.transformation import (

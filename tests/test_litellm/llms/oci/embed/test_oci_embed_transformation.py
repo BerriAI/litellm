@@ -5,15 +5,12 @@ These tests exercise the transformation layer only — no real OCI calls are mad
 """
 
 import json
-import os
-import sys
 from typing import Any
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.oci.common_utils import OCIError
 from litellm.llms.oci.embed.transformation import OCI_EMBED_BATCH_LIMIT, OCIEmbedConfig

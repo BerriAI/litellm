@@ -1,16 +1,55 @@
 import ast
+import contextvars
 import logging
 import os
 import sys
 from datetime import datetime
 from logging import Formatter
-from typing import Any, Final
+from typing import Any, Final, TextIO
 
+import litellm
+from litellm.constants import (
+    LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    LITELLM_TRUNCATION_STDOUT_SAFEGUARD_NOTE,
+    MAX_STRING_LENGTH_STDOUT_LOG,
+)
+from litellm.litellm_core_utils.env_utils import get_env_int
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
-from litellm.litellm_core_utils.secret_redaction import redact_string
+from litellm.litellm_core_utils.secret_redaction import redact_string, redact_structured_value
 
 set_verbose = False
+
+session_id_var: Final[contextvars.ContextVar[str]] = contextvars.ContextVar("session_id", default="")
+trace_id_var: Final[contextvars.ContextVar[str]] = contextvars.ContextVar("trace_id", default="")
+
+_MAX_CORRELATION_ID_LENGTH: Final = 256
+
+
+def _sanitize_correlation_id(value: str) -> str:
+    """Strip control characters, bound length, and redact credential-shaped
+    content before a caller-controlled trace_id/session_id (e.g.
+    litellm_session_id, x-litellm-trace-id) is stamped into log lines.
+
+    Without the first two, a caller could embed \\r/\\n or terminal escape
+    sequences to forge fake log entries, or submit an oversized value repeated
+    across every log line for the request. Without the redaction, a caller
+    could smuggle a real credential (e.g. an sk-... key) through this field:
+    CorrelationContextFilter stamps trace_id/session_id onto the record after
+    SecretRedactionFilter has already run, so those two fields never otherwise
+    pass through credential redaction.
+    """
+    stripped: Final = "".join(ch for ch in value if ch.isprintable())
+    return _redact_string(stripped[:_MAX_CORRELATION_ID_LENGTH])
+
+
+def set_session_id(session_id: str) -> "contextvars.Token[str]":
+    return session_id_var.set(_sanitize_correlation_id(session_id))
+
+
+def set_trace_id(trace_id: str) -> "contextvars.Token[str]":
+    return trace_id_var.set(_sanitize_correlation_id(trace_id))
+
 
 if set_verbose is True:
     logging.warning(
@@ -24,6 +63,12 @@ def _redact_string(value: str) -> str:
     if not _ENABLE_SECRET_REDACTION:
         return value
     return redact_string(value)
+
+
+def _redact_structured_value(key: str | None, value: str) -> str:
+    if not _ENABLE_SECRET_REDACTION:
+        return value
+    return redact_structured_value(key, value)
 
 
 def redact_secrets(value: str) -> str:
@@ -43,6 +88,24 @@ def redact_secrets(value: str) -> str:
     return _redact_string(value)
 
 
+def _substituted_color_message(record: logging.LogRecord) -> str | None:
+    """Render a record's ``color_message`` against its args, or None if absent.
+
+    uvicorn's colorized formatter re-renders `color_message` against
+    record.args at emit time (see uvicorn.logging.ColourizedFormatter) instead
+    of using the already-formatted record.msg, so it has to be substituted
+    before args are cleared or it is later formatted with no args and prints
+    the raw "%s://%s:%d" placeholders instead of the URL.
+    """
+    color_message: Final = record.__dict__.get("color_message")
+    if not isinstance(color_message, str) or not record.args:
+        return None
+    try:
+        return color_message % record.args
+    except TypeError:
+        return color_message
+
+
 class SecretRedactionFilter(logging.Filter):
     """Scrubs known secret/credential patterns from log records."""
 
@@ -51,6 +114,12 @@ class SecretRedactionFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if not _ENABLE_SECRET_REDACTION:
             return True
+
+        # Runs before args are cleared, and before the extra-field loop below
+        # that redacts the substituted result.
+        substituted_color_message: Final = _substituted_color_message(record)
+        if substituted_color_message is not None:
+            record.color_message = substituted_color_message  # rebind-ok: a Filter scrubs records in place
 
         try:
             record.msg = _redact_string(record.getMessage())
@@ -62,7 +131,7 @@ class SecretRedactionFilter(logging.Filter):
         # Redact exception tracebacks
         if record.exc_info and record.exc_info[1] is not None:
             try:
-                record.exc_text = _redact_string(self._formatter.formatException(record.exc_info))
+                record.exc_text = _redact_string(record.exc_text or self._formatter.formatException(record.exc_info))
             except Exception:
                 pass
 
@@ -77,13 +146,160 @@ class SecretRedactionFilter(logging.Filter):
 _secret_filter: Final = SecretRedactionFilter()
 
 
-json_logs = bool(os.getenv("JSON_LOGS", False))
+def _get_max_string_length_stdout_log() -> int:
+    """Read the limit per record so a value loaded later via proxy config
+    environment_variables is honored."""
+    return get_env_int("MAX_STRING_LENGTH_STDOUT_LOG", MAX_STRING_LENGTH_STDOUT_LOG)
+
+
+def _stdout_truncation_marker(skipped_chars: int) -> str:
+    return (
+        f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {skipped_chars} chars. "
+        f"{LITELLM_TRUNCATION_STDOUT_SAFEGUARD_NOTE}) ..."
+    )
+
+
+def _truncate_for_stdout_log(text: str, limit: int) -> str:
+    kept_chars: Final = limit - len(_stdout_truncation_marker(len(text)))
+    if kept_chars <= 0:
+        return text[:limit]
+    head_chars: Final = kept_chars // 2
+    tail_chars: Final = kept_chars - head_chars
+    return f"{text[:head_chars]}{_stdout_truncation_marker(len(text) - kept_chars)}{text[-tail_chars:]}"
+
+
+class StdoutLogTruncationFilter(logging.Filter):
+    """Bounds how much of an oversized log line reaches stdout.
+
+    A provider error string can echo the whole request payload, so one failed agentic
+    request writes hundreds of KB to stdout, repeatedly as the exception propagates from
+    the router to the proxy handler and into its traceback, all inline on the event loop.
+
+    DEBUG records pass through untouched, since dumping full payloads is the point of
+    `--detailed_debug`, and logging callbacks (OTEL, Datadog, etc.) don't run through
+    logging filters at all, so they still get the untruncated error.
+    """
+
+    _formatter = logging.Formatter()
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno < logging.INFO:
+            return True
+
+        limit: Final = _get_max_string_length_stdout_log()
+        if limit <= 0:
+            return True
+
+        try:
+            message: Final = record.getMessage()
+        except (TypeError, ValueError):
+            return True
+
+        if len(message) > limit:
+            record.msg = _truncate_for_stdout_log(message, limit)  # rebind-ok: the Filter interface mutates the record
+            record.args = None  # rebind-ok: args are consumed by the truncated message above
+
+        if isinstance(record.exc_info, tuple):
+            exc_text: Final = record.exc_text or self._formatter.formatException(record.exc_info)
+            if len(exc_text) > limit:
+                record.exc_text = _truncate_for_stdout_log(  # rebind-ok: the Filter interface mutates the record
+                    exc_text, limit
+                )
+
+        return True
+
+
+_stdout_truncation_filter: Final = StdoutLogTruncationFilter()
+
+
+class CorrelationContextFilter(logging.Filter):
+    """Stamps each log record with the current request's trace_id and session_id from contextvars.
+
+    Works in tandem with JsonFormatter: the formatter's record.__dict__ loop picks up these
+    attributes as first-class JSON fields without any formatter-level code.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not litellm.request_correlation_in_logs:
+            return True
+        trace_id: Final = trace_id_var.get()
+        if trace_id:
+            record.trace_id = trace_id  # rebind-ok: stamping the LogRecord is the Filter interface's contract
+        session_id: Final = session_id_var.get()
+        if session_id:
+            record.session_id = session_id  # rebind-ok: stamping the LogRecord is the Filter interface's contract
+        return True
+
+
+_correlation_filter: Final = CorrelationContextFilter()
+
+
+_LOG_FORMAT_PREFIX: Final = "%(asctime)s - %(name)s:%(levelname)s"
+_LOG_FORMAT_SUFFIX: Final = ": %(filename)s:%(lineno)s - %(message)s"
+_PLAIN_LOG_FORMAT: Final = _LOG_FORMAT_PREFIX + _LOG_FORMAT_SUFFIX
+_COLOR_LOG_FORMAT: Final = f"\033[92m{_LOG_FORMAT_PREFIX}\033[0m{_LOG_FORMAT_SUFFIX}"
+
+
+def _stream_is_tty(stream: TextIO | None) -> bool:
+    """True when the stream is an open interactive terminal; never raises.
+
+    A stream can be None (pythonw/embedded interpreters), lack isatty entirely
+    (GUI log-redirect shims), or be closed; import must survive all three.
+    """
+    try:
+        return stream is not None and stream.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def _plain_log_format(stdout: TextIO | None, stderr: TextIO | None) -> str:
+    """The plain-text log format, colorized only when both streams are an interactive terminal.
+
+    Honors the NO_COLOR convention from no-color.org: color is disabled when
+    NO_COLOR is present with a non-empty value.
+    """
+    if os.environ.get("NO_COLOR"):
+        return _PLAIN_LOG_FORMAT
+    return _COLOR_LOG_FORMAT if _stream_is_tty(stdout) and _stream_is_tty(stderr) else _PLAIN_LOG_FORMAT
+
+
+class LevelRoutingStreamHandler(logging.StreamHandler):
+    """Writes records below WARNING and invalid-key warnings to stdout, others to stderr.
+
+    Collectors that derive severity from the stream report every stderr line as an error.
+    Invalid-key warnings route to stdout so LITELLM_LOG=ERROR can suppress them.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        is_stdout_record: Final = record.levelno < logging.WARNING or (
+            record.levelno == logging.WARNING and record.name == verbose_proxy_stdout_logger.name
+        )
+        preferred: Final = sys.stdout if is_stdout_record else sys.stderr
+        if preferred is None or getattr(preferred, "closed", False):
+            self.stream = sys.stderr  # rebind-ok: fall back to the pre-fix stream rather than raising per record
+        else:
+            self.stream = preferred  # rebind-ok: StreamHandler.emit writes self.stream under the handler lock
+        super().emit(record)
+
+
+def _parse_json_logs_env(value: str | None) -> bool:
+    """Strict opt-in parse for the JSON_LOGS env var: only "true" (any case) enables JSON logs.
+
+    Matches the reader in litellm-proxy-extras/_logging.py. The previous
+    bool(os.getenv(...)) treated any non-empty value, including "false" and "0",
+    as enabled.
+    """
+    return (value or "").lower() == "true"
+
+
+json_logs: Final = _parse_json_logs_env(os.getenv("JSON_LOGS"))
 # Create a handler for the logger (you may need to adapt this based on your needs)
 log_level: Final = os.getenv("LITELLM_LOG", "DEBUG")
 numeric_level: Final[str] = getattr(logging, log_level.upper())
-handler: Final = logging.StreamHandler()
+handler: Final = LevelRoutingStreamHandler()
 handler.setLevel(numeric_level)
 handler.addFilter(_secret_filter)
+handler.addFilter(_correlation_filter)
 
 
 def _try_parse_json_message(message: str) -> dict[str, Any] | None:
@@ -146,6 +362,11 @@ def _get_standard_record_attrs() -> frozenset:
 
 _STANDARD_RECORD_ATTRS: Final = _get_standard_record_attrs()
 
+# CorrelationContextFilter is the only legitimate source for these two JSON fields;
+# see JsonFormatter.format() for why they're excluded from the generic message-content
+# and extra-attribute promotion paths.
+_RESERVED_CORRELATION_FIELDS: Final = frozenset(("trace_id", "session_id"))
+
 
 class JsonFormatter(Formatter):
     def __init__(self):
@@ -164,19 +385,36 @@ class JsonFormatter(Formatter):
             "timestamp": self.formatTime(record),
         }
 
-        # Parse embedded JSON or Python dict repr in message so sub-fields become first-class properties
+        # Parse embedded JSON or Python dict repr in message so sub-fields become first-class properties.
+        # trace_id/session_id are excluded here unconditionally (not just "if not already
+        # set") - CorrelationContextFilter is the only legitimate source for these two
+        # fields, and a message that merely happens to parse as JSON/dict (e.g. a proxy
+        # log line dumping raw request headers) must never be able to claim them, even on
+        # a record the filter hasn't stamped yet (no correlation context active for it).
         parsed = _try_parse_json_message(message_str)
         if parsed is None:
             parsed = _try_parse_embedded_python_dict(message_str)
         if parsed is not None:
             for key, value in parsed.items():
-                if key not in json_record:
+                if key not in json_record and key not in _RESERVED_CORRELATION_FIELDS:
                     json_record[key] = value
 
         # Include extra attributes passed via logger.debug("msg", extra={...})
         for key, value in record.__dict__.items():
             if key not in _STANDARD_RECORD_ATTRS and key not in json_record:
                 json_record[key] = value
+
+        # trace_id/session_id are reserved: CorrelationContextFilter is the only
+        # legitimate source for these two fields. Without this, a message string
+        # that happens to parse as JSON/dict (e.g. a proxy log line dumping raw
+        # request headers) with a "trace_id"/"session_id" key would have already
+        # claimed the key at the parsed-message step above, and the extra-attributes
+        # loop's "key not in json_record" guard would then skip the real value -
+        # letting a caller-supplied header spoof another request's correlation ids.
+        for reserved_key in _RESERVED_CORRELATION_FIELDS:
+            value = getattr(record, reserved_key, None)
+            if value:
+                json_record[reserved_key] = value
 
         # Set component/logger only if not already supplied via extra={...}
         if "component" not in json_record:
@@ -187,7 +425,28 @@ class JsonFormatter(Formatter):
         if record.exc_info:
             json_record["stacktrace"] = record.exc_text or self.formatException(record.exc_info)
 
-        return safe_dumps(json_record)
+        return safe_dumps(json_record, value_transform=_redact_structured_value)
+
+
+class CorrelationPlainFormatter(logging.Formatter):
+    """Appends trace_id/session_id to plain-text log lines stamped by CorrelationContextFilter.
+
+    Mirrors JsonFormatter's handling of these two fields so request_correlation_in_logs
+    behaves the same whether or not json_logs is enabled.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        formatted: Final = _redact_string(super().format(record))
+        trace_id: Final = getattr(record, "trace_id", None)
+        session_id: Final = getattr(record, "session_id", None)
+        if not trace_id and not session_id:
+            return formatted
+        parts: Final = tuple(
+            p
+            for p in (f"trace_id={trace_id}" if trace_id else None, f"session_id={session_id}" if session_id else None)
+            if p
+        )
+        return f"{formatted} [{' '.join(parts)}]"
 
 
 # Function to set up exception handlers for JSON logging
@@ -196,6 +455,8 @@ def _setup_json_exception_handlers(formatter):
     error_handler: Final = logging.StreamHandler()
     error_handler.setFormatter(formatter)
     error_handler.addFilter(_secret_filter)
+    error_handler.addFilter(_stdout_truncation_filter)
+    error_handler.addFilter(_correlation_filter)
 
     # Setup excepthook for uncaught exceptions
     def json_excepthook(exc_type, exc_value, exc_traceback):
@@ -243,14 +504,17 @@ if json_logs:
     handler.setFormatter(JsonFormatter())
     _setup_json_exception_handlers(JsonFormatter())
 else:
-    formatter: Final = logging.Formatter(
-        "\033[92m%(asctime)s - %(name)s:%(levelname)s\033[0m: %(filename)s:%(lineno)s - %(message)s",
+    formatter: Final = CorrelationPlainFormatter(
+        _plain_log_format(sys.stdout, sys.stderr),
         datefmt="%H:%M:%S",
     )
 
     handler.setFormatter(formatter)
 
 verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
+# Malformed virtual key rejections log through this child; LevelRoutingStreamHandler
+# writes its WARNING records to stdout. It has no handler or level of its own.
+verbose_proxy_stdout_logger: Final = verbose_proxy_logger.getChild("stdout")
 verbose_router_logger = logging.getLogger("LiteLLM Router")
 verbose_logger = logging.getLogger("LiteLLM")
 
@@ -258,6 +522,13 @@ verbose_logger = logging.getLogger("LiteLLM")
 verbose_router_logger.addHandler(handler)
 verbose_proxy_logger.addHandler(handler)
 verbose_logger.addHandler(handler)
+
+# Filters attached to the logger, not the handler, survive callers swapping in their own
+# handlers (JSON mode, uvicorn log config, a host app's root handler).
+verbose_router_logger.addFilter(_stdout_truncation_filter)
+verbose_proxy_logger.addFilter(_stdout_truncation_filter)
+verbose_proxy_stdout_logger.addFilter(_stdout_truncation_filter)
+verbose_logger.addFilter(_stdout_truncation_filter)
 
 
 def _suppress_loggers():
@@ -346,6 +617,7 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
     - Prevents bubbling to parent/root (critical to prevent duplicate JSON logs)
     """
     handler.addFilter(_secret_filter)
+    handler.addFilter(_correlation_filter)
     for lg in _get_loggers_to_initialize():
         lg.handlers.clear()  # remove any existing handlers
         lg.addHandler(handler)  # add JSON formatter handler
@@ -418,7 +690,8 @@ def _turn_on_json():
 
     - Adds a JSON formatter to all loggers
     """
-    handler: Final = logging.StreamHandler()
+    handler: Final = LevelRoutingStreamHandler()
+    handler.setLevel(numeric_level)
     handler.setFormatter(JsonFormatter())
     _initialize_loggers_with_handler(handler)
     # Set up exception handlers
@@ -436,12 +709,14 @@ def _disable_debugging():
     verbose_logger.disabled = True
     verbose_router_logger.disabled = True
     verbose_proxy_logger.disabled = True
+    verbose_proxy_stdout_logger.disabled = True
 
 
 def _enable_debugging():
     verbose_logger.disabled = False
     verbose_router_logger.disabled = False
     verbose_proxy_logger.disabled = False
+    verbose_proxy_stdout_logger.disabled = False
 
 
 def print_verbose(print_statement):

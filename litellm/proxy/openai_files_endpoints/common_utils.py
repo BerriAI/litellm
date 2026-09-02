@@ -1,14 +1,26 @@
 import base64
 import mimetypes
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Optional
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Literal,
+    Optional,
+    Protocol,
+    cast,  # noqa: TID251  # prisma types Json columns as fields.Json but de-serializes them to plain python on read
+    get_args,
+    runtime_checkable,
+)
 
+from litellm.proxy._types import ProxyException
 from litellm.repositories.table_repositories import (
     ManagedFileRepository,
     ManagedObjectRepository,
 )
+from litellm.types.llms.openai import OpenAIFilesPurpose
 from litellm.types.utils import SpecialEnums
 
 if TYPE_CHECKING:
@@ -16,8 +28,68 @@ if TYPE_CHECKING:
     from prisma.models import LiteLLM_ManagedObjectTable
 
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
     from litellm.types.utils import LiteLLMBatch
+
+
+MAX_FILE_LIST_LIMIT: Final = 10000
+
+FILE_LIST_CONTINUATION_CHUNK_SIZE: Final = 500
+
+
+def validate_file_list_limit(limit: int | None) -> None:
+    """Reject a ``limit`` outside the range OpenAI documents for GET /v1/files."""
+    if limit is None or 1 <= limit <= MAX_FILE_LIST_LIMIT:
+        return
+    bound, expected, openai_code = (
+        ("below minimum", ">= 1", "integer_below_min_value")
+        if limit < 1
+        else ("above maximum", f"<= {MAX_FILE_LIST_LIMIT}", "integer_above_max_value")
+    )
+    raise ProxyException(
+        message=f"Invalid 'limit': integer {bound} value. Expected a value {expected}, but got {limit} instead.",
+        type="invalid_request_error",
+        param="limit",
+        code=400,
+        openai_code=openai_code,
+    )
+
+
+def validate_file_list_purpose(purpose: str | None) -> None:
+    """Reject a ``purpose`` filter no upload to this proxy could have stored.
+
+    An unknown purpose matches no file, so filtering on it would report an
+    empty page for what is really a bad request. Rejecting it keeps a managed
+    listing consistent with the upload route, which refuses the same values
+    against this same set. The provider-backed listings do not: they pass
+    ``purpose`` upstream, so a purpose OpenAI accepts before it is added here
+    is rejected on the managed path while still working on those.
+    """
+    valid_purposes: Final = get_args(OpenAIFilesPurpose)
+    if purpose is None or purpose in valid_purposes:
+        return
+    raise ProxyException(
+        message=f"Invalid purpose: {purpose}. Must be one of: {valid_purposes}",
+        type="invalid_request_error",
+        param="purpose",
+        code=400,
+    )
+
+
+@runtime_checkable
+class ManagedResourceAccessChecker(Protocol):
+    async def can_user_call_unified_file_id(
+        self,
+        unified_file_id: str,
+        user_api_key_dict: "UserAPIKeyAuth",
+    ) -> bool: ...
+
+    async def can_user_call_unified_object_id(
+        self,
+        unified_object_id: str,
+        user_api_key_dict: "UserAPIKeyAuth",
+    ) -> bool: ...
 
 
 def _is_base64_encoded_unified_file_id(b64_uid: str) -> str | Literal[False]:
@@ -446,6 +518,31 @@ def apply_team_provider_credentials(
     if credentials is None:
         return
     prepare_data_with_credentials(data=data, credentials=credentials)
+
+
+def add_internal_model_credentials(
+    data: dict,
+    llm_router: "Router",
+    model_id: str | None,
+) -> None:
+    """
+    Attach the deployment's immutable server-side credential snapshot to a router-routed
+    batch call (in-place).
+
+    Cost accounting for a completed batch reads the batch's output file, and the Bedrock
+    file config resolves its bucket only from this snapshot, never from a request param,
+    because the bucket is what managed file ids are validated against. Without it that
+    read fails and the batch's cost is never recorded.
+    """
+    if model_id is None:
+        return
+    try:
+        credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+    except Exception:  # noqa: BLE001  # the snapshot only enables cost accounting; a batch whose deployment no longer resolves must still be retrievable
+        return
+    if credentials is None:
+        return
+    data["_litellm_internal_model_credentials"] = MappingProxyType(dict(credentials))
 
 
 def prepare_data_with_credentials(
@@ -879,6 +976,65 @@ def validate_managed_files_requirement(
         )
 
 
+async def validate_managed_id_requirement(
+    resource_id: str | None,
+    resource_kind: Literal["file", "batch", "fine-tuning job"],
+    user_api_key_dict: "UserAPIKeyAuth",
+    managed_files_obj: object | None,
+) -> None:
+    """
+    Enforce proxy-level managed resources on every route that accepts a provider-issued id
+    when ``litellm.require_managed_files`` is enabled, and authenticate managed ids against
+    the caller's stored ownership record.
+
+    Ownership is only recorded for LiteLLM managed ids, so a raw provider id is forwarded to the
+    provider under shared credentials without any tenant check; knowing another tenant's provider
+    id would be enough to read, reuse, or destroy the object behind it.
+
+    Raises:
+        HTTPException: 400 for a raw id, 403 for an inaccessible managed id, or 500 when
+            ownership validation is unavailable.
+    """
+    from fastapi import HTTPException
+
+    import litellm
+
+    if litellm.require_managed_files is not True:
+        return
+
+    if not resource_id:
+        return
+
+    if not _is_base64_encoded_unified_file_id(resource_id):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Raw provider {resource_kind} ids cannot be used when require_managed_files is enabled in "
+                f"litellm_settings. Use the LiteLLM managed {resource_kind} id returned when the "
+                f"{resource_kind} was created."
+            ),
+        )
+
+    if not isinstance(managed_files_obj, ManagedResourceAccessChecker):
+        raise HTTPException(
+            status_code=500,
+            detail="Managed resource ownership validation is unavailable.",
+        )
+
+    can_access: Final = (
+        await managed_files_obj.can_user_call_unified_file_id(resource_id, user_api_key_dict)
+        if resource_kind == "file"
+        else await managed_files_obj.can_user_call_unified_object_id(resource_id, user_api_key_dict)
+    )
+    if can_access:
+        return
+
+    raise HTTPException(
+        status_code=403,
+        detail=f"The caller does not have access to this managed {resource_kind} id.",
+    )
+
+
 def _extract_model_param(request: "Request", request_body: dict) -> str | None:
     """
     Extract model parameter from request.
@@ -1002,13 +1158,41 @@ async def resolve_output_file_ids_to_unified(response, prisma_client) -> None:
             pass
 
 
+async def map_raw_file_ids_to_unified(
+    raw_file_ids: frozenset[str], prisma_client: "PrismaClient | None"
+) -> Mapping[str, str]:
+    if not raw_file_ids or not prisma_client:
+        return MappingProxyType({})
+    managed_files: Final = await ManagedFileRepository(prisma_client).table.find_many(
+        where={"flat_model_file_ids": {"hasSome": sorted(raw_file_ids)}}  # mutable-ok: prisma where is a plain dict
+    )
+    return MappingProxyType(
+        {
+            raw_id: managed_file.unified_file_id
+            for managed_file in managed_files
+            for raw_id in managed_file.flat_model_file_ids
+            if raw_id in raw_file_ids
+        }
+    )
+
+
+def apply_unified_file_ids(response: "LiteLLMBatch", unified_id_by_raw_id: Mapping[str, str]) -> None:
+    for file_attr, raw_id in (
+        ("input_file_id", getattr(response, "input_file_id", None)),
+        ("output_file_id", getattr(response, "output_file_id", None)),
+        ("error_file_id", getattr(response, "error_file_id", None)),
+    ):
+        if isinstance(raw_id, str) and raw_id in unified_id_by_raw_id:
+            setattr(response, file_attr, unified_id_by_raw_id[raw_id])
+
+
 async def ensure_batch_response_managed_file_ids(
     response,
     managed_files_obj,
     prisma_client,
     verbose_proxy_logger,
     user_api_key_dict=None,
-    db_batch_object=None,
+    db_batch_object: "LiteLLM_ManagedObjectTable | None" = None,
     unified_batch_id: str | Literal[False] | None = None,
 ) -> None:
     """Normalize batch file IDs to managed unified IDs before DB persistence."""
@@ -1095,11 +1279,10 @@ async def get_batch_from_database(
             return None, None
 
         # Parse the batch object from database
-        batch_data: Final = (
-            json.loads(db_batch_object.file_object)
-            if isinstance(db_batch_object.file_object, str)
-            else db_batch_object.file_object
+        file_object: Final = cast(  # cast-ok: prisma types the Json column as str; reads return the decoded value
+            "Mapping[str, object] | str", db_batch_object.file_object
         )
+        batch_data: Final = json.loads(file_object) if isinstance(file_object, str) else file_object
         response: Final = LiteLLMBatch.model_validate(batch_data)
         response.id = batch_id
 
@@ -1127,6 +1310,59 @@ async def get_batch_from_database(
         return None, None
 
 
+def batch_cost_poller_is_active() -> bool:
+    """
+    Whether the CheckBatchCost poller will account for a managed batch's cost itself.
+
+    False whenever the poller cannot be relied on: polling disabled by config, the job
+    absent from the scheduler because the enterprise import failed, or the poller not
+    yet having confirmed that the batch_processed column exists. That last condition
+    matters because the poller needs the column both to find outstanding batches and to
+    mark them accounted; without it the poller falls back to a query that excludes
+    terminal statuses, so a batch the retrieve path has already marked complete becomes
+    invisible to it. Defaulting to False until the poller confirms support keeps the
+    retrieve path accounting in exactly the cases the poller would drop the batch.
+    """
+    from litellm.constants import PROXY_BATCH_POLLING_ENABLED
+
+    if not PROXY_BATCH_POLLING_ENABLED:
+        return False
+    try:
+        import litellm.proxy.proxy_server as proxy_server_module
+
+        scheduler = getattr(proxy_server_module, "scheduler", None)
+        if scheduler is None:
+            return False
+        job = scheduler.get_job("check_batch_cost_job")
+        if job is None:
+            return False
+        poller = getattr(getattr(job, "func", None), "__self__", None)
+        return getattr(poller, "batch_processed_support_confirmed", False) is True
+    except Exception:  # noqa: BLE001  # scheduler backends raise varied types from get_job; an unreadable scheduler means the poller cannot be relied on
+        return False
+
+
+def _completed_batch_safe_to_retire(response: "LiteLLMBatch") -> bool:
+    """Whether a "completed" batch may be retired from cost recovery.
+
+    ``batch_processed=True`` is the sole re-pickup gate for CheckBatchCost's
+    cost-recovery poller, so setting it retires the batch permanently. A batch can
+    reach ``status="completed"`` while ``output_file_id`` is still ``None`` (the
+    provider response briefly lags before the output id populates). Retiring in that
+    window loses the spend record forever. Retire only once we can prove there is
+    nothing left to recover: the output file has actually arrived, or the provider
+    reported a positive total with zero successful request lines, proving it
+    enumerated the batch and none succeeded. A zero or unknown total means counts
+    are unreported, so stay eligible and let the next poller pass revisit it. (#37713)
+    """
+    if response.output_file_id is not None:
+        return True
+    request_counts = response.request_counts
+    if request_counts is None:
+        return False
+    return request_counts.total > 0 and request_counts.completed == 0
+
+
 async def update_batch_in_database(
     batch_id: str,
     unified_batch_id: str | Literal[False],
@@ -1134,9 +1370,10 @@ async def update_batch_in_database(
     managed_files_obj,
     prisma_client,
     verbose_proxy_logger,
-    db_batch_object=None,
+    db_batch_object: "LiteLLM_ManagedObjectTable | None" = None,
     operation: str = "update",
     user_api_key_dict=None,
+    poller_owns_accounting: bool | None = None,
 ):
     """
     Update batch status and object in ManagedObjectTable.
@@ -1151,6 +1388,12 @@ async def update_batch_in_database(
         db_batch_object: Optional existing database object; fetched by unified_object_id when omitted
         operation: Description of operation ("update", "cancel", etc.)
         user_api_key_dict: Optional auth context for creating managed file IDs
+        poller_owns_accounting: Whether the caller already decided that the cost poller
+            owns this batch's accounting. Callers that suppress their own inline
+            accounting must pass the same decision they acted on, because re-deciding
+            here can observe a poller that became usable in between and leave the batch
+            unmarked after it was already accounted for, billing it twice. Left None by
+            callers that record no cost themselves.
     """
     import litellm.utils
 
@@ -1194,21 +1437,14 @@ async def update_batch_in_database(
         # Normalize status for database storage
         db_status: Final = response.status if response.status != "completed" else "complete"
 
-        update_data: Final[dict] = {
+        update_data: Final[dict[str, object]] = {
             "status": db_status,
             "file_object": response.model_dump_json(),
             "updated_at": litellm.utils.get_utc_datetime(),
         }
 
-        # When a batch reaches completion, also mark batch_processed=True.
-        # The cost callback is enqueued asynchronously during the
-        # aretrieve_batch call that detected completion (via the @client
-        # decorator).  It is not awaited, so there is a theoretical window
-        # where the callback hasn't executed yet.  In practice the callback
-        # completes reliably.  Setting the flag here unblocks file deletion
-        # which queries batch_processed=False.  CheckBatchCost acts as a
-        # safety net for the rare case where the callback fails.
-        if db_status == "complete":
+        poller_owns: Final = batch_cost_poller_is_active() if poller_owns_accounting is None else poller_owns_accounting
+        if db_status == "complete" and not poller_owns and _completed_batch_safe_to_retire(response):
             update_data["batch_processed"] = True
 
         try:

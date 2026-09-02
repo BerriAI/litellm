@@ -3,13 +3,20 @@ import asyncio
 import json
 import os
 from collections import Counter
-from collections.abc import Mapping
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import (
+    Final,
+    NamedTuple,
+    Protocol,
+    cast,  # noqa: TID251  # prisma types Json columns as fields.Json but de-serializes them to plain python on read
+)
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
-from pydantic import ConfigDict, ValidationError, create_model
+from pydantic import ConfigDict, JsonValue, ValidationError, create_model
 from pydantic.fields import FieldInfo
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -21,9 +28,11 @@ from litellm.proxy.config_resolvers.sso import (
     SSO_SECRET_FIELDS,
     resolve_sso_config,
 )
+from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.proxy.utils import invalidate_config_param
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
     SSOConfigRepository,
     UISettingsRepository,
@@ -36,12 +45,81 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 
 router: Final = APIRouter()
 
+
+JsonSchemaItems: Final = TypedDict(
+    "JsonSchemaItems",
+    {"$ref": ReadOnly[str], "enum": ReadOnly[Sequence[JsonValue]]},
+    total=False,
+)
+
+
+class JsonSchemaNode(TypedDict, total=False):
+    type: ReadOnly[str]
+    description: ReadOnly[str]
+    enum: ReadOnly[Sequence[JsonValue]]
+    anyOf: ReadOnly[Sequence["JsonSchemaNode"]]
+    items: ReadOnly["JsonSchemaItems"]
+    properties: ReadOnly[Mapping[str, "JsonSchemaNode"]]
+
+
+_EMPTY_SCHEMA_DEFS: Final[Mapping[str, "JsonSchemaNode"]] = MappingProxyType({})
+
+
+class JsonSchemaPropertyEntry(TypedDict):
+    description: ReadOnly[str]
+    type: ReadOnly[str]
+    items: NotRequired[ReadOnly["JsonSchemaItems"]]
+
+
+class _SsoSettingsMappingRow(Protocol):
+    @property
+    def sso_settings(self) -> Mapping[str, object] | None: ...
+
+
+def _sso_settings_mapping_db(repo: SSOConfigRepository) -> TableActions[_SsoSettingsMappingRow]:
+    return cast(  # cast-ok: prisma types Json columns as str; the client hands back the deserialized value
+        "TableActions[_SsoSettingsMappingRow]", repo.table
+    )
+
+
+class _StoredSsoSettingsRow(Protocol):
+    @property
+    def sso_settings(self) -> object: ...
+
+
+def _stored_sso_settings_db(repo: SSOConfigRepository) -> TableActions[_StoredSsoSettingsRow]:
+    return repo.table
+
+
+class _UiSettingsRow(Protocol):
+    @property
+    def ui_settings(self) -> str | Mapping[str, JsonValue] | None: ...
+
+
+def _ui_settings_db(repo: UISettingsRepository) -> TableActions[_UiSettingsRow]:
+    return cast(  # cast-ok: prisma types Json columns as str; the client hands back the deserialized value
+        "TableActions[_UiSettingsRow]", repo.table
+    )
+
+
+class _ConfigParamRow(Protocol):
+    @property
+    def param_value(self) -> str | Mapping[str, object] | None: ...
+
+
+def _config_param_db(repo: ConfigRepository) -> TableActions[_ConfigParamRow]:
+    return cast(  # cast-ok: prisma's LiteLLM_Config actions object, whose Json column parses to a mapping
+        "TableActions[_ConfigParamRow]", repo.table
+    )
+
+
 # Maps each UIThemeConfig field to the env var the UI branding path reads it
 # from. /update/ui_theme_settings writes both the stored ui_theme_config and
 # these env vars, so /get/ui_theme_settings resolves the same env vars to
 # reflect a deployment branded purely through process env.
 _UI_THEME_FIELD_ENV_VARS: Final[dict[str, str]] = {
     "logo_url": "UI_LOGO_PATH",
+    "logo_url_dark": "UI_LOGO_PATH_DARK",
     "favicon_url": "LITELLM_FAVICON_URL",
 }
 
@@ -54,7 +132,7 @@ def _is_public_http_url(value: str | None) -> bool:
     return parsed.scheme in ("http", "https") and bool(parsed.netloc)
 
 
-def _resolve_ui_theme_field(stored_values: Mapping[str, Any], field_name: str) -> str | None:
+def _resolve_ui_theme_field(stored_values: Mapping[str, object], field_name: str) -> str | None:
     """Resolve one UI theme field to the value the branding path actually uses.
 
     The stored ui_theme_config wins; a field absent or blank there falls back to
@@ -88,6 +166,14 @@ class UIThemeConfig(BaseModel):
         description="URL or path to custom logo image. Can be a local file path or HTTP/HTTPS URL",
     )
 
+    logo_url_dark: str | None = Field(
+        default=None,
+        description=(
+            "URL or path to a custom logo image for dark mode. Can be a local file path or HTTP/HTTPS URL. "
+            "Leave unset to reuse logo_url in dark mode"
+        ),
+    )
+
     # Favicon configuration
     favicon_url: str | None = Field(
         default=None,
@@ -98,10 +184,10 @@ class UIThemeConfig(BaseModel):
 class SettingsResponse(BaseModel):
     """Base response model for settings with values and schema information"""
 
-    values: dict[str, Any]
+    values: dict[str, object]
     """The current configuration values"""
 
-    field_schema: dict[str, Any]
+    field_schema: dict[str, object]
     """Schema information including descriptions and property types for UI display"""
 
 
@@ -240,6 +326,27 @@ ALLOWED_UI_SETTINGS_FIELDS: Final = {
     "enable_chat_ui",
 }
 
+ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: Final = "enable_ptu_cost_attribution"
+
+# UI settings derived from the deployment environment. Deliberately kept out of
+# ALLOWED_UI_SETTINGS_FIELDS: they are read-only, never persisted, and PATCH
+# rejects them so an admin cannot flip an env-gated feature at runtime.
+_DERIVED_UI_SETTINGS_FIELDS: Final[frozenset[str]] = frozenset({ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING})
+
+
+def _derived_ui_setting_value(key: str) -> object:
+    """The environment-derived value GET reports for ``key``.
+
+    PATCH compares against this rather than rejecting the key outright, so the body GET
+    hands back is still a valid PATCH body. Rejecting on presence broke read-modify-write:
+    a client that edited one setting and sent the rest back unchanged got a 400 and lost
+    the edit it actually wanted.
+    """
+    if key == ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING:
+        return is_ptu_cost_attribution_enabled()
+    return None
+
+
 # Flags that must be synced from the persisted UISettings into
 # general_settings at runtime (on both read and write).
 _RUNTIME_GENERAL_SETTINGS_FLAGS: Final = [
@@ -263,7 +370,7 @@ _RUNTIME_GENERAL_SETTINGS_FLAGS: Final = [
 # include generics like ``Optional[int]`` / ``List[str]`` that are not
 # instances of ``type`` — so tightening this to ``type`` would reject
 # valid inputs.
-_EXTRA_UI_SETTINGS_FIELDS: Final[dict[str, tuple[Any, FieldInfo]]] = {}
+_EXTRA_UI_SETTINGS_FIELDS: Final[dict[str, tuple[object, FieldInfo]]] = {}
 
 # Settings OSS knows about as enterprise-gated. If a caller sends one of
 # these keys and no extension package has registered it, the PATCH
@@ -275,7 +382,7 @@ _ENTERPRISE_ONLY_UI_SETTINGS: Final[set[str]] = {"enable_projects_ui"}
 _EFFECTIVE_UI_SETTINGS_CLASS: type[UISettings] | None = None
 
 
-def register_extra_ui_setting(name: str, annotation: Any, field: FieldInfo) -> None:
+def register_extra_ui_setting(name: str, annotation: object, field: FieldInfo) -> None:
     """Register an additional UI settings field contributed by an extension package.
 
     ``field`` must be a ``FieldInfo`` instance — construct it directly
@@ -468,9 +575,65 @@ async def delete_allowed_ip(
     return {"message": f"IP {ip_address.ip} deleted successfully", "status": "success"}
 
 
+def _resolve_non_null_variant(field_info: JsonSchemaNode) -> JsonSchemaNode:
+    """Pydantic v2 renders Optional fields as ``anyOf: [actual_type, null]``."""
+    if "anyOf" not in field_info:
+        return field_info
+    return next((variant for variant in field_info["anyOf"] if variant.get("type") != "null"), field_info)
+
+
+def _schema_items_entry(resolved: JsonSchemaNode, defs: Mapping[str, JsonSchemaNode]) -> "JsonSchemaItems | None":
+    """Items info (including enum values) for array fields, so the UI can render a multi-select dropdown."""
+    if "items" not in resolved:
+        return None
+    items: Final = resolved["items"]
+    if "$ref" not in items:
+        return items
+    ref_def: Final = defs.get(items["$ref"].split("/")[-1])
+    if ref_def is None or "enum" not in ref_def:
+        return None
+    enum_items: Final[JsonSchemaItems] = {"enum": ref_def["enum"]}
+    return enum_items
+
+
+def _schema_property_entry(field_info: JsonSchemaNode, defs: Mapping[str, JsonSchemaNode]) -> JsonSchemaPropertyEntry:
+    resolved: Final = _resolve_non_null_variant(field_info)
+    items_entry: Final = _schema_items_entry(resolved, defs)
+    description: Final = field_info.get("description", "")
+    type_name: Final = resolved.get("type", "string")
+    if items_entry is None:
+        entry: Final[JsonSchemaPropertyEntry] = {"description": description, "type": type_name}
+        return entry
+    entry_with_items: Final[JsonSchemaPropertyEntry] = {
+        "description": description,
+        "type": type_name,
+        "items": items_entry,
+    }
+    return entry_with_items
+
+
+class _RootSchema(NamedTuple):
+    description: str
+    properties: Mapping[str, JsonSchemaNode]
+    nested_defs: Mapping[str, JsonSchemaNode]
+    defs: Mapping[str, JsonSchemaNode]
+
+
+def _root_schema(settings_class: type[BaseModel]) -> _RootSchema:
+    from pydantic import TypeAdapter
+
+    raw_schema: Final = TypeAdapter(settings_class).json_schema(by_alias=True)
+    return _RootSchema(
+        description=raw_schema.get("description", ""),
+        properties=raw_schema["properties"],
+        nested_defs=raw_schema.get("definitions", _EMPTY_SCHEMA_DEFS),
+        defs=raw_schema["$defs"] if "$defs" in raw_schema else raw_schema.get("definitions", _EMPTY_SCHEMA_DEFS),
+    )
+
+
 async def _get_settings_with_schema(
     settings_key: str,
-    settings_class: Any,
+    settings_class: type[BaseModel],
     config: dict,
 ) -> dict:
     """
@@ -481,69 +644,43 @@ async def _get_settings_with_schema(
         settings_class: The Pydantic class to use for schema
         config: The config dictionary
     """
-    from pydantic import TypeAdapter
-
     litellm_settings: Final = config.get("litellm_settings", {}) or {}
     settings_data: Final = litellm_settings.get(settings_key, {}) or {}
 
     # Create the settings object
     settings: Final = settings_class(**(settings_data))
     # Get the schema
-    schema: Final = TypeAdapter(settings_class).json_schema(by_alias=True)
+    root_schema: Final = _root_schema(settings_class)
 
     # Convert to dict for response
     settings_dict: Final = settings.model_dump()
 
     # Add descriptions to the response
-    result: Final = {
-        "values": settings_dict,
-        "field_schema": {
-            "description": schema.get("description", ""),
-            "properties": {},
-        },
+    schema_properties_out: Final[Mapping[str, JsonSchemaPropertyEntry]] = {
+        field_name: _schema_property_entry(field_info, root_schema.defs)
+        for field_name, field_info in root_schema.properties.items()
     }
 
-    # Add property descriptions
-    defs: Final = schema.get("$defs", schema.get("definitions", {}))
-    for field_name, field_info in schema["properties"].items():
-        # For Optional fields, Pydantic v2 uses anyOf with [actual_type, null].
-        # Resolve the non-null variant to get the real type and items.
-        resolved = field_info
-        if "anyOf" in field_info:
-            for variant in field_info["anyOf"]:
-                if variant.get("type") != "null":
-                    resolved = variant
-                    break
-
-        prop_entry: dict = {
-            "description": field_info.get("description", ""),
-            "type": resolved.get("type", "string"),
-        }
-        # Pass through items info (including enum values) for array fields
-        # so the UI can render a multi-select dropdown
-        if "items" in resolved:
-            items = resolved["items"]
-            # Resolve $ref to enum definitions if needed
-            if "$ref" in items:
-                ref_name = items["$ref"].split("/")[-1]
-                ref_def = defs.get(ref_name, {})
-                if "enum" in ref_def:
-                    prop_entry["items"] = {"enum": ref_def["enum"]}
-            else:
-                prop_entry["items"] = items
-        result["field_schema"]["properties"][field_name] = prop_entry
-
     # Add nested object descriptions
-    for def_name, def_schema in schema.get("definitions", {}).items():
-        result["field_schema"][def_name] = {
+    nested_defs_out: Final[Mapping[str, Mapping[str, object]]] = {
+        def_name: {
             "description": def_schema.get("description", ""),
             "properties": {
                 prop_name: {"description": prop_info.get("description", "")}
                 for prop_name, prop_info in def_schema.get("properties", {}).items()
             },
         }
+        for def_name, def_schema in root_schema.nested_defs.items()
+    }
 
-    return result
+    return {
+        "values": settings_dict,
+        "field_schema": {
+            "description": root_schema.description,
+            "properties": schema_properties_out,
+            **nested_defs_out,
+        },
+    }
 
 
 @router.get(
@@ -577,7 +714,7 @@ async def get_internal_user_settings():
 )
 async def get_default_team_settings():
     """
-    Get all SSO settings from the litellm_settings configuration.
+    Get the default team parameters (litellm_settings.default_team_params).
     Returns a structured object with values and descriptions for UI display.
     """
     from litellm.proxy.proxy_server import proxy_config
@@ -805,8 +942,9 @@ async def update_default_team_settings(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Update the default team parameters for SSO users.
-    These settings will be applied to new teams created from SSO.
+    Update the default team parameters (litellm_settings.default_team_params).
+    Applied to every new team for fields not explicitly provided in the create request;
+    `models` only applies to teams automatically created via SSO Groups.
     """
     if settings.organization_id is not None:
         await _validate_default_organization_exists(settings.organization_id)
@@ -842,37 +980,36 @@ async def get_sso_settings():
     # Resolve the effective SSO config: the stored row wins, else the process
     # environment, else each field's default. Unlike the legacy read path this
     # does not write os.environ; a GET has no business mutating the environment.
-    sso_db_record: Final = await SSOConfigRepository(prisma_client).table.find_unique(where={"id": "sso_config"})
+    sso_db_record: Final = await _sso_settings_mapping_db(SSOConfigRepository(prisma_client)).find_unique(
+        where={"id": "sso_config"}
+    )
     sso_db_settings: Final = dict(sso_db_record.sso_settings) if sso_db_record and sso_db_record.sso_settings else None
     resolved: Final = resolve_sso_config(sso_db_settings, os.environ)
 
     # Get the schema for UI display
-    from pydantic import TypeAdapter
-
-    schema: Final = TypeAdapter(SSOConfig).json_schema(by_alias=True)
+    root_schema: Final = _root_schema(SSOConfig)
 
     # Convert to dict for response, masking OAuth client secrets so plaintext
     # is never sent to the UI.
     sso_dict: Final = mask_sensitive_keys(resolved.config.model_dump(), set(SSO_SECRET_FIELDS))
 
     # Add descriptions to the response
-    result: Final = {
-        "values": sso_dict,
-        "provenance": resolved.provenance,
-        "field_schema": {
-            "description": schema.get("description", ""),
-            "properties": {},
-        },
-    }
-
-    # Add property descriptions
-    for field_name, field_info in schema["properties"].items():
-        result["field_schema"]["properties"][field_name] = {
+    schema_properties_out: Final[Mapping[str, Mapping[str, str]]] = {
+        field_name: {
             "description": field_info.get("description", ""),
             "type": field_info.get("type", "string"),
         }
+        for field_name, field_info in root_schema.properties.items()
+    }
 
-    return result
+    return {
+        "values": sso_dict,
+        "provenance": resolved.provenance,
+        "field_schema": {
+            "description": root_schema.description,
+            "properties": schema_properties_out,
+        },
+    }
 
 
 @router.patch(
@@ -914,8 +1051,10 @@ async def update_sso_settings(
     # before-snapshot has the same shape as after_value, and rely on
     # create_config_audit_log's secret-name redaction to mask the
     # *_client_secret fields before the audit row is written.
-    existing_sso_record: Final = await SSOConfigRepository(prisma_client).table.find_unique(where={"id": "sso_config"})
-    before_sso_data: dict[str, Any] | None = None
+    existing_sso_record: Final = await _stored_sso_settings_db(SSOConfigRepository(prisma_client)).find_unique(
+        where={"id": "sso_config"}
+    )
+    before_sso_data: dict[str, JsonValue] | None = None
     if existing_sso_record and existing_sso_record.sso_settings:
         stored = existing_sso_record.sso_settings
         if isinstance(stored, str):
@@ -948,7 +1087,7 @@ async def update_sso_settings(
     encrypted_sso_data: Final = proxy_config._encrypt_env_variables(environment_variables=sso_data)
 
     # Save to dedicated SSO table
-    await SSOConfigRepository(prisma_client).table.upsert(
+    await _stored_sso_settings_db(SSOConfigRepository(prisma_client)).upsert(
         where={"id": "sso_config"},
         data={
             "create": {
@@ -974,7 +1113,7 @@ async def update_sso_settings(
 
     # Remove SSO-related env vars from config.environment_variables
     try:
-        env_var_entry: Final = await ConfigRepository(prisma_client).table.find_unique(
+        env_var_entry: Final = await _config_param_db(ConfigRepository(prisma_client)).find_unique(
             where={"param_name": "environment_variables"}
         )
 
@@ -982,7 +1121,7 @@ async def update_sso_settings(
         if env_var_entry is not None:
             if env_var_entry.param_value is not None:
                 if isinstance(env_var_entry.param_value, str):
-                    environment_variables = json.loads(env_var_entry.param_value)
+                    environment_variables: Mapping[str, object] = json.loads(env_var_entry.param_value)
                 else:
                     environment_variables = dict(env_var_entry.param_value)
             else:
@@ -993,7 +1132,7 @@ async def update_sso_settings(
                 key: value for key, value in environment_variables.items() if key not in env_vars_to_remove
             }
 
-            await ConfigRepository(prisma_client).table.update(
+            await _config_param_db(ConfigRepository(prisma_client)).update(
                 where={"param_name": "environment_variables"},
                 data={
                     "param_value": json.dumps(filtered_env_vars, default=str),
@@ -1090,6 +1229,7 @@ async def update_ui_theme_settings(
     )
 
     _validate_public_image_url(theme_config.logo_url, "logo_url")
+    _validate_public_image_url(theme_config.logo_url_dark, "logo_url_dark")
     _validate_public_image_url(theme_config.favicon_url, "favicon_url")
 
     if store_model_in_db is not True:
@@ -1110,16 +1250,18 @@ async def update_ui_theme_settings(
         config["litellm_settings"] = {}
     config["litellm_settings"]["ui_theme_config"] = theme_data
 
-    # UI_LOGO_PATH and LITELLM_FAVICON_URL are the only environment variables
-    # this endpoint owns. A non-empty value sets the var; an empty or missing
-    # one clears it back to the default. Apply to the live process immediately,
-    # then persist only these two keys so an unrelated env var (a YAML/OS value
-    # merged in by get_config) is never snapshotted into the DB.
+    # The vars below are the only environment variables this endpoint owns, and
+    # they must stay in step with _UI_THEME_FIELD_ENV_VARS. A non-empty value
+    # sets the var; an empty or missing one clears it back to the default. Apply
+    # to the live process immediately, then persist only those keys so an
+    # unrelated env var (a YAML/OS value merged in by get_config) is never
+    # snapshotted into the DB.
     def _clean(url: str | None) -> str | None:
         return url if url is not None and url.strip() else None
 
     env_updates: Final[dict[str, str | None]] = {
         "UI_LOGO_PATH": _clean(theme_config.logo_url),
+        "UI_LOGO_PATH_DARK": _clean(theme_config.logo_url_dark),
         "LITELLM_FAVICON_URL": _clean(theme_config.favicon_url),
     }
     for env_key, env_value in env_updates.items():
@@ -1221,7 +1363,7 @@ UI_SETTINGS_CACHE_KEY: Final = "ui_settings:settings_dict"
 UI_SETTINGS_CACHE_TTL: Final = 600  # 10 minutes
 
 
-async def get_ui_settings_cached() -> dict[str, Any]:
+async def get_ui_settings_cached() -> dict[str, JsonValue]:
     """
     Return the persisted UI settings dict, using DualCache for reads.
 
@@ -1239,8 +1381,10 @@ async def get_ui_settings_cached() -> dict[str, Any]:
     if prisma_client is None:
         return {}
 
-    db_record: Final = await UISettingsRepository(prisma_client).table.find_unique(where={"id": "ui_settings"})
-    ui_settings: dict[str, Any] = {}
+    db_record: Final = await _ui_settings_db(UISettingsRepository(prisma_client)).find_unique(
+        where={"id": "ui_settings"}
+    )
+    ui_settings: dict[str, JsonValue] = {}
     if db_record and db_record.ui_settings:
         raw: Final = db_record.ui_settings
         ui_settings = json.loads(raw) if isinstance(raw, str) else dict(raw)
@@ -1272,19 +1416,15 @@ async def get_ui_settings():
             detail={"error": "Database not connected. Please connect a database."},
         )
 
-    ui_settings: dict[str, Any] = {}
+    db_record: Final = await _ui_settings_db(UISettingsRepository(prisma_client)).find_unique(
+        where={"id": "ui_settings"}
+    )
 
-    db_record: Final = await UISettingsRepository(prisma_client).table.find_unique(where={"id": "ui_settings"})
-
-    if db_record and db_record.ui_settings:
-        ui_settings_json: Final = db_record.ui_settings
-        if isinstance(ui_settings_json, str):
-            ui_settings = json.loads(ui_settings_json)
-        else:
-            ui_settings = dict(ui_settings_json)
+    stored: Final = (db_record.ui_settings if db_record else None) or "{}"
+    parsed: Final = json.loads(stored) if isinstance(stored, str) else stored
 
     # Sanitize any unexpected keys from persisted config before returning
-    ui_settings = {k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
+    ui_settings: Final = {k: v for k, v in parsed.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
 
     # Sync runtime flags into general_settings so the proxy picks them up
     # at runtime (covers server restart scenarios).
@@ -1300,12 +1440,19 @@ async def get_ui_settings():
     await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
 
     # Build config-like object for schema helper
-    config: Final[dict[str, Any]] = {"litellm_settings": {"ui_settings": ui_settings}}
+    config: Final[dict[str, object]] = {"litellm_settings": {"ui_settings": ui_settings}}
 
-    return await _get_settings_with_schema(
+    settings: Final = await _get_settings_with_schema(
         settings_key="ui_settings",
         settings_class=_get_effective_ui_settings_class(),
         config=config,
+    )
+    return UISettingsResponse(
+        values={
+            **settings["values"],
+            ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: is_ptu_cost_attribution_enabled(),
+        },
+        field_schema=settings["field_schema"],
     )
 
 
@@ -1315,7 +1462,7 @@ async def get_ui_settings():
     dependencies=[Depends(user_api_key_auth)],
 )
 async def update_ui_settings(
-    settings_body: dict[str, Any] = Body(...),
+    settings_body: dict[str, object] = Body(...),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1343,6 +1490,20 @@ async def update_ui_settings(
             detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
         )
 
+    conflicting_keys: Final = sorted(
+        key
+        for key, value in settings_body.items()
+        if key in _DERIVED_UI_SETTINGS_FIELDS and value != _derived_ui_setting_value(key)
+    )
+    if conflicting_keys:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Setting(s) {conflicting_keys} are derived from the deployment environment "
+                "and cannot be changed from the UI."
+            ),
+        )
+
     # Validate against the same effective class GET advertises, so
     # enterprise-registered fields are typed consistently on both sides.
     effective_cls: Final = _get_effective_ui_settings_class()
@@ -1352,7 +1513,7 @@ async def update_ui_settings(
         raise HTTPException(status_code=422, detail=e.errors())
 
     # Only include fields the caller actually sent (not Pydantic defaults).
-    settings_dict: Final = settings.model_dump(exclude_unset=True)
+    settings_dict: Final[Mapping[str, JsonValue]] = settings.model_dump(exclude_unset=True)
 
     # Reject enterprise-only settings up front so the caller gets a clear
     # signal instead of a silent drop.
@@ -1373,15 +1534,17 @@ async def update_ui_settings(
 
     # Merge with existing persisted settings so a partial PATCH doesn't
     # overwrite fields the caller didn't send.
-    existing: dict = {}
-    db_existing: Final = await UISettingsRepository(prisma_client).table.find_unique(where={"id": "ui_settings"})
+    existing: dict[str, JsonValue] = {}
+    db_existing: Final = await _ui_settings_db(UISettingsRepository(prisma_client)).find_unique(
+        where={"id": "ui_settings"}
+    )
     if db_existing and db_existing.ui_settings:
         raw: Final = db_existing.ui_settings
         existing = json.loads(raw) if isinstance(raw, str) else dict(raw)
 
     ui_settings: Final = {**existing, **incoming}
 
-    await UISettingsRepository(prisma_client).table.upsert(
+    await _ui_settings_db(UISettingsRepository(prisma_client)).upsert(
         where={"id": "ui_settings"},
         data={
             "create": {

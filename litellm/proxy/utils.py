@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import copy
 import hashlib
 import inspect
@@ -10,23 +11,26 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Collection, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Union, cast, overload
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, TypeVar, Union, cast, overload
+
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     MAX_TEAM_LIST_LIMIT,
+    SPEND_LOG_QUEUE_MAX_BYTES,
     SPEND_LOG_WRITE_BATCH_MAX_BYTES,
+    SPEND_LOG_WRITE_BATCH_MAX_ROWS,
 )
 from litellm.proxy._types import (
-    DB_CONNECTION_ERROR_TYPES,
-    DB_RETRY_SAFE_ERROR_TYPES,
     CommonProxyErrors,
     ProxyErrorTypes,
     ProxyException,
@@ -36,7 +40,7 @@ from litellm.proxy._types import (
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse
-from litellm.types.utils import CallTypes, CallTypesLiteral, ModelInfo
+from litellm.types.utils import CallTypes, CallTypesLiteral, ModelInfo, Usage
 
 try:
     from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
@@ -87,7 +91,11 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
-from litellm.litellm_core_utils.core_helpers import coerce_token_limit
+from litellm.litellm_core_utils.core_helpers import (
+    coerce_token_limit,
+    independent_snapshot,
+    is_expected_client_error,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -105,6 +113,7 @@ from litellm.proxy.common_utils.config_sync_pubsub import publish_config_param_c
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.create_views import (
     create_missing_views,
+    create_view_tolerating_race,
     should_create_missing_views,
 )
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
@@ -118,7 +127,16 @@ from litellm.proxy.db.prisma_client import (
     parse_iam_endpoint_from_url,
 )
 from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
-from litellm.proxy.db.spend_log_batching import spend_log_write_batches
+from litellm.proxy.db.spend_log_batching import (
+    spend_log_queue_within_budget,
+    spend_log_row_bytes,
+    spend_log_write_batches,
+)
+from litellm.proxy.db.token_auth import (
+    DatabaseTokenAuth,
+    mint_database_token,
+    resolve_database_token_auth,
+)
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
@@ -135,6 +153,7 @@ from litellm.proxy.hooks.sensitive_data_routing import (
     _PROXY_SensitiveDataRoutingHandler,
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
 from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
@@ -162,15 +181,42 @@ from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
 if TYPE_CHECKING:
     from mcp.types import CallToolResult
     from opentelemetry.trace import Span as _Span
+    from prisma import models as prisma_models
+    from prisma.actions import LiteLLM_DeprecatedVerificationTokenActions
     from prisma.client import TransactionManager
+    from prisma.models import LiteLLM_DeprecatedVerificationToken
+    from prisma.types import HttpConfig
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.models.team import LiteLLM_TeamTableCachedObj
     from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
+    from litellm.repositories.prisma_protocols import TableActions
+    from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline
 
-    Span = _Span | Any
+    Span = _Span | object
 else:
     Span = Any
+
+_T: Final = TypeVar("_T")
+
+
+class _ViewCountRow(TypedDict):
+    view_count: ReadOnly[int]
+    view_names: ReadOnly[Sequence[str] | None]
+
+
+class _RelTuplesRow(TypedDict):
+    reltuples: ReadOnly[int]
+
+
+class _EndUserBatchTable(Protocol):
+    def upsert(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> None: ...
+
+
+class _EndUserSpendBatch(Protocol):
+    @property
+    def litellm_endusertable(self) -> _EndUserBatchTable: ...
 
 
 unified_guardrail: Final = UnifiedLLMGuardrails()
@@ -178,7 +224,7 @@ unified_guardrail: Final = UnifiedLLMGuardrails()
 NON_OPENAI_STREAM_GUARDRAIL_TRANSLATION_CALL_TYPES: "frozenset[CallTypes]" = frozenset({CallTypes.anthropic_messages})
 
 
-def print_verbose(print_statement):
+def print_verbose(print_statement: object):
     """
     Prints the given `print_statement` to the console if `litellm.set_verbose` is True.
     Also logs the `print_statement` at the debug level using `verbose_proxy_logger`.
@@ -226,10 +272,10 @@ class InternalUsageCache:
 
     async def async_get_cache(
         self,
-        key,
+        key: str,
         litellm_parent_otel_span: Span | None,
         local_only: bool = False,
-        **kwargs,
+        **kwargs: object,
     ) -> Any:
         return await self.dual_cache.async_get_cache(
             key=key,
@@ -240,11 +286,11 @@ class InternalUsageCache:
 
     async def async_set_cache(
         self,
-        key,
-        value,
+        key: str,
+        value: object,
         litellm_parent_otel_span: Span | None,
         local_only: bool = False,
-        **kwargs,
+        **kwargs: object,
     ) -> None:
         return await self.dual_cache.async_set_cache(
             key=key,
@@ -256,10 +302,10 @@ class InternalUsageCache:
 
     async def async_batch_set_cache(
         self,
-        cache_list: list,
+        cache_list: list[tuple[str, object]],
         litellm_parent_otel_span: Span | None,
         local_only: bool = False,
-        **kwargs,
+        **kwargs: object,
     ) -> None:
         return await self.dual_cache.async_set_cache_pipeline(
             cache_list=cache_list,
@@ -270,19 +316,19 @@ class InternalUsageCache:
 
     async def async_batch_get_cache(
         self,
-        keys: list,
+        keys: Sequence[str | None],
         parent_otel_span: Span | None = None,
         local_only: bool = False,
     ):
         return await self.dual_cache.async_batch_get_cache(
-            keys=keys,
+            keys=list(keys),
             parent_otel_span=parent_otel_span,
             local_only=local_only,
         )
 
     async def async_increment_cache(
         self,
-        key,
+        key: str,
         value: float,
         litellm_parent_otel_span: Span | None,
         local_only: bool = False,
@@ -298,10 +344,10 @@ class InternalUsageCache:
 
     def set_cache(
         self,
-        key,
-        value,
+        key: str,
+        value: object,
         local_only: bool = False,
-        **kwargs,
+        **kwargs: object,
     ) -> None:
         return self.dual_cache.set_cache(
             key=key,
@@ -312,9 +358,9 @@ class InternalUsageCache:
 
     def get_cache(
         self,
-        key,
+        key: str,
         local_only: bool = False,
-        **kwargs,
+        **kwargs: object,
     ) -> Any:
         return self.dual_cache.get_cache(
             key=key,
@@ -337,7 +383,7 @@ def _accepts_litellm_call_info(cb: CustomLogger) -> bool:
     return _CALLBACK_ACCEPTS_CALL_INFO[key]
 
 
-def _enrich_http_exception_with_guardrail_context(exc: BaseException, callback: Any) -> None:
+def _enrich_http_exception_with_guardrail_context(exc: BaseException, callback: object) -> None:
     """
     If `exc` is an HTTPException with a dict `detail`, mutate it in place to
     add `guardrail_name` and `guardrail_mode` taken from the callback instance.
@@ -351,10 +397,10 @@ def _enrich_http_exception_with_guardrail_context(exc: BaseException, callback: 
     detail: Final = getattr(exc, "detail", None)
     if not isinstance(detail, dict):
         return
-    guardrail_name: Final = getattr(callback, "guardrail_name", None)
+    guardrail_name: Final[object] = getattr(callback, "guardrail_name", None)
     if guardrail_name:
         detail.setdefault("guardrail_name", guardrail_name)
-    event_hook: Final = getattr(callback, "event_hook", None)
+    event_hook: Final[object] = getattr(callback, "event_hook", None)
     if event_hook:
         detail.setdefault("guardrail_mode", event_hook)
 
@@ -367,6 +413,188 @@ def _exception_changes_request_flow(exc: BaseException) -> bool:
     generic pipeline block instead of being re-raised verbatim.
     """
     return isinstance(exc, (SensitiveDataRouteException, ModifyResponseException))
+
+
+def _policy_state_metadata(data: Mapping[str, object]) -> Mapping[str, object]:
+    """
+    Return the metadata bucket the policy engine wrote its pipeline state into.
+
+    The route decides the bucket (``litellm_metadata`` for ``/v1/messages``,
+    responses, batches, files and bedrock, ``metadata`` everywhere else), and both
+    buckets can be present at once because callers send their own provider-facing
+    ``metadata`` (Claude Code sends ``metadata.user_id``) or their own
+    ``litellm_metadata``. Pipeline slots are stripped from caller input before the
+    policy engine runs, so whichever bucket carries them is the proxy's own write.
+    """
+    return next(
+        (
+            bucket
+            for bucket in (data.get("metadata"), data.get("litellm_metadata"))
+            if isinstance(bucket, dict)
+            and ("_guardrail_pipelines" in bucket or "_pipeline_managed_guardrails" in bucket)
+        ),
+        {},
+    )
+
+
+def _policy_pipelines(data: Mapping[str, object]) -> tuple[tuple[str, "GuardrailPipeline"], ...]:
+    pipelines: Final = _policy_state_metadata(data).get("_guardrail_pipelines")
+    return (
+        tuple(cast("Sequence[tuple[str, GuardrailPipeline]]", pipelines))  # cast-ok: the policy engine wrote the slot
+        if pipelines
+        else ()
+    )
+
+
+def _pipeline_managed_guardrail_names(data: Mapping[str, object]) -> frozenset[str]:
+    managed: Final = _policy_state_metadata(data).get("_pipeline_managed_guardrails")
+    return (
+        frozenset(cast("Collection[str]", managed))  # cast-ok: the policy engine wrote these guardrail names
+        if managed
+        else frozenset()
+    )
+
+
+def _prompt_block_text(block: object) -> str:
+    if isinstance(block, str):
+        return block
+    if not isinstance(block, dict):
+        return ""
+    block_text: Final = block.get("text")
+    return block_text if isinstance(block_text, str) else ""
+
+
+def _system_prompt_text(system_input: object) -> str:
+    if isinstance(system_input, str):
+        return system_input
+    if not isinstance(system_input, list):
+        return ""
+    return "".join(_prompt_block_text(block) for block in system_input)
+
+
+def _count_request_input_tokens(model: str, request_input: object, system_input: object) -> int:
+    system_text: Final = _system_prompt_text(system_input)
+    system_tokens: Final = litellm.token_counter(model=model, text=system_text) if system_text else 0
+    if isinstance(request_input, str):
+        return system_tokens + litellm.token_counter(model=model, text=request_input)
+    if not isinstance(request_input, list) or not request_input:
+        return system_tokens
+    text_entries: Final = tuple(entry for entry in request_input if isinstance(entry, str))
+    if len(text_entries) == len(request_input):
+        return system_tokens + litellm.token_counter(model=model, text="".join(text_entries))
+    return system_tokens + litellm.token_counter(
+        model=model, messages=request_input, use_default_image_token_count=True
+    )
+
+
+def _estimate_dispatched_failure_usage(model: str, request_input: object, system_input: object) -> Usage | None:
+    """A request that failed after dispatch consumed provider-billed input
+    tokens, but no provider usage ever came back. Estimate the input side with
+    the same tokenizer fallback interrupted streams use, so the spend log's
+    failure row records what was sent instead of zero."""
+    try:
+        input_tokens: Final = _count_request_input_tokens(
+            model=model, request_input=request_input, system_input=system_input
+        )
+    except Exception:
+        return None
+    if input_tokens <= 0:
+        return None
+    return Usage(prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens)
+
+
+_INPUT_ESTIMABLE_CALL_TYPES: Final = frozenset(
+    call_type.value
+    for call_type in (
+        CallTypes.completion,
+        CallTypes.acompletion,
+        CallTypes.text_completion,
+        CallTypes.atext_completion,
+        CallTypes.anthropic_messages,
+        CallTypes.aanthropic_messages,
+        CallTypes.responses,
+        CallTypes.aresponses,
+        CallTypes.embedding,
+        CallTypes.aembedding,
+        CallTypes.moderation,
+        CallTypes.amoderation,
+        CallTypes.image_generation,
+        CallTypes.aimage_generation,
+        CallTypes.speech,
+        CallTypes.aspeech,
+        CallTypes.rerank,
+        CallTypes.arerank,
+        CallTypes.generate_content,
+        CallTypes.agenerate_content,
+        CallTypes.generate_content_stream,
+        CallTypes.agenerate_content_stream,
+    )
+)
+
+
+def _failure_usage_to_lift(
+    model_call_details: Mapping[str, object],
+    request_body: Mapping[str, object],
+    dispatched: bool,
+) -> tuple[object, object] | None:
+    """A stream that broke mid-flight still billed the provider for the chunks
+    already delivered; the streaming handler stashes that recovered usage and
+    cost in model_call_details, so prefer it. Otherwise a request that was
+    dispatched to a provider and failed without upstream usage gets an
+    estimated input-side Usage with zero cost. The raw request body backfills
+    the system prompt when the SDK bridges an endpoint (e.g. /v1/messages on a
+    chat-completions provider) without filling optional_params. Returns the
+    (combined_usage_object, response_cost) pair to lift, or None."""
+    recovered_usage: Final = model_call_details.get("combined_usage_object")
+    if recovered_usage is not None:
+        return recovered_usage, model_call_details.get("response_cost")
+    if not dispatched or model_call_details.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL):
+        return None
+    if str(model_call_details.get("call_type")) not in _INPUT_ESTIMABLE_CALL_TYPES:
+        return None
+    optional_params: Final = model_call_details.get("optional_params")
+    dispatched_system: Final = (
+        (optional_params.get("system") or optional_params.get("instructions"))
+        if isinstance(optional_params, dict)
+        else None
+    )
+    system_input: Final = dispatched_system or request_body.get("system") or request_body.get("instructions")
+    estimated_usage: Final = _estimate_dispatched_failure_usage(
+        model=str(model_call_details.get("model") or ""),
+        request_input=model_call_details.get("messages"),
+        system_input=system_input,
+    )
+    if estimated_usage is None:
+        return None
+    return estimated_usage, 0.0
+
+
+_EMPTY_LIFT: Final = MappingProxyType({})
+
+
+def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, object]:
+    """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
+    request_data (it is not serialisable), so the caller merges these fields
+    onto request_data first: the first-handoff instant for preprocessing
+    latency, recovered or estimated usage for token counts, and the standard
+    logging object for deployment attribution on failed-request spend logs."""
+    _logging_obj: Final = request_data.get("litellm_logging_obj")
+    if _logging_obj is None:
+        return _EMPTY_LIFT
+    _model_call_details: Final = getattr(_logging_obj, "model_call_details", {})
+    _first_handoff: Final = _model_call_details.get("first_api_call_start_time")
+    _usage_to_lift: Final = _failure_usage_to_lift(
+        model_call_details=_model_call_details,
+        request_body=request_data,
+        dispatched=_first_handoff is not None,
+    )
+    _entries: Final = (
+        ("first_api_call_start_time", _first_handoff),
+        ("combined_usage_object", None if _usage_to_lift is None else _usage_to_lift[0]),
+        ("response_cost", None if _usage_to_lift is None else (_usage_to_lift[1] or 0.0)),
+        ("standard_logging_object", _model_call_details.get("standard_logging_object")),
+    )
+    return MappingProxyType({key: value for key, value in _entries if value is not None})
 
 
 @dataclass(frozen=True)
@@ -383,6 +611,7 @@ class _CallbackCapabilities:
     has_streaming_chunk_override: bool = False
     has_guardrail: bool = False
     has_pre_call_override: bool = False
+    has_content_enforcer: bool = False
     # Tuple[(resolved_callback, "override" | "apply_guardrail"), ...]
     # Ordered the same as ``litellm.callbacks``; used to build the streaming
     # iterator chain without re-scanning per request.
@@ -390,7 +619,7 @@ class _CallbackCapabilities:
     # Resolved CustomLogger callbacks in original order. Pre-resolving once
     # avoids the per-request ``get_custom_logger_compatible_class`` walk for
     # every string entry in ``litellm.callbacks``.
-    resolved_callbacks: tuple[Any, ...] = field(default_factory=tuple)
+    resolved_callbacks: tuple[object, ...] = field(default_factory=tuple)
 
 
 class ProxyLogging:
@@ -416,7 +645,7 @@ class ProxyLogging:
         self.max_parallel_request_limiter = _PROXY_MaxParallelRequestsHandler(self.internal_usage_cache)
         self.max_budget_limiter = _PROXY_MaxBudgetLimiter()
         self.cache_control_check = _PROXY_CacheControlCheck()
-        self.alerting: list | None = None
+        self.alerting: list[str] | None = None
         self.alerting_threshold: float = 300  # default to 5 min. threshold
         self.alert_types: list[AlertType] = DEFAULT_ALERT_TYPES
         self.alert_to_webhook_url: dict | None = None
@@ -441,6 +670,7 @@ class ProxyLogging:
         # Guard flags to prevent duplicate background tasks
         self.daily_report_started: bool = False
         self.hanging_requests_check_started: bool = False
+        self.deprecation_check_started: bool = False
 
     def startup_event(
         self,
@@ -466,7 +696,10 @@ class ProxyLogging:
             and not self.daily_report_started
         ):
             asyncio.create_task(
-                self.slack_alerting_instance._run_scheduled_daily_report(llm_router=llm_router)
+                self.slack_alerting_instance._run_scheduled_daily_report(
+                    llm_router=llm_router,
+                    pod_lock_manager=self.db_spend_update_writer.pod_lock_manager,
+                )
             )  # RUN DAILY REPORT (if scheduled)
             self.daily_report_started = True
 
@@ -479,6 +712,25 @@ class ProxyLogging:
                 self.slack_alerting_instance.hanging_request_check.check_for_hanging_requests()
             )  # RUN HANGING REQUEST CHECK (if user wants to alert on hanging requests)
             self.hanging_requests_check_started = True
+
+        self._ensure_deprecation_check_scheduled()
+
+    def _ensure_deprecation_check_scheduled(self) -> None:
+        """Alerting can be configured at startup or by a later config reload, so schedule from either path"""
+        if self.alerting is None or self.deprecation_check_started:
+            return
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        asyncio.create_task(
+            self.slack_alerting_instance.run_scheduled_deprecation_check(
+                pod_lock_manager=self.db_spend_update_writer.pod_lock_manager
+            )
+        )
+        self.deprecation_check_started = True
 
     def update_values(
         self,
@@ -507,6 +759,7 @@ class ProxyLogging:
             updated_slack_alerting = True
 
         if updated_slack_alerting is True:
+            self._ensure_deprecation_check_scheduled()
             self.slack_alerting_instance.update_values(
                 alerting=self.alerting,
                 alerting_threshold=self.alerting_threshold,
@@ -516,7 +769,7 @@ class ProxyLogging:
                 alert_type_config=alert_type_config,
             )
 
-            if self.alerting is not None and "slack" in self.alerting:
+            if self.alerting is not None and ("slack" in self.alerting or "ms_teams" in self.alerting):
                 # NOTE: ENSURE we only add callbacks when alerting is on
                 # We should NOT add callbacks when alerting is off
                 if (
@@ -543,6 +796,11 @@ class ProxyLogging:
         for hook in PROXY_HOOKS:
             proxy_hook = get_proxy_hook(hook)
             expected_args = inspect.getfullargspec(proxy_hook).args
+            if "prisma_client" in expected_args and prisma_client is None:
+                verbose_proxy_logger.debug(
+                    "Skipping proxy hook %s: it requires a database and no prisma client is configured", hook
+                )
+                continue
             passed_in_args: dict[str, Any] = {}
             if "internal_usage_cache" in expected_args:
                 passed_in_args["internal_usage_cache"] = self.internal_usage_cache
@@ -664,11 +922,12 @@ class ProxyLogging:
             # (e.g. MCPJWTSigner) to independently verify the caller's identity
             # before re-signing an outbound token (FR-5 verify+re-sign).
             "incoming_bearer_token": kwargs.get("incoming_bearer_token"),
+            "metadata": {"headers": kwargs.get("headers") or {}},
         }
 
         return synthetic_data
 
-    def _convert_llm_result_to_mcp_response(self, llm_result, request_obj) -> Any | None:
+    def _convert_llm_result_to_mcp_response(self, llm_result, request_obj) -> MCPPreCallResponseObject | None:
         """
         Convert LLM guardrail result back to MCP response format.
         """
@@ -794,7 +1053,7 @@ class ProxyLogging:
             verbose_proxy_logger.error("Error in manual argument parsing: %s", e)
             return None
 
-    def _convert_llm_result_to_mcp_during_response(self, llm_result, request_obj) -> Any | None:
+    def _convert_llm_result_to_mcp_during_response(self, llm_result, request_obj) -> MCPDuringCallResponseObject | None:
         """
         Convert LLM guardrail result back to MCP during call response format.
         """
@@ -840,7 +1099,7 @@ class ProxyLogging:
         self,
         response: MCPPreCallResponseObject,
         original_request: MCPPreCallRequestObject,
-    ) -> dict[str, Any]:
+    ) -> Mapping[str, object]:
         """
         Parse the response from the pre_mcp_tool_call_hook
 
@@ -943,8 +1202,8 @@ class ProxyLogging:
         data: dict,
         user_api_key_dict: UserAPIKeyAuth | None,
         call_type: CallTypesLiteral,
-        response: Any | None = None,
-    ) -> Any:
+        response: LLMResponseTypes | None = None,
+    ) -> object:
         """
         Execute a single guardrail's hook.
 
@@ -960,7 +1219,9 @@ class ProxyLogging:
             Result from the guardrail execution
         """
         # Use unified_guardrail if callback has apply_guardrail method
-        has_apply_guardrail: Final = "apply_guardrail" in type(callback).__dict__
+        has_apply_guardrail: Final = "apply_guardrail" in type(callback).__dict__ and not getattr(
+            callback, "use_native_lifecycle_hooks", False
+        )
         use_unified: Final = has_apply_guardrail and not (
             hook_type == "during_call" and getattr(callback, "use_native_during_call_hook", False)
         )
@@ -998,8 +1259,8 @@ class ProxyLogging:
         data: dict,
         user_api_key_dict: UserAPIKeyAuth | None,
         call_type: CallTypesLiteral,
-        response: Any | None = None,
-    ) -> Any:
+        response: LLMResponseTypes | None = None,
+    ) -> object:
         """
         Execute a guardrail using the router's load balancing.
 
@@ -1022,7 +1283,7 @@ class ProxyLogging:
         # Select guardrail using router's load balancing
         selected_guardrail: Final = llm_router.get_available_guardrail(guardrail_name=guardrail_name)
 
-        callback: Final = selected_guardrail.get("callback")
+        callback: Final[CustomGuardrail | None] = selected_guardrail.get("callback")
         if callback is None:
             raise ValueError(f"No callback found for guardrail: {guardrail_name}")
 
@@ -1130,12 +1391,89 @@ class ProxyLogging:
 
         return data
 
+    async def _run_sequential_guardrail_callback(
+        self,
+        callback: CustomGuardrail,
+        data: dict,  # mutable-ok: matches _process_guardrail_callback's own request-payload typing
+        raw_request_snapshot: dict | None,  # mutable-ok: same request-payload shape as data
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: CallTypesLiteral,
+    ) -> dict:  # mutable-ok: callers reassign the loop's own data from this return value
+        """
+        Run one guardrail from the sequential pre_call loop and return what the
+        rest of the loop should carry forward.
+
+        A guardrail opted into ``scan_raw_request`` always evaluates a fresh
+        copy of ``raw_request_snapshot`` (taken before any guardrail in this
+        hook ran) instead of ``data`` (the live, possibly already-mutated
+        payload), so its block/pass decision can never depend on where it's
+        declared relative to a guardrail that masks or rewrites content. It's
+        declared block-only, same contract as ``run_in_parallel``: any data it
+        returns is discarded, since applying its view on top of a stale
+        snapshot would silently undo whatever a later guardrail already did to
+        the live request. A guardrail that mutates content (e.g. PII masking)
+        should never set this flag -- if one does anyway, its returned
+        mutation is discarded and a warning is logged so the misconfiguration
+        is visible instead of silently forwarding unredacted content.
+        """
+        scans_raw_request: Final = callback.scan_raw_request
+        should_use_raw_snapshot: Final = scans_raw_request and raw_request_snapshot is not None
+        input_data: Final = (  # mutable-ok: same request-payload shape as data
+            independent_snapshot(raw_request_snapshot) if should_use_raw_snapshot else data
+        )
+        # _process_guardrail_callback always calls mark_pre_call_hook_ran on a
+        # successful run, which unconditionally stamps bookkeeping metadata onto
+        # the dict regardless of whether the guardrail's own hook mutated
+        # anything -- so comparing `result` straight against `input_data` would
+        # warn on every single scan_raw_request call. Apply that same stamp to a
+        # throwaway, guaranteed-independent copy first (never the live request or
+        # raw_request_snapshot itself) so the comparison isolates the guardrail's
+        # own content mutation from this bookkeeping noise without risking a
+        # premature marker write into shared state.
+        expected_if_unmutated: Final[dict | None] = (  # mutable-ok: same request-payload shape as data
+            independent_snapshot(input_data) if scans_raw_request else None
+        )
+        if expected_if_unmutated is not None:
+            callback.mark_pre_call_hook_ran(expected_if_unmutated)
+        result: Final = await self._process_guardrail_callback(
+            callback=callback,
+            data=input_data,
+            user_api_key_dict=user_api_key_dict,
+            call_type=call_type,
+            event_type=GuardrailEventHooks.pre_call,
+        )
+        if (
+            scans_raw_request
+            and expected_if_unmutated is not None
+            and result is not None
+            and result != expected_if_unmutated
+        ):
+            verbose_proxy_logger.warning(
+                "Guardrail '%s' has scan_raw_request=True but returned a modified payload; "
+                "scan_raw_request is for block-only guardrails and this mutation is being "
+                "discarded. Remove scan_raw_request from this guardrail's config if it needs "
+                "to mask/rewrite content.",
+                callback.guardrail_name or callback.__class__.__name__,
+            )
+        if scans_raw_request:
+            if result is not None:
+                # _process_guardrail_callback only stamped input_data (a throwaway
+                # snapshot copy), never the live data returned here -- without this,
+                # a deployment-level guardrail sharing this name would see no marker
+                # via _pre_call_hook_already_ran and re-run the same guardrail a
+                # second time on live kwargs.
+                callback.mark_pre_call_hook_ran(data)
+            return data
+        if result is None:
+            return data
+        return result
+
     async def _process_prompt_template(
         self,
         data: dict,
-        litellm_logging_obj: Any,
-        prompt_id: Any,
-        prompt_version: Any,
+        litellm_logging_obj: "LiteLLMLoggingObj",
+        prompt_id: str,
+        prompt_version: int | None,
         call_type: CallTypesLiteral,
     ) -> None:
         """Process prompt template if applicable."""
@@ -1145,6 +1483,7 @@ class ProxyLogging:
             get_latest_version_prompt_id,
         )
         from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+        from litellm.responses.utils import ResponsesAPIRequestUtils
         from litellm.utils import get_non_default_completion_params
 
         if prompt_version is None:
@@ -1163,13 +1502,20 @@ class ProxyLogging:
             data.pop("prompt_id", None)
 
         if custom_logger and prompt_spec is not None:
+            is_responses_call: Final = call_type == "aresponses"
+            original_responses_input: Final = data.get("input", "") if is_responses_call else ""
+            client_messages: Final = (
+                ResponsesAPIRequestUtils.responses_input_to_chat_messages(original_responses_input)
+                if is_responses_call
+                else data.get("messages", [])
+            )
             (
                 model,
                 messages,
                 optional_params,
             ) = await litellm_logging_obj.async_get_chat_completion_prompt(
                 model=data.get("model", ""),
-                messages=data.get("messages", []),
+                messages=client_messages,
                 non_default_params=get_non_default_completion_params(kwargs=data) or {},
                 prompt_id=litellm_prompt_id,
                 prompt_spec=prompt_spec,
@@ -1177,11 +1523,19 @@ class ProxyLogging:
                 prompt_variables=data.pop("prompt_variables", None) or {},
                 prompt_label=data.pop("prompt_label", None) or {},
                 prompt_version=data.pop("prompt_version", None) or {},
+                request_kwargs=data,
             )
 
             data.update(optional_params)
             data["model"] = model
-            data["messages"] = messages
+            if is_responses_call:
+                data["input"] = ResponsesAPIRequestUtils.merge_prompt_management_input(
+                    original_input=original_responses_input,
+                    client_input=client_messages,
+                    merged_input=messages,
+                )
+            else:
+                data["messages"] = messages
             # prevent re-processing the prompt template
             data.pop("prompt_id", None)
             data.pop("prompt_variables", None)
@@ -1223,6 +1577,7 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         call_type: str,
         event_hook: str,
+        raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
     ) -> dict:
         """
         Execute guardrail pipelines if any are configured for this request.
@@ -1230,10 +1585,14 @@ class ProxyLogging:
         Checks metadata for pipelines resolved by the policy engine
         and executes them. Handles the result (allow/block/modify_response).
 
+        ``raw_request_snapshot`` (taken before any guardrail or pipeline ran)
+        is forwarded so a pipeline step whose guardrail opted into
+        ``scan_raw_request`` evaluates the pristine request, not whatever an
+        earlier ``pass_data`` step in the same pipeline already rewrote.
+
         Returns the (possibly modified) data dict.
         """
-        metadata: Final = data.get("metadata", data.get("litellm_metadata", {})) or {}
-        pipelines: Final = metadata.get("_guardrail_pipelines")
+        pipelines: Final = _policy_pipelines(data)
         if not pipelines:
             return data
 
@@ -1248,6 +1607,7 @@ class ProxyLogging:
                 user_api_key_dict=user_api_key_dict,
                 call_type=call_type,
                 policy_name=policy_name,
+                raw_request_snapshot=raw_request_snapshot,
             )
 
             data = self._handle_pipeline_result(
@@ -1315,6 +1675,30 @@ class ProxyLogging:
 
         return data
 
+    def has_pre_call_guardrails(self, request_metadata: Mapping[str, object]) -> bool:
+        """
+        Whether anything configured would inspect the content of a request carrying this metadata.
+
+        Evaluated with the same predicate the pre-call loop uses, so a proxy configured only with
+        post-call guardrails answers False. Callers that must pay a real cost to build the hook's
+        input, such as streaming a batch input file off disk, use this to skip that work.
+
+        A content-enforcing ``CustomLogger`` counts too. It is not a guardrail and has no event
+        hook to consult, but it judges the payload the same way, so a proxy configured only with
+        one of those still has something to say about every record.
+        """
+        if request_metadata.get("_guardrail_pipelines"):
+            return True
+        caps: Final = ProxyLogging._callback_capabilities()
+        if caps.has_content_enforcer:
+            return True
+        probe: Final = {"metadata": dict(request_metadata)}  # mutable-ok: should_run_guardrail takes a dict
+        return any(
+            isinstance(callback, CustomGuardrail)
+            and callback.should_run_guardrail(data=probe, event_type=GuardrailEventHooks.pre_call)
+            for callback in caps.resolved_callbacks
+        )
+
     # The actual implementation of the function
     @overload
     async def pre_call_hook(
@@ -1322,6 +1706,7 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         data: None,
         call_type: CallTypesLiteral,
+        guardrails_only: bool = False,
     ) -> None:
         pass
 
@@ -1331,6 +1716,7 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         data: dict,
         call_type: CallTypesLiteral,
+        guardrails_only: bool = False,
     ) -> dict:
         pass
 
@@ -1339,6 +1725,7 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         data: dict | None,
         call_type: CallTypesLiteral,
+        guardrails_only: bool = False,
     ) -> dict | None:
         """
         Allows users to modify/reject the incoming request to the proxy, without having to deal with parsing Request body.
@@ -1347,24 +1734,30 @@ class ProxyLogging:
         1. /chat/completions
         2. /embeddings
         3. /image/generation
+
+        With ``guardrails_only`` the walk is limited to guardrails and guardrail pipelines: rate
+        limiting, budget accounting, prompt templates and hanging-request alerting are skipped.
+        Use it to scan a payload that is not itself a request, such as one record of a batch file.
         """
         verbose_proxy_logger.debug("Inside Proxy Logging Pre-call hook!")
 
-        self._init_response_taking_too_long_task(data=data)
+        if not guardrails_only:
+            self._init_response_taking_too_long_task(data=data)
 
         if data is None:
             return None
 
         litellm_logging_obj: Final = cast(Optional["LiteLLMLoggingObj"], data.get("litellm_logging_obj", None))
-        prompt_id: Final = data.get("prompt_id", None)
-        prompt_version: Final = data.get("prompt_version", None)
+        prompt_id: Final[str | None] = data.get("prompt_id", None)
+        prompt_version: Final[int | None] = data.get("prompt_version", None)
 
         ## PROMPT TEMPLATE CHECK ##
 
         if (
-            litellm_logging_obj is not None
+            not guardrails_only
+            and litellm_logging_obj is not None
             and prompt_id is not None
-            and (call_type == "completion" or call_type == "acompletion")
+            and (call_type == "completion" or call_type == "acompletion" or call_type == "aresponses")
         ):
             await self._process_prompt_template(
                 data=data,
@@ -1374,6 +1767,24 @@ class ProxyLogging:
                 call_type=call_type,
             )
 
+        # Snapshotted here, before _maybe_execute_pipelines or any guardrail in
+        # this hook has run, so a scan_raw_request guardrail's block/pass
+        # decision never depends on its position in the guardrails list or on
+        # a pipeline that runs ahead of it: an earlier guardrail (pipelined or
+        # not) that masks/rewrites content can't hide a violation from a later
+        # one that opted into scanning the original request. Only computed
+        # when at least one registered guardrail actually opted in, and via
+        # independent_snapshot (not safe_deep_copy) since this isolation
+        # guarantee must hold even under litellm.safe_memory_mode, which
+        # otherwise makes deep copies return the original object.
+        needs_raw_request_snapshot: Final = any(
+            isinstance(cb, CustomGuardrail) and cb.scan_raw_request
+            for cb in ProxyLogging._callback_capabilities().resolved_callbacks
+        )
+        raw_request_snapshot: Final[dict | None] = (  # mutable-ok: same request-payload shape as data
+            independent_snapshot(data) if needs_raw_request_snapshot else None
+        )
+
         try:
             # Execute guardrail pipelines before the normal callback loop
             data = await self._maybe_execute_pipelines(
@@ -1381,11 +1792,11 @@ class ProxyLogging:
                 user_api_key_dict=user_api_key_dict,
                 call_type=call_type,
                 event_hook="pre_call",
+                raw_request_snapshot=raw_request_snapshot,
             )
 
             # Get pipeline-managed guardrails to skip in normal loop
-            metadata: Final = data.get("metadata", data.get("litellm_metadata", {})) or {}
-            pipeline_managed: Final[set] = metadata.get("_pipeline_managed_guardrails", set())
+            pipeline_managed: Final = _pipeline_managed_guardrail_names(data)
 
             caps: Final = ProxyLogging._callback_capabilities()
             # Skip the per-request callback walk entirely when nothing in
@@ -1393,7 +1804,11 @@ class ProxyLogging:
             # CustomGuardrail is configured. Saves the loop overhead +
             # ``time.time()`` x2 per registered callback for the common
             # "callbacks=[]" case on small / dev deployments.
-            if not caps.has_guardrail and not caps.has_pre_call_override:
+            if (
+                not caps.has_guardrail
+                and not caps.has_content_enforcer
+                and (guardrails_only or not caps.has_pre_call_override)
+            ):
                 if data is not None:
                     self._process_guardrail_metadata(data)
                 return data
@@ -1418,27 +1833,25 @@ class ProxyLogging:
                         if getattr(_callback, "run_in_parallel", False):
                             continue
 
-                        result = await self._process_guardrail_callback(
+                        data = await self._run_sequential_guardrail_callback(
                             callback=_callback,
                             data=data,
+                            raw_request_snapshot=raw_request_snapshot,
                             user_api_key_dict=user_api_key_dict,
                             call_type=call_type,
-                            event_type=GuardrailEventHooks.pre_call,
                         )
-                        if result is None:
-                            continue
-                        data = result
 
                     elif (
                         _callback is not None
                         and isinstance(_callback, CustomLogger)
+                        and (not guardrails_only or _callback.enforces_request_content)
                         and "async_pre_call_hook" in vars(_callback.__class__)
                         and _callback.__class__.async_pre_call_hook != CustomLogger.async_pre_call_hook
                     ):
                         if call_type == "call_mcp_tool" and user_api_key_dict is None:
                             continue
 
-                        response = await _callback.async_pre_call_hook(
+                        response: Exception | str | Mapping[str, object] | None = await _callback.async_pre_call_hook(
                             user_api_key_dict=user_api_key_dict,
                             cache=self.call_details["user_api_key_cache"],
                             data=data,
@@ -1478,6 +1891,7 @@ class ProxyLogging:
                 await self._run_parallel_pre_call_guardrails(
                     guardrails=parallel_guardrails,
                     data=data,
+                    raw_request_snapshot=raw_request_snapshot,
                     user_api_key_dict=user_api_key_dict,
                     call_type=call_type,
                 )
@@ -1498,6 +1912,7 @@ class ProxyLogging:
         self,
         guardrails: tuple[CustomGuardrail, ...],
         data: dict,
+        raw_request_snapshot: dict | None,  # mutable-ok: same request-payload shape as data
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
     ) -> None:
@@ -1514,12 +1929,24 @@ class ProxyLogging:
         the LLM, preserving the pre-call barrier that ``during_call`` guardrails
         cannot provide. Per-guardrail latency is recorded by
         ``_process_guardrail_callback``'s own metrics.
+
+        A guardrail that also opted into ``scan_raw_request`` evaluates
+        ``raw_request_snapshot`` (taken before the sequential loop ran) instead
+        of ``data`` (the sequential loop's output), for the same reason the
+        sequential branch does: its block decision must not depend on what a
+        sequential guardrail already masked or rewrote.
         """
+
+        def _input_for(callback: CustomGuardrail) -> dict:  # mutable-ok: same request-payload shape as data
+            if not callback.scan_raw_request or raw_request_snapshot is None:
+                return data
+            return independent_snapshot(raw_request_snapshot)
+
         results: Final = await asyncio.gather(
             *(
                 self._process_guardrail_callback(
                     callback=callback,
-                    data=data,
+                    data=_input_for(callback),
                     user_api_key_dict=user_api_key_dict,
                     call_type=call_type,
                     event_type=GuardrailEventHooks.pre_call,
@@ -1528,6 +1955,15 @@ class ProxyLogging:
             ),
             return_exceptions=True,
         )
+        for callback, result in zip(guardrails, results, strict=True):
+            # _process_guardrail_callback stamped mark_pre_call_hook_ran on
+            # _input_for's throwaway snapshot copy for a scan_raw_request
+            # guardrail, never on the live, shared `data` -- without this, a
+            # deployment-level guardrail sharing this name would see no marker
+            # via _pre_call_hook_already_ran and re-run it a second time on
+            # live kwargs.
+            if callback.scan_raw_request and not isinstance(result, BaseException) and result is not None:
+                callback.mark_pre_call_hook_ran(data)
         raised: Final = tuple(result for result in results if isinstance(result, BaseException))
         blocking: Final = next((exc for exc in raised if not _exception_changes_request_flow(exc)), None)
         if blocking is not None:
@@ -1606,7 +2042,7 @@ class ProxyLogging:
                 break
 
     @staticmethod
-    async def _run_guardrail_with_metrics(callback: Any, coro: Awaitable[Any], hook_type: str) -> Any:
+    async def _run_guardrail_with_metrics(callback: object, coro: Awaitable[_T], hook_type: str) -> _T:
         """
         Await `coro`, recording its latency and status to the
         `litellm_guardrail_latency_seconds` metric under `hook_type`, and
@@ -1638,8 +2074,8 @@ class ProxyLogging:
 
     @staticmethod
     async def _wrap_streaming_iterator_with_enrichment(
-        callback: Any, gen: AsyncGenerator[Any, None]
-    ) -> AsyncGenerator[Any, None]:
+        callback: object, gen: AsyncGenerator[_T, None]
+    ) -> AsyncGenerator[_T, None]:
         """
         Yield from `gen`; if iteration raises an HTTPException with dict detail,
         enrich the detail with the originating callback's `guardrail_name` and
@@ -1683,12 +2119,13 @@ class ProxyLogging:
         has_streaming_chunk_override = False
         has_guardrail = False
         has_pre_call_override = False
+        has_content_enforcer = False
         iterator_overrides: Final[list[tuple[Any, str]]] = []  # (callback, kind)
-        resolved_callbacks: Final[list[Any]] = []
+        resolved_callbacks: Final[list[CustomLogger]] = []
 
         for callback in callbacks:
             if isinstance(callback, str):
-                resolved: Any = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                resolved = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
                     cast(_custom_logger_compatible_callbacks_literal, callback)
                 )
             else:
@@ -1713,7 +2150,7 @@ class ProxyLogging:
             if "async_post_call_streaming_iterator_hook" in cls_attrs:
                 has_iterator_override = True
                 iterator_overrides.append((resolved, "override"))
-            elif "apply_guardrail" in cls_attrs:
+            elif "apply_guardrail" in cls_attrs and not getattr(resolved, "use_native_lifecycle_hooks", False):
                 iterator_overrides.append((resolved, "apply_guardrail"))
             # Walk the MRO for ``async_post_call_streaming_hook`` rather than
             # using the leaf-class ``__dict__`` check used by the other flags:
@@ -1734,6 +2171,8 @@ class ProxyLogging:
                 has_streaming_chunk_override = True
             if "async_pre_call_hook" in cls_attrs:
                 has_pre_call_override = True
+                if resolved.enforces_request_content is True:
+                    has_content_enforcer = True
 
         caps: Final = _CallbackCapabilities(
             has_post_call_response_headers=has_post_call_response_headers,
@@ -1742,6 +2181,7 @@ class ProxyLogging:
             has_streaming_chunk_override=has_streaming_chunk_override,
             has_guardrail=has_guardrail,
             has_pre_call_override=has_pre_call_override,
+            has_content_enforcer=has_content_enforcer,
             iterator_overrides=tuple(iterator_overrides),
             resolved_callbacks=tuple(resolved_callbacks),
         )
@@ -1847,6 +2287,7 @@ class ProxyLogging:
                 # Add task to list for parallel execution
                 if (
                     "apply_guardrail" in type(callback).__dict__
+                    and not callback.use_native_lifecycle_hooks
                     and user_api_key_dict is not None
                     and not getattr(callback, "use_native_during_call_hook", False)
                 ):
@@ -1923,7 +2364,9 @@ class ProxyLogging:
             # do nothing if alerting is not switched on (unless it's a soft_budget alert with team-specific emails)
             return
 
-        if self.alerting is not None and "slack" in self.alerting:
+        if self.alerting is not None and (
+            "slack" in self.alerting or "ms_teams" in self.alerting or "webhook" in self.alerting
+        ):
             if self.slack_alerting_instance is not None:
                 await self.slack_alerting_instance.budget_alerts(
                     type=type,
@@ -1988,17 +2431,17 @@ class ProxyLogging:
                 and isinstance(request_data["metadata"]["alerting_metadata"], dict)
             ):
                 alerting_metadata = request_data["metadata"]["alerting_metadata"]
+        if "slack" in self.alerting or "ms_teams" in self.alerting:
+            await self.slack_alerting_instance.send_alert(
+                message=message,
+                level=level,
+                alert_type=alert_type,
+                user_info=None,
+                alerting_metadata=alerting_metadata,
+                **extra_kwargs,
+            )
         for client in self.alerting:
-            if client == "slack":
-                await self.slack_alerting_instance.send_alert(
-                    message=message,
-                    level=level,
-                    alert_type=alert_type,
-                    user_info=None,
-                    alerting_metadata=alerting_metadata,
-                    **extra_kwargs,
-                )
-            elif client == "sentry":
+            if client == "sentry":
                 if litellm.utils.sentry_sdk_instance is not None:
                     litellm.utils.sentry_sdk_instance.capture_message(formatted_message)
                 else:
@@ -2086,7 +2529,7 @@ class ProxyLogging:
 
             Related issue - https://github.com/BerriAI/litellm/issues/3395
             """
-            litellm_debug_info: Final = getattr(original_exception, "litellm_debug_info", None)
+            litellm_debug_info: Final[str | None] = getattr(original_exception, "litellm_debug_info", None)
             exception_str = str(original_exception)
             if litellm_debug_info is not None:
                 exception_str += litellm_debug_info
@@ -2099,6 +2542,11 @@ class ProxyLogging:
                     request_data=request_data,
                 )
             )
+
+        # Auth and pass-through failure bodies are unstripped client input, and
+        # the logging handler below flattens body keys into model_call_details,
+        # so drop the key before it can masquerade as the built payload.
+        request_data.pop("standard_logging_object", None)
 
         ### LOGGING ###
         if self._is_proxy_only_llm_api_error(
@@ -2113,25 +2561,7 @@ class ProxyLogging:
                 original_exception=original_exception,
             )
 
-        # Lift the first-handoff instant onto request_data (top-level
-        # internal key, not metadata) so failure-path callbacks can still
-        # compute preprocessing latency after the logging object is popped.
-        _logging_obj: Final = request_data.get("litellm_logging_obj")
-        if _logging_obj is not None:
-            _model_call_details: Final = getattr(_logging_obj, "model_call_details", {})
-            _first_handoff: Final = _model_call_details.get("first_api_call_start_time")
-            if _first_handoff is not None:
-                request_data["first_api_call_start_time"] = _first_handoff
-
-            # A stream that broke mid-flight still billed the provider for the
-            # chunks already delivered; the streaming handler stashes that
-            # recovered usage and cost here. Lift them onto request_data so the
-            # failure-path spend callbacks (which run after the logging object
-            # is popped) record the real partial spend instead of zero.
-            _recovered_usage: Final = _model_call_details.get("combined_usage_object")
-            if _recovered_usage is not None:
-                request_data["combined_usage_object"] = _recovered_usage
-                request_data["response_cost"] = _model_call_details.get("response_cost")
+        request_data.update(_failure_fields_to_lift(request_data))
 
         # Remove before callbacks iterate — not serialisable
         request_data.pop("litellm_logging_obj", None)
@@ -2292,20 +2722,36 @@ class ProxyLogging:
                 api_key="",
             )
 
-            # log the custom exception
-            await litellm_logging_obj.async_failure_handler(
-                exception=original_exception,
-                traceback_exception=traceback.format_exc(),
+            await self._dispatch_proxy_only_failure_handlers(
+                litellm_logging_obj=litellm_logging_obj,
+                original_exception=original_exception,
             )
 
-            threading.Thread(
-                target=litellm_logging_obj.failure_handler,
-                args=(
-                    original_exception,
-                    traceback.format_exc(),
-                ),
-                daemon=True,
-            ).start()
+    @staticmethod
+    async def _dispatch_proxy_only_failure_handlers(
+        litellm_logging_obj: Logging,
+        original_exception: Exception | None,
+    ) -> None:
+        """Runs the async failure handler plus the threaded sync handler. Expected
+        client (4xx) errors skip traceback formatting unless
+        litellm.log_client_error_tracebacks is set."""
+        include_traceback: Final = litellm.log_client_error_tracebacks or not is_expected_client_error(
+            original_exception
+        )
+        traceback_str: Final = traceback.format_exc() if include_traceback else ""
+        await litellm_logging_obj.async_failure_handler(
+            exception=original_exception,
+            traceback_exception=traceback_str,
+        )
+
+        threading.Thread(
+            target=litellm_logging_obj.failure_handler,
+            args=(
+                original_exception,
+                traceback_str,
+            ),
+            daemon=True,
+        ).start()
 
     async def post_call_success_hook(
         self,
@@ -2370,7 +2816,7 @@ class ProxyLogging:
 
                 guardrail_response: Any | None = None
 
-                if "apply_guardrail" in type(callback).__dict__:
+                if "apply_guardrail" in type(callback).__dict__ and not callback.use_native_lifecycle_hooks:
                     data["guardrail_to_apply"] = callback
                     guardrail_response = await self._run_guardrail_with_metrics(
                         callback,
@@ -2408,7 +2854,7 @@ class ProxyLogging:
             #################################################################
 
             for callback in other_callbacks:
-                callback_response = await callback.async_post_call_success_hook(
+                callback_response: LLMResponseTypes | None = await callback.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict, data=data, response=response
                 )
                 if callback_response is not None:
@@ -2443,7 +2889,7 @@ class ProxyLogging:
         async def _run_one(callback: CustomGuardrail) -> None:
             if callback.should_run_guardrail(data=guardrail_data, event_type=GuardrailEventHooks.post_call) is not True:
                 return
-            if "apply_guardrail" in type(callback).__dict__:
+            if "apply_guardrail" in type(callback).__dict__ and not callback.use_native_lifecycle_hooks:
                 data["guardrail_to_apply"] = callback
                 await self._run_guardrail_with_metrics(
                     callback,
@@ -2509,7 +2955,7 @@ class ProxyLogging:
         for callback in caps.resolved_callbacks:
             if not isinstance(callback, CustomGuardrail):
                 continue
-            if "apply_guardrail" not in type(callback).__dict__:
+            if "apply_guardrail" not in type(callback).__dict__ or callback.use_native_lifecycle_hooks:
                 continue
             if (
                 callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_mcp_call)
@@ -2533,7 +2979,7 @@ class ProxyLogging:
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
+        response: object,
         request_headers: dict[str, str] | None = None,
     ) -> dict[str, str]:
         """
@@ -2589,7 +3035,7 @@ class ProxyLogging:
         return merged_headers
 
     @staticmethod
-    def _build_litellm_call_info(data: dict, response: Any) -> dict[str, Any]:
+    def _build_litellm_call_info(data: dict, response: object) -> dict[str, object]:
         """
         Build a normalized dict of routing metadata from response._hidden_params
         and data, abstracting away the metadata vs litellm_metadata split.
@@ -2686,6 +3132,9 @@ class ProxyLogging:
                             complete_response = str_so_far + response_str
                         else:
                             complete_response = response_str
+                        callback_response: (
+                            ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream | None
+                        )
                         callback_response = await _callback.async_post_call_streaming_hook(
                             user_api_key_dict=user_api_key_dict,
                             response=complete_response,
@@ -2716,8 +3165,14 @@ class ProxyLogging:
         # through each of them adds N pass-through trampolines per chunk for
         # zero behavior change. Skip the chain entirely and stream through.
         if not caps.iterator_overrides:
-            async for chunk in response:
-                yield chunk
+            try:
+                async for chunk in response:
+                    yield chunk
+            except (GeneratorExit, asyncio.CancelledError):
+                raise
+            except Exception:
+                ProxyLogging._fire_deferred_stream_logging(request_data)
+                raise
             ProxyLogging._fire_deferred_stream_logging(request_data)
             return
 
@@ -2743,6 +3198,7 @@ class ProxyLogging:
                     and stream_needs_translation
                     and isinstance(resolved_callback, CustomGuardrail)
                     and resolved_callback.uses_apply_guardrail_interface()
+                    and getattr(resolved_callback, "use_native_lifecycle_hooks", False) is not True
                     and not resolved_callback.mask_response_content
                 )
                 else kind
@@ -2769,9 +3225,14 @@ class ProxyLogging:
                     ),
                 )
 
-        # Actually iterate through the chained async generator and yield chunks
-        async for chunk in current_response:
-            yield chunk
+        try:
+            async for chunk in current_response:
+                yield chunk
+        except (GeneratorExit, asyncio.CancelledError):
+            raise
+        except Exception:
+            ProxyLogging._fire_deferred_stream_logging(request_data)
+            raise
 
         # Fire deferred logging AFTER all guardrail end-of-stream blocks
         # completed.  unified_guardrail writes guardrail_information during
@@ -2792,8 +3253,10 @@ class ProxyLogging:
         logging_obj: Final = request_data.get("litellm_logging_obj")
         if logging_obj is None:
             return
-        _deferred_cb: Final = getattr(logging_obj, "_on_deferred_stream_complete", None)
-        _args: Final = getattr(logging_obj, "_deferred_stream_complete_args", None)
+        _deferred_cb: Final[Callable[..., Coroutine[object, object, object]] | None] = getattr(
+            logging_obj, "_on_deferred_stream_complete", None
+        )
+        _args: Final[tuple[object, ...] | None] = getattr(logging_obj, "_deferred_stream_complete_args", None)
         if _deferred_cb is not None and _args is not None:
             logging_obj._on_deferred_stream_complete = None
             logging_obj._deferred_stream_complete_args = None
@@ -2866,7 +3329,7 @@ _DEPRECATED_KEY_CACHE_TTL_SECONDS: Final = 60
 
 
 async def _lookup_deprecated_key(
-    db: Any,
+    db: PrismaWrapper | RoutingPrismaWrapper,
     hashed_token: str,
 ) -> str | None:
     """
@@ -2887,7 +3350,10 @@ async def _lookup_deprecated_key(
         _deprecated_key_cache.pop(hashed_token, None)
 
     try:
-        deprecated_row: Final = await db.litellm_deprecatedverificationtoken.find_first(
+        deprecated_keys_table: Final[
+            LiteLLM_DeprecatedVerificationTokenActions[LiteLLM_DeprecatedVerificationToken]
+        ] = db.litellm_deprecatedverificationtoken
+        deprecated_row: Final = await deprecated_keys_table.find_first(
             where={
                 "token": hashed_token,
                 "revoke_at": {"gt": now},
@@ -2934,7 +3400,7 @@ def _config_cache_key(param_name: str) -> str:
     return f"litellm_config:param:{param_name}"
 
 
-def _pack_config_row(row: Any) -> dict[str, Any]:
+def _pack_config_row(row: Any) -> dict[str, object]:
     return {"param_name": row.param_name, "param_value": row.param_value}
 
 
@@ -2946,7 +3412,7 @@ def _unpack_config_row(cached: Any) -> _ConfigRow | None:
     return None
 
 
-async def get_config_param(prisma_client: Any, param_name: str) -> Any | None:
+async def get_config_param(prisma_client: "PrismaClient", param_name: str) -> Any | None:
     """Cached read of a LiteLLM_Config row; returns row, _ConfigRow shim, or None."""
     cache_key: Final = _config_cache_key(param_name)
     cached: Final = await litellm_config_cache.async_get_cache(cache_key)
@@ -2954,7 +3420,7 @@ async def get_config_param(prisma_client: Any, param_name: str) -> Any | None:
         return _unpack_config_row(cached)
 
     row: Final = await prisma_client.get_generic_data(key="param_name", value=param_name, table_name="config")
-    cache_value: Final[Any] = _pack_config_row(row) if row is not None else _CONFIG_CACHE_MISS
+    cache_value: Final[Mapping[str, object] | str] = _pack_config_row(row) if row is not None else _CONFIG_CACHE_MISS
     await litellm_config_cache.async_set_cache(cache_key, cache_value, ttl=LITELLM_CONFIG_CACHE_TTL_SECONDS)
     return row
 
@@ -2969,12 +3435,15 @@ async def invalidate_config_param(param_name: str) -> None:
     await publish_config_param_change(param_name)
 
 
-async def prefetch_config_params(prisma_client: Any, param_names: list[str]) -> None:
+async def prefetch_config_params(prisma_client: "PrismaClient | None", param_names: list[str]) -> None:
     """Batch-load LiteLLM_Config rows into the cache with one find_many."""
     if not param_names:
         return
     try:
-        rows: Final = await ConfigRepository(prisma_client).table.find_many(where={"param_name": {"in": param_names}})
+        config_table: Final = cast(  # cast-ok: ConfigRepository.table is prisma's litellm_config actions object
+            "TableActions[prisma_models.LiteLLM_Config]", ConfigRepository(prisma_client).table
+        )
+        rows: Final = await config_table.find_many(where={"param_name": {"in": param_names}})
     except Exception as e:
         verbose_proxy_logger.debug(
             "prefetch_config_params failed, falling through to per-param queries: %s",
@@ -2984,15 +3453,74 @@ async def prefetch_config_params(prisma_client: Any, param_names: list[str]) -> 
     by_name: Final = {row.param_name: row for row in rows}
     for name in param_names:
         row = by_name.get(name)
-        cache_value: Any = _pack_config_row(row) if row is not None else _CONFIG_CACHE_MISS
+        cache_value: Mapping[str, object] | str = _pack_config_row(row) if row is not None else _CONFIG_CACHE_MISS
         await litellm_config_cache.async_set_cache(
             _config_cache_key(name), cache_value, ttl=LITELLM_CONFIG_CACHE_TTL_SECONDS
         )
 
 
+class _ForcedRecreateDeclined(Exception):
+    """A forced recreate was declined by the engine-generation guard.
+
+    Distinct from a reconnect *failure*: the machinery worked, it just found
+    that another path had already replaced the writer, so it left the engines
+    alone. The caller's engine may still be poisoned, so the cycle must not
+    report success, but it must not count as a failure either, or the record
+    of what could not be repaired would gate the retry that recovers.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class _StaleReadEngine:
+    """The read engine a query observed, identified rather than only counted.
+
+    `PrismaClient.read_db` resolves to the reader while it is available and to
+    the writer once it is not, and the two carry independent generation
+    counters that both start at zero and advance on the same reconnect
+    cadence. A bare generation compared across that switch would silently pit
+    one engine's counter against another's, so the wrapper is carried with the
+    number and a switch counts as the engine having moved.
+
+    Holding the wrapper itself rather than its `id()` is load-bearing, not
+    incidental: the strong reference keeps the wrapper alive, so its address
+    cannot be recycled under a stored observation and match an unrelated
+    engine later. It is only free because writer and reader both live as long
+    as the client does; a replaceable reader would make this a retention leak.
+    """
+
+    wrapper: PrismaWrapper
+    generation: int
+
+    @classmethod
+    def observe(cls, wrapper: PrismaWrapper) -> "_StaleReadEngine":
+        return cls(wrapper=wrapper, generation=wrapper.engine_generation)
+
+    def is_still_live(self, current: PrismaWrapper) -> bool:
+        """Whether this exact engine is still serving reads, unreplaced.
+
+        A True answer must never be the only thing standing between a poisoned
+        engine and its repair. The generation moves only after a replacement
+        connects, and a recreate whose connect raises leaves it unmoved until
+        some later recreate succeeds, so this can report an engine as live
+        after it has stopped working. What bounds that is the failed-repair
+        record in `_cooldown_applies`, written by a repair attempt that fails
+        rather than by whatever broke the engine: the two need not be the same
+        recreate, since the synchronous token-refresh fallback in
+        `PrismaWrapper.__getattr__` recreates outside the reconnect machinery
+        and records nothing. The record is written only for callers that named
+        an engine, and it collapses the rest of the burst for up to one
+        cooldown window rather than guaranteeing a repair, since the cooldown
+        conjunct underneath it still expires and lets a later caller retry.
+        """
+        return self.wrapper is current and self.generation == current.engine_generation
+
+
 class PrismaClient:
     spend_log_transactions: list = []
     _spend_log_transactions_lock = asyncio.Lock()
+    spend_log_flush_requested: ClassVar[asyncio.Event] = asyncio.Event()
+    spend_log_queue_bytes: ClassVar[int] = 0
+    spend_logs_queue_monitor_task: "asyncio.Task[None] | None" = None
     tool_usage_transactions: list["ToolUsageTransaction"] = []
     _tool_usage_transactions_lock = asyncio.Lock()
     autorouter_turn_transactions: ClassVar[
@@ -3000,15 +3528,22 @@ class PrismaClient:
     ] = []  # mutable-ok: drained queue, mirrors tool_usage_transactions
     _autorouter_turn_transactions_lock = asyncio.Lock()
 
+    # How long a health probe failure waits for an in-flight planned engine
+    # replacement to settle before deciding whether to report itself. Generous
+    # against a replacement that takes well under a second, and far short of the
+    # reconnect budget an outage-hung `connect()` runs under, so a real outage
+    # is never waited out.
+    PLANNED_ENGINE_REPLACEMENT_SETTLE_SECONDS: ClassVar[float] = 5.0
+
     def __init__(
         self,
         database_url: str,
         proxy_logging_obj: ProxyLogging,
-        http_client: Any | None = None,
+        http_client: "HttpConfig | None" = None,
     ):
         ## init logging object
         self.proxy_logging_obj = proxy_logging_obj
-        self.iam_token_db_auth: bool | None = str_to_bool(os.getenv("IAM_TOKEN_DB_AUTH"))
+        self.token_auth: DatabaseTokenAuth | None = resolve_database_token_auth()
         verbose_proxy_logger.debug("Creating Prisma Client..")
         try:
             from prisma import Prisma
@@ -3017,22 +3552,22 @@ class PrismaClient:
             verbose_proxy_logger.error("This usually means 'prisma generate' hasn't been run yet.")
             verbose_proxy_logger.error("Please run 'prisma generate' to generate the Prisma client.")
             raise Exception("Unable to find Prisma binaries. Please run 'prisma generate' first.")
-        iam_flag: Final = self.iam_token_db_auth if self.iam_token_db_auth is not None else False
+        token_auth: Final = self.token_auth
         # When read-replica routing is on, tag log lines with [writer]/[reader]
-        # so the two wrappers' interleaved IAM refresh logs can be told apart.
+        # so the two wrappers' interleaved token refresh logs can be told apart.
         # Single-DB deployments get an empty prefix (logs unchanged).
         read_replica_url = os.getenv("DATABASE_URL_READ_REPLICA")
         writer_log_prefix: Final = "[writer]" if read_replica_url else ""
         if http_client is not None:
             writer_wrapper = PrismaWrapper(
                 original_prisma=Prisma(http=http_client),
-                iam_token_db_auth=iam_flag,
+                token_auth=token_auth,
                 log_prefix=writer_log_prefix,
             )
         else:
             writer_wrapper = PrismaWrapper(
                 original_prisma=Prisma(),
-                iam_token_db_auth=iam_flag,
+                token_auth=token_auth,
                 log_prefix=writer_log_prefix,
             )
 
@@ -3044,29 +3579,22 @@ class PrismaClient:
         self.db: PrismaWrapper | RoutingPrismaWrapper
         if read_replica_url:
             try:
-                # If IAM auth is enabled, the reader refreshes its own token on
+                # If token auth is enabled, the reader refreshes its own token on
                 # the same cadence as the writer. We parse the static endpoint
                 # pieces (host/port/user/db) once from the reader URL — only
-                # the IAM token rotates after that.
-                reader_iam_endpoint: Final = parse_iam_endpoint_from_url(read_replica_url) if iam_flag else None
-                # Mint a fresh IAM token for the reader BEFORE constructing the
+                # the token rotates after that.
+                reader_iam_endpoint: Final = (
+                    parse_iam_endpoint_from_url(read_replica_url) if token_auth is not None else None
+                )
+                # Mint a fresh token for the reader BEFORE constructing the
                 # Prisma client. Mirrors what `proxy_cli.py` already does for
-                # the writer (proxy_cli.py:812-832) — without this, the reader
-                # Prisma is built with whatever placeholder URL the user
-                # supplied (no real token), and the first query falls through
-                # to the synchronous fallback path in
-                # `PrismaWrapper.__getattr__`, which deadlocks the event loop
-                # and times out after 30s.
-                if iam_flag and reader_iam_endpoint is not None:
-                    from litellm.proxy.auth.rds_iam_token import (
-                        generate_iam_auth_token,
-                    )
-
-                    reader_token: Final = generate_iam_auth_token(
-                        db_host=reader_iam_endpoint.host,
-                        db_port=reader_iam_endpoint.port,
-                        db_user=reader_iam_endpoint.user,
-                    )
+                # the writer — without this, the reader Prisma is built with
+                # whatever placeholder URL the user supplied (no real token),
+                # and the first query falls through to the synchronous fallback
+                # path in `PrismaWrapper.__getattr__`, which deadlocks the event
+                # loop and times out after 30s.
+                if token_auth is not None and reader_iam_endpoint is not None:
+                    reader_token: Final = mint_database_token(token_auth, reader_iam_endpoint)
                     read_replica_url = reader_iam_endpoint.build_url(reader_token)
                     os.environ["DATABASE_URL_READ_REPLICA"] = read_replica_url
                 reader_kwargs: Final[dict[str, Any]] = {"datasource": {"url": read_replica_url}}
@@ -3076,7 +3604,7 @@ class PrismaClient:
                     reader_prisma = Prisma(**reader_kwargs)
                 reader_wrapper: Final = PrismaWrapper(
                     original_prisma=reader_prisma,
-                    iam_token_db_auth=iam_flag,
+                    token_auth=token_auth,
                     db_url_env_var="DATABASE_URL_READ_REPLICA",
                     iam_endpoint=reader_iam_endpoint,
                     recreate_uses_datasource=True,
@@ -3085,15 +3613,15 @@ class PrismaClient:
                 self.db = RoutingPrismaWrapper(writer=writer_wrapper, reader=reader_wrapper)
                 verbose_proxy_logger.info(
                     "PrismaClient: read-replica routing enabled via DATABASE_URL_READ_REPLICA"
-                    + (" (with IAM token auto-refresh)" if iam_flag else "")
+                    + (f" (with {token_auth.label} auto-refresh)" if token_auth is not None else "")
                 )
             except Exception as e:
                 # Reader is opt-in; never let its construction fail proxy
                 # startup. Mirrors the runtime contract from
                 # `RoutingPrismaWrapper.connect`: reader-side failures are
                 # logged and we keep serving traffic via the writer alone.
-                # This recovers from transient AWS STS hiccups during the
-                # reader IAM token mint, malformed DATABASE_URL_READ_REPLICA,
+                # This recovers from transient credential-provider hiccups
+                # during the reader token mint, malformed DATABASE_URL_READ_REPLICA,
                 # and Prisma construction errors. Operator restart is required
                 # to retry read-routing once the underlying issue is resolved.
                 verbose_proxy_logger.warning(
@@ -3129,6 +3657,14 @@ class PrismaClient:
             float(os.getenv("PRISMA_AUTH_RECONNECT_LOCK_TIMEOUT_SECONDS", "0.1")),
         )
         self._consecutive_reconnect_failures: int = 0
+        # Last generation of each read engine whose repair was attempted and
+        # failed. Scoped to the engine rather than counted globally so an
+        # unrelated reconnect failure cannot suppress a stale reader's
+        # recovery, and keyed per wrapper rather than held in one slot so a
+        # writer failure cannot evict the reader's record and hand the waiver
+        # back to a caller whose engine is still unrepaired. Bounded at two
+        # entries: a client has one writer and at most one reader.
+        self._failed_recreate_generations: Mapping[PrismaWrapper, int] = MappingProxyType({})
         self._reconnect_escalation_threshold: int = max(1, int(os.getenv("PRISMA_RECONNECT_ESCALATION_THRESHOLD", "3")))
         self._engine_pidfd: int = -1
         self._engine_pid: int = 0
@@ -3142,6 +3678,19 @@ class PrismaClient:
         """Underlying writer Prisma wrapper, regardless of read-replica routing."""
         if isinstance(self.db, RoutingPrismaWrapper):
             return self.db.writer
+        return self.db
+
+    @property
+    def read_db(self) -> PrismaWrapper:
+        """Underlying wrapper that top-level reads are dispatched to.
+
+        Identical to `writer_db` without a read replica. With one configured
+        it is the reader, which is the engine `query_first` actually runs on,
+        so anything reasoning about the state of the connection that served a
+        read has to consult this rather than the writer.
+        """
+        if isinstance(self.db, RoutingPrismaWrapper):
+            return self.db.read_target
         return self.db
 
     def tx(self) -> "TransactionManager":
@@ -3183,8 +3732,8 @@ class PrismaClient:
 
         return hashed_token
 
-    def jsonify_object(self, data: dict) -> dict:
-        db_data: Final = copy.deepcopy(data)
+    def jsonify_object(self, data: Mapping[str, object]) -> dict[str, object]:
+        db_data: Final[dict[str, object]] = copy.deepcopy(dict(data))
 
         for k, v in db_data.items():
             if isinstance(v, dict):
@@ -3230,7 +3779,7 @@ class PrismaClient:
             required_view: Final = "LiteLLM_VerificationTokenView"
             expected_views_str: Final = ", ".join(f"'{view}'" for view in expected_views)
             pg_schema: Final = os.getenv("DATABASE_SCHEMA", "public")
-            ret: Final = await self.db.query_raw(f"""
+            ret: Final[Sequence[_ViewCountRow]] = await self.db.query_raw(f"""
                 WITH existing_views AS (
                     SELECT viewname
                     FROM pg_views
@@ -3251,7 +3800,10 @@ class PrismaClient:
                 ## check if required view exists ##
                 if ret[0]["view_names"] and required_view not in ret[0]["view_names"]:
                     await self.health_check()  # make sure we can connect to db
-                    await self.db.execute_raw("""
+                    await create_view_tolerating_race(
+                        self.db,
+                        "LiteLLM_VerificationTokenView",
+                        """
                             CREATE VIEW "LiteLLM_VerificationTokenView" AS
                             SELECT
                             v.*,
@@ -3261,9 +3813,8 @@ class PrismaClient:
                             t.rpm_limit AS team_rpm_limit
                             FROM "LiteLLM_VerificationToken" v
                             LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id;
-                        """)
-
-                    verbose_proxy_logger.info("LiteLLM_VerificationTokenView Created in DB!")
+                        """,
+                    )
                 else:
                     should_create_views: Final = await should_create_missing_views(db=self.db)
                     if should_create_views:
@@ -3296,7 +3847,7 @@ class PrismaClient:
     async def get_generic_data(
         self,
         key: str,
-        value: Any,
+        value: object,
         table_name: Literal["users", "keys", "config", "spend"],
     ):
         """
@@ -3316,7 +3867,10 @@ class PrismaClient:
             elif table_name == "keys":
                 return await VerificationTokenRepository(self).table.find_first(where={key: value})
             elif table_name == "config":
-                return await ConfigRepository(self).table.find_first(where={key: value})
+                config_table: Final = cast(  # cast-ok: ConfigRepository.table is prisma's litellm_config actions object
+                    "TableActions[prisma_models.LiteLLM_Config]", ConfigRepository(self).table
+                )
+                return await config_table.find_first(where={key: value})
             elif table_name == "spend":
                 return await self.db.l.find_first(where={key: value})
             return None
@@ -3365,18 +3919,30 @@ class PrismaClient:
         `attempt_db_reconnect`, which is singleflight: when a schema change
         poisons every pooled connection at once, the first cached-plan error
         recreates the client and the concurrent waiters reuse that single
-        recreate instead of racing to kill each other's fresh engine. We then
-        retry the identical query exactly once.
+        recreate instead of racing to kill each other's fresh engine. We pass
+        `force_recreate` so the reconnect skips its `SELECT 1` liveness probe:
+        the connection is healthy here, it is the prepared statements on it
+        that are stale, so a passing probe would otherwise skip the recreate
+        and leave the retry to hit the same error. We then retry the identical
+        query exactly once.
 
         The retry reuses the original query byte-for-byte. Mutating the SQL
         (e.g. injecting a unique comment) would defeat PostgreSQL's plan cache,
         forcing a fresh plan on every request and pegging the database CPU.
 
-        If the reconnect is skipped because a recent reconnect is still within
-        its cooldown, the retry runs against the same connection and may fail
-        again; the get_data backoff decorator re-runs the lookup and a later
-        attempt reconnects once the cooldown elapses.
+        The reconnect cooldown must not gate the engine this query itself saw
+        as stale, or a migration landing within the cooldown of an earlier
+        reconnect leaves auth failing until it elapses. The engine observed
+        before the query names it, so the reconnect bypasses the cooldown only
+        while that same engine is still the live one.
+
+        It is observed from `read_db`, not `writer_db`: `query_first` is a
+        top-level read, so with a read replica configured it runs on the reader
+        and it is the reader's prepared statements that went stale. Naming the
+        writer here would let an unrelated writer reconnect re-arm the cooldown
+        while the reader stayed poisoned.
         """
+        stale_read_engine: Final = _StaleReadEngine.observe(self.read_db)
         try:
             return await self.db.query_first(sql_query, *args)
         except Exception as e:
@@ -3388,7 +3954,11 @@ class PrismaClient:
                 "query. This may occur during rolling deployments when schema "
                 "changes are applied."
             )
-            await self.attempt_db_reconnect(reason="postgres_cached_plan_error")
+            await self.attempt_db_reconnect(
+                reason="postgres_cached_plan_error",
+                force_recreate=True,
+                stale_read_engine=stale_read_engine,
+            )
             return await self.db.query_first(sql_query, *args)
 
     @backoff.on_exception(
@@ -3403,9 +3973,9 @@ class PrismaClient:
         self,
         token: str | list | None = None,
         user_id: str | None = None,
-        user_id_list: list | None = None,
+        user_id_list: Sequence[str] | None = None,
         team_id: str | None = None,
-        team_id_list: list | None = None,
+        team_id_list: Sequence[str] | None = None,
         key_val: dict | None = None,
         table_name: Literal[
             "user", "key", "config", "spend", "enduser", "budget", "team", "user_notification", "combined_view"
@@ -3473,27 +4043,29 @@ class PrismaClient:
                                 r.expires = r.expires.isoformat()
                 elif query_type == "find_all" and expires is not None and reset_at is not None:
                     response = await VerificationTokenRepository(self).table.find_many(
+                        take=limit,
                         where={
                             "OR": [
                                 {"expires": None},
                                 {"expires": {"gt": expires}},
                             ],
                             "budget_reset_at": {"lt": reset_at},
-                        }
+                            "NOT": {"budget_duration": None},
+                        },
                     )
                     if response is not None and len(response) > 0:
                         for r in response:
                             if isinstance(r.expires, datetime):
                                 r.expires = r.expires.isoformat()
                 elif query_type == "find_all":
-                    where_filter: Final[dict] = {}
+                    where_filter: Final[dict[str, dict[str, Sequence[str]]]] = {}
                     if token is not None:
                         where_filter["token"] = {}
                         if isinstance(token, str):
                             token = _hash_token_if_needed(token=token)
                             where_filter["token"]["in"] = [token]
                         elif isinstance(token, list):
-                            hashed_tokens: Final = []
+                            hashed_tokens: Final[list[str]] = []
                             for t in token:
                                 assert isinstance(t, str)
                                 if t.startswith("sk-"):
@@ -3529,6 +4101,7 @@ class PrismaClient:
                     response = await UserRepository(self).table.find_many(where=key_val)
                 elif query_type == "find_all" and reset_at is not None:
                     response = await UserRepository(self).table.find_many(
+                        take=limit,
                         where={
                             # A user seeded from default_internal_user_params
                             # (or created via /user/new without an explicit
@@ -3539,16 +4112,12 @@ class PrismaClient:
                             # of the row, silently exceeding max_budget. Treat a
                             # NULL budget_reset_at with a non-NULL budget_duration
                             # as due, matching the budget-table query below.
+                            "NOT": {"budget_duration": None},
                             "OR": [
-                                {
-                                    "AND": [
-                                        {"budget_reset_at": None},
-                                        {"NOT": {"budget_duration": None}},
-                                    ]
-                                },
+                                {"budget_reset_at": None},
                                 {"budget_reset_at": {"lt": reset_at}},
                             ],
-                        }
+                        },
                     )
                 elif query_type == "find_all" and user_id_list is not None:
                     response = await UserRepository(self).table.find_many(where={"user_id": {"in": user_id_list}})
@@ -3604,17 +4173,14 @@ class PrismaClient:
             elif table_name == "budget" and reset_at is not None:
                 if query_type == "find_all":
                     response = await BudgetRepository(self).table.find_many(
+                        take=limit,
                         where={
+                            "NOT": {"budget_duration": None},
                             "OR": [
-                                {
-                                    "AND": [
-                                        {"budget_reset_at": None},
-                                        {"NOT": {"budget_duration": None}},
-                                    ]
-                                },
+                                {"budget_reset_at": None},
                                 {"budget_reset_at": {"lt": reset_at}},
-                            ]
-                        }
+                            ],
+                        },
                     )
                     return response
 
@@ -3632,20 +4198,17 @@ class PrismaClient:
                     )
                 elif query_type == "find_all" and reset_at is not None:
                     response = await TeamRepository(self).table.find_many(
+                        take=limit,
                         where={
                             # Same NULL budget_reset_at gap as the user query
                             # above: a team with a budget_duration but no
                             # initialized budget_reset_at would never be reset.
+                            "NOT": {"budget_duration": None},
                             "OR": [
-                                {
-                                    "AND": [
-                                        {"budget_reset_at": None},
-                                        {"NOT": {"budget_duration": None}},
-                                    ]
-                                },
+                                {"budget_reset_at": None},
                                 {"budget_reset_at": {"lt": reset_at}},
                             ],
-                        }
+                        },
                     )
                 elif query_type == "find_all" and user_id is not None:
                     response = await TeamRepository(self).table.find_many(
@@ -3799,7 +4362,7 @@ class PrismaClient:
             )
             raise e
 
-    def jsonify_team_object(self, db_data: dict):
+    def jsonify_team_object(self, db_data: Mapping[str, object]) -> dict[str, object]:
         db_data = self.jsonify_object(data=db_data)
         if db_data.get("members_with_roles", None) is not None and isinstance(db_data["members_with_roles"], list):
             db_data["members_with_roles"] = json.dumps(db_data["members_with_roles"])
@@ -3817,7 +4380,7 @@ class PrismaClient:
     )
     async def insert_data(
         self,
-        data: dict,
+        data: Mapping[str, object],
         table_name: Literal["user", "key", "config", "spend", "team", "user_notification"],
     ):
         """
@@ -3827,10 +4390,12 @@ class PrismaClient:
         try:
             verbose_proxy_logger.debug(
                 "PrismaClient: insert_data: %s",
-                {**data, "token": self.hash_token(token=data["token"])} if data.get("token") is not None else data,
+                {**data, "token": self.hash_token(token=cast("str", data["token"]))}  # cast-ok: a key token is a str
+                if data.get("token") is not None
+                else data,
             )
             if table_name == "key":
-                token: Final = data["token"]
+                token: Final = cast("str", data["token"])  # cast-ok: the key table's token column is a str
                 hashed_token: Final = self.hash_token(token=token)
                 db_data = self.jsonify_object(data=data)
                 db_data["token"] = hashed_token
@@ -3965,14 +4530,14 @@ class PrismaClient:
     async def update_data(
         self,
         token: str | None = None,
-        data: dict = {},
+        data: Mapping[str, object] = {},
         data_list: list | None = None,
         user_id: str | None = None,
         team_id: str | None = None,
         query_type: Literal["update", "update_many"] = "update",
         table_name: Literal["user", "key", "config", "spend", "team", "enduser", "budget"] | None = None,
-        update_key_values: dict | None = None,
-        update_key_values_custom_query: dict | None = None,
+        update_key_values: dict[str, object] | None = None,
+        update_key_values_custom_query: dict[str, object] | None = None,
     ):
         """
         Update existing data
@@ -3990,7 +4555,7 @@ class PrismaClient:
                 db_data["token"] = token
                 response: Final = await VerificationTokenRepository(self).table.update(
                     where={"token": token},
-                    data={**db_data},
+                    data=with_settings_updated_at(db_data),
                 )
                 verbose_proxy_logger.debug("\033[91m" + f"DB Token Table update succeeded {response}" + "\033[0m")
                 _data: dict = {}
@@ -3998,14 +4563,14 @@ class PrismaClient:
                     try:
                         _data = response.model_dump()
                     except Exception:
-                        _data = response.dict()
+                        _data = response.dict()  # pyright: ignore[reportDeprecated]  # pydantic-v1 row fallback
                 return {"token": token, "data": _data}
             elif user_id is not None or (table_name is not None and table_name == "user") and query_type == "update":
                 """
                 If data['spend'] + data['user'], update the user table with spend info as well
                 """
                 if user_id is None:
-                    user_id = db_data["user_id"]
+                    user_id = cast("str", db_data["user_id"])  # cast-ok: the user table's user_id column is a str
                 if update_key_values is None:
                     if update_key_values_custom_query is not None:
                         update_key_values = update_key_values_custom_query
@@ -4027,7 +4592,7 @@ class PrismaClient:
                 If data['spend'] + data['user'], update the user table with spend info as well
                 """
                 if team_id is None:
-                    team_id = db_data["team_id"]
+                    team_id = cast("str | None", db_data["team_id"])  # cast-ok: team_id column is a nullable str
                 if update_key_values is None:
                     update_key_values = db_data
                 if "team_id" not in db_data and team_id is not None:
@@ -4201,8 +4766,8 @@ class PrismaClient:
     )
     async def delete_data(
         self,
-        tokens: list | None = None,
-        team_id_list: list | None = None,
+        tokens: Sequence[str | None] | None = None,
+        team_id_list: Sequence[str] | None = None,
         table_name: Literal["user", "key", "config", "spend", "team"] | None = None,
         user_id: str | None = None,
     ):
@@ -4214,20 +4779,22 @@ class PrismaClient:
         start_time: Final = time.time()
         try:
             if tokens is not None and isinstance(tokens, list):
-                hashed_tokens: Final = []
+                hashed_tokens: Final[list[str | None]] = []
                 for token in tokens:
                     if isinstance(token, str) and token.startswith("sk-"):
                         hashed_token = self.hash_token(token=token)
                     else:
                         hashed_token = token
                     hashed_tokens.append(hashed_token)
-                filter_query: dict = {}
+                filter_query: dict[str, object] = {}
                 if user_id is not None:
                     filter_query = {"AND": [{"token": {"in": hashed_tokens}}, {"user_id": user_id}]}
                 else:
                     filter_query = {"token": {"in": hashed_tokens}}
 
-                deleted_tokens: Final = await VerificationTokenRepository(self).table.delete_many(where=filter_query)
+                deleted_tokens: Final[int] = await VerificationTokenRepository(self).table.delete_many(
+                    where=filter_query
+                )
                 verbose_proxy_logger.debug("deleted_tokens: %s", deleted_tokens)
                 return {"deleted_keys": deleted_tokens}
             elif table_name == "team" and team_id_list is not None and isinstance(team_id_list, list):
@@ -4332,7 +4899,7 @@ class PrismaClient:
             engine: Final = prisma_obj._engine
             process: Final = getattr(engine, "process", None) if engine is not None else None
             if process is not None:
-                pid: Final = process.pid
+                pid: Final[object] = process.pid
                 if isinstance(pid, int):
                     return pid
         except (AttributeError, TypeError):
@@ -4678,7 +5245,11 @@ class PrismaClient:
         self._cleanup_engine_watcher()
         asyncio.create_task(self._start_engine_watcher())
 
-    async def _run_reconnect_cycle(self, timeout_seconds: float | None = None) -> None:
+    async def _run_reconnect_cycle(
+        self,
+        timeout_seconds: float | None = None,
+        force_recreate: bool = False,
+    ) -> None:
         """
         Run a reconnect cycle with a single overall timeout budget.
 
@@ -4689,6 +5260,11 @@ class PrismaClient:
         the client via the non-blocking kill-then-construct flow rather than
         calling disconnect(), which blocks the event loop on the synchronous
         subprocess.Popen.wait() inside prisma-client-py (see issue #26191).
+
+        `force_recreate` skips the direct path's liveness probe, for callers
+        whose failure lives in the session state rather than the connection
+        (stale prepared statements after a schema change): a reachable writer
+        proves nothing about those, so the probe must not veto the recreate.
         """
         effective_timeout: Final = (
             timeout_seconds if timeout_seconds is not None else self._db_watchdog_reconnect_timeout_seconds
@@ -4728,8 +5304,29 @@ class PrismaClient:
                 # direct path there is no SELECT 1 probe here, so the generation
                 # guard is the only thing standing between a crash-reconnect and
                 # a refresh that raced it.
-                await self.db.recreate_prisma_client(db_url, expected_generation=expected_generation)
+                recreated: Final = await self.db.recreate_prisma_client(db_url, expected_generation=expected_generation)
                 await self._start_engine_watcher()
+                # Same contract as the direct path below: a forced caller asked
+                # for its engine to be replaced, so a decline is not a success.
+                # Reachable here because the escalation threshold flips
+                # `_engine_confirmed_dead`, which routes the next cycle, forced
+                # callers included, down this branch.
+                if force_recreate is True and recreated is False:
+                    # Clear the dead-engine flag first, restoring the policy the
+                    # non-forced path already has: a decline does not raise for
+                    # it, so it falls through to the clear below. Only the
+                    # forced branch would strand the flag, and stranding it
+                    # routes the next cycle back down this probe-free branch,
+                    # where the refreshed generation now matches and the
+                    # recreate kills the healthy engine a refresh just spawned
+                    # (#29176). This has to stay AFTER `_start_engine_watcher`
+                    # above: clearing the flag while the watcher is still torn
+                    # down would be worse than either alone.
+                    self._engine_confirmed_dead = False
+                    raise _ForcedRecreateDeclined(
+                        "Forced Prisma recreate declined by the generation guard; "
+                        "the engine that failed was not replaced"
+                    )
 
             await asyncio.wait_for(_do_heavy_reconnect(), timeout=effective_timeout)
             # Only clear the "dead engine" flag after the heavy reconnect
@@ -4754,44 +5351,106 @@ class PrismaClient:
                 # detect a refresh that landed since cycle entry and skip the
                 # redundant restart.
                 writer: Final = self.writer_db
-                try:
-                    await writer.query_raw("SELECT 1")
-                    verbose_proxy_logger.info(
-                        "Writer healthy on probe; skipping recreate (engine "
-                        "likely already replaced by a token refresh)."
-                    )
-                    if isinstance(self.db, RoutingPrismaWrapper):
-                        self.db.mark_writer_recovered()
-                    await self._start_engine_watcher()
-                    return
-                except Exception as probe_err:
-                    verbose_proxy_logger.warning(
-                        "Writer probe failed (%s); recreating Prisma client.",
-                        probe_err,
-                    )
+                if force_recreate is False:
+                    try:
+                        await writer.query_raw("SELECT 1")
+                        verbose_proxy_logger.info(
+                            "Writer healthy on probe; skipping recreate (engine "
+                            "likely already replaced by a token refresh)."
+                        )
+                        if isinstance(self.db, RoutingPrismaWrapper):
+                            self.db.mark_writer_recovered()
+                        await self._start_engine_watcher()
+                        return
+                    except Exception as probe_err:
+                        verbose_proxy_logger.warning(
+                            "Writer probe failed (%s); recreating Prisma client.",
+                            probe_err,
+                        )
                 # Fresh Prisma client + new engine subprocess. The previous
                 # "lightweight" path called `disconnect()` which blocks the
                 # event loop on `subprocess.Popen.wait()`; since that call
                 # ends up killing the engine anyway, we do it non-blockingly
                 # via `_kill_engine_process` inside `recreate_prisma_client`.
                 self._cleanup_engine_watcher()
-                await self.db.recreate_prisma_client(db_url, expected_generation=expected_generation)
+                recreated: Final = await self.db.recreate_prisma_client(db_url, expected_generation=expected_generation)
                 await self._start_engine_watcher()
                 # Smoke-test the writer specifically; query_raw on the routing
                 # wrapper sends to the reader, which would not validate the
-                # newly-recreated writer engine.
+                # newly-recreated writer engine. The reader is left to the
+                # caller's own retried query, a stronger check than SELECT 1,
+                # and a reader that fails to come back sets `_reader_unavailable`
+                # so reads fall through to the writer just recreated here.
                 await self.writer_db.query_raw("SELECT 1")
+                # A recreate can decline: the optimistic-lock guard no-ops when
+                # the writer generation moved since cycle entry, and the routing
+                # wrapper then leaves the reader untouched as well. Callers that
+                # merely suspect a transport blip are happy either way, but a
+                # forced caller asked for this engine to be replaced because its
+                # session state is poisoned, and it was not. Do not report that
+                # as a success: it would reset the consecutive-failure count and
+                # log a repair that never happened.
+                if force_recreate is True and recreated is False:
+                    raise _ForcedRecreateDeclined(
+                        "Forced Prisma recreate declined by the generation guard; "
+                        "the engine that failed was not replaced"
+                    )
 
             await asyncio.wait_for(_do_direct_reconnect(), timeout=effective_timeout)
+
+    def _cooldown_applies(self, stale_read_engine: "_StaleReadEngine | None") -> bool:
+        """
+        Whether the reconnect cooldown should still gate this caller.
+
+        The cooldown collapses a burst of callers onto one recreate, so it
+        keeps gating a caller whose named engine has already been replaced:
+        that recreate is the one it was waiting for. While that engine is still
+        the live one the damage is still being served, so deferring to an
+        unrelated reconnect's cooldown would leave it broken until the cooldown
+        elapses.
+
+        A named engine always describes the one that served the failing read
+        (see `_query_first_with_cached_plan_fallback`), so it is compared
+        against `read_db`, identity included: `read_db` can resolve to a
+        different wrapper than it did at observation time.
+
+        The waiver is withdrawn once a repair of this same engine has been
+        tried and failed. A failed recreate leaves the generation where it was,
+        so without this every queued caller would still see its own engine live
+        and run its own full recreate serially instead of collapsing onto one
+        attempt, which is what the cooldown is for. The record is scoped to the
+        engine rather than to a global failure count: an unrelated reconnect
+        failing somewhere else says nothing about whether this engine can be
+        repaired, and gating on it would suppress the recovery this method
+        exists to allow.
+
+        The record is never cleared, and does not need to be. Generations are
+        monotonic per wrapper, so once the engine is repaired every later
+        caller names a higher one and the entry can never match again. And this
+        method is only ever the first half of the gate: the cooldown window
+        itself still expires, so an engine that can never be repaired degrades
+        to the plain cooldown rather than being suppressed forever.
+        """
+        if stale_read_engine is None:
+            return True
+        if self._failed_recreate_generations.get(stale_read_engine.wrapper) == stale_read_engine.generation:
+            return True
+        return not stale_read_engine.is_still_live(self.read_db)
 
     async def _attempt_reconnect_inside_lock(
         self,
         force: bool,
         reason: str,
         timeout_seconds: float | None,
+        force_recreate: bool = False,
+        stale_read_engine: "_StaleReadEngine | None" = None,
     ) -> bool:
         now: Final = time.time()
-        if force is False and now - self._db_last_reconnect_attempt_ts < self._db_reconnect_cooldown_seconds:
+        if (
+            force is False
+            and self._cooldown_applies(stale_read_engine)
+            and now - self._db_last_reconnect_attempt_ts < self._db_reconnect_cooldown_seconds
+        ):
             verbose_proxy_logger.debug(
                 "Skipping DB reconnect attempt inside lock due to cooldown. reason=%s",
                 reason,
@@ -4815,12 +5474,43 @@ class PrismaClient:
 
         reconnect_succeeded = False
         try:
-            await self._run_reconnect_cycle(timeout_seconds=timeout_seconds)
+            await self._run_reconnect_cycle(timeout_seconds=timeout_seconds, force_recreate=force_recreate)
             reconnect_succeeded = True
             self._consecutive_reconnect_failures = 0
             verbose_proxy_logger.info("Prisma DB reconnect succeeded. reason=%s", reason)
+        except _ForcedRecreateDeclined as declined:
+            # A decline is raised only when the recreate returns False, which
+            # happens only at the generation guard, and the generation moves
+            # only after a replacement has connected. So a decline is proof
+            # that a replacement SUCCEEDED, and zeroing a consecutive-failure
+            # count on that proof is right by definition rather than by
+            # analogy to what a reported success used to do. Note what it
+            # proves is that the WRITER was replaced, not that this caller's
+            # engine was repaired: on a read replica the reader can still be
+            # poisoned, since the wrapper returns before touching it. Leaving
+            # the count at the threshold would let the escalation check above
+            # re-arm the dead-engine flag on the very next attempt and send a
+            # healthy replacement back down the probe-free heavy path.
+            self._consecutive_reconnect_failures = 0
+            verbose_proxy_logger.warning("Prisma DB reconnect declined. reason=%s detail=%s", reason, declined)
         except Exception as reconnect_err:
             self._consecutive_reconnect_failures += 1
+            # Remember WHICH engine could not be repaired, so the rest of this
+            # caller's burst collapses onto the cooldown instead of each
+            # retrying the recreate that just failed. Recorded only for a
+            # caller that named a generation: a watchdog or transport-error
+            # reconnect failing here is unrelated to any stale read engine and
+            # must not suppress its waiver.
+            if stale_read_engine is not None:
+                # Key off the wrapper the CALLER named, never a freshly resolved
+                # `read_db`. A failed reader recreate is itself what marks the
+                # reader unavailable, so re-resolving here would file the
+                # reader's failure under the writer: the poisoned reader would
+                # lose its record and the healthy writer would gain a spurious
+                # one, wrong in both directions at once.
+                self._failed_recreate_generations = MappingProxyType(
+                    {**self._failed_recreate_generations, stale_read_engine.wrapper: stale_read_engine.generation}
+                )
             verbose_proxy_logger.error(
                 "Prisma DB reconnect failed (%d consecutive). reason=%s error=%s",
                 self._consecutive_reconnect_failures,
@@ -4838,15 +5528,35 @@ class PrismaClient:
         force: bool = False,
         timeout_seconds: float | None = None,
         lock_timeout_seconds: float | None = None,
+        force_recreate: bool = False,
+        stale_read_engine: "_StaleReadEngine | None" = None,
     ) -> bool:
         """
         Attempt to reconnect the Prisma client in a singleflight manner.
+
+        `force` bypasses the cooldown unconditionally; `force_recreate`
+        bypasses the liveness probe that would otherwise skip recreating a
+        reachable engine; `stale_read_engine` bypasses the cooldown only while
+        the engine that produced the caller's failure is still the live one
+        (see `_cooldown_applies`).
+
+        A `force_recreate` caller can also get False for a third reason: the
+        generation guard declined because another path had already replaced
+        the engine, which is a successful outcome reported as False. Callers
+        that branch on the return value (`exception_handler` raises on False,
+        `auth_checks` retries only on True) would misread that as a dead end,
+        and are safe today only because neither passes `force_recreate`. Do
+        not add it to one of them without revisiting how it reads the result.
 
         Returns:
             bool: True if reconnection succeeded, else False.
         """
         now: Final = time.time()
-        if force is False and now - self._db_last_reconnect_attempt_ts < self._db_reconnect_cooldown_seconds:
+        if (
+            force is False
+            and self._cooldown_applies(stale_read_engine)
+            and now - self._db_last_reconnect_attempt_ts < self._db_reconnect_cooldown_seconds
+        ):
             verbose_proxy_logger.debug(
                 "Skipping DB reconnect attempt due to cooldown. reason=%s",
                 reason,
@@ -4855,7 +5565,9 @@ class PrismaClient:
 
         if lock_timeout_seconds is None:
             async with self._db_reconnect_lock:
-                return await self._attempt_reconnect_inside_lock(force, reason, timeout_seconds)
+                return await self._attempt_reconnect_inside_lock(
+                    force, reason, timeout_seconds, force_recreate, stale_read_engine
+                )
 
         lock_acquired_by_timeout_task = False
 
@@ -4866,12 +5578,8 @@ class PrismaClient:
             return True
 
         acquire_task: Final = asyncio.create_task(_acquire_reconnect_lock())
-        done, _pending = await asyncio.wait(
-            {acquire_task},
-            timeout=lock_timeout_seconds,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if acquire_task not in done:
+
+        async def _abandon_acquire_task() -> None:
             acquire_task.cancel()
             try:
                 await acquire_task
@@ -4886,6 +5594,18 @@ class PrismaClient:
                     self._db_reconnect_lock.release()
                 except RuntimeError:
                     pass
+
+        try:
+            done, _pending = await asyncio.wait(
+                {acquire_task},
+                timeout=lock_timeout_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except asyncio.CancelledError:
+            await asyncio.shield(_abandon_acquire_task())
+            raise
+        if acquire_task not in done:
+            await _abandon_acquire_task()
             verbose_proxy_logger.debug(
                 "Skipping DB reconnect attempt due to lock acquisition timeout. reason=%s timeout=%ss",
                 reason,
@@ -4904,7 +5624,9 @@ class PrismaClient:
             return False
 
         try:
-            return await self._attempt_reconnect_inside_lock(force, reason, timeout_seconds)
+            return await self._attempt_reconnect_inside_lock(
+                force, reason, timeout_seconds, force_recreate, stale_read_engine
+            )
         finally:
             self._db_reconnect_lock.release()
 
@@ -4970,6 +5692,101 @@ class PrismaClient:
                 else:
                     verbose_proxy_logger.debug("Prisma DB health watchdog observed non-DB error: %s", e)
 
+    def _probe_target_wrapper(self) -> PrismaWrapper:
+        """The Prisma wrapper a `SELECT 1` health probe actually reaches.
+
+        `health_check()` issues `query_raw`, which `RoutingPrismaWrapper` sends
+        to the reader unless the reader is degraded. The writer's engine state
+        therefore says nothing about a probe that failed against the reader, so
+        the gate has to follow the same routing rule the probe did.
+        """
+        if isinstance(self.db, RoutingPrismaWrapper):
+            return self.db.writer if self.db.reader_unavailable else self.db.reader
+        return self.db
+
+    async def _run_health_probe(self, wrapper: PrismaWrapper) -> object:
+        """Issue the `SELECT 1` a health check is made of, against `wrapper`.
+
+        Takes the wrapper rather than re-reading `self.db`, because routing is
+        re-resolved on every attribute access: a reader that recovers between
+        the caller picking its target and the query going out would send the
+        probe to a different engine than the one whose generation the caller is
+        about to check, and attribute the failure to the wrong replacement.
+        """
+        sql_query: Final = "SELECT 1"
+        response: Final[object] = await wrapper.query_raw(sql_query)
+        return response
+
+    async def _probe_answers_now(self, wrapper: PrismaWrapper) -> bool:
+        try:
+            await self._run_health_probe(wrapper)
+        except Exception as probe_error:  # noqa: BLE001  # any failure means the database is not answering
+            verbose_proxy_logger.debug("Prisma health_check() confirmation probe failed: %s", probe_error)
+            return False
+        return True
+
+    async def _planned_engine_replacement_absorbed(
+        self,
+        e: Exception,
+        wrapper: PrismaWrapper,
+        generation_before: int,
+    ) -> bool:
+        """True iff `e` is a connection-class probe failure that a completed
+        planned query-engine replacement explains.
+
+        Planned replacements (RDS IAM token refresh, guarded reconnect) kill the
+        running query engine and spawn a new one. A `SELECT 1` probe that races
+        that sub-second window fails with a transport error against the engine's
+        local HTTP port even though nothing is wrong with the database, and
+        reporting it drives a false-positive `db_exceptions` alert on every
+        replacement.
+
+        Two things must both hold, because neither is sufficient alone. The
+        engine generation must have moved, which says a replacement completed
+        rather than merely being attempted: reconnect attempts during a real
+        outage hold the same lock for tens of seconds, so gating on an in-flight
+        replacement would swallow most of an outage's alerts. And a fresh probe
+        must succeed, because `Prisma.connect()` polls the query engine's own
+        `/status` endpoint rather than round-tripping to the database, so a
+        future engine that binds before it validates its connection pool would
+        let the generation advance with the database still unreachable.
+
+        Waiting for an in-flight replacement to settle is what makes the
+        generation check meaningful, since the generation has not moved yet at
+        the instant the probe fails. The wait is generous against a replacement
+        that takes well under a second and short enough that an outage-hung
+        reconnect is not waited out; a replacement that has not settled by then
+        reports rather than stays silent.
+        """
+        if not PrismaDBExceptionHandler.is_database_connection_error(e):
+            return False
+        await wrapper.wait_for_planned_engine_replacement(self.PLANNED_ENGINE_REPLACEMENT_SETTLE_SECONDS)
+        if wrapper.engine_generation == generation_before:
+            return False
+        return await self._probe_answers_now(wrapper)
+
+    async def _report_health_check_failure(
+        self,
+        e: Exception,
+        duration: float,
+        traceback_str: str,
+        wrapper: PrismaWrapper,
+        generation_before: int,
+    ) -> None:
+        if await self._planned_engine_replacement_absorbed(e, wrapper, generation_before):
+            verbose_proxy_logger.info(
+                "Prisma health_check() connection error raced a planned query-engine replacement; "
+                "not reporting it as a DB exception: %s",
+                e,
+            )
+            return
+        await self.proxy_logging_obj.failure_handler(
+            original_exception=e,
+            duration=duration,
+            call_type="health_check",
+            traceback_str=traceback_str,
+        )
+
     @backoff.on_exception(
         backoff.expo,
         Exception,
@@ -4982,13 +5799,10 @@ class PrismaClient:
         Health check endpoint for the prisma client
         """
         start_time: Final = time.time()
+        probe_wrapper: Final = self._probe_target_wrapper()
+        generation_before: Final = probe_wrapper.engine_generation
         try:
-            sql_query: Final = "SELECT 1"
-
-            # Execute the raw query
-            # The asterisk before `user_id_list` unpacks the list into separate arguments
-            response: Final = await self.db.query_raw(sql_query)
-            return response
+            return await self._run_health_probe(probe_wrapper)
         except Exception as e:
             import traceback
 
@@ -4998,11 +5812,12 @@ class PrismaClient:
             end_time: Final = time.time()
             _duration: Final = end_time - start_time
             asyncio.create_task(
-                self.proxy_logging_obj.failure_handler(
-                    original_exception=e,
+                self._report_health_check_failure(
+                    e=e,
                     duration=_duration,
-                    call_type="health_check",
                     traceback_str=error_traceback,
+                    wrapper=probe_wrapper,
+                    generation_before=generation_before,
                 )
             )
             raise e
@@ -5025,7 +5840,7 @@ class PrismaClient:
             FROM pg_class
             WHERE oid = '"LiteLLM_SpendLogs"'::regclass;
             """
-            result: Final = await self.db.query_raw(query=sql_query)
+            result: Final[Sequence[_RelTuplesRow]] = await self.db.query_raw(query=sql_query)
             return result[0]["reltuples"]
 
         try:
@@ -5124,12 +5939,12 @@ class PrismaClient:
         limit: int = 100,
         offset: int = 0,
         status_filter: str | None = None,
-    ):
+    ) -> "Sequence[prisma_models.LiteLLM_HealthCheckTable]":
         """
         Get health check history with optional filtering
         """
         try:
-            where_clause: Final = {}
+            where_clause: Final[dict[str, str]] = {}
             if model_name:
                 where_clause["model_name"] = model_name
             if status_filter:
@@ -5146,7 +5961,7 @@ class PrismaClient:
             verbose_proxy_logger.error("Error getting health check history: %s", e)
             return []
 
-    async def get_all_latest_health_checks(self):
+    async def get_all_latest_health_checks(self) -> "Sequence[prisma_models.LiteLLM_HealthCheckTable]":
         """
         Get the latest health check for each model.
 
@@ -5166,6 +5981,29 @@ class PrismaClient:
             verbose_proxy_logger.error("Error getting all latest health checks: %s", e)
             return []
 
+    async def get_latest_health_checks_for_models(
+        self, model_names: "Sequence[str]"
+    ) -> "Sequence[prisma_models.LiteLLM_HealthCheckTable]":
+        """
+        Get the latest health check for each of the named models.
+
+        Same DISTINCT ON as ``get_all_latest_health_checks``, bounded to the models asked
+        about, so a paged caller reads health for its page instead of for the whole table.
+        """
+        if not model_names:
+            return ()
+        latest_first: Final = (("model_id", "asc"), ("model_name", "asc"), ("checked_at", "desc"))
+        order: Final = [{field: direction} for field, direction in latest_first]  # mutable-ok: prisma order is a list
+        try:
+            return await HealthCheckRepository(self).table.find_many(
+                where={"model_name": {"in": list(model_names)}},  # mutable-ok: prisma filters are dicts and lists
+                distinct=["model_id", "model_name"],  # mutable-ok: prisma distinct takes a list
+                order=order,
+            )
+        except Exception as e:  # noqa: BLE001  # health decorates a list; a driver error must not fail the page
+            verbose_proxy_logger.error("Error getting latest health checks for models: %s", e)
+            return ()
+
 
 ### HELPER FUNCTIONS ###
 
@@ -5182,7 +6020,7 @@ async def _cache_user_row(user_id: str, cache: DualCache, db: PrismaClient):
         if user_row is not None:
             print_verbose(f"User Row: {user_row}, type = {type(user_row)}")
             if hasattr(user_row, "model_dump_json") and callable(getattr(user_row, "model_dump_json")):
-                cache_value: Final = user_row.model_dump_json()
+                cache_value: Final[str] = user_row.model_dump_json()
                 cache.set_cache(key=cache_key, value=cache_value, ttl=600)  # store for 10 minutes
 
 
@@ -5195,10 +6033,42 @@ def _should_use_smtp_ssl(smtp_port: int) -> bool:
     return os.getenv("SMTP_USE_SSL", "False") == "True" or smtp_port == 465
 
 
-def _create_smtp_connection(smtp_host: str, smtp_port: int) -> smtplib.SMTP:
+def _create_smtp_connection(smtp_host: str, smtp_port: int, timeout: float) -> smtplib.SMTP:
     if _should_use_smtp_ssl(smtp_port=smtp_port):
-        return smtplib.SMTP_SSL(host=smtp_host, port=smtp_port, context=ssl.create_default_context())
-    return smtplib.SMTP(host=smtp_host, port=smtp_port)
+        return smtplib.SMTP_SSL(host=smtp_host, port=smtp_port, context=ssl.create_default_context(), timeout=timeout)
+    return smtplib.SMTP(host=smtp_host, port=smtp_port, timeout=timeout)
+
+
+def _send_smtp_message(
+    email_message: MIMEMultipart,
+    smtp_host: str,
+    smtp_port: int,
+    smtp_username: str | None,
+    smtp_password: str | None,
+    sender_email: str,
+    receiver_email: str,
+    timeout: float,
+) -> None:
+    using_ssl: Final = _should_use_smtp_ssl(smtp_port=smtp_port)
+    with _create_smtp_connection(
+        smtp_host=smtp_host,
+        smtp_port=smtp_port,
+        timeout=timeout,
+    ) as server:
+        if not using_ssl and os.getenv("SMTP_TLS", "True") != "False":
+            server.starttls(context=ssl.create_default_context())
+
+        if smtp_username and smtp_password:
+            server.login(
+                user=smtp_username,
+                password=smtp_password,
+            )
+
+        server.send_message(
+            msg=email_message,
+            from_addr=sender_email,
+            to_addrs=receiver_email,
+        )
 
 
 async def send_email(
@@ -5244,27 +6114,18 @@ async def send_email(
     email_message.attach(MIMEText(html, "html"))
 
     try:
-        using_ssl: Final = _should_use_smtp_ssl(smtp_port=smtp_port)
-        with _create_smtp_connection(
+        smtp_timeout: Final = float(os.getenv("SMTP_TIMEOUT", "30"))
+        await asyncio.to_thread(
+            _send_smtp_message,
+            email_message=email_message,
             smtp_host=smtp_host,
             smtp_port=smtp_port,
-        ) as server:
-            if not using_ssl and os.getenv("SMTP_TLS", "True") != "False":
-                server.starttls(context=ssl.create_default_context())
-
-            # Login to your email account only if smtp_username and smtp_password are provided
-            if smtp_username and smtp_password:
-                server.login(
-                    user=smtp_username,
-                    password=smtp_password,
-                )
-
-            # Send the email
-            server.send_message(
-                msg=email_message,
-                from_addr=sender_email,
-                to_addrs=receiver_email,
-            )
+            smtp_username=smtp_username,
+            smtp_password=smtp_password,
+            sender_email=sender_email,
+            receiver_email=receiver_email,
+            timeout=smtp_timeout,
+        )
 
     except Exception as e:
         verbose_proxy_logger.exception("An error occurred while sending the email:" + str(e))
@@ -5324,15 +6185,17 @@ async def migrate_passwords_to_scrypt_async(prisma_client) -> str:
         return len(s) == 64 and all(c in "0123456789abcdef" for c in s)
 
     plaintext_users: Final = [
-        u for u in all_with_pw if u.password and not u.password.startswith("scrypt:") and not _is_sha256_hex(u.password)
+        (u.user_id, u.password)
+        for u in all_with_pw
+        if u.password and not u.password.startswith("scrypt:") and not _is_sha256_hex(u.password)
     ]
     if not plaintext_users:
         return "No plaintext passwords found"
 
-    for user in plaintext_users:
+    for user_id, plaintext_password in plaintext_users:
         await UserRepository(prisma_client).table.update(
-            where={"user_id": user.user_id},
-            data={"password": hash_password(user.password)},
+            where={"user_id": user_id},
+            data={"password": hash_password(plaintext_password)},
         )
     return f"Migrated {len(plaintext_users)} plaintext passwords to scrypt"
 
@@ -5349,6 +6212,73 @@ def _hash_token_if_needed(token: str) -> str:
         return token
 
 
+async def enqueue_spend_logs(
+    prisma_client: PrismaClient,
+    logs: Sequence[Mapping[str, object]],
+    *,
+    at_head: bool = False,
+    max_bytes: int = SPEND_LOG_QUEUE_MAX_BYTES,
+) -> None:
+    """Queue spend logs for the next flush, held under ``SPEND_LOG_QUEUE_MAX_BYTES``.
+
+    ``at_head`` replays a batch the DB refused, so it flushes before the logs
+    that piled up during the outage. Past the budget the oldest logs are
+    dropped, which keeps a long outage from growing the queue until the pod
+    dies.
+    """
+    added: Final = sum(spend_log_row_bytes(row) for row in logs)
+    async with prisma_client._spend_log_transactions_lock:
+        queued: Final = (
+            tuple(logs) + tuple(prisma_client.spend_log_transactions)
+            if at_head
+            else tuple(prisma_client.spend_log_transactions) + tuple(logs)
+        )
+        kept, kept_bytes = spend_log_queue_within_budget(queued, PrismaClient.spend_log_queue_bytes + added, max_bytes)
+        prisma_client.spend_log_transactions[:] = kept
+        PrismaClient.spend_log_queue_bytes = kept_bytes
+    if len(kept) < len(queued):
+        verbose_proxy_logger.error(
+            "Spend tracking - spend log queue is at its %d byte budget; dropped the %d oldest spend logs",
+            max_bytes,
+            len(queued) - len(kept),
+        )
+
+
+def request_spend_log_flush() -> None:
+    """Wake the queue monitor now rather than leaving the rows for its next poll.
+
+    The Responses API hands the client an id it can chain from straight away, and that
+    lookup reads the DB, so the row cannot sit in this worker's queue for a poll interval.
+    Repeated requests coalesce into the monitor's next pass, so the batching holds.
+    """
+    PrismaClient.spend_log_flush_requested.set()
+
+
+async def _wait_for_spend_log_flush_request(interval: float) -> bool:
+    """Wait out ``interval``, returning early and True when a flush was requested."""
+    try:
+        await asyncio.wait_for(PrismaClient.spend_log_flush_requested.wait(), timeout=interval)
+    except asyncio.TimeoutError:
+        return False
+    PrismaClient.spend_log_flush_requested.clear()
+    return True
+
+
+async def dequeue_spend_logs(prisma_client: PrismaClient, limit: int) -> list[dict[str, object]]:
+    """Take up to ``limit`` of the oldest queued spend logs off the queue.
+
+    Every enqueue and dequeue goes through this pair so the byte total the
+    queue is bounded by stays in step with what the queue actually holds.
+    """
+    async with prisma_client._spend_log_transactions_lock:
+        popped: Final = prisma_client.spend_log_transactions[:limit]
+        prisma_client.spend_log_transactions[:] = prisma_client.spend_log_transactions[limit:]
+        PrismaClient.spend_log_queue_bytes = max(
+            0, PrismaClient.spend_log_queue_bytes - sum(spend_log_row_bytes(row) for row in popped)
+        )
+    return popped
+
+
 class ProxyUpdateSpend:
     @staticmethod
     async def update_end_user_spend(
@@ -5361,6 +6291,7 @@ class ProxyUpdateSpend:
             start_time = time.time()
             try:
                 async with prisma_client.db.tx(timeout=timedelta(seconds=60)) as transaction:
+                    batcher: _EndUserSpendBatch
                     async with transaction.batch_() as batcher:
                         # Sort by end_user_id for consistent lock ordering across pods to prevent deadlocks.
                         for end_user_id, response_cost in sorted(end_user_list_transactions.items()):
@@ -5379,15 +6310,14 @@ class ProxyUpdateSpend:
                             )
 
                 break
-            except DB_RETRY_SAFE_ERROR_TYPES as e:
-                if i >= n_retry_times:  # If we've reached the maximum number of retries
-                    _raise_failed_update_spend_exception(
-                        e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
-                    )
-                # Optionally, sleep for a bit before retrying
-                await asyncio.sleep(2**i)  # Exponential backoff
             except Exception as e:
-                _raise_failed_update_spend_exception(e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj)
+                await DBSpendUpdateWriter._handle_spend_update_failure(
+                    e=e,
+                    attempt=i,
+                    n_retry_times=n_retry_times,
+                    start_time=start_time,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
 
     @staticmethod
     async def update_spend_logs(
@@ -5395,17 +6325,13 @@ class ProxyUpdateSpend:
         prisma_client: PrismaClient,
         db_writer_client: AsyncHTTPHandler | None,
         proxy_logging_obj: ProxyLogging,
-        logs_to_process: list[dict[str, Any]] | None = None,
+        logs_to_process: list[dict[str, object]] | None = None,
     ):
         BATCH_SIZE: Final = 1000  # Preferred size of each batch to write to the database
         MAX_LOGS_PER_INTERVAL: Final = 10000  # Maximum number of logs to flush in a single interval
         popped_batch = False
         if logs_to_process is None:
-            # Atomically read and remove logs to process (protected by lock)
-            async with prisma_client._spend_log_transactions_lock:
-                logs_to_process = prisma_client.spend_log_transactions[:MAX_LOGS_PER_INTERVAL]
-                # Remove the logs we're about to process
-                prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[len(logs_to_process) :]
+            logs_to_process = await dequeue_spend_logs(prisma_client, MAX_LOGS_PER_INTERVAL)
             popped_batch = True
         if len(logs_to_process) > 0:
             verbose_proxy_logger.info(
@@ -5437,7 +6363,9 @@ class ProxyUpdateSpend:
                             batch_with_dates = [prisma_client.jsonify_object({**entry}) for entry in batch]
                             isolation_budget = MAX_SPEND_LOG_ISOLATION_FAILURES_PER_BATCH
                             for statement_rows in spend_log_write_batches(
-                                batch_with_dates, SPEND_LOG_WRITE_BATCH_MAX_BYTES
+                                batch_with_dates,
+                                SPEND_LOG_WRITE_BATCH_MAX_BYTES,
+                                SPEND_LOG_WRITE_BATCH_MAX_ROWS,
                             ):
                                 isolation_budget = await _create_spend_logs_with_poison_isolation(
                                     SpendLogsRepository(prisma_client),
@@ -5455,9 +6383,9 @@ class ProxyUpdateSpend:
                             "%s logs processed. Remaining in queue: %s", len(logs_to_process), remaining_count
                         )
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
-                    if i is None:
-                        i = 0
+                except Exception as e:
+                    if not PrismaDBExceptionHandler.is_database_transport_error(e):
+                        raise
                     verbose_proxy_logger.warning(
                         "Spend tracking - DB connection error writing spend logs, retry %d/%d. logs_count=%d, error=%s",
                         i + 1,
@@ -5466,11 +6394,10 @@ class ProxyUpdateSpend:
                         str(e),
                     )
                     if i >= n_retry_times:
+                        await enqueue_spend_logs(prisma_client, logs_to_process, at_head=True)
                         raise
                     await asyncio.sleep(2**i)
         except Exception as e:
-            # Logs already removed from queue at start - don't put them back
-            # This matches the original behavior where logs are removed even on error
             _raise_failed_update_spend_exception(e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj)
         finally:
             # Clean up logs_to_process only if we popped it (caller-owned otherwise)
@@ -5544,7 +6471,9 @@ async def _total_queued_spend_transactions(prisma_client: PrismaClient) -> int:
         tool_queue_size: Final = len(prisma_client.tool_usage_transactions)
     async with prisma_client._autorouter_turn_transactions_lock:
         autorouter_queue_size: Final = len(prisma_client.autorouter_turn_transactions)
-    return spend_queue_size + tool_queue_size + autorouter_queue_size
+    from litellm.proxy.db.shadow_eval_funnel import pending_shadow_eval_funnel_events
+
+    return spend_queue_size + tool_queue_size + autorouter_queue_size + pending_shadow_eval_funnel_events()
 
 
 async def update_daily_tag_spend(
@@ -5612,17 +6541,23 @@ async def update_spend_logs_job(
     if await _total_queued_spend_transactions(prisma_client) == 0:
         return
 
-    async with prisma_client._spend_log_transactions_lock:
-        logs_to_process: Final = prisma_client.spend_log_transactions[:MAX_LOGS_PER_INTERVAL]
-        prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[len(logs_to_process) :]
+    logs_to_process: Final = await dequeue_spend_logs(prisma_client, MAX_LOGS_PER_INTERVAL)
 
-    await ProxyUpdateSpend.update_spend_logs(
-        n_retry_times=n_retry_times,
-        prisma_client=prisma_client,
-        proxy_logging_obj=proxy_logging_obj,
-        db_writer_client=db_writer_client,
-        logs_to_process=logs_to_process,
-    )
+    try:
+        await ProxyUpdateSpend.update_spend_logs(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            db_writer_client=db_writer_client,
+            logs_to_process=logs_to_process,
+        )
+    except asyncio.CancelledError:
+        await enqueue_spend_logs(prisma_client, logs_to_process, at_head=True)
+        verbose_proxy_logger.warning(
+            "Spend tracking - spend log write cancelled, requeued %d rows for the next flush",
+            len(logs_to_process),
+        )
+        raise
 
     # Guardrail/policy usage tracking (same batch, outside spend-logs update)
     try:
@@ -5678,6 +6613,46 @@ async def update_spend_logs_job(
             "Spend tracking - auto-router session rollup drain failed; %s turn transactions dropped: %s",
             len(autorouter_turns_to_process),
             autorouter_tracking_err,
+        )
+
+    try:
+        from litellm.proxy.db.shadow_eval_funnel import flush_shadow_eval_funnel
+
+        await flush_shadow_eval_funnel(prisma_client)
+    except Exception as funnel_err:  # noqa: BLE001  # a drain bug must not abort the spend job
+        verbose_proxy_logger.error("Spend tracking - shadow eval funnel drain failed: %s", funnel_err)
+
+
+MAX_SPEND_LOG_DRAIN_ITERATIONS: Final = 20
+
+
+async def drain_spend_logs_queue(
+    prisma_client: PrismaClient,
+    db_writer_client: "AsyncHTTPHandler | None",
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    monitor_task: Final = prisma_client.spend_logs_queue_monitor_task
+    if monitor_task is not None:
+        monitor_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await monitor_task
+        prisma_client.spend_logs_queue_monitor_task = None  # rebind-ok: the client owns its monitor handle
+
+    for _ in range(MAX_SPEND_LOG_DRAIN_ITERATIONS):
+        if await _total_queued_spend_transactions(prisma_client) == 0:
+            return
+        await update_spend_logs_job(
+            prisma_client=prisma_client,
+            db_writer_client=db_writer_client,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    remaining: Final = await _total_queued_spend_transactions(prisma_client)
+    if remaining > 0:
+        spend_log_error(
+            "Spend tracking - %d spend log rows still queued after %d drain passes",
+            remaining,
+            MAX_SPEND_LOG_DRAIN_ITERATIONS,
         )
 
 
@@ -5743,7 +6718,8 @@ async def _monitor_spend_logs_queue(
                 # Exponential backoff when no logs to process
                 current_interval = min(current_interval * backoff_multiplier, max_backoff)
 
-            await asyncio.sleep(current_interval)
+            if await _wait_for_spend_log_flush_request(current_interval):
+                current_interval = base_interval
         except Exception as e:
             spend_log_error("Error in spend logs queue monitor: %s", str(e), exc=e)
             # Continue monitoring even if there's an error, with exponential backoff
@@ -5961,7 +6937,7 @@ def _check_and_merge_model_level_guardrails(
     # Medium on #29654).
     team_id: Final = metadata.get("user_api_key_team_id") or litellm_metadata.get("user_api_key_team_id")
 
-    model_level_guardrails: list | None = None
+    model_level_guardrails: list[object] | None = None
     if model_id is not None:
         deployment: Final = llm_router.get_deployment(model_id=model_id)
         if deployment is None:
@@ -6010,7 +6986,7 @@ def _check_and_merge_model_level_guardrails(
     return _merge_guardrails_with_existing(data, model_level_guardrails)
 
 
-def _merge_guardrails_with_existing(data: dict, model_level_guardrails: Any) -> dict:
+def _merge_guardrails_with_existing(data: dict, model_level_guardrails: object) -> dict:
     """
     Merge model-level guardrails with any existing guardrails in the request data.
 
@@ -6319,6 +7295,74 @@ def construct_database_url_from_env_vars() -> str | None:
     return None
 
 
+async def _get_validated_team_object(
+    user_api_key_dict: "UserAPIKeyAuth",
+    team_id: str,
+    prisma_client: "PrismaClient",
+    user_api_key_cache: "UserApiKeyCache",
+    proxy_logging_obj: "ProxyLogging",
+) -> "LiteLLM_TeamTableCachedObj":
+    from litellm.proxy.auth.auth_checks import get_team_object
+    from litellm.proxy.management_endpoints.team_endpoints import validate_membership
+
+    team_object: Final = await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    await validate_membership(user_api_key_dict=user_api_key_dict, team_table=team_object)
+    return team_object
+
+
+async def _get_team_object_for_access_groups(
+    team_id: str | None,
+    prisma_client: Optional["PrismaClient"],
+    user_api_key_cache: Optional["UserApiKeyCache"],
+    proxy_logging_obj: Optional["ProxyLogging"],
+) -> Optional["LiteLLM_TeamTableCachedObj"]:
+    from litellm.proxy.auth.auth_checks import get_team_object
+
+    if team_id is None or prisma_client is None or user_api_key_cache is None or proxy_logging_obj is None:
+        return None
+    try:
+        return await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except HTTPException:
+        verbose_proxy_logger.debug("Could not fetch team %s while listing models", team_id)
+        return None
+
+
+async def _get_access_group_models(
+    user_api_key_dict: "UserAPIKeyAuth",
+    team_object: Optional["LiteLLM_TeamTableCachedObj"],
+    prisma_client: Optional["PrismaClient"],
+    user_api_key_cache: Optional["UserApiKeyCache"],
+    proxy_logging_obj: Optional["ProxyLogging"],
+) -> tuple[str, ...]:
+    from litellm.proxy.auth.auth_checks import (
+        _get_models_from_access_groups,
+        get_authorized_resources_from_key_access_groups,
+    )
+
+    team_group_models: Final = await _get_models_from_access_groups(
+        access_group_ids=(team_object.access_group_ids or ()) if team_object is not None else (),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    key_group_models: Final = await get_authorized_resources_from_key_access_groups(
+        valid_token=user_api_key_dict,
+        team_object=team_object,
+        resource_field="access_model_names",
+    )
+    return tuple(dict.fromkeys((*team_group_models, *key_group_models)))
+
+
 async def get_available_models_for_user(
     user_api_key_dict: "UserAPIKeyAuth",
     llm_router: Optional["Router"],
@@ -6350,13 +7394,11 @@ async def get_available_models_for_user(
     Returns:
         List of model names available to the user
     """
-    from litellm.proxy.auth.auth_checks import get_team_object
     from litellm.proxy.auth.model_checks import (
         get_complete_model_list,
         get_key_models,
         get_team_models,
     )
-    from litellm.proxy.management_endpoints.team_endpoints import validate_membership
 
     # Get proxy model list and access groups
     if llm_router is None:
@@ -6366,31 +7408,33 @@ async def get_available_models_for_user(
         proxy_model_list = llm_router.get_model_names()
         model_access_groups = llm_router.get_model_access_groups()
 
-    # Get key models
-    key_models = get_key_models(
-        user_api_key_dict=user_api_key_dict,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
-        include_model_access_groups=include_model_access_groups,
-    )
-
-    # Get team models
-    team_models: list[str] = user_api_key_dict.team_models
-
-    # If specific team_id is provided, validate and get team models
-    if team_id and prisma_client and proxy_logging_obj and user_api_key_cache:
-        key_models = []
-        team_object: Final = await get_team_object(
+    requested_team_object: Final = (
+        await _get_validated_team_object(
+            user_api_key_dict=user_api_key_dict,
             team_id=team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
-        await validate_membership(user_api_key_dict=user_api_key_dict, team_table=team_object)
-        team_models = team_object.models
+        if team_id and prisma_client and proxy_logging_obj and user_api_key_cache
+        else None
+    )
 
-    team_models = get_team_models(
-        team_models=team_models,
+    key_models: Final[Sequence[str]] = (
+        ()
+        if requested_team_object is not None
+        else get_key_models(
+            user_api_key_dict=user_api_key_dict,
+            proxy_model_list=proxy_model_list,
+            model_access_groups=model_access_groups,
+            include_model_access_groups=include_model_access_groups,
+        )
+    )
+
+    team_models: Final = get_team_models(
+        team_models=(
+            requested_team_object.models if requested_team_object is not None else user_api_key_dict.team_models
+        ),
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
         include_model_access_groups=include_model_access_groups,
@@ -6398,10 +7442,31 @@ async def get_available_models_for_user(
 
     effective_team_id: Final = team_id or user_api_key_dict.team_id
 
+    access_group_models: Final = (
+        await _get_access_group_models(
+            user_api_key_dict=user_api_key_dict,
+            team_object=requested_team_object
+            or await _get_team_object_for_access_groups(
+                team_id=effective_team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            ),
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if key_models or team_models
+        else ()
+    )
+
+    granted_key_models: Final = (*key_models, *access_group_models) if key_models else key_models
+    granted_team_models: Final = (*team_models, *access_group_models) if team_models else team_models
+
     # Get complete model list
     all_models: Final = get_complete_model_list(
-        key_models=key_models,
-        team_models=team_models,
+        key_models=granted_key_models,
+        team_models=granted_team_models,
         proxy_model_list=proxy_model_list,
         user_model=user_model,
         infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
@@ -6537,7 +7602,7 @@ def model_dump_with_preserved_fields(
     obj: Any,
     preserve_fields: list[str] | None = None,
     exclude_unset: bool = True,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Serialize a Pydantic model to a dictionary while preserving specific fields
     even if they are None.

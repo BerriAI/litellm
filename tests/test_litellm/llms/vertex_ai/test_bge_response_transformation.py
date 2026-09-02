@@ -5,10 +5,7 @@ This test verifies that the BGE response transformer properly validates
 and handles different response formats.
 """
 
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import pytest
 

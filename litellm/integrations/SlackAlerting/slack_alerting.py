@@ -5,10 +5,12 @@ import datetime
 import os
 import random
 import time
+from collections.abc import Callable
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from openai import APIError
+from pydantic import TypeAdapter
 
 import litellm
 import litellm.litellm_core_utils
@@ -16,7 +18,11 @@ import litellm.litellm_core_utils.litellm_logging
 import litellm.types
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.constants import HOURS_IN_A_DAY
+from litellm.constants import (
+    HOURS_IN_A_DAY,
+    SLACK_DAILY_REPORT_LOCK_ID,
+    SLACK_MODEL_DEPRECATION_LOCK_ID,
+)
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_alert_type
 from litellm.integrations.SlackAlerting.hanging_request_check import (
@@ -33,24 +39,47 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._types import (
     AlertType,
     CallInfo,
+    InvitationModel,
+    InvitationNew,
     Litellm_EntityType,
+    UserAPIKeyAuth,
     VirtualKeyEvent,
     WebhookEvent,
 )
+from litellm.repositories.table_repositories import InvitationLinkRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.integrations.slack_alerting import *
+from litellm.types.proxy.model_deprecation import (
+    DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
+    DEPRECATION_IDLE_POLL_SECONDS,
+)
 
 from ..email_templates.templates import *
 from .batching_handler import send_to_webhook, squash_payloads
+from .ms_teams import (
+    MS_TEAMS_ALERT_HEADERS,
+    MS_TEAMS_ALERTING_DESTINATION,
+    MSTeamsAlertText,
+    MSTeamsQueueItem,
+    get_ms_teams_webhook_url,
+)
 from .utils import process_slack_alerting_variables
 
 if TYPE_CHECKING:
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+    from litellm.proxy.utils import PrismaClient
     from litellm.router import Router as _Router
 
     Router = _Router
 else:
     Router = Any
+
+
+def _proxy_llm_router() -> Router | None:
+    from litellm.proxy.proxy_server import llm_router
+
+    return llm_router
 
 
 class SlackAlerting(CustomBatchLogger):
@@ -517,7 +546,6 @@ class SlackAlerting(CustomBatchLogger):
         # Get the appropriate budget alert type handler
         budget_alert_class: Final = get_budget_alert_type(type)
         _id: Final = budget_alert_class.get_id(user_info)
-        user_info_json: Final = user_info.model_dump(exclude_none=True)
         user_info_str: Final = self._get_user_info_str(user_info)
         event_message = budget_alert_class.get_event_message()
 
@@ -547,7 +575,22 @@ class SlackAlerting(CustomBatchLogger):
                 webhook_event = WebhookEvent(
                     event=event,
                     event_message=event_message,
-                    **user_info_json,
+                    spend=user_info.spend,
+                    max_budget=user_info.max_budget,
+                    soft_budget=user_info.soft_budget,
+                    token=user_info.token,
+                    customer_id=user_info.customer_id,
+                    user_id=user_info.user_id,
+                    team_id=user_info.team_id,
+                    team_alias=user_info.team_alias,
+                    organization_id=user_info.organization_id,
+                    user_email=user_info.user_email,
+                    key_alias=user_info.key_alias,
+                    projected_exceeded_date=user_info.projected_exceeded_date,
+                    projected_spend=user_info.projected_spend,
+                    event_group=user_info.event_group,
+                    alert_emails=user_info.alert_emails,
+                    max_budget_alert_emails=user_info.max_budget_alert_emails,
                 )
                 await self.send_alert(
                     message=event_message + "\n\n" + user_info_str,
@@ -629,7 +672,7 @@ class SlackAlerting(CustomBatchLogger):
         """
         Create a standard message for a budget alert
         """
-        _all_fields_as_dict: Final = user_info.model_dump(exclude_none=True)
+        _all_fields_as_dict: Final[dict[str, object]] = user_info.model_dump(exclude_none=True)
         _all_fields_as_dict.pop("token")
         msg = ""
         for k, v in _all_fields_as_dict.items():
@@ -978,7 +1021,7 @@ class SlackAlerting(CustomBatchLogger):
         except Exception:
             pass
 
-    async def model_added_alert(self, model_name: str, litellm_model_name: str, passed_model_info: Any):
+    async def model_added_alert(self, model_name: str, litellm_model_name: str, passed_model_info: object):
         base_model_from_user: Final = getattr(passed_model_info, "base_model", None)
         model_info = {}
         base_model = ""
@@ -1038,6 +1081,99 @@ Model Info:
     async def model_removed_alert(self, model_name: str):
         pass
 
+    def _deprecation_alerts_enabled(self) -> bool:
+        return self.alerting is not None and AlertType.model_deprecation_warnings in self.alert_types
+
+    async def send_model_deprecation_alert(
+        self,
+        llm_router: Router | None = None,
+        pod_lock_manager: "PodLockManager | None" = None,
+    ) -> bool:
+        """Alert on the router's deprecated and imminent models, True when one was sent
+
+        The daily lock is claimed only once there is something to say, so an empty pass never blocks a
+        later real one, and a sent alert is stamped in the shared cache for a day so sibling pods stop asking
+        """
+        if not self._deprecation_alerts_enabled():
+            return False
+
+        from litellm.proxy.common_utils.model_deprecation import (
+            collect_model_deprecations,
+            format_deprecation_alert_message,
+        )
+
+        snapshot: Final = collect_model_deprecations(llm_router=llm_router)
+        message: Final = format_deprecation_alert_message(snapshot)
+        if message is None:
+            return False
+        if not await self._claimed_deprecation_alert_window(pod_lock_manager):
+            return False
+
+        level: Final[Literal["Low", "Medium", "High"]] = "High" if snapshot.deprecated else "Medium"
+
+        await self.send_alert(
+            message=message,
+            level=level,
+            alert_type=AlertType.model_deprecation_warnings,
+            alerting_metadata={  # mutable-ok: send_alert takes a dict payload
+                "deprecated_count": len(snapshot.deprecated),
+                "imminent_count": len(snapshot.imminent),
+                "upcoming_count": len(snapshot.upcoming),
+            },
+        )
+        await self.internal_usage_cache.async_set_cache(
+            key=SlackAlertingCacheKeys.deprecation_alert_sent_key.value,
+            value=time.time(),
+            ttl=DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
+        )
+        return True
+
+    async def _claimed_deprecation_alert_window(self, pod_lock_manager: "PodLockManager | None") -> bool:
+        """Without a redis backed lock there is no fleet to coordinate, so a lone pod always alerts"""
+        if pod_lock_manager is None:
+            return True
+        return (
+            await pod_lock_manager.acquire_lock(
+                cronjob_id=SLACK_MODEL_DEPRECATION_LOCK_ID,
+                ttl=DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
+                allow_reentrant=False,
+            )
+        ) is not False
+
+    async def _deprecation_alert_sent_within_a_day(self) -> bool:
+        return (
+            await self.internal_usage_cache.async_get_cache(key=SlackAlertingCacheKeys.deprecation_alert_sent_key.value)
+        ) is not None
+
+    async def _run_deprecation_alert_pass(
+        self, llm_router: Router | None, pod_lock_manager: "PodLockManager | None"
+    ) -> bool:
+        if llm_router is None or not self._deprecation_alerts_enabled():
+            return False
+        if await self._deprecation_alert_sent_within_a_day():
+            return False
+        return await self.send_model_deprecation_alert(llm_router=llm_router, pod_lock_manager=pod_lock_manager)
+
+    async def run_scheduled_deprecation_check(
+        self,
+        get_llm_router: Callable[[], Router | None] = _proxy_llm_router,
+        pod_lock_manager: "PodLockManager | None" = None,
+    ) -> None:
+        """Poll every pass for a loaded router, the alert being on, and no alert in the last day, then alert
+
+        A pass that could not alert (no router yet, alert type off, a sibling pod holds the daily lock, or a
+        redis blip at claim time) is retried on the next poll instead of costing a day, while a pass that
+        raised (a missing webhook, say) backs off a full day so a misconfiguration logs once, not every poll
+        """
+        while True:
+            try:
+                await self._run_deprecation_alert_pass(get_llm_router(), pod_lock_manager)
+            except Exception as e:  # noqa: BLE001  # a failed alert must not kill the loop
+                verbose_proxy_logger.exception("Error in model deprecation alert loop: %s", e)
+                await asyncio.sleep(DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS)
+                continue
+            await asyncio.sleep(DEPRECATION_IDLE_POLL_SECONDS)
+
     async def send_webhook_alert(self, webhook_event: WebhookEvent) -> bool:
         """
         Sends structured alert to webhook, if set.
@@ -1080,6 +1216,44 @@ Model Info:
         if premium_user is not True:
             if email_logo_url is not None or email_support_contact is not None:
                 raise ValueError(f"Trying to Customize Email Alerting\n {CommonProxyErrors.not_premium_user.value}")
+
+    async def _construct_user_invitation_link(self, recipient_user_id: str | None, base_url: str) -> str:
+        from litellm.proxy.management_helpers.user_invitation import (
+            create_invitation_for_user,
+        )
+        from litellm.proxy.proxy_server import prisma_client
+
+        if recipient_user_id is None or prisma_client is None:
+            return base_url
+
+        try:
+            existing_invitations: Final = TypeAdapter(list[InvitationModel]).validate_python(
+                await InvitationLinkRepository(prisma_client).table.find_many(  # pyright: ignore[reportAny]  # untyped prisma boundary (any-ok), result validated by TypeAdapter
+                    where={"user_id": recipient_user_id},  # mutable-ok: prisma find_many requires a dict where filter
+                    order={"created_at": "desc"},  # mutable-ok: prisma find_many requires a dict order arg
+                ),
+                from_attributes=True,
+            )
+            invitation: Final = (
+                existing_invitations[0]
+                if existing_invitations
+                else TypeAdapter(InvitationModel).validate_python(
+                    await create_invitation_for_user(
+                        data=InvitationNew(user_id=recipient_user_id),
+                        user_api_key_dict=UserAPIKeyAuth(user_id=recipient_user_id),
+                    ),
+                    from_attributes=True,
+                )
+            )
+        except Exception as e:  # noqa: BLE001  # best-effort link build; any DB/creation failure falls back to base_url
+            verbose_proxy_logger.error(
+                "Error creating invitation link for user_id %s: %s",
+                recipient_user_id,
+                str(e),
+            )
+            return base_url
+
+        return f"{base_url.rstrip('/')}/ui/onboarding?invitation_id={invitation.id}"
 
     async def send_key_created_or_user_invited_email(self, webhook_event: WebhookEvent) -> bool:
         try:
@@ -1139,11 +1313,14 @@ Model Info:
                     team_row: Final = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
                     if team_row is not None:
                         team_name = team_row.team_alias or "-"
+                invitation_link: Final = await self._construct_user_invitation_link(
+                    recipient_user_id=recipient_user_id, base_url=base_url
+                )
                 email_html_content = USER_INVITED_EMAIL_TEMPLATE.format(
                     email_logo_url=email_logo_url,
                     recipient_email=recipient_email,
                     team_name=team_name,
-                    base_url=base_url,
+                    base_url=invitation_link,
                     email_support_contact=email_support_contact,
                 )
             else:
@@ -1276,12 +1453,42 @@ Model Info:
             # only send budget alerts over Email
             await self.send_email_alert_using_smtp(webhook_event=user_info, alert_type=alert_type)
 
-        if "slack" not in self.alerting:
+        send_to_slack: Final = "slack" in self.alerting
+        send_to_ms_teams: Final = MS_TEAMS_ALERTING_DESTINATION in self.alerting
+        if not send_to_slack and not send_to_ms_teams:
             return
         if alert_type not in self.alert_types:
             return
 
         from datetime import datetime
+
+        current_time: Final = datetime.now().strftime("%H:%M:%S")
+        _proxy_base_url: Final = os.getenv("PROXY_BASE_URL", None)
+        alert_type_name: Final = getattr(alert_type, "name", alert_type)
+        alert_type_formatted: Final = f"Alert type: `{alert_type_name}`"
+        if alert_type == "daily_reports" or alert_type == "new_model_added":
+            formatted_message = alert_type_formatted + message
+        else:
+            formatted_message = (
+                f"{alert_type_formatted}\nLevel: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
+            )
+
+        if kwargs:
+            for key, value in kwargs.items():
+                formatted_message += f"\n\n{key}: `{value}`\n\n"
+        if alerting_metadata:
+            for key, value in alerting_metadata.items():
+                formatted_message += f"\n\n*Alerting Metadata*: \n{key}: `{value}`\n\n"
+        if _proxy_base_url is not None:
+            formatted_message += f"\n\nProxy URL: `{_proxy_base_url}`"
+
+        if send_to_ms_teams:
+            self._enqueue_ms_teams_alert(formatted_message=formatted_message, alert_type=alert_type)
+
+        if not send_to_slack:
+            if len(self.log_queue) >= self.batch_size:
+                await self.flush_queue()
+            return
 
         # Check if digest mode is enabled for this alert type
         alert_type_name_str: Final = getattr(alert_type, "value", str(alert_type))
@@ -1293,9 +1500,9 @@ Model Info:
             elif self.default_webhook_url is not None:
                 _digest_webhook = self.default_webhook_url
             else:
-                _digest_webhook = os.getenv("SLACK_WEBHOOK_URL", None)
+                _digest_webhook = os.getenv("SLACK_WEBHOOK_URL") or os.getenv("ALERTING_WEBHOOK_URL")
             if _digest_webhook is None:
-                raise ValueError("Missing SLACK_WEBHOOK_URL from environment")
+                raise ValueError("Missing SLACK_WEBHOOK_URL / ALERTING_WEBHOOK_URL from environment")
 
             digest_key: Final = f"{alert_type_name_str}:{request_model or ''}:{api_base or ''}"
 
@@ -1318,38 +1525,16 @@ Model Info:
                     )
             return  # Suppress immediate alert; will be emitted by _flush_digest_buckets
 
-        # Get the current timestamp
-        current_time: Final = datetime.now().strftime("%H:%M:%S")
-        _proxy_base_url: Final = os.getenv("PROXY_BASE_URL", None)
-        # Use .name if it's an enum, otherwise use as is
-        alert_type_name: Final = getattr(alert_type, "name", alert_type)
-        alert_type_formatted: Final = f"Alert type: `{alert_type_name}`"
-        if alert_type == "daily_reports" or alert_type == "new_model_added":
-            formatted_message = alert_type_formatted + message
-        else:
-            formatted_message = (
-                f"{alert_type_formatted}\nLevel: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
-            )
-
-        if kwargs:
-            for key, value in kwargs.items():
-                formatted_message += f"\n\n{key}: `{value}`\n\n"
-        if alerting_metadata:
-            for key, value in alerting_metadata.items():
-                formatted_message += f"\n\n*Alerting Metadata*: \n{key}: `{value}`\n\n"
-        if _proxy_base_url is not None:
-            formatted_message += f"\n\nProxy URL: `{_proxy_base_url}`"
-
         # check if we find the slack webhook url in self.alert_to_webhook_url
         if self.alert_to_webhook_url is not None and alert_type in self.alert_to_webhook_url:
             slack_webhook_url: str | list[str] | None = self.alert_to_webhook_url[alert_type]
         elif self.default_webhook_url is not None:
             slack_webhook_url = self.default_webhook_url
         else:
-            slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL", None)
+            slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL") or os.getenv("ALERTING_WEBHOOK_URL")
 
         if slack_webhook_url is None:
-            raise ValueError("Missing SLACK_WEBHOOK_URL from environment")
+            raise ValueError("Missing SLACK_WEBHOOK_URL / ALERTING_WEBHOOK_URL from environment")
         payload: Final = {"text": formatted_message}
         headers: Final = {"Content-type": "application/json"}
 
@@ -1375,6 +1560,24 @@ Model Info:
 
         if len(self.log_queue) >= self.batch_size:
             await self.flush_queue()
+
+    def _enqueue_ms_teams_alert(self, formatted_message: str, alert_type: AlertType) -> None:
+        ms_teams_webhook_url: Final = get_ms_teams_webhook_url()
+        if ms_teams_webhook_url is None:
+            verbose_proxy_logger.error(
+                "MS Teams alerting is enabled but MS_TEAMS_WEBHOOK_URL is not set. Dropping alert type=%s",
+                alert_type,
+            )
+            return
+        payload: Final[MSTeamsAlertText] = {"text": formatted_message}
+        item: Final[MSTeamsQueueItem] = {
+            "url": ms_teams_webhook_url,
+            "headers": MS_TEAMS_ALERT_HEADERS,
+            "payload": payload,
+            "alert_type": alert_type,
+            "format": MS_TEAMS_ALERTING_DESTINATION,
+        }
+        self.log_queue.append(item)
 
     async def async_send_batch(self):
         if not self.log_queue:
@@ -1530,7 +1733,11 @@ Model Info:
         except Exception:
             pass
 
-    async def _run_scheduler_helper(self, llm_router) -> bool:
+    async def _run_scheduler_helper(
+        self,
+        llm_router,
+        pod_lock_manager: "PodLockManager | None" = None,
+    ) -> bool:
         """
         Returns:
         - True -> report sent
@@ -1555,6 +1762,16 @@ Model Info:
             interval_seconds: Final = self.alerting_args.daily_report_frequency
 
             if current_time - report_sent >= interval_seconds:
+                if (
+                    pod_lock_manager is not None
+                    and (
+                        await pod_lock_manager.acquire_lock(
+                            cronjob_id=SLACK_DAILY_REPORT_LOCK_ID, ttl=interval_seconds, allow_reentrant=False
+                        )
+                    )
+                    is False
+                ):
+                    return False
                 # Sneak in the reporting logic here
                 await self.send_daily_reports(router=llm_router)
                 # Also, don't forget to update the report_sent time after sending the report!
@@ -1566,7 +1783,11 @@ Model Info:
 
         return report_sent_bool
 
-    async def _run_scheduled_daily_report(self, llm_router: Any | None = None):
+    async def _run_scheduled_daily_report(
+        self,
+        llm_router: Any | None = None,
+        pod_lock_manager: "PodLockManager | None" = None,
+    ):
         """
         If 'daily_reports' enabled
 
@@ -1579,7 +1800,7 @@ Model Info:
 
         if "daily_reports" in self.alert_types:
             while True:
-                await self._run_scheduler_helper(llm_router=llm_router)
+                await self._run_scheduler_helper(llm_router=llm_router, pod_lock_manager=pod_lock_manager)
                 interval = random.randint(
                     self.alerting_args.report_check_interval - 3,
                     self.alerting_args.report_check_interval + 3,
@@ -1724,6 +1945,69 @@ Model Info:
         except Exception as e:
             verbose_proxy_logger.exception("Error sending weekly spend report %s", e)
 
+    async def send_user_spend_alerts(self, prisma_client: "PrismaClient | None" = None) -> None:
+        """Check per-user daily/monthly spend thresholds and spend anomalies, alerting once per user per period."""
+        if self.alerting is None or "slack" not in self.alerting:
+            return
+
+        thresholds_enabled: Final = AlertType.user_spend_thresholds in self.alert_types
+        anomalies_enabled: Final = AlertType.user_spend_anomalies in self.alert_types
+        if not thresholds_enabled and not anomalies_enabled:
+            return
+
+        if prisma_client is None:
+            from litellm.proxy.proxy_server import prisma_client as global_prisma_client
+
+            prisma_client = global_prisma_client  # rebind-ok: fall back to the proxy's global client
+        if prisma_client is None:
+            return
+
+        from litellm.integrations.SlackAlerting.user_spend_alerts import (
+            evaluate_user_spend,
+            fetch_user_spend_rows,
+        )
+
+        try:
+            today: Final = datetime.datetime.now(datetime.timezone.utc).date()
+            rows: Final = await fetch_user_spend_rows(
+                prisma_client=prisma_client,
+                today=today,
+                baseline_days=self.alerting_args.spend_anomaly_baseline_days,
+            )
+            all_events: Final = tuple(
+                event
+                for row in rows
+                for event in evaluate_user_spend(
+                    row=row,
+                    args=self.alerting_args,
+                    today=today,
+                    thresholds_enabled=thresholds_enabled,
+                    anomalies_enabled=anomalies_enabled,
+                )
+            )
+            cached_flags: Final = await asyncio.gather(
+                *(self.internal_usage_cache.async_get_cache(key=event.cache_key) for event in all_events)
+            )
+            new_events: Final = tuple(event for event, cached in zip(all_events, cached_flags) if not cached)
+            for alert_type in (AlertType.user_spend_thresholds, AlertType.user_spend_anomalies):
+                typed_events = tuple(event for event in new_events if event.alert_type == alert_type)
+                if not typed_events:
+                    continue
+                await self.send_alert(
+                    message="\n\n".join(event.message for event in typed_events),
+                    level="High",
+                    alert_type=alert_type,
+                    alerting_metadata={},  # mutable-ok: send_alert takes a dict payload
+                )
+                for event in typed_events:
+                    await self.internal_usage_cache.async_set_cache(
+                        key=event.cache_key,
+                        value="SENT",
+                        ttl=event.cache_ttl,
+                    )
+        except Exception as e:  # noqa: BLE001  # background job must not crash the scheduler
+            verbose_proxy_logger.exception("Error sending user spend alerts: %s", e)
+
     async def send_fallback_stats_from_prometheus(self):
         """
         Helper to send fallback statistics from prometheus server -> to slack
@@ -1767,7 +2051,7 @@ Model Info:
         try:
             message = f"`{event_name}`\n"
 
-            key_event_dict: Final = key_event.model_dump()
+            key_event_dict: Final[dict[str, object]] = key_event.model_dump()
 
             # Add Created by information first
             message += "*Action Done by:*\n"

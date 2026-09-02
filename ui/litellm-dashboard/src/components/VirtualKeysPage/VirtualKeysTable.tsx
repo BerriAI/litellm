@@ -20,7 +20,7 @@ import { KeyRound } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
 import React, { useCallback, useMemo, useState } from "react";
 
-import { Team } from "../key_team_helpers/key_list";
+import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "../templates/key_info_view";
 import { getKeyTableColumns, KEY_TABLE_HIDDEN_COLUMNS } from "./keyTableColumns";
 
@@ -139,6 +139,16 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
     [organizations],
   );
 
+  const handleSelectedKeyDataUpdate = useCallback(
+    (updated: Partial<KeyResponse>) => {
+      const rotatedToken = updated.token ?? updated.token_id;
+      if (!rotatedToken || rotatedToken === selectedKeyId) return;
+      void setSelectedKeyId(rotatedToken);
+      void refetch();
+    },
+    [refetch, selectedKeyId, setSelectedKeyId],
+  );
+
   const formatFilterValue = useCallback(
     (columnId: string, value: unknown): string => {
       const raw = String(value);
@@ -165,19 +175,20 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
           keyData={selectedKey}
           teams={allTeams}
           onDelete={refetch}
+          onKeyDataUpdate={handleSelectedKeyDataUpdate}
         />
       </div>
     );
   }
 
   return (
-    <div className="flex h-full flex-col gap-4 overflow-hidden py-2">
+    <div className="flex h-full flex-col gap-6 overflow-hidden">
       <PageHeader
-        icon={<KeyRound className="size-5" />}
+        icon={<KeyRound />}
         title="Virtual Keys"
         subtitle="Every key that authenticates requests to the gateway."
+        primaryAction={headerActions}
       />
-      {headerActions}
       <DataTable
         data={keyList}
         columns={columns}

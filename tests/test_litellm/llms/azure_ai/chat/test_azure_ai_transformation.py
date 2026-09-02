@@ -1,13 +1,8 @@
 import json
-import os
-import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 from litellm.llms.azure_ai.azure_model_router.transformation import (
     AzureModelRouterConfig,
 )
@@ -110,15 +105,19 @@ def test_azure_ai_grok_stop_parameter_handling():
     config = AzureAIStudioConfig()
 
     # Test Grok model detection
-    assert config._supports_stop_reason("grok-4-fast") == False
-    assert config._supports_stop_reason("grok-4") == False
-    assert config._supports_stop_reason("grok-3-mini") == False
-    assert config._supports_stop_reason("grok-code-fast") == False
-    assert config._supports_stop_reason("gpt-4") == True
+    assert config._supports_stop_reason("grok-4-fast") is False
+    assert config._supports_stop_reason("grok-4.3") is False
+    assert config._supports_stop_reason("grok-4") is False
+    assert config._supports_stop_reason("grok-3-mini") is False
+    assert config._supports_stop_reason("grok-code-fast") is False
+    assert config._supports_stop_reason("gpt-4") is True
 
     # Test supported parameters for Grok models
-    grok_params = config.get_supported_openai_params("grok-4-fast")
-    assert "stop" not in grok_params, "Grok models should not support stop parameter"
+    for model in ("grok-4-fast", "grok-4.3"):
+        grok_params = config.get_supported_openai_params(model)
+        assert (
+            "stop" not in grok_params
+        ), "Grok models should not support stop parameter"
 
     # Test supported parameters for non-Grok models
     gpt_params = config.get_supported_openai_params("gpt-4")
@@ -202,6 +201,90 @@ def test_azure_model_router_response_shows_actual_model():
     )
 
 
+def test_azure_model_router_stamps_selected_model_on_hidden_params():
+    """
+    The selected model must be stamped on _hidden_params, not left for downstream code to
+    re-derive by looking for "model-router" in the model string. Deployments whose alias
+    does not contain that text are invisible to the string check.
+    """
+    from httpx import Response
+
+    from litellm.llms.azure_ai.common_utils import (
+        AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY,
+        AzureFoundryModelInfo,
+    )
+    from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
+    from litellm.types.utils import ModelResponse
+
+    raw_response_json = {
+        "id": "chatcmpl-test456",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "grok-4-1-fast-reasoning",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "pong"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+
+    mock_response = MagicMock(spec=Response)
+    mock_response.json.return_value = raw_response_json
+    mock_response.text = json.dumps(raw_response_json)
+    mock_response.headers = {}
+
+    logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+    logging_obj.post_call = MagicMock()
+    logging_obj.model_call_details = {}
+
+    result = AzureModelRouterConfig().transform_response(
+        model="smart-pick",
+        raw_response=mock_response,
+        model_response=ModelResponse(),
+        logging_obj=logging_obj,
+        request_data={},
+        messages=[{"role": "user", "content": "Reply with just pong"}],
+        optional_params={},
+        litellm_params={"model": "azure_ai/model_router/smart-pick"},
+        encoding=None,
+        api_key="test-key",
+        json_mode=False,
+    )
+
+    assert result._hidden_params[AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY] == result.model
+    assert (
+        result._hidden_params[AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY]
+        == "azure_ai/grok-4-1-fast-reasoning"
+    )
+    assert AzureFoundryModelInfo.get_model_router_selected_model(
+        result._hidden_params
+    ) == ("azure_ai/grok-4-1-fast-reasoning")
+    assert (
+        AzureFoundryModelInfo.is_model_router_call(
+            model="smart-pick", hidden_params=result._hidden_params
+        )
+        is True
+    )
+
+
+def test_azure_model_router_stamp_does_not_leak_across_responses():
+    """
+    ModelResponse declares _hidden_params as a class-level dict, so the stamp has to be written
+    as a fresh dict. Mutating in place would bleed the selected model into unrelated responses.
+    """
+    from litellm.llms.azure_ai.common_utils import (
+        AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY,
+    )
+    from litellm.types.utils import ModelResponse
+
+    untouched = ModelResponse()
+
+    assert AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY not in (untouched._hidden_params or {})
+
+
 def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
     """
     Regression test: Azure AI returns 400 when tools contain copilot_mcp_server_name.
@@ -262,3 +345,127 @@ def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
         assert "copilot_mcp_server_name" not in tool
     assert result["tools"][0]["type"] == "function"
     assert result["tools"][1]["function"]["name"] == "read_file"
+
+
+def _find_key_anywhere(obj, key: str) -> bool:
+    if isinstance(obj, dict):
+        if key in obj:
+            return True
+        return any(_find_key_anywhere(v, key) for v in obj.values())
+    if isinstance(obj, list):
+        return any(_find_key_anywhere(item, key) for item in obj)
+    return False
+
+
+def test_azure_ai_strips_non_openai_spec_message_fields():
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/33961.
+
+    Azure AI Foundry backends set additionalProperties=false, so any message
+    field outside the OpenAI chat-completions schema causes a 400 "Extra inputs
+    are not permitted". Anthropic-format clients (e.g. Claude Code) echo prior
+    assistant turns back as history carrying thinking_blocks, a nested thought
+    signature at tool_calls[].function.provider_specific_fields, and Anthropic
+    cache_control annotations. transform_request must strip all of these before
+    the request reaches the upstream.
+    """
+    config = AzureAIStudioConfig()
+
+    messages = [
+        {"role": "user", "content": "Read a file."},
+        {
+            "role": "assistant",
+            "content": "I can help.",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "The user wants me to read a file.",
+                    "signature": "",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            "reasoning_content": "The user wants me to read a file.",
+            "provider_specific_fields": {"thought_signature": "sig-top"},
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": "{}",
+                        "provider_specific_fields": {"thought_signature": "sig-nested"},
+                    },
+                }
+            ],
+        },
+        {"role": "user", "content": "go ahead"},
+    ]
+
+    request = config.transform_request(
+        model="fw-glm-5.2",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    transformed_messages = request["messages"]
+
+    assert not _find_key_anywhere(transformed_messages, "thinking_blocks")
+    assert not _find_key_anywhere(transformed_messages, "reasoning_content")
+    assert not _find_key_anywhere(transformed_messages, "provider_specific_fields")
+    assert not _find_key_anywhere(transformed_messages, "cache_control")
+
+    assistant_message = transformed_messages[1]
+    assert assistant_message["content"] == "I can help."
+    assert assistant_message["tool_calls"][0]["function"]["name"] == "read_file"
+
+
+def test_azure_ai_stripping_does_not_mutate_caller_messages():
+    """
+    The stripping must not touch the caller's messages. LiteLLM reuses the same
+    message objects when falling back to another provider, so stripping in place
+    would hand the fallback a conversation history with its thinking blocks and
+    provider metadata already destroyed.
+    """
+    config = AzureAIStudioConfig()
+
+    messages = [
+        {"role": "user", "content": "Read a file."},
+        {
+            "role": "assistant",
+            "content": "I can help.",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "Reading the file.", "signature": "sig"}
+            ],
+            "provider_specific_fields": {"thought_signature": "sig-top"},
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": "{}",
+                        "provider_specific_fields": {"thought_signature": "sig-nested"},
+                    },
+                }
+            ],
+        },
+    ]
+
+    request = config.transform_request(
+        model="fw-glm-5.2",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert not _find_key_anywhere(request["messages"], "thinking_blocks")
+
+    original_assistant = messages[1]
+    assert original_assistant["thinking_blocks"][0]["thinking"] == "Reading the file."
+    assert original_assistant["provider_specific_fields"] == {"thought_signature": "sig-top"}
+    assert original_assistant["tool_calls"][0]["function"]["provider_specific_fields"] == {
+        "thought_signature": "sig-nested"
+    }

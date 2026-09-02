@@ -1,13 +1,11 @@
 import json
-import os
 import stat
-import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 
 from litellm.proxy.client.cli import cli
@@ -17,7 +15,8 @@ from litellm.proxy.client.cli.commands.config import (
     load_config,
     save_config,
 )
-from litellm.proxy.client.cli.commands.private_json import write_private_json
+from litellm.litellm_core_utils.private_json import write_private_json
+from litellm.proxy.client.cli.interface import show_commands
 
 
 @pytest.fixture
@@ -179,6 +178,85 @@ class TestConfigUnset:
         assert "not set" in result.output.lower()
 
 
+class TestHiddenCommands:
+    """`hidden_commands` lets a deployment curate what `lite` advertises.
+
+    Two listings exist and both must honor it: click's own `--help` table and the
+    hand-rolled block the interactive shell prints.
+    """
+
+    def test_nothing_is_hidden_by_default(self, cli_runner, isolated_home):
+        result = cli_runner.invoke(cli, ["--help"])
+
+        assert result.exit_code == 0, result.output
+        assert "codex" in result.output
+        assert "opencode" in result.output
+
+    def test_configured_commands_drop_out_of_help(self, cli_runner, isolated_home):
+        assert cli_runner.invoke(cli, ["config", "set", "hidden_commands", "codex,opencode"]).exit_code == 0
+
+        result = cli_runner.invoke(cli, ["--help"])
+
+        assert result.exit_code == 0, result.output
+        assert "claude" in result.output
+        assert "codex" not in result.output
+        assert "opencode" not in result.output
+
+    def test_configured_commands_drop_out_of_interactive_listing(self, capsys, isolated_home):
+        save_config({"hidden_commands": "codex,keys"})
+
+        show_commands()
+        listing = capsys.readouterr().out
+
+        assert "claude" in listing
+        assert "codex" not in listing
+        assert "keys" not in listing
+        assert "teams" in listing
+
+    def test_hidden_commands_are_still_invokable(self, cli_runner, isolated_home):
+        """Hiding is about the listing only; anyone already scripting the command keeps working."""
+        save_config({"hidden_commands": "codex"})
+
+        with patch("litellm.proxy.client.cli.commands.agents.run_agent") as run_agent_mock:
+            result = cli_runner.invoke(
+                cli,
+                ["--base-url", "http://localhost:4000", "--api-key", "sk-key", "codex", "exec", "do a thing"],
+            )
+
+        assert result.exit_code == 0, result.output
+        _base_url, _api_key, command = run_agent_mock.call_args.args
+        assert list(command) == ["codex", "exec", "do a thing"]
+
+    def test_unset_brings_the_commands_back(self, cli_runner, isolated_home):
+        assert cli_runner.invoke(cli, ["config", "set", "hidden_commands", "codex"]).exit_code == 0
+        assert cli_runner.invoke(cli, ["config", "unset", "hidden_commands"]).exit_code == 0
+
+        assert "codex" in cli_runner.invoke(cli, ["--help"]).output
+
+    def test_set_normalizes_whitespace_and_ordering(self, cli_runner, isolated_home):
+        result = cli_runner.invoke(cli, ["config", "set", "hidden_commands", " opencode , codex ,"])
+
+        assert result.exit_code == 0, result.output
+        assert json.loads(_config_path(isolated_home).read_text()) == {"hidden_commands": "codex,opencode"}
+
+    @pytest.mark.parametrize("value", ["", " ", ",", " , "])
+    def test_set_empty_list_rejected(self, cli_runner, isolated_home, value):
+        """An empty value would silently hide nothing; point users at `config unset` instead."""
+        result = cli_runner.invoke(cli, ["config", "set", "hidden_commands", value])
+
+        assert result.exit_code != 0
+        assert "unset" in result.output
+        assert not _config_path(isolated_home).exists()
+
+    def test_set_space_separated_list_rejected(self, cli_runner, isolated_home):
+        """`lite config set hidden_commands "codex opencode"` would hide neither."""
+        result = cli_runner.invoke(cli, ["config", "set", "hidden_commands", "codex opencode"])
+
+        assert result.exit_code != 0
+        assert "without spaces" in result.output
+        assert not _config_path(isolated_home).exists()
+
+
 class TestConfigHelpers:
     def test_get_config_file_path_under_home(self, isolated_home):
         assert get_config_file_path() == str(isolated_home / ".litellm" / "config.json")
@@ -274,7 +352,7 @@ class TestWritePrivateJson:
         def _interrupt(*args: object, **kwargs: object) -> None:
             raise KeyboardInterrupt()
 
-        monkeypatch.setattr("litellm.proxy.client.cli.commands.private_json.json.dump", _interrupt)
+        monkeypatch.setattr("litellm.litellm_core_utils.private_json.json.dump", _interrupt)
         target = tmp_path / "config.json"
 
         with pytest.raises(KeyboardInterrupt):

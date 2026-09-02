@@ -37,8 +37,12 @@ from litellm.proxy.guardrails.guardrail_hooks.content_text import (
 from litellm.proxy.spend_tracking.compression_savings import HEADROOM_GUARDRAIL_PROVIDER
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, Mode
-from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.integrations.custom_logger import (
+    HEADROOM_CONVERTED_STREAM_KEY,
+    AgenticLoopPlan,
+    AgenticLoopRequestPatch,
+)
+from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -146,6 +150,27 @@ def _restore_protected_messages(
     return [
         messages[index] if index in protected_indices else compressed_by_index[index] for index in range(len(messages))
     ]
+
+
+def _build_compress_failure_detail(status_code: int, body: str) -> dict[str, object]:
+    """Build error details for failed /v1/compress responses.
+
+    Adds troubleshooting hints for known deployment-related errors while
+    preserving the upstream status code and response body.
+    """
+    if status_code == 404:
+        return {
+            "status_code": status_code,
+            "body": body,
+            "hint": (
+                "The Headroom compression endpoint returned HTTP 404. "
+                "Verify that the configured Headroom endpoint is correct and that "
+                "the compression endpoint is available. If you are using a "
+                "self-hosted deployment, some deployments require enabling remote "
+                "compression (for example, HEADROOM_COMPRESS_ALLOW_REMOTE=1)."
+            ),
+        }
+    return {"status_code": status_code, "body": body}
 
 
 def extract_hashes_from_messages(messages: list[dict[str, object]]) -> list[str]:
@@ -318,6 +343,7 @@ def _build_responses_followup_items(
 
 class HeadroomGuardrail(CustomGuardrail):
     records_own_guardrail_information: ClassVar[bool] = True
+    server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset({HEADROOM_RETRIEVE_TOOL_NAME})
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
@@ -407,7 +433,7 @@ class HeadroomGuardrail(CustomGuardrail):
             payload["model"] = model
 
         try:
-            raw_response: HttpxResponse | None = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]
+            raw_response: HttpxResponse = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler.post is untyped
                 url=f"{self.headroom_api_base}/v1/compress",
                 json=payload,
                 headers=self._request_headers(),
@@ -417,7 +443,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 self._handle_compress_failure(
                     messages,
                     "Headroom compression service returned an error",
-                    {"status_code": e.response.status_code, "body": e.response.text},
+                    _build_compress_failure_detail(e.response.status_code, e.response.text),
                 ),
                 False,
                 {},
@@ -432,16 +458,6 @@ class HeadroomGuardrail(CustomGuardrail):
                 False,
                 {},
             )
-        if raw_response is None:
-            return (
-                self._handle_compress_failure(
-                    messages,
-                    "Headroom compression service returned no response",
-                    {},
-                ),
-                False,
-                {},
-            )
         response: Final[HttpxResponse] = raw_response
 
         if response.status_code != 200:
@@ -449,7 +465,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 self._handle_compress_failure(
                     messages,
                     "Headroom compression service returned an error",
-                    {"status_code": response.status_code, "body": response.text},
+                    _build_compress_failure_detail(response.status_code, response.text),
                 ),
                 False,
                 {},
@@ -554,7 +570,7 @@ class HeadroomGuardrail(CustomGuardrail):
             params["query"] = query
 
         try:
-            raw_response: HttpxResponse | None = await self.async_handler.get(  # pyright: ignore[reportUnknownMemberType]
+            raw_response: HttpxResponse = await self.async_handler.get(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler.get is untyped
                 url=f"{self.headroom_api_base}/v1/retrieve/{hash_value}",
                 params=params,
                 headers=self._request_headers(),
@@ -563,7 +579,7 @@ class HeadroomGuardrail(CustomGuardrail):
             verbose_proxy_logger.warning("Headroom: retrieve failed for hash=%s: %s", hash_value, e)
             return f"[Headroom: retrieval failed for hash={hash_value}]"
 
-        if raw_response is None or raw_response.status_code == 404:
+        if raw_response.status_code == 404:
             return f"[Headroom: hash={hash_value} not found or expired]"
 
         if raw_response.status_code != 200:
@@ -691,6 +707,25 @@ class HeadroomGuardrail(CustomGuardrail):
 
         return {**inputs, "structured_messages": compressed, "tools": merged_tools}  # pyright: ignore[reportReturnType]
 
+    async def async_pre_call_deployment_hook(
+        self,
+        kwargs: dict[str, Any],
+        call_type: CallTypes | None,
+    ) -> dict[str, Any] | None:  # mutable-ok: overrides CustomLogger hook whose contract is a plain dict
+        base_result: Final = await super().async_pre_call_deployment_hook(kwargs, call_type)
+        effective: Final = base_result if base_result is not None else kwargs
+        if call_type not in (CallTypes.completion, CallTypes.acompletion):
+            return base_result
+        if not effective.get("stream"):
+            return base_result
+        if not has_headroom_retrieve_tool(effective.get("tools")):
+            return base_result
+        return {  # mutable-ok: the hook contract is a plain dict the router merges into the request kwargs
+            **effective,
+            "stream": False,
+            HEADROOM_CONVERTED_STREAM_KEY: True,
+        }
+
     async def async_should_run_agentic_loop(
         self,
         response: Any,
@@ -718,7 +753,7 @@ class HeadroomGuardrail(CustomGuardrail):
         response: Any,
         anthropic_messages_provider_config: Any,
         anthropic_messages_optional_request_params: dict,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj | None,
         stream: bool,
         kwargs: dict,
     ) -> AgenticLoopPlan:

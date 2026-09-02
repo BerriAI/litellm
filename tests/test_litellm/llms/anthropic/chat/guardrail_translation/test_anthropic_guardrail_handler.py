@@ -6,16 +6,11 @@ with guardrail transformations, specifically testing edge cases with empty choic
 """
 
 import json
-import os
-import sys
 from typing import Any, Literal, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.anthropic.chat.guardrail_translation.handler import (
@@ -74,6 +69,90 @@ class MockRecordingGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         self.request_data = request_data
         return inputs
+
+
+class MockMaskingGuardrail(CustomGuardrail):
+    """Capture request inputs and mask one known prohibited value."""
+
+    def __init__(self, skip_system_message_in_guardrail: Optional[bool] = True):
+        super().__init__(guardrail_name="masking-test")
+        self.skip_system_message_in_guardrail = skip_system_message_in_guardrail
+        self.inputs: Optional[GenericGuardrailAPIInputs] = None
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.inputs = inputs.copy()
+        masked_inputs = inputs.copy()
+        masked_inputs["texts"] = [
+            "[MASKED]" if text == "prohibited correction" else text for text in inputs.get("texts", [])
+        ]
+        return masked_inputs
+
+
+class MockCompactingGuardrail(CustomGuardrail):
+    """Stand in for a compaction guardrail that rewrites `structured_messages` wholesale."""
+
+    def __init__(self, replacement_messages: list):
+        super().__init__(guardrail_name="compacting-test")
+        self.replacement_messages = replacement_messages
+        self.inputs: Optional[GenericGuardrailAPIInputs] = None
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.inputs = inputs.copy()
+        rewritten = inputs.copy()
+        # A new list object -- this is what signals a rewrite to the handler.
+        rewritten["structured_messages"] = list(self.replacement_messages)
+        return rewritten
+
+
+class MockStructuredMaskingGuardrail(CustomGuardrail):
+    """Mask an email in texts and in a rebuilt structured view, like a PII-masking guardrail (LIT-5696)."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="structured-masking-test")
+
+    @staticmethod
+    def _mask(text: str) -> str:
+        return text.replace("bob@example.com", "<EMAIL>")
+
+    def _mask_content(self, content: object) -> object:
+        if isinstance(content, str):
+            return self._mask(content)
+        if not isinstance(content, list):
+            return content
+        return [
+            {**block, "text": self._mask(block["text"])}
+            if isinstance(block, dict) and isinstance(block.get("text"), str)
+            else block
+            for block in content
+        ]
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        masked = inputs.copy()
+        masked["texts"] = [self._mask(text) for text in inputs.get("texts", [])]
+        structured = inputs.get("structured_messages")
+        if structured is not None:
+            masked["structured_messages"] = [
+                {**message, "content": self._mask_content(message.get("content"))} for message in structured
+            ]
+        return masked
 
 
 class TestAnthropicMessagesHandlerStreamingRequestData:
@@ -210,6 +289,800 @@ class TestAnthropicMessagesHandlerInputProcessing:
 
         assert data.get("litellm_metadata", {}).get("guardrails")
         assert guardrail.dynamic_params == {"policy_id": "policy-123"}
+
+    @pytest.mark.asyncio
+    async def test_provider_native_tools_survive_guardrail_round_trip(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+        data = {
+            "model": "gemini-2.5-flash",
+            "messages": [{"role": "user", "content": "coffee shops near Union Square?"}],
+            "tools": [
+                {"googleMaps": {"enable_widget": True}},
+                {"name": "get_weather", "input_schema": {"type": "object", "properties": {}}},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert {"googleMaps": {"enable_widget": True}} in data["tools"]
+        assert [tool["name"] for tool in data["tools"] if "name" in tool] == ["get_weather"]
+
+    @pytest.mark.asyncio
+    async def test_midturn_system_correction_is_guardrailed_when_top_level_system_is_skipped(
+        self,
+    ):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockMaskingGuardrail()
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "system": "trusted top-level system prompt",
+            "messages": [
+                {"role": "user", "content": "safe text"},
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "unsupported", "text": "discarded text"},
+                        {"type": "text", "text": "prohibited correction"},
+                    ],
+                },
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["texts"] == ["safe text", "prohibited correction"]
+        assert "trusted top-level system prompt" not in guardrail.inputs["texts"]
+        assert data["messages"][1]["content"][0]["text"] == "discarded text"
+        assert data["messages"][1]["content"][1]["text"] == "[MASKED]"
+
+    @pytest.mark.asyncio
+    async def test_string_midturn_system_correction_is_guardrailed(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockMaskingGuardrail()
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [{"role": "system", "content": "prohibited correction"}],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["texts"] == ["prohibited correction"]
+        assert data["messages"][0]["content"] == "[MASKED]"
+
+    @pytest.mark.asyncio
+    async def test_unsupported_midturn_system_content_is_not_guardrailed(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockMaskingGuardrail()
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": [{"type": "image", "source": {"type": "url"}}],
+                }
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.inputs is None
+
+    @pytest.mark.asyncio
+    async def test_skip_system_message_excludes_only_hoisted_top_level_system(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockMaskingGuardrail()
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "system": "trusted top-level system prompt",
+            "messages": [
+                {"role": "user", "content": "safe text"},
+                {"role": "system", "content": "prohibited correction"},
+                {"role": "user", "content": "continue"},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.inputs is not None
+        structured = guardrail.inputs["structured_messages"]
+        assert [m["role"] for m in structured] == ["user", "system", "user"]
+        assert structured[1]["content"] == "prohibited correction"
+
+    @pytest.mark.asyncio
+    async def test_default_skip_false_scans_midturn_system_and_hoists_top_level_system(
+        self,
+    ):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockMaskingGuardrail(skip_system_message_in_guardrail=None)
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "system": "trusted top-level system prompt",
+            "messages": [
+                {"role": "user", "content": "safe text"},
+                {"role": "system", "content": "prohibited correction"},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["texts"] == ["safe text", "prohibited correction"]
+        structured = guardrail.inputs["structured_messages"]
+        assert [m["role"] for m in structured] == ["system", "user", "system"]
+        assert structured[0]["content"] == "trusted top-level system prompt"
+        assert data["messages"][1]["content"] == "[MASKED]"
+
+    @pytest.mark.asyncio
+    async def test_bedrock_masking_slice_is_unavailable_when_top_level_system_is_included(
+        self,
+    ):
+        from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
+            BedrockGuardrail,
+        )
+
+        handler = AnthropicMessagesHandler()
+        guardrail = MockMaskingGuardrail(skip_system_message_in_guardrail=None)
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "system": "trusted top-level system prompt",
+            "messages": [
+                {"role": "user", "content": "safe text"},
+                {"role": "system", "content": "prohibited correction"},
+                {"role": "user", "content": "latest question"},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.inputs is not None
+        texts = guardrail.inputs["texts"]
+        structured = guardrail.inputs["structured_messages"]
+
+        bedrock = BedrockGuardrail(guardrailIdentifier="gi", guardrailVersion="1")
+        assert sum(bedrock._count_message_texts(m) for m in structured) == len(texts) + 1
+        latest_user_index = bedrock._find_latest_message_index(structured, target_role="user")
+        assert (
+            bedrock._locate_message_texts_slice(
+                structured_messages=structured,
+                target_index=latest_user_index,
+                texts=texts,
+            )
+            is None
+        )
+        assert (
+            bedrock._merge_masked_texts(
+                masked_texts=["{MASKED}"],
+                texts=texts,
+                scanned_slice=None,
+                scanned_role_subset=True,
+            )
+            == texts
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("skip_system_message_in_guardrail", [True, None])
+    async def test_midturn_system_text_extraction_matches_translation_in_both_skip_modes(
+        self,
+        skip_system_message_in_guardrail: Optional[bool],
+    ):
+        from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
+            BedrockGuardrail,
+        )
+
+        handler = AnthropicMessagesHandler()
+        guardrail = MockMaskingGuardrail(skip_system_message_in_guardrail=skip_system_message_in_guardrail)
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [
+                {"role": "user", "content": "safe text"},
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": ""},
+                        {"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}},
+                        {"type": "text", "text": "prohibited correction"},
+                    ],
+                },
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.inputs is not None
+        texts = guardrail.inputs["texts"]
+        structured = guardrail.inputs["structured_messages"]
+        assert texts == ["safe text", "prohibited correction"]
+        bedrock = BedrockGuardrail(guardrailIdentifier="gi", guardrailVersion="1")
+        assert sum(bedrock._count_message_texts(m) for m in structured) == len(texts)
+        assert data["messages"][1]["content"][2]["text"] == "[MASKED]"
+
+    @pytest.mark.asyncio
+    async def test_bedrock_masking_slice_stays_aligned_with_midturn_system(self):
+        from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
+            BedrockGuardrail,
+        )
+
+        handler = AnthropicMessagesHandler()
+        guardrail = MockMaskingGuardrail()
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "system": "trusted top-level system prompt",
+            "messages": [
+                {"role": "user", "content": "safe text"},
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "prohibited correction"},
+                        {"type": "text", "text": "second correction"},
+                    ],
+                },
+                {"role": "user", "content": "latest question"},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.inputs is not None
+        texts = guardrail.inputs["texts"]
+        structured = guardrail.inputs["structured_messages"]
+
+        bedrock = BedrockGuardrail(guardrailIdentifier="gi", guardrailVersion="1")
+        total = sum(bedrock._count_message_texts(m) for m in structured)
+        assert total == len(texts)
+
+        latest_user_index = bedrock._find_latest_message_index(structured, target_role="user")
+        assert latest_user_index == 2
+        scanned_slice = bedrock._locate_message_texts_slice(
+            structured_messages=structured,
+            target_index=latest_user_index,
+            texts=texts,
+        )
+        assert scanned_slice == (3, 1)
+
+        merged = bedrock._merge_masked_texts(
+            masked_texts=["{MASKED}"],
+            texts=texts,
+            scanned_slice=scanned_slice,
+            scanned_role_subset=True,
+        )
+        assert merged == [
+            "safe text",
+            "prohibited correction",
+            "second correction",
+            "{MASKED}",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_compaction_rewrite_keeps_midturn_system_messages(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockCompactingGuardrail(
+            replacement_messages=[
+                {"role": "user", "content": "compacted history"},
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": "use the corrected result"}],
+                },
+                {"role": "user", "content": "continue"},
+            ]
+        )
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "system": "trusted top-level system prompt",
+            "messages": [
+                {"role": "user", "content": "original history"},
+                {"role": "system", "content": "use the corrected result"},
+                {"role": "user", "content": "continue"},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [m["role"] for m in data["messages"]] == ["user", "system", "user"]
+        assert data["messages"][1]["content"] == [{"type": "text", "text": "use the corrected result"}]
+        assert data["messages"][0]["content"] == [{"type": "text", "text": "compacted history"}]
+        assert data["messages"][2]["content"] == [{"type": "text", "text": "continue"}]
+        assert data["system"] == "trusted top-level system prompt"
+
+    @pytest.mark.asyncio
+    async def test_midturn_system_inside_tool_exchange_keeps_the_pair_intact(self):
+        """A system row between an assistant tool call and its result must not split the
+        exchange into orphaned halves; it is emitted right after the exchange instead."""
+        handler = AnthropicMessagesHandler()
+        guardrail = MockCompactingGuardrail(
+            replacement_messages=[
+                {"role": "user", "content": "run the tool"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {"role": "system", "content": "use the corrected result"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+            ]
+        )
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [
+                {"role": "user", "content": "run the tool"},
+                {"role": "system", "content": "use the corrected result"},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [m["role"] for m in data["messages"]] == ["user", "assistant", "user", "system"]
+        assistant_blocks = data["messages"][1]["content"]
+        assert any(block.get("type") == "tool_use" and block.get("id") == "call_1" for block in assistant_blocks)
+        result_blocks = data["messages"][2]["content"]
+        assert [block["type"] for block in result_blocks] == ["tool_result"]
+        assert result_blocks[0]["tool_use_id"] == "call_1"
+        assert data["messages"][3]["content"] == "use the corrected result"
+
+    @pytest.mark.asyncio
+    async def test_compaction_rewrite_does_not_duplicate_hoisted_top_level_system(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockCompactingGuardrail(
+            replacement_messages=[
+                {"role": "system", "content": "trusted top-level system prompt"},
+                {"role": "user", "content": "compacted history"},
+                {"role": "system", "content": "use the corrected result"},
+            ]
+        )
+        guardrail.skip_system_message_in_guardrail = None
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "system": "trusted top-level system prompt",
+            "messages": [
+                {"role": "user", "content": "original history"},
+                {"role": "system", "content": "use the corrected result"},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [m["role"] for m in data["messages"]] == ["user", "system"]
+        assert data["messages"][1]["content"] == "use the corrected result"
+        assert data["system"] == "trusted top-level system prompt"
+
+    @pytest.mark.asyncio
+    async def test_leading_system_row_appends_to_skipped_top_level_system(
+        self,
+    ):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockCompactingGuardrail(
+            replacement_messages=[
+                {"role": "system", "content": "use the corrected result"},
+                {"role": "user", "content": "compacted history"},
+            ]
+        )
+        guardrail.skip_system_message_in_guardrail = True
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "system": "trusted top-level system prompt",
+            "messages": [
+                {"role": "system", "content": "use the corrected result"},
+                {"role": "user", "content": "original history"},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [m["role"] for m in data["messages"]] == ["user"]
+        assert data["system"] == [
+            {"type": "text", "text": "trusted top-level system prompt"},
+            {"type": "text", "text": "use the corrected result"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_leading_correction_appends_when_top_level_system_hoists_nothing(
+        self,
+    ):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockCompactingGuardrail(
+            replacement_messages=[
+                {"role": "system", "content": "use the corrected result"},
+                {"role": "user", "content": "compacted history"},
+            ]
+        )
+        guardrail.skip_system_message_in_guardrail = None
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "system": [{"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}}],
+            "messages": [
+                {"role": "system", "content": "use the corrected result"},
+                {"role": "user", "content": "original history"},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [m["role"] for m in data["messages"]] == ["user"]
+        assert data["system"] == [
+            {"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}},
+            {"type": "text", "text": "use the corrected result"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_leading_correction_replaces_top_level_system_when_hoisted_prompt_is_dropped(
+        self,
+    ):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockCompactingGuardrail(
+            replacement_messages=[
+                {"role": "system", "content": "CLIENT CORRECTION"},
+                {"role": "user", "content": "compacted history"},
+            ]
+        )
+        guardrail.skip_system_message_in_guardrail = None
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "system": "TRUSTED",
+            "messages": [
+                {"role": "system", "content": "CLIENT CORRECTION"},
+                {"role": "user", "content": "original history"},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["structured_messages"][0] == {
+            "role": "system",
+            "content": "TRUSTED",
+        }
+        assert [m["role"] for m in data["messages"]] == ["user"]
+        assert data["system"] == [{"type": "text", "text": "CLIENT CORRECTION"}]
+
+    @pytest.mark.asyncio
+    async def test_masked_hoisted_system_folds_into_top_level_system(self):
+        """LIT-5696: a guardrail-modified top-level prompt must go back through the system
+        param; emitting it as messages[0] is rejected by Anthropic, dropping it leaks the
+        unmasked original."""
+        handler = AnthropicMessagesHandler()
+        guardrail = MockStructuredMaskingGuardrail()
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "system": [{"type": "text", "text": "You are helpful. The admin is bob@example.com."}],
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert data["system"] == [{"type": "text", "text": "You are helpful. The admin is <EMAIL>."}]
+        assert [m["role"] for m in data["messages"]] == ["user"]
+
+    @pytest.mark.asyncio
+    async def test_client_leading_system_row_folds_into_top_level_system(self):
+        """LIT-5696: a client-sent leading system row folds into the system param instead of
+        being sent back as messages[0], which Anthropic rejects."""
+        handler = AnthropicMessagesHandler()
+        guardrail = MockStructuredMaskingGuardrail()
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [
+                {"role": "system", "content": [{"type": "text", "text": "You are helpful."}]},
+                {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert data["system"] == [{"type": "text", "text": "You are helpful."}]
+        assert [m["role"] for m in data["messages"]] == ["user"]
+
+    @pytest.mark.asyncio
+    async def test_masked_midturn_system_after_user_stays_in_messages(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockStructuredMaskingGuardrail()
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "system": [{"type": "text", "text": "You are helpful. The admin is bob@example.com."}],
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+                {"role": "system", "content": [{"type": "text", "text": "Mid-turn: admin bob@example.com"}]},
+                {"role": "user", "content": [{"type": "text", "text": "next"}]},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert data["system"] == [{"type": "text", "text": "You are helpful. The admin is <EMAIL>."}]
+        assert [m["role"] for m in data["messages"]] == ["user", "assistant", "system", "user"]
+        assert data["messages"][2]["content"] == [{"type": "text", "text": "Mid-turn: admin <EMAIL>"}]
+
+    @pytest.mark.asyncio
+    async def test_unmodified_structured_copy_leaves_top_level_system_untouched(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockStructuredMaskingGuardrail()
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "system": "You are helpful.",
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert data["system"] == "You are helpful."
+        assert [m["role"] for m in data["messages"]] == ["user"]
+
+    @pytest.mark.asyncio
+    async def test_compaction_rewrite_drops_hoisted_prompt_matched_by_content_copy(self):
+        import json
+
+        handler = AnthropicMessagesHandler()
+        guardrail = MockCompactingGuardrail(
+            replacement_messages=[
+                json.loads(json.dumps({"role": "system", "content": "TRUSTED"})),
+                {"role": "user", "content": "compacted history"},
+                {"role": "system", "content": "CLIENT CORRECTION"},
+            ]
+        )
+        guardrail.skip_system_message_in_guardrail = None
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "system": "TRUSTED",
+            "messages": [
+                {"role": "user", "content": "original history"},
+                {"role": "system", "content": "CLIENT CORRECTION"},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [m["role"] for m in data["messages"]] == ["user", "system"]
+        assert data["messages"][1]["content"] == "CLIENT CORRECTION"
+        assert data["system"] == "TRUSTED"
+
+    @pytest.mark.asyncio
+    async def test_compaction_rewrite_preserves_cache_control_on_system_blocks(self):
+        """
+        `cache_control` on an in-sequence system text block survives the write-back, and is
+        copied rather than aliased into the guardrail's own returned list.
+        """
+        handler = AnthropicMessagesHandler()
+        source_cache_control = {"type": "ephemeral"}
+        guardrail = MockCompactingGuardrail(
+            replacement_messages=[
+                {"role": "user", "content": "compacted history"},
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "use the corrected result",
+                            "cache_control": source_cache_control,
+                        }
+                    ],
+                },
+            ]
+        )
+        guardrail.skip_system_message_in_guardrail = True
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [
+                {"role": "user", "content": "original history"},
+                {"role": "system", "content": "use the corrected result"},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert data["messages"][1]["content"] == [
+            {
+                "type": "text",
+                "text": "use the corrected result",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        assert data["messages"][1]["content"][0]["cache_control"] is not source_cache_control
+
+    @pytest.mark.asyncio
+    async def test_compaction_rewrite_rstrips_trailing_assistant_in_each_run(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockCompactingGuardrail(
+            replacement_messages=[
+                {"role": "user", "content": "compacted history"},
+                {"role": "assistant", "content": "earlier  "},
+                {"role": "system", "content": "use the corrected result"},
+                {"role": "user", "content": "continue"},
+                {"role": "assistant", "content": "prefill  "},
+            ]
+        )
+        guardrail.skip_system_message_in_guardrail = True
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [
+                {"role": "user", "content": "original history"},
+                {"role": "system", "content": "use the corrected result"},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [m["role"] for m in data["messages"]] == [
+            "user",
+            "assistant",
+            "system",
+            "user",
+            "assistant",
+        ]
+        assert data["messages"][1]["content"] == [{"type": "text", "text": "earlier"}]
+        assert data["messages"][-1]["content"] == [{"type": "text", "text": "prefill"}]
+
+    @pytest.mark.asyncio
+    async def test_compaction_rewrite_drops_text_free_system_message(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockCompactingGuardrail(
+            replacement_messages=[
+                {"role": "user", "content": "compacted history"},
+                {"role": "system", "content": [{"type": "text", "text": ""}]},
+                {"role": "system", "content": ""},
+                {"role": "user", "content": "continue"},
+            ]
+        )
+        guardrail.skip_system_message_in_guardrail = True
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [
+                {"role": "user", "content": "original history"},
+                {"role": "system", "content": "use the corrected result"},
+                {"role": "user", "content": "continue"},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [m["role"] for m in data["messages"]] == ["user", "user"]
+        assert data["messages"][0]["content"] == [{"type": "text", "text": "compacted history"}]
+        assert data["messages"][1]["content"] == [{"type": "text", "text": "continue"}]
+
+    @pytest.mark.asyncio
+    async def test_noncanonical_system_role_casing_is_still_scanned(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockMaskingGuardrail()
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [
+                {"role": "user", "content": "safe text"},
+                {"role": "System", "content": "prohibited correction"},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.inputs is not None
+        assert "prohibited correction" in guardrail.inputs["texts"]
+        assert data["messages"][1]["content"] == "[MASKED]"
+
+    @pytest.mark.asyncio
+    async def test_midturn_system_keeps_tool_result_turns_aligned_for_masking(self):
+        """Tool-result texts are scanned (LIT-5251), so counts align and the latest-user
+        masking slice is locatable; a mid-turn system entry only shifts it by its own text."""
+        from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
+            BedrockGuardrail,
+        )
+
+        handler = AnthropicMessagesHandler()
+        bedrock = BedrockGuardrail(guardrailIdentifier="gi", guardrailVersion="1")
+        tool_loop = [
+            {"role": "user", "content": "call the tool"},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "tu_1", "name": "get", "input": {"a": 1}}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tu_1",
+                        "content": [{"type": "text", "text": "tool output"}],
+                    }
+                ],
+            },
+        ]
+
+        async def _slice_for(messages: list):
+            guardrail = MockMaskingGuardrail()
+            data = {"model": "claude-3-5-sonnet-20241022", "messages": messages}
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+            assert guardrail.inputs is not None
+            texts = guardrail.inputs["texts"]
+            structured = guardrail.inputs["structured_messages"]
+            target_index = bedrock._find_latest_message_index(structured, target_role="user")
+            return (
+                sum(bedrock._count_message_texts(m) for m in structured) - len(texts),
+                bedrock._locate_message_texts_slice(
+                    structured_messages=structured,
+                    target_index=target_index,
+                    texts=texts,
+                ),
+            )
+
+        with_system = await _slice_for(
+            tool_loop
+            + [
+                {"role": "system", "content": "use the corrected result"},
+                {"role": "user", "content": "latest question"},
+            ]
+        )
+        without_system = await _slice_for(tool_loop + [{"role": "user", "content": "latest question"}])
+
+        assert with_system == (0, (3, 1))
+        assert without_system == (0, (2, 1))
+
+    @pytest.mark.asyncio
+    async def test_compaction_rewrite_to_only_system_messages_is_rejected(self):
+        import litellm
+
+        handler = AnthropicMessagesHandler()
+        guardrail = MockCompactingGuardrail(
+            replacement_messages=[{"role": "system", "content": "use the corrected result"}]
+        )
+        guardrail.skip_system_message_in_guardrail = True
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [
+                {"role": "user", "content": "original history"},
+                {"role": "system", "content": "use the corrected result"},
+            ],
+        }
+
+        with patch.object(litellm, "modify_params", False):
+            with pytest.raises(litellm.BadRequestError, match="at least one non-system message"):
+                await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    @pytest.mark.asyncio
+    async def test_compaction_rewrite_to_only_system_messages_repaired_with_modify_params(
+        self,
+    ):
+        import litellm
+
+        handler = AnthropicMessagesHandler()
+        guardrail = MockCompactingGuardrail(
+            replacement_messages=[{"role": "system", "content": "use the corrected result"}]
+        )
+        guardrail.skip_system_message_in_guardrail = True
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [
+                {"role": "user", "content": "original history"},
+                {"role": "system", "content": "use the corrected result"},
+            ],
+        }
+
+        with patch.object(litellm, "modify_params", True):
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert data["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Please continue."}]}]
+        assert data["system"] == [{"type": "text", "text": "use the corrected result"}]
+
+    @pytest.mark.asyncio
+    async def test_compaction_rewrite_without_system_messages_is_unchanged(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockCompactingGuardrail(replacement_messages=[{"role": "user", "content": "compacted history"}])
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [
+                {"role": "user", "content": "a"},
+                {"role": "assistant", "content": "b"},
+                {"role": "user", "content": "c"},
+            ],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert data["messages"] == [{"role": "user", "content": [{"type": "text", "text": "compacted history"}]}]
 
     @pytest.mark.asyncio
     async def test_process_output_streaming_response_empty_choices(self):
@@ -597,7 +1470,7 @@ class TestAnthropicMessagesIncrementalScan:
             assert "Thanks, summarize the result." in scanned
 
 
-class MockMaskingGuardrail(CustomGuardrail):
+class MockCanaryMaskingGuardrail(CustomGuardrail):
     """Records every text handed to it and masks a canary token in place."""
 
     def __init__(self, guardrail_name: str = "mask-canary"):
@@ -617,6 +1490,92 @@ class MockMaskingGuardrail(CustomGuardrail):
         return inputs
 
 
+class TestAnthropicMessagesImageSources:
+    """An Anthropic image block has three source shapes (`AnthropicMessagesImageParam.source`).
+
+    Only the base64 one carries "data", so reading that key alone drops url images
+    entirely -- for every guardrail consuming GenericGuardrailAPIInputs["images"],
+    not just Bedrock.
+    """
+
+    def _data(self, messages):
+        return {"model": "claude-sonnet-4-5", "messages": messages}
+
+    async def _images_seen(self, content) -> list[str]:
+        handler = AnthropicMessagesHandler()
+
+        class ImageRecordingGuardrail(MockCanaryMaskingGuardrail):
+            def __init__(self):
+                super().__init__()
+                self.seen_images: list[str] = []  # mutable-ok: accumulator for the assertion
+
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                self.seen_images.extend(inputs.get("images") or [])
+                return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+
+        guardrail = ImageRecordingGuardrail()
+        # The text block is what gets the guardrail invoked at all: a message with
+        # no text gives the handler nothing to scan, so it never reaches the
+        # guardrail and every source shape would look equally "dropped".
+        await handler.process_input_messages(
+            data=self._data([{"role": "user", "content": [{"type": "text", "text": "describe it"}, *content]}]),
+            guardrail_to_apply=guardrail,
+        )
+        return guardrail.seen_images
+
+    @pytest.mark.asyncio
+    async def test_url_source_reaches_the_guardrail(self):
+        """A url source has no "data" key, so it used to yield nothing at all."""
+        seen = await self._images_seen(
+            [{"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}}]
+        )
+
+        assert seen == ["https://example.com/a.png"]
+
+    @pytest.mark.asyncio
+    async def test_base64_source_carries_its_media_type(self):
+        """Bare base64 leaves the consumer no way to recover the format.
+
+        An API like Bedrock's ApplyGuardrail needs it to build the request, so the
+        media_type travels with the payload as a data URI.
+        """
+        seen = await self._images_seen(
+            [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}}]
+        )
+
+        assert seen == ["data:image/png;base64,AAAA"]
+
+    @pytest.mark.asyncio
+    async def test_base64_source_without_a_media_type_is_passed_through(self):
+        """There is no format to attach, so the payload goes through unchanged."""
+        seen = await self._images_seen([{"type": "image", "source": {"type": "base64", "data": "AAAA"}}])
+
+        assert seen == ["AAAA"]
+
+    @pytest.mark.asyncio
+    async def test_file_source_yields_nothing(self):
+        """The bytes live behind the Files API and this extractor has no client.
+
+        Documented as a known gap rather than silently handed on as a file_id string,
+        which a consumer would try to decode as an image.
+        """
+        seen = await self._images_seen([{"type": "image", "source": {"type": "file", "file_id": "file_abc"}}])
+
+        assert seen == []
+
+    @pytest.mark.asyncio
+    async def test_a_malformed_source_is_dropped_rather_than_passed_on(self):
+        seen = await self._images_seen(
+            [
+                {"type": "image", "source": {"type": "base64"}},
+                {"type": "image", "source": {"type": "url"}},
+                {"type": "image", "source": {"type": "base64", "data": ""}},
+            ]
+        )
+
+        assert seen == []
+
+
 class TestAnthropicMessagesToolResultScanning:
     """LIT-5251: tool_result blocks carry whatever a client's local tool fetched, so
     they are the request-path payload an indirect prompt injection actually arrives in.
@@ -629,7 +1588,7 @@ class TestAnthropicMessagesToolResultScanning:
     @pytest.mark.asyncio
     async def test_string_form_tool_result_is_scanned_and_written_back(self):
         handler = AnthropicMessagesHandler()
-        guardrail = MockMaskingGuardrail()
+        guardrail = MockCanaryMaskingGuardrail()
         messages = [
             {"role": "user", "content": "fetch the page"},
             {
@@ -652,7 +1611,7 @@ class TestAnthropicMessagesToolResultScanning:
     @pytest.mark.asyncio
     async def test_list_form_tool_result_is_scanned_and_written_back(self):
         handler = AnthropicMessagesHandler()
-        guardrail = MockMaskingGuardrail()
+        guardrail = MockCanaryMaskingGuardrail()
         messages = [
             {"role": "user", "content": "fetch the page"},
             {
@@ -683,7 +1642,7 @@ class TestAnthropicMessagesToolResultScanning:
         """The write-back is positional, so a single mis-indexed target silently
         writes one message's masked text over another's."""
         handler = AnthropicMessagesHandler()
-        guardrail = MockMaskingGuardrail()
+        guardrail = MockCanaryMaskingGuardrail()
         messages = [
             {"role": "user", "content": "plain POISON string"},
             {
@@ -713,7 +1672,7 @@ class TestAnthropicMessagesToolResultScanning:
     async def test_image_inside_tool_result_is_collected(self):
         handler = AnthropicMessagesHandler()
 
-        class ImageRecordingGuardrail(MockMaskingGuardrail):
+        class ImageRecordingGuardrail(MockCanaryMaskingGuardrail):
             def __init__(self):
                 super().__init__()
                 self.seen_images: list[str] = []
@@ -746,7 +1705,7 @@ class TestAnthropicMessagesToolResultScanning:
     @pytest.mark.asyncio
     async def test_tool_result_is_skipped_when_guardrail_skips_tool_messages(self):
         handler = AnthropicMessagesHandler()
-        guardrail = MockMaskingGuardrail()
+        guardrail = MockCanaryMaskingGuardrail()
         guardrail.skip_tool_message_in_guardrail = True
         messages = [
             {"role": "user", "content": "keep me POISON"},
@@ -763,7 +1722,7 @@ class TestAnthropicMessagesToolResultScanning:
         assert messages[0]["content"] == "keep me [BLOCKED]"
 
 
-class InputsRecordingGuardrail(MockMaskingGuardrail):
+class InputsRecordingGuardrail(MockCanaryMaskingGuardrail):
     def __init__(self):
         super().__init__(guardrail_name="scan-only-capture")
         self.captured_inputs: Optional[GenericGuardrailAPIInputs] = None
@@ -963,3 +1922,72 @@ class TestAnthropicMessagesScanOnlyToolResults:
 
         assert guardrail.captured_inputs is not None
         assert guardrail.captured_inputs.get("images") == ["TOOL_IMG"]
+
+
+class TestStructuredWriteBackKeepsToolResults:
+    """A guardrail rewrite must never leave a tool_use without its tool_result (Claude Code ToolSearch, LIT-6103)."""
+
+    @staticmethod
+    def _claude_code_tool_search_turns(tool_result_content):
+        return [
+            {"role": "user", "content": "load WebFetch for bob@example.com"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_01",
+                        "name": "ToolSearch",
+                        "input": {"query": "select:WebFetch"},
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_01", "content": tool_result_content},
+                    {"type": "text", "text": "Now fetch the page."},
+                ],
+            },
+        ]
+
+    @staticmethod
+    def _blocks(message):
+        return message["content"] if isinstance(message["content"], list) else []
+
+    @pytest.mark.parametrize(
+        ("tool_result_content", "expected_written_back_content"),
+        [
+            (
+                [{"type": "tool_reference", "tool_name": "WebFetch"}],
+                [{"type": "tool_reference", "tool_name": "WebFetch"}],
+            ),
+            ([], ""),
+        ],
+        ids=["tool_reference", "empty"],
+    )
+    async def test_tool_result_stays_right_after_its_tool_use(
+        self, tool_result_content, expected_written_back_content
+    ):
+        handler = AnthropicMessagesHandler()
+        data = {"model": "claude-fable-5", "messages": self._claude_code_tool_search_turns(tool_result_content)}
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=MockStructuredMaskingGuardrail())
+
+        serialized = json.dumps(data["messages"])
+        assert "bob@example.com" not in serialized
+        assert "<EMAIL>" in serialized
+
+        messages = data["messages"]
+        tool_use_index = next(
+            i for i, m in enumerate(messages) if any(b.get("type") == "tool_use" for b in self._blocks(m))
+        )
+        answer = messages[tool_use_index + 1]
+        assert answer["role"] == "user"
+        assert answer["content"][0] == {
+            "type": "tool_result",
+            "tool_use_id": "toolu_01",
+            "content": expected_written_back_content,
+        }
+        later_blocks = [b for m in messages[tool_use_index + 1 :] for b in self._blocks(m)]
+        assert {"type": "text", "text": "Now fetch the page."} in later_blocks
