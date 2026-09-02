@@ -10,7 +10,7 @@ import pytest
 import litellm
 from litellm.integrations.langfuse import langfuse as langfuse_module
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
-from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id
+from litellm.integrations.langfuse.langfuse_sdk import _lifecycle_state, resolve_trace_id
 
 
 # Import LangfuseUsageDetails directly from the module where it's defined
@@ -1384,6 +1384,34 @@ def _steering_logger():
     )
     logger.langfuse_sdk_version = installed_langfuse_version()
     return logger, exporter
+
+
+def test_log_event_holds_a_client_lease_during_export():
+    logger, _ = _steering_logger()
+    state = _lifecycle_state(logger.Langfuse)
+
+    def assert_lease_is_active(**_: object) -> tuple[str, str]:
+        assert state.active_leases == 1
+        return "trace-id", "generation-id"
+
+    now = datetime.datetime.now()
+    with patch.object(logger, "_log_langfuse_v2", side_effect=assert_lease_is_active):
+        returned = logger.log_event_on_langfuse(
+            kwargs={
+                "call_type": "completion",
+                "litellm_params": {"metadata": {}},
+                "messages": [{"role": "user", "content": "the-input"}],
+                "optional_params": {},
+            },
+            response_obj=litellm.ModelResponse(
+                choices=[{"message": {"role": "assistant", "content": "the-output"}}]
+            ),
+            start_time=now,
+            end_time=now,
+        )
+
+    assert returned == {"trace_id": "trace-id", "generation_id": "generation-id"}
+    assert state.active_leases == 0
 
 
 def _emit(rig, *, metadata=None, headers=None):

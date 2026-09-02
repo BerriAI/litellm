@@ -6,6 +6,7 @@ call would otherwise record its own duration instead of the call's.
 """
 
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 
 import opentelemetry.trace as otel_trace
@@ -25,9 +26,12 @@ from litellm.integrations.langfuse.langfuse_sdk import (
     AS_ROOT_ATTRIBUTE,
     PUBLIC_ATTRIBUTE,
     RELEASE_ATTRIBUTE,
+    _lifecycle_state,
     _litellm_built_providers,
+    _teardown_langfuse_client,
     build_isolated_tracer_provider,
     evict_stale_langfuse_resources,
+    lease_langfuse_client,
     open_trace_context,
     register_langfuse_client,
     resolve_observation_id,
@@ -102,7 +106,12 @@ def test_guardrail_span_with_float_timestamps_does_not_break_the_generation(clie
     context, claim_root = open_trace_context(client=lf, trace_id="9" * 32, parent_observation_id=None)
     guardrail_start = 1709294400.0
     start_child_span(
-        client=lf, context=context, name="guardrail", start_time=guardrail_start, claim_trace_root=claim_root, attributes={}
+        client=lf,
+        context=context,
+        name="guardrail",
+        start_time=guardrail_start,
+        claim_trace_root=claim_root,
+        attributes={},
     ).end(end_time=to_unix_nanos(guardrail_start + 2))
     start_generation(
         client=lf, context=context, name="gen", start_time=CALL_START, claim_trace_root=claim_root, attributes={}
@@ -143,7 +152,12 @@ def test_child_span_keeps_its_own_window_and_stays_a_sibling(client):
     context, claim_root = open_trace_context(client=lf, trace_id="d" * 32, parent_observation_id=None)
     guardrail_start = CALL_START + timedelta(seconds=1)
     start_child_span(
-        client=lf, context=context, name="guardrail", start_time=guardrail_start, claim_trace_root=claim_root, attributes={}
+        client=lf,
+        context=context,
+        name="guardrail",
+        start_time=guardrail_start,
+        claim_trace_root=claim_root,
+        attributes={},
     ).end(end_time=to_unix_nanos(guardrail_start + timedelta(seconds=2)))
     start_generation(
         client=lf, context=context, name="gen", start_time=CALL_START, claim_trace_root=claim_root, attributes={}
@@ -548,6 +562,153 @@ def test_evicting_a_client_that_shares_resources_keeps_the_other_exporting():
 
     assert _exports(first, exporter, "after-sibling-eviction")
     assert LangfuseResourceManager._instances.get(PUBLIC_KEY) is first._resources
+
+
+def test_eviction_defers_teardown_until_active_callback_finishes():
+    """A cached client must keep exporting while its callback lease is active."""
+    exporter = InMemorySpanExporter()
+    provider = build_isolated_tracer_provider(environment=None, release=None)
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    client = Langfuse(
+        public_key=PUBLIC_KEY,
+        secret_key="sk-original",
+        host="http://127.0.0.1:1",
+        tracer_provider=provider,
+        span_exporter=exporter,
+    )
+    register_langfuse_client(client)
+
+    def evict() -> None:
+        shutdown_langfuse_client(client)
+
+    with lease_langfuse_client(client):
+        evictor = threading.Thread(target=evict)
+        evictor.start()
+        evictor.join(timeout=5)
+        assert not evictor.is_alive()
+        assert not exporter._stopped
+
+        context, claim_root = open_trace_context(client=client, trace_id="a" * 32, parent_observation_id=None)
+        start_generation(
+            client=client,
+            context=context,
+            name="active-callback",
+            start_time=None,
+            claim_trace_root=claim_root,
+            attributes={},
+        ).end()
+        client.flush()
+        assert any(span.name == "active-callback" for span in exporter.get_finished_spans())
+
+    evictor.join(timeout=5)
+    assert not evictor.is_alive()
+    assert exporter._stopped
+    assert LangfuseResourceManager._instances.get(PUBLIC_KEY) is not client._resources
+
+
+def test_teardown_failure_does_not_strand_queued_clients(monkeypatch):
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    first = Langfuse(
+        public_key=PUBLIC_KEY,
+        secret_key="sk-original",
+        host="http://127.0.0.1:1",
+        tracer_provider=provider,
+        span_exporter=exporter,
+    )
+    clients = (
+        first,
+        Langfuse(public_key=PUBLIC_KEY, secret_key="sk-original", host="http://127.0.0.1:1"),
+        Langfuse(public_key=PUBLIC_KEY, secret_key="sk-original", host="http://127.0.0.1:1"),
+    )
+    assert len({client._resources for client in clients}) == 1
+    for client in clients:
+        register_langfuse_client(client)
+    state = _lifecycle_state(clients[0])
+    original_teardown = _teardown_langfuse_client
+    calls = []
+
+    def teardown(client):
+        calls.append(client)
+        original_teardown(client)
+        if len(calls) == 1:
+            raise RuntimeError("teardown failed")
+
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk._teardown_langfuse_client", teardown)
+    with lease_langfuse_client(clients[0]):
+        for client in clients:
+            shutdown_langfuse_client(client)
+
+    assert len(calls) == 3
+    assert not state.pending_clients
+    assert not state.teardown_in_progress
+
+
+def test_queued_eviction_waits_for_the_last_of_two_overlapping_leases():
+    exporter = InMemorySpanExporter()
+    provider = build_isolated_tracer_provider(environment=None, release=None)
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    client = Langfuse(
+        public_key=PUBLIC_KEY,
+        secret_key="sk-original",
+        host="http://127.0.0.1:1",
+        tracer_provider=provider,
+        span_exporter=exporter,
+    )
+    register_langfuse_client(client)
+
+    with lease_langfuse_client(client):
+        with lease_langfuse_client(client):
+            shutdown_langfuse_client(client)
+        assert not exporter._stopped
+
+    assert exporter._stopped
+
+
+def test_a_client_adopted_during_deferred_teardown_keeps_exporting():
+    """The registry hands the same bundle back out while its teardown is queued behind a lease;
+    the holder count must degrade that teardown to a flush."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    _litellm_built_providers.add(provider)
+    evicted = Langfuse(
+        public_key=PUBLIC_KEY,
+        secret_key="sk-original",
+        host="http://127.0.0.1:1",
+        tracer_provider=provider,
+        span_exporter=exporter,
+    )
+    register_langfuse_client(evicted)
+
+    with lease_langfuse_client(evicted):
+        shutdown_langfuse_client(evicted)
+        adopter = Langfuse(public_key=PUBLIC_KEY, secret_key="sk-original", host="http://127.0.0.1:1")
+        assert adopter._resources is evicted._resources
+        register_langfuse_client(adopter)
+
+    assert _exports(adopter, exporter, "after-deferred-teardown")
+    assert LangfuseResourceManager._instances.get(PUBLIC_KEY) is adopter._resources
+
+
+def test_leases_on_one_client_do_not_serialise_callbacks():
+    """Every langfuse callback in the process shares one client, so leases must overlap."""
+    client = _lifecycle_client()
+    both_inside = threading.Barrier(2, timeout=5)
+
+    def hold_lease() -> None:
+        with lease_langfuse_client(client):
+            both_inside.wait()
+
+    holders = tuple(threading.Thread(target=hold_lease) for _ in range(2))
+    for holder in holders:
+        holder.start()
+    for holder in holders:
+        holder.join(timeout=5)
+
+    assert not any(holder.is_alive() for holder in holders)
+    assert not both_inside.broken
 
 
 def test_last_client_on_shared_resources_tears_them_down():

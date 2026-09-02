@@ -459,20 +459,23 @@ class LangFuseLogger:
                 status_message=status_message,
             )
             verbose_logger.debug("OUTPUT IN LANGFUSE: %s; original: %s", output, response_obj)
-            trace_id, generation_id = self._log_langfuse_v2(
-                user_id=user_id,
-                metadata=metadata,
-                litellm_params=litellm_params,
-                output=output,
-                start_time=start_time,
-                end_time=end_time,
-                kwargs=kwargs,
-                optional_params=optional_params,
-                input=input,
-                response_obj=response_obj,
-                level=level,
-                litellm_call_id=litellm_call_id,
-            )
+            from litellm.integrations.langfuse.langfuse_sdk import lease_langfuse_client
+
+            with lease_langfuse_client(self.Langfuse):
+                trace_id, generation_id = self._log_langfuse_v2(
+                    user_id=user_id,
+                    metadata=metadata,
+                    litellm_params=litellm_params,
+                    output=output,
+                    start_time=start_time,
+                    end_time=end_time,
+                    kwargs=kwargs,
+                    optional_params=optional_params,
+                    input=input,
+                    response_obj=response_obj,
+                    level=level,
+                    litellm_call_id=litellm_call_id,
+                )
             verbose_logger.debug("Langfuse Layer Logging - final response object: %s", response_obj)
             verbose_logger.info("Langfuse Layer Logging - logging success")
 

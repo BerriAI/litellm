@@ -4,7 +4,8 @@ import os
 import re
 import threading
 from base64 import b64encode
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
 from datetime import datetime
 from hashlib import sha256
 from types import MappingProxyType
@@ -28,6 +29,7 @@ __all__ = (
     "acquire_langfuse_client",
     "build_isolated_tracer_provider",
     "evict_stale_langfuse_resources",
+    "lease_langfuse_client",
     "open_trace_context",
     "propagate_attributes",
     "register_langfuse_client",
@@ -221,6 +223,137 @@ _LIVE_CLIENTS_LOCK: Final = threading.Lock()
 _live_clients: Final[WeakKeyDictionary[LangfuseResourceManager, WeakSet]] = WeakKeyDictionary()
 
 
+class _LangfuseLifecycleState:
+    """How many callbacks are leasing one SDK resource bundle, and what eviction has queued behind them.
+
+    ``lock`` is never held across a teardown, which takes the SDK's own registry lock.
+    """
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.active_leases = 0
+        self.teardown_in_progress = False
+        self.teardown_owner: int | None = None
+        self.pending_clients: set[Langfuse] = set()  # mutable-ok: eviction and callback threads queue into it
+
+    def open_lease(self) -> None:
+        with self.lock:
+            self.active_leases += 1
+
+    def claim_for_teardown(self, client: Langfuse) -> bool:
+        """Whether this thread owns ``client``'s teardown; a lease or another teardown in flight queues it instead."""
+        with self.lock:
+            if self.active_leases > 0 or self.teardown_in_progress:
+                self.pending_clients.add(client)
+                return False
+            self.teardown_in_progress = True
+            self.teardown_owner = threading.get_ident()
+            return True
+
+    def release_lease(self) -> tuple[Langfuse, ...]:
+        """Drop this lease and take ownership of the teardowns it was holding up, if it was the last one."""
+        with self.lock:
+            self.active_leases -= 1
+            if self.active_leases > 0 or self.teardown_in_progress or not self.pending_clients:
+                return ()
+            claimed: Final = tuple(self.pending_clients)
+            self.pending_clients.clear()
+            self.teardown_in_progress = True
+            self.teardown_owner = threading.get_ident()
+            return claimed
+
+    def next_teardown_batch(self) -> tuple[Langfuse, ...]:
+        """Whatever eviction queued while the last batch was draining, handing the ownership flag back when empty."""
+        with self.lock:
+            if self.active_leases == 0 and self.pending_clients:
+                claimed: Final = tuple(self.pending_clients)
+                self.pending_clients.clear()
+                return claimed
+            self.teardown_in_progress = False
+            self.teardown_owner = None
+            return ()
+
+    def requeue(self, clients: tuple[Langfuse, ...]) -> None:
+        with self.lock:
+            self.pending_clients.update(clients)
+
+    def end_teardown(self) -> None:
+        with self.lock:
+            if self.teardown_owner == threading.get_ident():
+                self.teardown_in_progress = False
+                self.teardown_owner = None
+
+
+_LIFECYCLE_STATES_LOCK: Final = threading.Lock()
+_LIFECYCLE_STATES: Final[WeakKeyDictionary[object, _LangfuseLifecycleState]] = WeakKeyDictionary()
+
+
+def _lifecycle_state(client: Langfuse) -> _LangfuseLifecycleState:
+    """One state per resource bundle, since teardown closes the provider every client on that bundle exports through."""
+    resources: Final = getattr(client, "_resources", None)
+    key: Final = client if resources is None else resources
+    with _LIFECYCLE_STATES_LOCK:
+        existing: Final = _LIFECYCLE_STATES.get(key)
+        if existing is not None:
+            return existing
+        created: Final = _LangfuseLifecycleState()
+        _LIFECYCLE_STATES[key] = created
+        return created
+
+
+@contextmanager
+def lease_langfuse_client(client: Langfuse) -> Generator[None]:
+    """Hold off cache eviction's teardown of ``client`` while the export inside is in flight.
+
+    Eviction reaches a client the cache handed a callback moments earlier, so closing the SDK client
+    and its tracer provider there drops the spans that callback is still writing. The lease protects
+    exactly the window it wraps: an eviction arriving inside it is deferred to the last lease exit.
+    Taking a lease never blocks; a teardown already running keeps running, because the spans of a
+    lease taken that late were lost before the lease began, and stalling every other callback in the
+    process would not bring them back. A client the registry hands out during the deferral registers
+    as a holder, and the reference count keeps its bundle alive from there.
+    """
+    state: Final = _lifecycle_state(client)
+    state.open_lease()
+    try:
+        yield
+    finally:
+        _run_teardowns(state, state.release_lease(), propagate_base_exception=False)
+
+
+def _run_teardowns(
+    state: _LangfuseLifecycleState,
+    clients: tuple[Langfuse, ...],
+    *,
+    propagate_base_exception: bool = True,
+) -> None:
+    """Tear down ``clients``, then whatever eviction queued meanwhile, and hand the flag back.
+
+    A failing ordinary teardown is logged and skipped rather than raised: the thread here is usually a
+    request callback that merely held the last lease, and its request must not fail on eviction's behalf.
+    Interrupts requeue the unfinished batch and normally propagate, while a callback exception already
+    in flight takes precedence over an eviction interrupt.
+    """
+    batch = clients  # rebind-ok: drains each batch queued while the previous one was being torn down
+    try:
+        from litellm._logging import verbose_logger
+
+        while batch:
+            for index, client in enumerate(batch):
+                try:
+                    _teardown_langfuse_client(client)
+                except Exception:
+                    verbose_logger.exception("Langfuse client teardown failed during cache eviction")
+                except BaseException:
+                    state.requeue(batch[index:])
+                    if propagate_base_exception:
+                        raise
+                    return
+            batch = state.next_teardown_batch()
+    finally:
+        state.end_teardown()
+
+
 def _evict_if_stale_locked(
     *, public_key: object, secret_key: object, base_url: object
 ) -> LangfuseResourceManager | None:
@@ -397,6 +530,19 @@ def shutdown_langfuse_client(client: Langfuse) -> None:
     ``Langfuse.shutdown`` joins the score and media consumers but leaves the
     tracer provider's export thread running and leaves the client in the
     registry, so a later request for the same key gets a dead client back.
+
+    A callback holding a lease on the client's bundle postpones all of this to
+    the moment that lease ends, so eviction cannot close the provider out from
+    under an export the lease is wrapping. See ``lease_langfuse_client``.
+    """
+    state: Final = _lifecycle_state(client)
+    if not state.claim_for_teardown(client):
+        return
+    _run_teardowns(state, (client,))
+
+
+def _teardown_langfuse_client(client: Langfuse) -> None:
+    """The blocking teardown behind ``shutdown_langfuse_client``.
 
     A client that shares its resources with another live client only flushes:
     shutting the shared provider down here would silence the other client for
