@@ -57,6 +57,9 @@ class LeastBusyLoggingHandler(CustomLogger):
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
                     return
+                # Cache hits never ran log_pre_api_call (no increment); do not decrement (#39322).
+                if kwargs.get("cache_hit") is True:
+                    return
                 elif isinstance(id, int):
                     id = str(id)
 
@@ -83,6 +86,9 @@ class LeastBusyLoggingHandler(CustomLogger):
                 model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
+                    return
+                # Cache hits never ran log_pre_api_call (no increment); do not decrement (#39322).
+                if kwargs.get("cache_hit") is True:
                     return
                 elif isinstance(id, int):
                     id = str(id)
@@ -112,6 +118,9 @@ class LeastBusyLoggingHandler(CustomLogger):
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
                     return
+                # Cache hits never ran log_pre_api_call (no increment); do not decrement (#39322).
+                if kwargs.get("cache_hit") is True:
+                    return
                 elif isinstance(id, int):
                     id = str(id)
 
@@ -138,6 +147,9 @@ class LeastBusyLoggingHandler(CustomLogger):
                 model_group = kwargs["litellm_params"]["metadata"].get("model_group", None)
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
+                    return
+                # Cache hits never ran log_pre_api_call (no increment); do not decrement (#39322).
+                if kwargs.get("cache_hit") is True:
                     return
                 elif isinstance(id, int):
                     id = str(id)
