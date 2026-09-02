@@ -1,6 +1,5 @@
+use crate::Error;
 use serde_json::{Map, Value};
-
-use crate::CoreResult;
 
 use super::types::{OcrRequestData, OcrResponseData};
 
@@ -26,16 +25,16 @@ pub enum OcrResponseHandling {
 }
 
 pub trait OcrProviderConfig: Sync {
-    fn supported_ocr_params(&self) -> &'static [&'static str];
+    fn get_supported_ocr_params(&self) -> &'static [&'static str];
 
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn map_ocr_params(&self, non_default_params: &Map<String, Value>) -> Map<String, Value> {
-        let mut mapped_params = Map::new();
-        for (param, value) in non_default_params {
-            if self.supported_ocr_params().contains(&param.as_str()) {
-                mapped_params.insert(param.clone(), value.clone());
-            }
-        }
-        mapped_params
+        let supported_params = self.get_supported_ocr_params();
+        non_default_params
+            .iter()
+            .filter(|(param, _)| supported_params.contains(&param.as_str()))
+            .map(|(param, value)| (param.clone(), value.clone()))
+            .collect()
     }
 
     fn transform_ocr_request(
@@ -43,13 +42,13 @@ pub trait OcrProviderConfig: Sync {
         model: &str,
         document: Value,
         optional_params: Map<String, Value>,
-    ) -> CoreResult<OcrRequestData>;
+    ) -> Result<OcrRequestData, Error>;
 
     fn transform_ocr_response(
         &self,
         model: &str,
         response_json: Value,
-    ) -> CoreResult<OcrResponseData>;
+    ) -> Result<OcrResponseData, Error>;
 
     fn complete_url(
         &self,
@@ -57,13 +56,13 @@ pub trait OcrProviderConfig: Sync {
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String>;
+    ) -> Result<String, Error>;
 
     fn resolve_api_key(
         &self,
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String>;
+    ) -> Result<String, Error>;
 
     fn auth_strategy(&self) -> OcrAuthStrategy {
         OcrAuthStrategy::Bearer

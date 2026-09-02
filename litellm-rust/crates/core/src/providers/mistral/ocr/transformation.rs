@@ -1,4 +1,4 @@
-use crate::error::{CoreError, CoreResult, json_type_name};
+use crate::error::{Error, json_type_name};
 use crate::ocr::transformation::OcrProviderConfig;
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
 use serde_json::{Map, Value};
@@ -47,7 +47,7 @@ pub fn complete_url(api_base: Option<&str>) -> String {
 
 /// Resolve the Mistral API key from the explicit param or the environment.
 ///
-/// Blank/whitespace values are treated as absent. Returns `CoreError::Auth`
+/// Blank/whitespace values are treated as absent. Returns `Error::Auth`
 /// when no usable key is available.
 ///
 /// Note: the env fallback only reads the process environment. Secret-manager
@@ -56,13 +56,13 @@ pub fn complete_url(api_base: Option<&str>) -> String {
 pub fn resolve_api_key(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> CoreResult<String> {
+) -> Result<String, Error> {
     api_key
         .map(str::trim)
         .filter(|key| !key.is_empty())
         .map(str::to_string)
         .or_else(|| env_lookup(MISTRAL_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
-        .ok_or_else(|| CoreError::Auth(MISSING_KEY_MESSAGE.to_string()))
+        .ok_or_else(|| Error::Auth(MISSING_KEY_MESSAGE.to_string()))
 }
 
 pub struct MistralOcrConfig;
@@ -70,18 +70,20 @@ pub struct MistralOcrConfig;
 pub const MISTRAL_OCR_CONFIG: MistralOcrConfig = MistralOcrConfig;
 
 impl OcrProviderConfig for MistralOcrConfig {
-    fn supported_ocr_params(&self) -> &'static [&'static str] {
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
+    fn get_supported_ocr_params(&self) -> &'static [&'static str] {
         SUPPORTED_OCR_PARAMS
     }
 
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_ocr_request(
         &self,
         model: &str,
         document: Value,
         optional_params: Map<String, Value>,
-    ) -> CoreResult<OcrRequestData> {
+    ) -> Result<OcrRequestData, Error> {
         if !document.is_object() {
-            return Err(CoreError::InvalidType {
+            return Err(Error::InvalidType {
                 expected: "object",
                 actual: json_type_name(&document),
             });
@@ -100,14 +102,15 @@ impl OcrProviderConfig for MistralOcrConfig {
         })
     }
 
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn transform_ocr_response(
         &self,
         model: &str,
         response_json: Value,
-    ) -> CoreResult<OcrResponseData> {
+    ) -> Result<OcrResponseData, Error> {
         let response_object = response_json
             .as_object()
-            .ok_or_else(|| CoreError::InvalidType {
+            .ok_or_else(|| Error::InvalidType {
                 expected: "object",
                 actual: json_type_name(&response_json),
             })?;
@@ -140,7 +143,7 @@ impl OcrProviderConfig for MistralOcrConfig {
         _model: &str,
         _optional_params: &Map<String, Value>,
         _env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String> {
+    ) -> Result<String, Error> {
         Ok(complete_url(api_base))
     }
 
@@ -148,13 +151,13 @@ impl OcrProviderConfig for MistralOcrConfig {
         &self,
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String> {
+    ) -> Result<String, Error> {
         resolve_api_key(api_key, env_lookup)
     }
 }
 
-pub fn supported_ocr_params() -> &'static [&'static str] {
-    MISTRAL_OCR_CONFIG.supported_ocr_params()
+pub fn get_supported_ocr_params() -> &'static [&'static str] {
+    MISTRAL_OCR_CONFIG.get_supported_ocr_params()
 }
 
 pub fn map_ocr_params(non_default_params: &Map<String, Value>) -> Map<String, Value> {
@@ -165,11 +168,11 @@ pub fn transform_ocr_request(
     model: &str,
     document: Value,
     optional_params: Map<String, Value>,
-) -> CoreResult<OcrRequestData> {
+) -> Result<OcrRequestData, Error> {
     MISTRAL_OCR_CONFIG.transform_ocr_request(model, document, optional_params)
 }
 
-pub fn transform_ocr_response(model: &str, response_json: Value) -> CoreResult<OcrResponseData> {
+pub fn transform_ocr_response(model: &str, response_json: Value) -> Result<OcrResponseData, Error> {
     MISTRAL_OCR_CONFIG.transform_ocr_response(model, response_json)
 }
 
@@ -181,7 +184,7 @@ mod tests {
     #[test]
     fn supported_params_match_python_mistral_ocr_config() {
         assert_eq!(
-            supported_ocr_params(),
+            get_supported_ocr_params(),
             &[
                 "pages",
                 "include_image_base64",
@@ -250,7 +253,7 @@ mod tests {
 
         assert_eq!(
             err,
-            CoreError::InvalidType {
+            Error::InvalidType {
                 expected: "object",
                 actual: "string",
             }
@@ -307,6 +310,6 @@ mod tests {
     #[test]
     fn resolve_api_key_errors_when_absent() {
         let err = resolve_api_key(None, &|_| None).expect_err("missing key should error");
-        assert_eq!(err, CoreError::Auth(MISSING_KEY_MESSAGE.to_string()));
+        assert_eq!(err, Error::Auth(MISSING_KEY_MESSAGE.to_string()));
     }
 }

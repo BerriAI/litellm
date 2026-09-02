@@ -3,11 +3,14 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator, make_call
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.rust_bridge import bindings as bridge_bindings
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
@@ -44,6 +47,43 @@ async def test_make_call_passes_logging_obj_to_client_post():
     mock_client.post.assert_called_once()
     call_kwargs = mock_client.post.call_args[1]
     assert call_kwargs.get("logging_obj") is logging_obj
+
+
+def test_anthropic_completion_does_not_send_deployment_default_limits():
+    captured_requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_default_limits",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-3-5-haiku-20241022",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        litellm.completion(
+            model="anthropic/claude-3-5-haiku-20241022",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            client=client,
+            default_api_key_rpm_limit=60,
+            default_api_key_tpm_limit=5000000,
+        )
+    finally:
+        client.close()
+
+    request_body = json.loads(captured_requests[0].content)
+    assert "default_api_key_rpm_limit" not in request_body
+    assert "default_api_key_tpm_limit" not in request_body
 
 
 def test_redacted_thinking_content_block_delta():
@@ -2279,14 +2319,13 @@ class TestRustChatCompletionsHook:
         bridge.set_rust_chat_completions(decline=gate, chat_completions=native)
         return seen
 
-    def test_rust_true_serves_the_call_and_stamps_the_header(self):
+    def test_rust_true_serves_the_call(self):
         from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
 
         seen = self._inject()
         response = AnthropicChatCompletion().completion(**self._completion_kwargs())
 
         assert response.choices[0].message.content == "hello from rust"
-        assert response._hidden_params["additional_headers"] == {"x-litellm-rust": "true"}
         assert len(seen["call"]) == 1
 
     def test_the_core_receives_the_untranslated_openai_messages(self):
@@ -2427,7 +2466,7 @@ class TestRustChatCompletionsHook:
         def declining_native(**_kwargs):
             raise _Declined("blank message text")
 
-        monkeypatch.setattr(bridge, "get_native_bridge", lambda: _FakeNative())
+        monkeypatch.setattr(bridge_bindings, "get_native_bridge", lambda: _FakeNative())
         bridge.set_rust_chat_completions(
             decline=lambda **_kwargs: None, chat_completions=declining_native
         )
@@ -2459,7 +2498,7 @@ class TestRustChatCompletionsHook:
             RustBridgeDeclined = _Declined
             RustUpstreamError = type("_Upstream", (Exception,), {})
 
-        monkeypatch.setattr(bridge, "get_native_bridge", lambda: _FakeNative())
+        monkeypatch.setattr(bridge_bindings, "get_native_bridge", lambda: _FakeNative())
 
         async def declining_native(**_kwargs):
             raise _Declined("blank message text")
@@ -2501,7 +2540,6 @@ class TestRustChatCompletionsHook:
             )
 
         assert result.choices[0].message.content == "hello from rust"
-        assert result._hidden_params["additional_headers"] == {"x-litellm-rust": "true"}
         assert not python_call.called
 
 
@@ -2519,7 +2557,7 @@ class TestRustChatCompletionsHook:
             RustBridgeDeclined = _Declined
             RustUpstreamError = type("_Upstream", (Exception,), {})
 
-        monkeypatch.setattr(bridge, "get_native_bridge", lambda: _FakeNative())
+        monkeypatch.setattr(bridge_bindings, "get_native_bridge", lambda: _FakeNative())
 
         def declining_native(**_kwargs):
             raise _Declined("blank message text")

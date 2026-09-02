@@ -4,21 +4,36 @@ mod service;
 
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{Json, State};
+use axum::extract::{Json, Request, State};
 use axum::http::StatusCode;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, HeaderMap, HeaderValue};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
-use litellm_core::CoreError;
+use litellm_core::Error;
 use serde_json::{Map, Value};
 
 use crate::auth::RequireMasterKey;
 use crate::constants::{MESSAGES_HEADERS_NOT_FORWARDED, MESSAGES_ROUTE_PATH};
 use crate::state::AppState;
 
+const CORE_ENGINE_HEADER: &str = "x-litellm-core";
+const RUST_CORE_ENGINE: &str = "rust";
+
 /// This route's contribution to the app router.
 pub fn router() -> Router<AppState> {
-    Router::new().route(MESSAGES_ROUTE_PATH, post(handle))
+    Router::new()
+        .route(MESSAGES_ROUTE_PATH, post(handle))
+        .route_layer(middleware::from_fn(core_engine_header))
+}
+
+async fn core_engine_header(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        CORE_ENGINE_HEADER,
+        HeaderValue::from_static(RUST_CORE_ENGINE),
+    );
+    response
 }
 
 async fn handle(
@@ -46,7 +61,7 @@ fn stream_response(upstream: reqwest::Response) -> Result<Response, MessagesRout
     let mut response = Response::builder()
         .status(
             StatusCode::from_u16(upstream.status().as_u16()).map_err(|error| {
-                MessagesRouteError(CoreError::InvalidResponse(format!(
+                MessagesRouteError(Error::InvalidResponse(format!(
                     "invalid upstream response status: {error}"
                 )))
             })?,
@@ -58,13 +73,13 @@ fn stream_response(upstream: reqwest::Response) -> Result<Response, MessagesRout
     response
         .body(Body::from_stream(upstream.bytes_stream()))
         .map_err(|error| {
-            MessagesRouteError(CoreError::InvalidResponse(format!(
+            MessagesRouteError(Error::InvalidResponse(format!(
                 "failed to build streaming response: {error}"
             )))
         })
 }
 
-fn forwarded_headers(headers: &HeaderMap) -> Result<Option<Map<String, Value>>, CoreError> {
+fn forwarded_headers(headers: &HeaderMap) -> Result<Option<Map<String, Value>>, Error> {
     let forwarded = headers
         .iter()
         .filter(|(name, _)| {
@@ -74,19 +89,19 @@ fn forwarded_headers(headers: &HeaderMap) -> Result<Option<Map<String, Value>>, 
         })
         .map(|(name, value)| {
             let value = value.to_str().map_err(|_| {
-                CoreError::InvalidRequest(format!("invalid value for header {}", name.as_str()))
+                Error::InvalidRequest(format!("invalid value for header {}", name.as_str()))
             })?;
             Ok((name.to_string(), Value::String(value.to_string())))
         })
-        .collect::<Result<Map<_, _>, CoreError>>()?;
+        .collect::<Result<Map<_, _>, Error>>()?;
     Ok((!forwarded.is_empty()).then_some(forwarded))
 }
 
 #[derive(Debug)]
-struct MessagesRouteError(CoreError);
+struct MessagesRouteError(Error);
 
-impl From<CoreError> for MessagesRouteError {
-    fn from(error: CoreError) -> Self {
+impl From<Error> for MessagesRouteError {
+    fn from(error: Error) -> Self {
         Self(error)
     }
 }
@@ -94,28 +109,27 @@ impl From<CoreError> for MessagesRouteError {
 impl IntoResponse for MessagesRouteError {
     fn into_response(self) -> Response {
         let (status, message) = match self.0 {
-            CoreError::InvalidRequest(message) => (StatusCode::BAD_REQUEST, message),
-            CoreError::InvalidProvider(_) | CoreError::Routing(_) => (
+            Error::InvalidRequest(message) => (StatusCode::BAD_REQUEST, message),
+            Error::InvalidProvider(_) | Error::Routing(_) => (
                 StatusCode::NOT_FOUND,
                 "no messages deployment is configured for this model".to_string(),
             ),
-            CoreError::Auth(_) => (
+            Error::Auth(_) => (
                 StatusCode::BAD_GATEWAY,
                 "messages provider authentication failed".to_string(),
             ),
-            CoreError::Http { .. }
-            | CoreError::Network(_)
-            | CoreError::Connect(_)
-            | CoreError::InvalidResponse(_)
-            | CoreError::InvalidType { .. }
-            | CoreError::MissingField(_) => (
+            Error::Http { .. }
+            | Error::Network(_)
+            | Error::InvalidResponse(_)
+            | Error::InvalidType { .. }
+            | Error::MissingField(_) => (
                 StatusCode::BAD_GATEWAY,
                 "messages provider request failed".to_string(),
             ),
             // The gateway has no Python implementation to decline to, so a
             // request the core cannot serve is reported to the caller. The
             // reason is a fixed internal string, never provider content.
-            CoreError::Unsupported(reason) => (
+            Error::Unsupported(reason) => (
                 StatusCode::BAD_REQUEST,
                 format!("messages request is not supported: {reason}"),
             ),
@@ -143,6 +157,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::super::app;
+    use super::{CORE_ENGINE_HEADER, RUST_CORE_ENGINE};
     use crate::io::realtime_pool::RealtimePool;
     use crate::state::AppState;
 
@@ -290,6 +305,7 @@ mod tests {
             .await
             .expect("route responds");
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[CORE_ENGINE_HEADER], RUST_CORE_ENGINE);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("response body reads");

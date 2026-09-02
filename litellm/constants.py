@@ -13,6 +13,12 @@ DEFAULT_BATCH_SIZE: Final = int(os.getenv("DEFAULT_BATCH_SIZE", 512))
 DEFAULT_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_FLUSH_INTERVAL_SECONDS", 5))
 DEFAULT_S3_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_S3_BATCH_SIZE: Final = int(os.getenv("DEFAULT_S3_BATCH_SIZE", 512))
+# https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
+MAX_S3_OBJECT_KEY_BYTES: Final = 1024
+S3_BOUNDED_OBJECT_KEY_HEAD_BYTES: Final = 64
+S3_PREFIX_DIGEST_CHARS: Final = 16
+# s3 allows 2048 bytes of combined metadata headers, which Content-Disposition counts against
+MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = int(os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1))
 DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = int(os.getenv("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1))
@@ -130,6 +136,7 @@ MCP_CLIENT_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_CLIENT_TIMEOUT", "60.0"
 MCP_TOOL_LISTING_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "30.0"))
 MCP_METADATA_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "10.0"))
 MCP_HEALTH_CHECK_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
+MCP_TOOL_LISTING_MAX_PAGES: Final = 1000
 
 # Allowlist of commands permitted for MCP stdio transport.
 # Prevents arbitrary command execution via /mcp-rest/test/* endpoints or server creation.
@@ -1251,6 +1258,7 @@ BEDROCK_CONVERSE_MODELS: Final = [
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-fable-5-1",
     "anthropic.claude-fable-5",
     "anthropic.claude-sonnet-5",
     "anthropic.claude-opus-5",
@@ -1582,6 +1590,7 @@ KEY_ROTATION_JOB_NAME: Final = "litellm_key_rotation_job"
 EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME: Final = "litellm_expired_ui_session_key_cleanup_job"
 WEEKLY_SPEND_REPORT_JOB_ID: Final = "weekly_spend_report_job"
 MONTHLY_SPEND_REPORT_JOB_ID: Final = "monthly_spend_report_job"
+USER_SPEND_ALERTS_JOB_ID: Final = "user_spend_alerts_job"
 PROMETHEUS_FALLBACK_STATS_JOB_ID: Final = "prometheus_fallback_stats_job"
 SLACK_DAILY_REPORT_LOCK_ID: Final = "slack_daily_report"
 SLACK_MODEL_DEPRECATION_LOCK_ID: Final = "slack_model_deprecation_warning"

@@ -2680,10 +2680,16 @@ async def test_generic_http_handler_async_streaming_forwards_provider_response_h
         (None, GenericLiteLLMParams(rust=True), False),
     ],
 )
-def test_the_rust_responses_websocket_needs_both_openai_and_the_rust_flag(
+def test_the_rust_responses_websocket_needs_provider_flag_and_typed_capability(
     custom_llm_provider, litellm_params, expected
 ):
-    assert _rust_responses_websocket_enabled(custom_llm_provider, litellm_params) is expected
+    from litellm.rust_bridge import streaming
+
+    streaming.set_rust_streaming(capability=lambda api, provider, transport: True)
+    try:
+        assert _rust_responses_websocket_enabled(custom_llm_provider, litellm_params) is expected
+    finally:
+        streaming.set_rust_streaming(capability=None)
 
 
 def test_a_plain_callback_does_not_advertise_a_pre_call_deployment_hook(monkeypatch):

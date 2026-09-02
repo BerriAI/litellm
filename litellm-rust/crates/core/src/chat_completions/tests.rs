@@ -1,6 +1,6 @@
 use serde_json::{Map, Value, json};
 
-use crate::error::CoreError;
+use crate::error::Error;
 
 use super::prepare::prepare_chat_completions_call;
 use super::transformation::ChatCompletionsAuth;
@@ -29,7 +29,7 @@ fn request<'a>(
 
 /// `ProviderChatCompletionsRequest` deliberately has no `Debug` (its headers
 /// carry resolved credentials), so unwrap the failure case by hand.
-fn decline(request: ChatCompletionsRequest<'_>) -> CoreError {
+fn decline(request: ChatCompletionsRequest<'_>) -> Error {
     match prepare_chat_completions_call(request) {
         Err(error) => error,
         Ok(prepared) => panic!("expected a decline, prepared a call to {}", prepared.url),
@@ -196,7 +196,7 @@ fn declines_an_unsupported_request_before_resolving_credentials() {
     call.api_key = None;
     // No api_key is set and no env is consulted: the gate must run first, so the
     // error is the decline rather than a missing-credential error.
-    assert_eq!(decline(call), CoreError::Unsupported("streaming"));
+    assert_eq!(decline(call), Error::Unsupported("streaming"));
 }
 
 #[test]
@@ -208,7 +208,7 @@ fn rejects_an_unknown_provider() {
             json!([{"role": "user", "content": "hi"}]),
             json!({}),
         )),
-        CoreError::InvalidProvider("openai".to_string())
+        Error::InvalidProvider("openai".to_string())
     );
 }
 
@@ -221,7 +221,7 @@ fn rejects_a_model_with_no_resolvable_provider() {
             json!([{"role": "user", "content": "hi"}]),
             json!({}),
         )),
-        CoreError::InvalidProvider(_)
+        Error::InvalidProvider(_)
     ));
 }
 
@@ -234,7 +234,7 @@ fn rejects_an_empty_or_malformed_message_list() {
             json!([]),
             json!({}),
         )),
-        CoreError::InvalidRequest("chat completions requires at least one message".to_string())
+        Error::InvalidRequest("chat completions requires at least one message".to_string())
     );
     assert!(matches!(
         decline(request(
@@ -243,7 +243,7 @@ fn rejects_an_empty_or_malformed_message_list() {
             json!("not a list"),
             json!({}),
         )),
-        CoreError::InvalidRequest(_)
+        Error::InvalidRequest(_)
     ));
 }
 
@@ -258,7 +258,7 @@ fn rejects_non_string_extra_headers() {
     call.extra_headers = Some(Map::from_iter([("x-trace".to_string(), json!(7))]));
     assert_eq!(
         decline(call),
-        CoreError::InvalidRequest(
+        Error::InvalidRequest(
             "chat completions extra_headers.x-trace must be a string, got number".to_string()
         )
     );
@@ -374,7 +374,7 @@ async fn a_forwarded_header_the_signer_computes_declines_to_python() {
             .await
             .expect_err("{forwarded} should decline instead of being signed");
         assert!(
-            matches!(error, CoreError::Unsupported(_)),
+            matches!(error, Error::Unsupported(_)),
             "{forwarded} declined as {error:?}, which the host would not fall back on"
         );
     }
@@ -727,7 +727,7 @@ mod round_trip {
         .expect_err("response cannot be normalized");
         handle.await.expect("server task");
         assert!(
-            matches!(err, CoreError::InvalidResponse(_)),
+            matches!(err, Error::InvalidResponse(_)),
             "expected a post-send error, got {err:?}"
         );
     }
@@ -745,7 +745,7 @@ mod round_trip {
         .expect_err("response cannot be normalized");
         handle.await.expect("server task");
         assert!(
-            matches!(err, CoreError::InvalidResponse(_)),
+            matches!(err, Error::InvalidResponse(_)),
             "expected a post-send error, got {err:?}"
         );
     }
@@ -763,17 +763,13 @@ mod round_trip {
         .expect_err("upstream rejects");
         handle.await.expect("server task");
         assert!(
-            matches!(err, CoreError::Http { status: 429, .. }),
+            matches!(err, Error::Http { status: 429, .. }),
             "expected a 429, got {err:?}"
         );
     }
 
     #[tokio::test]
-    async fn a_connection_that_is_never_established_declines_instead_of_failing() {
-        // Nothing was sent, so nothing was billed and the host can still serve
-        // the request. Classing this with the post-send failures would turn a
-        // recoverable fallback into a user-facing error on exactly the
-        // deployments whose transport is configured only on the Python client.
+    async fn a_connection_that_is_never_established_is_still_terminal() {
         let port = {
             let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
             listener.local_addr().expect("has an address").port()
@@ -787,34 +783,8 @@ mod round_trip {
         .await
         .expect_err("nothing is listening");
         assert!(
-            matches!(err, CoreError::Connect(_)),
-            "expected a pre-send connect failure, got {err:?}"
+            matches!(err, Error::Network(_)),
+            "expected a terminal network failure, got {err:?}"
         );
-    }
-
-    #[test]
-    fn response_errors_collapse_to_one_variant_that_can_only_mean_already_sent() {
-        use crate::chat_completions::handler::as_response_error;
-
-        for original in [
-            CoreError::MissingField("usage"),
-            CoreError::Unsupported("non-text response content block"),
-            CoreError::InvalidRequest("whatever".to_string()),
-            CoreError::Auth("whatever".to_string()),
-        ] {
-            let label = format!("{original:?}");
-            assert!(
-                matches!(as_response_error(original), CoreError::InvalidResponse(_)),
-                "{label} must not stay retryable once the provider has answered"
-            );
-        }
-        // An upstream status is already unambiguous, so it survives intact.
-        assert!(matches!(
-            as_response_error(CoreError::Http {
-                status: 500,
-                body: "boom".to_string()
-            }),
-            CoreError::Http { status: 500, .. }
-        ));
     }
 }

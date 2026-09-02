@@ -1,6 +1,18 @@
-use crate::CoreResult;
+use crate::Error;
 use crate::constants::{OPENAI_RESPONSES_DEFAULT_API_BASE, OPENAI_RESPONSES_PATH};
-use crate::responses::types::{ResponsesWsEvent, ResponsesWsEventType, ResponsesWsTransformResult};
+use crate::responses::types::{
+    ResponseCommand, ResponsesStreamEvent, ResponsesWsEvent, ResponsesWsEventType,
+    ResponsesWsTransformResult,
+};
+use futures_util::future::BoxFuture;
+
+pub trait TypedResponsesWebSocketSession: Send + Sync {
+    fn send(&self, command: ResponseCommand) -> BoxFuture<'_, Result<(), Error>>;
+
+    fn recv(&self) -> BoxFuture<'_, Result<Option<ResponsesStreamEvent>, Error>>;
+
+    fn close(&self) -> BoxFuture<'_, Result<(), Error>>;
+}
 
 pub trait ResponsesWebSocketProviderConfig: Sync {
     fn supports_native_websocket(&self) -> bool {
@@ -19,13 +31,13 @@ pub trait ResponsesWebSocketProviderConfig: Sync {
         &self,
         event: &ResponsesWsEvent,
         model: &str,
-    ) -> CoreResult<ResponsesWsTransformResult>;
+    ) -> Result<ResponsesWsTransformResult, Error>;
 
     fn transform_ws_response(
         &self,
         event: &ResponsesWsEvent,
         model: &str,
-    ) -> CoreResult<ResponsesWsTransformResult>;
+    ) -> Result<ResponsesWsTransformResult, Error>;
 }
 
 pub fn complete_websocket_url(

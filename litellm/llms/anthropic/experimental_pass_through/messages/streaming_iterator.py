@@ -6,7 +6,7 @@ from typing import Any, Final, Protocol, runtime_checkable
 
 import httpx
 from pydantic import TypeAdapter
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.constants import (
     ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS,
@@ -19,6 +19,7 @@ from litellm.llms.anthropic.common_utils import ANTHROPIC_ERROR_STATUS_CODE_MAP
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
+from litellm.rust_bridge.runtime import CoreEngine, execution_additional_headers
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
@@ -86,20 +87,39 @@ def _decoded_sse_data_line(line: bytes) -> object | None:
         return None
 
 
-def _anthropic_error_event_payload(chunk: object) -> Mapping[str, object] | None:
+def _anthropic_event_payload(chunk: object, event_type: str) -> Mapping[str, object] | None:
     if isinstance(chunk, dict):
-        return chunk if chunk.get("type") == "error" else None
+        return chunk if chunk.get("type") == event_type else None
     if isinstance(chunk, (bytes, bytearray)):
         decoded_lines: Final = (_decoded_sse_data_line(line) for line in chunk.splitlines())
         return next(
             (
                 candidate
                 for candidate in decoded_lines
-                if isinstance(candidate, dict) and candidate.get("type") == "error"
+                if isinstance(candidate, dict) and candidate.get("type") == event_type
             ),
             None,
         )
     return None
+
+
+def _anthropic_error_event_payload(chunk: object) -> Mapping[str, object] | None:
+    return _anthropic_event_payload(chunk, "error")
+
+
+def parse_anthropic_refusal_stop_details(chunk: object) -> Mapping[str, object] | None:
+    """
+    Return the ``stop_details`` object of an Anthropic SSE ``message_delta``
+    chunk whose delta carries ``stop_reason: "refusal"`` (a safeguard refusal:
+    https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback),
+    or None for any other chunk, a plain refusal without ``stop_details`` included.
+    """
+    payload: Final = _anthropic_event_payload(chunk, "message_delta")
+    delta: Final = payload.get("delta") if payload is not None else None
+    if not isinstance(delta, dict) or delta.get("stop_reason") != "refusal":
+        return None
+    stop_details: Final = delta.get("stop_details")
+    return stop_details if isinstance(stop_details, dict) else None
 
 
 def _anthropic_error_body(chunk: object) -> Mapping[str, object] | None:
@@ -306,7 +326,8 @@ def _anthropic_content_block_events(index: int, block: Mapping[str, object]) -> 
 
 
 class AnthropicMessagesStreamHiddenParams(TypedDict):
-    additional_headers: dict[str, str]
+    additional_headers: ReadOnly[Mapping[str, str]]
+    core_engine: ReadOnly[str]
 
 
 @runtime_checkable
@@ -325,8 +346,10 @@ _RESPONSE_HEADERS_ADAPTER: Final[TypeAdapter[dict[str, str]]] = TypeAdapter(dict
 def anthropic_messages_stream_hidden_params(
     response_headers: httpx.Headers,
 ) -> AnthropicMessagesStreamHiddenParams:
+    additional_headers: Final = _RESPONSE_HEADERS_ADAPTER.validate_python(process_response_headers(response_headers))
     return AnthropicMessagesStreamHiddenParams(
-        additional_headers=_RESPONSE_HEADERS_ADAPTER.validate_python(process_response_headers(response_headers))
+        additional_headers=execution_additional_headers(additional_headers, CoreEngine.PYTHON),
+        core_engine=CoreEngine.PYTHON.value,
     )
 
 

@@ -1,4 +1,4 @@
-use crate::error::{CoreError, CoreResult};
+use crate::error::Error;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
 use super::common_utils::{has_bearer_auth, has_header, messages_provider_config, string_headers};
@@ -7,7 +7,7 @@ use super::types::{MessagesRequest, ProviderMessagesRequest};
 
 pub(super) fn prepare_messages_call(
     request: MessagesRequest<'_>,
-) -> CoreResult<ProviderMessagesRequest> {
+) -> Result<ProviderMessagesRequest, Error> {
     let provider_info = get_custom_llm_provider(request.model, request.custom_llm_provider)
         .or_else(|| {
             request
@@ -18,15 +18,16 @@ pub(super) fn prepare_messages_call(
                 })
         })
         .ok_or_else(|| {
-            CoreError::InvalidProvider(
+            Error::InvalidProvider(
                 "unable to resolve custom_llm_provider for messages request".to_string(),
             )
         })?;
     let model = provider_info.model.to_string();
     let provider = provider_info.custom_llm_provider;
 
-    let config = messages_provider_config(provider)
-        .ok_or_else(|| CoreError::InvalidProvider(provider.to_string()))?;
+    let config = messages_provider_config(provider).ok_or(Error::Unsupported(
+        "messages provider is not registered in the Rust bridge",
+    ))?;
     let env_lookup = |key: &str| std::env::var(key).ok();
 
     let mut headers = string_headers(request.extra_headers)?;
@@ -53,11 +54,11 @@ pub(super) fn prepare_messages_call(
 
     let url = config.complete_url(request.api_base, &model, &env_lookup)?;
     let typed_request = serde_json::from_value(request.body).map_err(|err| {
-        CoreError::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
+        Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
     })?;
     let transformed = config.transform_request(typed_request)?;
     let body = serde_json::to_value(transformed).map_err(|err| {
-        CoreError::InvalidRequest(format!(
+        Error::InvalidRequest(format!(
             "failed to serialize Anthropic messages request: {err}"
         ))
     })?;

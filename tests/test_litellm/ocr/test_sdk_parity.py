@@ -296,13 +296,20 @@ class _RustAocrSpy:
 
 @contextmanager
 def _restore_rust_ocr_state() -> Generator[None]:
-    enabled: Final = rust_ocr_bridge._rust_ocr_enabled  # pyright: ignore[reportPrivateUsage]  # restore test state
-    ocr_impl: Final = rust_ocr_bridge._rust_ocr_impl  # pyright: ignore[reportPrivateUsage]  # restore test state
-    aocr_impl: Final = rust_ocr_bridge._rust_aocr_impl  # pyright: ignore[reportPrivateUsage]  # restore test state
+    from litellm.rust_bridge import configuration
+
+    config: Final = configuration._CONFIGURATION  # pyright: ignore[reportPrivateUsage]  # restore test state
+    sync_binding: Final = rust_ocr_bridge._OCR  # pyright: ignore[reportPrivateUsage]  # restore test state
+    async_binding: Final = rust_ocr_bridge._AOCR  # pyright: ignore[reportPrivateUsage]  # restore test state
+    enabled: Final = config.override
+    ocr_impl: Final = sync_binding._override  # pyright: ignore[reportPrivateUsage]  # preserve unset binding
+    aocr_impl: Final = async_binding._override  # pyright: ignore[reportPrivateUsage]  # preserve unset binding
     try:
         yield
     finally:
-        rust_ocr_bridge.use_litellm_rust(enabled, ocr=ocr_impl, aocr=aocr_impl)
+        config.override = enabled
+        sync_binding._override = ocr_impl  # pyright: ignore[reportPrivateUsage]  # restore exact binding state
+        async_binding._override = aocr_impl  # pyright: ignore[reportPrivateUsage]  # restore exact binding state
 
 
 def _native_spies() -> tuple[_RustOcrSpy, _RustAocrSpy]:
@@ -343,7 +350,8 @@ def test_recorded_ocr_sdk_parity(
     event_loop: Final = asyncio.new_event_loop()
     try:
         with _restore_rust_ocr_state(), replay_server() as provider:
-            rust_ocr_bridge.use_litellm_rust(False, ocr=sync_spy, aocr=async_spy)
+            rust_ocr_bridge.set_rust_ocr(ocr=sync_spy, aocr=async_spy)
+            rust_ocr_bridge.use_litellm_rust(False)
             python: Final = run_in_process(
                 provider,
                 ocr_fixture.provider_responses,
@@ -352,7 +360,7 @@ def test_recorded_ocr_sdk_parity(
             assert sync_spy.calls == 0
             assert async_spy.calls == 0
 
-            rust_ocr_bridge.use_litellm_rust(True, ocr=sync_spy, aocr=async_spy)
+            rust_ocr_bridge.use_litellm_rust(True)
             rust: Final = run_in_process(
                 provider,
                 ocr_fixture.provider_responses,
@@ -380,7 +388,8 @@ def test_invalid_ocr_sdk_parity(case: InvalidOcrCase, route: SDKRoute) -> None:
     event_loop: Final = asyncio.new_event_loop()
     try:
         with _restore_rust_ocr_state(), replay_server() as provider:
-            rust_ocr_bridge.use_litellm_rust(False, ocr=sync_spy, aocr=async_spy)
+            rust_ocr_bridge.set_rust_ocr(ocr=sync_spy, aocr=async_spy)
+            rust_ocr_bridge.use_litellm_rust(False)
             python: Final = run_in_process(
                 provider,
                 (),
@@ -389,7 +398,7 @@ def test_invalid_ocr_sdk_parity(case: InvalidOcrCase, route: SDKRoute) -> None:
             assert sync_spy.calls == 0
             assert async_spy.calls == 0
 
-            rust_ocr_bridge.use_litellm_rust(True, ocr=sync_spy, aocr=async_spy)
+            rust_ocr_bridge.use_litellm_rust(True)
             rust: Final = run_in_process(
                 provider,
                 (),

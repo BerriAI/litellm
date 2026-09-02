@@ -29,6 +29,7 @@ from litellm.llms.base_llm.ocr.transformation import (
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import ocr as rust_ocr_bridge
+from litellm.rust_bridge.runtime import CoreEngine, execution_hidden_params
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
@@ -66,6 +67,24 @@ _RUST_OCR_PROVIDERS: Final = {
     "azure_ai",
     "vertex_ai",
 }
+
+
+def _with_core_engine(response: OCRResponse, source: CoreEngine) -> OCRResponse:
+    raw_hidden_params: Final = cast(object, response._hidden_params)
+    hidden_params: Final = (
+        cast(Mapping[str, object], raw_hidden_params) if isinstance(raw_hidden_params, Mapping) else None
+    )
+    response._hidden_params = execution_hidden_params(  # pyright: ignore[reportPrivateUsage]  # OCRResponse has no public metadata setter
+        hidden_params, source
+    )
+    return response
+
+
+async def _await_with_core_engine(
+    response: Coroutine[object, object, OCRResponse],
+    source: CoreEngine,
+) -> OCRResponse:
+    return _with_core_engine(await response, source)
 
 
 def _prepare_ocr_request(
@@ -199,6 +218,12 @@ def _rust_ocr_supported(prepared_request: _PreparedOCRRequest) -> bool:
     return prepared_request.custom_llm_provider in _RUST_OCR_PROVIDERS
 
 
+def _rust_ocr_enabled(prepared_request: _PreparedOCRRequest) -> bool:
+    raw_request_override: Final = prepared_request.litellm_params.get("rust")
+    request_override: Final = raw_request_override if isinstance(raw_request_override, bool) else None
+    return rust_ocr_bridge.rust_ocr_enabled(request_override=request_override)
+
+
 def _rust_bridge_optional_params(
     prepared_request: _PreparedOCRRequest,
     resolve_secret: Callable[[str], str | None],
@@ -307,7 +332,7 @@ def _run_rust_ocr(
     )
     if rust_response is None:
         return None
-    return OCRResponse.model_validate(rust_response)
+    return _with_core_engine(OCRResponse.model_validate(rust_response), CoreEngine.RUST)
 
 
 async def _run_rust_aocr(
@@ -333,7 +358,7 @@ async def _run_rust_aocr(
     )
     if rust_response is None:
         return None
-    return OCRResponse.model_validate(rust_response)
+    return _with_core_engine(OCRResponse.model_validate(rust_response), CoreEngine.RUST)
 
 
 @client
@@ -430,7 +455,7 @@ async def aocr(
         custom_llm_provider = prepared.custom_llm_provider
         completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
 
-        if _rust_ocr_supported(prepared) and rust_ocr_bridge.rust_ocr_enabled():
+        if _rust_ocr_supported(prepared) and _rust_ocr_enabled(prepared):
             from litellm.secret_managers.main import get_secret_str
 
             rust_response: Final = await _run_rust_aocr(
@@ -463,7 +488,7 @@ async def aocr(
         if response is None:
             raise ValueError(f"Got an unexpected None response from the OCR API: {response}")
 
-        return response
+        return _with_core_engine(response, CoreEngine.PYTHON)
     except Exception as e:
         raise litellm.exception_type(
             model=model,
@@ -702,7 +727,7 @@ def ocr(
         custom_llm_provider = prepared.custom_llm_provider
         completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
 
-        if _rust_ocr_supported(prepared) and rust_ocr_bridge.rust_ocr_enabled():
+        if _rust_ocr_supported(prepared) and _rust_ocr_enabled(prepared):
             from litellm.secret_managers.main import get_secret_str
 
             rust_response: Final = _run_rust_ocr(
@@ -729,7 +754,9 @@ def ocr(
             litellm_params=prepared.litellm_params,
         )
 
-        return response
+        if asyncio.iscoroutine(response):
+            return _await_with_core_engine(response, CoreEngine.PYTHON)
+        return _with_core_engine(response, CoreEngine.PYTHON)
     except Exception as e:
         raise litellm.exception_type(
             model=model,

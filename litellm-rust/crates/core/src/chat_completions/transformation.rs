@@ -1,11 +1,22 @@
+use crate::Error;
 use serde_json::{Map, Value};
-
-use crate::error::CoreResult;
 
 use super::types::{
     ChatCompletionsResponse, ChatMessage, ChatMessageContent, ProviderChatRequestData,
     ProviderChatResponseData,
 };
+use super::types::{ChatCompletionsStreamRequest, ChatStreamEvent};
+use crate::streaming::StreamProvider;
+
+pub trait ChatCompletionsStreamProvider:
+    StreamProvider<ChatCompletionsStreamRequest, ChatStreamEvent>
+{
+}
+
+impl<T> ChatCompletionsStreamProvider for T where
+    T: StreamProvider<ChatCompletionsStreamRequest, ChatStreamEvent>
+{
+}
 
 /// How the upstream call is authenticated. API-key strategies are resolved in
 /// `prepare`; SigV4 needs the serialized body, so the handler signs it.
@@ -39,7 +50,7 @@ pub trait ChatCompletionsProviderConfig: Sync {
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String>;
+    ) -> Result<String, Error>;
 
     fn auth(
         &self,
@@ -47,7 +58,7 @@ pub trait ChatCompletionsProviderConfig: Sync {
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<ChatCompletionsAuth>;
+    ) -> Result<ChatCompletionsAuth, Error>;
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         &[("content-type", "application/json")]
@@ -91,13 +102,13 @@ pub trait ChatCompletionsProviderConfig: Sync {
         model: &str,
         messages: Vec<ChatMessage>,
         optional_params: Map<String, Value>,
-    ) -> CoreResult<ProviderChatRequestData>;
+    ) -> Result<ProviderChatRequestData, Error>;
 
     fn transform_response(
         &self,
         model: &str,
         response: ProviderChatResponseData,
-    ) -> CoreResult<ChatCompletionsResponse>;
+    ) -> Result<ChatCompletionsResponse, Error>;
 }
 
 pub fn unsupported_param(

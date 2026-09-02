@@ -1,4 +1,4 @@
-use crate::error::{CoreError, CoreResult, json_type_name};
+use crate::error::{Error, json_type_name};
 use crate::ocr::transformation::OcrProviderConfig;
 use crate::ocr::types::{OcrRequestData, OcrResponseData};
 use serde_json::{Map, Value, json};
@@ -43,7 +43,7 @@ pub fn is_deepseek_model(model: &str) -> bool {
 pub fn resolve_vertex_api_key(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> CoreResult<String> {
+) -> Result<String, Error> {
     api_key
         .map(str::trim)
         .filter(|key| !key.is_empty())
@@ -51,7 +51,7 @@ pub fn resolve_vertex_api_key(
         .or_else(|| env_lookup(VERTEX_AI_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
         .or_else(|| env_lookup(VERTEXAI_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
         .ok_or_else(|| {
-            CoreError::Auth(
+            Error::Auth(
                 "Missing Vertex AI access token - pass api_key or provide Authorization via extra_headers"
                     .to_string(),
             )
@@ -61,12 +61,12 @@ pub fn resolve_vertex_api_key(
 fn vertex_project(
     params: &Map<String, Value>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> CoreResult<String> {
+) -> Result<String, Error> {
     string_param(params, &["vertex_project", "vertex_ai_project"])
         .map(str::to_string)
         .or_else(|| env_lookup(VERTEXAI_PROJECT_ENV).filter(|value| !value.trim().is_empty()))
         .ok_or_else(|| {
-            CoreError::InvalidRequest(
+            Error::InvalidRequest(
                 "Missing vertex_project - Set VERTEXAI_PROJECT environment variable or pass vertex_project parameter"
                     .to_string(),
             )
@@ -99,7 +99,7 @@ pub fn complete_vertex_mistral_url(
     model: &str,
     optional_params: &Map<String, Value>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> CoreResult<String> {
+) -> Result<String, Error> {
     let project = vertex_project(optional_params, env_lookup)?;
     let location = vertex_location(optional_params, env_lookup);
     let base = vertex_mistral_api_base(api_base, &location);
@@ -112,7 +112,7 @@ pub fn complete_vertex_deepseek_url(
     api_base: Option<&str>,
     optional_params: &Map<String, Value>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> CoreResult<String> {
+) -> Result<String, Error> {
     let project = vertex_project(optional_params, env_lookup)?;
     let location = vertex_location(optional_params, env_lookup);
     let base = api_base
@@ -125,20 +125,20 @@ pub fn complete_vertex_deepseek_url(
     ))
 }
 
-fn document_content_item(document: &Value) -> CoreResult<Value> {
-    let object = document.as_object().ok_or_else(|| CoreError::InvalidType {
+fn document_content_item(document: &Value) -> Result<Value, Error> {
+    let object = document.as_object().ok_or_else(|| Error::InvalidType {
         expected: "object",
         actual: json_type_name(document),
     })?;
     let doc_type = object
         .get("type")
         .and_then(Value::as_str)
-        .ok_or(CoreError::MissingField("document.type"))?;
+        .ok_or(Error::MissingField("document.type"))?;
     let url_field = match doc_type {
         "image_url" => "image_url",
         "document_url" => "document_url",
         other => {
-            return Err(CoreError::InvalidRequest(format!(
+            return Err(Error::InvalidRequest(format!(
                 "Unsupported document type: {other}. Expected 'image_url' or 'document_url'"
             )));
         }
@@ -147,7 +147,7 @@ fn document_content_item(document: &Value) -> CoreResult<Value> {
         .get(url_field)
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
-        .ok_or(CoreError::MissingField(url_field))?;
+        .ok_or(Error::MissingField(url_field))?;
 
     Ok(json!({
         "type": "image_url",
@@ -163,7 +163,7 @@ fn deepseek_model_name(model: &str) -> String {
     }
 }
 
-fn first_choice_content(response: &Value) -> CoreResult<Value> {
+fn first_choice_content(response: &Value) -> Result<Value, Error> {
     response
         .get("choices")
         .and_then(Value::as_array)
@@ -176,9 +176,7 @@ fn first_choice_content(response: &Value) -> CoreResult<Value> {
             Value::Object(_) => true,
             _ => false,
         })
-        .ok_or_else(|| {
-            CoreError::InvalidResponse("No content in DeepSeek OCR response".to_string())
-        })
+        .ok_or_else(|| Error::InvalidResponse("No content in DeepSeek OCR response".to_string()))
 }
 
 fn ocr_data_from_content(content: Value, usage: Option<Value>, model: &str) -> Value {
@@ -210,8 +208,8 @@ fn ocr_data_from_content(content: Value, usage: Option<Value>, model: &str) -> V
 }
 
 impl OcrProviderConfig for VertexAiOcrConfig {
-    fn supported_ocr_params(&self) -> &'static [&'static str] {
-        MISTRAL_OCR_CONFIG.supported_ocr_params()
+    fn get_supported_ocr_params(&self) -> &'static [&'static str] {
+        MISTRAL_OCR_CONFIG.get_supported_ocr_params()
     }
 
     fn transform_ocr_request(
@@ -219,7 +217,7 @@ impl OcrProviderConfig for VertexAiOcrConfig {
         model: &str,
         document: Value,
         optional_params: Map<String, Value>,
-    ) -> CoreResult<OcrRequestData> {
+    ) -> Result<OcrRequestData, Error> {
         MISTRAL_OCR_CONFIG.transform_ocr_request(model, document, optional_params)
     }
 
@@ -227,7 +225,7 @@ impl OcrProviderConfig for VertexAiOcrConfig {
         &self,
         model: &str,
         response_json: Value,
-    ) -> CoreResult<OcrResponseData> {
+    ) -> Result<OcrResponseData, Error> {
         MISTRAL_OCR_CONFIG.transform_ocr_response(model, response_json)
     }
 
@@ -237,7 +235,7 @@ impl OcrProviderConfig for VertexAiOcrConfig {
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String> {
+    ) -> Result<String, Error> {
         complete_vertex_mistral_url(api_base, model, optional_params, env_lookup)
     }
 
@@ -245,7 +243,7 @@ impl OcrProviderConfig for VertexAiOcrConfig {
         &self,
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String> {
+    ) -> Result<String, Error> {
         resolve_vertex_api_key(api_key, env_lookup)
     }
 
@@ -255,7 +253,7 @@ impl OcrProviderConfig for VertexAiOcrConfig {
 }
 
 impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
-    fn supported_ocr_params(&self) -> &'static [&'static str] {
+    fn get_supported_ocr_params(&self) -> &'static [&'static str] {
         DEEPSEEK_SUPPORTED_OCR_PARAMS
     }
 
@@ -264,7 +262,7 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
         model: &str,
         document: Value,
         optional_params: Map<String, Value>,
-    ) -> CoreResult<OcrRequestData> {
+    ) -> Result<OcrRequestData, Error> {
         let mut data = Map::new();
         data.insert(
             "model".to_string(),
@@ -289,10 +287,10 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
         &self,
         model: &str,
         response_json: Value,
-    ) -> CoreResult<OcrResponseData> {
+    ) -> Result<OcrResponseData, Error> {
         let response = response_json
             .as_object()
-            .ok_or_else(|| CoreError::InvalidType {
+            .ok_or_else(|| Error::InvalidType {
                 expected: "object",
                 actual: json_type_name(&response_json),
             })?;
@@ -314,7 +312,7 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
             });
         }
 
-        let object = ocr_data.as_object().ok_or_else(|| CoreError::InvalidType {
+        let object = ocr_data.as_object().ok_or_else(|| Error::InvalidType {
             expected: "object",
             actual: json_type_name(&ocr_data),
         })?;
@@ -346,7 +344,7 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
         _model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String> {
+    ) -> Result<String, Error> {
         complete_vertex_deepseek_url(api_base, optional_params, env_lookup)
     }
 
@@ -354,7 +352,7 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
         &self,
         api_key: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String> {
+    ) -> Result<String, Error> {
         resolve_vertex_api_key(api_key, env_lookup)
     }
 }
