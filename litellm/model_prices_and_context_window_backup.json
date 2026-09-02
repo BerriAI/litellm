@@ -9412,12 +9412,15 @@
         "supports_tool_choice": true
     },
     "azure_ai/FW-DeepSeek-V4-Flash-0731": {
+        "cache_read_input_token_cost": 7e-09,
         "deprecation_date": "2027-08-15",
+        "input_cost_per_token": 2.2e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
+        "output_cost_per_token": 6.6e-07,
         "reasoning_effort_levels": [
             "low",
             "high",
@@ -9772,7 +9775,7 @@
         "deprecation_date": "2026-10-01"
     },
     "azure_ai/MAI-Image-2.5-Pro": {
-        "deprecation_date": "2026-10-01",
+        "deprecation_date": "2026-10-31",
         "input_cost_per_image_token": 8e-06,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure_ai",

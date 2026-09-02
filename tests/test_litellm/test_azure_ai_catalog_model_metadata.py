@@ -17,11 +17,12 @@ MODEL_LIMITS = (
     ("azure_ai/Codestral-2501", "chat", 256000, 4096, None),
     ("azure_ai/Kimi-K3", "chat", 1048576, 131072, "2026-11-26"),
     ("azure_ai/grok-4.6", "chat", 200000, 128000, "2027-08-24"),
-    ("azure_ai/MAI-Image-2.5-Pro", "image_generation", 32000, None, "2026-10-01"),
+    ("azure_ai/MAI-Image-2.5-Pro", "image_generation", 32000, None, "2026-10-31"),
     ("azure_ai/mistral-ocr-4-0", "ocr", 128000, 4096, "2027-10-01"),
 )
 
 CHAT_PRICING = (
+    ("azure_ai/FW-DeepSeek-V4-Flash-0731", 2.2e-07, 6.6e-07, 7e-09),
     ("azure_ai/FW-GLM-5.3", 1.4e-06, 4.4e-06, 2.6e-07),
     ("azure_ai/MAI-Thinking-1", 2e-06, 8e-06, 2e-07),
     ("azure_ai/Codestral-2501", 3e-07, 9e-07, None),
@@ -78,14 +79,6 @@ def test_azure_ai_catalog_chat_pricing(
     assert info.get("cache_read_input_token_cost") == cache_cost
     assert prompt_cost == pytest.approx(1000 * input_cost)
     assert completion_cost == pytest.approx(500 * output_cost)
-
-
-def test_provisioned_deepseek_model_has_no_paygo_token_price() -> None:
-    info = _load(MAIN_PATH)["azure_ai/FW-DeepSeek-V4-Flash-0731"]
-
-    assert "input_cost_per_token" not in info
-    assert "output_cost_per_token" not in info
-    assert "cache_read_input_token_cost" not in info
 
 
 @pytest.mark.parametrize("model", REASONING_MODELS)
