@@ -141,7 +141,7 @@ describe("AgentInfoView update payload", () => {
       rpm_limit: 222,
       session_tpm_limit: 333,
       session_rpm_limit: 444,
-      object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_tool_permissions: {} },
+      object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} },
     });
   });
 
@@ -182,7 +182,7 @@ describe("AgentInfoView update payload", () => {
       rpm_limit: 222,
       session_tpm_limit: 333,
       session_rpm_limit: 444,
-      object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_tool_permissions: {} },
+      object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} },
     });
   });
 
@@ -260,18 +260,20 @@ describe("AgentInfoView update payload", () => {
         api_base: "https://other.example.com",
         model: "langgraph/asst_1",
       },
-      object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_tool_permissions: {} },
+      object_permission: { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} },
     });
   });
 
   it("keeps the agent's existing MCP grants in the update payload", async () => {
+    const existingMcpGrants = {
+      mcp_servers: ["srv-1"],
+      mcp_access_groups: ["grp-a"],
+      mcp_toolsets: ["toolset-1"],
+      mcp_tool_permissions: { "srv-1": ["tool_x"] },
+    };
     vi.mocked(networking.getAgentInfo).mockResolvedValue({
       ...A2A_AGENT,
-      object_permission: {
-        mcp_servers: ["srv-1"],
-        mcp_access_groups: ["grp-a"],
-        mcp_tool_permissions: { "srv-1": ["tool_x"] },
-      },
+      object_permission: existingMcpGrants,
     } as never);
     const user = setup();
     renderView();
@@ -279,11 +281,7 @@ describe("AgentInfoView update payload", () => {
 
     await save(user);
 
-    expect(patchedPayload().object_permission).toEqual({
-      mcp_servers: ["srv-1"],
-      mcp_access_groups: ["grp-a"],
-      mcp_tool_permissions: { "srv-1": ["tool_x"] },
-    });
+    expect(patchedPayload().object_permission).toEqual(existingMcpGrants);
   });
 
   it("reloads the agent and leaves edit mode when the edit is cancelled", async () => {

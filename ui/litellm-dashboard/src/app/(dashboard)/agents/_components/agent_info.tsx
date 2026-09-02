@@ -359,6 +359,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
             {agent.object_permission &&
               (agent.object_permission.mcp_servers?.length ||
                 agent.object_permission.mcp_access_groups?.length ||
+                agent.object_permission.mcp_toolsets?.length ||
                 (agent.object_permission.mcp_tool_permissions &&
                   Object.keys(agent.object_permission.mcp_tool_permissions).length > 0)) && (
                 <div style={{ marginTop: 24 }}>
@@ -379,6 +380,9 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                           {agent.object_permission.mcp_access_groups.join(", ")}
                         </DetailItem>
                       )}
+                    {agent.object_permission.mcp_toolsets && agent.object_permission.mcp_toolsets.length > 0 && (
+                      <DetailItem label="MCP Toolsets">{agent.object_permission.mcp_toolsets.join(", ")}</DetailItem>
+                    )}
                     {agent.object_permission.mcp_tool_permissions &&
                       Object.keys(agent.object_permission.mcp_tool_permissions).length > 0 && (
                         <DetailItem label="Tool permissions per server">
@@ -501,6 +505,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                                 value={{
                                   servers: (value as McpServerSelection | undefined)?.servers ?? [],
                                   accessGroups: (value as McpServerSelection | undefined)?.accessGroups ?? [],
+                                  toolsets: (value as McpServerSelection | undefined)?.toolsets ?? [],
                                 }}
                                 accessToken={accessToken ?? ""}
                                 placeholder="Select MCP servers or access groups (optional)"
