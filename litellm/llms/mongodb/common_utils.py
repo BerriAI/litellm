@@ -110,6 +110,9 @@ def reset_client_cache() -> None:
 
 _AUTHENTICATION_FAILED_CODE: Final = 18
 _UNAUTHORIZED_CODE: Final = 13
+# Atlas reports a rejected user as code 8000 "AtlasError" rather than 18, so the
+# message is the only reliable signal for a serverless or shared-tier deployment.
+_AUTHENTICATION_MESSAGE_MARKERS: Final = ("bad auth", "authentication failed", "not authorized")
 
 
 def _index_hint(index_name: str, database: str, collection: str) -> str:
@@ -169,12 +172,14 @@ def translate_mongo_error(error: Exception, index_name: str, database: str, coll
         )
     if isinstance(error, OperationFailure):
         code: Final = error.code
-        if code in (_AUTHENTICATION_FAILED_CODE, _UNAUTHORIZED_CODE):
+        detail: Final = str(error).lower()
+        if code in (_AUTHENTICATION_FAILED_CODE, _UNAUTHORIZED_CODE) or any(
+            marker in detail for marker in _AUTHENTICATION_MESSAGE_MARKERS
+        ):
             return config_error(
                 "MongoDB rejected the credentials in mongodb_connection_string, or the database user "
                 f"lacks read access to '{database}.{collection}'. Driver detail: {error.details}"
             )
-        detail: Final = str(error).lower()
         if "dimension" in detail:
             return config_error(
                 "The query embedding does not match the vector dimensions the Atlas index was built for. "
