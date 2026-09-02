@@ -43,7 +43,7 @@ const DEFAULT_SCORING_EXPLANATION =
   "The router scores each request across 7 dimensions: token count, code presence, reasoning markers, technical " +
   "terms, simple indicators, multi-step patterns, and question complexity. The weighted score determines the tier:";
 
-const TRAINED_HEURISTIC_EXPLANATION =
+const HEURISTIC_V2_EXPLANATION =
   "The router estimates success probability for all four tiers with the bundled calibrated model, then selects " +
   "the first tier that meets its trained threshold. It runs locally with no classifier API call.";
 
@@ -66,7 +66,7 @@ const CUSTOM_PROMPT_WITH_DEFAULT_MODEL_FALLBACK =
  * at all, so the panel must not keep implying a score is involved on either router.
  */
 const scoringExplanation = (value: ComplexityRouterConfigValue): string => {
-  if (value.classifier_type === "trained_heuristic") return TRAINED_HEURISTIC_EXPLANATION;
+  if (value.classifier_type === "heuristic_v2") return HEURISTIC_V2_EXPLANATION;
   const usesCustomPrompt =
     usesLlmClassifier(value.classifier_type) && Boolean(value.classifier_llm_config?.system_prompt?.trim());
   if (!usesCustomPrompt) return DEFAULT_SCORING_EXPLANATION;
@@ -186,9 +186,9 @@ const ClassifierTypeRadios: React.FC<{
         </SimpleTooltip>
         <SimpleTooltip content={scorerLockedReason}>
           <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
-            <RadioGroupItem value="trained_heuristic" className="mt-0.5" disabled={scorerLocked} />
+            <RadioGroupItem value="heuristic_v2" className="mt-0.5" disabled={scorerLocked} />
             <span>
-              <strong className="font-semibold">Trained heuristic</strong>{" "}
+              <strong className="font-semibold">Heuristic v2</strong>{" "}
               <span className="text-muted-foreground">
                 uses bundled calibrated four-tier probabilities with no API call
               </span>

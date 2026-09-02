@@ -127,24 +127,24 @@ describe("ComplexityRouterConfig", () => {
     expect(onChange).toHaveBeenCalledWith(expectedValue);
   });
 
-  it("selects the trained heuristic without requiring a classifier model or showing weighted scoring", () => {
+  it("selects heuristic v2 without requiring a classifier model or showing weighted scoring", () => {
     const onChange = vi.fn();
     const { rerender } = renderWithProviders(
       <ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={onChange} />,
     );
 
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
-    fireEvent.click(screen.getByText("Trained heuristic"));
+    fireEvent.click(screen.getByText("Heuristic v2"));
 
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({
-        classifier_type: "trained_heuristic",
+        classifier_type: "heuristic_v2",
         classifier_llm_config: undefined,
       }),
     );
 
-    const trainedValue: ComplexityRouterConfigValue = { ...defaultValue, classifier_type: "trained_heuristic" };
-    rerender(<ComplexityRouterConfig modelInfo={mockModelInfo} value={trainedValue} onChange={onChange} />);
+    const heuristicV2Value: ComplexityRouterConfigValue = { ...defaultValue, classifier_type: "heuristic_v2" };
+    rerender(<ComplexityRouterConfig modelInfo={mockModelInfo} value={heuristicV2Value} onChange={onChange} />);
 
     expect(screen.queryByText("Classifier Model")).not.toBeInTheDocument();
     expect(screen.queryByText("Advanced scoring")).not.toBeInTheDocument();

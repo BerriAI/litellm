@@ -84,7 +84,7 @@ function describeReasoningOverride(tierLabel: string | undefined, floor: number 
 
 const CONSTANT_CAUSE_LABELS: Record<string, string> = {
   heuristic_scorer: "Heuristic scorer",
-  trained_heuristic: "Trained tier heuristic",
+  heuristic_v2: "Heuristic v2",
   heuristic_first_short_circuit: "Heuristic scorer, classifier skipped",
   classifier_plugin: "Custom classifier plugin",
   semantic_keyword_match: "Semantic keyword match",

@@ -68,9 +68,9 @@ still resolve to a deployment in `model_list`; this configuration does not creat
             - abc
 ```
 
-### Trained four-tier heuristic
+### Heuristic v2
 
-Set `classifier_type: trained_heuristic` to classify with the bundled calibrated
+Set `classifier_type: heuristic_v2` to classify with the bundled calibrated
 success-probability model instead of the hand-written weighted scorer
 
 ```yaml
@@ -79,7 +79,7 @@ model_list:
     litellm_params:
       model: auto_router/complexity_router
       complexity_router_config:
-        classifier_type: trained_heuristic
+        classifier_type: heuristic_v2
         tiers:
           SIMPLE: luna
           MEDIUM: terra
@@ -94,7 +94,7 @@ monotonic probabilities, and returns the first tier meeting the trained 0.75
 threshold. The existing complexity-router tier pool then selects and dispatches
 a model from that tier
 
-Spend logs record `routing_decision.cause: trained_heuristic`, the detected request
+Spend logs record `routing_decision.cause: heuristic_v2`, the detected request
 type, and all four predicted probabilities. Existing `classifier_type: heuristic`
 configurations keep the original weighted scorer unchanged
 

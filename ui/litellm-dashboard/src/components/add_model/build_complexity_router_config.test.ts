@@ -111,16 +111,16 @@ describe("buildComplexityRouterConfig", () => {
     expect(config.classifier_llm_config).toBeUndefined();
   });
 
-  it("emits trained_heuristic without classifier-only fields", () => {
+  it("emits heuristic_v2 without classifier-only fields", () => {
     const trainedParams: BuildComplexityRouterConfigParams = {
       ...baseParams,
-      classifierType: "trained_heuristic",
+      classifierType: "heuristic_v2",
       classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000 },
       classifierContextWindowSize: 5,
       classifierFallback: "heuristic",
     };
     const config = buildComplexityRouterConfig(trainedParams);
-    expect(config.classifier_type).toBe("trained_heuristic");
+    expect(config.classifier_type).toBe("heuristic_v2");
     expect(config.classifier_llm_config).toBeUndefined();
     expect(config.classifier_context_window_size).toBeUndefined();
     expect(config.classifier_fallback).toBeUndefined();
@@ -728,8 +728,8 @@ describe("getClassifierModelError", () => {
     expect(getClassifierModelError({ classifier_type: "heuristic" })).toBeNull();
   });
 
-  it("stays quiet for a trained heuristic router, which runs locally", () => {
-    expect(getClassifierModelError({ classifier_type: "trained_heuristic" })).toBeNull();
+  it("stays quiet for a heuristic v2 router, which runs locally", () => {
+    expect(getClassifierModelError({ classifier_type: "heuristic_v2" })).toBeNull();
   });
 
   it("blocks an LLM classifier with no model, which the router cannot start without", () => {
@@ -810,7 +810,7 @@ describe("heuristic_first", () => {
   });
 
   it("omits heuristic_first_max_tier on every other classifier type, which the backend rejects it on", () => {
-    for (const classifierType of ["heuristic", "trained_heuristic", "llm"] as const) {
+    for (const classifierType of ["heuristic", "heuristic_v2", "llm"] as const) {
       const config = buildComplexityRouterConfig({ ...heuristicFirstParams, classifierType });
       expect(config.heuristic_first_max_tier).toBeUndefined();
     }

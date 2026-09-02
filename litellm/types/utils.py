@@ -2839,7 +2839,7 @@ class StandardLoggingRoutingDecisionTierBoundaries(TypedDict):
 
 RoutingDecisionCause = Literal[
     "heuristic_scorer",
-    "trained_heuristic",
+    "heuristic_v2",
     # The scorer found 2+ reasoning markers and forced REASONING regardless of score.
     # A distinct cause rather than a marker inside `signals`, because it is the fact
     # that tells a reader the score did NOT choose the tier; encoding it as free text

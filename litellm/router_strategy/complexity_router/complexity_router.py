@@ -795,7 +795,7 @@ class ClassificationOutcome(NamedTuple):
     signals: tuple[str, ...]
     cause: Literal[
         "heuristic_scorer",
-        "trained_heuristic",
+        "heuristic_v2",
         "reasoning_override",
         "llm_classifier",
         "heuristic_first_short_circuit",
@@ -985,8 +985,8 @@ class ComplexityRouter(CustomLogger):
             else None
         )
         self._tier_success_predictor: TierSuccessPredictor | None = (
-            TierSuccessPredictor(resolve_tier_artifact(self.config.trained_heuristic_artifact))
-            if self.config.classifier_type == "trained_heuristic"
+            TierSuccessPredictor(resolve_tier_artifact(self.config.heuristic_v2_artifact))
+            if self.config.classifier_type == "heuristic_v2"
             else None
         )
 
@@ -1361,8 +1361,8 @@ class ComplexityRouter(CustomLogger):
         custom tier set, and classifier_fallback otherwise decides between the heuristic scorer and
         default_model. The outcome's `cause` reports which path actually ran.
         """
-        if self.config.classifier_type == "trained_heuristic":
-            return self._classify_with_trained_heuristic(prompt)
+        if self.config.classifier_type == "heuristic_v2":
+            return self._classify_with_heuristic_v2(prompt)
         if self.config.classifier_type == "custom":
             return await self._classify_with_plugin(prompt, system_prompt, request_kwargs, raw_messages)
         if self.config.classifier_type == "heuristic_first" and self.config.classifier_llm_config is not None:
@@ -1372,10 +1372,10 @@ class ComplexityRouter(CustomLogger):
             return ClassificationOutcome(tier=tier, score=score, signals=signals, cause=cause)
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
 
-    def _classify_with_trained_heuristic(self, prompt: str) -> ClassificationOutcome:
+    def _classify_with_heuristic_v2(self, prompt: str) -> ClassificationOutcome:
         predictor: Final = self._tier_success_predictor
         if predictor is None:
-            raise ValueError("trained heuristic predictor is not configured")
+            raise ValueError("heuristic v2 predictor is not configured")
         request_type: Final = classify_prompt(prompt)
         prediction: Final = predictor.predict(prompt, request_type)
         tier: Final = TIER_SEVERITY_ORDER[prediction.required_tier - 1]
@@ -1387,7 +1387,7 @@ class ComplexityRouter(CustomLogger):
             tier=tier,
             score=None,
             signals=(f"request-type:{request_type.value}", *probability_signals),
-            cause="trained_heuristic",
+            cause="heuristic_v2",
         )
 
     async def _classify_heuristic_first(

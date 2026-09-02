@@ -49,7 +49,7 @@ from litellm.types.router import (
 )
 
 
-def _trained_heuristic_artifact() -> TrainedTierArtifact:
+def _heuristic_v2_artifact() -> TrainedTierArtifact:
     return TrainedTierArtifact(
         global_statistics=tuple(
             TierGlobalStatistic(tier=tier, successes=successes, observations=100)
@@ -1710,13 +1710,13 @@ class TestLLMClassifier:
         assert outcome.score is not None
 
     @pytest.mark.asyncio
-    async def test_trained_heuristic_routes_directly_to_predicted_builtin_tier(self, mock_router_instance):
+    async def test_heuristic_v2_routes_directly_to_predicted_builtin_tier(self, mock_router_instance):
         router = ComplexityRouter(
             model_name="tier-router",
             litellm_router_instance=mock_router_instance,
             complexity_router_config={
-                "classifier_type": "trained_heuristic",
-                "trained_heuristic_artifact": _trained_heuristic_artifact(),
+                "classifier_type": "heuristic_v2",
+                "heuristic_v2_artifact": _heuristic_v2_artifact(),
                 "tiers": {
                     "SIMPLE": "simple-model",
                     "MEDIUM": "medium-model",
@@ -1735,7 +1735,7 @@ class TestLLMClassifier:
         assert response is not None
         assert response.model == "complex-model"
         assert response.routing_decision["tier"] == "COMPLEX"
-        assert response.routing_decision["cause"] == "trained_heuristic"
+        assert response.routing_decision["cause"] == "heuristic_v2"
         assert response.routing_decision["signals"] == [
             "request-type:general",
             "tier-probability:simple=0.107843",
@@ -1744,16 +1744,16 @@ class TestLLMClassifier:
             "tier-probability:reasoning=0.980392",
         ]
 
-    def test_trained_heuristic_needs_no_classifier_model(self):
-        config = ComplexityRouterConfig(classifier_type="trained_heuristic")
+    def test_heuristic_v2_needs_no_classifier_model(self):
+        config = ComplexityRouterConfig(classifier_type="heuristic_v2")
 
         assert config.classifier_llm_config is None
-        assert config.trained_heuristic_artifact == "ultrafeedback"
+        assert config.heuristic_v2_artifact == "ultrafeedback"
 
-    def test_trained_heuristic_rejects_custom_tier_definitions(self):
-        with pytest.raises(ValidationError, match="as does trained_heuristic"):
+    def test_heuristic_v2_rejects_custom_tier_definitions(self):
+        with pytest.raises(ValidationError, match="as does heuristic_v2"):
             ComplexityRouterConfig(
-                classifier_type="trained_heuristic",
+                classifier_type="heuristic_v2",
                 tier_definitions=(
                     {"name": "low", "description": "easy work"},
                     {"name": "high", "description": "hard work"},

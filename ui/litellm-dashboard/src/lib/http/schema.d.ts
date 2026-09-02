@@ -34448,7 +34448,7 @@ export interface components {
              * @default heuristic
              * @enum {string}
              */
-            classifier_type: "heuristic" | "trained_heuristic" | "llm" | "custom" | "heuristic_first";
+            classifier_type: "heuristic" | "heuristic_v2" | "llm" | "custom" | "heuristic_first";
             /**
              * Code Keywords
              * @description Keywords indicating code-related content
@@ -34509,6 +34509,12 @@ export interface components {
              * @description The highest tier the local scorer may decide on its own; required when classifier_type is 'heuristic_first' and rejected otherwise. A request whose heuristic tier is at or below this one skips the LLM classifier and routes straight to that heuristic tier, so the classifier call is only paid for on traffic the scorer could not place cheaply. The scorer must also have produced at least one signal: a prompt where no dimension fired scores 0.0 and would otherwise land SIMPLE by default rather than by evidence, which is how a chained router would silently send unclassified traffic to the cheapest model. Names a built-in tier, and may not name the highest one, since that would make the LLM classifier unreachable.
              */
             heuristic_first_max_tier?: string | null;
+            /**
+             * Heuristic V2 Artifact
+             * @description Success-probability artifact used by classifier_type 'heuristic_v2'. The bundled UltraFeedback artifact is selected by default; an inline trained artifact may replace it
+             * @default ultrafeedback
+             */
+            heuristic_v2_artifact: components["schemas"]["TrainedTierArtifact"] | "ultrafeedback";
             /**
              * Housekeeping Patterns
              * @description Additional case-sensitive literal sentinels that mark a request as client housekeeping, on top of the built-in conversation-title ones. For clients whose wording the built-ins don't cover, or after a client release changes its strings.
@@ -34644,12 +34650,6 @@ export interface components {
             token_thresholds?: {
                 [key: string]: number;
             };
-            /**
-             * Trained Heuristic Artifact
-             * @description Success-probability artifact used by classifier_type 'trained_heuristic'. The bundled UltraFeedback artifact is selected by default; an inline trained artifact may replace it
-             * @default ultrafeedback
-             */
-            trained_heuristic_artifact: components["schemas"]["TrainedTierArtifact"] | "ultrafeedback";
         } & {
             [key: string]: unknown;
         };
@@ -35736,7 +35736,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "trained_heuristic" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */

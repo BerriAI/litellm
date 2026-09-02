@@ -627,7 +627,7 @@ class ComplexityRouterConfig(BaseModel):
     )
 
     # Classifier strategy
-    classifier_type: Literal["heuristic", "trained_heuristic", "llm", "custom", "heuristic_first"] = Field(
+    classifier_type: Literal["heuristic", "heuristic_v2", "llm", "custom", "heuristic_first"] = Field(
         default="heuristic",
         description=(
             "Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, "
@@ -635,10 +635,10 @@ class ComplexityRouterConfig(BaseModel):
             "for the LLM classifier when the local scorer does not confidently land a cheap tier"
         ),
     )
-    trained_heuristic_artifact: TrainedTierArtifact | Literal["ultrafeedback"] = Field(
+    heuristic_v2_artifact: TrainedTierArtifact | Literal["ultrafeedback"] = Field(
         default="ultrafeedback",
         description=(
-            "Success-probability artifact used by classifier_type 'trained_heuristic'. The bundled "
+            "Success-probability artifact used by classifier_type 'heuristic_v2'. The bundled "
             "UltraFeedback artifact is selected by default; an inline trained artifact may replace it"
         ),
     )
@@ -1257,10 +1257,10 @@ class ComplexityRouterConfig(BaseModel):
         )
         if duplicated:
             raise ValueError(f"tier_definitions names must be unique (case-insensitive): {', '.join(duplicated)}")
-        if self.classifier_type in ("heuristic", "trained_heuristic", "heuristic_first"):
+        if self.classifier_type in ("heuristic", "heuristic_v2", "heuristic_first"):
             raise ValueError(
                 "tier_definitions requires classifier_type 'llm' or 'custom': the heuristic scorer only "
-                "produces the four built-in tiers, as does trained_heuristic"
+                "produces the four built-in tiers, as does heuristic_v2"
             )
         conflicts: Final = self._tier_definition_conflicts()
         if conflicts:

@@ -128,7 +128,7 @@ export interface ClassifierLLMConfig {
   system_prompt?: string;
 }
 
-export type ClassifierType = "heuristic" | "trained_heuristic" | "llm" | "heuristic_first";
+export type ClassifierType = "heuristic" | "heuristic_v2" | "llm" | "heuristic_first";
 
 /**
  * Whether this router can call classifier_llm_config.model. Mirrors the backend's
@@ -161,7 +161,7 @@ export const heuristicScoringRoleFor = (
   classifierType: ClassifierType,
   classifierFallback: ClassifierFallback | undefined,
 ): HeuristicScoringRole => {
-  if (classifierType === "trained_heuristic") return "never";
+  if (classifierType === "heuristic_v2") return "never";
   if (classifierType === "heuristic" || classifierType === "heuristic_first") return "decides";
   return (classifierFallback ?? DEFAULT_CLASSIFIER_FALLBACK) === "heuristic" ? "fallback_only" : "never";
 };
@@ -190,7 +190,7 @@ const builtInTierInfo = (rowId: string): { label: string; description: string; e
 };
 
 const tierConfigIntroText = (value: ComplexityRouterConfigValue): string => {
-  if (value.classifier_type === "trained_heuristic") {
+  if (value.classifier_type === "heuristic_v2") {
     return "The complexity router classifies each request with a calibrated local four-tier model (no API calls). Configure which model(s) handle each tier.";
   }
   if (heuristicScoringRole(value) === "never") {
