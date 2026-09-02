@@ -15,6 +15,14 @@ def redis_no_ping():
         yield
 
 
+@pytest.fixture
+def sync_batch_redis_cache(redis_no_ping):
+    cache = RedisCache(host="127.0.0.1", port=6379)
+    cache.redis_client = MagicMock()
+    cache.redis_client.mget.side_effect = OSError("redis unavailable")
+    return cache
+
+
 @pytest.mark.parametrize(
     ("namespace", "key", "expected"),
     [
@@ -502,21 +510,15 @@ async def test_circuit_breaker_opens_when_method_swallows_redis_failure(redis_no
         await call_method(cache)
 
 
-def test_circuit_breaker_opens_when_sync_batch_get_cache_swallows_redis_failure(redis_no_ping):
-    """The sync batch read is a production path since LIT-6729 routed
-    DualCache.batch_get_cache to the blocking client, so it must feed the same
-    circuit breaker the async methods do: an unreachable Redis has to open the
-    breaker instead of costing every sync routing decision the full socket timeout.
-    """
+def test_circuit_breaker_opens_when_sync_batch_get_cache_swallows_redis_failure(sync_batch_redis_cache):
+    """A sync batch read that swallows a Redis failure must still open the breaker."""
     from litellm.constants import REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD
 
-    cache = RedisCache(host="127.0.0.1", port=_closed_port(), socket_timeout=0.5)
-
     for _ in range(REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD):
-        assert cache.batch_get_cache(key_list=["lit6729"]) == {}
+        assert sync_batch_redis_cache.batch_get_cache(key_list=["lit6729"]) == {}
 
     with pytest.raises(Exception, match="circuit breaker is open"):
-        cache.batch_get_cache(key_list=["lit6729"])
+        sync_batch_redis_cache.batch_get_cache(key_list=["lit6729"])
 
 
 @pytest.mark.asyncio

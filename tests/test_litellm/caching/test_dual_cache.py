@@ -141,6 +141,19 @@ def test_dual_cache_batch_get_cache_rolls_back_redis_reservation_on_error():
     assert "shared_a" not in dual_cache.last_redis_batch_access_time
 
 
+def test_dual_cache_batch_get_cache_returns_memory_only_when_redis_read_is_throttled():
+    mock_redis = _redis_mock_for_sync_batch({"throttled_key": "redis_value"})
+    dual_cache = DualCache(
+        in_memory_cache=InMemoryCache(), redis_cache=mock_redis, default_redis_batch_cache_expiry=10
+    )
+    dual_cache.last_redis_batch_access_time["throttled_key"] = time.time()
+
+    result = dual_cache.batch_get_cache(keys=["throttled_key"])
+
+    assert result == [None]
+    mock_redis.batch_get_cache.assert_not_called()
+
+
 def test_dual_cache_sync_batch_redis_backfill_injects_default_in_memory_ttl():
     """Sync batch_get_cache's Redis-to-memory backfill must honor
     default_in_memory_ttl, same as the async path."""
