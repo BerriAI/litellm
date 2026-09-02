@@ -130,6 +130,7 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
         password="secret",
         master_key="test-master-key",
         prisma_client=mock_prisma_client,
+        general_settings={},
     )
     mock_create_ui_token_object.assert_called_once_with(
         login_result=mock_login_result,
