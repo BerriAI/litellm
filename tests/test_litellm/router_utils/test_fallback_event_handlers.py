@@ -1220,6 +1220,28 @@ class TestOrderedFallbackLookupGroups:
         assert fallback_lookup_groups({}, "smart-router") == ("smart-router",)
         assert fallback_lookup_groups({}, None) == ()
 
+    def test_session_remap_keeps_the_bound_router_between_tier_and_requested_group(self):
+        from litellm.router_utils.fallback_event_handlers import (
+            PRE_ROUTING_SELECTED_MODEL_KEY,
+            fallback_lookup_groups,
+        )
+
+        kwargs = {
+            "litellm_metadata": {
+                PRE_ROUTING_SELECTED_MODEL_KEY: "tier1",
+                "model_group": "smart-router",
+            }
+        }
+
+        assert fallback_lookup_groups(kwargs, "requested-model") == (
+            "tier1",
+            "smart-router",
+            "requested-model",
+        )
+        assert fallback_lookup_groups({"metadata": {"model_group": []}}, "requested-model") == (
+            "requested-model",
+        )
+
     def test_first_resolving_group_wins_and_generic_idx_survives_a_miss(self):
         from litellm.router_utils.fallback_event_handlers import (
             get_fallback_model_group_for_lookup_groups,
