@@ -583,6 +583,7 @@ except ImportError:
     shutdown_billing_metrics_recorder = None
 from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlMiddleware,
+    admission_control_state,
     get_admission_control_settings,
 )
 from litellm.proxy.middleware.in_flight_requests_middleware import (
@@ -18106,6 +18107,7 @@ app.add_middleware(
 app.add_middleware(
     AdmissionControlMiddleware,
     get_settings=lambda: get_admission_control_settings(general_settings),
+    state=admission_control_state,
 )
 
 
