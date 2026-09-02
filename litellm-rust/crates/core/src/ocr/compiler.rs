@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;
 use url::Url;
@@ -10,6 +9,7 @@ use super::plan::{CompletionPlan, DocumentPlan};
 use super::policy::OcrParameterPolicy;
 use super::response::NormalizedOcr;
 use super::types::OcrDialectId;
+pub use super::wire::{MultipartBodyPlan, MultipartPart, OcrJsonValue, OcrWireBody, OcrWireError};
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum CompileError {
@@ -95,33 +95,34 @@ pub enum ProviderDocument {
         kind: DocumentKind,
         url: Url,
     },
-    InlineDataUri {
+    Inline {
         kind: DocumentKind,
-        data_uri: String,
+        media_type: mime::Mime,
+        bytes: bytes::Bytes,
     },
     Reference {
         id: String,
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "UPPERCASE")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HttpMethod {
     Get,
     Post,
 }
 
-#[derive(Clone, PartialEq, Serialize)]
-#[serde(transparent)]
-pub struct OcrWireBody(pub(crate) Value);
-
-impl OcrWireBody {
-    pub fn as_value(&self) -> &Value {
-        &self.0
-    }
-}
-
-#[derive(Clone, PartialEq, Serialize)]
+/// ```compile_fail
+/// fn assert_serialize<T: serde::Serialize>() {}
+/// assert_serialize::<litellm_core::ocr::compiler::CompiledHttpRequest>();
+/// assert_serialize::<litellm_core::ocr::compiler::OcrWireBody>();
+/// assert_serialize::<litellm_core::ocr::compiler::OcrJsonValue>();
+/// ```
+///
+/// ```compile_fail
+/// fn assert_debug<T: std::fmt::Debug>() {}
+/// assert_debug::<litellm_core::ocr::compiler::OcrWireBody>();
+/// ```
+#[derive(Clone, PartialEq)]
 pub struct CompiledHttpRequest {
     pub method: HttpMethod,
     pub url: Url,
@@ -179,23 +180,60 @@ pub trait OcrDialectCompiler: Send + Sync {
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
+    use mime::Mime;
     use serde_json::json;
 
     use super::*;
+    use crate::ocr::canonical::OcrDocument;
 
     #[test]
-    fn compiled_http_request_is_the_serializable_wire_boundary() {
+    fn compilation_preserves_the_inline_media_allocation() {
+        let source = Bytes::from_static(b"pdf payload");
+        let source_pointer = source.as_ptr();
+        let canonical_document = OcrDocument::Inline {
+            kind: DocumentKind::Pdf,
+            media_type: "application/pdf".parse::<Mime>().expect("valid MIME type"),
+            bytes: source.clone(),
+        };
+        let OcrDocument::Inline {
+            kind,
+            media_type,
+            bytes,
+        } = &canonical_document
+        else {
+            panic!("inline canonical document expected");
+        };
+        let provider_document = ProviderDocument::Inline {
+            kind: *kind,
+            media_type: media_type.clone(),
+            bytes: bytes.clone(),
+        };
+        let ProviderDocument::Inline {
+            media_type, bytes, ..
+        } = provider_document
+        else {
+            panic!("inline document expected");
+        };
         let request = CompiledHttpRequest {
             method: HttpMethod::Post,
             url: Url::parse("https://example.com/ocr").expect("valid URL"),
             headers: BTreeMap::from([("content-type".to_string(), "application/json".to_string())]),
-            body: OcrWireBody(json!({"model": "ocr-model"})),
+            body: OcrWireBody::JsonWithMedia(OcrJsonValue::Object(BTreeMap::from([
+                (
+                    "document".to_string(),
+                    OcrJsonValue::InlineDataUri { media_type, bytes },
+                ),
+                ("model".to_string(), OcrJsonValue::Value(json!("ocr-model"))),
+            ]))),
         };
 
-        let serialized = serde_json::to_value(request).expect("wire request serializes");
-
-        assert_eq!(serialized["method"], "POST");
-        assert_eq!(serialized["url"], "https://example.com/ocr");
-        assert_eq!(serialized["body"]["model"], "ocr-model");
+        let OcrWireBody::JsonWithMedia(OcrJsonValue::Object(fields)) = &request.body else {
+            panic!("media JSON body expected");
+        };
+        let OcrJsonValue::InlineDataUri { bytes, .. } = &fields["document"] else {
+            panic!("inline media expected");
+        };
+        assert_eq!(bytes.as_ptr(), source_pointer);
     }
 }

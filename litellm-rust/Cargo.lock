@@ -1428,6 +1428,7 @@ dependencies = [
  "aws-sigv4",
  "aws-smithy-runtime-api",
  "aws-types",
+ "base64",
  "bytes",
  "futures-util",
  "mime",
