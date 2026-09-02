@@ -1,3 +1,4 @@
+import importlib.util
 import os
 import re
 import sys
@@ -1402,7 +1403,7 @@ def is_pass_through_provider_route(route: str) -> bool:
     return False
 
 
-def _has_user_setup_sso() -> bool:
+def has_user_setup_sso() -> bool:
     """
     Check if the user has set up single sign-on (SSO).
 
@@ -1423,6 +1424,63 @@ def _has_user_setup_sso() -> bool:
         or bool(saml_idp_metadata_url)
         or bool(saml_idp_metadata_xml)
     )
+
+
+def _is_google_ready() -> bool:
+    return bool(os.getenv("GOOGLE_CLIENT_ID")) and bool(os.getenv("GOOGLE_CLIENT_SECRET"))
+
+
+def _is_microsoft_ready() -> bool:
+    return (
+        bool(os.getenv("MICROSOFT_CLIENT_ID"))
+        and bool(os.getenv("MICROSOFT_CLIENT_SECRET"))
+        and bool(os.getenv("MICROSOFT_TENANT"))
+    )
+
+
+def _is_generic_oauth_ready() -> bool:
+    return (
+        bool(os.getenv("GENERIC_CLIENT_ID"))
+        and bool(os.getenv("GENERIC_CLIENT_SECRET"))
+        and bool(os.getenv("GENERIC_AUTHORIZATION_ENDPOINT"))
+        and bool(os.getenv("GENERIC_TOKEN_ENDPOINT"))
+        and bool(os.getenv("GENERIC_USERINFO_ENDPOINT"))
+    )
+
+
+def _is_saml_ready() -> bool:
+    if not (os.getenv("SAML_IDP_METADATA_URL") or os.getenv("SAML_IDP_METADATA_XML")):
+        return False
+    # SAML's runtime (python3-saml) is an optional dependency; the SAML
+    # handler itself fails closed on every request when it is missing
+    # (SAMLAuthHandler raises before touching the IdP), so metadata alone
+    # is not "ready" either. find_spec raises ModuleNotFoundError (rather
+    # than returning None) when the top-level package is absent entirely,
+    # so this must not be a bare boolean expression or every password
+    # login would 500 on a deployment that configured SAML metadata
+    # without installing the optional extra.
+    try:
+        return importlib.util.find_spec("onelogin.saml2.auth") is not None
+    except ModuleNotFoundError:
+        return False
+
+
+def is_sso_provider_fully_configured() -> bool:
+    """Whether ANY configured SSO provider has every companion setting it
+    needs to actually authenticate a user, not merely a client id.
+
+    A lone ``MICROSOFT_CLIENT_ID`` with no secret or tenant makes
+    ``has_user_setup_sso()`` return True while every real sign-in attempt
+    fails, so a gate that BLOCKS the password fallback (unlike the UI
+    discovery use of ``has_user_setup_sso()``, where a dead login button is
+    merely confusing) must check readiness here, or it can lock every admin
+    out with no way to sign in at all. Checks every provider independently
+    (mirroring ``/sso/readiness``'s per-provider requirements) rather than
+    stopping at the first one with a client id set, so a stray leftover
+    client id for an unused provider can never mask a different, fully
+    configured provider that would otherwise satisfy this gate.
+    """
+    return _is_google_ready() or _is_microsoft_ready() or _is_generic_oauth_ready() or _is_saml_ready()
 
 
 def get_customer_user_header_from_mapping(user_id_mapping) -> list | None:
