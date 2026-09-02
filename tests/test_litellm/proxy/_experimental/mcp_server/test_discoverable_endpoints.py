@@ -7816,6 +7816,132 @@ async def test_token_exchange_pairs_client_secret_with_server_client_id():
     assert "client_secret" not in sent
 
 
+@pytest.mark.asyncio
+async def test_token_exchange_refresh_passes_presented_refresh_ownership():
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+    from litellm.proxy._experimental.mcp_server.oauth_identity_binding import RefreshTokenPresented
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer
+
+    server = MCPServer(
+        server_id="srv-1",
+        name="srv-1",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="cid",
+        token_url="https://provider.example/token",
+        oauth_identity_binding=MCPOAuthIdentityBinding(
+            mode="enforce",
+            issuer="https://provider.example",
+            audiences=["cid"],
+        ),
+    )
+    request = MagicMock(spec=Request)
+    request.base_url = "https://litellm.example.com/"
+    request.headers = {}
+    response = MagicMock()
+    response.json.return_value = {"access_token": "at"}
+    response.raise_for_status = MagicMock()
+    client = MagicMock()
+    client.post = AsyncMock(return_value=response)
+    enforce = AsyncMock()
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_user_id_from_request",
+            new=AsyncMock(return_value="user-a"),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.enforce_oauth_identity_binding",
+            new=enforce,
+        ),
+    ):
+        await exchange_token_with_server(
+            request=request,
+            mcp_server=server,
+            grant_type="refresh_token",
+            code=None,
+            redirect_uri=None,
+            client_id="cid",
+            client_secret=None,
+            code_verifier=None,
+            refresh_token="rt-1",
+        )
+
+    ownership = enforce.await_args.kwargs["refresh_ownership"]
+    assert isinstance(ownership, RefreshTokenPresented)
+    assert ownership.refresh_token == "rt-1"
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_authorization_code_passes_no_refresh_ownership():
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer
+
+    server = MCPServer(
+        server_id="srv-1",
+        name="srv-1",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="cid",
+        token_url="https://provider.example/token",
+        oauth_identity_binding=MCPOAuthIdentityBinding(
+            mode="enforce",
+            issuer="https://provider.example",
+            audiences=["cid"],
+        ),
+    )
+    request = MagicMock(spec=Request)
+    request.base_url = "https://litellm.example.com/"
+    request.headers = {}
+    response = MagicMock()
+    response.json.return_value = {"access_token": "at"}
+    response.raise_for_status = MagicMock()
+    client = MagicMock()
+    client.post = AsyncMock(return_value=response)
+    enforce = AsyncMock()
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._extract_user_id_from_request",
+            new=AsyncMock(return_value="user-a"),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.enforce_oauth_identity_binding",
+            new=enforce,
+        ),
+    ):
+        await exchange_token_with_server(
+            request=request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="https://litellm.example.com/callback",
+            client_id="cid",
+            client_secret=None,
+            code_verifier=None,
+        )
+
+    assert enforce.await_args.kwargs["refresh_ownership"] is None
+
+
 def _upstream_token_response(status_code: int, *, json_body: object = None, text_body: str = "") -> "httpx.Response":
     import httpx
 
