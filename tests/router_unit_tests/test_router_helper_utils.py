@@ -2294,6 +2294,7 @@ def search_tools():
                 "search_provider": "perplexity",
                 "api_key": "test-api-key",
                 "api_base": "https://api.perplexity.ai",
+                "mode": "turbo",
             },
         },
         {
@@ -2302,6 +2303,7 @@ def search_tools():
                 "search_provider": "perplexity",
                 "api_key": "test-api-key-2",
                 "api_base": "https://api.perplexity.ai",
+                "mode": "turbo",
             },
         },
     ]
@@ -2393,6 +2395,7 @@ async def test_asearch_with_fallbacks_helper(search_tools):
         assert "search_provider" in kwargs
         assert kwargs["search_provider"] == "perplexity"
         assert "api_key" in kwargs
+        assert kwargs["mode"] == "turbo"
         assert kwargs["query"] == "helper test query"
         return mock_response
 
