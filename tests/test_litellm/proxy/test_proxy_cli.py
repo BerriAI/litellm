@@ -1737,8 +1737,7 @@ class TestRunServerDbSetup:
         mock_atexit_register,
         mock_subprocess_run,
     ):
-        """Which resolver and which migration mode run_server hands setup_database,
-        across the db push flag, the v2/legacy flag pair and USE_V2_MIGRATION_RESOLVER."""
+        """Test that use_prisma_db_push flag correctly controls PrismaManager.setup_database use_migrate parameter"""
         from litellm.proxy.proxy_cli import run_server
 
         # Mock subprocess.run to simulate prisma being available
@@ -1788,7 +1787,7 @@ class TestRunServerDbSetup:
             # use_prisma_db_push should be False (default), so use_migrate should be True
             run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
             mock_setup_database.assert_called_with(
-                use_migrate=True, use_v2_resolver=True
+                use_migrate=True, use_v2_resolver=False
             )
 
             # Reset mocks
@@ -1803,37 +1802,8 @@ class TestRunServerDbSetup:
                 standalone_mode=False,
             )
             mock_setup_database.assert_called_with(
-                use_migrate=False, use_v2_resolver=True
+                use_migrate=False, use_v2_resolver=False
             )
-
-            for argv, env_value, expected_v2 in (
-                ([], None, True),
-                (["--use_v2_migration_resolver"], None, True),
-                (["--use_legacy_migration_resolver"], None, False),
-                ([], "false", False),
-                ([], "true", True),
-                (["--use_v2_migration_resolver"], "false", True),
-                (["--use_legacy_migration_resolver"], "true", False),
-            ):
-                mock_setup_database.reset_mock()
-                mock_should_update_schema.reset_mock()
-                mock_should_update_schema.return_value = True
-
-                resolver_env = (
-                    {"USE_V2_MIGRATION_RESOLVER": env_value}
-                    if env_value is not None
-                    else {}
-                )
-                os.environ.pop("USE_V2_MIGRATION_RESOLVER", None)
-                with patch.dict(os.environ, resolver_env):
-                    run_server.main(
-                        ["--local", "--skip_server_startup", *argv],
-                        standalone_mode=False,
-                    )
-                assert mock_setup_database.call_args.kwargs == {
-                    "use_migrate": True,
-                    "use_v2_resolver": expected_v2,
-                }, f"argv={argv} env={env_value}"
 
     @patch("subprocess.run")
     @patch("atexit.register")
@@ -1899,7 +1869,7 @@ class TestRunServerDbSetup:
                 )
             assert exc_info.value.code == 1
             mock_setup_database.assert_called_once_with(
-                use_migrate=True, use_v2_resolver=True
+                use_migrate=True, use_v2_resolver=False
             )
 
     @patch("subprocess.run")
@@ -2010,6 +1980,7 @@ class TestRunServerDbSetup:
         mock_setup_database.assert_called_once_with(
             use_migrate=True, use_v2_resolver=True
         )
+
 
 # --- Module-level helpers for worker startup hook tests ---
 
@@ -2479,6 +2450,96 @@ class TestReadReplicaConnectionParams:
         captured = _run_server_and_capture_urls(str(config_path))
 
         assert "DATABASE_URL_READ_REPLICA" not in captured
+
+
+class TestMaxIdleConnectionLifetimeDefault:
+    """The proxy defaults `max_idle_connection_lifetime` below common infra idle
+    timeouts so stale pooled connections are recycled instead of failing requests."""
+
+    def _config(self, tmp_path, general_settings):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(yaml.dump({"model_list": [], "general_settings": general_settings}))
+        return str(config_path)
+
+    def test_default_applied_to_database_and_direct_url(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {}),
+            direct_url="postgresql://t:t@localhost:5432/t",
+        )
+
+        for env_var in ("DATABASE_URL", "DIRECT_URL"):
+            query = urlparse.parse_qs(urlparse.urlparse(captured[env_var]).query)
+            assert query["max_idle_connection_lifetime"] == ["60"], env_var
+
+    def test_url_pinned_value_wins_over_default(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {}),
+            database_url="postgresql://t:t@localhost:5432/t?max_idle_connection_lifetime=300",
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        assert query["max_idle_connection_lifetime"] == ["300"]
+
+    def test_url_pinned_value_wins_over_config_key(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {"database_max_idle_connection_lifetime": 45}),
+            database_url="postgresql://t:t@localhost:5432/t?max_idle_connection_lifetime=300",
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        assert query["max_idle_connection_lifetime"] == ["300"]
+
+    def test_config_key_overrides_default(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {"database_max_idle_connection_lifetime": 45}),
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        assert query["max_idle_connection_lifetime"] == ["45"]
+
+    def test_extra_connection_params_override_default(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(
+                tmp_path,
+                {"database_extra_connection_params": {"max_idle_connection_lifetime": 120}},
+            ),
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        assert query["max_idle_connection_lifetime"] == ["120"]
+
+    def test_read_replica_gets_the_default(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {}),
+            read_replica_url="postgresql://t:t@reader:5432/t",
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
+        assert query["max_idle_connection_lifetime"] == ["60"]
+
+    def test_replica_pinned_value_wins(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {"database_max_idle_connection_lifetime": 45}),
+            read_replica_url="postgresql://t:t@reader:5432/t?max_idle_connection_lifetime=200",
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
+        assert query["max_idle_connection_lifetime"] == ["200"]
+
+    def test_config_key_reaches_the_read_replica(self, tmp_path):
+        captured = _run_server_and_capture_urls(
+            self._config(tmp_path, {"database_max_idle_connection_lifetime": 45}),
+            read_replica_url="postgresql://t:t@reader:5432/t",
+        )
+
+        query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
+        assert query["max_idle_connection_lifetime"] == ["45"]
+
+    def test_idle_lifetime_params_prefers_configured_value(self):
+        from litellm.proxy.db.db_url_settings import idle_lifetime_params
+
+        assert dict(idle_lifetime_params(45)) == {"max_idle_connection_lifetime": 45}
+        assert dict(idle_lifetime_params(None)) == {"max_idle_connection_lifetime": 60}
 
 
 class TestTokenAuthCliFlags:

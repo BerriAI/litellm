@@ -4,7 +4,8 @@ Support for gpt model family
 
 import json
 import os
-from collections.abc import AsyncIterator, Coroutine, Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, overload
 from urllib.parse import urlparse
 
@@ -21,6 +22,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_tool_reference_parts_from_tool_messages,
     get_tool_call_names,
     hoist_images_from_tool_messages,
+    tool_with_flattened_parameters,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
@@ -63,6 +65,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+_NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
@@ -397,6 +402,21 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 )
         return messages, tools
 
+    def _targets_openai_hosted_endpoint(
+        self,
+        custom_llm_provider: str | None,
+        api_base: str | None,
+    ) -> bool:
+        if custom_llm_provider != "openai":
+            return False
+        resolved_api_base = api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
+        if not resolved_api_base:
+            return True
+        hostname: Final = urlparse(resolved_api_base).hostname
+        if hostname is None:
+            return True
+        return hostname == "openai.com" or hostname.endswith(".openai.com")
+
     def _should_preserve_cache_control_for_endpoint(
         self,
         custom_llm_provider: str | None,
@@ -408,15 +428,34 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         api_base. Those can understand cache_control, so it must survive there.
         Real OpenAI cannot, so it is still stripped for an openai.com host.
         """
-        if custom_llm_provider != "openai":
-            return False
-        resolved_api_base = api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
-        if not resolved_api_base:
-            return False
-        hostname: Final = urlparse(resolved_api_base).hostname
-        if hostname is None:
-            return False
-        return hostname != "openai.com" and not hostname.endswith(".openai.com")
+        return custom_llm_provider == "openai" and not self._targets_openai_hosted_endpoint(
+            custom_llm_provider, api_base
+        )
+
+    def _flattened_tools_update_for_openai(
+        self,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        """
+        OpenAI's chat completions validator rejects tool `parameters` carrying
+        'oneOf'/'anyOf'/'allOf'/'enum'/'const'/'not' at the top level for every
+        model family, unlike the Responses API, where GPT-5+ accepts them.
+        """
+        tools: Final = optional_params.get("tools")
+        if not isinstance(tools, list):
+            return _NO_TOOLS_UPDATE
+        provider: Final = litellm_params.get("custom_llm_provider")
+        raw_api_base: Final = litellm_params.get("api_base")
+        if not self._targets_openai_hosted_endpoint(
+            provider if isinstance(provider, str) else None,
+            raw_api_base if isinstance(raw_api_base, str) else None,
+        ):
+            return _NO_TOOLS_UPDATE
+        flattened: Final = [  # mutable-ok: request tools are a JSON list
+            tool_with_flattened_parameters(tool) if isinstance(tool, dict) else tool for tool in tools
+        ]
+        return MappingProxyType({"tools": flattened})
 
     def transform_request(
         self,
@@ -450,6 +489,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             "model": model,
             "messages": messages,
             **optional_params,
+            **self._flattened_tools_update_for_openai(optional_params, litellm_params),
         }
 
     async def async_transform_request(
@@ -481,6 +521,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 "model": model,
                 "messages": transformed_messages,
                 **optional_params,
+                **self._flattened_tools_update_for_openai(optional_params, litellm_params),
             }
         else:
             ## allow for any object specific behaviour to be handled
