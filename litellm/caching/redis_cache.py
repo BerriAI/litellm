@@ -14,6 +14,7 @@ import functools
 import hashlib
 import inspect
 import json
+import re
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextvars import ContextVar
@@ -128,12 +129,51 @@ def _get_call_stack_info(num_frames: int = 2) -> str:
         return "unknown"
 
 
+# redis-py annotates every failed pipeline command with the command it sent,
+# arguments included: ``Command # 1 (SET <key> <value> EX 60) of pipeline caused
+# error: <server error>`` (``Pipeline.annotate_exception`` in redis/client.py,
+# redis/asyncio/client.py and redis/cluster.py). The pinned redis-py 5.3.1 does
+# not truncate that text at all, so ``str(error)`` carries the whole cache key
+# and the serialized prompt/response straight into logs and telemetry -- the
+# exact payload this module removed from its own log arguments.
+#
+# ``command`` is matched greedily so that the split happens at the LAST
+# " of pipeline caused error: ", which is the one redis-py wrote. A cache value
+# containing that literal text therefore cannot shift the boundary and smuggle
+# itself into the part we keep.
+_PIPELINE_COMMAND_ANNOTATION: Final = re.compile(
+    r"^Command # (?P<index>\d+) \((?P<command>.*)\) of pipeline caused error: (?P<detail>.*)$",
+    re.DOTALL,
+)
+
+_REDACTED: Final = "<redacted>"
+
+
+def _redact_redis_error(error: Exception) -> str:
+    """Return ``str(error)`` with any redis-py pipeline command arguments removed.
+
+    Only the command name is kept (``SET``, ``INCRBY``, ...) because that is the
+    part with diagnostic value; the key and value that follow it are not. The
+    trailing detail is the server's own error string ("WRONGTYPE ...", "OOM
+    ..."), which redis never echoes argument data into, so it is preserved.
+
+    Messages that are not pipeline annotations are returned unchanged: redis-py
+    builds those from the server reply alone.
+    """
+    message: Final = str(error)
+    match: Final = _PIPELINE_COMMAND_ANNOTATION.match(message)
+    if match is None:
+        return message
+    command_name: Final = match["command"].split(" ", 1)[0].strip() or _REDACTED
+    return f"Command # {match['index']} ({command_name} {_REDACTED}) of pipeline caused error: {match['detail']}"
+
+
 def _log_redis_write_failure(operation: str, error: Exception) -> None:
     """Log Redis write failures without serializing cache keys or values."""
     verbose_logger.error(
         "LiteLLM Redis Caching: %s - Got exception from REDIS %s",
         operation,
-        str(error),
+        _redact_redis_error(error),
     )
 
 
@@ -572,6 +612,7 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=end_time - start_time,
                     error=e,
+                    error_message_override=_redact_redis_error(e),
                     call_type="redis_async_ping",
                 )
             )
@@ -589,6 +630,7 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=end_time - start_time,
                     error=e,
+                    error_message_override=_redact_redis_error(e),
                     call_type="redis_sync_ping",
                 )
             )
@@ -782,6 +824,7 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     error=e,
+                    error_message_override=_redact_redis_error(e),
                     call_type=f"async_scan_iter <- {_get_call_stack_info()}",
                     start_time=start_time,
                     end_time=end_time,
@@ -900,6 +943,7 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     error=e,
+                    error_message_override=_redact_redis_error(e),
                     start_time=start_time,
                     end_time=end_time,
                     parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
@@ -946,6 +990,7 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     error=e,
+                    error_message_override=_redact_redis_error(e),
                     call_type=f"async_set_cache <- {_get_call_stack_info()}",
                     start_time=start_time,
                     end_time=end_time,
@@ -1027,6 +1072,7 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     error=e,
+                    error_message_override=_redact_redis_error(e),
                     call_type=f"async_set_cache_pipeline <- {_get_call_stack_info()}",
                     start_time=start_time,
                     end_time=end_time,
@@ -1069,6 +1115,7 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     error=e,
+                    error_message_override=_redact_redis_error(e),
                     start_time=start_time,
                     end_time=end_time,
                     parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
@@ -1104,6 +1151,7 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     error=e,
+                    error_message_override=_redact_redis_error(e),
                     call_type=f"async_set_cache_sadd <- {_get_call_stack_info()}",
                     start_time=start_time,
                     end_time=end_time,
@@ -1173,6 +1221,7 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     error=e,
+                    error_message_override=_redact_redis_error(e),
                     call_type=f"async_increment <- {_get_call_stack_info()}",
                     start_time=start_time,
                     end_time=end_time,
@@ -1373,6 +1422,7 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     error=e,
+                    error_message_override=_redact_redis_error(e),
                     call_type=f"async_get_cache <- {_get_call_stack_info()}",
                     start_time=start_time,
                     end_time=end_time,
@@ -1446,6 +1496,7 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     error=e,
+                    error_message_override=_redact_redis_error(e),
                     call_type=f"async_batch_get_cache <- {_get_call_stack_info()}",
                     start_time=start_time,
                     end_time=end_time,
@@ -1517,6 +1568,7 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     error=e,
+                    error_message_override=_redact_redis_error(e),
                     call_type=f"async_ping <- {_get_call_stack_info()}",
                 )
             )
@@ -1671,6 +1723,7 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     error=e,
+                    error_message_override=_redact_redis_error(e),
                     call_type=f"async_increment_pipeline <- {_get_call_stack_info()}",
                     start_time=start_time,
                     end_time=end_time,
@@ -1753,6 +1806,7 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     error=e,
+                    error_message_override=_redact_redis_error(e),
                     call_type=f"async_rpush <- {_get_call_stack_info()}",
                 )
             )
@@ -1821,6 +1875,7 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     error=e,
+                    error_message_override=_redact_redis_error(e),
                     call_type=f"async_rpush_pipeline <- {_get_call_stack_info()}",
                 )
             )
@@ -1899,6 +1954,7 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     error=e,
+                    error_message_override=_redact_redis_error(e),
                     call_type=f"async_lpop <- {_get_call_stack_info()}",
                 )
             )
@@ -2010,6 +2066,7 @@ class RedisCache(BaseCache):
                     service=ServiceTypes.REDIS,
                     duration=_duration,
                     error=e,
+                    error_message_override=_redact_redis_error(e),
                     call_type=f"async_lpop_pipeline <- {_get_call_stack_info()}",
                 )
             )

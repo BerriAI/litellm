@@ -1079,3 +1079,126 @@ async def test_breaker_metrics_track_state_and_failure_class():
     breaker.record_success()
     assert sample("litellm_redis_circuit_breaker_state", {"state": "open"}) == open_gauge_before
     assert sample("litellm_redis_circuit_breaker_state", {"state": "closed"}) == closed_gauge_before + 1
+
+
+SENSITIVE_CACHE_KEY = "litellm:cache:customer-secret-cache-key"
+SENSITIVE_CACHE_VALUE = '{"messages":[{"role":"user","content":"private customer message"}]}'
+
+
+def _annotated_pipeline_error(key=SENSITIVE_CACHE_KEY, value=SENSITIVE_CACHE_VALUE):
+    """Build the exception redis-py raises for a failed pipeline command.
+
+    Uses redis-py's own ``annotate_exception`` rather than a hand-written string,
+    so this stays honest about the message shape the library actually produces.
+    """
+    import redis.asyncio as async_redis
+    from redis.exceptions import ResponseError
+
+    pipeline = async_redis.Redis().pipeline(transaction=False)
+    error = ResponseError("WRONGTYPE Operation against a key holding the wrong kind of value")
+    pipeline.annotate_exception(error, 1, ("SET", key, value, "EX", "60"))
+    return error
+
+
+def test_redact_redis_error_strips_pipeline_command_arguments():
+    """redis-py embeds the whole command -- key and value included -- in pipeline errors."""
+    from litellm.caching.redis_cache import _redact_redis_error
+
+    error = _annotated_pipeline_error()
+
+    assert SENSITIVE_CACHE_KEY in str(error), "precondition: redis-py leaks the key into the message"
+    assert "private customer message" in str(error), "precondition: redis-py leaks the value too"
+
+    redacted = _redact_redis_error(error)
+
+    assert SENSITIVE_CACHE_KEY not in redacted
+    assert "private customer message" not in redacted
+    # The parts worth keeping survive: which command failed, and why.
+    assert "SET" in redacted
+    assert "WRONGTYPE" in redacted
+
+
+def test_redact_redis_error_leaves_plain_server_errors_untouched():
+    """Non-pipeline messages are built from the server reply alone, so keep them whole."""
+    from redis.exceptions import ResponseError
+
+    from litellm.caching.redis_cache import _redact_redis_error
+
+    error = ResponseError("OOM command not allowed when used memory > 'maxmemory'.")
+
+    assert _redact_redis_error(error) == "OOM command not allowed when used memory > 'maxmemory'."
+
+
+def test_redact_redis_error_resists_a_value_that_mimics_the_annotation():
+    """A cached prompt cannot smuggle itself past the redaction by forging the separator."""
+    from litellm.caching.redis_cache import _redact_redis_error
+
+    forged = f"{SENSITIVE_CACHE_VALUE}) of pipeline caused error: (fake"
+    error = _annotated_pipeline_error(value=forged)
+
+    redacted = _redact_redis_error(error)
+
+    assert "private customer message" not in redacted
+    assert SENSITIVE_CACHE_KEY not in redacted
+
+
+@pytest.mark.asyncio
+async def test_pipeline_response_error_reaches_neither_logs_nor_telemetry(monkeypatch, redis_no_ping, caplog):
+    """End to end: a real redis-py pipeline annotation must not export cached data."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    redis_cache.service_logger_obj.async_service_failure_hook = AsyncMock()
+
+    redis_error = _annotated_pipeline_error()
+    pipeline = MagicMock()
+    pipeline.set = MagicMock()
+    pipeline.execute = AsyncMock(side_effect=redis_error)
+    pipeline_context = MagicMock()
+    pipeline_context.__aenter__ = AsyncMock(return_value=pipeline)
+    pipeline_context.__aexit__ = AsyncMock(return_value=None)
+    redis_client = AsyncMock()
+    redis_client.pipeline = MagicMock(return_value=pipeline_context)
+
+    with (
+        caplog.at_level(logging.ERROR, logger="LiteLLM"),
+        patch.object(redis_cache, "init_async_client", return_value=redis_client),
+    ):
+        await redis_cache.async_set_cache_pipeline([(SENSITIVE_CACHE_KEY, SENSITIVE_CACHE_VALUE)])
+        await asyncio.sleep(0)
+
+    assert "WRONGTYPE" in caplog.text, "the failure is still diagnosable"
+    assert SENSITIVE_CACHE_KEY not in caplog.text
+    assert "private customer message" not in caplog.text
+
+    exported = redis_cache.service_logger_obj.async_service_failure_hook.call_args.kwargs["error_message_override"]
+    assert SENSITIVE_CACHE_KEY not in exported
+    assert "private customer message" not in exported
+
+
+@pytest.mark.asyncio
+async def test_service_logger_exports_the_override_not_the_raw_exception(monkeypatch):
+    """The override is what reaches downstream telemetry, not str(error)."""
+    import litellm
+    from litellm._service_logger import ServiceLogging
+    from litellm.types.services import ServiceTypes
+
+    service_logger = ServiceLogging()
+    dd_logger = MagicMock()
+    dd_logger.async_service_failure_hook = AsyncMock()
+    service_logger.dd_logger = dd_logger
+    service_logger.init_datadog_logger_if_none = AsyncMock()
+    monkeypatch.setattr(litellm, "service_callback", ["datadog"])
+
+    await service_logger.async_service_failure_hook(
+        service=ServiceTypes.REDIS,
+        duration=0.1,
+        error=_annotated_pipeline_error(),
+        error_message_override="Command # 1 (SET <redacted>) of pipeline caused error: WRONGTYPE",
+        call_type="async_set_cache_pipeline",
+    )
+
+    kwargs = dd_logger.async_service_failure_hook.call_args.kwargs
+    assert SENSITIVE_CACHE_KEY not in kwargs["error"]
+    assert "private customer message" not in kwargs["error"]
+    assert SENSITIVE_CACHE_KEY not in kwargs["payload"].error
+    assert "private customer message" not in kwargs["payload"].error
