@@ -1,9 +1,7 @@
-use thiserror::Error;
+use thiserror::Error as ThisError;
 
-pub type CoreResult<T> = Result<T, CoreError>;
-
-#[derive(Debug, Error, PartialEq, Eq)]
-pub enum CoreError {
+#[derive(Debug, ThisError, PartialEq, Eq)]
+pub enum Error {
     #[error("expected {expected}, got {actual}")]
     InvalidType {
         expected: &'static str,
