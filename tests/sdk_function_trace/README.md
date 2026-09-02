@@ -5,10 +5,10 @@ The compare runner executes the same SDK calls through the Python engine and the
 From the repository root, using the project's Python environment:
 
 ```bash
-uv run tests/sdk_function_trace/compare.py
-uv run tests/sdk_function_trace/compare.py --route ocr
-uv run tests/sdk_function_trace/compare.py --route ocr --sync
-uv run tests/sdk_function_trace/compare.py --route all --both --check
+uv run python -m tests.sdk_function_trace.compare
+uv run python -m tests.sdk_function_trace.compare --route ocr
+uv run python -m tests.sdk_function_trace.compare --route ocr --sync
+uv run python -m tests.sdk_function_trace.compare --route all --both --check
 ```
 
 Calls default to async; use `--sync` for synchronous calls or `--both` for the complete matrix. Python sync Messages raises `not implemented for sync calls`; only that exact failure is marked `SKIP`, and the runner still executes Rust sync Messages and subsequent routes. Bedrock transcription has no independent Python provider implementation: its Python trace covers SDK dispatch into Rust
