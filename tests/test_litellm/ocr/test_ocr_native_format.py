@@ -39,6 +39,13 @@ def test_rust_ocr_skipped_for_native_format():
     assert _rust_ocr_supported(_prepared({"req_format": "native"})) is False
 
 
+def test_rust_ocr_skipped_for_cohere_parse_schema():
+    prepared = _prepared({})
+    prepared.model = "Cohere-parse-v5"
+
+    assert _rust_ocr_supported(prepared) is False
+
+
 @pytest.mark.asyncio
 async def test_native_format_rejected_for_provider_without_support_as_bad_request():
     with pytest.raises(litellm.BadRequestError, match="not supported for provider") as exc_info:

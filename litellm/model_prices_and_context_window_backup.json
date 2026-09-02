@@ -9953,6 +9953,25 @@
         "supports_tool_choice": true,
         "supports_reasoning": true
     },
+    "azure_ai/Cohere-parse-v5": {
+        "deprecation_date": "2026-12-15",
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "ocr",
+        "ocr_cost_per_page": 0.0015,
+        "source": "https://cohere.com/blog/parse",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ],
+        "supported_modalities": [
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ]
+    },
     "azure_ai/mistral-document-ai-2505": {
         "deprecation_date": "2026-07-20",
         "litellm_provider": "azure_ai",

@@ -19,6 +19,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure_ai.ocr.common_utils import (
+    is_azure_cohere_parse_model,
     is_azure_document_intelligence_model,
 )
 from litellm.llms.base_llm.ocr.transformation import (
@@ -190,6 +191,9 @@ def _prepare_ocr_request(
 
 def _rust_ocr_supported(prepared_request: _PreparedOCRRequest) -> bool:
     if prepared_request.optional_params.get(OCR_REQUEST_FORMAT_PARAM) == "native":
+        return False
+    if prepared_request.custom_llm_provider == "azure_ai" and is_azure_cohere_parse_model(prepared_request.model):
+        # The Rust Azure OCR bridge currently implements the Mistral schema only.
         return False
     return prepared_request.custom_llm_provider in _RUST_OCR_PROVIDERS
 

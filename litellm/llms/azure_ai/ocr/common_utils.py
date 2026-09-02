@@ -24,13 +24,20 @@ def is_azure_document_intelligence_model(model: str) -> bool:
     return "doc-intelligence" in lowered or "documentintelligence" in lowered
 
 
+def is_azure_cohere_parse_model(model: str) -> bool:
+    """Whether an Azure AI OCR model routes to Cohere Parse."""
+    normalized: Final = model.lower().replace("_", "-").rsplit("/", 1)[-1]
+    return normalized == "cohere-parse-v5"
+
+
 def get_azure_ai_ocr_config(model: str) -> Optional["BaseOCRConfig"]:
     """
     Determine which Azure AI OCR configuration to use based on the model name.
 
     Azure AI supports multiple OCR services:
     - Azure Document Intelligence: azure_ai/doc-intelligence/<model>
-    - Mistral OCR (via Azure AI): azure_ai/<model>
+    - Cohere Parse: azure_ai/Cohere-parse-v5
+    - Mistral OCR (via Azure AI): other azure_ai OCR models
 
     Args:
         model: The model name (e.g., "azure_ai/doc-intelligence/prebuilt-read",
@@ -46,6 +53,9 @@ def get_azure_ai_ocr_config(model: str) -> Optional["BaseOCRConfig"]:
         >>> get_azure_ai_ocr_config("azure_ai/pixtral-12b-2409")
         <AzureAIOCRConfig object>
     """
+    from litellm.llms.azure_ai.ocr.cohere_parse_transformation import (
+        AzureAICohereParseConfig,
+    )
     from litellm.llms.azure_ai.ocr.document_intelligence.transformation import (
         AzureDocumentIntelligenceOCRConfig,
     )
@@ -55,6 +65,10 @@ def get_azure_ai_ocr_config(model: str) -> Optional["BaseOCRConfig"]:
     if is_azure_document_intelligence_model(model):
         verbose_logger.debug("Routing %s to Azure Document Intelligence OCR config", model)
         return AzureDocumentIntelligenceOCRConfig()
+
+    if is_azure_cohere_parse_model(model):
+        verbose_logger.debug("Routing %s to Azure AI Cohere Parse config", model)
+        return AzureAICohereParseConfig()
 
     # Default to Mistral-based OCR for other azure_ai models
     verbose_logger.debug("Routing %s to Azure AI (Mistral) OCR config", model)
