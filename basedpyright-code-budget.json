@@ -108,10 +108,10 @@
     "limit": 38350
   },
   "reportUnknownParameterType": {
-    "limit": 19626
+    "limit": 19625
   },
   "reportUnknownVariableType": {
-    "limit": 29890
+    "limit": 29877
   },
   "reportUnnecessaryCast": {
     "limit": 111
@@ -138,7 +138,7 @@
     "limit": 138
   },
   "reportUnusedImport": {
-    "limit": 543
+    "limit": 542
   },
   "reportUnusedVariable": {
     "limit": 137
