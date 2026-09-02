@@ -791,30 +791,4 @@ mod round_trip {
             "expected a pre-send connect failure, got {err:?}"
         );
     }
-
-    #[test]
-    fn response_errors_collapse_to_one_variant_that_can_only_mean_already_sent() {
-        use crate::chat_completions::handler::as_response_error;
-
-        for original in [
-            CoreError::MissingField("usage"),
-            CoreError::Unsupported("non-text response content block"),
-            CoreError::InvalidRequest("whatever".to_string()),
-            CoreError::Auth("whatever".to_string()),
-        ] {
-            let label = format!("{original:?}");
-            assert!(
-                matches!(as_response_error(original), CoreError::InvalidResponse(_)),
-                "{label} must not stay retryable once the provider has answered"
-            );
-        }
-        // An upstream status is already unambiguous, so it survives intact.
-        assert!(matches!(
-            as_response_error(CoreError::Http {
-                status: 500,
-                body: "boom".to_string()
-            }),
-            CoreError::Http { status: 500, .. }
-        ));
-    }
 }

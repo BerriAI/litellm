@@ -1,7 +1,7 @@
 use serde_json::Value;
 
-use crate::error::{CoreError, CoreResult};
-use crate::http_utils::truncate_error_body;
+use crate::error::{CoreError, CoreResult, as_response_error};
+use crate::http_utils::{classify_send_error, truncate_error_body};
 
 use super::client::http_client;
 use super::transformation::ChatCompletionsAuth;
@@ -27,16 +27,7 @@ pub(super) async fn execute_chat_completions_provider_call(
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = request_builder.send().await.map_err(|err| {
-        // Failing to establish the connection means the request never went out,
-        // so the host can still serve it. Everything else here, a timeout
-        // above all, may have reached the provider and been answered.
-        if err.is_connect() || err.is_builder() {
-            CoreError::Connect(err.to_string())
-        } else {
-            CoreError::Network(err.to_string())
-        }
-    })?;
+    let response = request_builder.send().await.map_err(classify_send_error)?;
 
     let status = response.status();
     let text = response
@@ -58,22 +49,6 @@ pub(super) async fn execute_chat_completions_provider_call(
         .config
         .transform_response(&request.model, ProviderChatResponseData { body })
         .map_err(as_response_error)
-}
-
-/// Re-tag an error raised while normalizing a response the provider already
-/// returned.
-///
-/// A config reports the same variants on either side of the call: a missing
-/// field or an unsupported block can mean "this request cannot be translated"
-/// during prepare and "this response cannot be normalized" here. Only the
-/// second kind has already been billed, and a host that keeps a reference
-/// implementation must not retry those, so collapse them to one variant that
-/// can only mean the provider was already called.
-pub(super) fn as_response_error(err: CoreError) -> CoreError {
-    match err {
-        already @ (CoreError::InvalidResponse(_) | CoreError::Http { .. }) => already,
-        other => CoreError::InvalidResponse(other.to_string()),
-    }
 }
 
 #[cfg(feature = "bedrock-auth")]

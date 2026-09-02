@@ -20,6 +20,7 @@ import litellm.types.utils
 from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.exceptions import APIError
 from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
     validated_max_agentic_loops,
@@ -2400,10 +2401,27 @@ class BaseLLMHTTPHandler:
                 extra_headers=headers,
                 timeout=timeout,
             )
-        except Exception as rust_error:  # noqa: BLE001  # rollout-safety fallback: any Rust bridge failure must fall back to the Python path
+        except Exception as rust_error:  # noqa: BLE001
+            from litellm.rust_bridge import get_native_bridge
+
+            native_bridge: Final = get_native_bridge()
+            declined: Final = getattr(native_bridge, "RustBridgeDeclined", None)
+            upstream_failed: Final = getattr(native_bridge, "RustUpstreamError", None)
+            if isinstance(upstream_failed, type) and isinstance(rust_error, upstream_failed):
+                args: Final = rust_error.args
+                status: Final = args[0] if args else 0
+                message: Final = args[1] if len(args) > 1 else ""
+                raise APIError(
+                    status_code=int(status) or 500,
+                    message=f"litellm rust messages: {message}",
+                    llm_provider=custom_llm_provider,
+                    model=model,
+                ) from rust_error
+            if not isinstance(declined, type) or not isinstance(rust_error, declined):
+                raise
             verbose_logger.debug(
-                "Rust Anthropic messages bridge raised %s; falling back to Python path",
-                type(rust_error).__name__,
+                "Rust Anthropic messages bridge declined before calling the provider (%s); falling back to Python path",
+                rust_error,
             )
             return None
         if rust_response is None:

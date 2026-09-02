@@ -9,7 +9,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
 
-use crate::errors::chat_completions_error_to_pyerr;
+use crate::errors::fallback_route_error_to_pyerr;
 use crate::marshal::{optional_object_to_map, optional_timeout};
 
 fn chat_completions_response_to_py(
@@ -112,7 +112,7 @@ fn chat_completions(
 
     match result {
         Ok(response) => chat_completions_response_to_py(py, response),
-        Err(err) => Err(chat_completions_error_to_pyerr(err)),
+        Err(err) => Err(fallback_route_error_to_pyerr(err)),
     }
 }
 
@@ -150,7 +150,7 @@ fn achat_completions(
             timeout,
         })
         .await
-        .map_err(chat_completions_error_to_pyerr)?;
+        .map_err(fallback_route_error_to_pyerr)?;
 
         Python::attach(|py| chat_completions_response_to_py(py, response))
     })

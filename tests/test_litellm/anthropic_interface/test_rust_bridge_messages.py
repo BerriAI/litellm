@@ -1,12 +1,14 @@
 """Tests for the optional Rust-backed Anthropic Messages path."""
 
 import importlib
+from types import ModuleType
 from typing import cast
 
 import httpx
 import pytest
 
 import litellm
+from litellm.exceptions import APIError
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -99,12 +101,28 @@ class ExplodingAsyncMessages:
 
 
 class RaisingAsyncMessages:
-    def __init__(self) -> None:
+    def __init__(self, error: Exception) -> None:
         self.calls = 0
+        self.error = error
 
     async def __call__(self, **kwargs: object) -> dict[str, object]:
         self.calls += 1
-        raise RuntimeError("upstream request failed with status 400: bad request")
+        raise self.error
+
+
+class FakeBridgeDeclined(Exception):
+    pass
+
+
+class FakeUpstreamError(Exception):
+    pass
+
+
+def _install_fake_bridge_exceptions(monkeypatch) -> None:
+    native_bridge = ModuleType("_native")
+    native_bridge.RustBridgeDeclined = FakeBridgeDeclined
+    native_bridge.RustUpstreamError = FakeUpstreamError
+    monkeypatch.setattr(rust_bridge_loader, "_cached_bridge", native_bridge)
 
 
 @pytest.fixture(autouse=True)
@@ -251,13 +269,53 @@ async def test_gate_invokes_rust_and_marks_response_header():
 
 
 @pytest.mark.asyncio
-async def test_gate_falls_back_to_python_when_bridge_raises():
-    bridge = RaisingAsyncMessages()
+async def test_gate_falls_back_only_when_bridge_declines(monkeypatch):
+    _install_fake_bridge_exceptions(monkeypatch)
+    bridge = RaisingAsyncMessages(FakeBridgeDeclined("unsupported request"))
     litellm.use_litellm_rust(True, amessages=bridge)
 
     response = await _gate()
 
     assert response is None
+    assert bridge.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_gate_surfaces_an_upstream_failure_without_fallback(monkeypatch):
+    _install_fake_bridge_exceptions(monkeypatch)
+    bridge = RaisingAsyncMessages(FakeUpstreamError(429, "429: rate limited"))
+    litellm.use_litellm_rust(True, amessages=bridge)
+
+    with pytest.raises(APIError) as exc_info:
+        await _gate()
+
+    assert exc_info.value.status_code == 429
+    assert "429: rate limited" in str(exc_info.value)
+    assert bridge.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_gate_maps_statusless_upstream_failure_to_500_without_fallback(monkeypatch):
+    _install_fake_bridge_exceptions(monkeypatch)
+    bridge = RaisingAsyncMessages(FakeUpstreamError(0, "request timed out"))
+    litellm.use_litellm_rust(True, amessages=bridge)
+
+    with pytest.raises(APIError) as exc_info:
+        await _gate()
+
+    assert exc_info.value.status_code == 500
+    assert "request timed out" in str(exc_info.value)
+    assert bridge.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_gate_reraises_an_unknown_bridge_failure():
+    bridge = RaisingAsyncMessages(RuntimeError("unknown bridge failure"))
+    litellm.use_litellm_rust(True, amessages=bridge)
+
+    with pytest.raises(RuntimeError, match="unknown bridge failure"):
+        await _gate()
+
     assert bridge.calls == 1
 
 
