@@ -8,7 +8,7 @@ import json
 import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
-from types import UnionType
+from types import MappingProxyType, UnionType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, Union, cast, get_args, get_origin
 from urllib.parse import urlparse
 
@@ -50,6 +50,9 @@ from litellm.types.guardrails import (
     PresidioPresidioConfigModelUserInterface,
     SupportedGuardrailIntegrations,
     ToolPermissionGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.hide_secrets import (
+    HideSecretsGuardrailConfigModel,
 )
 
 if TYPE_CHECKING:
@@ -1387,7 +1390,11 @@ async def get_guardrail_ui_settings():
         provider: [hook.value for hook in hooks]
         for provider, guardrail_class in guardrail_class_registry.items()
         if (hooks := guardrail_class.get_supported_event_hooks()) is not None
-    }
+    } | MappingProxyType(
+        # hide-secrets lives in the enterprise package, not in the registry
+        # above; it only runs on pre_call.
+        {SupportedGuardrailIntegrations.HIDE_SECRETS.value: (GuardrailEventHooks.pre_call.value,)}
+    )
 
     return GuardrailUIAddGuardrailSettings(
         supported_entities=[entity.value for entity in PiiEntityType],
@@ -1939,12 +1946,18 @@ async def get_provider_specific_params():
 
     tool_permission_fields["ui_friendly_name"] = ToolPermissionGuardrailConfigModel.ui_friendly_name()
 
+    # hide-secrets lives in the enterprise package, not in the registry loop below.
+    hide_secrets_fields: Final = _get_fields_from_model(HideSecretsGuardrailConfigModel)
+
+    hide_secrets_fields["ui_friendly_name"] = HideSecretsGuardrailConfigModel.ui_friendly_name()
+
     # Return the provider-specific parameters
     provider_params: Final = {
         SupportedGuardrailIntegrations.BEDROCK.value: bedrock_fields,
         SupportedGuardrailIntegrations.PRESIDIO.value: presidio_fields,
         SupportedGuardrailIntegrations.LAKERA_V2.value: lakera_v2_fields,
         SupportedGuardrailIntegrations.TOOL_PERMISSION.value: tool_permission_fields,
+        SupportedGuardrailIntegrations.HIDE_SECRETS.value: hide_secrets_fields,
     }
 
     ### get the config model for the guardrail - go through the registry and get the config model for the guardrail

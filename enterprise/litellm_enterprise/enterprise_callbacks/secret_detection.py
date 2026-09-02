@@ -11,16 +11,34 @@ import sys
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+import functools
 import tempfile
-from typing import Optional
+from contextvars import ContextVar
+from typing import TYPE_CHECKING, ClassVar, Literal, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails._content_utils import walk_user_text
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import GenericGuardrailAPIInputs
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 GUARDRAIL_NAME = "hide_secrets"
+
+GUARDRAIL_PROVIDER = "hide-secrets"
+
+# Per-invocation tally of redacted secrets by detect-secrets plugin type; None
+# means the guardrail did not run, so _process_response records nothing.
+_masked_entity_count: ContextVar[Optional[dict]] = ContextVar(
+    "hide_secrets_masked_entity_count", default=None
+)
 
 _custom_plugins_path = "file://" + os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "secrets_plugins"
@@ -422,6 +440,10 @@ _default_detect_secrets_config = {
 
 
 class _ENTERPRISE_SecretDetection(CustomGuardrail):
+    # Keeps proxied traffic on async_pre_call_hook (the unified apply_guardrail
+    # path skips should_run_check and never sees data["prompt"]).
+    use_native_lifecycle_hooks: ClassVar[bool] = True
+
     def __init__(self, detect_secrets_config: Optional[dict] = None, **kwargs):
         self.user_defined_detect_secrets_config = detect_secrets_config
         super().__init__(**kwargs)
@@ -455,6 +477,26 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
 
         return detected_secrets
 
+    def redact_text(self, text: str, source: str = "message") -> str:
+        """Replace every detected secret in ``text`` with ``[REDACTED]`` and
+        tally the detected types into the per-invocation masked-entity count."""
+        detected_secrets = self.scan_message_for_secrets(text)
+        if not detected_secrets:
+            return text
+        counts = _masked_entity_count.get()
+        if counts is not None:
+            for secret in detected_secrets:
+                counts[secret["type"]] = counts.get(secret["type"], 0) + 1
+        secret_types = [secret["type"] for secret in detected_secrets]
+        verbose_proxy_logger.warning(
+            f"Detected and redacted secrets in {source}: {secret_types}"
+        )
+        return functools.reduce(
+            lambda redacted, secret: redacted.replace(secret["value"], "[REDACTED]"),
+            detected_secrets,
+            text,
+        )
+
     async def should_run_check(self, user_api_key_dict: UserAPIKeyAuth) -> bool:
         if user_api_key_dict.permissions is not None:
             if GUARDRAIL_NAME in user_api_key_dict.permissions:
@@ -463,7 +505,25 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
 
         return True
 
+    @log_guardrail_information
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> GenericGuardrailAPIInputs:
+        """Unified-interface entrypoint, used by /guardrails/apply_guardrail
+        (the UI test playground). Proxied traffic keeps using
+        ``async_pre_call_hook``, see ``use_native_lifecycle_hooks``."""
+        texts = inputs.get("texts")
+        if not texts:
+            return inputs
+        _masked_entity_count.set({})
+        return {**inputs, "texts": [self.redact_text(text) for text in texts]}
+
     #### CALL HOOKS - proxy only ####
+    @log_guardrail_information
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -471,53 +531,86 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         data: dict,
         call_type: str,  # "completion", "embeddings", "image_generation", "moderation"
     ):
+        _masked_entity_count.set(None)
         if await self.should_run_check(user_api_key_dict) is False:
             return
 
-        # Covers multimodal list content + Responses-API input.
-        def _redact_message_text(text: str) -> str:
-            detected_secrets = self.scan_message_for_secrets(text)
-            for secret in detected_secrets:
-                text = text.replace(secret["value"], "[REDACTED]")
-            if detected_secrets:
-                secret_types = [secret["type"] for secret in detected_secrets]
-                verbose_proxy_logger.warning(
-                    f"Detected and redacted secrets in message: {secret_types}"
-                )
-            return text
+        _masked_entity_count.set({})
 
-        walk_user_text(data, _redact_message_text)
+        # Covers multimodal list content + Responses-API input.
+        walk_user_text(data, self.redact_text)
 
         if "prompt" in data:
             if isinstance(data["prompt"], str):
-                detected_secrets = self.scan_message_for_secrets(data["prompt"])
-                for secret in detected_secrets:
-                    data["prompt"] = data["prompt"].replace(
-                        secret["value"], "[REDACTED]"
-                    )
-                if len(detected_secrets) > 0:
-                    secret_types = [secret["type"] for secret in detected_secrets]
-                    verbose_proxy_logger.warning(
-                        f"Detected and redacted secrets in prompt: {secret_types}"
-                    )
+                data["prompt"] = self.redact_text(data["prompt"], source="prompt")
             elif isinstance(data["prompt"], list):
-                # Index back into the list — assigning to ``item`` would only
-                # rebind the loop variable and leave ``data["prompt"]``
-                # carrying the unredacted secret.
                 for idx, item in enumerate(data["prompt"]):
                     if isinstance(item, str):
-                        detected_secrets = self.scan_message_for_secrets(item)
-                        for secret in detected_secrets:
-                            item = item.replace(secret["value"], "[REDACTED]")
-                        data["prompt"][idx] = item
-                        if len(detected_secrets) > 0:
-                            secret_types = [
-                                secret["type"] for secret in detected_secrets
-                            ]
-                            verbose_proxy_logger.warning(
-                                f"Detected and redacted secrets in prompt: {secret_types}"
-                            )
+                        data["prompt"][idx] = self.redact_text(item, source="prompt")
 
-        # ``data["input"]`` (Responses API and embeddings/moderation) is
-        # already covered by ``walk_user_text`` above.
         return
+
+    def _process_response(
+        self,
+        response: Optional[dict],
+        request_data: dict,
+        start_time: Optional[float] = None,
+        end_time: Optional[float] = None,
+        duration: Optional[float] = None,
+        event_type: Optional[GuardrailEventHooks] = None,
+        original_inputs: Optional[dict] = None,
+    ):
+        """Record allow/mask plus the masked-entity tally for a completed run.
+
+        Records nothing when the guardrail inspected nothing (opted-out key,
+        empty inputs) or when the instance has no guardrail_name (legacy
+        ``litellm_settings.callbacks`` deployments, which predate guardrail
+        telemetry and stay without it).
+        """
+        counts = _masked_entity_count.get()
+        _masked_entity_count.set(None)
+        if counts is None or self.guardrail_name is None:
+            return response
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response="mask" if counts else "allow",
+            request_data=request_data,
+            guardrail_status="success",
+            duration=duration,
+            start_time=start_time,
+            end_time=end_time,
+            event_type=event_type,
+            guardrail_provider=GUARDRAIL_PROVIDER,
+            masked_entity_count=counts,
+        )
+        return response
+
+    def _process_error(
+        self,
+        e: Exception,
+        request_data: dict,
+        start_time: Optional[float] = None,
+        end_time: Optional[float] = None,
+        duration: Optional[float] = None,
+        event_type: Optional[GuardrailEventHooks] = None,
+    ):
+        """Label the failed run with this guardrail's provider so error rows
+        group with the successful ones in the monitor. Nameless legacy
+        instances record nothing, matching ``_process_response``."""
+        _masked_entity_count.set(None)
+        if self.guardrail_name is None:
+            raise e
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response=e,
+            request_data=request_data,
+            guardrail_status=(
+                "guardrail_intervened"
+                if self._is_guardrail_intervention(e)
+                else "guardrail_failed_to_respond"
+            ),
+            duration=duration,
+            start_time=start_time,
+            end_time=end_time,
+            event_type=event_type,
+            guardrail_provider=GUARDRAIL_PROVIDER,
+        )
+        raise e
