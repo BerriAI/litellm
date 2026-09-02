@@ -3,17 +3,19 @@ import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Optional, cast
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from typing import Final, Optional, cast
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, call, patch
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from litellm._uuid import uuid
 
 from litellm.proxy._types import UserAPIKeyAuth  # Import UserAPIKeyAuth
 from litellm.proxy._types import (
+    LiteLLM_BudgetTable,
     LiteLLM_BudgetTableFull,
     LiteLLM_ModelTable,
     LiteLLM_OrganizationMembershipTable,
@@ -27,7 +29,9 @@ from litellm.proxy._types import (
     Member,
     ProxyErrorTypes,
     ProxyException,
+    ResetSpendRequest,
     TeamMemberAddRequest,
+    TeamMemberUpdateRequest,
     UpdateTeamRequest,
 )
 from litellm.proxy.management_endpoints.team_endpoints import (
@@ -42,14 +46,20 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     _transform_teams_to_deleted_records,
     _update_model_table,
     _validate_and_populate_member_user_info,
+    _validate_team_member_reset_spend_value,
     _verify_team_access,
     delete_team,
     list_available_teams,
+    reset_team_member_spend_fn,
     router,
     team_member_add_duplication_check,
     team_member_delete,
+    team_member_update,
     update_team,
     validate_team_org_change,
+)
+from litellm.proxy.management_helpers.access_group_team_sync import (
+    TEAM_ADVISORY_LOCK_SQL,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -68,7 +78,11 @@ client = TestClient(app)
 
 def _wire_team_create_tx(prisma_client):
     """`/team/new` inserts the team and mirrors it onto the access groups in one transaction,
-    so a mocked client has to hand its team table back out of `db.tx()`."""
+    so a mocked client has to hand its team table back out of `db.tx()`.
+
+    A `/team/new` carrying members then adds them under the team's advisory lock, and those
+    writes run on that lock's transaction, so `tx()` has to hand back the mocked tables too
+    for the per-table assertions on `prisma_client.db.*` to keep seeing them."""
 
     @asynccontextmanager
     async def _tx():
@@ -78,6 +92,72 @@ def _wire_team_create_tx(prisma_client):
         )
 
     prisma_client.db.tx = lambda *_args, **_kwargs: _tx()
+    _wire_member_add_tx(prisma_client)
+
+
+def _wire_member_add_tx(prisma_client):
+    """/team/member_add takes the team's advisory lock, re-reads the roster under it, and runs
+    the user, budget, and membership writes on that same transaction, so a mocked client has
+    to hand its own table mocks back out of `tx()`.
+
+    Tables resolve on access, not here, since tests routinely replace `db.<table>` after
+    wiring the transaction."""
+
+    class _Tx:
+        query_raw = AsyncMock(return_value=[{"members_with_roles": []}])
+
+        def __getattr__(self, table_name):
+            return getattr(prisma_client.db, table_name)
+
+    tx = _Tx()
+    tx_cm = MagicMock()
+    tx_cm.__aenter__ = AsyncMock(return_value=tx)
+    tx_cm.__aexit__ = AsyncMock(return_value=None)
+    prisma_client.tx = MagicMock(return_value=tx_cm)
+
+
+def _wire_member_delete_tx(prisma_client):
+    """/team/member_delete's four cleanups, plus the advisory-lock re-read that now guards
+    them, run inside one transaction, so a mocked client has to hand back its own table
+    mocks (and a `query_raw` that answers the locked re-read from the same team row the
+    test already configured on `find_unique`) out of `tx()` for the existing per-table
+    assertions to keep seeing the calls."""
+
+    async def _query_raw(sql, team_id):
+        if sql != TEAM_ADVISORY_LOCK_SQL:
+            team_row = await prisma_client.db.litellm_teamtable.find_unique(where={"team_id": team_id})
+            if team_row is not None:
+                return [{"members_with_roles": team_row.model_dump()["members_with_roles"]}]
+        return []
+
+    class _Tx:
+        query_raw = staticmethod(_query_raw)
+
+        def __getattr__(self, table_name):
+            return getattr(prisma_client.db, table_name)
+
+    tx = _Tx()
+    tx_cm = MagicMock()
+    tx_cm.__aenter__ = AsyncMock(return_value=tx)
+    tx_cm.__aexit__ = AsyncMock(return_value=None)
+    prisma_client.tx = MagicMock(return_value=tx_cm)
+
+
+def _wire_team_delete_tx(prisma_client):
+    """`/team/delete` deletes the team rows and runs its post-delete reference sweep under
+    every team's advisory lock in one transaction, so a mocked client has to hand its own
+    table mocks (and db-level execute_raw) back out of `tx()` for existing per-table
+    assertions on `prisma_client.db.*` to keep seeing those calls."""
+    tx = SimpleNamespace(
+        litellm_teamtable=prisma_client.db.litellm_teamtable,
+        litellm_teammembership=prisma_client.db.litellm_teammembership,
+        query_raw=AsyncMock(return_value=[]),
+        execute_raw=prisma_client.db.execute_raw,
+    )
+    tx_cm = MagicMock()
+    tx_cm.__aenter__ = AsyncMock(return_value=tx)
+    tx_cm.__aexit__ = AsyncMock(return_value=None)
+    prisma_client.tx = MagicMock(return_value=tx_cm)
 
 
 # Mock prisma_client
@@ -1645,6 +1725,7 @@ async def test_process_team_members_single_member():
             default_team_budget_id="budget-123",
             allowed_models=None,
             budget_duration=None,
+            tx=None,
         )
 
 
@@ -1785,8 +1866,8 @@ async def test_update_team_members_list_duplicate_prevention():
 async def test_add_team_members_reconciles_against_freshly_locked_row():
     """
     Regression: _add_team_members_to_team must build the new members_with_roles
-    from the row it re-reads under a lock inside the write transaction, not from
-    the stale complete_team_data snapshot captured at the start of the request.
+    from the row it re-reads under the team's advisory lock, not from the stale
+    complete_team_data snapshot captured at the start of the request.
 
     Two concurrent /team/member_add calls for the same team read the same
     snapshot; without the locked re-read the losing write rewrites the whole
@@ -1847,24 +1928,89 @@ async def test_add_team_members_reconciles_against_freshly_locked_row():
     written_ids = sorted(m["user_id"] for m in json.loads(captured["data"]["members_with_roles"]))
     assert written_ids == ["alice", "bob", "zed"]
 
-    lock_reads = [call for call in tx.query_raw.call_args_list if "FOR UPDATE" in str(call.args[0])]
-    assert lock_reads, "expected a SELECT ... FOR UPDATE row-lock read before the write"
+    assert tx.query_raw.call_args_list[0].args == (TEAM_ADVISORY_LOCK_SQL, "test-team-lock"), (
+        "expected the team's advisory lock to be acquired before the members_with_roles read"
+    )
+    assert not any("FOR UPDATE" in str(call.args[0]) for call in tx.query_raw.call_args_list), (
+        "a row lock here can deadlock with the access-group endpoints; only the advisory lock is safe"
+    )
 
     assert [m.user_id for m in updated_team.members_with_roles] == ["zed", "alice", "bob"]
 
 
 @pytest.mark.asyncio
-async def test_add_team_members_cleans_up_when_the_team_is_deleted_mid_request():
+async def test_add_team_members_runs_member_writes_on_the_lock_holding_transaction():
+    """
+    Regression pin against exhausting the connection pool with advisory-lock waiters.
+
+    Every concurrent /team/member_add for one team holds a pooled connection while it waits
+    on the team's advisory lock. If the holder's member writes went to the regular client,
+    it would need a second connection to finish, so enough concurrent adds fill the pool
+    with waiters and the holder can never commit or release the lock. The member writes
+    therefore have to run on the transaction that already owns the connection.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _add_team_members_to_team,
+    )
+
+    added_user = MagicMock()
+    added_user.user_id = "bob"
+    added_user.model_dump.return_value = {"user_id": "bob", "teams": ["team-pool"]}
+    created_budget = MagicMock()
+    created_budget.budget_id = "budget-pool"
+    membership = MagicMock()
+    membership.model_dump.return_value = {
+        "team_id": "team-pool",
+        "user_id": "bob",
+        "budget_id": "budget-pool",
+        "litellm_budget_table": None,
+    }
+
+    tx = MagicMock()
+    tx.query_raw = AsyncMock(return_value=[{"members_with_roles": []}])
+    tx.litellm_teamtable.update = AsyncMock(
+        return_value=LiteLLM_TeamTable(team_id="team-pool", members_with_roles=[])
+    )
+    tx.litellm_usertable.upsert = AsyncMock(return_value=added_user)
+    tx.litellm_usertable.update_many = AsyncMock()
+    tx.litellm_budgettable.create = AsyncMock(return_value=created_budget)
+    tx.litellm_teammembership.create = AsyncMock(return_value=membership)
+
+    tx_cm = MagicMock()
+    tx_cm.__aenter__ = AsyncMock(return_value=tx)
+    tx_cm.__aexit__ = AsyncMock(return_value=None)
+
+    prisma_client = MagicMock()
+    prisma_client.tx = MagicMock(return_value=tx_cm)
+    type(prisma_client).db = PropertyMock(
+        side_effect=AssertionError("member writes must not reach for a second pooled connection")
+    )
+
+    _, updated_users, updated_team_memberships = await _add_team_members_to_team(
+        data=TeamMemberAddRequest(
+            team_id="team-pool",
+            member=Member(user_id="bob", role="user"),
+            max_budget_in_team=50.0,
+        ),
+        complete_team_data=LiteLLM_TeamTable(team_id="team-pool", members_with_roles=[]),
+        prisma_client=cast(object, prisma_client),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        litellm_proxy_admin_name="admin",
+    )
+
+    assert [user.user_id for user in updated_users] == ["bob"]
+    assert [tm.budget_id for tm in updated_team_memberships] == ["budget-pool"]
+
+
+@pytest.mark.asyncio
+async def test_add_team_members_writes_nothing_when_the_team_is_deleted_mid_request():
     """
     Regression pin for the /team/member_add vs /team/delete race.
 
-    The user row and membership writes land before the reconcile takes the team
-    row lock, so a /team/delete that commits in between has already run its own
-    reference sweep and cannot see them. The empty locked SELECT is the only
-    signal that happened, and leaving it at that would strand the member on a
-    deleted team id, which authorization paths that trust `user.teams` would
-    treat as membership if the id were ever recreated. So the request must sweep
-    the references it just wrote and fail, not report success.
+    The advisory lock is acquired, and the team is gone, before any write is attempted:
+    the empty locked SELECT is proof a /team/delete already committed under the same
+    lock, so this request must fail without writing the user or membership rows in the
+    first place, rather than writing them and then trying to sweep them back out.
     """
     from litellm.proxy.management_endpoints.team_endpoints import (
         _add_team_members_to_team,
@@ -1883,9 +2029,10 @@ async def test_add_team_members_cleans_up_when_the_team_is_deleted_mid_request()
     prisma_client.db.execute_raw = AsyncMock()
     prisma_client.db.litellm_teammembership.delete_many = AsyncMock()
 
+    process_team_members = AsyncMock(return_value=([], []))
     with patch(
         "litellm.proxy.management_endpoints.team_endpoints._process_team_members",
-        new=AsyncMock(return_value=([], [])),
+        new=process_team_members,
     ):
         with pytest.raises(HTTPException) as exc_info:
             await _add_team_members_to_team(
@@ -1900,14 +2047,10 @@ async def test_add_team_members_cleans_up_when_the_team_is_deleted_mid_request()
             )
 
     assert exc_info.value.status_code == 404
+    process_team_members.assert_not_awaited()
     tx.litellm_teamtable.update.assert_not_awaited()
-
-    assert prisma_client.db.execute_raw.await_args_list == [
-        call(_STRIP_DELETED_TEAM_FROM_USERS_SQL, "team-deleted-mid-add")
-    ]
-    prisma_client.db.litellm_teammembership.delete_many.assert_awaited_once_with(
-        where={"team_id": {"in": ("team-deleted-mid-add",)}}
-    )
+    prisma_client.db.execute_raw.assert_not_awaited()
+    prisma_client.db.litellm_teammembership.delete_many.assert_not_awaited()
 
 
 def test_add_new_models_to_team_with_existing_models():
@@ -2062,6 +2205,100 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "endpoint_name",
+    ["team_model_add", "team_model_delete", "update_team_member_permissions"],
+)
+async def test_team_write_404s_when_row_vanishes_before_update(endpoint_name):
+    """A team deleted between the read and the write must 404.
+
+    Prisma's `update` returns None when no row matches `where`, and the team
+    row can be deleted between the read these endpoints do first and the
+    update that follows it. Without the guard, `team_model_add` /
+    `team_model_delete` hand that None to `_refresh_cached_team` (which
+    reads `team_row.team_id`) and `/team/permissions_update` returns None
+    out of a route declared to return a team, so a plain race turns into a
+    500 instead of the 404 every other not-found path in this file raises.
+    """
+    from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LitellmUserRoles,
+        TeamModelAddRequest,
+        TeamModelDeleteRequest,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        team_model_add,
+        team_model_delete,
+        update_team_member_permissions,
+    )
+
+    mock_request = Mock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    existing_team = MagicMock()
+    existing_team.team_id = "team-1234"
+    existing_team.model_dump.return_value = {
+        "team_id": "team-1234",
+        "models": ["bedrock-claude-sonnet-4", "openai/*"],
+        "team_member_permissions": [],
+        "spend": 0.0,
+    }
+
+    call_endpoint_under_test: Final = {
+        "team_model_add": lambda: team_model_add(
+            data=TeamModelAddRequest(team_id="team-1234", models=["team-byok-1"]),
+            http_request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+        ),
+        "team_model_delete": lambda: team_model_delete(
+            data=TeamModelDeleteRequest(team_id="team-1234", models=["openai/*"]),
+            http_request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+        ),
+        "update_team_member_permissions": lambda: update_team_member_permissions(
+            data=UpdateTeamMemberPermissionsRequest(
+                team_id="team-1234",
+                team_member_permissions=["/key/generate"],
+            ),
+            http_request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+        ),
+    }[endpoint_name]
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client,  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch("litellm.proxy.proxy_server.user_api_key_cache"),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch("litellm.proxy.proxy_server.proxy_logging_obj"),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch(  # test-quality-ok: stubs the cache write so the test observes only the DB result handling
+            "litellm.proxy.management_endpoints.team_endpoints._cache_team_object",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: stubs the collaborator so the test pins the endpoint's own error contract
+            "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+            new_callable=AsyncMock,
+            return_value=existing_team,
+        ),
+    ):
+        mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=existing_team
+        )
+        mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=None)
+        mock_prisma_client.db.execute_raw = AsyncMock(return_value=None)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await call_endpoint_under_test()
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == {"error": "Team not found, passed team_id=team-1234"}
+
+
+@pytest.mark.asyncio
 async def test_update_team_team_member_budget_not_passed_to_db(
     disable_audit_logging_for_mocked_team,
 ):
@@ -2129,6 +2366,7 @@ async def test_update_team_team_member_budget_not_passed_to_db(
             team_member_rpm_limit=None,
             team_member_tpm_limit=None,
             team_member_budget_duration=None,
+            explicitly_set_fields=frozenset(),
         ):
             # Remove team_member_budget from updated_kv as the real function does
             result_kv = updated_kv.copy()
@@ -2502,6 +2740,138 @@ async def test_upsert_team_member_budget_table_no_existing_budget():
 
 
 @pytest.mark.asyncio
+async def test_upsert_team_member_budget_table_clears_duration_kept_budget(mock_db_client):
+    """
+    A request that keeps team_member_budget but explicitly nulls
+    team_member_budget_duration must clear the reset period and its reset time.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    team_table = MagicMock(spec=LiteLLM_TeamTable)
+    team_table.metadata = {"team_member_budget_id": "existing_budget_123"}
+
+    mock_db_client.db.litellm_budgettable.update = AsyncMock(
+        side_effect=lambda where, data: SimpleNamespace(**data)
+    )
+
+    result = await TeamMemberBudgetHandler.upsert_team_member_budget_table(
+        team_table=team_table,
+        user_api_key_dict=mock_user_api_key_dict,
+        updated_kv={
+            "team_id": "test_team_id",
+            "team_member_budget": 100.0,
+            "team_member_budget_duration": None,
+        },
+        team_member_budget=100.0,
+        team_member_budget_duration=None,
+        explicitly_set_fields={
+            "team_member_budget",
+            "team_member_budget_duration",
+        },
+    )
+
+    written = mock_db_client.db.litellm_budgettable.update.call_args.kwargs["data"]
+    assert written["max_budget"] == 100.0
+    assert written["budget_duration"] is None
+    assert written["budget_reset_at"] is None
+    assert "rpm_limit" not in written
+    assert "tpm_limit" not in written
+    assert result["metadata"]["team_member_budget_id"] == "existing_budget_123"
+    assert "team_member_budget" not in result
+    assert "team_member_budget_duration" not in result
+
+
+@pytest.mark.asyncio
+async def test_create_team_member_budget_table_explicit_null_duration_does_not_inherit_team_duration(
+    mock_db_client,
+):
+    """
+    A first-time member budget with an explicitly null duration must never
+    reset, even when the team itself has a reset period.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    team_table = MagicMock(spec=LiteLLM_TeamTable)
+    team_table.metadata = {}
+    team_table.team_alias = "Test Team"
+    team_table.budget_duration = "30d"
+
+    mock_db_client.db.litellm_budgettable.create = AsyncMock(
+        side_effect=lambda data: SimpleNamespace(**data)
+    )
+
+    result = await TeamMemberBudgetHandler.create_team_member_budget_table(
+        data=team_table,
+        new_team_data_json={"team_id": "test_team_id"},
+        user_api_key_dict=mock_user_api_key_dict,
+        team_member_budget=100.0,
+        team_member_budget_duration=None,
+        explicitly_set_fields={
+            "team_member_budget",
+            "team_member_budget_duration",
+        },
+    )
+
+    written = mock_db_client.db.litellm_budgettable.create.call_args.kwargs["data"]
+    assert written["max_budget"] == 100.0
+    assert "budget_duration" not in written
+    assert "budget_reset_at" not in written
+    assert result["metadata"]["team_member_budget_id"] == written["budget_id"]
+    assert "team_member_budget" not in result
+
+
+@pytest.mark.asyncio
+async def test_create_team_member_budget_table_inherits_team_duration_when_duration_omitted(
+    mock_db_client,
+):
+    """
+    Omitting team_member_budget_duration keeps the existing inheritance of the
+    team's own reset period.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    team_table = MagicMock(spec=LiteLLM_TeamTable)
+    team_table.metadata = {}
+    team_table.team_alias = "Test Team"
+    team_table.budget_duration = "30d"
+
+    mock_db_client.db.litellm_budgettable.create = AsyncMock(
+        side_effect=lambda data: SimpleNamespace(**data)
+    )
+
+    result = await TeamMemberBudgetHandler.create_team_member_budget_table(
+        data=team_table,
+        new_team_data_json={"team_id": "test_team_id"},
+        user_api_key_dict=mock_user_api_key_dict,
+        team_member_budget=100.0,
+        explicitly_set_fields={"team_member_budget"},
+    )
+
+    written = mock_db_client.db.litellm_budgettable.create.call_args.kwargs["data"]
+    assert written["budget_duration"] == "30d"
+    assert written["budget_reset_at"] is not None
+    assert result["metadata"]["team_member_budget_id"] == written["budget_id"]
+
+
+@pytest.mark.asyncio
 async def test_update_team_with_team_member_budget_duration(
     disable_audit_logging_for_mocked_team,
 ):
@@ -2562,6 +2932,7 @@ async def test_update_team_with_team_member_budget_duration(
             team_member_rpm_limit=None,
             team_member_tpm_limit=None,
             team_member_budget_duration=None,
+            explicitly_set_fields=frozenset(),
         ):
             result_kv = updated_kv.copy()
             result_kv.pop("team_member_budget", None)
@@ -3371,6 +3742,93 @@ async def test_list_team_v2_with_status_deleted():
 
 
 @pytest.mark.asyncio
+async def test_list_team_v2_includes_litellm_model_table():
+    """
+    Regression test for GH #26312: GET /v2/team/list must eagerly load the
+    litellm_model_table relation for active teams, same as /team/info and
+    /team/list, or a team's model_aliases always read back as null from this
+    endpoint. Deleted teams are excluded: LiteLLM_DeletedTeamTable has no such
+    relation in the Prisma schema, so requesting it there raises
+    UnknownRelationalFieldError against a real database.
+
+    The fake find_many below only attaches litellm_model_table when its own
+    `include` kwarg actually asks for the relation, so the assertions below
+    are on what the caller gets back, not on how find_many was called.
+    """
+    from unittest.mock import AsyncMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
+
+    mock_request = Mock(spec=Request)
+    mock_user_api_key_dict_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user_123",
+    )
+
+    def _team_row(team_id: str, include) -> Mock:
+        model_table = (
+            {
+                "id": 1,
+                "model_aliases": {"my-fast-model": "fake-model"},
+                "created_by": "u",
+                "updated_by": "u",
+                "team": None,
+            }
+            if (include or {}).get("litellm_model_table")
+            else None
+        )
+        return Mock(
+            team_id=team_id,
+            model_dump=lambda: {
+                "team_id": team_id,
+                "team_alias": "t",
+                "litellm_model_table": model_table,
+            },
+        )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:  # test-quality-ok: this file's DB-mock convention
+        mock_db = Mock()
+        mock_prisma_client.db = mock_db
+
+        mock_db.litellm_teamtable.find_many = AsyncMock(
+            side_effect=lambda **kw: [_team_row("team_1", kw.get("include"))]
+        )
+        mock_db.litellm_teamtable.count = AsyncMock(return_value=1)
+        mock_db.litellm_verificationtoken.group_by = AsyncMock(return_value=[])
+
+        result = await list_team_v2(
+            http_request=mock_request,
+            user_id=None,
+            user_api_key_dict=mock_user_api_key_dict_admin,
+            page=1,
+            page_size=10,
+            status=None,
+        )
+
+        assert result["teams"][0].litellm_model_table is not None
+        assert result["teams"][0].litellm_model_table.model_aliases == {"my-fast-model": "fake-model"}
+
+        mock_db.litellm_deletedteamtable.find_many = AsyncMock(
+            side_effect=lambda **kw: [_team_row("team_2", kw.get("include"))]
+        )
+        mock_db.litellm_deletedteamtable.count = AsyncMock(return_value=1)
+
+        await list_team_v2(
+            http_request=mock_request,
+            user_id=None,
+            user_api_key_dict=mock_user_api_key_dict_admin,
+            page=1,
+            page_size=10,
+            status="deleted",
+        )
+
+        assert "include" not in mock_db.litellm_deletedteamtable.find_many.call_args.kwargs
+
+
+@pytest.mark.asyncio
 async def test_list_team_v2_org_admin_sees_org_teams():
     """
     Test that an org admin (internal_user role with org_admin membership)
@@ -4147,6 +4605,8 @@ async def test_team_member_delete_cleans_membership(mock_db_client, mock_admin_a
         return_value=MagicMock()
     )
 
+    _wire_member_delete_tx(mock_db_client)
+
     # Execute
     await team_member_delete(
         data=TeamMemberDeleteRequest(team_id=test_team_id, user_id=test_user_id),
@@ -4205,6 +4665,8 @@ async def test_team_member_delete_cleans_verification_tokens(
         return_value=MagicMock()
     )
 
+    _wire_member_delete_tx(mock_db_client)
+
     await team_member_delete(
         data=TeamMemberDeleteRequest(team_id=test_team_id, user_id=test_user_id),
         user_api_key_dict=mock_admin_auth,
@@ -4215,6 +4677,86 @@ async def test_team_member_delete_cleans_verification_tokens(
             "user_id": {"in": [test_user_id]},
             "team_id": test_team_id,
         }
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_member_delete_reads_on_the_lock_holding_transaction(
+    mock_db_client, mock_admin_auth
+):
+    """
+    Regression pin against exhausting the connection pool with advisory-lock waiters.
+
+    Every concurrent removal for one team holds a pooled connection while it waits on the
+    team's advisory lock, and /team/delete fans its per-member removals out concurrently.
+    A holder whose reads went to the regular client would need a second connection to
+    finish, so enough waiters fill the pool and the holder can never release the lock.
+    Both reads therefore have to run on the transaction that already owns the connection.
+    """
+    from litellm.proxy._types import TeamMemberDeleteRequest
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_delete
+
+    test_team_id = "team-del-pool-123"
+    test_user_id = "user-del-pool-123"
+    roster_entry = {"user_id": test_user_id, "user_email": None, "role": "user"}
+
+    mock_team_row = MagicMock()
+    mock_team_row.model_dump.return_value = {
+        "team_id": test_team_id,
+        "members_with_roles": [roster_entry],
+        "team_member_permissions": [],
+        "metadata": {},
+        "models": [],
+        "spend": 0.0,
+    }
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=mock_team_row
+    )
+
+    user_row = MagicMock()
+    user_row.user_id = test_user_id
+    user_row.teams = [test_team_id]
+
+    # Both are wired to answer, so the endpoint completes either way and the awaits below
+    # are what tells which connection it read on.
+    pooled_user_read = AsyncMock(return_value=[user_row])
+    pooled_token_read = AsyncMock(return_value=[])
+    mock_db_client.db.litellm_usertable.find_many = pooled_user_read
+    mock_db_client.db.litellm_verificationtoken.find_many = pooled_token_read
+
+    tx = MagicMock()
+    tx.query_raw = AsyncMock(return_value=[{"members_with_roles": [roster_entry]}])
+    tx.litellm_teamtable.update = AsyncMock(return_value=mock_team_row)
+    tx.litellm_usertable.find_many = AsyncMock(return_value=[user_row])
+    tx.litellm_usertable.update = AsyncMock()
+    tx.litellm_teammembership.delete_many = AsyncMock()
+    tx.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    tx.litellm_verificationtoken.delete_many = AsyncMock()
+
+    tx_cm = MagicMock()
+    tx_cm.__aenter__ = AsyncMock(return_value=tx)
+    tx_cm.__aexit__ = AsyncMock(return_value=None)
+    mock_db_client.tx = MagicMock(return_value=tx_cm)
+
+    await team_member_delete(
+        data=TeamMemberDeleteRequest(team_id=test_team_id, user_id=test_user_id),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    tx.litellm_usertable.find_many.assert_awaited_once_with(
+        where={"user_id": {"in": [test_user_id]}}
+    )
+    tx.litellm_verificationtoken.find_many.assert_awaited_once_with(
+        where={"user_id": {"in": [test_user_id]}, "team_id": test_team_id}
+    )
+    pooled_user_read.assert_not_awaited()
+    pooled_token_read.assert_not_awaited()
+
+    tx.litellm_usertable.update.assert_awaited_once_with(
+        where={"user_id": test_user_id}, data={"teams": {"set": []}}
+    )
+    tx.litellm_teammembership.delete_many.assert_awaited_once_with(
+        where={"team_id": test_team_id, "user_id": test_user_id}
     )
 
 
@@ -4300,6 +4842,8 @@ async def test_team_member_delete_by_email_the_user_row_does_not_carry(
         return_value=MagicMock()
     )
 
+    _wire_member_delete_tx(mock_db_client)
+
     await team_member_delete(
         data=TeamMemberDeleteRequest(team_id=test_team_id, user_email=roster_email),
         user_api_key_dict=mock_admin_auth,
@@ -4316,6 +4860,83 @@ async def test_team_member_delete_by_email_the_user_row_does_not_carry(
     mock_db_client.db.litellm_teammembership.delete_many.assert_awaited_once_with(
         where={"team_id": test_team_id, "user_id": test_user_id}
     )
+
+
+class _InjectedMemberDeleteFailure(Exception):
+    pass
+
+
+@pytest.mark.asyncio
+async def test_team_member_delete_is_atomic_across_its_four_writes(
+    mock_db_client, mock_admin_auth
+):
+    """
+    /team/member_delete's four cleanups (team roster, user.teams, team
+    membership, verification tokens) run as one transaction, so a failure
+    partway through must not leave the removal half applied.
+
+    Failing the second write (the user's ``teams`` update) pins two things a
+    non-transactional implementation gets wrong: the roster write that already
+    ran has to land on the SAME transaction client the failure raises on (so a
+    real database rolls it back too), and the writes still queued behind the
+    failure (membership delete, token delete) must never be attempted at all.
+    """
+    from litellm.proxy._types import TeamMemberDeleteRequest
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_delete
+
+    test_team_id = "team-del-atomic-123"
+    test_user_id = "user-atomic@example.com"
+
+    mock_team_row = MagicMock()
+    mock_team_row.model_dump.return_value = {
+        "team_id": test_team_id,
+        "members_with_roles": [
+            {"user_id": test_user_id, "user_email": None, "role": "user"}
+        ],
+        "team_member_permissions": [],
+        "metadata": {},
+        "models": [],
+        "spend": 0.0,
+    }
+    mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=mock_team_row
+    )
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=mock_team_row)
+
+    mock_user_row = MagicMock()
+    mock_user_row.user_id = test_user_id
+    mock_user_row.teams = [test_team_id]
+    mock_db_client.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[mock_user_row]
+    )
+    mock_db_client.db.litellm_usertable.update = AsyncMock(
+        side_effect=_InjectedMemberDeleteFailure("boom between writes 1 and 2")
+    )
+
+    mock_db_client.db.litellm_teammembership = MagicMock()
+    mock_db_client.db.litellm_teammembership.delete_many = AsyncMock()
+
+    mock_db_client.db.litellm_verificationtoken = MagicMock()
+    mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_db_client.db.litellm_verificationtoken.delete_many = AsyncMock()
+
+    _wire_member_delete_tx(mock_db_client)
+
+    with pytest.raises(_InjectedMemberDeleteFailure):
+        await team_member_delete(
+            data=TeamMemberDeleteRequest(team_id=test_team_id, user_id=test_user_id),
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    # The roster write ran, but on the transaction the injected failure also raised on.
+    mock_db_client.db.litellm_teamtable.update.assert_awaited_once()
+    mock_db_client.tx.assert_called_once()
+    aexit_args = mock_db_client.tx.return_value.__aexit__.await_args.args
+    assert aexit_args[0] is _InjectedMemberDeleteFailure
+
+    # Writes queued behind the failure inside that same transaction never ran.
+    mock_db_client.db.litellm_teammembership.delete_many.assert_not_awaited()
+    mock_db_client.db.litellm_verificationtoken.delete_many.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -7304,6 +7925,7 @@ async def test_delete_team_persists_deleted_teams(
     mock_tx_cm.__aenter__ = AsyncMock(return_value=mock_tx)
     mock_tx_cm.__aexit__ = AsyncMock(return_value=False)
     mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
+    _wire_team_delete_tx(mock_prisma_client)
 
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.prisma_client",
@@ -7374,15 +7996,14 @@ async def test_delete_team_sweeps_references_outside_members_with_roles(
     cache_state_when_rows_deleted = {}
 
     async def record_cache_state_then_delete(*args, **kwargs):
-        if kwargs.get("table_name") == "team":
-            cache_state_when_rows_deleted["doomed_still_cached"] = (
-                fresh_cache.get_cache(key="team_id:team-doomed") is not None
-            )
-        return {"deleted_teams": ["team-doomed"]}
+        cache_state_when_rows_deleted["doomed_still_cached"] = (
+            fresh_cache.get_cache(key="team_id:team-doomed") is not None
+        )
+        return 1
 
     mock_prisma_client = AsyncMock()
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=doomed_team)
-    mock_prisma_client.delete_data = AsyncMock(side_effect=record_cache_state_then_delete)
+    mock_prisma_client.delete_data = AsyncMock(return_value={"deleted_keys": 0})
     mock_prisma_client.db.litellm_deletedteamtable.create_many = AsyncMock()
     mock_prisma_client.db.litellm_deletedverificationtoken.create_many = AsyncMock()
     mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
@@ -7391,6 +8012,7 @@ async def test_delete_team_sweeps_references_outside_members_with_roles(
     mock_prisma_client.db.execute_raw = mock_execute_raw
     mock_membership_delete_many = AsyncMock()
     mock_prisma_client.db.litellm_teammembership.delete_many = mock_membership_delete_many
+    mock_prisma_client.db.litellm_teamtable.delete_many = AsyncMock(side_effect=record_cache_state_then_delete)
 
     mock_tx = AsyncMock()
     mock_tx.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
@@ -7398,6 +8020,11 @@ async def test_delete_team_sweeps_references_outside_members_with_roles(
     mock_tx_cm.__aenter__ = AsyncMock(return_value=mock_tx)
     mock_tx_cm.__aexit__ = AsyncMock(return_value=False)
     mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
+
+    # The locked delete-and-sweep transaction /team/member_add serializes against, kept
+    # separate from mock_tx above (the BYOK-model-cleanup transaction, unrelated to this lock).
+    _wire_team_delete_tx(mock_prisma_client)
+    mock_lock_tx = mock_prisma_client.tx.return_value.__aenter__.return_value
 
     fresh_cache = UserApiKeyCache()
     for cached_team_id, cached_alias in (
@@ -7432,13 +8059,21 @@ async def test_delete_team_sweeps_references_outside_members_with_roles(
     assert mock_execute_raw.await_args_list == [
         call(_STRIP_DELETED_TEAM_FROM_USERS_SQL, "team-doomed"),
         call(_STRIP_DELETED_TEAM_FROM_USERS_SQL, "team-doomed"),
-    ], "the sweep must run once before the team row is deleted and again after, so a member_add racing the delete cannot leave the reference behind"
+    ], (
+        "the unlocked sweep must run once to catch pre-existing drift, and the locked sweep "
+        "(alongside the delete, under the same advisory lock member_add takes) must run again "
+        "so a member_add that wrote its reference just before losing the lock is still reaped"
+    )
 
-    # same two passes: the second one reaps a membership row inserted while the delete was running
+    # same two passes for the membership rows, the second under the lock alongside the delete
     assert mock_membership_delete_many.await_args_list == [
         call(where={"team_id": {"in": ("team-doomed",)}}),
         call(where={"team_id": {"in": ("team-doomed",)}}),
     ]
+
+    assert mock_lock_tx.query_raw.await_args_list == [call(TEAM_ADVISORY_LOCK_SQL, "team-doomed")], (
+        "the advisory lock must be acquired before the team row is deleted"
+    )
 
     assert fresh_cache.get_cache(key="team_id:team-doomed") is None
     assert fresh_cache.get_cache(key="team_alias:doomed-team") is None
@@ -7489,6 +8124,7 @@ async def test_delete_team_evicts_the_auth_cache_of_the_keys_it_deletes(
     mock_tx_cm.__aenter__ = AsyncMock(return_value=mock_tx)
     mock_tx_cm.__aexit__ = AsyncMock(return_value=False)
     mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
+    _wire_team_delete_tx(mock_prisma_client)
 
     fresh_cache = UserApiKeyCache()
     fresh_cache.set_cache(key="hashed-doomed-key", value=UserAPIKeyAuth(token="hashed-doomed-key", team_id="team-doomed"))
@@ -7516,14 +8152,17 @@ async def test_delete_team_evicts_the_auth_cache_of_the_keys_it_deletes(
 
 
 @pytest.mark.asyncio
-async def test_delete_team_failing_reconcile_sweep_cannot_strand_the_team_in_cache(
+async def test_delete_team_failing_locked_sweep_rolls_back_the_delete_and_leaves_the_cache_alone(
     monkeypatch,
     disable_audit_logging_for_mocked_team,
 ):
     """
-    The reconcile sweep runs after the team row is committed deleted. If it ran before cache
-    eviction, a sweep failure would return an error with the team gone from the db but still
-    served from cache, which is the exact bug this PR exists to fix.
+    The team delete and its post-delete reconcile sweep run inside one transaction, under the
+    team's advisory lock, so a sweep failure rolls the delete back with it rather than leaving
+    the row gone with the sweep half done. Cache eviction only runs after that transaction
+    commits, so a failure here must leave the team exactly as it was: still in the db, and
+    still cached. Evicting a cache entry for a delete that never actually committed would be
+    the same class of bug this PR exists to fix, just on the other side of the transaction.
     """
     from litellm.proxy._types import DeleteTeamRequest
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -7543,7 +8182,7 @@ async def test_delete_team_failing_reconcile_sweep_cannot_strand_the_team_in_cac
     mock_prisma_client.db.litellm_deletedteamtable.create_many = AsyncMock()
     mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma_client.db.litellm_teammembership.delete_many = AsyncMock()
-    # the first sweep succeeds, the post-delete reconcile sweep blows up
+    # the unlocked pre-delete sweep succeeds, the locked post-delete sweep blows up
     mock_prisma_client.db.execute_raw = AsyncMock(side_effect=[None, ConnectionError("db went away")])
 
     mock_tx = AsyncMock()
@@ -7552,6 +8191,7 @@ async def test_delete_team_failing_reconcile_sweep_cannot_strand_the_team_in_cac
     mock_tx_cm.__aenter__ = AsyncMock(return_value=mock_tx)
     mock_tx_cm.__aexit__ = AsyncMock(return_value=False)
     mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
+    _wire_team_delete_tx(mock_prisma_client)
 
     fresh_cache = UserApiKeyCache()
     cached_obj = LiteLLM_TeamTableCachedObj(team_id="team-doomed", team_alias="doomed-team")
@@ -7575,9 +8215,10 @@ async def test_delete_team_failing_reconcile_sweep_cannot_strand_the_team_in_cac
             litellm_changed_by="admin-user",
         )
 
-    # the delete committed, so the cache must not still be serving the team
-    assert fresh_cache.get_cache(key="team_id:team-doomed") is None
-    assert fresh_cache.get_cache(key="team_alias:doomed-team") is None
+    # the transaction that deletes the row and runs the locked sweep never committed, so
+    # cache eviction (which only runs after that commit) must never have been reached
+    assert fresh_cache.get_cache(key="team_id:team-doomed") is not None
+    assert fresh_cache.get_cache(key="team_alias:doomed-team") is not None
 
 
 @pytest.mark.asyncio
@@ -7619,6 +8260,7 @@ async def test_delete_team_broadcasts_cache_invalidation_to_other_workers(
     mock_tx_cm.__aenter__ = AsyncMock(return_value=mock_tx)
     mock_tx_cm.__aexit__ = AsyncMock(return_value=False)
     mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
+    _wire_team_delete_tx(mock_prisma_client)
 
     published = []
 
@@ -7689,6 +8331,7 @@ async def test_delete_team_survives_a_failing_cache_backend(
     mock_tx_cm.__aenter__ = AsyncMock(return_value=mock_tx)
     mock_tx_cm.__aexit__ = AsyncMock(return_value=False)
     mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
+    _wire_team_delete_tx(mock_prisma_client)
 
     exploding_logging_obj = MagicMock()
     exploding_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock(
@@ -7713,7 +8356,7 @@ async def test_delete_team_survives_a_failing_cache_backend(
     )
 
     assert result == {"deleted_teams": ["team-doomed"]}
-    mock_delete_data.assert_any_await(team_id_list=["team-doomed"], table_name="team")
+    mock_prisma_client.db.litellm_teamtable.delete_many.assert_any_await(where={"team_id": {"in": ["team-doomed"]}})
     assert exploding_logging_obj.internal_usage_cache.dual_cache.async_delete_cache.await_count > 0
 
 
@@ -7805,6 +8448,8 @@ async def test_team_member_delete_persists_deleted_keys(monkeypatch):
     mock_prisma_client.db.litellm_deletedverificationtoken.create_many = (
         mock_create_many_keys
     )
+
+    _wire_member_delete_tx(mock_prisma_client)
 
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.prisma_client",
@@ -12501,3 +13146,376 @@ async def test_invalidate_access_group_cache_deletes_the_cached_object():
         "user_api_key_cache": cache,
         "proxy_logging_obj": logging_obj,
     }
+
+
+def test_validate_team_member_reset_spend_value_rejects_non_numeric():
+    with pytest.raises(HTTPException) as exc:
+        _validate_team_member_reset_spend_value(
+            reset_to="not-a-number",
+            membership=LiteLLM_TeamMembership(user_id="u1", team_id="t1", spend=10.0),
+        )
+    assert exc.value.status_code == 400
+
+
+def test_validate_team_member_reset_spend_value_rejects_negative():
+    with pytest.raises(HTTPException) as exc:
+        _validate_team_member_reset_spend_value(
+            reset_to=-1.0,
+            membership=LiteLLM_TeamMembership(user_id="u1", team_id="t1", spend=10.0),
+        )
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.parametrize("reset_to", [float("nan"), float("inf"), float("-inf")])
+def test_validate_team_member_reset_spend_value_rejects_non_finite(reset_to):
+    """NaN and +/-inf are instances of float and compare False against every bound
+    below (`nan < 0`, `nan > current_spend` are both False), so an isinstance-and-range
+    check alone lets them through to persist as the member's spend and silently
+    disable every later budget comparison against it."""
+    with pytest.raises(HTTPException) as exc:
+        _validate_team_member_reset_spend_value(
+            reset_to=reset_to,
+            membership=LiteLLM_TeamMembership(user_id="u1", team_id="t1", spend=10.0),
+        )
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.parametrize("reset_to", [True, False])
+def test_reset_spend_request_rejects_bool_reset_to(reset_to):
+    """bool is a subclass of int, so pydantic silently coerces True/False into 1.0/0.0 for a
+    ``float`` field: {"reset_to": true} would otherwise reach _validate_team_member_reset_spend_value
+    as an indistinguishable 1.0 and reset the member's spend instead of failing the request."""
+    with pytest.raises(ValidationError):
+        ResetSpendRequest(reset_to=reset_to)
+
+
+def test_validate_team_member_reset_spend_value_rejects_above_current_spend():
+    with pytest.raises(HTTPException) as exc:
+        _validate_team_member_reset_spend_value(
+            reset_to=20.0,
+            membership=LiteLLM_TeamMembership(user_id="u1", team_id="t1", spend=10.0),
+        )
+    assert exc.value.status_code == 400
+
+
+def test_validate_team_member_reset_spend_value_rejects_above_max_budget():
+    with pytest.raises(HTTPException) as exc:
+        _validate_team_member_reset_spend_value(
+            reset_to=10.0,
+            membership=LiteLLM_TeamMembership(
+                user_id="u1",
+                team_id="t1",
+                spend=10.0,
+                litellm_budget_table=LiteLLM_BudgetTable(budget_id="b1", max_budget=5.0),
+            ),
+        )
+    assert exc.value.status_code == 400
+
+
+def test_validate_team_member_reset_spend_value_accepts_valid_reset():
+    result = _validate_team_member_reset_spend_value(
+        reset_to=0.0,
+        membership=LiteLLM_TeamMembership(user_id="u1", team_id="t1", spend=10.0),
+    )
+    assert result == 0.0
+
+
+@pytest.mark.asyncio
+async def test_reset_team_member_spend_fn_success(monkeypatch):
+    """A proxy admin resetting a stuck team member's spend must write the DB
+    row to reset_to AND invalidate the cached spend/membership state, or the
+    429 the endpoint exists to clear keeps firing off the stale cache.
+    Asserted against real cache reads, not mock call args, so a change that
+    keeps the call but drops its effect still fails."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    mock_prisma_client = MagicMock()
+    mock_proxy_logging_obj = MagicMock()
+    real_cache = UserApiKeyCache()
+    await real_cache.async_set_cache(key="team-1_member-1", value="stale-membership")
+    await real_cache.async_set_cache(key="team_membership:member-1:team-1", value="stale-membership")
+    real_spend_counter_cache = DualCache()
+    real_spend_counter_cache.in_memory_cache.set_cache(key="spend:team_member:member-1:team-1", value=999.0)
+
+    membership_row = LiteLLM_TeamMembership(
+        user_id="member-1",
+        team_id="team-1",
+        spend=10.0,
+        litellm_budget_table=LiteLLM_BudgetTable(budget_id="b1", max_budget=50.0),
+    )
+    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=membership_row)
+    mock_prisma_client.db.litellm_teammembership.update = AsyncMock(return_value=membership_row)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", real_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj)
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache)
+
+    with patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+        "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+        AsyncMock(return_value=LiteLLM_TeamTable(team_id="team-1")),
+    ):
+        response = await reset_team_member_spend_fn(
+            team_id="team-1",
+            user_id="member-1",
+            data=ResetSpendRequest(reset_to=0.0),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user"
+            ),
+        )
+
+    assert response["spend"] == 0.0
+    assert response["previous_spend"] == 10.0
+    assert response["max_budget"] == 50.0
+    mock_prisma_client.db.litellm_teammembership.update.assert_awaited_once_with(
+        where={"user_id_team_id": {"user_id": "member-1", "team_id": "team-1"}},
+        data={"spend": 0.0},
+    )
+    assert await real_cache.async_get_cache(key="team-1_member-1") is None
+    assert await real_cache.async_get_cache(key="team_membership:member-1:team-1") is None
+    assert real_spend_counter_cache.in_memory_cache.get_cache(key="spend:team_member:member-1:team-1") == 0.0
+
+
+@pytest.mark.asyncio
+async def test_reset_team_member_spend_fn_membership_not_found(monkeypatch):
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+
+    with patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+        "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+        AsyncMock(return_value=LiteLLM_TeamTable(team_id="team-1")),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await reset_team_member_spend_fn(
+                team_id="team-1",
+                user_id="ghost-user",
+                data=ResetSpendRequest(reset_to=0.0),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user"
+                ),
+            )
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_reset_team_member_spend_fn_team_not_found(monkeypatch):
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+
+    with patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+        "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+        AsyncMock(side_effect=HTTPException(status_code=404, detail={"error": "Team doesn't exist in db."})),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await reset_team_member_spend_fn(
+                team_id="ghost-team",
+                user_id="member-1",
+                data=ResetSpendRequest(reset_to=0.0),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user"
+                ),
+            )
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_reset_team_member_spend_fn_forbidden_for_non_admin(monkeypatch):
+    """A caller who is neither proxy admin, org admin, nor this team's admin must be refused,
+    matching every other team-mutating endpoint's authorization."""
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+
+    with patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+        "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+        AsyncMock(return_value=LiteLLM_TeamTable(team_id="team-1", members_with_roles=[])),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await reset_team_member_spend_fn(
+                team_id="team-1",
+                user_id="member-1",
+                data=ResetSpendRequest(reset_to=0.0),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-user", user_id="plain-user"
+                ),
+            )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_reset_team_member_spend_fn_team_admin_cannot_reset_own_spend(monkeypatch):
+    """_verify_team_access authorizes a team admin over their own team with no check that the
+    target differs from the caller. Unchecked, that admin could target their own membership row
+    and repeatedly zero it right before it crosses their per-member cap, consuming the shared
+    team budget without the configured limit ever binding (Veria finding on PR #37971)."""
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+
+    team_admin = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-admin", user_id="team-admin-1")
+    with patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+        "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+        AsyncMock(
+            return_value=LiteLLM_TeamTable(
+                team_id="team-1",
+                members_with_roles=[Member(user_id="team-admin-1", role="admin")],
+            )
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await reset_team_member_spend_fn(
+                team_id="team-1",
+                user_id="team-admin-1",
+                data=ResetSpendRequest(reset_to=0.0),
+                user_api_key_dict=team_admin,
+            )
+    assert exc.value.status_code == 403
+    mock_prisma_client.db.litellm_teammembership.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reset_team_member_spend_fn_proxy_admin_can_reset_own_spend(monkeypatch):
+    """The self-reset guard is scoped to non-proxy-admin roles: a proxy admin resetting their
+    own membership spend is the platform-wide trust boundary, not a team-scoped one."""
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+
+    membership_row = LiteLLM_TeamMembership(user_id="admin-user", team_id="team-1", spend=10.0)
+    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=membership_row)
+    mock_prisma_client.db.litellm_teammembership.update = AsyncMock(return_value=membership_row)
+
+    with patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+        "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+        AsyncMock(return_value=LiteLLM_TeamTable(team_id="team-1")),
+    ):
+        response = await reset_team_member_spend_fn(
+            team_id="team-1",
+            user_id="admin-user",
+            data=ResetSpendRequest(reset_to=0.0),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user"
+            ),
+        )
+    assert response["spend"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_team_member_update_invalidates_team_member_spend_state_when_budget_patch_applied(monkeypatch):
+    """Raising a stuck member's max_budget_in_team via the documented /team/member_update
+    endpoint must invalidate the cached membership state, or the raised cap never reaches the
+    admission check and the member stays 429ing. The live spend counter itself must be left
+    untouched: only the cap changed, and deleting the counter would force a reseed from the
+    DB's own spend column, which lags the live counter via periodic batch writes, briefly
+    UNDER-enforcing the raised cap against a spend value lower than what was actually tracked.
+    Asserted against real cache reads, not mock call args, so a change that keeps the call but
+    drops its effect still fails."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    mock_prisma_client = MagicMock()
+    real_cache = UserApiKeyCache()
+    await real_cache.async_set_cache(key="team-1_member-1", value="stale-membership")
+    await real_cache.async_set_cache(key="team_membership:member-1:team-1", value="stale-membership")
+    real_spend_counter_cache = DualCache()
+    real_spend_counter_cache.in_memory_cache.set_cache(key="spend:team_member:member-1:team-1", value=999.0)
+
+    team_row = LiteLLM_TeamTable(team_id="team-1", metadata={}, members_with_roles=[])
+    team_info_response = {
+        "team_info": team_row,
+        "team_memberships": [LiteLLM_TeamMembership(user_id="member-1", team_id="team-1", budget_id=None)],
+    }
+
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", real_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache)
+
+    mock_tx = AsyncMock()
+    mock_prisma_client.tx.return_value.__aenter__ = AsyncMock(return_value=mock_tx)
+    mock_prisma_client.tx.return_value.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+            "litellm.proxy.management_endpoints.team_endpoints.team_info",
+            AsyncMock(return_value=team_info_response),
+        ),
+        patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+            "litellm.proxy.management_endpoints.team_endpoints._upsert_budget_and_membership",
+            AsyncMock(),
+        ),
+    ):
+        await team_member_update(
+            data=TeamMemberUpdateRequest(team_id="team-1", user_id="member-1", max_budget_in_team=999999.0),
+            http_request=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user"
+            ),
+        )
+
+    assert await real_cache.async_get_cache(key="team-1_member-1") is None
+    assert await real_cache.async_get_cache(key="team_membership:member-1:team-1") is None
+    assert real_spend_counter_cache.in_memory_cache.get_cache(key="spend:team_member:member-1:team-1") == 999.0
+
+
+@pytest.mark.asyncio
+async def test_team_member_update_skips_invalidation_when_no_budget_fields_sent(monkeypatch):
+    """A role-only update carries an empty budget_patch and touches no budget state,
+    so the member's cached spend/membership state must be left untouched."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    mock_prisma_client = MagicMock()
+    real_cache = UserApiKeyCache()
+    await real_cache.async_set_cache(key="team-1_member-1", value="still-fresh-membership")
+    real_spend_counter_cache = DualCache()
+    real_spend_counter_cache.in_memory_cache.set_cache(key="spend:team_member:member-1:team-1", value=1.5)
+
+    team_row = LiteLLM_TeamTable(team_id="team-1", metadata={}, members_with_roles=[])
+    team_info_response = {
+        "team_info": team_row,
+        "team_memberships": [LiteLLM_TeamMembership(user_id="member-1", team_id="team-1", budget_id=None)],
+    }
+
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", real_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache)
+
+    mock_tx = AsyncMock()
+    mock_prisma_client.tx.return_value.__aenter__ = AsyncMock(return_value=mock_tx)
+    mock_prisma_client.tx.return_value.__aexit__ = AsyncMock(return_value=None)
+
+    with (
+        patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+            "litellm.proxy.management_endpoints.team_endpoints.team_info",
+            AsyncMock(return_value=team_info_response),
+        ),
+        patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+            "litellm.proxy.management_endpoints.team_endpoints._upsert_budget_and_membership",
+            AsyncMock(),
+        ),
+    ):
+        await team_member_update(
+            data=TeamMemberUpdateRequest(team_id="team-1", user_id="member-1"),
+            http_request=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user"
+            ),
+        )
+
+    assert await real_cache.async_get_cache(key="team-1_member-1") == "still-fresh-membership"
+    assert real_spend_counter_cache.in_memory_cache.get_cache(key="spend:team_member:member-1:team-1") == 1.5

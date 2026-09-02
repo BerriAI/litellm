@@ -11,6 +11,7 @@ import {
   buildPresetPrefill,
   buildModelAvailability,
   deploymentRefsFromModelInfo,
+  normalizeModelName,
 } from "./autorouter_presets";
 import { DEFAULT_MATCH_THRESHOLD } from "@/components/add_model/SemanticKeywordMatching";
 import { DEFAULT_ESCALATION_KEYWORDS } from "@/components/add_model/EscalationKeywords";
@@ -20,11 +21,34 @@ const groupsOnly = (models: Iterable<string>) => buildModelAvailability(models, 
 describe("autorouter_presets", () => {
   it("loads exactly the bundled presets", () => {
     const presets = getAllPresets();
-    expect(presets.map((p) => p.label).sort()).toEqual(["Anthropic Family", "Lite", "OpenAI Family"]);
+    expect(presets.map((p) => p.label).sort()).toEqual(["Anthropic Family", "Gemini Family", "Lite", "OpenAI Family"]);
     // Every preset carries all four fields the UI relies on; a JSON typo dropping one fails here.
     for (const p of presets) {
       expect(p).toMatchObject({ key: expect.any(String), label: expect.any(String), description: expect.any(String) });
       expect(p.complexity_router_config.tiers).toBeTruthy();
+    }
+  });
+
+  // buildPresetPrefill resolves every model reference through normalizeModelName, so two spellings
+  // of the same model in one tier (e.g. "claude-sonnet-4-5" and "claude-sonnet-4.5") collapse to one
+  // key. For tier_model_configs that silently drops one model's litellm_params; catch it in the
+  // bundled data itself, since nothing else validates preset authoring.
+  it("never spells the same model two ways within a single tier", () => {
+    for (const preset of getAllPresets()) {
+      const { tiers, tier_model_configs: configs } = preset.complexity_router_config;
+      for (const tier of Object.keys(tiers) as (keyof typeof tiers)[]) {
+        const fromTierList = tiers[tier] ?? [];
+        const fromConfigs = (configs?.[tier] ?? []).map((entry) => entry.model_name);
+        const names = new Set([...fromTierList, ...fromConfigs]);
+        const byNormalized = new Map<string, string[]>();
+        for (const name of names) {
+          const key = normalizeModelName(name);
+          byNormalized.set(key, [...(byNormalized.get(key) ?? []), name]);
+        }
+        for (const spellings of byNormalized.values()) {
+          expect(new Set(spellings).size, `${preset.key}.${tier}: ${spellings.join(", ")}`).toBe(1);
+        }
+      }
     }
   });
 
@@ -51,7 +75,7 @@ describe("autorouter_presets", () => {
   });
 
   it("keeps the model-family presets on the heuristic classifier", () => {
-    for (const key of ["anthropic_family", "openai_family"]) {
+    for (const key of ["anthropic_family", "gemini_family", "openai_family"]) {
       expect(getPresetByKey(key)!.complexity_router_config.classifier_type).toBe("heuristic");
     }
   });
@@ -73,6 +97,100 @@ describe("autorouter_presets", () => {
     expect(getRequiredModelsInPreset(lite)).toEqual(
       new Set(["deepseek-v4-flash", "muse-spark-1.2", "kimi-k3", "claude-opus-5"]),
     );
+  });
+
+  // Opus serves both tiers, so the effort is all that separates them and losing it fails silently.
+  it("pins the anthropic preset's reasoning tier to Opus at high thinking", () => {
+    const config = getPresetByKey("anthropic_family")!.complexity_router_config;
+    expect(config.tiers.COMPLEX).toEqual(["claude-opus-5"]);
+    expect(config.tiers.REASONING).toEqual(["claude-opus-5"]);
+    expect(config.tier_model_configs).toEqual({
+      REASONING: [{ model_name: "claude-opus-5", litellm_params: { reasoning_effort: "high" } }],
+    });
+  });
+
+  // Kimi K3 at max needs the map to declare max for kimi-k3, which is the commit below this one.
+  it("pins the lite preset's per-tier reasoning efforts", () => {
+    expect(getPresetByKey("lite")!.complexity_router_config.tier_model_configs).toEqual({
+      MEDIUM: [{ model_name: "muse-spark-1.2", litellm_params: { reasoning_effort: "xhigh" } }],
+      COMPLEX: [{ model_name: "kimi-k3", litellm_params: { reasoning_effort: "max" } }],
+    });
+  });
+
+  // serializeTierModelConfigs filters on the tier's models, so a stray name drops silently.
+  it("never names a model in tier_model_configs that its own tier does not hold", () => {
+    for (const preset of getAllPresets()) {
+      const { tiers, tier_model_configs: configs } = preset.complexity_router_config;
+      for (const [tier, entries] of Object.entries(configs ?? {})) {
+        for (const entry of entries) {
+          expect(tiers[tier as keyof typeof tiers] ?? [], `${preset.key}.${tier}`).toContain(entry.model_name);
+        }
+      }
+    }
+  });
+
+  it("carries a preset's modality_routing into the prefilled form state", () => {
+    const preset = getPresetByKey("anthropic_family")!;
+    const withFlag = { ...preset.complexity_router_config, modality_routing: true };
+    const prefill = buildPresetPrefill(withFlag, groupsOnly(getRequiredModelsInPreset(preset)));
+    expect(prefill.complexityRouterConfig.modality_routing).toBe(true);
+    const withoutFlag = buildPresetPrefill(
+      preset.complexity_router_config,
+      groupsOnly(getRequiredModelsInPreset(preset)),
+    );
+    expect(withoutFlag.complexityRouterConfig.modality_routing).toBe(false);
+  });
+
+  it("prefills the anthropic preset's effort through to tier_model_params", () => {
+    const preset = getPresetByKey("anthropic_family")!;
+    const prefill = buildPresetPrefill(preset.complexity_router_config, groupsOnly(getRequiredModelsInPreset(preset)));
+    expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+      REASONING: { "claude-opus-5": { reasoning_effort: "high" } },
+    });
+  });
+
+  it("prefills the lite preset's efforts through to tier_model_params", () => {
+    const lite = getPresetByKey("lite")!;
+    const prefill = buildPresetPrefill(lite.complexity_router_config, groupsOnly(getRequiredModelsInPreset(lite)));
+    expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+      MEDIUM: { "muse-spark-1.2": { reasoning_effort: "xhigh" } },
+      COMPLEX: { "kimi-k3": { reasoning_effort: "max" } },
+    });
+  });
+
+  it("pins the OpenAI preset to the Luna, Terra, and Sol progression", () => {
+    const preset = getPresetByKey("openai_family")!;
+    const expectedTiers = {
+      SIMPLE: ["gpt-5.6-luna"],
+      MEDIUM: ["gpt-5.6-terra"],
+      COMPLEX: ["gpt-5.6-sol"],
+      REASONING: ["gpt-5.6-sol"],
+    };
+    expect(preset.complexity_router_config.tiers).toEqual(expectedTiers);
+    expect(preset.complexity_router_config.tier_model_configs).toEqual({
+      REASONING: [{ model_name: "gpt-5.6-sol", litellm_params: { reasoning_effort: "xhigh" } }],
+    });
+    const prefill = buildPresetPrefill(preset.complexity_router_config, groupsOnly(getRequiredModelsInPreset(preset)));
+    expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+      REASONING: { "gpt-5.6-sol": { reasoning_effort: "xhigh" } },
+    });
+  });
+
+  it("pins the gemini preset to concrete model ids, never Google's hot-swapping -latest aliases", () => {
+    const gemini = getPresetByKey("gemini_family")!;
+    const config = gemini.complexity_router_config;
+    expect(config.classifier_type).toBe("heuristic");
+    expect(config.classifier_llm_config).toBeUndefined();
+    const expectedTiers = {
+      SIMPLE: ["gemini-2.5-flash-lite"],
+      MEDIUM: ["gemini-3.1-flash-lite"],
+      COMPLEX: ["gemini-3.7-flash"],
+      REASONING: ["gemini-3.1-pro-preview"],
+    };
+    expect(config.tiers).toEqual(expectedTiers);
+    const required = getRequiredModelsInPreset(gemini);
+    for (const model of required) expect(model).not.toMatch(/-latest$/);
+    expect(required.size).toBe(4);
   });
 
   it("collects every tier model as a required model", () => {
@@ -142,6 +260,7 @@ describe("autorouter_presets", () => {
       const config = {
         tiers: { SIMPLE: [presetModel], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
         session_affinity: false,
         deployment_affinity: true,
       };
@@ -185,6 +304,7 @@ describe("autorouter_presets", () => {
       const config = {
         tiers: { SIMPLE: ["claude-opus-5"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
         session_affinity: false,
         deployment_affinity: true,
       };
@@ -199,6 +319,7 @@ describe("autorouter_presets", () => {
       const config = {
         tiers: { SIMPLE: ["claude-opus-5"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
         session_affinity: false,
         deployment_affinity: true,
       };
@@ -232,6 +353,7 @@ describe("autorouter_presets", () => {
     const simpleTierConfig = (presetModel: string) => ({
       tiers: { SIMPLE: [presetModel], MEDIUM: [], COMPLEX: [], REASONING: [] },
       classifier_type: "heuristic" as const,
+      classification_mode: "every_request" as const,
       session_affinity: false,
       deployment_affinity: true,
     });
@@ -475,6 +597,7 @@ describe("autorouter_presets", () => {
       const config = {
         tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
         session_affinity: false,
         deployment_affinity: true,
         match_threshold: 0,
@@ -485,11 +608,46 @@ describe("autorouter_presets", () => {
       expect(prefill.escalationKeywords).toEqual([]);
     });
 
+    it("carries a preset's context-window escalation opt-out and buffer through the prefill", () => {
+      const prefill = buildPresetPrefill(
+        {
+          tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+          classifier_type: "heuristic",
+          classification_mode: "every_request",
+          session_affinity: false,
+          deployment_affinity: true,
+          enable_context_window_escalation: false,
+          context_window_escalation_buffer: 0.9,
+        },
+        groupsOnly(["gpt-5-nano"]),
+      );
+      expect(prefill.complexityRouterConfig.enable_context_window_escalation).toBe(false);
+      expect(prefill.complexityRouterConfig.context_window_escalation_buffer).toBe(0.9);
+    });
+
+    it("carries a preset's classification_mode and defaults it when the preset omits one", () => {
+      const tiers = { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] };
+      const base = {
+        tiers,
+        classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
+        session_affinity: false,
+        deployment_affinity: true,
+      };
+      const availability = groupsOnly(["gpt-5-nano"]);
+      expect(
+        buildPresetPrefill({ ...base, classification_mode: "user_turn" }, availability).complexityRouterConfig
+          .classification_mode,
+      ).toBe("user_turn");
+      expect(buildPresetPrefill(base, availability).complexityRouterConfig.classification_mode).toBe("every_request");
+    });
+
     it("falls back to the defaults when a preset omits match_threshold and escalation_keywords", () => {
       const prefill = buildPresetPrefill(
         {
           tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
           classifier_type: "heuristic",
+          classification_mode: "every_request" as const,
           session_affinity: false,
           deployment_affinity: true,
         },
@@ -506,6 +664,7 @@ describe("autorouter_presets", () => {
       const base = {
         tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
         session_affinity: false,
         deployment_affinity: true,
       };
@@ -521,11 +680,86 @@ describe("autorouter_presets", () => {
       const config = {
         tiers: { SIMPLE: ["claude-sonnet-4-5"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
         session_affinity: false,
         deployment_affinity: true,
       };
       const prefill = buildPresetPrefill(config, groupsOnly(["claude-sonnet-4.5"]));
       expect(prefill.complexityRouterConfig.tiers.SIMPLE).toEqual(["claude-sonnet-4.5"]);
+    });
+
+    it("prefills the per-model litellm_params a preset carries in tier_model_configs", () => {
+      const config = {
+        tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: ["o3"] },
+        tier_model_configs: {
+          REASONING: [{ model_name: "o3", litellm_params: { reasoning_effort: "high" } }],
+        },
+        classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
+        session_affinity: false,
+        deployment_affinity: true,
+      };
+      const prefill = buildPresetPrefill(config, groupsOnly(["gpt-5-nano", "o3"]));
+      expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+        REASONING: { o3: { reasoning_effort: "high" } },
+      });
+    });
+
+    // The params key on the preset's own spelling while the tier entry gets rewritten to the
+    // caller's. Leaving the key alone names a model the tier no longer holds, and
+    // serializeTierModelConfigs then drops the params on submit without saying so.
+    it("rewrites a param key to the same registered spelling its tier entry was rewritten to", () => {
+      const config = {
+        tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: ["claude-sonnet-4-5"] },
+        tier_model_configs: {
+          REASONING: [{ model_name: "claude-sonnet-4-5", litellm_params: { reasoning_effort: "high" } }],
+        },
+        classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
+        session_affinity: false,
+        deployment_affinity: true,
+      };
+      const prefill = buildPresetPrefill(config, groupsOnly(["claude-sonnet-4.5"]));
+      expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+        REASONING: { "claude-sonnet-4.5": { reasoning_effort: "high" } },
+      });
+    });
+
+    // Two spellings of one model in a tier collapse to a single registered key, and one model can
+    // only hold one param set downstream. Merging keeps whatever only one spelling set instead of
+    // dropping that spelling's params wholesale.
+    it("merges rather than drops params when two spellings resolve to the same registered model", () => {
+      const config = {
+        tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: ["claude-sonnet-4-5", "claude-sonnet-4.5"] },
+        tier_model_configs: {
+          REASONING: [
+            { model_name: "claude-sonnet-4-5", litellm_params: { reasoning_effort: "high", temperature: 0.2 } },
+            { model_name: "claude-sonnet-4.5", litellm_params: { reasoning_effort: "low" } },
+          ],
+        },
+        classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
+        session_affinity: false,
+        deployment_affinity: true,
+      };
+      const prefill = buildPresetPrefill(config, groupsOnly(["claude-sonnet-4.5"]));
+      // temperature survives from the spelling that would otherwise have been overwritten;
+      // reasoning_effort, set by both, resolves last-wins.
+      expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+        REASONING: { "claude-sonnet-4.5": { reasoning_effort: "low", temperature: 0.2 } },
+      });
+    });
+
+    it("leaves tier_model_params undefined for a preset that carries no per-model params", () => {
+      const config = {
+        tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+        classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
+        session_affinity: false,
+        deployment_affinity: true,
+      };
+      const prefill = buildPresetPrefill(config, groupsOnly(["gpt-5-nano"]));
+      expect(prefill.complexityRouterConfig.tier_model_params).toBeUndefined();
     });
   });
 });

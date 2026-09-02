@@ -366,7 +366,7 @@ def test_shipped_rules_stack_adaptive_and_mid_conversation_flags(shipped_cost_ma
 def test_shipped_rules_flag_unmapped_fable_as_always_on_thinking(shipped_cost_map):
     """An unmapped Fable/Mythos id picks up ``thinking_always_on`` from the
     claude-always-on-thinking rule, while other unmapped Claudes stay unflagged."""
-    model = "claude-fable-5-1"
+    model = "claude-fable-6-1"
     assert model not in litellm.model_cost
     info = litellm.get_model_info(model, custom_llm_provider="anthropic")
     assert info["thinking_always_on"] is True
@@ -378,7 +378,7 @@ def test_shipped_rules_flag_unmapped_fable_as_always_on_thinking(shipped_cost_ma
     "model,provider",
     [
         ("claude-opus-4-9@20260101", "vertex_ai"),
-        ("databricks-claude-opus-5-1", "databricks"),
+        ("databricks-claude-haiku-5-1", "databricks"),
     ],
 )
 def test_shipped_rules_are_provider_neutral_for_unmapped_ids(shipped_cost_map, model, provider):
@@ -388,6 +388,8 @@ def test_shipped_rules_are_provider_neutral_for_unmapped_ids(shipped_cost_map, m
     assert info["supports_adaptive_thinking"] is True
     assert info["supports_mid_conversation_system"] is True
     assert info["supports_function_calling"] is True
+    assert not info.get("input_cost_per_token")
+    assert not info.get("output_cost_per_token")
 
 
 @pytest.mark.parametrize(
@@ -417,7 +419,7 @@ def test_shipped_rules_cover_new_families_like_fable_at_5_plus(shipped_cost_map)
     """Both version gates accept any claude-<family>- id at major 5 or higher, bare
     major or major-minor, so a new family shaped like claude-fable-5 gets adaptive
     thinking and mid-conversation system support without a cost-map entry."""
-    model = "claude-fable-5-1"
+    model = "claude-fable-6-1"
     assert model not in litellm.model_cost
     info = litellm.get_model_info(model, custom_llm_provider="anthropic")
     assert info["supports_mid_conversation_system"] is True

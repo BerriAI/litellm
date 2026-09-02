@@ -124,6 +124,25 @@ class TestLiteLLMCompletionResponsesConfig:
         assert "extra_field" not in result["file"]
         assert "another_field" not in result["file"]
 
+    def test_transform_input_file_item_to_file_item_keeps_filename(self):
+        """OpenAI rejects file_data with no filename beside it, so dropping it 400s the request"""
+        result = (
+            LiteLLMCompletionResponsesConfig._transform_input_file_item_to_file_item(
+                {
+                    "type": "input_file",
+                    "filename": "report.pdf",
+                    "file_data": "data:application/pdf;base64,JVBERi0=",
+                }
+            )
+        )
+        assert result == {
+            "type": "file",
+            "file": {
+                "file_data": "data:application/pdf;base64,JVBERi0=",
+                "filename": "report.pdf",
+            },
+        }
+
     def test_transform_input_file_item_to_file_item_with_file_url(self):
         """file_url should be mapped to file_id for downstream URL handling"""
         result = (
@@ -629,6 +648,72 @@ class TestLiteLLMCompletionResponsesConfig:
 
         assert responses_api_response.status == "incomplete"
 
+    def test_tool_call_only_response_emits_no_null_text_message_item(self):
+        """A tool-calls-only turn (message content None, e.g. from Anthropic)
+        must not emit a message output item whose output_text has text null.
+        OpenAI rejects such an item on replay with
+        "Invalid type for 'input[..].content[..].text': expected a string, but
+        got null instead." Native OpenAI tool-only turns carry no message item."""
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-sonnet-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="toolu_01OnlyToolCall",
+                                type="function",
+                                function=Function(name="get_weather", arguments='{"city": "SF"}'),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="what's the weather in SF?",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+        output_types = [item.type for item in responses_api_response.output]
+        assert "message" not in output_types
+        assert "function_call" in output_types
+
+    def test_content_bearing_response_still_emits_message_item(self):
+        """Turns with real text content must keep their message output item."""
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-sonnet-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="It is sunny.", role="assistant"),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="what's the weather in SF?",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+        message_items = [item for item in responses_api_response.output if item.type == "message"]
+        assert len(message_items) == 1
+        assert message_items[0].content[0].text == "It is sunny."
+
     def test_transform_chat_completion_response_preserves_hidden_params(self):
         """Test that _hidden_params from chat completion response are preserved in responses API response"""
         # Setup
@@ -952,6 +1037,68 @@ class TestFunctionCallTransformation:
         function = tool_call.get("function", {})
         assert function.get("name") == "get_weather"
         assert function.get("arguments") == '{"location": "São Paulo, Brazil"}'
+
+    def test_function_call_transformation_normalizes_redacted_arguments(self):
+        """Redacted rows hold the bare sentinel in arguments, which is invalid JSON."""
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+            function_call={
+                "type": "function_call",
+                "name": "get_weather",
+                "arguments": "redacted-by-litellm",
+                "call_id": "call_123",
+            }
+        )
+
+        assert result[0]["tool_calls"][0]["function"]["arguments"] == "{}"
+
+    def test_function_call_transformation_json_encodes_object_arguments(self):
+        """A decoded arguments object must be JSON-encoded, not str()'d.
+
+        Clients and providers sometimes send `arguments` as an object rather
+        than a JSON string; `str()` on a dict produces a Python repr with
+        single quotes, which downstream JSON parsers reject with errors like
+        "Expecting ',' delimiter".
+        """
+        function_call_item = {
+            "type": "function_call",
+            "name": "shell",
+            "arguments": {"command": "ls", "timeout": 30, "flags": ["-l", "-a"]},
+            "call_id": "call_123",
+            "id": "call_123",
+            "status": "completed",
+        }
+
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+            function_call=function_call_item
+        )
+
+        arguments = result[0].get("tool_calls", [])[0].get("function", {}).get("arguments")
+        assert json.loads(arguments) == {"command": "ls", "timeout": 30, "flags": ["-l", "-a"]}
+        assert "'" not in arguments
+
+    def test_create_tool_call_chunk_json_encodes_object_arguments(self):
+        """Cached tool_call definitions with object arguments stay valid JSON."""
+        chunk = LiteLLMCompletionResponsesConfig._create_tool_call_chunk(
+            tool_use_definition={
+                "id": "call_456",
+                "type": "function",
+                "function": {"name": "shell", "arguments": {"command": "ls"}},
+            },
+            tool_call_id="call_456",
+            index=0,
+        )
+
+        assert json.loads(chunk["function"]["arguments"]) == {"command": "ls"}
+
+    def test_create_tool_call_chunk_keeps_empty_arguments_default(self):
+        """Missing arguments still fall back to an empty JSON object."""
+        chunk = LiteLLMCompletionResponsesConfig._create_tool_call_chunk(
+            tool_use_definition={"id": "call_789", "type": "function", "function": {"name": "shell"}},
+            tool_call_id="call_789",
+            index=0,
+        )
+
+        assert chunk["function"]["arguments"] == "{}"
 
     def test_complete_input_transformation_with_function_calls(self):
         """Test the complete transformation with the exact input from the issue"""
@@ -2841,9 +2988,9 @@ class TestStreamingIDConsistency:
         # Verify the cached ID is set and matches
         assert iterator._cached_item_id is not None, "Iterator should cache the item_id"
         assert iterator._cached_item_id == item_id_1, "Cached ID should match event IDs"
-        assert (
-            iterator._cached_item_id == "chatcmpl-first-id"
-        ), "Should use the first chunk's ID"
+        assert iterator._cached_item_id.startswith(
+            "msg_"
+        ), "Message item IDs must use the Responses API msg_ prefix (issue #27333)"
 
     def test_streaming_iterator_initial_events_use_cached_id(self):
         """
@@ -3262,6 +3409,7 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._pending_tool_events = []
         iterator._tool_output_index_by_call_id = {}
         iterator._tool_args_by_call_id = {}
+        iterator._tool_item_id_by_call_id = {}
         iterator._tool_call_id_by_index = {}
         iterator._ambiguous_tool_call_indexes = set()
         iterator._next_tool_output_index = 1
@@ -3771,3 +3919,234 @@ def test_function_call_tool_id_falls_back_to_unique_id_for_degenerate_call_id():
         id="fc_2", call_id="call_tokyo", name="get_weather", arguments="{}"
     )
     assert convert(openai)["id"] == "call_tokyo"
+
+
+BRIDGED_CHAT_COMPLETION_ID = "chatcmpl-dfa2da3a-1586-4ff7-b64e-f59c692a5d11"
+
+
+def _bridged_chat_completion_response(**overrides):
+    defaults = dict(
+        id=BRIDGED_CHAT_COMPLETION_ID,
+        created=1717000000,
+        model="claude-sonnet-4-5",
+        object="chat.completion",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="stop",
+                message=Message(role="assistant", content="apple"),
+            )
+        ],
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+    defaults.update(overrides)
+    return ModelResponse(**defaults)
+
+
+def _bridged_output_items(response, item_type):
+    return [item for item in response.output if getattr(item, "type", None) == item_type]
+
+
+class TestBridgedOutputItemIdPrefixes:
+    """Bridged output items must carry Responses API ID prefixes (issue #27333).
+
+    Native OpenAI Responses rejects a replayed history whose message item ID does not
+    begin with "msg", so leaking the upstream chatcmpl-* ID makes the conversation
+    impossible to hand off from a bridged provider to OpenAI.
+    """
+
+    def _transform(self, chat_completion_response):
+        return LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Say the single word: apple",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+    def test_message_item_id_uses_msg_prefix(self):
+        response = self._transform(_bridged_chat_completion_response())
+
+        message_items = _bridged_output_items(response, "message")
+        assert len(message_items) == 1
+        assert message_items[0].id.startswith("msg_")
+
+    def test_message_item_id_does_not_leak_chat_completion_id(self):
+        response = self._transform(_bridged_chat_completion_response())
+
+        for item in _bridged_output_items(response, "message"):
+            assert item.id != BRIDGED_CHAT_COMPLETION_ID
+            assert not item.id.startswith("chatcmpl-")
+
+    def test_message_item_ids_are_unique_across_responses(self):
+        first = self._transform(_bridged_chat_completion_response())
+        second = self._transform(_bridged_chat_completion_response())
+
+        first_id = _bridged_output_items(first, "message")[0].id
+        second_id = _bridged_output_items(second, "message")[0].id
+        assert first_id != second_id
+
+    def _reasoning_items(self):
+        message = Message(role="assistant", content="apple")
+        message.reasoning_content = "thinking about fruit"
+        choice = Choices(index=0, finish_reason="stop", message=message)
+        return LiteLLMCompletionResponsesConfig._extract_reasoning_output_items(
+            chat_completion_response=_bridged_chat_completion_response(),
+            choices=[choice],
+        )
+
+    def test_reasoning_item_id_uses_rs_prefix(self):
+        items = self._reasoning_items()
+
+        assert len(items) == 1
+        assert items[0].id.startswith("rs_")
+
+    def test_reasoning_item_id_is_not_a_salted_hash(self):
+        """Python's hash() is salted per process, so the old rs_{hash(...)} ID for the
+        same reasoning text differed between workers and across restarts."""
+        suffix = self._reasoning_items()[0].id.removeprefix("rs_")
+
+        assert not suffix.lstrip("-").isdigit()
+        assert not suffix.startswith("-")
+
+
+class TestStreamingSnapshotItemIds:
+    """The response.completed snapshot must reuse the streamed item ID (issue #27333).
+
+    The incremental events already minted msg_* IDs while the final snapshot went back
+    through the non-streaming transform, so a streaming client replaying the snapshot
+    sent back an ID it had never been shown.
+    """
+
+    def _make_iterator(self):
+        from unittest.mock import Mock
+
+        import litellm
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+
+        mock_stream_wrapper = Mock(spec=litellm.CustomStreamWrapper)
+        mock_stream_wrapper.logging_obj = Mock()
+        return LiteLLMCompletionStreamingIterator(
+            model="anthropic/claude-sonnet-4-5",
+            litellm_custom_stream_wrapper=mock_stream_wrapper,
+            request_input="Say the single word: apple",
+            responses_api_request={},
+            custom_llm_provider="anthropic",
+        )
+
+    def _make_chunk(self, content):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        return ModelResponseStream(
+            id=BRIDGED_CHAT_COMPLETION_ID,
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content=content, role="assistant"),
+                    finish_reason=None,
+                )
+            ],
+            created=1717000000,
+            model="claude-sonnet-4-5",
+            object="chat.completion.chunk",
+        )
+
+    def test_incremental_item_id_uses_msg_prefix(self):
+        iterator = self._make_iterator()
+
+        event = iterator._transform_chat_completion_chunk_to_response_api_chunk(
+            self._make_chunk("apple")
+        )
+
+        assert event is not None
+        assert event.item_id.startswith("msg_")
+        assert event.item_id != BRIDGED_CHAT_COMPLETION_ID
+
+    def test_completed_snapshot_reuses_streamed_item_id(self):
+        iterator = self._make_iterator()
+
+        streamed_event = iterator._transform_chat_completion_chunk_to_response_api_chunk(
+            self._make_chunk("apple")
+        )
+        assert streamed_event is not None
+
+        completed_event = iterator._emit_response_completed_event(
+            _bridged_chat_completion_response()
+        )
+
+        assert completed_event is not None
+        message_items = _bridged_output_items(completed_event.response, "message")
+        assert len(message_items) == 1
+        assert message_items[0].id == streamed_event.item_id
+
+    def test_completed_snapshot_item_id_is_replayable(self):
+        iterator = self._make_iterator()
+        iterator._transform_chat_completion_chunk_to_response_api_chunk(
+            self._make_chunk("apple")
+        )
+
+        completed_event = iterator._emit_response_completed_event(
+            _bridged_chat_completion_response()
+        )
+
+        assert completed_event is not None
+        for item in _bridged_output_items(completed_event.response, "message"):
+            assert item.id.startswith("msg_")
+            assert not item.id.startswith("chatcmpl-")
+
+    def _make_reasoning_chunk(self, reasoning_content):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        return ModelResponseStream(
+            id=BRIDGED_CHAT_COMPLETION_ID,
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(role="assistant", reasoning_content=reasoning_content),
+                    finish_reason=None,
+                )
+            ],
+            created=1717000000,
+            model="claude-sonnet-4-5",
+            object="chat.completion.chunk",
+        )
+
+    def _reasoning_chat_completion_response(self):
+        message = Message(role="assistant", content="apple")
+        message.reasoning_content = "thinking about fruit"
+        return _bridged_chat_completion_response(
+            choices=[Choices(index=0, finish_reason="stop", message=message)]
+        )
+
+    def test_reasoning_delta_events_share_one_item_id(self):
+        """The old rs_{hash(text)} ID changed with every delta, so a client accumulating
+        reasoning by item ID saw a new item per chunk."""
+        iterator = self._make_iterator()
+
+        first = iterator._transform_chat_completion_chunk_to_response_api_chunk(
+            self._make_reasoning_chunk("thinking ")
+        )
+        second = iterator._transform_chat_completion_chunk_to_response_api_chunk(
+            self._make_reasoning_chunk("about fruit")
+        )
+
+        assert first is not None and second is not None
+        assert first.item_id.startswith("rs_")
+        assert first.item_id == second.item_id
+
+    def test_completed_snapshot_reuses_streamed_reasoning_item_id(self):
+        iterator = self._make_iterator()
+
+        streamed_event = iterator._transform_chat_completion_chunk_to_response_api_chunk(
+            self._make_reasoning_chunk("thinking about fruit")
+        )
+        assert streamed_event is not None
+
+        completed_event = iterator._emit_response_completed_event(
+            self._reasoning_chat_completion_response()
+        )
+
+        assert completed_event is not None
+        reasoning_items = _bridged_output_items(completed_event.response, "reasoning")
+        assert len(reasoning_items) == 1
+        assert reasoning_items[0].id == streamed_event.item_id

@@ -1,5 +1,5 @@
 import * as networking from "@/components/networking";
-import { fireEvent, render, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, waitFor, within, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import GuardrailInfoView from "./guardrail_info";
@@ -65,21 +65,47 @@ describe("Guardrail Info", () => {
 
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
 
-    const { getAllByText, getByText } = render(
-      <GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />,
-    );
+    render(<GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />);
 
     // Wait for the loading to complete and data to be rendered
     await waitFor(() => {
       // The guardrail name appears in multiple places (title and settings tab)
-      const elements = getAllByText("Test Guardrail");
+      const elements = screen.getAllByText("Test Guardrail");
       expect(elements.length).toBeGreaterThan(0);
     });
 
     // Verify other key elements are present
-    expect(getByText("Back to Guardrails")).toBeInTheDocument();
-    expect(getByText("Overview")).toBeInTheDocument();
-    expect(getByText("Settings")).toBeInTheDocument();
+    expect(screen.getByText("Back to Guardrails")).toBeInTheDocument();
+    expect(screen.getByText("Overview")).toBeInTheDocument();
+    expect(screen.getByText("Settings")).toBeInTheDocument();
+  });
+
+  it("should render a tag-based mode object rather than crashing the detail view", async () => {
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue({
+      guardrail_id: "123",
+      guardrail_name: "Test Guardrail",
+      litellm_params: {
+        guardrail: "bedrock",
+        mode: { tags: { "Service-Type: internal-service": "post_call" }, default: ["pre_call", "post_call"] },
+        default_on: true,
+      },
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+      guardrail_definition_location: "database",
+    });
+
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
+      supported_entities: [],
+      supported_actions: [],
+      pii_entity_categories: [],
+      supported_modes: ["pre_call", "post_call"],
+    });
+
+    vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
+
+    render(<GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />);
+
+    expect(await screen.findAllByText("pre_call, post_call (tag-based)")).not.toHaveLength(0);
   });
 
   it("should render the provider logo from the bundled guardrail logo map", async () => {
@@ -105,11 +131,9 @@ describe("Guardrail Info", () => {
 
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
 
-    const { findByAltText } = render(
-      <GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />,
-    );
+    render(<GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />);
 
-    const logo = await findByAltText("Presidio PII logo");
+    const logo = await screen.findByAltText("Presidio PII logo");
     expect(logo).toHaveAttribute("src", expect.stringContaining("microsoft_azure.svg"));
   });
 
@@ -137,25 +161,27 @@ describe("Guardrail Info", () => {
 
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
 
-    const { getByText, findByText, container } = render(
+    const { container } = render(
       <GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />,
     );
 
     await waitFor(() => {
-      expect(getByText("Settings")).toBeInTheDocument();
+      expect(screen.getByText("Settings")).toBeInTheDocument();
     });
 
     // Click the Settings tab
-    fireEvent.click(getByText("Settings"));
+    fireEvent.click(screen.getByText("Settings"));
 
     // Wait for the Settings panel to render
     await waitFor(() => {
-      expect(getByText("Guardrail Settings")).toBeInTheDocument();
+      expect(screen.getByText("Guardrail Settings")).toBeInTheDocument();
     });
 
     await userEvent.hover(within(container).getByRole("img", { name: "Config guardrail details" }));
 
-    expect(await findByText("Guardrail is defined in the config file and cannot be edited.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Guardrail is defined in the config file and cannot be edited."),
+    ).toBeInTheDocument();
   });
 
   it("should render the guardrail info", async () => {
@@ -186,12 +212,10 @@ describe("Guardrail Info", () => {
 
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
 
-    const { getByText } = render(
-      <GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />,
-    );
+    render(<GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />);
 
     await waitFor(() => {
-      expect(getByText("PII Entity Configuration")).toBeInTheDocument();
+      expect(screen.getByText("PII Entity Configuration")).toBeInTheDocument();
     });
   });
   it("should handle content filter updates correctly", async () => {
@@ -221,30 +245,28 @@ describe("Guardrail Info", () => {
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
     vi.mocked(networking.updateGuardrailCall).mockResolvedValue({ status: "success" });
 
-    const { getByText, getByLabelText } = render(
-      <GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />,
-    );
+    render(<GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />);
 
     await waitFor(() => {
-      expect(getByText("Settings")).toBeInTheDocument();
+      expect(screen.getByText("Settings")).toBeInTheDocument();
     });
 
     // Go to Settings tab
-    fireEvent.click(getByText("Settings"));
+    fireEvent.click(screen.getByText("Settings"));
 
     await waitFor(() => {
-      expect(getByText("Guardrail Settings")).toBeInTheDocument();
+      expect(screen.getByText("Guardrail Settings")).toBeInTheDocument();
     });
 
     // Enter Edit Mode
-    fireEvent.click(getByText("Edit Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
 
     // Modify Guardrail Name to force an update
-    const nameInput = getByLabelText("Guardrail Name");
+    const nameInput = screen.getByLabelText("Guardrail Name");
     fireEvent.change(nameInput, { target: { value: "Updated Name" } });
 
     // Save with only name change
-    const saveButton = getByText("Save Changes");
+    const saveButton = screen.getByText("Save Changes");
     fireEvent.click(saveButton);
 
     await waitFor(() => {
@@ -270,16 +292,16 @@ describe("Guardrail Info", () => {
 
     // Enter Edit Mode again to make changes
     await waitFor(() => {
-      expect(getByText("Edit Settings")).toBeInTheDocument();
+      expect(screen.getByText("Edit Settings")).toBeInTheDocument();
     });
-    fireEvent.click(getByText("Edit Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
 
     // Now modify the values using the mock button
-    const simulateChangeButton = getByText("Simulate Change");
+    const simulateChangeButton = screen.getByText("Simulate Change");
     fireEvent.click(simulateChangeButton);
 
     // Save again
-    fireEvent.click(getByText("Save Changes"));
+    fireEvent.click(screen.getByText("Save Changes"));
 
     await waitFor(() => {
       expect(networking.updateGuardrailCall).toHaveBeenCalled();
@@ -309,12 +331,10 @@ describe("Guardrail Info", () => {
     });
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
 
-    const { findByRole, getByRole, getByText } = render(
-      <GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />,
-    );
+    render(<GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />);
 
-    expect(await findByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
-    expect(getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "false");
-    expect(getByText("Guardrail Settings")).toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByText("Guardrail Settings")).toBeInTheDocument();
   });
 });

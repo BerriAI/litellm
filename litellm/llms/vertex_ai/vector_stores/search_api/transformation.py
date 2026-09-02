@@ -1,6 +1,8 @@
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm import get_model_info
 from litellm.exceptions import BadRequestError
@@ -23,6 +25,7 @@ from litellm.types.vector_stores import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.router import Router
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -50,6 +53,52 @@ VERTEX_SEARCH_DATASTORE_EXTRA_BODY_FIELDS: Final = frozenset(VertexSearchDataSto
 VERTEX_SEARCH_ENGINE_EXTRA_BODY_FIELDS: Final = frozenset(VertexSearchEngineExtraBody.__annotations__)
 
 
+class VertexSearchSnippet(TypedDict, total=False):
+    snippet: ReadOnly[str]
+    htmlSnippet: ReadOnly[str]
+
+
+class VertexSearchDerivedStructData(TypedDict, total=False):
+    """The ``derivedStructData`` blob Discovery Engine attaches to each search hit."""
+
+    title: ReadOnly[str]
+    link: ReadOnly[str]
+    displayLink: ReadOnly[str]
+    formattedUrl: ReadOnly[str]
+    snippets: ReadOnly[list[VertexSearchSnippet]]
+
+
+class VertexSearchDocument(TypedDict, total=False):
+    derivedStructData: ReadOnly[VertexSearchDerivedStructData]
+
+
+class VertexSearchHit(TypedDict, total=False):
+    id: ReadOnly[str]
+    document: ReadOnly[VertexSearchDocument]
+
+
+class VertexSearchApiResponse(TypedDict, total=False):
+    """Body of a Discovery Engine ``:search`` response."""
+
+    results: ReadOnly[list[VertexSearchHit]]
+
+
+class _SearchQueryView(TypedDict):
+    """Holds the logged search query so the model call detail reads back as ``str``."""
+
+    query: ReadOnly[str]
+
+
+class _VertexSearchApiSource(Protocol):
+    """An HTTP response whose JSON body is a Discovery Engine ``:search`` result."""
+
+    def json(self) -> VertexSearchApiResponse: ...
+
+
+def _vertex_search_payload(response: _VertexSearchApiSource) -> VertexSearchApiResponse:
+    return response.json()
+
+
 class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
     """
     Configuration for Vertex AI Search API Vector Store
@@ -61,7 +110,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         super().__init__()
 
     @staticmethod
-    def get_supported_extra_body_fields(is_engine: bool = False) -> frozenset:
+    def get_supported_extra_body_fields(is_engine: bool = False) -> frozenset[str]:
         """
         Native SearchRequest fields callers may forward via ``extra_body``.
 
@@ -75,7 +124,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         return VERTEX_SEARCH_DATASTORE_EXTRA_BODY_FIELDS
 
     @classmethod
-    def _filter_extra_body(cls, extra_body: dict[str, Any], is_engine: bool = False) -> dict[str, Any]:
+    def _filter_extra_body(cls, extra_body: Mapping[str, object], is_engine: bool = False) -> dict[str, object]:
         """
         Validate ``extra_body`` against the supported-field allowlist for the
         active serving config (engine/app vs data store).
@@ -196,8 +245,9 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
-        extra_body: dict[str, Any] | None = None,
-    ) -> tuple[str, dict[str, Any]]:
+        extra_body: Mapping[str, object] | None = None,
+        router: "Router | None" = None,
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform a search request for the Vertex AI Search (Discovery Engine) API.
 
@@ -222,7 +272,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
 
         is_engine: Final = bool(litellm_params.get("vertex_engine_id"))
 
-        request_body: Final[dict[str, Any]] = {"query": query, "pageSize": 10}
+        request_body: Final[dict[str, object]] = {"query": query, "pageSize": 10}
         max_num_results: Final = vector_store_search_optional_params.get("max_num_results")
         if max_num_results is not None:
             request_body["pageSize"] = max_num_results
@@ -256,7 +306,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         }
         """
         try:
-            response_json: Final = response.json()
+            response_json: Final = _vertex_search_payload(response)
 
             # Extract results from Vertex AI Search API response
             results: Final = response_json.get("results", [])
@@ -264,8 +314,8 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
             # Transform results to standard format
             search_results: Final[list[VectorStoreSearchResult]] = []
             for result in results:
-                document = result.get("document", {})
-                derived_data = document.get("derivedStructData", {})
+                document: VertexSearchDocument = result.get("document", {})
+                derived_data: VertexSearchDerivedStructData = document.get("derivedStructData", {})
 
                 # Extract text content from snippets
                 snippets = derived_data.get("snippets", [])
@@ -329,9 +379,10 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
                 )
                 search_results.append(result_obj)
 
+            query_view: Final[_SearchQueryView] = {"query": litellm_logging_obj.model_call_details.get("query", "")}
             return VectorStoreSearchResponse(
                 object="vector_store.search_results.page",
-                search_query=litellm_logging_obj.model_call_details.get("query", ""),
+                search_query=query_view["query"],
                 data=search_results,
             )
 

@@ -1,5 +1,5 @@
 use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
-use crate::error::{CoreError, CoreResult};
+use crate::error::Error;
 
 use super::client::http_client;
 use super::common_utils::truncate_error_body;
@@ -7,7 +7,7 @@ use super::types::{AnthropicMessagesResponse, ProviderMessagesRequest};
 
 pub(super) async fn execute_messages_provider_call(
     request: ProviderMessagesRequest,
-) -> CoreResult<AnthropicMessagesResponse> {
+) -> Result<AnthropicMessagesResponse, Error> {
     let mut request_builder = http_client().post(&request.url).json(&request.body);
     for (key, value) in &request.upstream_headers {
         request_builder = request_builder.header(key, value);
@@ -19,32 +19,31 @@ pub(super) async fn execute_messages_provider_call(
     let response = request_builder
         .send()
         .await
-        .map_err(|err| CoreError::Network(err.to_string()))?;
+        .map_err(|err| Error::Network(err.to_string()))?;
 
     let status = response.status();
     let text = response
         .text()
         .await
-        .map_err(|err| CoreError::Network(err.to_string()))?;
+        .map_err(|err| Error::Network(err.to_string()))?;
 
     if !status.is_success() {
-        return Err(CoreError::Http {
+        return Err(Error::Http {
             status: status.as_u16(),
             body: truncate_error_body(&text),
         });
     }
 
-    let response = serde_json::from_str(&text).map_err(|err| {
-        CoreError::InvalidResponse(format!("invalid messages response JSON: {err}"))
-    })?;
+    let response = serde_json::from_str(&text)
+        .map_err(|err| Error::InvalidResponse(format!("invalid messages response JSON: {err}")))?;
     request.config.transform_response(&request.model, response)
 }
 
 pub(super) async fn execute_messages_provider_stream(
     request: ProviderMessagesRequest,
-) -> CoreResult<reqwest::Response> {
+) -> Result<reqwest::Response, Error> {
     if request.provider != ANTHROPIC_MESSAGES_PROVIDER {
-        return Err(CoreError::InvalidRequest(
+        return Err(Error::InvalidRequest(
             "streaming messages is not supported for this provider".to_string(),
         ));
     }
@@ -60,14 +59,14 @@ pub(super) async fn execute_messages_provider_stream(
     let response = request_builder
         .send()
         .await
-        .map_err(|err| CoreError::Network(err.to_string()))?;
+        .map_err(|err| Error::Network(err.to_string()))?;
     let status = response.status();
     if !status.is_success() {
         let text = response
             .text()
             .await
-            .map_err(|err| CoreError::Network(err.to_string()))?;
-        return Err(CoreError::Http {
+            .map_err(|err| Error::Network(err.to_string()))?;
+        return Err(Error::Http {
             status: status.as_u16(),
             body: truncate_error_body(&text),
         });
