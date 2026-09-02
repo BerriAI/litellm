@@ -64,7 +64,7 @@ async def test_async_streaming_missing_credentials_is_not_a_server_error(monkeyp
     monkeypatch.setattr(litellm, "api_key", None, raising=False)
     monkeypatch.setattr(litellm, "openai_key", None, raising=False)
 
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(openai.OpenAIError) as exc_info:
         await litellm.acompletion(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "hi"}],
