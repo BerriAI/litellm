@@ -4,11 +4,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
-import TeamInfoView, {
-  grantedMcpPermissionKeys,
-  mcpToolPermissionNotice,
-  retainedMcpToolPermissions,
-} from "./TeamInfo";
+import TeamInfoView, { grantedMcpServerIds, retainedMcpToolPermissions } from "./TeamInfo";
 import type { EffectiveMcpServer } from "@/components/mcp_server_management/effectiveMcpServers";
 import type { MCPServer } from "@/components/mcp_tools/types";
 
@@ -174,12 +170,20 @@ vi.mock("@/components/common_components/ModelAliasManager", () => ({
 vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroups", () => ({
   useAccessGroups: vi.fn().mockReturnValue({
     data: [
-      { access_group_id: "ag-1", access_group_name: "Group 1" },
-      { access_group_id: "ag-2", access_group_name: "Group 2" },
+      { access_group_id: "ag-1", access_group_name: "Group 1", access_mcp_server_ids: [] },
+      { access_group_id: "ag-2", access_group_name: "Group 2", access_mcp_server_ids: [] },
     ],
     isLoading: false,
     isError: false,
   }),
+}));
+
+vi.mock("@/components/common_components/AccessGroupSelector", () => ({
+  default: ({ value, onChange }: { value?: string[]; onChange?: (next: string[]) => void }) => (
+    <button type="button" onClick={() => onChange?.((value ?? []).slice(1))}>
+      remove first unified access group
+    </button>
+  ),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
@@ -208,6 +212,8 @@ import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
+import { useAccessGroups } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 
 const mockUseAllProxyModels = vi.mocked(useAllProxyModels);
 const mockUseKeys = vi.mocked(useKeys);
@@ -216,9 +222,12 @@ const mockUseOrganization = vi.mocked(useOrganization);
 const mockUseCurrentUser = vi.mocked(useCurrentUser);
 const mockUseMCPServers = vi.mocked(useMCPServers);
 const mockUseMCPToolsets = vi.mocked(useMCPToolsets);
+const mockUseAccessGroups = vi.mocked(useAccessGroups);
 
 const mcpQueryResult = <T,>(data: T, isError = false, isLoading = false) =>
-  ({ data, isError, isLoading }) as unknown as ReturnType<typeof useMCPServers> & ReturnType<typeof useMCPToolsets>;
+  ({ data, isError, isLoading }) as unknown as ReturnType<typeof useMCPServers> &
+    ReturnType<typeof useMCPToolsets> &
+    ReturnType<typeof useAccessGroups>;
 
 const createMockTeamData = (overrides = {}) => ({
   team_id: "123",
@@ -1573,6 +1582,19 @@ describe("TeamInfoView", () => {
       updated_at: "",
       updated_by: "",
     };
+    const UNIFIED_SERVER = {
+      server_id: "unified-server",
+      server_name: "wiki",
+      mcp_access_groups: [],
+      created_at: "",
+      created_by: "",
+      updated_at: "",
+      updated_by: "",
+    };
+    const UNIFIED_GROUPS = [
+      { access_group_id: "ag-1", access_group_name: "Group 1", access_mcp_server_ids: ["unified-server"] },
+      { access_group_id: "ag-2", access_group_name: "Group 2", access_mcp_server_ids: [] },
+    ];
 
     const openSettingsEditor = async (user: ReturnType<typeof userEvent.setup>) => {
       await waitFor(() => {
@@ -1605,12 +1627,27 @@ describe("TeamInfoView", () => {
 
     const renderTeam = async (
       user: ReturnType<typeof userEvent.setup>,
-      { serversFailed = false, toolsetsLoading = false, catalog = [DIRECT_SERVER, GROUP_SERVER] } = {},
+      {
+        serversFailed = false,
+        toolsetsLoading = false,
+        accessGroupsFailed = false,
+        catalog = [DIRECT_SERVER, GROUP_SERVER],
+        accessGroups = UNIFIED_GROUPS,
+        team = {},
+      }: {
+        serversFailed?: boolean;
+        toolsetsLoading?: boolean;
+        accessGroupsFailed?: boolean;
+        catalog?: readonly MCPServer[];
+        accessGroups?: typeof UNIFIED_GROUPS;
+        team?: Record<string, unknown>;
+      } = {},
     ) => {
       mockUseMCPServers.mockReturnValue(mcpQueryResult(serversFailed ? [] : catalog, serversFailed));
       mockUseMCPToolsets.mockReturnValue(mcpQueryResult([], false, toolsetsLoading));
+      mockUseAccessGroups.mockReturnValue(mcpQueryResult(accessGroupsFailed ? [] : accessGroups, accessGroupsFailed));
       vi.mocked(networking.teamInfoCall).mockResolvedValue(
-        createMockTeamData({ models: ["gpt-4"], object_permission: objectPermission }),
+        createMockTeamData({ models: ["gpt-4"], object_permission: objectPermission, ...team }),
       );
       renderWithProviders(<TeamInfoView {...defaultProps} />);
       await openSettingsEditor(user);
@@ -1623,20 +1660,34 @@ describe("TeamInfoView", () => {
       });
     };
 
+    const saveIsRefused = async (user: ReturnType<typeof userEvent.setup>, reason: RegExp) => {
+      const refused = vi.spyOn(NotificationsManager, "fromBackend").mockImplementation(() => {});
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+      await waitFor(() => {
+        expect(refused).toHaveBeenCalledWith(expect.stringMatching(reason));
+      });
+      expect(networking.teamUpdateCall).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    };
+
     const savedToolPermissions = (): Record<string, string[]> => {
       const calls = vi.mocked(networking.teamUpdateCall).mock.calls;
       const [, payload] = calls[calls.length - 1];
       return payload.object_permission.mcp_tool_permissions;
     };
 
+    const renameTeam = async (user: ReturnType<typeof userEvent.setup>) => {
+      await user.clear(screen.getByLabelText("Team Name"));
+      await user.type(screen.getByLabelText("Team Name"), "Renamed Team");
+    };
+
     it.each(CATALOG_ORDERS)(
       "keeps the allowlist of a server reached only through an access group on an unrelated save (%s)",
       async (_order, catalog) => {
         const user = userEvent.setup({ delay: null });
-        await renderTeam(user, { catalog: [...catalog] });
+        await renderTeam(user, { catalog });
 
-        await user.clear(screen.getByLabelText("Team Name"));
-        await user.type(screen.getByLabelText("Team Name"), "Renamed Team");
+        await renameTeam(user);
         await save(user);
 
         expect(savedToolPermissions()).toEqual({
@@ -1650,7 +1701,7 @@ describe("TeamInfoView", () => {
       "keeps the allowlist of a deselected server that a retained access group still supplies (%s)",
       async (_order, catalog) => {
         const user = userEvent.setup({ delay: null });
-        await renderTeam(user, { catalog: [...catalog] });
+        await renderTeam(user, { catalog });
 
         await user.click(screen.getByRole("button", { name: "deselect all mcp servers" }));
         await save(user);
@@ -1687,8 +1738,7 @@ describe("TeamInfoView", () => {
       const user = userEvent.setup({ delay: null });
       await renderTeam(user, { catalog: [DIRECT_SERVER] });
 
-      await user.clear(screen.getByLabelText("Team Name"));
-      await user.type(screen.getByLabelText("Team Name"), "Renamed Team");
+      await renameTeam(user);
       await save(user);
 
       expect(savedToolPermissions()).toEqual({
@@ -1697,89 +1747,137 @@ describe("TeamInfoView", () => {
       });
     });
 
-    it("keeps every allowlist unchanged when the server list cannot be resolved", async () => {
+    const unifiedTeam = (toolPermissions: Record<string, string[]>) => ({
+      access_group_ids: ["ag-1", "ag-2"],
+      object_permission: {
+        mcp_servers: [],
+        mcp_access_groups: [],
+        mcp_toolsets: [],
+        mcp_tool_permissions: toolPermissions,
+      },
+    });
+
+    it("keeps a unified access group server's allowlist on an unrelated save even when keyed by server name", async () => {
+      const user = userEvent.setup({ delay: null });
+      await renderTeam(user, { catalog: [UNIFIED_SERVER], team: unifiedTeam({ wiki: ["read_page"] }) });
+
+      await renameTeam(user);
+      await save(user);
+
+      expect(savedToolPermissions()).toEqual({ wiki: ["read_page"] });
+    });
+
+    it("drops a server's allowlist when its unified access group is removed while another group stays", async () => {
+      const user = userEvent.setup({ delay: null });
+      await renderTeam(user, { catalog: [UNIFIED_SERVER], team: unifiedTeam({ wiki: ["read_page"] }) });
+
+      await user.click(screen.getByRole("button", { name: "remove first unified access group" }));
+      await save(user);
+
+      expect(savedToolPermissions()).toEqual({});
+    });
+
+    it("refuses to save when a selected unified access group is missing from the loaded list", async () => {
+      const user = userEvent.setup({ delay: null });
+      await renderTeam(user, {
+        catalog: [UNIFIED_SERVER],
+        accessGroups: [UNIFIED_GROUPS[1]],
+        team: unifiedTeam({ wiki: ["read_page"] }),
+      });
+
+      await renameTeam(user);
+      await saveIsRefused(user, /access groups could not be loaded/);
+    });
+
+    it("refuses to save when the access group list failed to load", async () => {
+      const user = userEvent.setup({ delay: null });
+      await renderTeam(user, { accessGroupsFailed: true, team: unifiedTeam({ wiki: ["read_page"] }) });
+
+      await renameTeam(user);
+      await saveIsRefused(user, /access group list could not be loaded/);
+    });
+
+    it("refuses to save when the server list cannot be resolved", async () => {
       const user = userEvent.setup({ delay: null });
       await renderTeam(user, { serversFailed: true });
 
       await user.click(screen.getByRole("button", { name: "remove all access groups" }));
       await user.click(screen.getByRole("button", { name: "deselect all mcp servers" }));
-      await save(user);
-
-      expect(savedToolPermissions()).toEqual({
-        "direct-server": ["create_issue"],
-        "group-server": ["list_issues"],
-      });
+      await saveIsRefused(user, /MCP server list could not be loaded/);
     });
 
-    it("keeps every allowlist unchanged while the toolset list is still loading", async () => {
+    it("refuses to save while the toolset list is still loading", async () => {
       const user = userEvent.setup({ delay: null });
       await renderTeam(user, { toolsetsLoading: true });
 
-      await user.click(screen.getByRole("button", { name: "remove all access groups" }));
-      await user.click(screen.getByRole("button", { name: "deselect all mcp servers" }));
+      await renameTeam(user);
+      await saveIsRefused(user, /still loading/);
+    });
+
+    it("still saves a team without tool permissions while the inventory is unavailable", async () => {
+      const user = userEvent.setup({ delay: null });
+      await renderTeam(user, {
+        serversFailed: true,
+        team: { object_permission: { mcp_servers: ["direct-server"], mcp_tool_permissions: {} } },
+      });
+
+      await renameTeam(user);
       await save(user);
 
-      expect(savedToolPermissions()).toEqual({
-        "direct-server": ["create_issue"],
-        "group-server": ["list_issues"],
-      });
+      expect(savedToolPermissions()).toEqual({});
     });
   });
 
-  describe("grantedMcpPermissionKeys", () => {
-    const effective = (key: string, kind: EffectiveMcpServer["source"]["kind"]): EffectiveMcpServer =>
+  describe("grantedMcpServerIds", () => {
+    const effective = (serverId: string, kind: EffectiveMcpServer["source"]["kind"]): EffectiveMcpServer =>
       ({
-        server: { server_id: key },
-        permissionKey: key,
+        server: { server_id: serverId },
+        permissionKey: serverId,
         source: kind === "accessGroup" ? { kind, name: "ops_readonly" } : { kind },
       }) as EffectiveMcpServer;
+    const GROUPS = [
+      { access_group_id: "ag-1", access_mcp_server_ids: ["u1", "u2"] },
+      { access_group_id: "ag-2", access_mcp_server_ids: ["u3"] },
+    ];
 
-    it("counts a server granted directly or through a group as granted", () => {
-      expect(grantedMcpPermissionKeys([effective("a", "direct"), effective("b", "accessGroup")], [], [], [])).toEqual({
-        kind: "resolved",
-        keys: ["a", "b"],
-      });
+    it("counts a server granted directly, through a group or through a toolset as granted", () => {
+      expect(
+        grantedMcpServerIds(
+          [effective("a", "direct"), effective("b", "accessGroup"), effective("c", "toolset")],
+          [],
+          [],
+        ),
+      ).toEqual({ kind: "resolved", serverIds: new Set(["a", "b", "c"]) });
     });
 
     it("does not let a tool-permission entry justify keeping itself", () => {
-      expect(grantedMcpPermissionKeys([effective("stale", "toolPermission")], [], [], [])).toEqual({
+      expect(grantedMcpServerIds([effective("stale", "toolPermission")], [], [])).toEqual({
         kind: "resolved",
-        keys: [],
+        serverIds: new Set(),
       });
     });
 
-    it("adds the unified access group servers when that selection is unchanged", () => {
-      expect(grantedMcpPermissionKeys([effective("a", "direct")], ["ag-1"], ["ag-1"], ["unified-server"])).toEqual({
+    it("adds only the servers of the unified access groups that are still selected", () => {
+      expect(grantedMcpServerIds([effective("a", "direct")], ["ag-2"], GROUPS)).toEqual({
         kind: "resolved",
-        keys: ["a", "unified-server"],
+        serverIds: new Set(["a", "u3"]),
       });
     });
 
-    it("treats a reordered unified access group selection as unchanged", () => {
-      expect(
-        grantedMcpPermissionKeys([effective("a", "direct")], ["ag-2", "ag-1"], ["ag-1", "ag-2"], ["unified-server"]),
-      ).toEqual({ kind: "resolved", keys: ["a", "unified-server"] });
-    });
-
-    it("does not mistake a duplicated id for an unchanged selection", () => {
-      expect(grantedMcpPermissionKeys([effective("a", "direct")], ["ag-1", "ag-1"], ["ag-1", "ag-2"], ["u"])).toEqual({
-        kind: "accessGroupsChanged",
+    it("is unresolvable when a selected unified access group is not in the loaded list", () => {
+      expect(grantedMcpServerIds([effective("a", "direct")], ["ag-1", "ag-missing"], GROUPS)).toEqual({
+        kind: "unresolvable",
+        reason: expect.stringMatching(/access groups could not be loaded/),
       });
-    });
-
-    it("reports the changed access group selection when it differs", () => {
-      expect(
-        grantedMcpPermissionKeys([effective("a", "direct")], ["ag-1", "ag-2"], ["ag-1"], ["unified-server"]),
-      ).toEqual({ kind: "accessGroupsChanged" });
     });
   });
 
   describe("retainedMcpToolPermissions", () => {
-    const knownServer = (serverId: string) =>
+    const knownServer = (serverId: string, alias: string | null = null) =>
       ({
         server_id: serverId,
         server_name: `${serverId}_name`,
-        alias: null,
+        alias,
         mcp_access_groups: [],
         created_at: "",
         created_by: "",
@@ -1787,49 +1885,33 @@ describe("TeamInfoView", () => {
         updated_by: "",
       }) as unknown as MCPServer;
 
-    const CATALOG = [knownServer("a"), knownServer("b")];
+    const CATALOG = [knownServer("a", "a_alias"), knownServer("b")];
 
     it("keeps only entries whose server is still granted", () => {
-      expect(retainedMcpToolPermissions({ a: ["t"], b: ["t"] }, { kind: "resolved", keys: ["a"] }, CATALOG)).toEqual({
-        a: ["t"],
-      });
+      expect(retainedMcpToolPermissions({ a: ["t"], b: ["t"] }, new Set(["a"]), CATALOG)).toEqual({ a: ["t"] });
     });
 
-    it("keeps everything when the server lookup failed", () => {
-      expect(retainedMcpToolPermissions({ a: ["t"], b: ["t"] }, { kind: "lookupFailed" }, CATALOG)).toEqual({
-        a: ["t"],
-        b: ["t"],
-      });
-    });
-
-    it("keeps everything when the access group selection changed", () => {
-      expect(retainedMcpToolPermissions({ a: ["t"], b: ["t"] }, { kind: "accessGroupsChanged" }, CATALOG)).toEqual({
-        a: ["t"],
-        b: ["t"],
-      });
+    it("matches an entry keyed by server name or alias to its granted server", () => {
+      expect(
+        retainedMcpToolPermissions({ a_name: ["t"], a_alias: ["u"], b_name: ["v"] }, new Set(["a"]), CATALOG),
+      ).toEqual({ a_name: ["t"], a_alias: ["u"] });
     });
 
     it("drops everything when nothing is granted", () => {
-      expect(retainedMcpToolPermissions({ a: ["t"] }, { kind: "resolved", keys: [] }, CATALOG)).toEqual({});
+      expect(retainedMcpToolPermissions({ a: ["t"] }, new Set(), CATALOG)).toEqual({});
     });
 
     it("keeps an entry whose server is absent from the inventory, since it cannot be shown unreachable", () => {
-      expect(
-        retainedMcpToolPermissions({ a: ["t"], "unknown-server": ["t"] }, { kind: "resolved", keys: ["a"] }, CATALOG),
-      ).toEqual({ a: ["t"], "unknown-server": ["t"] });
+      expect(retainedMcpToolPermissions({ a: ["t"], "unknown-server": ["t"] }, new Set(["a"]), CATALOG)).toEqual({
+        a: ["t"],
+        "unknown-server": ["t"],
+      });
     });
 
-    it("still drops a known server's entry, so revocation keeps working", () => {
-      expect(retainedMcpToolPermissions({ b: ["t"] }, { kind: "resolved", keys: ["a"] }, CATALOG)).toEqual({});
-    });
-
-    it("explains a failed lookup and a changed access group differently, and stays silent when resolved", () => {
-      const failed = mcpToolPermissionNotice({ kind: "lookupFailed" });
-      const changed = mcpToolPermissionNotice({ kind: "accessGroupsChanged" });
-      expect(failed).toMatch(/could not be loaded/);
-      expect(changed).toMatch(/access groups/);
-      expect(failed).not.toEqual(changed);
-      expect(mcpToolPermissionNotice({ kind: "resolved", keys: [] })).toBeNull();
+    it("keeps an ambiguous key when any server it names is still granted", () => {
+      const twins = [knownServer("x", "shared"), knownServer("y", "shared")];
+      expect(retainedMcpToolPermissions({ shared: ["t"] }, new Set(["y"]), twins)).toEqual({ shared: ["t"] });
+      expect(retainedMcpToolPermissions({ shared: ["t"] }, new Set(), twins)).toEqual({});
     });
   });
 });

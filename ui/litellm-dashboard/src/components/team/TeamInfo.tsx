@@ -85,62 +85,42 @@ import {
 import { MCPServer } from "../mcp_tools/types";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPToolsets } from "../../app/(dashboard)/hooks/mcpServers/useMCPToolsets";
+import { AccessGroupResponse, useAccessGroups } from "../../app/(dashboard)/hooks/accessGroups/useAccessGroups";
 
 export type McpGrantResolution =
-  | { readonly kind: "resolved"; readonly keys: readonly string[] }
-  | { readonly kind: "lookupFailed" }
-  | { readonly kind: "accessGroupsChanged" };
+  | { readonly kind: "resolved"; readonly serverIds: ReadonlySet<string> }
+  | { readonly kind: "unresolvable"; readonly reason: string };
 
-const sameIdSelection = (a: readonly string[], b: readonly string[]): boolean => {
-  const left = new Set(a);
-  const right = new Set(b);
-  return left.size === right.size && [...left].every((id) => right.has(id));
-};
-
-export const grantedMcpPermissionKeys = (
+export const grantedMcpServerIds = (
   effectiveServers: readonly EffectiveMcpServer[],
   selectedAccessGroupIds: readonly string[],
-  loadedAccessGroupIds: readonly string[],
-  loadedAccessGroupServerIds: readonly string[],
+  accessGroups: readonly Pick<AccessGroupResponse, "access_group_id" | "access_mcp_server_ids">[],
 ): McpGrantResolution => {
-  const granted = effectiveServers
-    .filter(({ source }) => source.kind !== "toolPermission")
-    .map(({ permissionKey }) => permissionKey);
-
-  if (selectedAccessGroupIds.length === 0) {
-    return { kind: "resolved", keys: granted };
+  const selectedGroups = accessGroups.filter((group) => selectedAccessGroupIds.includes(group.access_group_id));
+  if (selectedAccessGroupIds.some((id) => !selectedGroups.some((group) => group.access_group_id === id))) {
+    return { kind: "unresolvable", reason: "the team's access groups could not be loaded" };
   }
-  return sameIdSelection(selectedAccessGroupIds, loadedAccessGroupIds)
-    ? { kind: "resolved", keys: [...granted, ...loadedAccessGroupServerIds] }
-    : { kind: "accessGroupsChanged" };
+  const direct = effectiveServers
+    .filter(({ source }) => source.kind !== "toolPermission")
+    .map(({ server }) => server.server_id);
+  const viaUnifiedGroups = selectedGroups.flatMap((group) => group.access_mcp_server_ids);
+  return { kind: "resolved", serverIds: new Set([...direct, ...viaUnifiedGroups]) };
 };
 
 export const retainedMcpToolPermissions = (
   toolPermissions: Record<string, string[]>,
-  resolution: McpGrantResolution,
+  grantedServerIds: ReadonlySet<string>,
   knownServers: readonly MCPServer[],
-): Record<string, string[]> => {
-  if (resolution.kind !== "resolved") {
-    return toolPermissions;
-  }
-  const granted = new Set(resolution.keys);
-  return Object.fromEntries(
-    Object.entries(toolPermissions).filter(
-      ([key]) => granted.has(key) || mcpServersForIdentifier(knownServers, key).length === 0,
-    ),
+): Record<string, string[]> =>
+  Object.fromEntries(
+    Object.entries(toolPermissions).filter(([key]) => {
+      const named = mcpServersForIdentifier(knownServers, key);
+      return named.length === 0 || named.some((server) => grantedServerIds.has(server.server_id));
+    }),
   );
-};
 
-export const mcpToolPermissionNotice = (resolution: McpGrantResolution): string | null => {
-  switch (resolution.kind) {
-    case "resolved":
-      return null;
-    case "lookupFailed":
-      return "MCP tool permissions were left unchanged because the MCP server list could not be loaded";
-    case "accessGroupsChanged":
-      return "MCP tool permissions were left unchanged because this save changes the team's access groups; reopen the team to review them";
-  }
-};
+export const mcpUnresolvableSaveError = (reason: string): string =>
+  `Cannot save MCP tool permissions because ${reason}. Retry once the page has finished loading`;
 
 const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "logging",
@@ -265,8 +245,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const { data: guardrailsData, isLoading: isGuardrailsLoading } = useGuardrails();
   const { data: allMcpServers = [], isError: mcpServersFailed, isLoading: mcpServersLoading } = useMCPServers();
   const { data: allMcpToolsets = [], isError: mcpToolsetsFailed, isLoading: mcpToolsetsLoading } = useMCPToolsets();
-  const mcpServersUnavailable = mcpServersFailed || mcpServersLoading;
-  const mcpToolsetsUnavailable = mcpToolsetsFailed || mcpToolsetsLoading;
+  const { data: allAccessGroups = [], isError: accessGroupsFailed, isLoading: accessGroupsLoading } = useAccessGroups();
+  const mcpLookupFailure =
+    (
+      [
+        [mcpServersFailed, "the MCP server list could not be loaded"],
+        [mcpToolsetsFailed, "the MCP toolset list could not be loaded"],
+        [accessGroupsFailed, "the access group list could not be loaded"],
+        [mcpServersLoading || mcpToolsetsLoading || accessGroupsLoading, "the MCP server inventory is still loading"],
+      ] as const
+    ).find(([failed]) => failed)?.[1] ?? null;
   const globalGuardrailNames = guardrailsData?.globalGuardrailNames ?? new Set<string>();
   const canViewPolicies = useCan("viewPolicies");
   const [policiesList, setPoliciesList] = useState<string[]>([]);
@@ -642,7 +630,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         toolsets: [],
       };
       const submittedToolPermissions: Record<string, string[]> = values.mcp_tool_permissions || {};
-      const mcpResolutionFailed = mcpServersUnavailable || mcpToolsetsUnavailable;
       const effectiveMcpInput = {
         allServers: allMcpServers,
         selectedServers: servers || [],
@@ -651,20 +638,22 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         toolsets: allMcpToolsets,
         toolPermissions: submittedToolPermissions,
       };
-      const mcpResolution: McpGrantResolution = mcpResolutionFailed
-        ? { kind: "lookupFailed" }
-        : grantedMcpPermissionKeys(
-            resolveEffectiveMcpServers(effectiveMcpInput),
-            values.access_group_ids || [],
-            info.access_group_ids || [],
-            info.access_group_mcp_server_ids || [],
-          );
-      const mcpToolPermissions = retainedMcpToolPermissions(submittedToolPermissions, mcpResolution, allMcpServers);
-
-      const mcpNotice = mcpToolPermissionNotice(mcpResolution);
-      if (mcpNotice !== null && Object.keys(submittedToolPermissions).length > 0) {
-        NotificationsManager.warning(mcpNotice);
+      const mcpResolution: McpGrantResolution =
+        mcpLookupFailure !== null
+          ? { kind: "unresolvable", reason: mcpLookupFailure }
+          : grantedMcpServerIds(
+              resolveEffectiveMcpServers(effectiveMcpInput),
+              values.access_group_ids || [],
+              allAccessGroups,
+            );
+      if (mcpResolution.kind === "unresolvable" && Object.keys(submittedToolPermissions).length > 0) {
+        NotificationsManager.fromBackend(mcpUnresolvableSaveError(mcpResolution.reason));
+        return;
       }
+      const mcpToolPermissions =
+        mcpResolution.kind === "resolved"
+          ? retainedMcpToolPermissions(submittedToolPermissions, mcpResolution.serverIds, allMcpServers)
+          : submittedToolPermissions;
 
       updateData.object_permission = {};
       if (servers) {
