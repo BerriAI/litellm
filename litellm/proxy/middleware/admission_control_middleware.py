@@ -54,6 +54,7 @@ class AdmissionControlMiddleware:
             "/health/backlog",
             "/health/drain",
             "/metrics",
+            "/metrics/",
         }
     )
     _admitted: int = 0
