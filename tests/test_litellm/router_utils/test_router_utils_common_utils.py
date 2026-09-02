@@ -371,6 +371,25 @@ class TestFilterWebSearchDeployments:
         assert len(result) == 1
         assert result[0]["model_info"]["id"] == "d1"
 
+    def test_custom_function_names_do_not_trigger_native_capability_filtering(self):
+        deployments = [
+            {
+                "model_info": {
+                    "id": "custom-function",
+                    "supports_web_search": False,
+                    "supports_web_fetch": False,
+                }
+            }
+        ]
+
+        for tool in (
+            {"type": "function", "name": "web_search"},
+            {"type": "function", "name": "web_fetch"},
+            {"type": "function", "function": {"name": "web_search"}},
+            {"type": "function", "function": {"name": "web_fetch"}},
+        ):
+            assert filter_web_search_deployments(deployments, {"tools": [tool]}) == deployments
+
 
 def test_invalidate_model_group_info_cache():
     """Test that _invalidate_model_group_info_cache clears the LRU cache."""
