@@ -70,6 +70,7 @@ RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \
     --extra extra_proxy \
     --extra semantic-router \
     --extra saml \
+    --extra bedrock-realtime \
     --python python3.13
 
 # Copy full source tree
@@ -97,6 +98,7 @@ RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \
         --extra extra_proxy \
         --extra semantic-router \
         --extra saml \
+        --extra bedrock-realtime \
         --python python3.13 \
         --no-sources-package litellm-proxy-extras; \
     else \
@@ -106,6 +108,7 @@ RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \
         --extra extra_proxy \
         --extra semantic-router \
         --extra saml \
+        --extra bedrock-realtime \
         --python python3.13; \
     fi
 
