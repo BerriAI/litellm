@@ -7,6 +7,11 @@ attempt fails identically. These tests pin the two behaviours that keep a
 container recoverable: an incomplete cache is deleted before Prisma is
 invoked, and the install gets a budget of its own rather than sharing the one
 that bounds each migration command.
+
+``prisma migrate deploy`` gets a budget of its own for the same reason: its
+runtime grows with the number of pending migrations, so a fresh database that
+replays every migration overran the per-command budget on slow machines and
+the proxy gave up after four identical timeouts.
 """
 
 import ast
@@ -14,19 +19,23 @@ import json
 import os
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from litellm_proxy_extras.prisma_toolchain import (
     DEFAULT_PRISMA_COMMAND_TIMEOUT,
+    DEFAULT_PRISMA_MIGRATE_DEPLOY_TIMEOUT,
     PRISMA_BOOTSTRAP_TIMEOUT_ENV_VAR,
     PRISMA_COMMAND_TIMEOUT_ENV_VAR,
+    PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR,
     ensure_prisma_toolchain,
     heal_incomplete_nodeenv_cache,
     node_binary_path,
     prisma_bootstrap_timeout,
     prisma_command_timeout,
+    prisma_migrate_deploy_timeout,
 )
 from litellm_proxy_extras.utils import ProxyExtrasDBManager
 
@@ -42,13 +51,24 @@ import time
 
 args = sys.argv[1:]
 cache_dir = os.environ["PRISMA_NODEENV_CACHE_DIR"]
-with pathlib.Path(os.environ["FAKE_PRISMA_LOG"]).open("a") as log:
+log_path = pathlib.Path(os.environ["FAKE_PRISMA_LOG"])
+earlier_deploys = sum(
+    1
+    for line in (log_path.read_text().splitlines() if log_path.exists() else [])
+    if json.loads(line)["args"][:2] == ["migrate", "deploy"]
+)
+with log_path.open("a") as log:
     log.write(
         json.dumps({{"args": args, "cache_dir_present": os.path.isdir(cache_dir)}})
         + "\\n"
     )
 time.sleep(float(os.environ.get("FAKE_PRISMA_SLEEP", "0")))
 if args[:2] == ["migrate", "deploy"]:
+    if earlier_deploys == 0:
+        time.sleep(float(os.environ.get("FAKE_PRISMA_FIRST_DEPLOY_SLEEP", "0")))
+    elif os.environ.get("FAKE_PRISMA_LATER_DEPLOY_STDERR"):
+        print(os.environ["FAKE_PRISMA_LATER_DEPLOY_STDERR"], file=sys.stderr)
+        sys.exit(1)
     print("No pending migrations to apply")
 sys.exit(0)
 """
@@ -80,7 +100,12 @@ def toolchain_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.delenv(PRISMA_COMMAND_TIMEOUT_ENV_VAR, raising=False)
     monkeypatch.delenv(PRISMA_BOOTSTRAP_TIMEOUT_ENV_VAR, raising=False)
+    monkeypatch.delenv(PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR, raising=False)
     return cache_dir, log_path
+
+
+def _deploy_calls(log_path: Path) -> list[list[str]]:
+    return [call["args"] for call in _fake_prisma_calls(log_path) if call["args"][:2] == ["migrate", "deploy"]]
 
 
 def _make_incomplete_cache(cache_dir: Path) -> None:
@@ -209,25 +234,70 @@ def test_setup_database_prepares_the_toolchain_before_migrating(
     assert calls[0]["cache_dir_present"] is False
 
 
+@pytest.mark.parametrize("use_v2_resolver", [False, True], ids=["v1", "v2"])
+def test_migrate_deploy_is_not_bounded_by_the_per_command_timeout(
+    toolchain_env: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    use_v2_resolver: bool,
+) -> None:
+    """A fresh database replays every migration, which takes longer than any bookkeeping command."""
+    _, log_path = toolchain_env
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
+    monkeypatch.setenv(PRISMA_COMMAND_TIMEOUT_ENV_VAR, "1")
+    monkeypatch.setenv("FAKE_PRISMA_FIRST_DEPLOY_SLEEP", "3")
+
+    assert ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=use_v2_resolver) is True
+    assert _deploy_calls(log_path) == [["migrate", "deploy"]]
+
+
+def test_migrate_deploy_stops_at_its_own_timeout(
+    toolchain_env: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The deploy budget still bounds a deploy that hangs, so boot cannot wait forever."""
+    _, log_path = toolchain_env
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
+    monkeypatch.setenv(PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR, "1")
+    monkeypatch.setenv("FAKE_PRISMA_FIRST_DEPLOY_SLEEP", "60")
+    monkeypatch.setenv("FAKE_PRISMA_LATER_DEPLOY_STDERR", "Error: P3018 permission denied for schema public")
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="insufficient permissions"):
+        ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+    elapsed = time.monotonic() - started
+
+    assert len(_deploy_calls(log_path)) == 2
+    assert elapsed < 30
+
+
 @pytest.mark.parametrize(
     "raw",
     ["", "0", "-5", "not-a-number", "nan", "inf", "-inf", "1e400"],
 )
+@pytest.mark.parametrize(
+    ("env_var", "read_timeout", "default"),
+    [
+        (PRISMA_COMMAND_TIMEOUT_ENV_VAR, prisma_command_timeout, DEFAULT_PRISMA_COMMAND_TIMEOUT),
+        (PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR, prisma_migrate_deploy_timeout, DEFAULT_PRISMA_MIGRATE_DEPLOY_TIMEOUT),
+    ],
+    ids=["command", "migrate_deploy"],
+)
 def test_unusable_timeout_override_falls_back_to_the_default(
-    raw: str, monkeypatch: pytest.MonkeyPatch
+    raw: str, env_var: str, read_timeout: Callable[[], float], default: float, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A non-finite override would silently disable the timeout it configures."""
-    monkeypatch.setenv(PRISMA_COMMAND_TIMEOUT_ENV_VAR, raw)
+    monkeypatch.setenv(env_var, raw)
 
-    assert prisma_command_timeout() == DEFAULT_PRISMA_COMMAND_TIMEOUT
+    assert read_timeout() == default
 
 
 def test_timeout_overrides_are_independent(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(PRISMA_COMMAND_TIMEOUT_ENV_VAR, "12")
     monkeypatch.setenv(PRISMA_BOOTSTRAP_TIMEOUT_ENV_VAR, "900")
+    monkeypatch.setenv(PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR, "1200")
 
     assert prisma_command_timeout() == 12
     assert prisma_bootstrap_timeout() == 900
+    assert prisma_migrate_deploy_timeout() == 1200
 
 
 @pytest.mark.parametrize("module", ["utils.py", "replica_identity.py"])
