@@ -190,9 +190,7 @@ class DualCache(BaseCache):
             in_memory_result: Final = (
                 self.in_memory_cache.batch_get_cache(keys, **kwargs) if self.in_memory_cache is not None else None
             )
-            result: Final = (
-                in_memory_result if in_memory_result is not None else [None] * len(keys)
-            )  # mutable-ok: positional merge result
+            result: Final = in_memory_result if in_memory_result is not None else [None] * len(keys)
 
             if None not in result or self.redis_cache is None or local_only:
                 return result
@@ -215,7 +213,7 @@ class DualCache(BaseCache):
                     if value is not None:
                         self.in_memory_cache.set_cache(key, value, **self._backfill_kwargs(kwargs))
 
-            return [redis_result.get(key) if value is None else value for key, value in zip(keys, result)]  # noqa: LIT002  # preserves positional cache results
+            return [redis_result.get(key) if value is None else value for key, value in zip(keys, result)]
         except Exception:
             verbose_logger.error(traceback.format_exc())
 
