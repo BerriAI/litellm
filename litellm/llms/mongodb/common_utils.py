@@ -181,6 +181,7 @@ def translate_mongo_error(error: Exception, index_name: str, database: str, coll
     try:
         from pymongo.errors import (
             ConfigurationError,
+            ConnectionFailure,
             ExecutionTimeout,
             InvalidOperation,
             NetworkTimeout,
@@ -201,6 +202,14 @@ def translate_mongo_error(error: Exception, index_name: str, database: str, coll
         return timeout_error(
             f"The MongoDB vector search against '{database}.{collection}' timed out before returning. "
             f"Driver detail: {error}"
+        )
+    # ServerSelectionTimeoutError and NetworkTimeout both sit under ConnectionFailure, so this
+    # only sees what those two branches left: a dropped or refused connection
+    if isinstance(error, ConnectionFailure):
+        return config_error(
+            f"The connection to '{database}.{collection}' was refused or dropped. On Atlas this is "
+            "usually a connection string with no username and password, or a TLS failure. Confirm "
+            f"the URI is the one Atlas shows under Connect, Drivers. Driver detail: {error}"
         )
     if isinstance(error, OperationFailure):
         code: Final = error.code
@@ -247,4 +256,11 @@ def translate_mongo_error(error: Exception, index_name: str, database: str, coll
         )
     if isinstance(error, InvalidOperation):
         return config_error(f"The MongoDB client was already closed or is unusable. Driver detail: {error}")
+    # pymongo's URI parser raises a plain ValueError, not a PyMongoError, for a password holding an
+    # unescaped '/', which would otherwise reach the caller as a 500
+    if isinstance(error, ValueError):
+        return config_error(
+            "mongodb_connection_string could not be parsed. A username or password containing "
+            f"'@', '/', ':' or '%' has to be percent-encoded per RFC 3986. Driver detail: {error}"
+        )
     return error

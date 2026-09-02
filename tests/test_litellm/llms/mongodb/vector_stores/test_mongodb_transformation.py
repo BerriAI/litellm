@@ -759,6 +759,42 @@ class TestErrorTranslation:
 
         assert "rejected the credentials" in str(translated)
 
+    def test_a_dropped_connection_is_a_400_not_an_unhandled_driver_error(self):
+        """AutoReconnect sits under ConnectionFailure alongside the two timeout classes, and Atlas
+        answers a URI with no credentials by closing the connection rather than failing auth. Left
+        untranslated it is not a litellm exception type, so it reaches the caller as a 500."""
+        from pymongo.errors import AutoReconnect
+
+        translated = self._translate(AutoReconnect("connection closed"))
+
+        assert isinstance(translated, BadRequestError)
+        assert "refused or dropped" in str(translated)
+        assert "no username and password" in str(translated)
+
+    def test_server_selection_timeout_still_wins_over_the_connection_branch(self):
+        from pymongo.errors import ServerSelectionTimeoutError
+
+        translated = self._translate(ServerSelectionTimeoutError("no servers"))
+
+        assert isinstance(translated, Timeout)
+        assert "refused or dropped" not in str(translated)
+
+    def test_network_timeout_still_wins_over_the_connection_branch(self):
+        from pymongo.errors import NetworkTimeout
+
+        translated = self._translate(NetworkTimeout("socket timed out"))
+
+        assert isinstance(translated, Timeout)
+        assert "refused or dropped" not in str(translated)
+
+    def test_an_unescaped_password_character_is_a_400_not_a_500(self):
+        """pymongo's URI parser raises a plain ValueError, not a PyMongoError, when a password
+        holds an unescaped '/'. That is a routine mistake and it must not be a 500."""
+        translated = self._translate(ValueError("Port contains non-digit characters"))
+
+        assert isinstance(translated, BadRequestError)
+        assert "percent-encoded" in str(translated)
+
     def test_unauthorized_points_at_the_database_user_permissions(self):
         from pymongo.errors import OperationFailure
 
