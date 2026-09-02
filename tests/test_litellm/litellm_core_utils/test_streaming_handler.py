@@ -4771,3 +4771,48 @@ class TestStableStreamingResponseId:
         )
         wrapper.response_id = "chatcmpl-from-provider"
         assert wrapper.model_response_creator().id == "chatcmpl-from-provider"
+
+
+def test_provider_usage_model_is_coerced_to_litellm_usage(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """A raw provider usage model must be coerced, or its details are lost.
+
+    Some providers attach the final usage to a chunk that still carries a
+    choice, so it does not take the usage-only path. `usage` is not a declared
+    field on ModelResponseStream, so assigning it there does not coerce, and
+    cost tracking only understands litellm `Usage`: prompt_tokens_details, and
+    with it cached_tokens, is dropped and cached input is billed at the full
+    input rate. See #36168.
+    """
+    from openai.types.completion_usage import CompletionUsage, PromptTokensDetails
+
+    wrapper = initialized_custom_stream_wrapper
+    wrapper.custom_llm_provider = "openai"
+    wrapper.received_finish_reason = "stop"
+    wrapper.sent_last_chunk = True
+
+    chunk = ModelResponseStream(
+        id="chatcmpl-1",
+        object="chat.completion.chunk",
+        created=1000000,
+        model="openai/some-model",
+        choices=[StreamingChoices(index=0, delta=Delta(), finish_reason=None)],
+    )
+    # what a provider SDK hands over: not a litellm Usage
+    chunk.usage = CompletionUsage(
+        prompt_tokens=1000,
+        completion_tokens=5,
+        total_tokens=1005,
+        prompt_tokens_details=PromptTokensDetails(cached_tokens=900),
+    )
+
+    result = wrapper.chunk_creator(chunk=chunk)
+
+    assert result is not None, "the usage-bearing chunk must not be dropped"
+    assert isinstance(result.usage, Usage), (
+        f"usage stayed a {type(result.usage).__name__}, so cost tracking cannot read it"
+    )
+    assert result.usage.prompt_tokens == 1000
+    assert result.usage.prompt_tokens_details is not None
+    assert result.usage.prompt_tokens_details.cached_tokens == 900
