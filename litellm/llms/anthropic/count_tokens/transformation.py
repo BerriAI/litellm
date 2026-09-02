@@ -7,7 +7,7 @@ This module handles the transformation of requests to Anthropic's CountTokens AP
 from typing import Any, Final
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
-from litellm.llms.anthropic.wif import anthropic_base_without_chat_suffix
+from litellm.llms.anthropic.wif import resolve_anthropic_base
 
 
 class AnthropicCountTokensConfig:
@@ -27,14 +27,14 @@ class AnthropicCountTokensConfig:
         Args:
             api_base: The deployment's api_base, which names the chat surface (a host, or a
                 base already carrying ``/v1`` or ``/v1/messages``); the count-tokens path is
-                appended to it, so it is never the full count-tokens URL
+                appended to it, so it is never the full count-tokens URL. Unset or empty falls
+                back to ``ANTHROPIC_API_BASE`` / ``ANTHROPIC_BASE_URL`` and then Anthropic's
+                host, the same resolution chat and the federated exchange use
 
         Returns:
             The endpoint URL for the CountTokens API
         """
-        if api_base is None:
-            return "https://api.anthropic.com/v1/messages/count_tokens"
-        return anthropic_base_without_chat_suffix(api_base) + "/v1/messages/count_tokens"
+        return resolve_anthropic_base(api_base) + "/v1/messages/count_tokens"
 
     def transform_request_to_count_tokens(
         self,

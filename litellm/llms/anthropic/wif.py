@@ -254,7 +254,7 @@ def get_anthropic_wif_token(
     params: Final = resolve_anthropic_wif_params(litellm_params)
     if params is None:
         return None
-    exchange_base: Final = _token_exchange_base(api_base)
+    exchange_base: Final = resolve_anthropic_base(api_base)
     _raise_if_exchange_host_untrusted(exchange_base, model)
     result: Final = engine.get_token(build_anthropic_wif_spec(params, exchange_base))
     return _token_from_result(result, model, params)
@@ -269,7 +269,7 @@ async def aget_anthropic_wif_token(
     params: Final = resolve_anthropic_wif_params(litellm_params)
     if params is None:
         return None
-    exchange_base: Final = _token_exchange_base(api_base)
+    exchange_base: Final = resolve_anthropic_base(api_base)
     _raise_if_exchange_host_untrusted(exchange_base, model)
     result: Final = await engine.aget_token(build_anthropic_wif_spec(params, exchange_base))
     return _token_from_result(result, model, params)
@@ -283,11 +283,12 @@ def _token_from_result(result: ExchangeResult, model: str, params: AnthropicWifP
             _raise_anthropic_wif_error(result, model=model, workspace_id_set=params.workspace_id is not None)
 
 
-def _token_exchange_base(api_base: str | None) -> str:
-    """Exchange base for any caller-supplied form of the deployment base: trailing
-    slashes and chat-appended ``/v1/messages`` suffixes stripped, so every tier
-    derives the same token URL (and cache key) for the same deployment."""
-    return anthropic_base_without_chat_suffix(api_base if api_base is not None else _resolve_default_api_base())
+def resolve_anthropic_base(api_base: str | None) -> str:
+    """The base every Anthropic tier derives its URLs from: the deployment api_base when set,
+    else ``ANTHROPIC_API_BASE`` / ``ANTHROPIC_BASE_URL``, else Anthropic's host, with trailing
+    slashes and chat-appended ``/v1/messages`` suffixes stripped, so the token URL, the cache key
+    and the count-tokens URL all agree for the same deployment."""
+    return anthropic_base_without_chat_suffix(api_base or _resolve_default_api_base())
 
 
 def _trusted_exchange_hosts() -> frozenset[str]:

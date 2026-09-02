@@ -303,6 +303,11 @@ class TestBaseUrlDerivation:
         monkeypatch.setenv("ANTHROPIC_API_BASE", "https://env.example.com")
         assert self._mint(None, monkeypatch) == "https://env.example.com/v1/oauth/token"
 
+    def test_empty_api_base_falls_back_like_unset(self, monkeypatch: pytest.MonkeyPatch):
+        """Chat treats an empty deployment api_base as unset; the exchange must not refuse host ''."""
+        monkeypatch.setenv("ANTHROPIC_API_BASE", "https://env.example.com")
+        assert self._mint("", monkeypatch) == "https://env.example.com/v1/oauth/token"
+
     def test_env_base_url(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://base.example.com")
         assert self._mint(None, monkeypatch) == "https://base.example.com/v1/oauth/token"
