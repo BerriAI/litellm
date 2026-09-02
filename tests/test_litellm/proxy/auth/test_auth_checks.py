@@ -1349,6 +1349,34 @@ async def test_vector_store_access_check_early_returns(
     assert result == expected_result
 
 
+@pytest.mark.asyncio
+async def test_vector_store_access_check_skips_db_lookup_when_no_vector_stores_requested():
+    """Registry returns [] (not None) for plain requests; no object permission DB lookup should happen."""
+    valid_token = UserAPIKeyAuth(token="test-token", object_permission_id="perm-123")
+    team_object = MagicMock()
+    team_object.object_permission_id = "team-permission"
+
+    mock_prisma_client = MagicMock()
+    find_unique = AsyncMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = find_unique
+
+    mock_vector_store_registry = MagicMock()
+    mock_vector_store_registry.get_vector_store_ids_to_run.return_value = []
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.vector_store_registry", mock_vector_store_registry),
+    ):
+        result = await vector_store_access_check(
+            request_body={"messages": [{"role": "user", "content": "test"}]},
+            team_object=team_object,
+            valid_token=valid_token,
+        )
+
+    assert result is True
+    find_unique.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     "object_permissions,vector_store_ids,should_raise,error_type",
     [

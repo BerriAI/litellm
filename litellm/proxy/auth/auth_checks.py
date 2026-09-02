@@ -5776,7 +5776,7 @@ async def vector_store_access_check(
     vector_store_ids_to_run: Final = litellm.vector_store_registry.get_vector_store_ids_to_run(
         non_default_params=request_body, tools=request_body.get("tools", None)
     )
-    if vector_store_ids_to_run is None:
+    if not vector_store_ids_to_run:
         verbose_proxy_logger.debug("Vector store to run not found, skipping vector store access check")
         return True
 
