@@ -6,18 +6,23 @@ import shutil
 import subprocess
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Final, Optional
 
 from litellm_proxy_extras._logging import logger
-from litellm_proxy_extras.replica_identity import (
-    REPLICA_IDENTITY_FULL_ENV_VAR,
-    apply_replica_identity_full,
-)
 from litellm_proxy_extras.prisma_toolchain import (
     ensure_prisma_toolchain,
     prisma_command_timeout,
 )
+from litellm_proxy_extras.replica_identity import (
+    REPLICA_IDENTITY_FULL_ENV_VAR,
+    apply_replica_identity_full,
+)
+
+if TYPE_CHECKING:
+    import psycopg
+    import psycopg.sql
 
 
 def str_to_bool(value: Optional[str]) -> bool:
@@ -39,6 +44,29 @@ def _get_prisma_env() -> dict:
 
 
 _MIGRATION_TS_RE = re.compile(r"^(\d{14})_")
+
+INDEX_REPAIR_ADVISORY_LOCK_KEY: Final = int.from_bytes(b"litellm", "big")
+_TRANSIENT_INDEX_SUFFIX_RE: Final = re.compile(r"_cc(?:new|old)\d*$")
+_INVALID_LITELLM_INDEXES_SQL: Final = (
+    "SELECT n.nspname, c.relname, pg_size_pretty(pg_table_size(t.oid)) "
+    "FROM pg_index i "
+    "JOIN pg_class c ON c.oid = i.indexrelid "
+    "JOIN pg_class t ON t.oid = i.indrelid "
+    "JOIN pg_namespace n ON n.oid = t.relnamespace "
+    "WHERE NOT i.indisvalid "
+    "  AND c.relkind = 'i' "
+    "  AND n.nspname = %s "
+    "  AND t.relname LIKE %s "
+    "  AND NOT EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conindid = i.indexrelid) "
+    "ORDER BY c.relname"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _InvalidIndex:
+    schema: str
+    name: str
+    table_size: str
 
 _SPEND_LOGS_ALTER_RE = re.compile(r'^ALTER\s+TABLE\s+"LiteLLM_SpendLogs"\s', re.IGNORECASE)
 _SPEND_LOGS_ARTIFACT_DROP_RE = re.compile(
@@ -557,7 +585,7 @@ class ProxyExtrasDBManager:
     def _strip_prisma_query_params(url: str) -> str:
         """Remove Prisma-specific query params (connection_limit, pool_timeout,
         schema, etc.) from DATABASE_URL so psycopg can parse it."""
-        from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+        from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
         parsed = urlparse(url)
         if not parsed.query:
@@ -578,7 +606,7 @@ class ProxyExtrasDBManager:
             "target_session_attrs",
         }
         kept = [(k, v) for k, v in parse_qsl(parsed.query) if k in libpq_params]
-        return urlunparse(parsed._replace(query=urlencode(kept)))
+        return urlunparse(parsed._replace(query=urlencode(kept, quote_via=quote)))
 
     @staticmethod
     def _warn_if_db_ahead_of_head(migrations_dir: str) -> None:
@@ -651,6 +679,91 @@ class ProxyExtrasDBManager:
             len(hostile),
             ", ".join(sorted_hostile[:5]) + (" ..." if len(sorted_hostile) > 5 else ""),
         )
+
+    @staticmethod
+    def _invalid_litellm_indexes(
+        conn: "psycopg.Connection[tuple[str, str, str]]", schema: str
+    ) -> tuple[_InvalidIndex, ...]:
+        rows: Final = conn.execute(_INVALID_LITELLM_INDEXES_SQL, (schema, "LiteLLM\\_%")).fetchall()
+        return tuple(_InvalidIndex(*row) for row in rows)
+
+    @staticmethod
+    def _index_repair(index: _InvalidIndex) -> tuple["psycopg.sql.Composed", str]:
+        from psycopg import sql
+
+        target: Final = sql.Identifier(index.schema, index.name)
+        if _TRANSIENT_INDEX_SUFFIX_RE.search(index.name):
+            return sql.SQL("DROP INDEX CONCURRENTLY IF EXISTS {}").format(target), "Dropped leftover"
+        return sql.SQL("REINDEX INDEX CONCURRENTLY {}").format(target), "Rebuilt"
+
+    @staticmethod
+    def _repair_index(conn: "psycopg.Connection[tuple[str, str, str]]", index: _InvalidIndex) -> None:
+        import psycopg
+
+        statement, action = ProxyExtrasDBManager._index_repair(index)
+        try:
+            conn.execute(statement)
+        except psycopg.Error as e:
+            logger.warning(
+                "Could not repair invalid index %s.%s, will retry on the next startup. "
+                "If this keeps happening, run `%s` by hand as the index owner. Error: %s",
+                index.schema,
+                index.name,
+                statement.as_string(conn),
+                e,
+            )
+            return
+        logger.info("%s invalid index %s.%s", action, index.schema, index.name)
+
+    @staticmethod
+    def repair_invalid_indexes(lock_timeout: str = "30s") -> bool:
+        """Rebuild LiteLLM indexes an interrupted CREATE INDEX CONCURRENTLY left
+        INVALID (a migration deadlock between replicas is the usual cause; the
+        retried migration skips them because of IF NOT EXISTS). Never raises:
+        returns True when no invalid index remains, False when the repair was
+        skipped or failed and will be retried on the next startup."""
+        database_url: Final = os.getenv("DATABASE_URL")
+        if not database_url:
+            return False
+
+        try:
+            import psycopg
+            from psycopg import sql
+        except ImportError:
+            logger.warning(
+                "psycopg is not installed; skipping the invalid index check. "
+                "Install the litellm[extra_proxy] extra, which includes psycopg."
+            )
+            return False
+
+        schema: Final = ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"
+        cleaned_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
+        try:
+            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
+                conn.execute("SET statement_timeout = 0")
+                conn.execute(sql.SQL("SET lock_timeout = {}").format(sql.Literal(lock_timeout)))
+                found: Final = ProxyExtrasDBManager._invalid_litellm_indexes(conn, schema)
+                if not found:
+                    return True
+                logger.warning(
+                    "Found %d invalid index(es) left by an interrupted CREATE INDEX "
+                    "CONCURRENTLY, rebuilding: %s",
+                    len(found),
+                    ", ".join(f"{index.name} (table size {index.table_size})" for index in found),
+                )
+                lock_row: Final = conn.execute(
+                    "SELECT pg_try_advisory_lock(%s)", (INDEX_REPAIR_ADVISORY_LOCK_KEY,)
+                ).fetchone()
+                if lock_row is None or not lock_row[0]:
+                    logger.info("Another replica is already rebuilding the invalid indexes, skipping")
+                    return False
+                for index in ProxyExtrasDBManager._invalid_litellm_indexes(conn, schema):
+                    ProxyExtrasDBManager._repair_index(conn, index)
+                remaining: Final = ProxyExtrasDBManager._invalid_litellm_indexes(conn, schema)
+        except psycopg.Error as e:
+            logger.warning("Could not check for invalid indexes, will retry on the next startup. Error: %s", e)
+            return False
+        return not remaining
 
     @staticmethod
     def _setup_database_v2(use_migrate: bool) -> bool:
@@ -886,6 +999,7 @@ class ProxyExtrasDBManager:
             use_migrate=use_migrate, use_v2_resolver=use_v2_resolver
         )
         if migrated:
+            ProxyExtrasDBManager.repair_invalid_indexes()
             ProxyExtrasDBManager.apply_replica_identity_full_if_requested()
         return migrated
 
