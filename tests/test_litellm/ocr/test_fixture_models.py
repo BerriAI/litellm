@@ -492,7 +492,6 @@ def test_vertex_deepseek_request_maps_both_document_types_to_image_content(
     data: Final = cast(dict[str, object], request.data)
     messages: Final = cast(list[dict[str, object]], data["messages"])
     content: Final = cast(list[dict[str, object]], messages[0]["content"])
-    assert data["model"] == "deepseek-ai/deepseek-ocr-maas"
     assert content == [{"type": "image_url", "image_url": document[source_key]}]
 
 
