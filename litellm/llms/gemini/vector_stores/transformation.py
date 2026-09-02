@@ -33,6 +33,7 @@ from litellm.types.vector_stores import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.router import Router
 else:
     LiteLLMLoggingObj = Any
 
@@ -168,6 +169,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         extra_body: Mapping[str, object] | None = None,
+        router: "Router | None" = None,
     ) -> tuple[str, dict]:
         """
         Transform search request to Gemini's generateContent format.

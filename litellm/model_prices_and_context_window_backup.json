@@ -10177,7 +10177,7 @@
         "cache_read_input_token_cost": 2.8e-08,
         "supports_prompt_caching": true
     },
-    "azure_ai/deepseek-v4-flash-0731": {
+    "azure_ai/DeepSeek-V4-Flash-0731": {
         "cache_read_input_token_cost": 1.4e-08,
         "deprecation_date": "2026-12-03",
         "input_cost_per_token": 4.4e-07,
@@ -33053,6 +33053,88 @@
         "supports_xhigh_reasoning_effort": true
     },
     "meta/muse-spark-1.2-contributor": {
+        "cache_read_input_token_cost": 2e-09,
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "meta",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2e-07,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.0025,
+            "search_context_size_low": 0.0025,
+            "search_context_size_medium": 0.0025
+        },
+        "source": "https://ai.developer.meta.com/docs/pricing-rate-limits",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_minimal_reasoning_effort": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "meta/muse-spark-1.3": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 1.25e-06,
+        "litellm_provider": "meta",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 4.25e-06,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.0025,
+            "search_context_size_low": 0.0025,
+            "search_context_size_medium": 0.0025
+        },
+        "source": "https://ai.developer.meta.com/docs/pricing-rate-limits",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_minimal_reasoning_effort": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "meta/muse-spark-1.3-contributor": {
         "cache_read_input_token_cost": 2e-09,
         "input_cost_per_token": 1e-07,
         "litellm_provider": "meta",
