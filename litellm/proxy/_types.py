@@ -2508,6 +2508,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider",
     )
+    max_file_size_mb: int | None = Field(
+        None,
+        description="max file size in MB for /v1/files uploads, for any purpose, if a file is larger than this size it will be rejected before being forwarded to the provider",
+    )
+    blocked_file_extensions: tuple[str, ...] | None = Field(
+        None,
+        description="file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename",
+    )
     max_response_size_mb: int | None = Field(
         None,
         description="max response size in MB, if a response is larger than this size it will be rejected",
