@@ -1,4 +1,6 @@
+import asyncio
 import sys
+import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -221,6 +223,30 @@ async def test_chain_tokens_are_read_from_the_provider_on_every_refresh(
     assert first_token == "chain-token-1"
     assert logger.azure_auth_token == "chain-token-2"
     assert provider.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_chain_token_read_yields_to_the_event_loop(workload_identity_env_vars):
+    """
+    The chain walk is blocking I/O (IMDS probe, CLI subprocess), so reading the provider
+    inline would stall every request on the worker. Prove other coroutines run during the read.
+    """
+    loop_was_free = threading.Event()
+
+    def provider() -> str:
+        if not loop_was_free.wait(timeout=5):
+            raise TimeoutError("the event loop never ran the observer while the token was being read")
+        return "chain-token"
+
+    async def observer():
+        loop_was_free.set()
+
+    logger = AzureBlobStorageLogger(build_credential_chain_token_provider=MagicMock(return_value=provider))
+    observer_task = asyncio.create_task(observer())
+    await logger.set_valid_azure_ad_token()
+    await observer_task
+
+    assert logger.azure_auth_token == "chain-token"
 
 
 @pytest.mark.asyncio

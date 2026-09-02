@@ -256,11 +256,12 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         Wrapper to set self.azure_auth_token to a valid Azure AD token, refreshing if necessary
 
         Without a service principal configured, the credential chain provider is read every
-        time; it caches internally and refreshes against the token's real expiry
+        time; it caches internally and refreshes against the token's real expiry. The read runs
+        in a worker thread because the chain walk (IMDS probe, CLI subprocess) is blocking
         """
         if self.tenant_id is None and self.client_id is None and self.client_secret is None:
             token_provider: Final = self._build_credential_chain_token_provider()
-            self.azure_auth_token = token_provider()
+            self.azure_auth_token = await asyncio.to_thread(token_provider)
             return
 
         # Check if token needs refresh
