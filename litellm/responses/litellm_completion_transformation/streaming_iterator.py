@@ -119,7 +119,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._tool_call_id_by_index: dict[int, str] = {}
         self._streamed_tool_call_ids_in_order: list[str] = []  # mutable-ok: accumulates call ids across stream chunks
         self._resolved_tool_call_id_by_position: dict[int, str] = {}  # mutable-ok: terminal correlation state
-        self._streamed_call_id_by_provider_id: dict[str, str] = {}  # mutable-ok: provider identity correlation
+        self._streamed_call_id_by_terminal_id: dict[str, str] = {}  # mutable-ok: terminal identity correlation
         self._next_tool_output_index: int = 1  # output_index=0 reserved for the message item
         self._final_tool_events_queued: bool = False
         self._sequence_number: int = 0
@@ -188,7 +188,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         indexed_call_id: Final = self._tool_call_id_by_index.get(tool_call_index)
         if indexed_call_id is not None:
             if call_id_raw:
-                self._streamed_call_id_by_provider_id[str(call_id_raw)] = indexed_call_id
+                self._streamed_call_id_by_terminal_id[str(call_id_raw)] = indexed_call_id
             return indexed_call_id
 
         if not call_id_raw:
@@ -333,7 +333,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             terminal_call_id = str(call_id_raw)
             call_id = self._streamed_tool_call_id_for_terminal_call(tc, position) or terminal_call_id
             self._resolved_tool_call_id_by_position[position] = call_id
-            self._streamed_call_id_by_provider_id[terminal_call_id] = call_id
+            self._streamed_call_id_by_terminal_id[terminal_call_id] = call_id
             output_index = self._get_or_assign_tool_output_index(call_id)
 
             fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
@@ -1211,7 +1211,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _output_item_with_streamed_tool_identity(self, item: object, tool_position: int) -> object:
         terminal_call_id: Final = getattr(item, "call_id", None)
         resolved_by_call_id: Final = (
-            self._streamed_call_id_by_provider_id.get(terminal_call_id) if isinstance(terminal_call_id, str) else None
+            self._streamed_call_id_by_terminal_id.get(terminal_call_id) if isinstance(terminal_call_id, str) else None
         )
         resolved_by_position: Final = self._resolved_tool_call_id_by_position.get(tool_position)
         streamed_call_id: Final = (
