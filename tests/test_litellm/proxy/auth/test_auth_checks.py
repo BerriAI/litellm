@@ -1364,8 +1364,12 @@ async def test_vector_store_access_check_skips_db_lookup_when_no_vector_stores_r
     mock_vector_store_registry.get_vector_store_ids_to_run.return_value = []
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
-        patch("litellm.vector_store_registry", mock_vector_store_registry),
+        patch(  # test-quality-ok: production auth reads these module globals; no dependency injection seam exists
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+        ),
+        patch(  # test-quality-ok: production auth reads this module global; no dependency injection seam exists
+            "litellm.vector_store_registry", mock_vector_store_registry
+        ),
     ):
         result = await vector_store_access_check(
             request_body={"messages": [{"role": "user", "content": "test"}]},
