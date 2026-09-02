@@ -31,6 +31,16 @@ pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
     }
 }
 
+pub(crate) fn ocr_error_to_pyerr(err: Error) -> PyErr {
+    match err {
+        Error::MissingField("document_url" | "image_url") => {
+            PyValueError::new_err("Document URL is required")
+        }
+        Error::Http { status, body } => RustUpstreamError::new_err((status, body)),
+        other => core_error_to_pyerr(other),
+    }
+}
+
 /// Map a core error for a route whose host keeps a Python implementation.
 ///
 /// Only an explicit capability decline permits the host to try Python. Every
@@ -60,6 +70,29 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ocr_errors_preserve_python_validation_and_provider_details() {
+        Python::initialize();
+        Python::attach(|py| {
+            for field in ["document_url", "image_url"] {
+                let mapped = ocr_error_to_pyerr(Error::MissingField(field));
+                assert!(mapped.is_instance_of::<PyValueError>(py));
+                assert_eq!(mapped.value(py).to_string(), "Document URL is required");
+            }
+            let mapped = ocr_error_to_pyerr(Error::Http {
+                status: 429,
+                body: r#"{"message":"rate limited"}"#.to_string(),
+            });
+            assert!(mapped.is_instance_of::<RustUpstreamError>(py));
+            let args: (u16, String) = mapped
+                .value(py)
+                .getattr("args")
+                .and_then(|args| args.extract())
+                .expect("OCR failures retain status and unprefixed provider message");
+            assert_eq!(args, (429, r#"{"message":"rate limited"}"#.to_string()));
+        });
+    }
 
     #[test]
     fn fallback_routes_distinguish_declines_from_upstream_failures() {

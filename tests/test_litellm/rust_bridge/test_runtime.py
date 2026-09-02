@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from litellm.exceptions import APIError
@@ -120,3 +121,59 @@ def test_required_mode_rejects_unavailable_bridge() -> None:
             mode=runtime.FallbackMode.RUST_REQUIRED,
             context=context(),
         )
+
+
+@pytest.mark.parametrize("asynchronous", (False, True), ids=("sync", "async"))
+@pytest.mark.asyncio
+async def test_upstream_error_adapter_preserves_response_without_fallback(asynchronous: bool) -> None:
+    request = httpx.Request("POST", "https://example.com/ocr")
+
+    def provider_error(status: int, message: str) -> Exception:
+        return httpx.HTTPStatusError(
+            message,
+            request=request,
+            response=httpx.Response(status, request=request),
+        )
+
+    error_context = runtime.BridgeErrorContext(
+        route="ocr", provider="mistral", model="model", upstream_error=provider_error
+    )
+
+    def fail() -> str:
+        raise RustUpstreamError(429, '{"message":"rate limited"}')
+
+    async def afail() -> str:
+        return fail()
+
+    def fallback() -> str:
+        pytest.fail("provider failure must not execute Python fallback")
+
+    async def afallback() -> str:
+        return fallback()
+
+    async def invoke() -> None:
+        if asynchronous:
+            await runtime.ainvoke(
+                native_call=afail,
+                fallback=afallback,
+                adapt=runtime.identity,
+                mode=runtime.FallbackMode.PYTHON,
+                context=error_context,
+            )
+        else:
+            runtime.invoke(
+                native_call=fail,
+                fallback=fallback,
+                adapt=runtime.identity,
+                mode=runtime.FallbackMode.PYTHON,
+                context=error_context,
+            )
+
+    with pytest.raises(httpx.HTTPStatusError) as caught:
+        await invoke()
+
+    assert str(caught.value) == '{"message":"rate limited"}'
+    assert caught.value.response.status_code == 429
+    assert caught.value.request is request
+    assert isinstance(caught.value.__cause__, RustUpstreamError)
+    assert caught.value.headers == {"x-litellm-core": "rust", "x-litellm-rust": "true"}

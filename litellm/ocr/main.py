@@ -53,12 +53,13 @@ class _PreparedOCRRequest:
     litellm_logging_obj: LiteLLMLoggingObj
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class _PreparedRustOCRCall:
     api_key: str | None
     api_base: str | None
     headers: dict[str, object]
     optional_params: dict[str, object]
+    request_url: str
 
 
 _RUST_OCR_PROVIDERS: Final = {
@@ -210,6 +211,10 @@ def _prepare_ocr_request(
 def _rust_ocr_supported(prepared_request: _PreparedOCRRequest) -> bool:
     if prepared_request.optional_params.get(OCR_REQUEST_FORMAT_PARAM) == "native":
         return False
+    if prepared_request.extra_headers is not None and any(
+        not isinstance(value, str) for value in prepared_request.extra_headers.values()
+    ):
+        return False
     return prepared_request.custom_llm_provider in _RUST_OCR_PROVIDERS
 
 
@@ -300,6 +305,7 @@ def _prepare_rust_ocr_call(
         api_base=rust_api_base,
         headers=cast(dict[str, object], resolved_headers),
         optional_params=rust_optional_params,
+        request_url=resolved_complete_url,
     )
 
 
@@ -322,6 +328,7 @@ def _run_rust_ocr(
         extra_headers=prepared.headers,
         optional_params=prepared.optional_params,
         timeout=prepared_request.effective_timeout,
+        request_url=prepared.request_url,
     )
     if rust_response is None:
         return None
@@ -347,6 +354,7 @@ async def _run_rust_aocr(
         extra_headers=prepared.headers,
         optional_params=prepared.optional_params,
         timeout=prepared_request.effective_timeout,
+        request_url=prepared.request_url,
     )
     if rust_response is None:
         return None

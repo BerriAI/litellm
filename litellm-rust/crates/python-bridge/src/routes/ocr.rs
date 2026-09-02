@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 use serde_json::Value;
 use tracing::instrument::WithSubscriber;
 
-use crate::errors::core_error_to_pyerr;
+use crate::errors::ocr_error_to_pyerr;
 use crate::function_trace::FunctionTrace;
 use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
 
@@ -79,5 +79,5 @@ bridge_route! {
         trace: Option<bool>,
     },
     prepare = prepare_ocr,
-    errors = core_error_to_pyerr,
+    errors = ocr_error_to_pyerr,
 }
