@@ -155,7 +155,7 @@ async def test_dual_cache_batch_operations(is_async):
         else:
             results = dual_cache.batch_get_cache(test_keys, parent_otel_span=None)
 
-        assert results == test_values
+        assert list(results) == test_values
         mock_redis_get.assert_not_called()
 
 
@@ -263,7 +263,7 @@ async def test_dual_cache_concurrent_sync_and_async_redis_reads():
         *(asyncio.to_thread(dual_cache.batch_get_cache, keys=[key]) for key in sync_keys),
         *(dual_cache.async_batch_get_cache(keys=[key]) for key in async_keys),
     )
-    assert list(concurrent_results) == [[expected[key]] for key in [*sync_keys, *async_keys]]
+    assert [list(r) for r in concurrent_results] == [[expected[key]] for key in [*sync_keys, *async_keys]]
 
     async_connects = []
     original_connect = AsyncRedisConnection.connect
@@ -275,6 +275,6 @@ async def test_dual_cache_concurrent_sync_and_async_redis_reads():
     with patch.object(AsyncRedisConnection, "connect", counting_connect):
         in_loop_results = [dual_cache.batch_get_cache(keys=[key]) for key in in_loop_keys]
 
-    assert in_loop_results == [[expected[key]] for key in in_loop_keys]
+    assert [list(r) for r in in_loop_results] == [[expected[key]] for key in in_loop_keys]
     assert async_connects == []
     assert await dual_cache.async_batch_get_cache(keys=[survivor_key]) == [expected[survivor_key]]
