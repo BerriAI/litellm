@@ -8335,20 +8335,26 @@ class TestClaudeCodeSubagentSessionRouterBinding:
             )
 
     @classmethod
-    def _router(cls) -> "litellm.Router":
+    def _router(
+        cls,
+        cheap_response: str = "cheap response",
+        fallbacks: list[dict[str, list[str]]] | None = None,
+    ) -> "litellm.Router":
         from litellm.types.router import TaggedPreRoutingStrategy
 
         router = litellm.Router(
             model_list=[
                 {
                     "model_name": "cheap-model",
-                    "litellm_params": {"model": "openai/gpt-4o-mini", "mock_response": "cheap response"},
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "mock_response": cheap_response},
                 },
                 {
                     "model_name": "expensive-model",
                     "litellm_params": {"model": "openai/gpt-4o", "mock_response": "expensive response"},
                 },
-            ]
+            ],
+            fallbacks=fallbacks,
+            num_retries=0,
         )
         router.complexity_routers = {
             "smart-router": [TaggedPreRoutingStrategy(tags=(), strategy=cls._RewriteStrategy())]
@@ -8476,6 +8482,29 @@ class TestClaudeCodeSubagentSessionRouterBinding:
         )
 
         assert response is None
+
+    @pytest.mark.asyncio
+    async def test_subagent_can_fallback_to_its_original_requested_model(self):
+        router = self._router(
+            cheap_response="litellm.RateLimitError",
+            fallbacks=[{"cheap-model": ["expensive-model"]}],
+        )
+
+        await router.acompletion(
+            model="smart-router",
+            messages=[{"role": "user", "content": "main turn"}],
+            **self._request_kwargs(),
+        )
+        subagent_kwargs = self._request_kwargs(agent_id="agent-1234")
+
+        response = await router.acompletion(
+            model="expensive-model",
+            messages=[{"role": "user", "content": "subagent turn"}],
+            **subagent_kwargs,
+        )
+
+        assert response.choices[0].message.content == "expensive response"
+        assert subagent_kwargs["metadata"]["routing_decision"]["routed_model"] == "cheap-model"
 
     @pytest.mark.asyncio
     async def test_session_router_binding_is_scoped_to_the_authenticated_key(self):
