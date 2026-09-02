@@ -1196,28 +1196,29 @@ async def test_update_user_without_groups_preserves_memberships(mocker):
 
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value={"user_id": "test-user"})
-    mocker.patch(
+    mocker.patch(  # test-quality-ok: prisma client is a module global, not injectable into the endpoint
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
         AsyncMock(return_value=mock_prisma_client),
     )
-    mocker.patch(
+    mocker.patch(  # test-quality-ok: user lookup is a module-level helper, not injectable into the endpoint
         "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
         AsyncMock(return_value=existing_user),
     )
-    mocker.patch(
+    mocker.patch(  # test-quality-ok: admin group lookup is a module-level helper, not injectable into the endpoint
         "litellm.proxy.management_endpoints.scim.scim_v2._get_scim_admin_group",
         AsyncMock(return_value="admin-group"),
     )
-    patch_membership = mocker.patch(
+    patch_membership = mocker.patch(  # test-quality-ok: roster helper is module-level, not injectable into the endpoint
         "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership", AsyncMock()
     )
-    mocker.patch(
+    mocker.patch(  # test-quality-ok: response transform is a module-level class, not injectable into the endpoint
         "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
         AsyncMock(return_value=scim_user),
     )
 
-    await update_user(user_id="test-user", user=scim_user)
+    result = await update_user(user_id="test-user", user=scim_user)
 
+    assert result == scim_user
     patch_membership.assert_not_awaited()
     update_data = mock_prisma_client.db.litellm_usertable.update.call_args[1]["data"]
     assert update_data["teams"] == ["team1", "team2"]
@@ -1240,24 +1241,25 @@ async def test_update_user_with_explicit_empty_groups_removes_memberships(mocker
 
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value={"user_id": "test-user"})
-    mocker.patch(
+    mocker.patch(  # test-quality-ok: prisma client is a module global, not injectable into the endpoint
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
         AsyncMock(return_value=mock_prisma_client),
     )
-    mocker.patch(
+    mocker.patch(  # test-quality-ok: user lookup is a module-level helper, not injectable into the endpoint
         "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
         AsyncMock(return_value=existing_user),
     )
-    patch_membership = mocker.patch(
+    patch_membership = mocker.patch(  # test-quality-ok: roster helper is module-level, not injectable into the endpoint
         "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership", AsyncMock()
     )
-    mocker.patch(
+    mocker.patch(  # test-quality-ok: response transform is a module-level class, not injectable into the endpoint
         "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
         AsyncMock(return_value=scim_user),
     )
 
-    await update_user(user_id="test-user", user=scim_user)
+    result = await update_user(user_id="test-user", user=scim_user)
 
+    assert result == scim_user
     assert patch_membership.call_args[1]["teams_ids_to_remove_user_from"] == ["team1"]
     assert mock_prisma_client.db.litellm_usertable.update.call_args[1]["data"]["teams"] == []
 
