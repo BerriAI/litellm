@@ -8,7 +8,7 @@ use litellm_core::chat_completions::{
 use pyo3::prelude::*;
 use serde_json::Value;
 
-use crate::errors::chat_completions_error_to_pyerr;
+use crate::errors::fallback_route_error_to_pyerr;
 use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty, required_value};
 
 fn prepare_chat_completions(
@@ -86,6 +86,6 @@ bridge_route! {
         timeout_seconds: Option<f64>,
     },
     prepare = prepare_chat_completions,
-    errors = chat_completions_error_to_pyerr,
+    errors = fallback_route_error_to_pyerr,
     extra = [chat_completions_decline],
 }
