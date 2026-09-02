@@ -11438,3 +11438,27 @@ class TestConfigServerIdPinning:
         assert any("database entry takes precedence" in m for m in caplog.messages)
         assert all("name or alias of a database-backed" not in m for m in caplog.messages)
         assert manager.get_registry()["db_server"].url == "https://db.example.com/mcp"
+
+    @pytest.mark.asyncio
+    async def test_an_explicitly_blank_alias_still_blocks_the_mapping(self):
+        """The loader only consults mcp_aliases when the key is absent, so a blank alias frees it."""
+        manager = MCPServerManager()
+
+        await manager.load_servers_from_config(
+            {
+                "wiki_server": {
+                    "alias": "",
+                    "url": "https://wiki.example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+                "docs_server": {
+                    "server_id": "wiki",
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+            },
+            {"wiki": "wiki_server"},
+        )
+
+        assert "wiki" in manager.config_mcp_servers
+        assert manager.config_mcp_servers["wiki"].url == "https://example.com/mcp"

@@ -462,7 +462,11 @@ def _config_identifier_owners(
     owners: dict[str, str] = {}  # mutable-ok: per-load identifier index
     for server_name, server_config in mcp_servers_config.items():
         owners[server_name] = server_name
-        alias = server_config.get("alias") or _first_mapped_alias(server_name, mcp_aliases)
+        alias = server_config.get("alias")
+        if alias is None:
+            # ``is None``, not falsiness: the loader below only consults the mapping when the key is
+            # absent, so an entry that sets ``alias: ""`` gets no mapped alias and reserves nothing.
+            alias = _first_mapped_alias(server_name, mcp_aliases)
         if alias:
             owners.setdefault(alias, server_name)
     return owners
