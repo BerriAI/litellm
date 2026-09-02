@@ -11180,11 +11180,11 @@ class TestConfigServerIdPinning:
             transport=MCPTransport.http,
         )
         with (
-            patch(
+            patch(  # test-quality-ok: the db reload path has no seam but its own repository
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
                 return_value=repository,
             ),
-            patch(
+            patch(  # test-quality-ok: same, the prisma client is fetched inside the reload
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
                 return_value=MagicMock(),
             ),
@@ -11382,3 +11382,59 @@ class TestConfigServerIdPinning:
             await self._reload_with_db_server(manager, "db-uuid-1")
 
         assert all("name or alias of a database-backed" not in m for m in caplog.messages)
+
+    @pytest.mark.asyncio
+    async def test_mapped_alias_for_a_server_with_its_own_alias_reserves_nothing(self):
+        """load_servers_from_config ignores the mapping when the entry sets alias, so it is free."""
+        manager = MCPServerManager()
+
+        await manager.load_servers_from_config(
+            {
+                "wiki_server": {
+                    "alias": "wiki_prod",
+                    "url": "https://wiki.example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+                "docs_server": {
+                    "server_id": "wiki",
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+            },
+            {"wiki": "wiki_server"},
+        )
+
+        assert "wiki" in manager.config_mcp_servers
+        assert len(manager.config_mcp_servers) == 2
+
+    @pytest.mark.asyncio
+    async def test_only_the_first_mapped_alias_for_a_server_is_reserved(self):
+        """Only the first mapping is applied, so pinning the second one must still load."""
+        manager = MCPServerManager()
+
+        await manager.load_servers_from_config(
+            {
+                "wiki_server": {"url": "https://wiki.example.com/mcp", "transport": MCPTransport.http},
+                "docs_server": {
+                    "server_id": "wiki_two",
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                },
+            },
+            {"wiki_one": "wiki_server", "wiki_two": "wiki_server"},
+        )
+
+        assert "wiki_two" in manager.config_mcp_servers
+
+    @pytest.mark.asyncio
+    async def test_a_shadowing_db_server_reports_only_the_shadow_warning(self, caplog):
+        """The db row wins the id outright, so the capture message would contradict the shadow one."""
+        manager = MCPServerManager()
+        await manager.load_servers_from_config(self._config(server_id="db_server"))
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "db_server")
+
+        assert any("database entry takes precedence" in m for m in caplog.messages)
+        assert all("name or alias of a database-backed" not in m for m in caplog.messages)
+        assert manager.get_registry()["db_server"].url == "https://db.example.com/mcp"

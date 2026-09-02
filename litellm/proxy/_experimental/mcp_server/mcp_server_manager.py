@@ -431,6 +431,18 @@ def _pinned_config_server_id(raw_server_id: object, server_name: str) -> str | N
     return raw_server_id.strip()
 
 
+def _first_mapped_alias(server_name: str, mcp_aliases: Mapping[str, str] | None) -> str | None:
+    """The ``mcp_aliases`` name ``load_servers_from_config`` will assign to this server, if any.
+
+    Mirrors that loop, which takes the first mapping pointing at the server and stops. A later
+    mapping for the same server is never applied, so it stays free for another entry to pin.
+    """
+    for alias_name, target_server_name in (mcp_aliases or {}).items():
+        if target_server_name == server_name:
+            return alias_name
+    return None
+
+
 def _config_identifier_owners(
     mcp_servers_config: Mapping[str, MCPServerConfig],
     mcp_aliases: Mapping[str, str] | None,
@@ -439,19 +451,20 @@ def _config_identifier_owners(
 
     ``expand_permission_list`` resolves a grant against the registry keys before it falls back to
     matching alias and server_name, so an id equal to another entry's name or alias captures that
-    entry's grants. Aliases arrive two ways, an ``alias`` on the entry and a ``mcp_aliases`` entry in
-    litellm_settings pointing at it, and both end up on the server, so both are reserved here.
-    Derived ids are hashes and never collide with a name, so this only matters once an id is pinned.
+    entry's grants. Derived ids are hashes and never collide with a name, so this only matters once
+    an id is pinned.
+
+    An alias is either set on the entry or mapped to it from ``litellm_settings.mcp_aliases``. Only
+    a name the loader below will really assign is reserved: the mapping is ignored for an entry that
+    sets its own ``alias``, and only the first mapping wins for one that does not, so reserving every
+    mapping would fail startup on a pin that was never going to collide.
     """
     owners: dict[str, str] = {}  # mutable-ok: per-load identifier index
     for server_name, server_config in mcp_servers_config.items():
         owners[server_name] = server_name
-        alias = server_config.get("alias")
+        alias = server_config.get("alias") or _first_mapped_alias(server_name, mcp_aliases)
         if alias:
             owners.setdefault(alias, server_name)
-    for alias_name, target_server_name in (mcp_aliases or {}).items():
-        if target_server_name in mcp_servers_config:
-            owners.setdefault(alias_name, target_server_name)
     return owners
 
 
@@ -465,10 +478,15 @@ def _config_ids_capturing_db_identifiers(
     such an id answers every grant written for the database server, and the database server itself
     stops being reachable by name. The config load cannot catch this because the database registry
     is not loaded yet, so it is reported from the reload that does have both halves.
+
+    A database server whose own id is that config id is skipped: ``get_registry`` is
+    ``config_mcp_servers | registry``, so there the database server wins the id outright and the
+    shadow warning above is the accurate one. Reporting both would contradict.
     """
     return frozenset(
         identifier
         for server in db_servers
+        if server.server_id not in config_server_ids
         for identifier in (server.name, server.server_name, server.alias)
         if identifier and identifier in config_server_ids
     )
