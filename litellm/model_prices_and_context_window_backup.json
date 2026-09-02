@@ -38556,12 +38556,22 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "parallel_ai/search": {
-        "input_cost_per_query": 0.004,
+        "input_cost_per_query": 0.005,
+        "litellm_provider": "parallel_ai",
+        "mode": "search"
+    },
+    "parallel_ai/search-fast": {
+        "input_cost_per_query": 0.001,
         "litellm_provider": "parallel_ai",
         "mode": "search"
     },
     "parallel_ai/search-pro": {
-        "input_cost_per_query": 0.009,
+        "input_cost_per_query": 0.005,
+        "litellm_provider": "parallel_ai",
+        "mode": "search"
+    },
+    "parallel_ai/search-turbo": {
+        "input_cost_per_query": 0.001,
         "litellm_provider": "parallel_ai",
         "mode": "search"
     },
