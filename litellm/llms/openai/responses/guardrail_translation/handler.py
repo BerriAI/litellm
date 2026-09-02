@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING, Any, Final, Union, cast
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from openai.types.responses.tool_param import FunctionToolParam
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -108,6 +108,88 @@ class ResponsesStreamChunk(TypedDict, total=False):
     item_id: ReadOnly[str]
     output_index: ReadOnly[int]
     content_index: ReadOnly[int]
+
+
+_TOOL_TYPES_NOT_SENT_TO_GUARDRAIL: Final = frozenset(
+    {"web_search", "web_search_preview", "computer_use", "image_generation", "shell"}
+)
+
+
+_NAMESPACE_MEMBERS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _namespace_members(tool: Mapping[str, object]) -> tuple[Mapping[str, object], ...] | None:
+    """``None`` when the namespace has no member list and is flattened to one function named after it."""
+    raw_members: Final = tool.get("tools")
+    if not isinstance(raw_members, Sequence) or isinstance(raw_members, (str, bytes)):
+        return None
+    try:
+        return _NAMESPACE_MEMBERS.validate_python(raw_members)
+    except ValidationError:
+        return ()
+
+
+def _is_function_member(member: Mapping[str, object]) -> bool:
+    return member.get("type") == "function"
+
+
+def _qualified_member_name(namespace: str, member: Mapping[str, object]) -> str:
+    return f"{namespace}__{member.get('name') or ''}"
+
+
+def _namespace_function_names(tool: Mapping[str, object]) -> tuple[str, ...]:
+    namespace: Final = str(tool.get("name") or "")
+    members: Final = _namespace_members(tool)
+    if members is None:
+        return (namespace,)
+    return tuple(_qualified_member_name(namespace, member) for member in members if _is_function_member(member))
+
+
+def _flattened_function_names(tools: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
+    """Names the guardrail sees for ``tools`` once flattened to Chat Completions format."""
+    top_level: Final = tuple(
+        str(tool.get("name") or "") for tool in tools if tool.get("type") in ("function", "custom")
+    )
+    nested: Final = tuple(
+        name for tool in tools if tool.get("type") == "namespace" for name in _namespace_function_names(tool)
+    )
+    return top_level + nested
+
+
+def _merge_namespace_tool(
+    tool: Mapping[str, object], remapped_functions: Mapping[str, Mapping[str, object]]
+) -> Mapping[str, object] | None:
+    namespace: Final = str(tool.get("name") or "")
+    members: Final = _namespace_members(tool)
+    if members is None:
+        return tool if namespace in remapped_functions else None
+    surviving: Final = tuple(
+        member
+        for member in members
+        if not _is_function_member(member) or _qualified_member_name(namespace, member) in remapped_functions
+    )
+    if len(surviving) == len(members):
+        return tool
+    if not any(_is_function_member(member) for member in surviving):
+        return None
+    return {**tool, "tools": [*surviving]}  # mutable-ok: request tools are JSON dicts sent to the provider
+
+
+def _merge_original_tool(
+    tool: Mapping[str, object],
+    remapped_functions: Mapping[str, Mapping[str, object]],
+    remapped_passthrough: Sequence[Mapping[str, object]],
+) -> Mapping[str, object] | None:
+    tool_type: Final = tool.get("type")
+    if tool_type in _TOOL_TYPES_NOT_SENT_TO_GUARDRAIL:
+        return tool
+    if tool_type == "function":
+        return remapped_functions.get(str(tool.get("name") or ""))
+    if tool_type == "custom":
+        return tool if str(tool.get("name") or "") in remapped_functions else None
+    if tool_type == "namespace":
+        return _merge_namespace_tool(tool, remapped_functions)
+    return tool if tool in remapped_passthrough else None
 
 
 def _next_stream_sequence_number(responses_so_far: Sequence[Any] | None) -> int:
@@ -297,32 +379,37 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     def _merge_tools_after_guardrail(
         self,
-        original_tools: list[dict[str, object]],
+        original_tools: Sequence[Mapping[str, object]],
         remapped: list[dict[str, object]],
-    ) -> list[dict[str, object]]:
+    ) -> Sequence[Mapping[str, object]]:
         """
-        Merge remapped guardrailed tools with original tools that were not sent
-        to the guardrail (e.g. web_search, web_search_preview), preserving order.
-        Tools a guardrail appended (``remapped`` longer than ``original_tools``)
-        have no original slot and are kept so an injected tool is not dropped.
+        Rebuild the Responses tool list from ``original_tools`` and apply only the
+        guardrail's delta: tools it dropped are removed (namespace members
+        individually), tools it appended are kept at the end, and tools that never
+        reach the guardrail (web_search, computer_use, ...) stay untouched.
+        Namespace tools keep their wrapper and member names instead of the
+        ``namespace__tool`` functions the guardrail saw.
         """
         if not original_tools:
             return remapped
-        result: Final[list[dict[str, object]]] = []
-        j = 0
-        for tool in original_tools:
-            if isinstance(tool, dict) and tool.get("type") in (
-                "web_search",
-                "web_search_preview",
-            ):
-                result.append(tool)
-            else:
-                if j < len(remapped):
-                    result.append(remapped[j])
-                    j += 1
-        # Keep guardrail-appended tools that matched no original slot above.
-        result.extend(remapped[j:])
-        return result
+        remapped_functions: Final = MappingProxyType(
+            {str(tool.get("name") or ""): tool for tool in remapped if tool.get("type") == "function"}
+        )
+        remapped_passthrough: Final = tuple(tool for tool in remapped if tool.get("type") != "function")
+        original_function_names: Final = frozenset(_flattened_function_names(original_tools))
+        kept: Final = tuple(
+            merged
+            for tool in original_tools
+            for merged in (_merge_original_tool(tool, remapped_functions, remapped_passthrough),)
+            if merged is not None
+        )
+        appended: Final = tuple(
+            tool
+            for tool in remapped
+            if (tool.get("type") == "function" and str(tool.get("name") or "") not in original_function_names)
+            or (tool.get("type") != "function" and tool not in original_tools)
+        )
+        return [*kept, *appended]  # mutable-ok: request tools are JSON dicts sent to the provider
 
     def _apply_guardrailed_tools_to_data(
         self,
