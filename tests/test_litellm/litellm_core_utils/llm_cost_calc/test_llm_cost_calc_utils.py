@@ -4200,6 +4200,51 @@ def test_generic_cost_per_token_gemini_37_flash(_local_model_cost_map):
     assert completion_cost == pytest.approx(0.001875)
 
 
+GEMINI_38_FLASH_LAUNCH_PRICING = [
+    ("gemini-3.8-flash", 7.5e-07, 3.75e-06, 7.5e-08),
+    ("gemini/gemini-3.8-flash", 7.5e-07, 3.75e-06, 7.5e-08),
+    ("vertex_ai/gemini-3.8-flash", 7.5e-07, 3.75e-06, 7.5e-08),
+]
+
+
+@pytest.mark.parametrize("model,input_cost,output_cost,cache_read_cost", GEMINI_38_FLASH_LAUNCH_PRICING)
+def test_gemini_38_flash_launch_pricing(model, input_cost, output_cost, cache_read_cost, _local_model_cost_map):
+    model_cost_map = litellm.model_cost[model]
+    assert model_cost_map["input_cost_per_token"] == input_cost
+    assert model_cost_map["output_cost_per_token"] == output_cost
+    assert model_cost_map["output_cost_per_reasoning_token"] == output_cost
+    assert model_cost_map["cache_read_input_token_cost"] == cache_read_cost
+    assert model_cost_map["mode"] == "chat"
+    assert model_cost_map["supports_reasoning"] is True
+    assert model_cost_map["supports_function_calling"] is True
+    assert model_cost_map["max_input_tokens"] == 1048576
+
+
+def test_gemini_38_flash_matches_37_flash_promotional_pricing(_local_model_cost_map):
+    for prefix in ("", "gemini/", "vertex_ai/"):
+        assert litellm.model_cost[f"{prefix}gemini-3.8-flash"] == litellm.model_cost[f"{prefix}gemini-3.7-flash"]
+
+
+def test_generic_cost_per_token_gemini_38_flash(_local_model_cost_map):
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            reasoning_tokens=200,
+            text_tokens=300,
+        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=1000),
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="gemini-3.8-flash",
+        usage=usage,
+        custom_llm_provider="gemini",
+    )
+    assert prompt_cost == pytest.approx(0.00075)
+    assert completion_cost == pytest.approx(0.001875)
+
+
 def test_grok_46_launch_pricing(_local_model_cost_map):
     model_cost_map = litellm.model_cost["xai/grok-4.6"]
     assert model_cost_map["input_cost_per_token"] == 2e-06
