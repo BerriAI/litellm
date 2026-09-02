@@ -1,8 +1,7 @@
-use serde_json::{Map, Value};
-
-use crate::error::CoreResult;
+use crate::Error;
 use crate::http_utils::string_headers as shared_string_headers;
 use crate::providers::anthropic::chat_completions::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG;
+use serde_json::{Map, Value};
 
 use super::transformation::ChatCompletionsProviderConfig;
 
@@ -23,6 +22,6 @@ pub(super) fn chat_completions_provider_config(
 
 pub(super) fn string_headers(
     extra_headers: Option<Map<String, Value>>,
-) -> CoreResult<Vec<(String, String)>> {
+) -> Result<Vec<(String, String)>, Error> {
     shared_string_headers(HEADER_CONTEXT, extra_headers)
 }

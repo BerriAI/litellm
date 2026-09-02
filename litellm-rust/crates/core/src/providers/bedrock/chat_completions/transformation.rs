@@ -11,7 +11,7 @@ use crate::chat_completions::types::{
     ChatCompletionsUsage, ChatMessage, ChatMessageContent, ProviderChatRequestData,
     ProviderChatResponseData,
 };
-use crate::error::{CoreError, CoreResult};
+use crate::error::Error;
 
 use super::super::aws_base::{bedrock_model_id_and_region, resolve_bedrock_region};
 use super::super::constants::{AWS_BEARER_TOKEN_BEDROCK, BEDROCK_RUNTIME_ENDPOINT_TEMPLATE};
@@ -110,7 +110,7 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String> {
+    ) -> Result<String, Error> {
         let (model_id, model_region) = bedrock_model_id_and_region(model);
         let region = resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup);
         let endpoint = optional_params
@@ -137,7 +137,7 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<ChatCompletionsAuth> {
+    ) -> Result<ChatCompletionsAuth, Error> {
         // Python reads `api_key` as the Bedrock bearer token and consults the
         // env only when the caller passed none, so a caller-supplied empty key
         // falls through to SigV4 without reaching for the environment. An
@@ -208,7 +208,7 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         _model: &str,
         messages: Vec<ChatMessage>,
         optional_params: Map<String, Value>,
-    ) -> CoreResult<ProviderChatRequestData> {
+    ) -> Result<ProviderChatRequestData, Error> {
         Ok(ProviderChatRequestData {
             body: converse_body(&build_conversation(&messages), &optional_params),
         })
@@ -218,17 +218,18 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         &self,
         model: &str,
         response: ProviderChatResponseData,
-    ) -> CoreResult<ChatCompletionsResponse> {
-        let body = response.body.as_object().ok_or_else(|| {
-            CoreError::InvalidResponse("converse response is not an object".into())
-        })?;
+    ) -> Result<ChatCompletionsResponse, Error> {
+        let body = response
+            .body
+            .as_object()
+            .ok_or_else(|| Error::InvalidResponse("converse response is not an object".into()))?;
 
         let content = body
             .get("output")
             .and_then(|output| output.get("message"))
             .and_then(|message| message.get("content"))
             .and_then(Value::as_array)
-            .ok_or(CoreError::MissingField("output.message.content"))?;
+            .ok_or(Error::MissingField("output.message.content"))?;
         // The route declines tool requests, so anything other than a text block
         // is something this path never asked for. Decline; the host falls back.
         if content.iter().any(|block| {
@@ -236,7 +237,7 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
                 .as_object()
                 .is_none_or(|block| block.len() != 1 || !block.contains_key("text"))
         }) {
-            return Err(CoreError::Unsupported("non-text response content block"));
+            return Err(Error::Unsupported("non-text response content block"));
         }
         let text: String = content
             .iter()
@@ -246,7 +247,7 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         let usage = body
             .get("usage")
             .and_then(Value::as_object)
-            .ok_or(CoreError::MissingField("usage"))?;
+            .ok_or(Error::MissingField("usage"))?;
         let field = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
         let computed = usage_from_parts(
             field("inputTokens"),

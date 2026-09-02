@@ -158,6 +158,24 @@ describe("autorouter_presets", () => {
     });
   });
 
+  it("pins the OpenAI preset to the Luna, Terra, and Sol progression", () => {
+    const preset = getPresetByKey("openai_family")!;
+    const expectedTiers = {
+      SIMPLE: ["gpt-5.6-luna"],
+      MEDIUM: ["gpt-5.6-terra"],
+      COMPLEX: ["gpt-5.6-sol"],
+      REASONING: ["gpt-5.6-sol"],
+    };
+    expect(preset.complexity_router_config.tiers).toEqual(expectedTiers);
+    expect(preset.complexity_router_config.tier_model_configs).toEqual({
+      REASONING: [{ model_name: "gpt-5.6-sol", litellm_params: { reasoning_effort: "xhigh" } }],
+    });
+    const prefill = buildPresetPrefill(preset.complexity_router_config, groupsOnly(getRequiredModelsInPreset(preset)));
+    expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+      REASONING: { "gpt-5.6-sol": { reasoning_effort: "xhigh" } },
+    });
+  });
+
   it("pins the gemini preset to concrete model ids, never Google's hot-swapping -latest aliases", () => {
     const gemini = getPresetByKey("gemini_family")!;
     const config = gemini.complexity_router_config;

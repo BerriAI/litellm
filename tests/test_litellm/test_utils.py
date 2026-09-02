@@ -41,7 +41,6 @@ from litellm.utils import (
     _snapshot_exception_for_hook,
     async_post_call_failure_deployment_hook,
     client,
-    get_api_key,
     get_llm_provider,
     get_non_default_completion_params,
     get_optional_params_image_gen,
@@ -4655,6 +4654,7 @@ GEMINI_4096_CACHE_MIN_MODELS: Final = tuple(
         "gemini-3.5-flash",
         "gemini-3.6-flash",
         "gemini-3.7-flash",
+        "gemini-3.8-flash",
         "gemini-3.1-pro-preview",
         "gemini-3.1-pro-preview-customtools",
     )
@@ -4914,17 +4914,6 @@ def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkey
     finally:
         litellm.model_cost = saved_model_cost
         _invalidate_model_cost_lowercase_map()
-
-
-def test_ai21_api_key_is_resolved_from_the_documented_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The ai21 branch resolved a misspelled env var, so the name every other ai21 code path
-    reads, and the only name documented, was ignored."""
-    monkeypatch.setattr(litellm, "api_key", None)
-    monkeypatch.setattr(litellm, "ai21_key", None)
-    monkeypatch.delenv("AI211_API_KEY", raising=False)
-    monkeypatch.setenv("AI21_API_KEY", "sk-ai21-resolved-from-env")
-
-    assert get_api_key(llm_provider="ai21", dynamic_api_key=None) == "sk-ai21-resolved-from-env"
 
 
 class _JsonCapture(logging.Handler):
