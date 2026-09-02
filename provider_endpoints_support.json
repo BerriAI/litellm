@@ -2880,6 +2880,13 @@
         "vector_stores_search": true
       }
     },
+    "mongodb": {
+      "display_name": "MongoDB Atlas (`mongodb`)",
+      "url": "https://docs.litellm.ai/docs/providers/mongodb_vector_stores",
+      "endpoints": {
+        "vector_stores_search": true
+      }
+    },
     "valkey": {
       "display_name": "Valkey (`valkey`)",
       "url": "https://docs.litellm.ai/docs/providers/valkey_vector_stores",
