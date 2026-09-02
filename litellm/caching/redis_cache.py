@@ -90,7 +90,7 @@ def _ttl_argument(ttl: object) -> str:
 
 def _refresh_ttl_argument(refresh_ttl: object) -> str:
     if not isinstance(refresh_ttl, bool):
-        raise ValueError("refresh_ttl must be a boolean")
+        raise TypeError("refresh_ttl must be a boolean")
     return "1" if refresh_ttl else "0"
 
 
