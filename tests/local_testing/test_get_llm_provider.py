@@ -155,6 +155,11 @@ def test_default_api_base():
                         continue
                     elif provider == "github" and other_provider.value == "azure":
                         continue
+                    elif (
+                        provider in ("qwencloud", "qwen_ai_platform")
+                        and other_provider.value == "dashscope"
+                    ):
+                        continue
                     assert other_provider.value not in api_base.replace("/openai", "")
 
 
