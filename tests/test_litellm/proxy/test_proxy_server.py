@@ -148,6 +148,72 @@ def test_login_v2_returns_redirect_url_and_sets_cookie(monkeypatch):
     assert mock_jwt_encode.call_args.kwargs == {"algorithm": "HS256"}
 
 
+def _mock_login_v2_deps(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user",
+        AsyncMock(return_value={"user_id": "test-user"}),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.create_ui_token_object",
+        MagicMock(return_value={"user_id": "test-user"}),
+    )
+    monkeypatch.setattr("jwt.encode", MagicMock(return_value="signed-token"))
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+    monkeypatch.setattr("litellm.proxy.utils.get_server_root_path", lambda: "")
+    monkeypatch.setattr("litellm.proxy.utils.get_proxy_base_url", lambda: None)
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+
+
+def test_login_v2_sets_secure_cookie_over_direct_https(monkeypatch):
+    """Regression: the token cookie previously carried no Secure/HttpOnly/SameSite
+    attributes at all, so it was always sent over plain HTTP."""
+    _mock_login_v2_deps(monkeypatch)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    client = TestClient(app, base_url="https://testserver")
+    response = client.post("/v2/login", json={"username": "alice", "password": "secret"})
+
+    assert response.status_code == 200
+    cookie = response.headers.get("set-cookie")
+    assert "Secure" in cookie
+    assert "HttpOnly" not in cookie  # deliberate: the dashboard reads this cookie via JS
+    assert "samesite=lax" in cookie.lower()
+
+
+def test_login_v2_does_not_set_secure_cookie_over_direct_http(monkeypatch):
+    _mock_login_v2_deps(monkeypatch)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    client = TestClient(app, base_url="http://testserver")
+    response = client.post("/v2/login", json={"username": "alice", "password": "secret"})
+
+    assert response.status_code == 200
+    assert "Secure" not in response.headers.get("set-cookie")
+
+
+def test_login_v2_sets_secure_cookie_behind_trusted_tls_terminating_proxy(monkeypatch):
+    """THE regression: litellm only sees a plain-HTTP hop when TLS terminates at a
+    reverse proxy, but the token cookie must still be Secure when the direct peer is
+    a configured trusted proxy reporting X-Forwarded-Proto: https."""
+    _mock_login_v2_deps(monkeypatch)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"use_x_forwarded_for": True, "mcp_trusted_proxy_ranges": ["10.0.0.0/8"]},
+    )
+
+    client = TestClient(app, base_url="http://testserver", client=("10.0.0.5", 50000))
+    response = client.post(
+        "/v2/login",
+        json={"username": "alice", "password": "secret"},
+        headers={"X-Forwarded-Proto": "https"},
+    )
+
+    assert response.status_code == 200
+    assert "Secure" in response.headers.get("set-cookie")
+
+
 def test_login_v2_returns_json_on_proxy_exception(monkeypatch):
     """Test that /v2/login returns JSON error when ProxyException is raised"""
     from litellm.proxy._types import ProxyErrorTypes, ProxyException
@@ -354,6 +420,51 @@ def test_login_v3_exchange_happy_path(monkeypatch):
     assert exchange_data["token"] == "signed-token"
     assert "redirect_url" in exchange_data
     assert exchange_response.cookies.get("token") == "signed-token"
+
+
+def test_login_v3_exchange_sets_secure_cookie_behind_trusted_tls_terminating_proxy(monkeypatch):
+    """Regression: /v3/login/exchange's token cookie must be Secure behind a trusted
+    TLS-terminating reverse proxy even though litellm only sees a plain-HTTP hop."""
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.authenticate_user",
+        AsyncMock(return_value={"user_id": "test-user"}),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.login_utils.create_ui_token_object",
+        MagicMock(return_value={"user_id": "test-user"}),
+    )
+    monkeypatch.setattr("jwt.encode", MagicMock(return_value="signed-token"))
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "test-master-key")
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {
+            "control_plane_url": "https://cp.example.com",
+            "use_x_forwarded_for": True,
+            "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+        },
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mock_config = MagicMock()
+    mock_config.worker_registry = []
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", mock_config)
+    monkeypatch.setattr("litellm.proxy.utils.get_server_root_path", lambda: "")
+    monkeypatch.setattr("litellm.proxy.utils.get_proxy_base_url", lambda: None)
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+
+    client = TestClient(app, base_url="http://testserver", client=("10.0.0.5", 50000))
+
+    login_response = client.post("/v3/login", json={"username": "alice", "password": "secret"})
+    code = login_response.json()["code"]
+
+    exchange_response = client.post(
+        "/v3/login/exchange",
+        json={"code": code},
+        headers={"X-Forwarded-Proto": "https"},
+    )
+    assert exchange_response.status_code == 200
+    assert "Secure" in exchange_response.headers.get("set-cookie")
 
 
 def test_login_v3_exchange_single_use(monkeypatch):
