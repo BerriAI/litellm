@@ -6,7 +6,7 @@ import os
 from collections.abc import Callable, Iterator, Mapping
 from datetime import datetime, timezone
 from itertools import chain, count
-from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol
 
 from pydantic import ValidationError
 
@@ -624,16 +624,18 @@ class InMemoryGuardrailHandler:
         """
         Update a guardrail in memory
 
-        - updates the guardrail in memory
         - updates the guardrail params in litellm.callback_manager
+        - stores the guardrail in memory only after the callback update
+          succeeds, so a failed update stays visible as a diff to the
+          per-worker DB poller and gets retried instead of going stale
         """
+        custom_guardrail_callback: Final = self.guardrail_id_to_custom_guardrail.get(guardrail_id)
+        updated_litellm_params: Final = guardrail.get("litellm_params")
+        if custom_guardrail_callback and updated_litellm_params:
+            custom_guardrail_callback.update_in_memory_litellm_params(litellm_params=updated_litellm_params)
+
         self.IN_MEMORY_GUARDRAILS[guardrail_id] = guardrail
         self._sources[guardrail_id] = source
-
-        custom_guardrail_callback: Final = self.guardrail_id_to_custom_guardrail.get(guardrail_id)
-        if custom_guardrail_callback:
-            updated_litellm_params: Final = cast(LitellmParams, guardrail.get("litellm_params", {}))
-            custom_guardrail_callback.update_in_memory_litellm_params(litellm_params=updated_litellm_params)
 
     def delete_in_memory_guardrail(self, guardrail_id: str) -> None:
         """

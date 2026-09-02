@@ -14,6 +14,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
+    updated_litellm_param,
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     AZURE_PROMPT_SHIELD_TEXT_RECORD_UNIT,
@@ -59,15 +60,6 @@ def _resolved_secret_value(value: object) -> object:
             raise ValueError(f"Azure Prompt Shield: {value!r} resolves to an unset or blank environment variable")
         return resolved
     return value
-
-
-def _updated_param(litellm_params: "LitellmParams | dict", key: str) -> object:  # mutable-ok: DB dict
-    """Read one param from a Mapping or a pydantic object, including pydantic
-    extras (cost_tier / price_per_1000_text_records live there), which the base
-    class ``vars()`` loop never sees."""
-    if isinstance(litellm_params, Mapping):
-        return litellm_params.get(key)
-    return getattr(litellm_params, key, None)
 
 
 def _resolved_cost_tier(raw: object) -> str | None:
@@ -270,29 +262,27 @@ class AzureContentSafetyPromptShieldGuardrail(AzureGuardrailBase, CustomGuardrai
             verbose_proxy_logger.warning("Azure Prompt Shield: No user prompt found")
         return None
 
-    def update_in_memory_litellm_params(self, litellm_params: "LitellmParams | dict") -> None:  # mutable-ok: DB dict
+    def update_in_memory_litellm_params(self, litellm_params: "LitellmParams | Mapping[str, object]") -> None:
         """Apply updated params in place, re-resolving billing and credentials.
 
-        Pricing is read via ``_updated_param`` (the values are pydantic extras, and
-        the immediate PUT sync hands this method the raw DB dict). Pricing and any
-        ``os.environ/`` credential references are validated and resolved BEFORE any
-        state is mutated, so an invalid update leaves the running guardrail
-        untouched and a raw reference never overwrites a resolved credential.
+        Pricing is read via ``updated_litellm_param`` (the values are pydantic
+        extras, and the immediate PUT sync hands this method the raw DB dict).
+        Pricing and any ``os.environ/`` credential references are validated and
+        resolved BEFORE any state is mutated, so an invalid update leaves the
+        running guardrail untouched and a raw reference never overwrites a
+        resolved credential. Both input shapes flow through the base update so
+        the event_hook resync applies to each.
         """
-        cost_tier: Final = _resolved_cost_tier(_updated_param(litellm_params, "cost_tier"))
-        price: Final = _resolved_price(_updated_param(litellm_params, "price_per_1000_text_records"), cost_tier)
+        cost_tier: Final = _resolved_cost_tier(updated_litellm_param(litellm_params, "cost_tier"))
+        price: Final = _resolved_price(updated_litellm_param(litellm_params, "price_per_1000_text_records"), cost_tier)
         resolved_credentials: dict[str, object] = {}  # mutable-ok: staged before mutation
         for cred_key in ("api_key", "api_base"):
-            cred_value = _updated_param(litellm_params, cred_key)
+            cred_value = updated_litellm_param(litellm_params, cred_key)
             if isinstance(cred_value, str) and cred_value.startswith("os.environ/"):
                 resolved_credentials[cred_key] = _resolved_secret_value(cred_value)
-        if isinstance(litellm_params, Mapping):
-            for key, value in litellm_params.items():
-                setattr(self, key, resolved_credentials.get(key, value))
-        else:
-            super().update_in_memory_litellm_params(litellm_params)
-            for cred_key, cred_value in resolved_credentials.items():
-                setattr(self, cred_key, cred_value)
+        super().update_in_memory_litellm_params(litellm_params)
+        for cred_key, cred_value in resolved_credentials.items():
+            setattr(self, cred_key, cred_value)
         self.cost_tier = cost_tier
         self.price_per_1000_text_records = price
 

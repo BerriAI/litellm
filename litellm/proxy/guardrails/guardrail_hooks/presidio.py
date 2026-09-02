@@ -11,7 +11,7 @@
 import asyncio
 import json
 import threading
-from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypedDict, cast
@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
+    GUARDRAIL_MODE_ADAPTER,
     CustomGuardrail,
     log_guardrail_information,
 )
@@ -530,17 +531,17 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return created
 
     @staticmethod
-    def _coerce_analyze_chunk_size(value: int | None) -> int:
+    def _coerce_analyze_chunk_size(value: object) -> int:
         """
         Validate a configured chunk size, falling back to the default.
 
-        Non-positive values would either bypass chunking entirely or degenerate
-        it into per-character splits (silently disabling detection), so they are
-        replaced by the default; values below 4 bytes are floored to 4 and the
-        splitter always emits at least one character per chunk, so the chunked
-        path can never re-enter itself.
+        Non-positive or non-integer values would either bypass chunking entirely
+        or degenerate it into per-character splits (silently disabling
+        detection), so they are replaced by the default; values below 4 bytes
+        are floored to 4 and the splitter always emits at least one character
+        per chunk, so the chunked path can never re-enter itself.
         """
-        if not value or value <= 0:
+        if not isinstance(value, int) or value <= 0:
             return DEFAULT_PRESIDIO_ANALYZE_CHUNK_SIZE_BYTES
         return max(value, 4)
 
@@ -1628,20 +1629,24 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         inputs["texts"] = new_texts
         return inputs
 
-    def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
+    def update_in_memory_litellm_params(self, litellm_params: "LitellmParams | Mapping[str, object]") -> None:
         """
         Update the guardrails litellm params in memory
         """
         super().update_in_memory_litellm_params(litellm_params)
-        if litellm_params.pii_entities_config:
-            self.pii_entities_config = litellm_params.pii_entities_config
-        if litellm_params.presidio_score_thresholds:
-            self.presidio_score_thresholds = litellm_params.presidio_score_thresholds
-        if litellm_params.presidio_entities_deny_list:
-            self.presidio_entities_deny_list = litellm_params.presidio_entities_deny_list
-        if litellm_params.presidio_analyze_chunk_size_bytes is not None:
-            # Same validation as __init__: a non-positive value from a guardrail
-            # update must not silently disable detection via degenerate chunking.
-            self.presidio_analyze_chunk_size_bytes = self._coerce_analyze_chunk_size(
-                litellm_params.presidio_analyze_chunk_size_bytes
-            )
+        self.presidio_analyze_chunk_size_bytes = self._coerce_analyze_chunk_size(self.presidio_analyze_chunk_size_bytes)
+        self._resync_output_stage_event_hook()
+
+    def _resync_output_stage_event_hook(self) -> None:
+        if self.event_hook == GuardrailEventHooks.logging_only:
+            return
+        if self.apply_to_output:
+            self.event_hook = GuardrailEventHooks.post_call
+            return
+        if not self.output_parse_pii:
+            return
+        current_hook: Final = self.event_hook
+        if isinstance(current_hook, str) and current_hook != "post_call":
+            self.event_hook = GUARDRAIL_MODE_ADAPTER.validate_python((current_hook, GuardrailEventHooks.post_call))
+        elif isinstance(current_hook, list) and "post_call" not in current_hook:
+            self.event_hook = GUARDRAIL_MODE_ADAPTER.validate_python((*current_hook, GuardrailEventHooks.post_call))

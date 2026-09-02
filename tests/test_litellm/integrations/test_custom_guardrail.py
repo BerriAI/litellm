@@ -9,6 +9,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
+from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailTracingDetail
 
 
@@ -2237,3 +2238,66 @@ class TestRecordsOwnGuardrailInformation:
         )
 
         assert _guardrail_entries(request_data) == []
+
+
+class TestUpdateInMemoryLitellmParams:
+    """A PUT /guardrails update reaches the live callback through
+    update_in_memory_litellm_params: it must accept both a LitellmParams object
+    and the raw DB dict, and resync self.event_hook (which dispatch reads) from
+    the incoming mode instead of only writing a dead self.mode attribute (LIT-6591)."""
+
+    def _guardrail(self) -> CustomGuardrail:
+        return CustomGuardrail(
+            guardrail_name="update-test",
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+            supported_event_hooks=[GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call],
+        )
+
+    def test_mode_change_resyncs_event_hook_dispatch(self):
+        guardrail = self._guardrail()
+
+        guardrail.update_in_memory_litellm_params(
+            LitellmParams(guardrail="update-test", mode="post_call", default_on=True)
+        )
+
+        assert guardrail.event_hook is GuardrailEventHooks.post_call
+        assert guardrail.should_run_guardrail(data={}, event_type=GuardrailEventHooks.post_call) is True
+        assert guardrail.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is False
+
+    def test_raw_db_dict_copies_params_and_resyncs_event_hook(self):
+        guardrail = self._guardrail()
+
+        guardrail.update_in_memory_litellm_params(
+            {
+                "guardrail": "update-test",
+                "mode": "post_call",
+                "api_base": "https://guardrail.example.com",
+                "default_on": True,
+            }
+        )
+
+        assert guardrail.event_hook is GuardrailEventHooks.post_call
+        assert getattr(guardrail, "api_base", None) == "https://guardrail.example.com"
+        assert guardrail.should_run_guardrail(data={}, event_type=GuardrailEventHooks.post_call) is True
+
+    def test_strict_mode_rejects_unsupported_mode_without_mutating(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_STRICT_GUARDRAIL_MODES", raising=False)
+        guardrail = self._guardrail()
+
+        with pytest.raises(ValueError, match="not in the supported event hooks"):
+            guardrail.update_in_memory_litellm_params(
+                {"mode": "during_call", "api_base": "https://guardrail.example.com"}
+            )
+
+        assert guardrail.event_hook is GuardrailEventHooks.pre_call
+        assert getattr(guardrail, "api_base", None) is None
+
+    def test_non_strict_mode_warns_and_applies_unsupported_mode(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_STRICT_GUARDRAIL_MODES", "false")
+        guardrail = self._guardrail()
+
+        guardrail.update_in_memory_litellm_params({"mode": "during_call", "api_base": "https://guardrail.example.com"})
+
+        assert guardrail.event_hook is GuardrailEventHooks.during_call
+        assert getattr(guardrail, "api_base", None) == "https://guardrail.example.com"

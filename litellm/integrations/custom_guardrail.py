@@ -2,9 +2,11 @@ import contextvars
 import hashlib
 import os
 import secrets
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_args
+
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
@@ -121,6 +123,18 @@ def _strict_guardrail_modes_enabled() -> bool:
     return True if parsed is None else parsed
 
 
+def updated_litellm_param(litellm_params: "LitellmParams | Mapping[str, object]", key: str) -> object:
+    if isinstance(litellm_params, Mapping):
+        return litellm_params.get(key)
+    value: Final[object] = getattr(litellm_params, key, None)
+    return value
+
+
+GUARDRAIL_MODE_ADAPTER: Final[TypeAdapter[GuardrailEventHooks | list[GuardrailEventHooks] | Mode]] = TypeAdapter(
+    GuardrailEventHooks | list[GuardrailEventHooks] | Mode
+)
+
+
 def get_session_id_from_request_data(request_data: dict[str, Any]) -> str | None:
     """Extract session_id from request data (litellm_session_id or metadata)."""
     session_id = request_data.get("litellm_session_id")
@@ -214,18 +228,7 @@ class CustomGuardrail(CustomLogger):
         self.only_scan_new_messages: bool = only_scan_new_messages
 
         if supported_event_hooks:
-            ## validate event_hook is in supported_event_hooks
-            try:
-                self._validate_event_hook(event_hook, supported_event_hooks)
-            except ValueError as validation_error:
-                if _strict_guardrail_modes_enabled():
-                    raise
-                verbose_logger.warning(
-                    "%s. LITELLM_STRICT_GUARDRAIL_MODES=false; continuing "
-                    "with unsupported event_hook. Set the env var to true "
-                    "(default) to enforce validation and fail at startup.",
-                    validation_error,
-                )
+            self._validate_or_warn_event_hook(event_hook, supported_event_hooks)
         super().__init__(**kwargs)
 
     def render_violation_message(self, default: str, context: Mapping[str, object] | None = None) -> str:
@@ -588,12 +591,12 @@ class CustomGuardrail(CustomLogger):
 
     def _validate_event_hook(
         self,
-        event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None,
-        supported_event_hooks: list[GuardrailEventHooks],
+        event_hook: GuardrailEventHooks | Sequence[GuardrailEventHooks] | Mode | None,
+        supported_event_hooks: Sequence[GuardrailEventHooks],
     ) -> None:
         def _validate_event_hook_list_is_in_supported_event_hooks(
-            event_hook: list[GuardrailEventHooks] | list[str],
-            supported_event_hooks: list[GuardrailEventHooks],
+            event_hook: Sequence[GuardrailEventHooks] | Sequence[str],
+            supported_event_hooks: Sequence[GuardrailEventHooks],
         ) -> None:
             for hook in event_hook:
                 if isinstance(hook, str):
@@ -621,6 +624,23 @@ class CustomGuardrail(CustomLogger):
         elif isinstance(event_hook, GuardrailEventHooks):
             if event_hook not in supported_event_hooks:
                 raise ValueError(f"Event hook {event_hook} is not in the supported event hooks {supported_event_hooks}")
+
+    def _validate_or_warn_event_hook(
+        self,
+        event_hook: GuardrailEventHooks | Sequence[GuardrailEventHooks] | Mode | None,
+        supported_event_hooks: Sequence[GuardrailEventHooks],
+    ) -> None:
+        try:
+            self._validate_event_hook(event_hook, supported_event_hooks)
+        except ValueError as validation_error:
+            if _strict_guardrail_modes_enabled():
+                raise
+            verbose_logger.warning(
+                "%s. LITELLM_STRICT_GUARDRAIL_MODES=false; continuing "
+                "with unsupported event_hook. Set the env var to true "
+                "(default) to enforce validation and fail at startup.",
+                validation_error,
+            )
 
     @staticmethod
     def _get_admin_metadata(data: dict) -> dict:
@@ -1271,12 +1291,25 @@ class CustomGuardrail(CustomLogger):
         # Mask the content
         return content_string[:start_index] + mask_string + content_string[end_index:]
 
-    def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
+    def update_in_memory_litellm_params(self, litellm_params: "LitellmParams | Mapping[str, object]") -> None:
         """
-        Update the guardrails litellm params in memory
+        Update the guardrails litellm params in memory, accepting either a
+        LitellmParams object or the raw params mapping stored in the DB, and
+        resync ``event_hook`` when the update carries a new ``mode``. The new
+        mode is validated against ``supported_event_hooks`` before any state
+        is mutated, so a rejected update leaves the guardrail untouched.
         """
-        for key, value in vars(litellm_params).items():
+        updated_params: Final[Mapping[str, object]] = (
+            litellm_params if isinstance(litellm_params, Mapping) else vars(litellm_params)
+        )
+        raw_mode: Final = updated_params.get("mode")
+        new_event_hook: Final = None if raw_mode is None else GUARDRAIL_MODE_ADAPTER.validate_python(raw_mode)
+        if new_event_hook is not None and self.supported_event_hooks:
+            self._validate_or_warn_event_hook(new_event_hook, self.supported_event_hooks)
+        for key, value in updated_params.items():
             setattr(self, key, value)
+        if new_event_hook is not None:
+            self.event_hook = new_event_hook
 
     def get_guardrails_messages_for_call_type(
         self, call_type: CallTypes, data: dict | None = None

@@ -13,6 +13,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     DEFAULT_ADVISORY_MESSAGE,
     CustomGuardrail,
+    updated_litellm_param,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
@@ -304,7 +305,7 @@ class LakeraAIGuardrail(CustomGuardrail):
             breakdown=self.breakdown,
         )
 
-    def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
+    def update_in_memory_litellm_params(self, litellm_params: "LitellmParams | Mapping[str, object]") -> None:
         """
         The base implementation blindly ``setattr``s every field on ``litellm_params``
         (including ``on_flagged``/``advisory_system_message``/``payload``/``breakdown``)
@@ -313,24 +314,18 @@ class LakeraAIGuardrail(CustomGuardrail):
         on_flagged combinations __init__ rejects. Validate the prospective post-update
         state *before* mutating, so a rejected update leaves the live instance untouched
         instead of raising after it's already been corrupted.
-
-        The base setattr also writes ``litellm_params.mode`` onto a new ``self.mode``
-        attribute rather than the ``self.event_hook`` dispatch actually reads
-        (LitellmParams has no field literally named ``event_hook``), so without the
-        explicit sync below a hot reload that changes mode would pass validation but
-        keep dispatching on the stale event_hook.
         """
-        new_event_hook: Final = litellm_params.mode or self.event_hook
-        prospective_payload: Final = litellm_params.payload
-        prospective_breakdown: Final = litellm_params.breakdown
+        raw_on_flagged: Final = updated_litellm_param(litellm_params, "on_flagged")
+        raw_advisory: Final = updated_litellm_param(litellm_params, "advisory_system_message")
+        raw_payload: Final = updated_litellm_param(litellm_params, "payload")
+        raw_breakdown: Final = updated_litellm_param(litellm_params, "breakdown")
         self._validate_advisory_config(
-            on_flagged=litellm_params.on_flagged or self.on_flagged,
-            advisory_system_message=litellm_params.advisory_system_message,
-            payload=self.payload if prospective_payload is None else prospective_payload,
-            breakdown=self.breakdown if prospective_breakdown is None else prospective_breakdown,
+            on_flagged=raw_on_flagged if isinstance(raw_on_flagged, str) and raw_on_flagged else self.on_flagged,
+            advisory_system_message=raw_advisory if isinstance(raw_advisory, str) else None,
+            payload=raw_payload if isinstance(raw_payload, bool) else self.payload,
+            breakdown=raw_breakdown if isinstance(raw_breakdown, bool) else self.breakdown,
         )
         super().update_in_memory_litellm_params(litellm_params=litellm_params)
-        self.event_hook = new_event_hook
 
     def _validate_advisory_config(
         self,

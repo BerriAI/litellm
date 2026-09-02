@@ -179,6 +179,65 @@ def test_update_in_memory_guardrail():
     assert handler.guardrail_id_to_custom_guardrail["123"].event_hook is GuardrailEventHooks.pre_call
 
 
+def test_update_in_memory_guardrail_raw_db_dict_resyncs_event_hook():
+    """PUT /guardrails hands this method the raw DB row, whose litellm_params is a
+    plain dict; the update must still apply and move dispatch to the new mode
+    instead of raising inside vars() and leaving the worker stale (LIT-6591)."""
+    handler = InMemoryGuardrailHandler()
+    handler.guardrail_id_to_custom_guardrail["123"] = CustomGuardrail(
+        guardrail_name="test-guardrail",
+        default_on=True,
+        event_hook=GuardrailEventHooks.pre_call,
+        supported_event_hooks=[GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call],
+    )
+
+    updated_row = {
+        "guardrail_id": "123",
+        "guardrail_name": "test-guardrail",
+        "litellm_params": {"guardrail": "test-guardrail", "mode": "post_call", "default_on": True},
+    }
+    handler.update_in_memory_guardrail("123", updated_row)
+
+    callback = handler.guardrail_id_to_custom_guardrail["123"]
+    assert callback.event_hook is GuardrailEventHooks.post_call
+    assert callback.should_run_guardrail(data={}, event_type=GuardrailEventHooks.post_call) is True
+    assert callback.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is False
+    assert handler.IN_MEMORY_GUARDRAILS["123"] == updated_row
+
+
+def test_update_in_memory_guardrail_failed_callback_update_stays_visible_to_poller(monkeypatch):
+    """When the callback update raises, IN_MEMORY_GUARDRAILS must keep the old row:
+    storing the new row first would make the per-worker DB poller see no diff and
+    never re-initialize, leaving the PUT-serving worker stale until restart."""
+    monkeypatch.delenv("LITELLM_STRICT_GUARDRAIL_MODES", raising=False)
+    handler = InMemoryGuardrailHandler()
+    stale_row = Guardrail(
+        guardrail_id="123",
+        guardrail_name="test-guardrail",
+        litellm_params=LitellmParams(guardrail="test-guardrail", mode="pre_call", default_on=True),
+    )
+    handler.IN_MEMORY_GUARDRAILS["123"] = stale_row
+    handler.guardrail_id_to_custom_guardrail["123"] = CustomGuardrail(
+        guardrail_name="test-guardrail",
+        default_on=True,
+        event_hook=GuardrailEventHooks.pre_call,
+        supported_event_hooks=[GuardrailEventHooks.pre_call],
+    )
+
+    with pytest.raises(ValueError, match="not in the supported event hooks"):
+        handler.update_in_memory_guardrail(
+            "123",
+            {
+                "guardrail_id": "123",
+                "guardrail_name": "test-guardrail",
+                "litellm_params": {"guardrail": "test-guardrail", "mode": "post_call", "default_on": True},
+            },
+        )
+
+    assert handler.IN_MEMORY_GUARDRAILS["123"] == stale_row
+    assert handler.guardrail_id_to_custom_guardrail["123"].event_hook is GuardrailEventHooks.pre_call
+
+
 def _make_guardrail(guardrail_id: str, name: str = "g") -> Guardrail:
     return Guardrail(
         guardrail_id=guardrail_id,

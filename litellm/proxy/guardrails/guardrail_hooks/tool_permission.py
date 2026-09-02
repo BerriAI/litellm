@@ -159,7 +159,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         self._compiled_rule_targets = compiled_targets
         self._compiled_rule_patterns = compiled_patterns
 
-    def update_in_memory_litellm_params(self, litellm_params: LitellmParams | dict) -> None:
+    def update_in_memory_litellm_params(self, litellm_params: "LitellmParams | Mapping[str, object]") -> None:
         """Apply updated params in place, rebuilding the compiled rule state.
 
         The base implementation only ``setattr``s raw fields, which would leave
@@ -169,17 +169,11 @@ class ToolPermissionGuardrail(CustomGuardrail):
         immediate in-memory sync take effect, mirroring the PresidioGuardrail
         override of this method.
         """
-        # ``litellm_params`` may arrive as the raw DB dict (the proxy ``cast()``s
-        # it to ``LitellmParams`` without converting), so handle both shapes. The
-        # base ``setattr`` loop is model-only, so apply the dict case here.
         previous_rules: Final = self.rules
-        if isinstance(litellm_params, dict):
-            params = litellm_params
-            for key, value in params.items():
-                setattr(self, key, value)
-        else:
-            super().update_in_memory_litellm_params(litellm_params)
-            params = vars(litellm_params)
+        params: Final[Mapping[str, object]] = (
+            litellm_params if isinstance(litellm_params, Mapping) else vars(litellm_params)
+        )
+        super().update_in_memory_litellm_params(litellm_params)
 
         # The generic update above sets ``self.rules`` from the incoming value
         # (None on a partial update that omits rules), but never rebuilds the
@@ -187,7 +181,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         # the previous ruleset so a partial update doesn't silently wipe it. An
         # explicit empty list still clears the rules.
         rules: Final = params.get("rules")
-        if rules is not None:
+        if isinstance(rules, list):
             try:
                 self._load_rules(rules)
             except Exception:
