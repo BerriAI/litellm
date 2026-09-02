@@ -64,12 +64,15 @@ def _leave_invalid_reindex_leftover(schema: str, table: str, index: str) -> None
     _interrupt_concurrent_build(schema, table, f'REINDEX INDEX CONCURRENTLY "{schema}"."{index}"')
 
 
-def _scratch_schema(monkeypatch: pytest.MonkeyPatch, *table_definitions: str) -> Iterator[str]:
+@pytest.fixture
+def scratch_schema(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
     schema: Final = f"invalid_index_{uuid.uuid4().hex[:8]}"
     with psycopg.connect(_base_url(), autocommit=True) as conn:
         conn.execute(f'CREATE SCHEMA "{schema}"')
-        for definition in table_definitions:
-            conn.execute(f'CREATE TABLE "{schema}".{definition}')
+        conn.execute(
+            f'CREATE TABLE "{schema}"."{HEALTH_TABLE}" (model_id TEXT, model_name TEXT, checked_at TIMESTAMPTZ)'
+        )
+        conn.execute(f'CREATE TABLE "{schema}"."{LOOKALIKE_TABLE}" (id TEXT)')
 
     monkeypatch.delenv("DIRECT_URL", raising=False)
     monkeypatch.setenv("DATABASE_URL", f"{_base_url()}?schema={schema}")
@@ -80,17 +83,22 @@ def _scratch_schema(monkeypatch: pytest.MonkeyPatch, *table_definitions: str) ->
 
 
 @pytest.fixture
-def scratch_schema(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    yield from _scratch_schema(
-        monkeypatch,
-        f'"{HEALTH_TABLE}" (model_id TEXT, model_name TEXT, checked_at TIMESTAMPTZ)',
-        f'"{LOOKALIKE_TABLE}" (id TEXT)',
-    )
+def fresh_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    """A brand-new database, what a first deploy sees. A scratch schema would
+    not do: the migrations guard on pg_constraint by name across every schema,
+    so a LiteLLM schema already pushed into public makes them skip and then
+    fail, which is exactly what CI's database looks like."""
+    admin_url: Final = _base_url()
+    name: Final = f"invalid_index_{uuid.uuid4().hex[:8]}"
+    with psycopg.connect(admin_url, autocommit=True) as conn:
+        conn.execute(f'CREATE DATABASE "{name}"')
 
+    monkeypatch.delenv("DIRECT_URL", raising=False)
+    monkeypatch.setenv("DATABASE_URL", f"{admin_url.rsplit('/', 1)[0]}/{name}")
+    yield "public"
 
-@pytest.fixture
-def empty_schema(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    yield from _scratch_schema(monkeypatch)
+    with psycopg.connect(admin_url, autocommit=True) as conn:
+        conn.execute(f'DROP DATABASE "{name}" WITH (FORCE)')
 
 
 @requires_db
@@ -227,12 +235,11 @@ def test_repair_survives_an_unreachable_database(monkeypatch: pytest.MonkeyPatch
 
 
 @requires_db
-def test_repair_runs_over_direct_url_when_set(scratch_schema: str) -> None:
+def test_repair_connects_over_direct_url_but_looks_in_the_schema_database_url_names(scratch_schema: str) -> None:
     _leave_invalid_index(scratch_schema, HEALTH_TABLE, HEALTH_INDEX, HEALTH_INDEX_COLUMNS)
-    direct_url: Final = os.environ["DATABASE_URL"]
     with pytest.MonkeyPatch.context() as env:
-        env.setenv("DIRECT_URL", direct_url)
-        env.setenv("DATABASE_URL", "postgresql://u:p@127.0.0.1:9/x?schema=whatever")
+        env.setenv("DIRECT_URL", f"{_base_url()}?schema=public")
+        env.setenv("DATABASE_URL", f"postgresql://u:p@127.0.0.1:9/x?schema={scratch_schema}")
         assert ProxyExtrasDBManager.repair_invalid_indexes() is True
 
     assert _index_validity(scratch_schema) == {HEALTH_INDEX: True}
@@ -247,11 +254,11 @@ def _invalidate_deployed_index(schema: str) -> None:
 @requires_db
 @pytest.mark.timeout(300)
 @pytest.mark.parametrize("use_v2_resolver", [True, False])
-def test_setup_database_repairs_the_index_after_a_recovered_deploy(empty_schema: str, use_v2_resolver: bool) -> None:
+def test_setup_database_repairs_the_index_after_a_recovered_deploy(fresh_database: str, use_v2_resolver: bool) -> None:
     assert ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=use_v2_resolver) is True
-    _invalidate_deployed_index(empty_schema)
-    assert _index_validity(empty_schema)[HEALTH_INDEX] is False
+    _invalidate_deployed_index(fresh_database)
+    assert _index_validity(fresh_database)[HEALTH_INDEX] is False
 
     assert ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=use_v2_resolver) is True
 
-    assert _index_validity(empty_schema)[HEALTH_INDEX] is True
+    assert _index_validity(fresh_database)[HEALTH_INDEX] is True
