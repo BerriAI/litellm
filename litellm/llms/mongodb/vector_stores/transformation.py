@@ -128,6 +128,12 @@ class _MongoDBSearchParams(BaseModel):
         return self.mongodb_collection
 
 
+_MONGODB_PARAM_PREFIX: Final = "mongodb_"
+_KNOWN_MONGODB_PARAMS: Final = frozenset(
+    name for name in _MongoDBSearchParams.model_fields if name.startswith(_MONGODB_PARAM_PREFIX)
+)
+
+
 class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
     def __init__(
         self,
@@ -141,6 +147,22 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
         self.aembedding_fn = aembedding_fn if aembedding_fn is not None else litellm.aembedding
         self.sync_client_factory = sync_client_factory if sync_client_factory is not None else get_sync_client
         self.async_client_factory = async_client_factory if async_client_factory is not None else get_async_client
+
+    @staticmethod
+    def _reject_unknown_params(litellm_params: Mapping[str, object]) -> None:
+        """The params model ignores unrelated keys because litellm_params carries plenty of them,
+        which would otherwise turn a mistyped mongodb_collection into 'mongodb_collection is
+        required' pointing at a key the reader can see they have set."""
+        unknown: Final = sorted(
+            key
+            for key in litellm_params
+            if key.startswith(_MONGODB_PARAM_PREFIX) and key not in _KNOWN_MONGODB_PARAMS
+        )
+        if unknown:
+            raise config_error(
+                f"Unrecognised MongoDB vector store parameter(s): {', '.join(unknown)}. "
+                f"Supported: {', '.join(sorted(_KNOWN_MONGODB_PARAMS))}."
+            )
 
     @staticmethod
     def _query_text(query: str | Sequence[str]) -> str:
@@ -219,20 +241,22 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
         ]
 
     @staticmethod
-    def _field_value(document: Mapping[str, object], dotted_path: str) -> str:
+    def _field_value(document: Mapping[str, object], dotted_path: str) -> str | None:
+        """None means the path is absent from the document, which is what separates a
+        mistyped mongodb_text_field from a document whose text is genuinely empty."""
         current: object = document
         for segment in dotted_path.split("."):
-            if not isinstance(current, Mapping):
-                return ""
-            current = current.get(segment)
-        return "" if current is None else str(current)
+            if not isinstance(current, Mapping) or segment not in current:
+                return None
+            current = current[segment]
+        return None if current is None else str(current)
 
     @classmethod
     def _to_result(cls, document: Mapping[str, object], text_field: str) -> VectorStoreSearchResult:
         document_id: Final = document.get("_id")
         identifier: Final = None if document_id is None else str(document_id)
         content: Final = [  # mutable-ok: VectorStoreSearchResult declares a list of content parts
-            VectorStoreResultContent(text=cls._field_value(document, text_field), type="text")
+            VectorStoreResultContent(text=cls._field_value(document, text_field) or "", type="text")
         ]
         raw_score: Final = document.get(SCORE_FIELD_NAME)
         return VectorStoreSearchResult(
@@ -241,6 +265,20 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
             file_id=identifier,
             filename=identifier,
         )
+
+    @classmethod
+    def _raise_for_missing_text_field(
+        cls, documents: Sequence[Mapping[str, object]], text_field: str, database: str, collection: str
+    ) -> None:
+        """Atlas happily matches vectors in documents that carry no text at all, so a mistyped
+        mongodb_text_field returns well-scored results whose content is empty and feeds an empty
+        context to the model. Every matched document lacking the field is the misconfiguration."""
+        if documents and all(cls._field_value(document, text_field) is None for document in documents):
+            raise config_error(
+                f"None of the {len(documents)} matched documents in '{database}.{collection}' has a "
+                f"'{text_field}' field, so every result would carry empty text. Set mongodb_text_field "
+                "to the field holding the readable text; it accepts a dotted path such as metadata.body."
+            )
 
     @classmethod
     def _to_response(
@@ -284,6 +322,7 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
         litellm_params: Mapping[str, object],
         timeout: float | httpx.Timeout | None = None,
     ) -> VectorStoreSearchResponse:
+        self._reject_unknown_params(litellm_params)
         params: Final = _MongoDBSearchParams.model_validate(litellm_params)
         query_text: Final = self._query_text(query)
         key: Final = self._client_key(params, timeout)
@@ -315,6 +354,7 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
                     e, index_name=vector_store_id, database=database, collection=collection
                 ) from e
             self._raise_for_unusable_index(catalogue, vector_store_id, database, collection)
+        self._raise_for_missing_text_field(documents, params.text_field, database, collection)
         return self._to_response(documents, query_text, params.text_field)
 
     async def aexecute_search_vector_store_request(
@@ -326,6 +366,7 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
         litellm_params: Mapping[str, object],
         timeout: float | httpx.Timeout | None = None,
     ) -> VectorStoreSearchResponse:
+        self._reject_unknown_params(litellm_params)
         params: Final = _MongoDBSearchParams.model_validate(litellm_params)
         query_text: Final = self._query_text(query)
         key: Final = self._client_key(params, timeout)
@@ -359,6 +400,7 @@ class MongoDBVectorStoreConfig(BaseDirectVectorStoreConfig):
                     e, index_name=vector_store_id, database=database, collection=collection
                 ) from e
             self._raise_for_unusable_index(catalogue, vector_store_id, database, collection)
+        self._raise_for_missing_text_field(documents, params.text_field, database, collection)
         return self._to_response(documents, query_text, params.text_field)
 
     def transform_create_vector_store_request(

@@ -275,12 +275,30 @@ def test_response_reads_a_dotted_text_field_path():
     assert response["data"][0]["content"][0]["text"] == "nested text"
 
 
-def test_response_tolerates_a_document_missing_the_text_field():
-    config, _, _ = _config(documents=[{"_id": 1, "score": 0.5}])
+def test_response_tolerates_a_sparse_document_missing_the_text_field():
+    config, _, _ = _config(documents=[{"_id": 1, "score": 0.5}, {"_id": 2, "text": "has text", "score": 0.4}])
 
     response = _search(config)
 
     assert response["data"][0]["content"][0]["text"] == ""
+    assert response["data"][1]["content"][0]["text"] == "has text"
+
+
+def test_a_present_but_empty_text_field_is_not_treated_as_a_misconfiguration():
+    config, _, _ = _config(documents=[{"_id": 1, "text": "", "score": 0.5}])
+
+    response = _search(config)
+
+    assert response["data"][0]["content"][0]["text"] == ""
+
+
+def test_matches_that_all_lack_the_text_field_name_the_setting_to_fix():
+    """Atlas matches on the vector, so a mistyped mongodb_text_field returns confidently
+    scored results whose content is empty and hands the model an empty context."""
+    config, _, _ = _config(documents=[{"_id": 1, "score": 0.9}, {"_id": 2, "score": 0.8}])
+
+    with pytest.raises(BadRequestError, match="mongodb_text_field"):
+        _search(config)
 
 
 def test_response_tolerates_a_document_missing_a_score():
@@ -930,3 +948,38 @@ def test_a_rejected_search_that_is_not_an_auth_failure_keeps_the_generic_message
     translated = translate_mongo_error(error, index_name="idx", database="db", collection="coll")
 
     assert "mongodb_connection_string" not in str(translated)
+
+
+class TestUnrecognisedParameters:
+    """litellm_params carries plenty of keys this provider does not own, so the params model has
+    to ignore extras. That turns a mistyped mongodb_collection into 'mongodb_collection is
+    required', pointing the reader at a key they can see they have set."""
+
+    def test_a_mistyped_parameter_is_named(self):
+        config, _, _ = _config()
+
+        with pytest.raises(BadRequestError, match="mongodb_collectoin"):
+            _search(config, litellm_params={"mongodb_collectoin": "embedded_movies"})
+
+    def test_the_supported_names_are_listed(self):
+        config, _, _ = _config()
+
+        with pytest.raises(BadRequestError, match="mongodb_connection_string"):
+            _search(config, litellm_params={"mongodb_databse": "sample_mflix"})
+
+    def test_unrelated_litellm_params_are_still_ignored(self):
+        config, _, _ = _config(documents=[{"_id": 1, "text": "hit", "score": 0.9}])
+
+        response = _search(
+            config,
+            litellm_params={"use_litellm_proxy": False, "use_in_pass_through": False, "vector_store_id": "x"},
+        )
+
+        assert len(response["data"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_the_async_path_rejects_them_too(self):
+        config, _, _ = _async_config()
+
+        with pytest.raises(BadRequestError, match="mongodb_collectoin"):
+            await _asearch(config, litellm_params={"mongodb_collectoin": "embedded_movies"})
