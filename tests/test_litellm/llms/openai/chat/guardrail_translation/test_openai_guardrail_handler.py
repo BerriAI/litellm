@@ -1559,3 +1559,87 @@ class TestScanOnlyToolResults:
         assert data["messages"][3]["content"] == "page says [BLOCKED] here"
         assert data["messages"][3]["tool_call_id"] == "call_1"
         assert data["messages"][4]["content"] == "and then?"
+
+
+class TestBuildBlockSseChunks:
+    """build_block_sse_chunks turns a streaming ModifyResponseException into 200 SSE chunks"""
+
+    def _exc(self, original_response=None):
+        from litellm.exceptions import ModifyResponseException
+
+        return ModifyResponseException(
+            message="Blocked by policy.",
+            model="gpt-5.4-mini",
+            request_data={},
+            guardrail_name="test",
+            original_response=original_response,
+        )
+
+    def _payloads(self, chunks):
+        return [json.loads(chunk.decode().removeprefix("data: ").strip()) for chunk in chunks]
+
+    def test_standalone_block_uses_fresh_identity_and_zero_usage(self):
+        handler = OpenAIChatCompletionsHandler()
+        first, final = self._payloads(handler.build_block_sse_chunks(self._exc(), stream_started=False))
+        assert first["id"].startswith("chatcmpl-")
+        assert first["model"] == "gpt-5.4-mini"
+        assert first["choices"][0]["delta"] == {"role": "assistant", "content": "Blocked by policy."}
+        assert first["choices"][0]["finish_reason"] is None
+        assert final["choices"][0]["delta"] == {}
+        assert final["choices"][0]["finish_reason"] == "content_filter"
+        assert final["usage"] == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+    def test_continuation_reuses_stream_identity_and_real_usage(self):
+        handler = OpenAIChatCompletionsHandler()
+        yielded = [
+            {"id": "chatcmpl-live", "created": 1724900000, "model": "gpt-5.4-mini-2026-01-01"},
+        ]
+        original = yielded + [
+            {"id": "chatcmpl-live", "usage": {"prompt_tokens": 11, "completion_tokens": 5}},
+        ]
+        first, final = self._payloads(
+            handler.build_block_sse_chunks(
+                self._exc(original_response=original), stream_started=True, responses_so_far=yielded
+            )
+        )
+        assert (first["id"], first["created"], first["model"]) == (
+            "chatcmpl-live",
+            1724900000,
+            "gpt-5.4-mini-2026-01-01",
+        )
+        assert first["choices"][0]["delta"] == {"content": "Blocked by policy."}
+        assert final["id"] == "chatcmpl-live"
+        assert final["usage"] == {"prompt_tokens": 11, "completion_tokens": 5, "total_tokens": 16}
+
+
+class TestCheckStreamingHasEnded:
+    """_check_streaming_has_ended lets end_of_stream_only withhold the finish chunk until moderation"""
+
+    def test_empty_and_content_only_chunks_are_not_ended(self):
+        handler = OpenAIChatCompletionsHandler()
+        assert handler._check_streaming_has_ended([]) is False
+        content_only = [
+            {"id": "chatcmpl-live", "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": None}]},
+            {"id": "chatcmpl-live", "choices": []},
+            {"id": "chatcmpl-live", "usage": {"prompt_tokens": 1, "completion_tokens": 1}},
+        ]
+        assert handler._check_streaming_has_ended(content_only) is False
+
+    def test_dict_finish_chunk_marks_stream_ended(self):
+        handler = OpenAIChatCompletionsHandler()
+        chunks = [
+            {"id": "chatcmpl-live", "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": None}]},
+            {"id": "chatcmpl-live", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        ]
+        assert handler._check_streaming_has_ended(chunks) is True
+
+    def test_object_finish_chunk_marks_stream_ended(self):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        handler = OpenAIChatCompletionsHandler()
+        chunks = [
+            ModelResponseStream(
+                choices=[StreamingChoices(index=0, delta=Delta(content=None), finish_reason="stop")]
+            )
+        ]
+        assert handler._check_streaming_has_ended(chunks) is True

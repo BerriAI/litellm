@@ -24,25 +24,10 @@ from junit_properties import (
 )
 
 
-class FakeMarker:
-    def __init__(self, name: str, *args: object) -> None:
-        self.name = name
-        self.args = args
-
-
-class FakeItem:
-    """The three attributes junit_properties reads off a pytest Item."""
-
-    def __init__(
-        self, nodeid: str, location: tuple[str, int | None, str], markers: tuple[FakeMarker, ...] = ()
-    ) -> None:
-        self.nodeid = nodeid
-        self.location = location
-        self.user_properties: list[tuple[str, str]] = []
-        self._markers = markers
-
-    def iter_markers(self, name: str):
-        return (marker for marker in self._markers if marker.name == name)
+def collected_item(request: pytest.FixtureRequest, name: str) -> pytest.Item:
+    """The Item pytest collected for test ``name`` in this file: the real nodeid,
+    location and marker machinery the collection hook reads, as pytest built it."""
+    return next(item for item in request.session.items if item.path == request.path and item.name == name)
 
 
 def repo_root() -> Path | None:
@@ -109,24 +94,24 @@ class TestSourceFromLocation:
 
 
 class TestResultProperties:
-    def test_every_test_carries_package_covers_and_source(self) -> None:
-        item = FakeItem(
-            "logging/test_x.py::TestFoo::test_bar",
-            ("logging/test_x.py", 40, "TestFoo.test_bar"),
-            (FakeMarker("covers", "LOG-1", "LOG-2"),),
-        )
-        assert result_properties(item) == (  # pyright: ignore[reportArgumentType]  # duck-typed Item double
-            ("package", "logging"),
+    def test_every_test_carries_package_covers_and_source(self, request: pytest.FixtureRequest) -> None:
+        """Read off this test's own collected Item, so the nodeid and location are
+        whatever pytest reports for the launch shape in use, and the marker is added
+        at run time so the coverage registry's collect-only pass never sees it."""
+        test = type(self).test_every_test_carries_package_covers_and_source
+        request.applymarker(pytest.mark.covers("LOG-1", "LOG-2"))
+        assert result_properties(collected_item(request, test.__name__)) == (
+            ("package", "root"),
             ("covers", "LOG-1,LOG-2"),
-            ("source", "tests/e2e/logging/test_x.py:41"),
+            ("source", f"tests/e2e/test_junit_properties.py:{test.__code__.co_firstlineno}"),
         )
 
-    def test_attach_is_idempotent(self) -> None:
+    def test_attach_is_idempotent(self, request: pytest.FixtureRequest) -> None:
         """Collection can run the hook more than once; a second pass must not
         double the <property> entries in the report."""
-        item = FakeItem("logging/test_x.py::test_bar", ("logging/test_x.py", 40, "test_bar"))
-        attach_result_properties(item)  # pyright: ignore[reportArgumentType]  # duck-typed Item double
-        attach_result_properties(item)  # pyright: ignore[reportArgumentType]  # duck-typed Item double
+        item = collected_item(request, type(self).test_attach_is_idempotent.__name__)
+        attach_result_properties(item)
+        attach_result_properties(item)
         assert [name for name, _ in item.user_properties] == ["package", "covers", "source"]
 
 

@@ -43,6 +43,8 @@ class AgentCredentialField(BaseModel):
     options: list[str] | None = None
     default_value: str | None = None
     include_in_litellm_params: bool | None = None
+    validation_pattern: str | None = None
+    validation_message: str | None = None
 
 
 class AgentCreateInfo(BaseModel):

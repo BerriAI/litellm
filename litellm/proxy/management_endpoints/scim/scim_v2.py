@@ -29,6 +29,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.models.user import SCIMPlaceholder
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -1858,6 +1859,89 @@ async def delete_user(
         await _table(UserRepository(prisma_client)).delete(where={"user_id": user_id})
 
         return Response(status_code=204)
+    except Exception as e:
+        raise handle_exception_on_proxy(e)
+
+
+@scim_router.get(
+    "/placeholders",
+    response_model=tuple[SCIMPlaceholder, ...],
+    dependencies=(Depends(user_api_key_auth),),
+)
+async def list_placeholders() -> tuple[SCIMPlaceholder, ...]:
+    """
+    List user rows whose id is another account's SSO identity or email.
+
+    An earlier release provisioned a group member it could not match as a user keyed
+    by the raw member value, and that row now shadows the account the value really
+    names, so every push of that member is refused. This lists those rows so an
+    operator can fold each one into the account it shadows with
+    ``POST /scim/v2/placeholders/{user_id}/merge``. A row that has an SSO identity of
+    its own or owns virtual keys is left out: someone uses that account.
+    """
+    try:
+        prisma_client: Final = await _get_prisma_client_or_raise_exception()
+        async with prisma_client.tx() as tx:
+            return await UserRepository(prisma_client).find_shadowing_placeholders(tx)
+    except Exception as e:
+        raise handle_exception_on_proxy(e)
+
+
+def _placeholder_rejection(placeholder: LiteLLM_UserTable, resolved: tuple[str, ...], key_count: int) -> str | None:
+    if placeholder.sso_user_id is not None:
+        return f"User '{placeholder.user_id}' has an SSO identity of its own, so it is an account someone signs in to"
+    if key_count:
+        return f"User '{placeholder.user_id}' owns {key_count} virtual keys. Move or delete them before merging it"
+    if not resolved:
+        return f"User '{placeholder.user_id}' shadows no account: no other user has that id as SSO identity or email"
+    if len(resolved) > 1:
+        return (
+            f"User '{placeholder.user_id}' names {len(resolved)} accounts ({', '.join(resolved)}). Resolve that first"
+        )
+    return None
+
+
+@scim_router.post(
+    "/placeholders/{user_id}/merge",
+    response_model=SCIMPlaceholderMergeResult,
+    dependencies=(Depends(user_api_key_auth),),
+)
+async def merge_placeholder(
+    user_id: str = Path(..., title="User ID"),
+) -> SCIMPlaceholderMergeResult:
+    """
+    Fold a placeholder user into the one account its id names by SSO identity or email.
+
+    The account is added to every team the placeholder is on, then the placeholder is
+    deleted the way ``DELETE /scim/v2/Users/{id}`` deletes a user, so the next group
+    push resolves the member value to the real account. Refused with 409 when the row
+    has an SSO identity of its own, owns virtual keys, or names no account or several.
+    """
+    try:
+        prisma_client: Final = await _get_prisma_client_or_raise_exception()
+        placeholder: Final = await _check_user_exists(user_id)
+        resolved: Final = tuple(
+            other for other in await _users_named_by_member_value(user_id, prisma_client, take=None) if other != user_id
+        )
+        owned_keys: Final[_UserIdWhere] = {"user_id": user_id}
+        keys: Final = await _table(VerificationTokenRepository(prisma_client)).find_many(where=owned_keys)
+        rejection: Final = _placeholder_rejection(placeholder, resolved, len(keys))
+        if rejection is not None:
+            detail: Final[_ScimErrorDetail] = {"error": rejection}
+            raise HTTPException(status_code=409, detail=detail)
+
+        target_user_id: Final = resolved[0]
+        team_ids: Final = tuple(placeholder.teams)
+        for team_id in team_ids:
+            await _add_user_to_team(user_id=target_user_id, team_id=team_id)
+        await delete_user(user_id=user_id)
+        await _recompute_scim_member_roles(prisma_client, (target_user_id,))
+        verbose_proxy_logger.info(
+            "SCIM: merged placeholder user '%s' into '%s', moving teams %s", user_id, target_user_id, team_ids
+        )
+        return SCIMPlaceholderMergeResult(
+            placeholder_user_id=user_id, merged_into_user_id=target_user_id, team_ids=team_ids
+        )
     except Exception as e:
         raise handle_exception_on_proxy(e)
 
