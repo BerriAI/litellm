@@ -8,6 +8,7 @@ Here are the core requirements for any PR submitted to LiteLLM:
 
 - [ ] **Sign the Contributor License Agreement (CLA)** - [see details](#contributor-license-agreement-cla)
 - [ ] **Keep scope isolated** - Your changes should address 1 specific problem at a time
+- [ ] **Prove it works end to end** - Paste the commands you ran against a live proxy and their output in the PR - [see details](#proving-your-change-works-end-to-end)
 
 #### Proxy (Backend) PRs
 
@@ -246,6 +247,38 @@ If `make test-unit` fails:
 - **Keep PRs focused**: One feature/fix per PR
 - **Test edge cases**: Don't just test the happy path
 - **Update documentation**: If you change APIs, update docs
+
+## Proving Your Change Works End to End
+
+Tests are a hard requirement, and they are not the proof that your change works. Reviewers need to see the change behave correctly in the product, so every PR's "Screenshots / Proof of Fix" section must show a real run: the exact commands you sent to a live proxy and the output that came back, against real provider APIs rather than mocks. `pytest` output does not count as proof, because a passing test only shows that the code does what its own mocks were told to expect.
+
+What a good proof looks like:
+
+1. Boot the proxy locally with your branch and a config containing the model you are touching: `uv run litellm --config your_config.yaml --detailed_debug`
+2. Send the request an actual user would send, with `curl`, and paste both the command and the response. Include the response headers when cost or routing is involved, since `x-litellm-response-cost` is what a user sees
+3. For a bug fix, do that twice: once at the commit you branched from to show the broken behavior, once on your branch to show the fix. Name both commit hashes
+4. If your change can be reached from more than one endpoint (`/v1/chat/completions`, `/v1/responses`, `/v1/messages`), show each one. A fix that only lands on the endpoint you tested is a common review finding
+5. If it can stream, show the streaming run too. Usage and cost are assembled on a different path when `"stream": true`
+6. For UI changes, include before and after screenshots and say which page you were on
+
+```bash
+curl -sD - http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "your-model", "messages": [{"role": "user", "content": "hi"}]}'
+```
+
+Spend and usage claims should be checked against the provider's own numbers where the provider reports them, so the reviewer can see that the gateway agrees with the invoice rather than merely being self-consistent.
+
+## Contributing an LLM Provider Integration
+
+Provider work (a new provider, a new parameter, a new usage or cost field) is the most common kind of contribution and the one where PRs most often get reworked. Two things prevent that.
+
+**Find the existing machinery before you add plumbing.** LiteLLM already has generic paths for moving data between the endpoints, the provider transformations, and cost tracking, and a hand-rolled second path for the same data is the single most common reason a provider PR gets rewritten before merge. Start from [`ARCHITECTURE.md`](ARCHITECTURE.md) for where the layers live, then read [`adr/`](adr/README.md) for why those layers are shaped the way they are. [ADR 0001](adr/0001-provider-usage-extras-and-built-in-tool-cost.md) covers how provider-specific usage fields reach cost tracking, which is where new billing work usually belongs. If you cannot find a mechanism for what you need, say so in the PR or ask in [#pr-review on Slack](https://join.slack.com/t/litellmossslack/shared_invite/zt-3o7nkuyfr-p_kbNJj8taRfXGgQI1~YyA) before building one.
+
+**Do not change what a caller sees to make internals easier.** Each endpoint promises the schema of the API it emulates, so a `/v1/responses` caller keeps getting `input_tokens` and a `/v1/chat/completions` caller keeps getting `prompt_tokens`, whatever the provider sent on the wire and whatever cost tracking needs internally. Reshaping a public response to feed an internal consumer is a breaking change for every user of that endpoint.
+
+If your change is itself an architectural decision, for example a new cross-cutting mechanism or a deliberate deviation from a provider's API shape, add an ADR alongside the code using [`adr/0000-template.md`](adr/0000-template.md).
 
 ## Building and Running Locally
 
