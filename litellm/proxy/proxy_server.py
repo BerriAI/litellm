@@ -6644,6 +6644,12 @@ class ProxyConfig:
         if "max_batch_file_size_mb" not in self._yaml_general_settings_keys:
             general_settings["max_batch_file_size_mb"] = _general_settings.get("max_batch_file_size_mb")
 
+        if "max_file_size_mb" not in self._yaml_general_settings_keys:
+            general_settings["max_file_size_mb"] = _general_settings.get("max_file_size_mb")
+
+        if "blocked_file_extensions" not in self._yaml_general_settings_keys:
+            general_settings["blocked_file_extensions"] = _general_settings.get("blocked_file_extensions")
+
         ## ALERTING ARGS ##
         if "alerting_args" in _general_settings:
             general_settings["alerting_args"] = _general_settings["alerting_args"]
@@ -16412,6 +16418,8 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "global_max_parallel_requests": "Integer",
         "max_request_size_mb": "Integer",
         "max_batch_file_size_mb": "Integer",
+        "max_file_size_mb": "Integer",
+        "blocked_file_extensions": "List",
         "max_response_size_mb": "Integer",
         "proxy_config_reload_interval_seconds": "Integer",
         "pass_through_endpoints": "PydanticModel",
