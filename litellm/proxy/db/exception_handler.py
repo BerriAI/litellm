@@ -1,4 +1,4 @@
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from typing import Any, Final, TypeVar
 
 from litellm._logging import verbose_proxy_logger
@@ -9,9 +9,31 @@ from litellm.proxy._types import (
 )
 from litellm.secret_managers.main import str_to_bool
 
-# Bounds the __cause__/__context__ walk in is_database_service_unavailable_error_in_chain.
+# Bounds the __cause__/__context__ walk in find_database_service_unavailable_error_in_chain.
 # Real exception chains are a few links deep; the cap also makes the walk cycle-safe.
 _MAX_EXCEPTION_CHAIN_DEPTH: Final = 20
+
+_TRANSIENT_DB_UNAVAILABLE_MESSAGE: Final = (
+    "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."
+)
+
+
+def _exception_chain(e: BaseException) -> Iterator[BaseException]:
+    current = e  # rebind-ok: advances one link per iteration of the bounded walk
+    for _ in range(_MAX_EXCEPTION_CHAIN_DEPTH):
+        yield current
+        following = current.__cause__ or current.__context__
+        if following is None:
+            return
+        current = following
+
+
+def _database_service_unavailable_errors(e: BaseException) -> tuple[Exception, ...]:
+    return tuple(
+        link
+        for link in _exception_chain(e)
+        if isinstance(link, Exception) and PrismaDBExceptionHandler.is_database_service_unavailable_error(link)
+    )
 
 
 def _exception_types(*candidates: object) -> tuple[type[BaseException], ...]:
@@ -280,6 +302,51 @@ class PrismaDBExceptionHandler:
         )
 
     @staticmethod
+    def is_permanent_database_fault(e: Exception) -> bool:
+        """True for a service-unavailable failure that will not clear on its
+        own: an engine-layer ``PrismaError`` (missing or version-skewed engine
+        binary, engine error status, misused transaction) that is neither the
+        transient ``EngineConnectionError`` nor a reconnectable transport failure.
+
+        Picks only the wording of a 503, never whether one is sent;
+        ``is_database_service_unavailable_error`` stays the status gate.
+        """
+        if PrismaDBExceptionHandler.is_database_connection_error(e):
+            return False
+        if PrismaDBExceptionHandler.is_database_transport_error(e):
+            return False
+        return PrismaDBExceptionHandler.is_database_infrastructure_error(e)
+
+    @staticmethod
+    def database_unavailable_message(e: Exception) -> str:
+        """The 503 detail for a service-unavailable database failure: retry
+        guidance for a transient outage, a pointer at the deployment for a
+        fault that retrying cannot fix. A permanent fault anywhere in the
+        exception chain wins, since the transport error that surfaced it is
+        not what blocks recovery."""
+        fault: Final = PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(e) or e
+        if not PrismaDBExceptionHandler.is_permanent_database_fault(fault):
+            return _TRANSIENT_DB_UNAVAILABLE_MESSAGE
+        return (
+            "Service Unavailable, the authentication database query engine reported "
+            f"{type(fault).__name__}, which is not a transient outage and will not clear by retrying. "
+            "The proxy deployment needs attention."
+        )
+
+    @staticmethod
+    def find_database_service_unavailable_error_in_chain(e: BaseException) -> Exception | None:
+        """The exception in the ``__cause__`` / ``__context__`` chain that
+        ``is_database_service_unavailable_error`` accepts, or ``None``. Callers
+        that word a response by the kind of outage need the wrapped database
+        error itself, not just the fact that one is present. A permanent fault
+        outranks a transient one wherever it sits in the chain: a reconnect that
+        dies on a missing engine binary raises the transport error last, but the
+        binary is what keeps the database down."""
+        outages: Final = _database_service_unavailable_errors(e)
+        permanent: Final = next(filter(PrismaDBExceptionHandler.is_permanent_database_fault, outages), None)
+        return permanent if permanent is not None else next(iter(outages), None)
+
+    @staticmethod
     def is_database_service_unavailable_error_in_chain(e: BaseException) -> bool:
         """Like ``is_database_service_unavailable_error`` but also walks the
         ``__cause__`` / ``__context__`` chain.
@@ -296,14 +363,7 @@ class PrismaDBExceptionHandler:
 
         The walk is depth-bounded, which also makes it cycle-safe.
         """
-        current: BaseException | None = e
-        for _ in range(_MAX_EXCEPTION_CHAIN_DEPTH):
-            if not isinstance(current, Exception):
-                return False
-            if PrismaDBExceptionHandler.is_database_service_unavailable_error(current):
-                return True
-            current = current.__cause__ or current.__context__
-        return False
+        return PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(e) is not None
 
     @staticmethod
     def handle_db_exception(e: Exception):

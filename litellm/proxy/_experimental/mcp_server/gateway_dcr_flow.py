@@ -150,11 +150,18 @@ _CLIENT_RECORD_DEBUG_KEY: Final = "gateway_dcr_client"
 _CONNECT_FLOW_DEBUG_KEY: Final = "gateway_connect_flow"
 _AUTH_CODE_DEBUG_KEY: Final = "gateway_authorization_code"
 
-ReloadUserFailure = Literal["unresolvable", "unavailable", "no_active_key"]
+ReloadUserFailure = Literal["unresolvable", "unavailable", "faulted", "no_active_key"]
 ReloadUser = Callable[[str], Awaitable[ReloadUserFailure | None]]
 """Injected live-user revalidation (the token endpoint's mirror of admission):
-``None`` means the user is active; ``unavailable`` is a retryable DB outage; anything
-else fails the grant closed."""
+``None`` means the user is active; ``unavailable`` is a retryable DB outage; ``faulted`` is
+a DB fault retrying will not clear (still 503, worded so nobody just waits); anything else
+fails the grant closed."""
+
+_DB_UNAVAILABLE_DESCRIPTION: Final = "the gateway database is unavailable; retry"
+_DB_FAULTED_DESCRIPTION: Final = (
+    "the gateway database reported a fault that is not a transient outage; "
+    "retrying will not help until the gateway deployment is repaired"
+)
 
 PROXY_API_AUDIENCE: Final[SessionAudience] = "proxy_api"
 """The audience a native client (``lite login --pkce``, a Go CLI) asks for by sending the
@@ -659,7 +666,9 @@ def _set_flow_cookie(response: Response, request: Request, handle: str, flow: _C
 def _consent_lookup_failure_response(failure: ReloadUserFailure) -> Response:
     match failure:
         case "unavailable":
-            return _oauth_error(503, "temporarily_unavailable", "the gateway database is unavailable; retry")
+            return _oauth_error(503, "temporarily_unavailable", _DB_UNAVAILABLE_DESCRIPTION)
+        case "faulted":
+            return _oauth_error(503, "temporarily_unavailable", _DB_FAULTED_DESCRIPTION)
         case "unresolvable":
             return _oauth_error(500, "server_error", "the gateway is not configured to resolve users")
         case "no_active_key":
@@ -962,7 +971,9 @@ def _reload_failure_response(failure: ReloadUserFailure) -> Response:
     ``ReloadUserFailure`` member is a type error here rather than silently 400ing."""
     match failure:
         case "unavailable":
-            return _oauth_error(503, "temporarily_unavailable", "the gateway database is unavailable; retry")
+            return _oauth_error(503, "temporarily_unavailable", _DB_UNAVAILABLE_DESCRIPTION)
+        case "faulted":
+            return _oauth_error(503, "temporarily_unavailable", _DB_FAULTED_DESCRIPTION)
         case "unresolvable":
             return _oauth_error(500, "server_error", "the gateway is not configured to resolve users")
         case "no_active_key":
@@ -981,7 +992,7 @@ def _mint_failure_response(failure: ProxyCredentialMintFailure) -> Response:
             return _oauth_error(
                 400, "invalid_grant", "this user belongs to a team; sign in again and pick the team for this credential"
             )
-        case "unavailable" | "unresolvable" | "no_active_key":
+        case "unavailable" | "faulted" | "unresolvable" | "no_active_key":
             return _reload_failure_response(failure)
         case _:
             assert_never(failure)
@@ -1297,8 +1308,8 @@ async def introspect_gateway_token(
         if peeked == "claimed":
             return _inactive_introspection_response()
     failure: Final = await reload_user(opened.principal.user_id)
-    if failure == "unavailable":
-        return _oauth_error(503, "temporarily_unavailable", "the gateway database is unavailable; retry")
+    if failure == "unavailable" or failure == "faulted":
+        return _reload_failure_response(failure)
     if failure is not None:
         return _inactive_introspection_response()
     return _active_introspection_response(opened)
