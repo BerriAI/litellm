@@ -823,7 +823,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.cognition.ai/v1",
     "https://api.scx.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
-    "https://api.openzoo.fun/v1",
+    "http://localhost:8402/v1",  # openzoo: local `npx openzoo` x402 proxy; hosted api.openzoo.fun needs an ozk_live_ key
 ]
 
 

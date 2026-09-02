@@ -20,7 +20,7 @@ class TestOpenZooProviderConfig:
 
         openzoo = JSONProviderRegistry.get("openzoo")
         assert openzoo is not None
-        assert openzoo.base_url == "https://api.openzoo.fun/v1"
+        assert openzoo.base_url == "http://localhost:8402/v1"
         assert openzoo.api_key_env == "OPENZOO_API_KEY"
         assert openzoo.param_mappings.get("max_completion_tokens") == "max_tokens"
 
@@ -41,7 +41,7 @@ class TestOpenZooProviderConfig:
 
         assert model == "z-ai/glm-5.3-flash"
         assert provider == "openzoo"
-        assert api_base == "https://api.openzoo.fun/v1"
+        assert api_base == "http://localhost:8402/v1"
 
     def test_openzoo_api_base_override(self):
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
@@ -49,13 +49,13 @@ class TestOpenZooProviderConfig:
         model, provider, api_key, api_base = get_llm_provider(
             model="openzoo/z-ai/glm-5.3-flash",
             custom_llm_provider=None,
-            api_base="http://localhost:8402/v1",
-            api_key="sk-openzoo",
+            api_base="https://api.openzoo.fun/v1",
+            api_key="ozk_live_example",
         )
 
         assert provider == "openzoo"
-        assert api_base == "http://localhost:8402/v1"
-        assert api_key == "sk-openzoo"
+        assert api_base == "https://api.openzoo.fun/v1"
+        assert api_key == "ozk_live_example"
 
     def test_openzoo_url_autodetection(self):
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
@@ -63,11 +63,11 @@ class TestOpenZooProviderConfig:
         model, provider, api_key, api_base = get_llm_provider(
             model="z-ai/glm-5.3-flash",
             custom_llm_provider=None,
-            api_base="https://api.openzoo.fun/v1",
+            api_base="http://localhost:8402/v1",
             api_key=None,
         )
         assert provider == "openzoo"
-        assert api_base == "https://api.openzoo.fun/v1"
+        assert api_base == "http://localhost:8402/v1"
 
     def test_openzoo_temperature_passthrough(self):
         from litellm.llms.openai_like.dynamic_config import create_config_class
