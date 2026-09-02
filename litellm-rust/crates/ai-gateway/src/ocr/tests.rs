@@ -2,12 +2,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use litellm_core::error::Error;
+use litellm_core::http_utils::has_header;
 use litellm_core::ocr::transformation::OcrResponseHandling;
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use super::common_utils::{has_header, ocr_provider_config, string_headers, truncate_error_body};
+use super::common_utils::{ocr_provider_config, string_headers, truncate_error_body};
 use super::{OcrRequest, ocr};
 use crate::integrations::custom_guardrail::{
     CustomGuardrail, GuardrailContext, GuardrailDecision, GuardrailError, GuardrailEventHook,
