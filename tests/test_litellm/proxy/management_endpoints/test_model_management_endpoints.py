@@ -3953,6 +3953,80 @@ class TestStrategyRouterWriteValidation:
             model_info={"id": model_id},
         )
 
+    @pytest.mark.asyncio
+    async def test_second_heuristic_v2_router_is_rejected(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _raise_if_heuristic_v2_slot_taken,
+        )
+
+        table = MagicMock()
+        row = MagicMock()
+        row.model_id = "first-v2"
+        row.litellm_params = {"complexity_router_config": {"classifier_type": "heuristic_v2"}}
+        table.find_many = AsyncMock(return_value=[row])
+        with patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints._proxy_model_table",
+            return_value=table,
+        ):
+            with pytest.raises(ProxyException, match="Only one complexity router"):
+                await _raise_if_heuristic_v2_slot_taken(
+                    prisma_client=MagicMock(),
+                    incoming_params=LiteLLM_Params(
+                        model="auto_router/complexity_router",
+                        complexity_router_config={"classifier_type": "heuristic_v2"},
+                    ),
+                    existing_params=None,
+                )
+
+    @pytest.mark.asyncio
+    async def test_existing_heuristic_v2_router_can_be_edited(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _raise_if_heuristic_v2_slot_taken,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        table = MagicMock()
+        row = MagicMock()
+        row.model_id = "first-v2"
+        row.litellm_params = json.dumps({"complexity_router_config": {"classifier_type": "heuristic_v2"}})
+        table.find_many = AsyncMock(return_value=[row])
+        with patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints._proxy_model_table",
+            return_value=table,
+        ):
+            await _raise_if_heuristic_v2_slot_taken(
+                prisma_client=MagicMock(),
+                incoming_params=updateLiteLLMParams(rpm=10),
+                existing_params=LiteLLM_Params(
+                    model="auto_router/complexity_router",
+                    complexity_router_config={"classifier_type": "heuristic_v2"},
+                ),
+                current_model_id="first-v2",
+            )
+
+    @pytest.mark.asyncio
+    async def test_heuristic_v1_does_not_consume_v2_slot(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _raise_if_heuristic_v2_slot_taken,
+        )
+
+        table = MagicMock()
+        table.find_many = AsyncMock()
+        with patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints._proxy_model_table",
+            return_value=table,
+        ):
+            await _raise_if_heuristic_v2_slot_taken(
+                prisma_client=MagicMock(),
+                incoming_params=LiteLLM_Params(
+                    model="auto_router/complexity_router",
+                    complexity_router_config={"classifier_type": "heuristic"},
+                ),
+                existing_params=None,
+            )
+        table.find_many.assert_not_awaited()
+
     def test_double_prefix_rejected_against_stored_params(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             _strategy_router_write_violation,
