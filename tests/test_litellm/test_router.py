@@ -8701,6 +8701,65 @@ class TestClaudeCodeSubagentSessionRouterBinding:
         assert response.choices[0].message.content == "expensive response"
 
     @pytest.mark.asyncio
+    async def test_anthropic_subagent_four_fallback_hops_use_each_current_model_chain(self):
+        from litellm.types.router import TaggedPreRoutingStrategy
+
+        failing_groups = ("cheap-model", "fallback-1", "fallback-2", "fallback-3")
+        router = litellm.Router(
+            model_list=[
+                *(
+                    {
+                        "model_name": group,
+                        "litellm_params": {
+                            "model": "anthropic/claude-3-haiku-20240307",
+                            "mock_response": "litellm.RateLimitError",
+                        },
+                    }
+                    for group in failing_groups
+                ),
+                {
+                    "model_name": "requested-model",
+                    "litellm_params": {
+                        "model": "anthropic/claude-3-haiku-20240307",
+                        "mock_response": "requested response",
+                    },
+                },
+                {
+                    "model_name": "fallback-4",
+                    "litellm_params": {
+                        "model": "anthropic/claude-3-haiku-20240307",
+                        "mock_response": "fourth fallback response",
+                    },
+                },
+            ],
+            fallbacks=[
+                {"smart-router": ["fallback-1"]},
+                {"fallback-1": ["fallback-2"]},
+                {"fallback-2": ["fallback-3"]},
+                {"fallback-3": ["fallback-4"]},
+            ],
+            num_retries=0,
+            max_fallbacks=4,
+        )
+        router.complexity_routers = {
+            "smart-router": (TaggedPreRoutingStrategy(tags=(), strategy=self._RewriteStrategy()),)
+        }
+        main_kwargs = self._request_kwargs()
+        main_kwargs["litellm_metadata"] = main_kwargs.pop("metadata")
+        await router.async_pre_routing_hook(model="smart-router", request_kwargs=main_kwargs)
+        subagent_kwargs = self._request_kwargs(agent_id="agent-1234")
+        subagent_kwargs["litellm_metadata"] = subagent_kwargs.pop("metadata")
+
+        response = await router.aanthropic_messages(
+            model="requested-model",
+            messages=[{"role": "user", "content": "subagent turn"}],
+            max_tokens=64,
+            **subagent_kwargs,
+        )
+
+        assert response["content"][0]["text"] == "fourth fallback response"
+
+    @pytest.mark.asyncio
     async def test_session_router_binding_is_scoped_to_the_authenticated_key(self):
         router = self._router()
 
