@@ -7712,8 +7712,9 @@ export interface paths {
          * @description Retrieve information about a key.
          *
          *     Parameters:
-         *     - key: str | None (query parameter) - The key to look up. Accepts the plaintext key or its hash.
-         *       Defaults to the key in the Authorization header.
+         *     - key: str | None (query parameter) - The key to look up. Accepts the plaintext key or its hash;
+         *       prefer the hash, since a query parameter is recorded verbatim by any HTTP access log in front
+         *       of the proxy. Defaults to the key in the Authorization header.
          *
          *     Returns:
          *     - key: str - The key that was looked up, echoed back as it was passed in
@@ -7745,7 +7746,7 @@ export interface paths {
          *
          *     Example Curl:
          *     ```
-         *     curl -X GET "http://0.0.0.0:4000/key/info?key=sk-test-example-key-123" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:4000/key/info?key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" -H "Authorization: Bearer sk-1234"
          *     ```
          *
          *     Example Curl - if no key is passed, it will use the Key Passed in Authorization Header
@@ -14041,7 +14042,7 @@ export interface paths {
          *
          *     Example Request for specific api_key
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=sk-test-example-key-123" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" -H "Authorization: Bearer sk-1234"
          *     ```
          *
          *     Example Request for specific user_id
@@ -47485,7 +47486,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Group spend by internal team or customer or api_key */
                 group_by?: ("team" | "customer" | "api_key") | null;
-                /** @description View spend for a specific api_key. Example api_key='sk-1234 */
+                /** @description View spend for a specific api_key. Pass the key's sha256 hash so the raw key stays out of URLs and access logs. Example api_key='d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa' */
                 api_key?: string | null;
                 /** @description View spend for a specific internal_user_id. Example internal_user_id='1234 */
                 internal_user_id?: string | null;
@@ -49358,7 +49359,7 @@ export interface operations {
     info_key_fn_key_info_get: {
         parameters: {
             query?: {
-                /** @description Key in the request parameters */
+                /** @description Key to look up. Pass the key's sha256 hash so the raw key stays out of URLs and access logs. Example key='d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa' */
                 key?: string | null;
             };
             header?: never;
@@ -49536,7 +49537,7 @@ export interface operations {
                 start_date?: string | null;
                 /** @description Time till which to view spend (YYYY-MM-DD) */
                 end_date?: string | null;
-                /** @description View spend for a specific api_key. Proxy admin only; other callers are scoped to their own key. */
+                /** @description View spend for a specific api_key. Proxy admin only; other callers are scoped to their own key. Pass the key's sha256 hash so the raw key stays out of URLs and access logs. Example api_key='d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa' */
                 api_key?: string | null;
             };
             header?: never;
