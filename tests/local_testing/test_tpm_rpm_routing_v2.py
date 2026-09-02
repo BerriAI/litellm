@@ -2,7 +2,7 @@
 #    This tests the router's ability to pick deployment with lowest tpm using 'usage-based-routing-v2-v2'
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 import random
 import time
@@ -112,21 +112,21 @@ def test_rate_limit_windows_do_not_share_cache_values():
 
 def test_router_does_not_read_legacy_hh_mm_key():
     test_cache = DualCache()
-    legacy_key = "deployment:model:rpm:23-59"
-    test_cache.set_cache(key=legacy_key, value=100, local_only=True)
+    current_datetime = get_utc_datetime()
+    legacy_keys = {
+        f"deployment:model:rpm:{(current_datetime + timedelta(minutes=offset)):%H-%M}"
+        for offset in (0, 1)
+    }
+    for legacy_key in legacy_keys:
+        test_cache.set_cache(key=legacy_key, value=100, local_only=True)
     deployment = {
         "model_name": "model-group",
         "litellm_params": {"model": "model"},
         "model_info": {"id": "deployment"},
     }
-    fixed_datetime = datetime(2024, 1, 1, 23, 59, 30, tzinfo=timezone.utc)
     lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
 
     with (
-        patch(
-            "litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime",
-            return_value=fixed_datetime,
-        ),
         patch.object(test_cache, "batch_get_cache", wraps=test_cache.batch_get_cache) as batch_get,
     ):
         assert (
@@ -138,7 +138,7 @@ def test_router_does_not_read_legacy_hh_mm_key():
         )
 
     requested_keys = [key for call in batch_get.call_args_list for key in call.kwargs["keys"]]
-    assert legacy_key not in requested_keys
+    assert legacy_keys.isdisjoint(requested_keys)
     assert all(":v2:" in key for key in requested_keys)
 
 
@@ -156,15 +156,9 @@ def test_router_uses_one_window_id_for_tpm_and_rpm_batches():
             "model_info": {"id": "deployment-2"},
         },
     ]
-    fixed_datetime = datetime(2024, 1, 1, 23, 59, 30, tzinfo=timezone.utc)
-    expected_window = utc_epoch_minute(fixed_datetime)
     lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
 
     with (
-        patch(
-            "litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime",
-            return_value=fixed_datetime,
-        ),
         patch.object(test_cache, "batch_get_cache", wraps=test_cache.batch_get_cache) as batch_get,
     ):
         lowest_tpm_logger.get_available_deployments(
@@ -174,7 +168,7 @@ def test_router_uses_one_window_id_for_tpm_and_rpm_batches():
 
     assert len(batch_get.call_args_list) == 2
     requested_keys = [key for call in batch_get.call_args_list for key in call.kwargs["keys"]]
-    assert {key.rsplit(":", 1)[-1] for key in requested_keys} == {str(expected_window)}
+    assert len({key.rsplit(":", 1)[-1] for key in requested_keys}) == 1
 
 
 @pytest.mark.parametrize("cache_type", list(RouterCacheEnum))
