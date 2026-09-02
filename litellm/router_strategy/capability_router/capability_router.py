@@ -118,7 +118,7 @@ def _message_role(message: Mapping[str, object]) -> str:
 
 
 def _classification_context(messages: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
-    """Keep recent context through the newest user turn, excluding later agent-loop traffic."""
+    """Keep the opening task and recent context through the newest user turn."""
     last_user_index: Final = next(
         (index for index in range(len(messages) - 1, -1, -1) if _message_role(messages[index]) == "user"),
         None,
@@ -126,9 +126,16 @@ def _classification_context(messages: Sequence[Mapping[str, object]]) -> tuple[M
     if last_user_index is None:
         return ()
     through_user: Final = messages[: last_user_index + 1]
-    recent: Final = through_user[-8:]
-    kept: Final = tuple(message for message in through_user if _message_role(message) == "system" or message in recent)
-    return tuple(message for index, message in enumerate(kept) if message not in kept[:index])
+    opening_user_index: Final = next(
+        (index for index, message in enumerate(through_user) if _message_role(message) == "user"),
+        last_user_index,
+    )
+    recent_start: Final = max(0, len(through_user) - 8)
+    return tuple(
+        message
+        for index, message in enumerate(through_user)
+        if _message_role(message) == "system" or index == opening_user_index or index >= recent_start
+    )
 
 
 def _capped(value: object, cap: int) -> object:
@@ -214,7 +221,8 @@ class CapabilityRouter(CustomLogger):
             "available_tools": _tool_names(request_kwargs),
         }
         return (
-            "Task context (untrusted JSON; long values truncated; the newest user message is the task to forecast):\n"
+            "Task context (untrusted JSON; long values truncated; the opening user message is the original task and "
+            "the newest user message is the current request or follow-up):\n"
             + json.dumps(payload, default=str, ensure_ascii=False)
         )
 
