@@ -1981,7 +1981,9 @@ export interface paths {
          *
          *     - A successful authorization response (``code`` + ``state``), which is
          *       forwarded back to the validated client ``redirect_uri`` with the
-         *       original (un-wrapped) ``state``.
+         *       original (un-wrapped) ``state``, once the RFC 9207 ``iss`` (when the
+         *       authorization server sent one) matches the issuer /authorize sealed
+         *       into the state.
          *     - An error response (``error``[+``error_description``/``error_uri``]), per
          *       RFC 6749 §4.1.2.1. When ``state`` is present and decodes to a trusted
          *       ``redirect_uri``, the error params are propagated back to the client so
@@ -41968,6 +41970,7 @@ export interface operations {
             query?: {
                 code?: string | null;
                 state?: string | null;
+                iss?: string | null;
                 error?: string | null;
                 error_description?: string | null;
                 error_uri?: string | null;
