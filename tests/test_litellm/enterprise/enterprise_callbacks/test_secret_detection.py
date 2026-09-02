@@ -176,16 +176,18 @@ def test_proxied_traffic_stays_on_native_hooks():
 
 @pytest.mark.asyncio
 async def test_apply_guardrail_without_texts_records_nothing():
-    """No inputs means nothing was inspected, so no "allow" row is recorded."""
+    """No inputs means nothing was inspected, so no "allow" row is recorded.
+    Empty strings count as no input: there is no content to inspect."""
     guardrail = _guardrail()
-    request_data: dict = {"metadata": {}}
 
-    result = await guardrail.apply_guardrail(
-        inputs={"texts": []}, request_data=request_data, input_type="request"
-    )
-
-    assert result == {"texts": []}
-    assert "standard_logging_guardrail_information" not in request_data["metadata"]
+    empty_variants: list[list[str]] = [[], ["", ""]]
+    for texts in empty_variants:
+        request_data: dict = {"metadata": {}}
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": texts}, request_data=request_data, input_type="request"
+        )
+        assert result == {"texts": texts}
+        assert "standard_logging_guardrail_information" not in request_data["metadata"]
 
 
 @pytest.mark.asyncio

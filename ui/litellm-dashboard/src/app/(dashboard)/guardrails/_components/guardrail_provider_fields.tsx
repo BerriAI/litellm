@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from "react";
-import { toast } from "@/lib/toast";
 import {
   guardrail_provider_map,
   populateGuardrailProviders,
@@ -14,6 +13,8 @@ import { FieldGroup } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
+import { Textarea } from "@/components/ui/textarea";
+import { toast } from "@/lib/toast";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import {
   asStringArray,
@@ -23,6 +24,7 @@ import {
   readRecord,
   requiredRule,
   type GuardrailFieldControlProps,
+  type GuardrailFieldRules,
   type GuardrailFormControl,
 } from "./GuardrailFormField";
 
@@ -60,6 +62,44 @@ const BOOLEAN_ITEMS = [
 
 const isSecretKey = (fieldKey: string): boolean =>
   fieldKey.includes("password") || fieldKey.includes("secret") || fieldKey.includes("key");
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+// Object fields hold the raw text while the user types, so submission must be
+// blocked until the value parses to a plain JSON object (or is cleared).
+const jsonObjectRule = (fieldKey: string): GuardrailFieldRules => ({
+  validate: (value: unknown) =>
+    value === undefined || isPlainObject(value) ? true : `${fieldKey} must be a valid JSON object`,
+});
+
+// Commits a parsed object (or undefined for a cleared field) to the form on
+// blur; anything else stays as raw text so jsonObjectRule blocks submission.
+const commitObjectField = (raw: string, onChange: (value: unknown) => void): void => {
+  const next = raw.trim();
+  if (next === "") {
+    onChange(undefined);
+    return;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(next);
+  } catch {
+    parsed = next;
+  }
+  if (isPlainObject(parsed)) {
+    onChange(parsed);
+  } else {
+    toast.error("Enter a valid JSON object for this configuration");
+  }
+};
+
+const fieldRules = (field: ProviderParam, fieldKey: string): GuardrailFieldRules | undefined => {
+  if (field.type === "object") {
+    return jsonObjectRule(fieldKey);
+  }
+  return field.required ? requiredRule(`${fieldKey} is required`) : undefined;
+};
 
 interface ProviderFieldInputProps {
   descriptor: ProviderParam;
@@ -153,16 +193,7 @@ const ProviderFieldInput: React.FC<ProviderFieldInputProps> = ({ descriptor, fie
         value={objectValue}
         onChange={(event) => onChange(event.target.value)}
         onBlur={(event) => {
-          const next = event.target.value.trim();
-          if (next === "") {
-            onChange(undefined);
-          } else {
-            try {
-              onChange(JSON.parse(next));
-            } catch {
-              toast.error("Enter valid JSON for this configuration");
-            }
-          }
+          commitObjectField(event.target.value, onChange);
           onBlur();
         }}
         {...aria}
@@ -345,7 +376,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
           control={control}
           name={fullFieldKey}
           label={labelWithHint(fieldKey, field.description)}
-          rules={field.required ? requiredRule(`${fieldKey} is required`) : undefined}
+          rules={fieldRules(field, fieldKey)}
           defaultValue={resolvedInitialValue}
         >
           {(fieldControl) => <ProviderFieldInput descriptor={field} fieldKey={fieldKey} control={fieldControl} />}

@@ -1393,7 +1393,7 @@ async def get_guardrail_ui_settings():
     } | MappingProxyType(
         # hide-secrets lives in the enterprise package, not in the registry
         # above; it only runs on pre_call.
-        {SupportedGuardrailIntegrations.HIDE_SECRETS.value: (GuardrailEventHooks.pre_call.value,)}
+        {SupportedGuardrailIntegrations.HIDE_SECRETS.value: [GuardrailEventHooks.pre_call.value]}
     )
 
     return GuardrailUIAddGuardrailSettings(

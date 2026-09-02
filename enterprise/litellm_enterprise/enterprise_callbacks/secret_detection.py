@@ -517,7 +517,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         (the UI test playground). Proxied traffic keeps using
         ``async_pre_call_hook``, see ``use_native_lifecycle_hooks``."""
         texts = inputs.get("texts")
-        if not texts:
+        if not texts or not any(texts):
             return inputs
         _masked_entity_count.set({})
         return {**inputs, "texts": [self.redact_text(text) for text in texts]}
