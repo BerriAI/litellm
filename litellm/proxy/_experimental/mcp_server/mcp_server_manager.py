@@ -1128,16 +1128,22 @@ def _extract_upstream_auth_failure(
 
 
 def _obo_retry_applies(server: MCPServer, subject_token: str | None) -> bool:
-    """Whether an upstream 401/403 should invalidate the minted credential and retry once.
+    """Whether an upstream 401/403 should invalidate the cached credential and retry once.
 
     ``oauth2_token_exchange`` can only mint from an inbound subject token, so with no token there is
-    nothing to re-mint and the plain single call is correct. ``oauth2_id_jag`` also sources its
-    subject from the identity assertion stored for the user at SSO login, so it qualifies whether or
-    not the caller presented a token of its own; gating it on the inbound token would leave a
-    store-sourced bearer un-invalidated and replayed until its TTL.
+    nothing to re-mint and the plain single call is correct. ``oauth2_id_jag`` sources its subject
+    from the identity assertion stored for the user at SSO login, so it qualifies whether or not the
+    caller presented a token of its own. ``oauth2`` authorization_code (migrated, v2-resolver-owned)
+    sources its per-user token from the stored credential, so it too qualifies without an inbound
+    token: the retry invalidates the cached token and re-resolves, refreshing via the stored
+    refresh_token when present. M2M ``client_credentials`` recovers in its own auth flow and
+    delegate/passthrough defer to v1, so neither is gated here.
     """
     if server.auth_type == MCPAuth.oauth2_id_jag:
         return True
+    if server.auth_type == MCPAuth.oauth2:
+        spec = to_server_spec(server)
+        return spec is not None and isinstance(spec.config, AuthorizationCodeConfig)
     return server.auth_type == MCPAuth.oauth2_token_exchange and bool(subject_token)
 
 
@@ -5199,12 +5205,13 @@ class MCPServerManager:
         subject_token: str | None,
         user_api_key_auth: UserAPIKeyAuth | None,
     ) -> CallToolResult:
-        """Call a token_exchange (OBO) tool; on an upstream 401/403 re-mint the token once and retry.
+        """Call a tool whose credential is resolver-owned; on an upstream 401/403 re-resolve once and retry.
 
-        The exchanged token is baked into the client at build time, so the retry invalidates the
-        cached exchange and rebuilds the client (which re-exchanges). One retry only: a non-auth
-        failure or a second auth failure degrades to the normal ``isError`` result, and a re-exchange
-        that now fails surfaces its own 401 challenge from ``_create_mcp_client``.
+        The token (exchanged, asserted, or stored per-user) is baked into the client at build time,
+        so the retry invalidates the cached credential and rebuilds the client (which re-resolves).
+        One retry only: a non-auth failure or a second auth failure degrades to the normal
+        ``isError`` result, and a re-resolve that now fails surfaces its own 401 challenge from
+        ``_create_mcp_client``.
         """
         try:
             return await client.call_tool(
@@ -5390,9 +5397,10 @@ class MCPServerManager:
         )
 
         if _obo_retry_applies(mcp_server, subject_token):
-            # OBO / ID-JAG: the exchanged token may have been revoked/rotated upstream since it was
-            # cached, so an upstream 401 gets one invalidate + re-mint + retry. Gated to these modes;
-            # all others keep the plain single call below.
+            # Resolver-owned per-caller credentials (token_exchange, id_jag, migrated
+            # authorization_code): the cached token may have been revoked/rotated upstream since it
+            # was minted, so an upstream 401 gets one invalidate + re-resolve + retry. Gated to these
+            # modes; all others keep the plain single call below.
             async def _obo_call_tool_limited():
                 async with self._limit_outbound_concurrency(mcp_server):
                     return await self._obo_call_tool_with_retry(
