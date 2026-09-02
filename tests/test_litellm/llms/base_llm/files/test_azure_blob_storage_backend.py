@@ -61,7 +61,7 @@ async def test_upload_file_with_credential_chain(credential_chain_env_vars):
     client = _mock_upload_client()
     build_provider = MagicMock(return_value=lambda: "workload-identity-token")
 
-    with patch(  # test-quality-ok: the REST upload path builds its own client, so the header assertion needs this seam
+    with patch(  # test-quality-ok: the backend creates its REST client internally; assert the emitted authorization header
         "litellm.llms.custom_httpx.http_handler.get_async_httpx_client", return_value=client
     ):
         backend = AzureBlobStorageBackend(build_credential_chain_token_provider=build_provider)

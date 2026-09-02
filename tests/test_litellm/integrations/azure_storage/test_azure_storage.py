@@ -168,7 +168,7 @@ async def test_upload_authenticates_through_the_credential_chain_under_workload_
     workload_identity_env_vars,
 ):
     build_provider = MagicMock(return_value=lambda: "workload-identity-token")
-    with patch(  # test-quality-ok: the REST upload path builds its own client, so the header assertions need this seam
+    with patch(  # test-quality-ok: REST client is created inside the method; assert emitted request headers
         "litellm.integrations.azure_storage.azure_storage.get_async_httpx_client"
     ) as mock_get_client:
         mock_http_client = AsyncMock()
@@ -191,7 +191,7 @@ async def test_upload_authenticates_through_the_credential_chain_under_workload_
 def test_default_chain_provider_is_storage_scoped_and_built_once_per_process():
     _cached_credential_chain_token_provider.cache_clear()
     with (
-        patch(  # test-quality-ok: pins the default factory's scope and credential args; the real builder would import azure-identity
+        patch(  # test-quality-ok: assert the default factory's fixed scope and credential type without constructing Azure SDK credentials
             "litellm.integrations.azure_storage.azure_storage.get_azure_ad_token_provider",
             return_value=lambda: "chain-token",
         ) as mock_builder
@@ -242,7 +242,7 @@ async def test_empty_string_service_principal_vars_still_use_the_credential_chai
 async def test_client_secret_auth_still_uses_the_storage_scoped_service_principal(mock_env_vars):
     build_provider = MagicMock()
     with (
-        patch(  # test-quality-ok: the assertion is the scope handed to the shared entra-id helper, which has no fakeable boundary short of calling Entra
+        patch(  # test-quality-ok: assert the storage scope passed to the shared token factory without making an external auth call
             "litellm.integrations.azure_storage.azure_storage.get_azure_ad_token_from_entra_id",
             return_value=lambda: "client-secret-token",
         ) as mock_entra_id
