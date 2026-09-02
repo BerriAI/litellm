@@ -617,8 +617,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         image_format: Final = (
             _APPLY_GUARDRAIL_IMAGE_FORMATS.get(str(image_block.get("format"))) if image_block else None
         )
-        # mutable-ok: {} is an empty default for .get, never mutated
-        image_bytes: Final = image_block.get("source", {}).get("bytes") if image_block else None
+        image_source: Final = image_block.get("source") if image_block else None
+        image_bytes: Final = image_source.get("bytes") if image_source else None
         if image_format is None or not image_bytes:
             self._handle_unscannable_image(reason="attachment is not a png/jpeg image")
             return None
