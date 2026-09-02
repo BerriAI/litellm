@@ -264,6 +264,38 @@ def get_pre_routing_selection(kwargs: Mapping[str, Any]) -> str | None:
     return next((selected for selected in selections if isinstance(selected, str) and selected), None)
 
 
+DISABLE_FALLBACKS_METADATA_KEY: Final = "_disable_fallbacks"
+
+
+def record_disable_fallbacks(request_kwargs: Mapping[str, Any] | None, disabled: bool) -> None:
+    """
+    Write-or-clear the request's disable_fallbacks verdict into the router-internal metadata
+    bucket. The wrapper pops the raw kwarg before any downstream frame runs, so the refusal
+    gate (which decides whether to convert a refusal into a recoverable error) needs this
+    carrier to know recovery is impossible.
+    """
+    from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
+
+    if request_kwargs is None:
+        return
+    bucket: Final = request_kwargs.get(get_metadata_variable_name_from_kwargs(request_kwargs))
+    if not isinstance(bucket, dict):
+        return
+    if disabled:
+        bucket[DISABLE_FALLBACKS_METADATA_KEY] = True
+    else:
+        bucket.pop(DISABLE_FALLBACKS_METADATA_KEY, None)
+
+
+def fallbacks_disabled_for_request(kwargs: Mapping[str, Any]) -> bool:
+    """True when this request opted out of fallbacks, read from the raw kwarg (pre-pop
+    snapshots keep it) or the router-internal bucket the wrapper stamps after popping it."""
+    if kwargs.get("disable_fallbacks") is True:
+        return True
+    buckets: Final = (kwargs.get(name) for name in _ROUTER_METADATA_BUCKETS)
+    return any(isinstance(bucket, dict) and bucket.get(DISABLE_FALLBACKS_METADATA_KEY) is True for bucket in buckets)
+
+
 def fallback_lookup_groups(kwargs: Mapping[str, Any], model_group: str | None) -> tuple[str, ...]:
     """
     Ordered keys for resolving a fallback chain: the tier a pre-routing hook selected wins,
