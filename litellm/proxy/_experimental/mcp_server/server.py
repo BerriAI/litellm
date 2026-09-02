@@ -1393,7 +1393,7 @@ if MCP_AVAILABLE:
     ########################################################
 
     async def _get_allowed_mcp_servers_from_mcp_server_names(
-        mcp_servers: list[str] | None,
+        mcp_servers: Sequence[str] | None,
         allowed_mcp_servers: list[MCPServer],
     ) -> list[MCPServer]:
         """
@@ -1459,35 +1459,55 @@ if MCP_AVAILABLE:
         client_ip: str | None = None,
     ) -> None:
         """A scoped request (``/mcp/<name>`` path or ``x-mcp-servers`` header) resolved to zero
-        allowed servers. When a requested name IS a registered server visible to this client IP,
-        the denial is a permission outcome and must be loud: a silent 200 with no tools reads as
-        a healthy server with no tools. Names matching no registered server stay fail-closed
-        empty so scoping cannot probe for server existence."""
-        known_targets: Final = tuple(
-            (name, server)
-            for name in requested_names
-            if (server := global_mcp_server_manager.get_mcp_server_by_name(name, client_ip=client_ip)) is not None
-        )
-        if not known_targets:
-            return
-        denied_name, denied_server = known_targets[0]
+        allowed servers, so the denial must be loud: a silent 200 with no tools reads as a healthy
+        server with no tools. Unknown, unauthorized, and access-group names all share one generic
+        error so scoping cannot probe which servers exist; the agent variant fires only when the
+        same request resolves once the agent binding is stripped, proving the binding caused the veto."""
         agent_id: Final = user_api_key_auth.agent_id if user_api_key_auth else None
         if user_api_key_auth is not None and agent_id:
-            allowed_without_agent: Final = await global_mcp_server_manager.get_allowed_mcp_servers(
-                user_api_key_auth.model_copy(update=types.MappingProxyType({"agent_id": None}))
+            resolved_without_agent: Final = await _get_allowed_mcp_servers(
+                user_api_key_auth=user_api_key_auth.model_copy(update=types.MappingProxyType({"agent_id": None})),
+                mcp_servers=requested_names,
+                client_ip=client_ip,
             )
-            if denied_server.server_id in allowed_without_agent:
+            resolved_ids: Final = frozenset(server.server_id for server in resolved_without_agent)
+
+            def _registered_server_id(name: str) -> str | None:
+                server: Final = global_mcp_server_manager.get_mcp_server_by_name(name, client_ip=client_ip)
+                return server.server_id if server is not None else None
+
+            vetoed_server: Final = next(
+                (name for name in requested_names if _registered_server_id(name) in resolved_ids), None
+            )
+            if vetoed_server is not None:
                 agent_denial: Final[_McpDeniedDetail] = {
                     "error": (
-                        f"MCP server '{denied_name}' is not available to this key: the key is bound to "
+                        f"MCP server '{vetoed_server}' is not available to this key: the key is bound to "
                         f"agent '{agent_id}', whose MCP grants do not include this server. Add the server "
                         f"to the agent's object_permission.mcp_servers (edit the agent in the Admin UI or "
                         f"PATCH /v1/agents/{agent_id}), or use a key that is not bound to the agent."
                     )
                 }
                 raise HTTPException(status_code=403, detail=agent_denial)
-        key_denial: Final[_McpDeniedDetail] = {"error": f"The key is not allowed to access server {denied_name}"}
-        raise HTTPException(status_code=403, detail=key_denial)
+            vetoed_group: Final = (
+                next((name for name in requested_names if _registered_server_id(name) is None), None)
+                if resolved_ids
+                else None
+            )
+            if vetoed_group is not None:
+                group_denial: Final[_McpDeniedDetail] = {
+                    "error": (
+                        f"MCP access group '{vetoed_group}' is not available to this key: the key is bound to "
+                        f"agent '{agent_id}', whose MCP grants do not include it. Add the group to the "
+                        f"agent's object_permission.mcp_access_groups (edit the agent in the Admin UI or "
+                        f"PATCH /v1/agents/{agent_id}), or use a key that is not bound to the agent."
+                    )
+                }
+                raise HTTPException(status_code=403, detail=group_denial)
+        generic_denial: Final[_McpDeniedDetail] = {
+            "error": f"The key is not allowed to access the requested MCP servers: {', '.join(requested_names)}"
+        }
+        raise HTTPException(status_code=403, detail=generic_denial)
 
     def _tool_name_matches(tool_name: str, filter_list: list[str], mcp_server: MCPServer) -> bool:
         """
@@ -1581,7 +1601,7 @@ if MCP_AVAILABLE:
 
     async def _get_allowed_mcp_servers(
         user_api_key_auth: UserAPIKeyAuth | None,
-        mcp_servers: list[str] | None,
+        mcp_servers: Sequence[str] | None,
         client_ip: str | None = None,
     ) -> list[MCPServer]:
         """Return allowed MCP servers for a request after applying filters.

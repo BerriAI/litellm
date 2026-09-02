@@ -74,7 +74,8 @@ describe("AgentInfoView settings", () => {
     expect(token).toBe("sk-test");
     expect(agentId).toBe("agent-1");
     expect(payload.tpm_limit).toBe(42);
-    expect(payload.object_permission).toEqual({ mcp_servers: [], mcp_access_groups: [], mcp_tool_permissions: {} });
+    const clearedMcpGrants = { mcp_servers: [], mcp_access_groups: [], mcp_toolsets: [], mcp_tool_permissions: {} };
+    expect(payload.object_permission).toEqual(clearedMcpGrants);
   });
 
   it("shows MCP grants with server names on the overview tab", async () => {
