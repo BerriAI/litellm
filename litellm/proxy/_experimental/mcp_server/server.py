@@ -1489,10 +1489,14 @@ if MCP_AVAILABLE:
                     )
                 }
                 raise HTTPException(status_code=403, detail=agent_denial)
-            vetoed_group: Final = (
-                next((name for name in requested_names if _registered_server_id(name) is None), None)
-                if resolved_ids
-                else None
+            vetoed_group: Final = next(
+                (
+                    name
+                    for name in requested_names
+                    if _registered_server_id(name) is None
+                    and any(name in (server.access_groups or ()) for server in resolved_without_agent)
+                ),
+                None,
             )
             if vetoed_group is not None:
                 group_denial: Final[_McpDeniedDetail] = {
