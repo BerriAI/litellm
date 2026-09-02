@@ -1407,6 +1407,21 @@ class TestOpenAIResponsesHandlerNamespaceTools:
         assert result["tools"] == tools
 
     @pytest.mark.asyncio
+    async def test_namespace_with_unparseable_members_is_kept_once_and_unchanged(self):
+        handler = OpenAIResponsesHandler()
+        namespace_tool = {"type": "namespace", "name": "mcp__odd", "tools": ["confluence_get_page"]}
+        data = {
+            "input": [{"role": "user", "content": "fetch page 1", "type": "message"}],
+            "tools": [dict(namespace_tool)],
+            "model": "gpt-5.3-codex",
+        }
+
+        result = await handler.process_input_messages(data, ToolAppendingGuardrail(guardrail_name="test"))
+
+        assert result["tools"][0] == namespace_tool
+        assert [t["name"] for t in result["tools"]] == ["mcp__odd", "injected_tool"]
+
+    @pytest.mark.asyncio
     async def test_guardrail_can_still_drop_a_single_namespace_member(self):
         handler = OpenAIResponsesHandler()
         data = {
