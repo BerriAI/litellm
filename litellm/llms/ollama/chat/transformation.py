@@ -423,6 +423,12 @@ class OllamaChatConfig(BaseConfig):
 class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
     started_reasoning_content: bool = False
     finished_reasoning_content: bool = False
+    saw_tool_calls: bool = False
+
+    def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False) -> None:
+        super().__init__(streaming_response, sync_stream, json_mode)
+        self.response_id: str = str(uuid.uuid4())
+        self._tool_call_index: int = 0
 
     def _is_function_call_complete(self, function_args: str | dict) -> bool:
         if isinstance(function_args, dict):
@@ -468,12 +474,17 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             # process tool calls - if complete function arg - add id to tool call
             tool_calls: Final = chunk["message"].get("tool_calls")
             if tool_calls is not None:
+                self.saw_tool_calls = True
                 for tool_call in tool_calls:
+                    tool_call["index"] = self._tool_call_index
+                    self._tool_call_index += 1
                     function_args = tool_call.get("function").get("arguments")
                     if function_args is not None and len(function_args) > 0:
+                        if isinstance(function_args, dict):
+                            tool_call["function"]["arguments"] = json.dumps(function_args)
                         is_function_call_complete = self._is_function_call_complete(function_args)
                         if is_function_call_complete:
-                            tool_call["id"] = str(uuid.uuid4())
+                            tool_call["id"] = f"call_{uuid.uuid4()}"
 
             # PROCESS REASONING CONTENT
             reasoning_content: str | None = None
@@ -508,9 +519,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
 
             if chunk["done"] is True:
                 finish_reason = chunk.get("done_reason") or "stop"
-                # Override finish_reason when tool_calls are present
-                # Fixes: https://github.com/BerriAI/litellm/issues/18922
-                if tool_calls is not None:
+                if finish_reason == "stop" and (tool_calls is not None or self.saw_tool_calls):
                     finish_reason = "tool_calls"
                 choices = [
                     StreamingChoices(
@@ -532,7 +541,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             )
 
             return ModelResponseStream(
-                id=str(uuid.uuid4()),
+                id=self.response_id,
                 object="chat.completion.chunk",
                 created=int(time.time()),  # ollama created_at is in UTC
                 usage=usage,

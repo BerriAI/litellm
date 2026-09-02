@@ -1,4 +1,5 @@
 import inspect
+import json
 import os
 import sys
 from typing import cast
@@ -904,3 +905,169 @@ class TestOllamaToolCallTransformation:
         assert tool_msg["content"] == "Sunny, 72°F"
         assert "tool_call_id" in tool_msg, "tool_call_id must be forwarded to Ollama"
         assert tool_msg["tool_call_id"] == "call_abc123"
+
+
+class TestOllamaStreamingToolCalls:
+    """Regression tests for ollama_chat streaming tool call defects."""
+
+    @staticmethod
+    def _make_tool_call_chunk(tool_name: str, arguments: dict, done: bool = False, done_reason: str = "stop") -> dict:
+        return {
+            "model": "qwen3:14b",
+            "created_at": "2025-01-11T00:00:00.000000Z",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"function": {"name": tool_name, "arguments": arguments}}
+                ],
+            },
+            "done": done,
+            "done_reason": done_reason if done else None,
+            "prompt_eval_count": 10,
+            "eval_count": 5,
+        }
+
+    @staticmethod
+    def _make_done_chunk(done_reason: str = "stop") -> dict:
+        return {
+            "model": "qwen3:14b",
+            "created_at": "2025-01-11T00:00:00.000000Z",
+            "message": {"role": "assistant", "content": ""},
+            "done": True,
+            "done_reason": done_reason,
+            "prompt_eval_count": 10,
+            "eval_count": 5,
+        }
+
+    def test_streaming_chunks_have_consistent_id(self):
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+        expected_id = iterator.response_id
+
+        chunk1 = {
+            "model": "qwen3:14b",
+            "created_at": "2025-01-11T00:00:00.000000Z",
+            "message": {"role": "assistant", "content": "Hello"},
+            "done": False,
+        }
+        chunk2 = {
+            "model": "qwen3:14b",
+            "created_at": "2025-01-11T00:00:00.000000Z",
+            "message": {"role": "assistant", "content": " world"},
+            "done": True,
+            "done_reason": "stop",
+            "prompt_eval_count": 5,
+            "eval_count": 2,
+        }
+
+        result1 = iterator.chunk_parser(chunk1)
+        result2 = iterator.chunk_parser(chunk2)
+
+        assert result1.id == expected_id
+        assert result2.id == expected_id
+
+    def test_streaming_tool_call_id_has_call_prefix(self):
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        result = iterator.chunk_parser(self._make_tool_call_chunk("get_weather", {"location": "Tokyo"}, done=True))
+        tool_call = result.choices[0].delta.tool_calls[0]
+        assert tool_call["id"].startswith("call_")
+
+    def test_streaming_arguments_converted_to_json_string(self):
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        result = iterator.chunk_parser(self._make_tool_call_chunk("get_weather", {"location": "Tokyo"}, done=True))
+        arguments = result.choices[0].delta.tool_calls[0]["function"]["arguments"]
+        assert isinstance(arguments, str)
+        assert json.loads(arguments) == {"location": "Tokyo"}
+
+    def test_streaming_finish_reason_tool_calls_in_done_chunk(self):
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        result = iterator.chunk_parser(self._make_tool_call_chunk("get_weather", {"location": "Tokyo"}, done=True))
+        assert result.choices[0].finish_reason == "tool_calls"
+
+    def test_streaming_saw_tool_calls_propagates_to_done_chunk(self):
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        iterator.chunk_parser(self._make_tool_call_chunk("get_weather", {"location": "Tokyo"}))
+        result = iterator.chunk_parser(self._make_done_chunk())
+        assert result.choices[0].finish_reason == "tool_calls"
+
+    def test_streaming_length_finish_reason_preserved_with_tool_calls(self):
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        iterator.chunk_parser(self._make_tool_call_chunk("get_weather", {"location": "Tokyo"}))
+        result = iterator.chunk_parser(self._make_done_chunk(done_reason="length"))
+        assert result.choices[0].finish_reason == "length"
+
+    def test_streaming_parallel_tool_calls_get_unique_indices(self):
+        iterator = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+
+        chunk1 = {
+            "model": "qwen3:14b",
+            "created_at": "2025-01-11T00:00:00.000000Z",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": {"city": "Tokyo"},
+                        }
+                    }
+                ],
+            },
+            "done": False,
+        }
+        chunk2 = {
+            "model": "qwen3:14b",
+            "created_at": "2025-01-11T00:00:00.000000Z",
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "get_time",
+                            "arguments": {"timezone": "America/New_York"},
+                        }
+                    }
+                ],
+            },
+            "done": False,
+        }
+
+        result1 = iterator.chunk_parser(chunk1)
+        result2 = iterator.chunk_parser(chunk2)
+
+        tc1 = result1.choices[0].delta.tool_calls[0]
+        tc2 = result2.choices[0].delta.tool_calls[0]
+        assert tc1["index"] == 0
+        assert tc2["index"] == 1
+        assert tc1["function"]["name"] == "get_weather"
+        assert tc2["function"]["name"] == "get_time"
+        assert json.loads(tc1["function"]["arguments"]) == {"city": "Tokyo"}
+        assert json.loads(tc2["function"]["arguments"]) == {"timezone": "America/New_York"}
