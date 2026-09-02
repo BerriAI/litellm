@@ -13289,6 +13289,58 @@ export interface paths {
         patch: operations["patch_user_scim_v2_Users__user_id__patch"];
         trace?: never;
     };
+    "/scim/v2/placeholders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Placeholders
+         * @description List user rows whose id is another account's SSO identity or email.
+         *
+         *     An earlier release provisioned a group member it could not match as a user keyed
+         *     by the raw member value, and that row now shadows the account the value really
+         *     names, so every push of that member is refused. This lists those rows so an
+         *     operator can fold each one into the account it shadows with
+         *     ``POST /scim/v2/placeholders/{user_id}/merge``. A row that has an SSO identity of
+         *     its own or owns virtual keys is left out: someone uses that account.
+         */
+        get: operations["list_placeholders_scim_v2_placeholders_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/scim/v2/placeholders/{user_id}/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Merge Placeholder
+         * @description Fold a placeholder user into the one account its id names by SSO identity or email.
+         *
+         *     The account is added to every team the placeholder is on, then the placeholder is
+         *     deleted the way ``DELETE /scim/v2/Users/{id}`` deletes a user, so the next group
+         *     push resolves the member value to the real account. Refused with 409 when the row
+         *     has an SSO identity of its own, owns virtual keys, or names no account or several.
+         */
+        post: operations["merge_placeholder_scim_v2_placeholders__user_id__merge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/search": {
         parameters: {
             query?: never;
@@ -22816,6 +22868,10 @@ export interface components {
             required: boolean;
             /** Tooltip */
             tooltip?: string | null;
+            /** Validation Message */
+            validation_message?: string | null;
+            /** Validation Pattern */
+            validation_pattern?: string | null;
         };
         /**
          * AgentExtension
@@ -34927,6 +34983,27 @@ export interface components {
             /** Value */
             value?: unknown | null;
         };
+        /**
+         * SCIMPlaceholder
+         * @description A user row keyed by a value that names another account by SSO identity or email.
+         */
+        SCIMPlaceholder: {
+            /** Placeholder User Id */
+            placeholder_user_id: string;
+            /** Resolved User Ids */
+            resolved_user_ids: string[];
+            /** Team Ids */
+            team_ids: string[];
+        };
+        /** SCIMPlaceholderMergeResult */
+        SCIMPlaceholderMergeResult: {
+            /** Merged Into User Id */
+            merged_into_user_id: string;
+            /** Placeholder User Id */
+            placeholder_user_id: string;
+            /** Team Ids */
+            team_ids: string[];
+        };
         /** SCIMServiceProviderConfig */
         SCIMServiceProviderConfig: {
             /** Authenticationschemes */
@@ -37400,6 +37477,8 @@ export interface components {
             } | null;
             /** Num Retries */
             num_retries?: number | null;
+            /** Optional Pre Call Checks */
+            optional_pre_call_checks?: ("prompt_caching" | "router_budget_limiting" | "responses_api_deployment_check" | "deployment_affinity" | "session_affinity" | "forward_client_headers_by_model_group" | "enforce_model_rate_limits" | "encrypted_content_affinity")[] | null;
             /** Retry After */
             retry_after?: number | null;
             retry_policy?: components["schemas"]["RetryPolicy"] | null;
@@ -55845,6 +55924,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SCIMUser-Output"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_placeholders_scim_v2_placeholders_get: {
+        parameters: {
+            query?: {
+                feature?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SCIMPlaceholder"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    merge_placeholder_scim_v2_placeholders__user_id__merge_post: {
+        parameters: {
+            query?: {
+                feature?: string | null;
+            };
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SCIMPlaceholderMergeResult"];
                 };
             };
             /** @description Validation Error */
