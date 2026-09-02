@@ -92,6 +92,7 @@ from litellm.router_strategy.complexity_router import (
 from litellm.router_utils.auto_router_model_naming import (
     STRATEGY_ROUTER_PARAM_FIELDS,
     carries_complexity_router_settings,
+    uses_heuristic_v2,
     validate_complexity_router_config_placement,
     validate_complexity_router_config_write,
     validate_strategy_router_model_write,
@@ -142,6 +143,9 @@ class _ProxyModelRow(Protocol):
     def model_info(self) -> object: ...
 
     def model_dump_json(self, *, exclude_none: bool = False) -> str: ...
+
+    @property
+    def litellm_params(self) -> object: ...
 
 
 class _ProxyModelTable(Protocol):
@@ -263,6 +267,68 @@ def _raise_on_strategy_router_write_violation(
         code=status.HTTP_400_BAD_REQUEST,
         param="litellm_params.model",
     )
+
+
+def _litellm_params_mapping(value: object) -> Mapping[str, object]:
+    """Normalize Prisma's parsed or JSON-encoded Json column at the typed boundary."""
+    if isinstance(value, Mapping):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed: Final = json.loads(value)
+        except JSONDecodeError:
+            return MappingProxyType({})
+        return parsed if isinstance(parsed, Mapping) else MappingProxyType({})
+    return MappingProxyType({})
+
+
+def _effective_complexity_router_config(
+    incoming_params: GenericLiteLLMParams | None,
+    existing_params: GenericLiteLLMParams | None,
+) -> Mapping[str, object] | None:
+    """Return the whole config that the write leaves on the deployment."""
+    config: Final = (
+        incoming_params.complexity_router_config
+        if incoming_params is not None and incoming_params.complexity_router_config is not None
+        else existing_params.complexity_router_config
+        if existing_params is not None
+        else None
+    )
+    return config if isinstance(config, Mapping) else None
+
+
+async def _raise_if_heuristic_v2_slot_taken(
+    *,
+    prisma_client: PrismaClient,
+    incoming_params: GenericLiteLLMParams | None,
+    existing_params: GenericLiteLLMParams | None,
+    current_model_id: str | None = None,
+) -> None:
+    """Allow at most one persisted heuristic-v2 complexity router per proxy."""
+    effective_config: Final = _effective_complexity_router_config(incoming_params, existing_params)
+    if not uses_heuristic_v2(effective_config):
+        return
+    rows: Final = await _proxy_model_table(prisma_client).find_many(where={})
+    for row in rows:
+        if current_model_id is not None and row.model_id == current_model_id:
+            continue
+        if uses_heuristic_v2(
+            config
+            if isinstance(
+                config := _litellm_params_mapping(row.litellm_params).get("complexity_router_config"), Mapping
+            )
+            else None
+        ):
+            raise ProxyException(
+                message=(
+                    "Only one complexity router can use classifier_type='heuristic_v2' per proxy. "
+                    "Use classifier_type='heuristic' for this router, or change or delete the existing "
+                    "heuristic_v2 router first."
+                ),
+                type=ProxyErrorTypes.validation_error.value,
+                code=status.HTTP_400_BAD_REQUEST,
+                param="litellm_params.complexity_router_config.classifier_type",
+            )
 
 
 ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING: Final = "enforce_rpm_tpm_on_model_add"
@@ -713,6 +779,12 @@ async def patch_model(
         _raise_on_strategy_router_write_violation(
             incoming_params=patch_data.litellm_params,
             existing_params=db_model.litellm_params,
+        )
+        await _raise_if_heuristic_v2_slot_taken(
+            prisma_client=prisma_client,
+            incoming_params=patch_data.litellm_params,
+            existing_params=db_model.litellm_params,
+            current_model_id=model_id,
         )
 
         # Handle team model updates with proper alias management
@@ -1830,6 +1902,11 @@ async def add_new_model(
             incoming_params=model_params.litellm_params,
             existing_params=None,
         )
+        await _raise_if_heuristic_v2_slot_taken(
+            prisma_client=prisma_client,
+            incoming_params=model_params.litellm_params,
+            existing_params=None,
+        )
 
         _raise_if_rate_limits_required_but_missing(
             litellm_params=model_params.litellm_params,
@@ -2007,6 +2084,12 @@ async def update_model(
         _raise_on_strategy_router_write_violation(
             incoming_params=model_params.litellm_params,
             existing_params=deployment.litellm_params,
+        )
+        await _raise_if_heuristic_v2_slot_taken(
+            prisma_client=prisma_client,
+            incoming_params=model_params.litellm_params,
+            existing_params=deployment.litellm_params,
+            current_model_id=_model_id,
         )
 
         # update DB

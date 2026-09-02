@@ -8702,6 +8702,15 @@ class Router:
 
         complexity_router_config: Final[dict | None] = deployment.litellm_params.complexity_router_config
 
+        if complexity_router_config and complexity_router_config.get("classifier_type") == "heuristic_v2":
+            for registered in self.complexity_routers.values():
+                if any(tagged.strategy.config.classifier_type == "heuristic_v2" for tagged in registered):
+                    raise ValueError(
+                        "Only one complexity router can use classifier_type='heuristic_v2' per proxy. "
+                        "Use classifier_type='heuristic' for this router, or change or remove the existing "
+                        "heuristic_v2 router first."
+                    )
+
         default_model: str | None = deployment.litellm_params.complexity_router_default_model
 
         # If no default model specified, try to get from config tiers. Derived from the

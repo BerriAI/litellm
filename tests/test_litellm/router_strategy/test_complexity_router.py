@@ -1085,6 +1085,60 @@ class TestRouterComplexityDeploymentMethods:
         router.init_complexity_router_deployment(deployment)
         assert "auto_router/complexity_router/test-router" in router.complexity_routers
 
+    def test_only_one_heuristic_v2_complexity_router_can_register(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o-mini",
+                    "litellm_params": {"model": "openai/gpt-4o-mini"},
+                }
+            ]
+        )
+
+        def deployment(name: str) -> Deployment:
+            return Deployment(
+                model_name=name,
+                litellm_params=LiteLLM_Params(
+                    model=f"auto_router/complexity_router/{name}",
+                    complexity_router_default_model="gpt-4o-mini",
+                    complexity_router_config={
+                        "classifier_type": "heuristic_v2",
+                        "tiers": {"SIMPLE": "gpt-4o-mini"},
+                    },
+                ),
+                model_info={"id": name},
+            )
+
+        router.init_complexity_router_deployment(deployment("first"))
+        with pytest.raises(ValueError, match="Only one complexity router"):
+            router.init_complexity_router_deployment(deployment("second"))
+
+    def test_heuristic_v1_complexity_routers_remain_unlimited(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o-mini",
+                    "litellm_params": {"model": "openai/gpt-4o-mini"},
+                }
+            ]
+        )
+        for name in ("first", "second"):
+            router.init_complexity_router_deployment(
+                Deployment(
+                    model_name=name,
+                    litellm_params=LiteLLM_Params(
+                        model=f"auto_router/complexity_router/{name}",
+                        complexity_router_default_model="gpt-4o-mini",
+                        complexity_router_config={
+                            "classifier_type": "heuristic",
+                            "tiers": {"SIMPLE": "gpt-4o-mini"},
+                        },
+                    ),
+                    model_info={"id": name},
+                )
+            )
+        assert set(router.complexity_routers) == {"first", "second"}
+
     def test_hybrid_initialization_waits_for_later_pool_deployments(self):
         router = Router(
             model_list=[

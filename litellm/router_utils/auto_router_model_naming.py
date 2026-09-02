@@ -210,6 +210,11 @@ def carries_complexity_router_settings(model: str | None, present_fields: frozen
     )
 
 
+def uses_heuristic_v2(complexity_router_config: Mapping[str, object] | None) -> bool:
+    """Whether a complexity-router config selects the singleton v2 classifier."""
+    return complexity_router_config is not None and complexity_router_config.get("classifier_type") == "heuristic_v2"
+
+
 def validate_complexity_router_config_placement(litellm_params: Mapping[str, object] | None) -> str | None:
     """Reject a complexity-router setting written beside ``complexity_router_config``.
 
