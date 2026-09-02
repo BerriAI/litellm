@@ -1,6 +1,5 @@
+use crate::Error;
 use serde_json::{Map, Value};
-
-use crate::CoreResult;
 
 use super::types::{AudioTranscriptionRequestData, AudioTranscriptionResponseData};
 
@@ -32,13 +31,13 @@ pub trait AudioTranscriptionProviderConfig: Sync {
         model: &str,
         audio: Value,
         optional_params: Map<String, Value>,
-    ) -> CoreResult<AudioTranscriptionRequestData>;
+    ) -> Result<AudioTranscriptionRequestData, Error>;
 
     fn transform_transcription_response(
         &self,
         model: &str,
         response_json: Value,
-    ) -> CoreResult<AudioTranscriptionResponseData>;
+    ) -> Result<AudioTranscriptionResponseData, Error>;
 
     fn complete_url(
         &self,
@@ -46,12 +45,12 @@ pub trait AudioTranscriptionProviderConfig: Sync {
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<String>;
+    ) -> Result<String, Error>;
 
     fn auth_strategy(
         &self,
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> CoreResult<AudioTranscriptionAuth>;
+    ) -> Result<AudioTranscriptionAuth, Error>;
 }
