@@ -3078,6 +3078,56 @@ class TestMcpToolSearchSettingsEndpoints:
         assert mock_proxy_config["save_call_count"]() == 0
 
 
+def test_upload_logo_requires_proxy_admin(monkeypatch):
+    """Any authenticated key could previously write a file to the server's disk here."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    async def _internal_user_auth():
+        return UserAPIKeyAuth(
+            user_id="internal-user-1",
+            api_key="hashed-internal-key",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+    app.dependency_overrides[user_api_key_auth] = _internal_user_auth
+    try:
+        resp = client.post(
+            "/upload/logo",
+            files={"file": ("logo.png", b"\x89PNG\r\n\x1a\n" + b"x" * 32, "image/png")},
+        )
+        assert resp.status_code == 403
+        assert "proxy admin" in resp.json()["detail"].lower()
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_upload_logo_allows_proxy_admin(monkeypatch, tmp_path):
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    async def _admin_auth():
+        return UserAPIKeyAuth(
+            user_id="admin-1",
+            api_key="hashed-admin-key",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+    app.dependency_overrides[user_api_key_auth] = _admin_auth
+    try:
+        resp = client.post(
+            "/upload/logo",
+            files={"file": ("logo.png", b"\x89PNG\r\n\x1a\n" + b"x" * 32, "image/png")},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "success"
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+        uploaded_path = resp.json().get("file_path")
+        if uploaded_path and os.path.exists(uploaded_path):
+            os.remove(uploaded_path)
+
+
 class TestPtuCostAttributionUISetting:
     """``enable_ptu_cost_attribution`` is derived from the environment on every GET.
 
