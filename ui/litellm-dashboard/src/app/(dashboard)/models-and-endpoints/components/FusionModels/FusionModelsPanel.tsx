@@ -164,23 +164,30 @@ function FusionModelDialog({
 
           <div className="space-y-2">
             <Label htmlFor="fusion-preset">Behavior</Label>
-            <Select value={preset} onValueChange={(value) => applyPreset(value as FusionPreset)}>
-              <SelectTrigger id="fusion-preset">
-                <SelectValue />
+            <Select
+              value={preset}
+              onValueChange={(value) => {
+                if (value === "quality" || value === "resilient") applyPreset(value);
+              }}
+            >
+              <SelectTrigger id="fusion-preset" className="h-11 w-full px-3">
+                <span className="flex-1 text-left font-medium">
+                  {preset === "quality" ? "Quality First" : "High Availability"}
+                </span>
               </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="quality" label="Quality First">
-                  <div>
+              <SelectContent align="start">
+                <SelectItem value="quality" label="Quality First" className="items-start py-3">
+                  <div className="min-w-0 whitespace-normal pr-2">
                     <div className="font-medium">Quality First</div>
-                    <div className="text-xs text-muted-foreground">
+                    <div className="mt-1 text-sm leading-5 text-muted-foreground">
                       Fail the request when the panel quorum is missed.
                     </div>
                   </div>
                 </SelectItem>
-                <SelectItem value="resilient" label="High Availability">
-                  <div>
+                <SelectItem value="resilient" label="High Availability" className="items-start py-3">
+                  <div className="min-w-0 whitespace-normal pr-2">
                     <div className="font-medium">High Availability</div>
-                    <div className="text-xs text-muted-foreground">
+                    <div className="mt-1 text-sm leading-5 text-muted-foreground">
                       Let the aggregator answer alone when the panel quorum is missed.
                     </div>
                   </div>
@@ -206,7 +213,7 @@ function FusionModelDialog({
           <div className="space-y-2">
             <Label htmlFor="fusion-aggregator">Aggregator model</Label>
             <Select value={aggregatorModel} onValueChange={(value) => setAggregatorModel(value ?? "")}>
-              <SelectTrigger id="fusion-aggregator">
+              <SelectTrigger id="fusion-aggregator" className="w-full">
                 <SelectValue placeholder="Select the model that produces the final response" />
               </SelectTrigger>
               <SelectContent>

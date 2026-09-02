@@ -102,6 +102,23 @@ describe("FusionModelsPanel", () => {
     });
   });
 
+  it("shows readable, full-width behavior presets", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByRole("button", { name: "Add Fusion Model" }));
+    const behaviorSelector = screen.getByLabelText("Behavior");
+    expect(behaviorSelector).toHaveTextContent("Quality First");
+    expect(behaviorSelector).toHaveClass("w-full");
+
+    await user.click(behaviorSelector);
+    expect(screen.getByRole("option", { name: /Quality First/ })).toBeVisible();
+    expect(screen.getByRole("option", { name: /High Availability/ })).toBeVisible();
+
+    await user.click(screen.getByRole("option", { name: /High Availability/ }));
+    expect(behaviorSelector).toHaveTextContent("High Availability");
+  });
+
   it("requires and sends a team for team-admin creation", async () => {
     const user = userEvent.setup();
     renderPanel("team-required");
