@@ -622,7 +622,7 @@ class TestAgentRBACProxyAdmin:
     def test_create_agent_response_never_echoes_secret(self):
         """LIT-6736: POST /v1/agents must not echo the stored secret back, even
         though it's the caller's own value and even for a proxy admin."""
-        with patch("litellm.proxy.proxy_server.prisma_client"):
+        with patch("litellm.proxy.proxy_server.prisma_client"):  # test-quality-ok: proxy_server module global is the endpoint's only injection point
             self.mock_registry.get_agent_by_name = MagicMock(return_value=None)
             self.mock_registry.add_agent_to_db = AsyncMock(
                 return_value=AgentResponse(
@@ -658,7 +658,7 @@ class TestAgentRBACProxyAdmin:
 
     def test_update_agent_response_never_echoes_secret(self):
         """LIT-6736: PUT /v1/agents/{id} must not echo the stored secret back."""
-        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:  # test-quality-ok: proxy_server module global is the endpoint's only injection point
             mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
                 return_value={
                     "agent_id": "agent-123",
@@ -693,7 +693,7 @@ class TestAgentRBACProxyAdmin:
 
     def test_patch_agent_response_never_echoes_secret(self):
         """LIT-6736: PATCH /v1/agents/{id} must not echo the stored secret back."""
-        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:  # test-quality-ok: proxy_server module global is the endpoint's only injection point
             mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
                 return_value={
                     "agent_id": "agent-123",

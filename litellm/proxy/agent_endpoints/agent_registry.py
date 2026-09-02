@@ -133,6 +133,7 @@ _REDACT_AGENT_PARAMS_MAX_DEPTH: Final = 10
 _AGENT_PARAMS_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(
     dict[str, object]
 )  # mutable-ok: safe_dumps() and AgentResponse.litellm_params both require a real dict, not a Mapping
+_AGENT_PARAMS_SEQUENCE_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 _EMPTY_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
@@ -144,32 +145,45 @@ def redact_sensitive_agent_litellm_params(litellm_params: object, _depth: int = 
     responses never echo a stored provider credential back to the caller.
 
     Handles a plain dict, a JSON-serialized string (some callers hold the
-    in-memory registry's params that way), and ``None``; anything else is
-    passed through. Recursion depth is bounded to match the convention
-    documented in ``tests/code_coverage_tests/recursive_detector.py``.
+    in-memory registry's params that way), and ``None`` at the top level;
+    anything else is passed through. Recursion depth is bounded to match the
+    convention documented in ``tests/code_coverage_tests/recursive_detector.py``.
     """
-    if _depth >= _REDACT_AGENT_PARAMS_MAX_DEPTH:
-        return REDACTED_BY_LITELM_STRING
     if litellm_params is None:
         return None
     if isinstance(litellm_params, str):
+        if _depth >= _REDACT_AGENT_PARAMS_MAX_DEPTH:
+            return REDACTED_BY_LITELM_STRING
         try:
             parsed_params: Final = _AGENT_PARAMS_ADAPTER.validate_json(litellm_params)
         except ValidationError:
             return REDACTED_BY_LITELM_STRING
-        return json.dumps(redact_sensitive_agent_litellm_params(parsed_params, _depth + 1))
-    if not isinstance(litellm_params, dict):
-        return litellm_params
-    typed_params: Final = _AGENT_PARAMS_ADAPTER.validate_python(litellm_params)
+        return json.dumps(_redact_agent_params_tree(parsed_params, _depth + 1))
+    return _redact_agent_params_tree(litellm_params, _depth)
+
+
+def _redact_agent_params_tree(value: object, _depth: int) -> object:
+    """Structural recursion over an already-parsed litellm_params value: a
+    dict redacts sensitive keys and recurses into the rest, a list redacts
+    each element (so a secret nested inside a list of provider configs is
+    still caught), and anything else -- including a plain string leaf, which
+    must never be re-interpreted as a JSON blob -- passes through unchanged.
+    """
+    if _depth >= _REDACT_AGENT_PARAMS_MAX_DEPTH:
+        return REDACTED_BY_LITELM_STRING
+    if isinstance(value, list):
+        typed_items: Final = _AGENT_PARAMS_SEQUENCE_ADAPTER.validate_python(value)
+        return tuple(_redact_agent_params_tree(item, _depth + 1) for item in typed_items)
+    if not isinstance(value, dict):
+        return value
+    typed_params: Final = _AGENT_PARAMS_ADAPTER.validate_python(value)
     return {
         key: (
             REDACTED_BY_LITELM_STRING
             if _AGENT_PARAMS_MASKER.is_sensitive_key(key)
-            else redact_sensitive_agent_litellm_params(_AGENT_PARAMS_ADAPTER.validate_python(value), _depth + 1)
-            if isinstance(value, dict)
-            else value
+            else _redact_agent_params_tree(nested_value, _depth + 1)
         )
-        for key, value in typed_params.items()
+        for key, nested_value in typed_params.items()
     }  # mutable-ok: consumed by json.dumps()/AgentResponse.litellm_params, both of which require a real dict
 
 
@@ -195,20 +209,55 @@ def parse_agent_litellm_params(value: object) -> Mapping[str, object]:
 
 
 _MISSING_AGENT_PARAM: Final = object()
+_RESTORE_AGENT_PARAMS_MAX_DEPTH: Final = 10
+
+
+def _restore_redacted_nested_value(incoming_value: object, existing_value: object, _depth: int) -> object:
+    """Recurse into a non-sensitively-named dict/list value so a secret
+    nested underneath it (e.g. inside a list of per-provider configs) is
+    still restored, not just top-level keys. Mirrors the shapes
+    ``redact_sensitive_agent_litellm_params`` recurses into on read, so
+    restore and redact stay symmetric. Depth-bounded like its read-side
+    counterpart; a value at the cap is returned unchanged rather than
+    corrupted.
+    """
+    if _depth >= _RESTORE_AGENT_PARAMS_MAX_DEPTH:
+        return incoming_value
+    if isinstance(incoming_value, Mapping):
+        typed_incoming_map: Final = _AGENT_PARAMS_ADAPTER.validate_python(incoming_value)
+        existing_map: Final = (
+            _AGENT_PARAMS_ADAPTER.validate_python(existing_value)
+            if isinstance(existing_value, Mapping)
+            else _EMPTY_LITELLM_PARAMS
+        )
+        return _restore_redacted_litellm_params(typed_incoming_map, existing_map, _depth + 1)
+    if isinstance(incoming_value, (list, tuple)):
+        typed_incoming_seq: Final = _AGENT_PARAMS_SEQUENCE_ADAPTER.validate_python(incoming_value)
+        existing_seq: Final = (
+            _AGENT_PARAMS_SEQUENCE_ADAPTER.validate_python(existing_value)
+            if isinstance(existing_value, (list, tuple))
+            else ()
+        )
+        return tuple(
+            _restore_redacted_nested_value(item, existing_seq[index] if index < len(existing_seq) else None, _depth + 1)
+            for index, item in enumerate(typed_incoming_seq)
+        )
+    return incoming_value
 
 
 def _resolved_agent_param_value(
     key: str,
     incoming: Mapping[str, object],
     existing: Mapping[str, object],
+    _depth: int,
 ) -> object:
     """The value ``key`` should end up with in a restored litellm_params, or
     ``_MISSING_AGENT_PARAM`` when it should be dropped entirely."""
     if key in incoming:
         value: Final = incoming[key]
-        if _AGENT_PARAMS_MASKER.is_sensitive_key(key) and value == REDACTED_BY_LITELM_STRING:
-            return existing.get(key, _MISSING_AGENT_PARAM)
-        return value
+        if _AGENT_PARAMS_MASKER.is_sensitive_key(key):
+            return existing.get(key, _MISSING_AGENT_PARAM) if value == REDACTED_BY_LITELM_STRING else value
+        return _restore_redacted_nested_value(value, existing.get(key), _depth)
     if _AGENT_PARAMS_MASKER.is_sensitive_key(key):
         return existing.get(key, _MISSING_AGENT_PARAM)
     return _MISSING_AGENT_PARAM
@@ -217,24 +266,26 @@ def _resolved_agent_param_value(
 def _restore_redacted_litellm_params(
     incoming: Mapping[str, object],
     existing: Mapping[str, object],
+    _depth: int = 0,
 ) -> dict[str, object]:
     """Restore the real credential behind any litellm_params value the caller
     echoed back as ``REDACTED_BY_LITELM_STRING``, and behind any sensitive key
     omitted entirely, so an edit to an unrelated field never overwrites (or
     silently drops) a stored provider credential -- the UI never has to
-    read-and-resend a secret to keep it.
+    read-and-resend a secret to keep it. Recurses into nested dicts and lists
+    so a secret nested under a non-sensitively-named key is restored too.
 
     A sensitive key given a real (non-marker) value, including an explicit
     empty string, is treated as a deliberate update -- that's how a caller
-    clears a credential. Non-sensitive keys always take the incoming value,
-    matching the endpoints' existing full-replace-on-PUT / merge-on-PATCH
-    semantics for everything that isn't a secret.
+    clears a credential. Non-sensitive keys always take the incoming value
+    (recursed into), matching the endpoints' existing full-replace-on-PUT /
+    merge-on-PATCH semantics for everything that isn't a secret.
     """
     all_keys: Final = frozenset(incoming) | frozenset(existing)
     return {
         key: value
         for key in all_keys
-        if (value := _resolved_agent_param_value(key, incoming, existing)) is not _MISSING_AGENT_PARAM
+        if (value := _resolved_agent_param_value(key, incoming, existing, _depth)) is not _MISSING_AGENT_PARAM
     }  # mutable-ok: fed to safe_dumps() for JSON-column storage, which requires a real dict
 
 

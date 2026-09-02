@@ -548,6 +548,35 @@ def test_redact_sensitive_agent_litellm_params_handles_none_and_json_string():
     assert json.loads(redacted)["model"] == "gpt-4"
 
 
+def test_redact_sensitive_agent_litellm_params_recurses_into_lists_of_dicts():
+    """A secret nested inside a list of provider sub-configs (a shape a
+    non-sensitively-named key can legitimately hold) must also be redacted,
+    not silently returned as-is."""
+    redacted = redact_sensitive_agent_litellm_params(
+        {
+            "provider_configs": [
+                {"aws_secret_access_key": SENTINEL_AWS_SECRET_ACCESS_KEY, "region": "us-east-1"},
+                {"aws_secret_access_key": "other-" + SENTINEL_AWS_SECRET_ACCESS_KEY, "region": "us-west-2"},
+            ]
+        }
+    )
+
+    assert SENTINEL_AWS_SECRET_ACCESS_KEY not in json.dumps(redacted)
+    assert redacted["provider_configs"][0]["aws_secret_access_key"] == REDACTED_BY_LITELM_STRING
+    assert redacted["provider_configs"][0]["region"] == "us-east-1"
+    assert redacted["provider_configs"][1]["aws_secret_access_key"] == REDACTED_BY_LITELM_STRING
+    assert redacted["provider_configs"][1]["region"] == "us-west-2"
+
+
+def test_redact_sensitive_agent_litellm_params_does_not_reinterpret_plain_string_values_as_json():
+    """A plain non-JSON string value (most string leaves) must pass through
+    unchanged rather than failing to parse and getting redacted."""
+    redacted = redact_sensitive_agent_litellm_params({"model": "bedrock/agentcore/my-agent", "is_public": True})
+
+    assert redacted["model"] == "bedrock/agentcore/my-agent"
+    assert redacted["is_public"] is True
+
+
 @pytest.mark.asyncio
 async def test_add_agent_to_db_drops_a_sentinel_value_instead_of_storing_the_placeholder():
     """A create has nothing stored to restore behind a redaction marker, so a
@@ -676,6 +705,60 @@ async def test_update_agent_in_db_preserves_secret_when_key_omitted_entirely():
 
     stored_params: Final = json.loads(mock_update.call_args.kwargs["data"]["litellm_params"])
     assert stored_params["aws_secret_access_key"] == SENTINEL_AWS_SECRET_ACCESS_KEY
+
+
+@pytest.mark.asyncio
+async def test_update_agent_in_db_preserves_secret_nested_under_a_non_sensitive_key():
+    """A secret nested inside a dict held by a non-sensitively-named key
+    (e.g. a per-provider sub-config) must also survive an echoed-back
+    redaction marker, not just top-level secret keys."""
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            litellm_params={
+                "provider_config": {
+                    "aws_secret_access_key": SENTINEL_AWS_SECRET_ACCESS_KEY,
+                    "region": "us-east-1",
+                }
+            },
+            object_permission_id=None,
+        )
+    )
+    updated_agent = MagicMock()
+    updated_agent.model_dump.return_value = {
+        "agent_id": "agent-123",
+        "agent_name": "Test Agent",
+        "agent_card_params": _sample_agent_card_params(),
+        "litellm_params": {},
+        "object_permission": None,
+    }
+    updated_agent.object_permission = None
+    mock_update = AsyncMock(return_value=updated_agent)
+    mock_prisma.db.litellm_agentstable.update = mock_update
+
+    await registry.update_agent_in_db(
+        agent_id="agent-123",
+        agent={
+            "agent_name": "Test Agent",
+            "agent_card_params": _sample_agent_card_params(),
+            "litellm_params": {
+                # The GET response redacted the nested secret; the caller
+                # round-trips it verbatim while changing nothing.
+                "provider_config": {
+                    "aws_secret_access_key": REDACTED_BY_LITELM_STRING,
+                    "region": "us-west-2",
+                }
+            },
+        },
+        prisma_client=mock_prisma,
+        updated_by="test-user",
+    )
+
+    stored_params: Final = json.loads(mock_update.call_args.kwargs["data"]["litellm_params"])
+    assert stored_params["provider_config"]["aws_secret_access_key"] == SENTINEL_AWS_SECRET_ACCESS_KEY
+    assert stored_params["provider_config"]["region"] == "us-west-2"
 
 
 @pytest.mark.asyncio
