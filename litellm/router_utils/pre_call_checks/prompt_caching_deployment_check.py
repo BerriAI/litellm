@@ -58,6 +58,9 @@ class PromptCachingDeploymentCheck(CustomLogger):
         request_kwargs: dict | None = None,
         parent_otel_span: Span | None = None,
     ) -> list[dict]:
+        if request_kwargs is not None and request_kwargs.get("_target_order") is not None:
+            return healthy_deployments
+
         if messages is not None and is_prompt_caching_valid_prompt(
             messages=messages,
             model=model,
