@@ -14,6 +14,17 @@ from litellm.secret_managers.main import str_to_bool
 _MAX_EXCEPTION_CHAIN_DEPTH: Final = 20
 
 
+def _exception_types(*candidates: object) -> tuple[type[BaseException], ...]:
+    """Keep only the real exception classes among ``candidates``.
+
+    The predicates below resolve prisma's error classes at call time, so a test
+    that swaps ``sys.modules["prisma"]`` for a ``MagicMock`` hands them mocks,
+    and ``isinstance`` against a mock raises ``TypeError`` instead of answering
+    False. Dropping the non-types lets the call fall through to the other checks.
+    """
+    return tuple(c for c in candidates if isinstance(c, type) and issubclass(c, BaseException))
+
+
 class PrismaDBExceptionHandler:
     """
     Class to handle DB Exceptions or Connection Errors
@@ -59,7 +70,7 @@ class PrismaDBExceptionHandler:
 
         if isinstance(e, DB_CONNECTION_ERROR_TYPES):
             return True
-        if isinstance(e, prisma.engine.errors.EngineConnectionError):
+        if isinstance(e, _exception_types(prisma.engine.errors.EngineConnectionError)):
             return True
         return isinstance(e, ProxyException) and e.type == ProxyErrorTypes.no_db_connection
 
@@ -81,7 +92,7 @@ class PrismaDBExceptionHandler:
         """
         import prisma
 
-        data_layer_errors: Final = (
+        data_layer_errors: Final = _exception_types(
             prisma.errors.DataError,
             prisma.errors.UniqueViolationError,
             prisma.errors.ForeignKeyViolationError,
@@ -94,7 +105,7 @@ class PrismaDBExceptionHandler:
             return False
         if isinstance(e, DB_CONNECTION_ERROR_TYPES):
             return True
-        if isinstance(e, prisma.errors.PrismaError):
+        if isinstance(e, _exception_types(prisma.errors.PrismaError)):
             return True
         if isinstance(e, ProxyException) and e.type == ProxyErrorTypes.no_db_connection:
             return True
@@ -138,13 +149,13 @@ class PrismaDBExceptionHandler:
             return True
         if isinstance(
             e,
-            (
+            _exception_types(
                 prisma.errors.ClientNotConnectedError,
                 prisma.errors.HTTPClientClosedError,
             ),
         ):
             return True
-        if isinstance(e, prisma.errors.PrismaError):
+        if isinstance(e, _exception_types(prisma.errors.PrismaError)):
             error_message: Final = str(e).lower()
             connection_keywords: Final = (
                 "can't reach database server",
@@ -171,7 +182,7 @@ class PrismaDBExceptionHandler:
         """True iff ``e`` is a Postgres deadlock (P2034 / 40P01) surfaced through prisma."""
         import prisma
 
-        if not isinstance(e, prisma.errors.PrismaError):
+        if not isinstance(e, _exception_types(prisma.errors.PrismaError)):
             return False
         if getattr(e, "code", None) == "P2034":
             return True
@@ -202,7 +213,7 @@ class PrismaDBExceptionHandler:
         """
         import prisma
 
-        if isinstance(e, prisma.errors.PrismaError):
+        if isinstance(e, _exception_types(prisma.errors.PrismaError)):
             return False
         tb = getattr(e, "__traceback__", None)
         while tb is not None:

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sys
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -579,3 +580,40 @@ def test_is_deadlock_error_matches_postgres_deadlock(error):
 def test_is_deadlock_error_excludes_non_deadlocks(error):
     """Non-deadlock prisma errors, connectivity failures, and non-prisma exceptions are not treated as deadlocks."""
     assert PrismaDBExceptionHandler.is_deadlock_error(error) is False
+
+
+MOCKED_PRISMA_PREDICATES: Final = (
+    PrismaDBExceptionHandler.is_database_infrastructure_error,
+    PrismaDBExceptionHandler.is_database_transport_error,
+    PrismaDBExceptionHandler.is_deadlock_error,
+    PrismaDBExceptionHandler.is_prisma_engine_internal_error,
+    PrismaDBExceptionHandler.is_database_service_unavailable_error,
+)
+
+
+@pytest.mark.parametrize("predicate", MOCKED_PRISMA_PREDICATES, ids=lambda p: p.__name__)
+def test_predicates_answer_false_for_a_plain_exception_when_prisma_is_mocked(predicate):
+    """Suites that swap ``sys.modules["prisma"]`` for a ``MagicMock`` hand the
+    predicates mocks in place of prisma's error classes. ``isinstance`` against
+    a mock raises ``TypeError``; the predicate must instead answer for the
+    non-prisma checks it still has."""
+    with patch.dict(sys.modules, {"prisma": MagicMock()}):
+        assert predicate(Exception("db connection dropped")) is False
+
+
+def test_infrastructure_error_still_recognizes_transport_errors_when_prisma_is_mocked():
+    """Skipping the prisma classes must not skip the checks that do not need them."""
+    with patch.dict(sys.modules, {"prisma": MagicMock()}):
+        no_db: Final = ProxyException(message="no db", type=ProxyErrorTypes.no_db_connection, param=None, code=503)
+        assert PrismaDBExceptionHandler.is_database_infrastructure_error(httpx.ConnectError("refused")) is True
+        assert PrismaDBExceptionHandler.is_database_infrastructure_error(no_db) is True
+
+
+def test_connection_error_answers_when_prisma_is_mocked_after_import():
+    """``prisma.engine`` is already loaded in a real process, so a mock parent
+    still resolves ``prisma.engine.errors``; its classes are then mocks too."""
+    import prisma.engine.errors  # noqa: F401
+
+    with patch.dict(sys.modules, {"prisma": MagicMock()}):
+        assert PrismaDBExceptionHandler.is_database_connection_error(Exception("x")) is False
+        assert PrismaDBExceptionHandler.is_database_connection_error(httpx.ConnectError("refused")) is True
