@@ -35,6 +35,22 @@ class ConfidenceLevel(str, Enum):
 
 SDK_FUNCTIONS = ("ocr", "messages", "responses", "count_tokens")
 
+# Gateway endpoints for execution tracing
+GATEWAY_ENDPOINTS = {
+    "/chat/completions": {
+        "python_func": "litellm.proxy.proxy_server.chat_completion",
+        "rust_func": "litellm_python_bridge.chat_completion_endpoint",
+    },
+    "/ocr": {
+        "python_func": "litellm.proxy.ocr_endpoints.endpoints.ocr",
+        "rust_func": "litellm_python_bridge.ocr_endpoint",
+    },
+    "/audio/transcriptions": {
+        "python_func": "litellm.proxy.audio_endpoints.audio_transcription",
+        "rust_func": "litellm_python_bridge.audio_transcription_endpoint",
+    },
+}
+
 
 @dataclass(frozen=True)
 class HarnessCase:

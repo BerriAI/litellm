@@ -1,0 +1,8 @@
+{
+  "name": "gateway_trace",
+  "description": "Gateway-level endpoint execution tracing",
+  "test_files": [
+    "test_chat_completions.py",
+    "test_ocr.py"
+  ]
+}
