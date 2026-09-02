@@ -17,7 +17,7 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     _OPTIONAL_PresidioPIIMasking,
 )
 from litellm.exceptions import GuardrailRaisedException
-from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
+from litellm.types.guardrails import GuardrailEventHooks, LitellmParams, PiiAction, PiiEntityType
 from litellm.types.utils import Choices, Message, ModelResponse
 from litellm.exceptions import BlockedPiiEntityError
 
@@ -3165,6 +3165,41 @@ def test_update_in_memory_coerces_invalid_chunk_size():
     )
     guardrail.update_in_memory_litellm_params(params)
     assert guardrail.presidio_analyze_chunk_size_bytes == DEFAULT_PRESIDIO_ANALYZE_CHUNK_SIZE_BYTES
+
+
+def test_update_in_memory_output_callback_keeps_forced_post_call():
+    """The registry-tracked callback for filter_scope='output' is initialized with a
+    forced post_call hook regardless of the configured mode; a mode-changing update
+    must not move it off the response stage (LIT-6591)."""
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        event_hook=GuardrailEventHooks.post_call.value,
+    )
+
+    guardrail.update_in_memory_litellm_params({"guardrail": "presidio", "mode": "pre_call", "default_on": True})
+
+    assert guardrail.event_hook is GuardrailEventHooks.post_call
+    assert guardrail.should_run_guardrail(data={}, event_type=GuardrailEventHooks.post_call) is True
+    assert guardrail.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is False
+
+
+def test_update_in_memory_output_parse_pii_keeps_post_call_expansion():
+    """A guardrail with output_parse_pii must keep running on post_call to unmask the
+    response after a mode-changing update, mirroring the constructor's expansion."""
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+        event_hook="pre_call",
+    )
+
+    guardrail.update_in_memory_litellm_params(
+        LitellmParams(guardrail="presidio", mode="during_call", output_parse_pii=True, default_on=True)
+    )
+
+    assert guardrail.should_run_guardrail(data={}, event_type=GuardrailEventHooks.during_call) is True
+    assert guardrail.should_run_guardrail(data={}, event_type=GuardrailEventHooks.post_call) is True
+    assert guardrail.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is False
 
 
 def test_split_text_handles_chunk_size_below_char_width():

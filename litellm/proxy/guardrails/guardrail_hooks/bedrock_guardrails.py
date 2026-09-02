@@ -317,9 +317,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.streaming_sampling_rate = streaming_params.streaming_sampling_rate
         self.streaming_end_of_stream_only = streaming_params.streaming_end_of_stream_only
 
-    def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
+    def update_in_memory_litellm_params(self, litellm_params: "LitellmParams | Mapping[str, object]") -> None:
         super().update_in_memory_litellm_params(litellm_params)
-        self._set_streaming_params(BedrockGuardrailStreamingParams.from_extras(litellm_params.model_extra))
+        extras: Final = litellm_params if isinstance(litellm_params, Mapping) else litellm_params.model_extra
+        self._set_streaming_params(BedrockGuardrailStreamingParams.from_extras(extras))
 
     def _streams_incrementally(self) -> bool:
         return not self.streaming_buffer_until_moderated and not self.mask_response_content

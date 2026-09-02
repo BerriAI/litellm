@@ -7,6 +7,7 @@
 
 import json
 import os
+from collections.abc import Mapping
 from typing import Any, Final, Literal
 
 from fastapi import HTTPException
@@ -15,6 +16,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
+    updated_litellm_param,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
@@ -111,7 +113,7 @@ class QualifireGuardrail(CustomGuardrail):
                 "only 'block' and 'monitor' are supported."
             )
 
-    def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
+    def update_in_memory_litellm_params(self, litellm_params: "LitellmParams | Mapping[str, object]") -> None:
         """
         The base implementation blindly ``setattr``s every field on ``litellm_params``
         (including ``on_flagged``) onto this live instance with no revalidation, so an
@@ -121,7 +123,10 @@ class QualifireGuardrail(CustomGuardrail):
         the live instance untouched instead of raising after it's already been
         corrupted. Mirrors LakeraAIGuardrail's own override of this same method.
         """
-        prospective_on_flagged: Final = litellm_params.on_flagged or self.on_flagged
+        raw_on_flagged: Final = updated_litellm_param(litellm_params, "on_flagged")
+        prospective_on_flagged: Final = (
+            raw_on_flagged if isinstance(raw_on_flagged, str) and raw_on_flagged else self.on_flagged
+        )
         self._validate_on_flagged(prospective_on_flagged)
         super().update_in_memory_litellm_params(litellm_params=litellm_params)
 
