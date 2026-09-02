@@ -5,13 +5,14 @@ Utility functions for base LLM classes.
 import copy
 import json
 from abc import ABC, abstractmethod
-from typing import Any, Final
+from functools import reduce
+from typing import Any, Final, TypeAlias
 
 from openai.lib import _parsing, _pydantic
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from litellm._logging import verbose_logger
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionSystemMessage, ChatCompletionToolCallChunk
 from litellm.types.utils import Message, ProviderSpecificModelInfo, TokenCountResponse
 
 
@@ -204,19 +205,72 @@ def type_to_response_format_param(
     }
 
 
+SystemMessageContent: TypeAlias = str | list[object]
+
+
+def _content_blocks(content: SystemMessageContent) -> list[object]:  # mutable-ok: block lists are the wire format
+    if not isinstance(content, str):
+        return content
+    return [{"type": "text", "text": content}] if content else []  # mutable-ok: text block for str content
+
+
+def merge_system_message_contents(first: SystemMessageContent, second: SystemMessageContent) -> SystemMessageContent:
+    """
+    Merge the contents of two consecutive system messages: str pairs join with a
+    blank line, anything involving block lists concatenates as blocks.
+    """
+    if isinstance(first, str) and isinstance(second, str):
+        return f"{first}\n\n{second}" if first and second else first or second
+    return _content_blocks(first) + _content_blocks(second)
+
+
+_system_content_adapter: Final = TypeAdapter[SystemMessageContent](SystemMessageContent)
+
+
+def _system_content(message: ChatCompletionSystemMessage) -> SystemMessageContent:
+    return _system_content_adapter.validate_python(message["content"])
+
+
+def _as_system_message(message: AllMessageValues) -> AllMessageValues:
+    if message["role"] != "developer":
+        return message
+    verbose_logger.debug(
+        "Translating developer role to system role for non-OpenAI providers."
+    )  # ensure user knows what's happening with their input.
+    translated: Final[ChatCompletionSystemMessage] = {**message, "role": "system"}
+    return translated
+
+
+def _merged_system_messages(
+    first: ChatCompletionSystemMessage, second: ChatCompletionSystemMessage
+) -> ChatCompletionSystemMessage:
+    merged: Final[ChatCompletionSystemMessage] = {
+        **second,
+        **first,
+        "role": "system",
+        "content": merge_system_message_contents(_system_content(first), _system_content(second)),
+    }
+    return merged
+
+
+def _fold_into_previous_system(
+    acc: tuple[AllMessageValues, ...], message: AllMessageValues
+) -> tuple[AllMessageValues, ...]:
+    if not acc or message["role"] != "system":
+        return (*acc, message)
+    previous: Final = acc[-1]
+    if previous["role"] != "system":
+        return (*acc, message)
+    return (*acc[:-1], _merged_system_messages(previous, message))
+
+
 def map_developer_role_to_system_role(
     messages: list[AllMessageValues],
 ) -> list[AllMessageValues]:
     """
-    Translate `developer` role to `system` role for non-OpenAI providers.
+    Translate `developer` role to `system` role for non-OpenAI providers, merging
+    the consecutive system messages this creates for backends that allow only one.
     """
-    new_messages: Final[list[AllMessageValues]] = []
-    for m in messages:
-        if m["role"] == "developer":
-            verbose_logger.debug(
-                "Translating developer role to system role for non-OpenAI providers."
-            )  # ensure user knows what's happening with their input.
-            new_messages.append({"role": "system", "content": m["content"]})
-        else:
-            new_messages.append(m)
-    return new_messages
+    empty: Final[tuple[AllMessageValues, ...]] = ()
+    merged: Final = reduce(_fold_into_previous_system, map(_as_system_message, messages), empty)
+    return list(merged)  # mutable-ok: callers expect the list the pre-merge implementation returned

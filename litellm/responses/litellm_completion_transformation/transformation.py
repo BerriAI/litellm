@@ -38,6 +38,7 @@ from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.base_utils import SystemMessageContent, merge_system_message_contents
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
@@ -401,28 +402,38 @@ class LiteLLMCompletionResponsesConfig:
         guardrail scanning) leave it off, because they need every piece of text
         in the request to stay readable as message ``content``.
         """
-        messages: list[
-            AllMessageValues
-            | GenericChatCompletionMessage
-            | ChatCompletionMessageToolCall
-            | ChatCompletionResponseMessage
-            | Message
-        ] = []
-        if responses_api_request.get("instructions"):
-            messages.append(
-                LiteLLMCompletionResponsesConfig.transform_instructions_to_system_message(
-                    responses_api_request.get("instructions")
-                )
-            )
-
-        messages.extend(
+        input_messages: Final = (
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message(
                 input=input,
                 replay_reasoning=replay_reasoning,
             )
         )
+        instructions: Final = cast(  # cast-ok: instructions is a str per the Responses API
+            "str | None", responses_api_request.get("instructions")
+        )
+        if not instructions:
+            return list(input_messages)  # mutable-ok: widened copy for the declared return union
 
-        return messages
+        first_message: Final = input_messages[0] if input_messages else None
+        if isinstance(first_message, dict):
+            leading: Final = cast(  # cast-ok: every dict message form carries role and content
+                "GenericChatCompletionMessage", first_message
+            )
+            if leading["role"] in ("system", "developer"):
+                merged_content: Final = merge_system_message_contents(
+                    instructions,
+                    cast("SystemMessageContent", leading["content"]),  # cast-ok: content field is typed as a bare list
+                )
+                merged_first: Final = cast(  # cast-ok: source message shape is kept, only content changes
+                    "GenericChatCompletionMessage",
+                    {**leading, "content": merged_content},  # mutable-ok: chat messages travel as plain dicts
+                )
+                return [merged_first, *input_messages[1:]]  # mutable-ok: declared return type is a list
+
+        return [  # mutable-ok: declared return type is a list
+            LiteLLMCompletionResponsesConfig.transform_instructions_to_system_message(instructions),
+            *input_messages,
+        ]
 
     @staticmethod
     async def async_responses_api_session_handler(
