@@ -91,14 +91,21 @@ def test_get_complete_url_default_base(monkeypatch: pytest.MonkeyPatch):
     assert url == SPEECH_URL
 
 
-def test_get_complete_url_custom_base():
+@pytest.mark.parametrize(
+    "api_base",
+    ["https://custom.api.example.com/v1/", "https://custom.api.example.com/v1", "https://custom.api.example.com"],
+)
+def test_get_complete_url_custom_base_always_versioned(api_base: str):
     config: Final = MistralTextToSpeechConfig()
-    url: Final = config.get_complete_url(
-        model="voxtral-mini-tts-2603",
-        api_base="https://custom.api.example.com/v1/",
-        litellm_params={},
-    )
+    url: Final = config.get_complete_url(model="voxtral-mini-tts-2603", api_base=api_base, litellm_params={})
     assert url == "https://custom.api.example.com/v1/audio/speech"
+
+
+def test_get_complete_url_host_only_env_base_gets_v1(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("MISTRAL_API_BASE", "https://api.mistral.ai")
+    config: Final = MistralTextToSpeechConfig()
+    url: Final = config.get_complete_url(model="voxtral-mini-tts-2603", api_base=None, litellm_params={})
+    assert url == SPEECH_URL
 
 
 def test_validate_environment_sets_bearer_header():
