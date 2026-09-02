@@ -1005,6 +1005,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "gemini_native_audio": {"type": "boolean"},
                 "gemini_audio_only_live": {"type": "boolean"},
                 "supports_embedding_image_input": {"type": "boolean"},
+                "supports_forced_tool_use": {"type": "boolean"},
                 "supports_function_calling": {"type": "boolean"},
                 "supports_image_input": {"type": "boolean"},
                 "supports_nova_canvas_image_edit": {"type": "boolean"},

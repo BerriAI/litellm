@@ -86,20 +86,39 @@ def _decoded_sse_data_line(line: bytes) -> object | None:
         return None
 
 
-def _anthropic_error_event_payload(chunk: object) -> Mapping[str, object] | None:
+def _anthropic_event_payload(chunk: object, event_type: str) -> Mapping[str, object] | None:
     if isinstance(chunk, dict):
-        return chunk if chunk.get("type") == "error" else None
+        return chunk if chunk.get("type") == event_type else None
     if isinstance(chunk, (bytes, bytearray)):
         decoded_lines: Final = (_decoded_sse_data_line(line) for line in chunk.splitlines())
         return next(
             (
                 candidate
                 for candidate in decoded_lines
-                if isinstance(candidate, dict) and candidate.get("type") == "error"
+                if isinstance(candidate, dict) and candidate.get("type") == event_type
             ),
             None,
         )
     return None
+
+
+def _anthropic_error_event_payload(chunk: object) -> Mapping[str, object] | None:
+    return _anthropic_event_payload(chunk, "error")
+
+
+def parse_anthropic_refusal_stop_details(chunk: object) -> Mapping[str, object] | None:
+    """
+    Return the ``stop_details`` object of an Anthropic SSE ``message_delta``
+    chunk whose delta carries ``stop_reason: "refusal"`` (a safeguard refusal:
+    https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback),
+    or None for any other chunk, a plain refusal without ``stop_details`` included.
+    """
+    payload: Final = _anthropic_event_payload(chunk, "message_delta")
+    delta: Final = payload.get("delta") if payload is not None else None
+    if not isinstance(delta, dict) or delta.get("stop_reason") != "refusal":
+        return None
+    stop_details: Final = delta.get("stop_details")
+    return stop_details if isinstance(stop_details, dict) else None
 
 
 def _anthropic_error_body(chunk: object) -> Mapping[str, object] | None:
