@@ -4743,7 +4743,11 @@ def _init_custom_logger_compatible_class(
             return newrelic_logger
         return None
     except Exception as e:
-        verbose_logger.exception("[Non-Blocking Error] Error initializing custom logger: %s", e)
+        verbose_logger.exception(
+            "Failed to initialize custom logger for integration %r: %s. Callback will not be registered.",
+            logging_integration,
+            e,
+        )
         return None
     return None
 
