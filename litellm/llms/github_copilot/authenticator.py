@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 import time
 from datetime import datetime
 from typing import Any, Final
@@ -37,11 +38,14 @@ class Authenticator:
             os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token"),
         )
         self.api_key_file = os.path.join(self.token_dir, os.getenv("GITHUB_COPILOT_API_KEY_FILE", "api-key.json"))
-        self._ensure_token_dir()
+        self._session_cache: dict[str, dict[str, Any]] = {}  # mutable-ok: session cache
 
-    def get_access_token(self) -> str:
+    def get_access_token(self, access_token: str | None = None) -> str:
         """
         Login to Copilot with retry 3 times.
+
+        Args:
+            access_token: Optional access token passed via config/request params.
 
         Returns:
             str: The GitHub access token.
@@ -49,24 +53,28 @@ class Authenticator:
         Raises:
             GetAccessTokenError: If unable to obtain an access token after retries.
         """
+        if access_token:
+            return access_token
+
         try:
             with open(self.access_token_file, "r") as f:
-                access_token = f.read().strip()
-                if access_token:
-                    return access_token
+                saved_token: Final = f.read().strip()
+                if saved_token:
+                    return saved_token
         except OSError:
             verbose_logger.warning("No existing access token found or error reading file")
 
         for attempt in range(3):
             verbose_logger.debug("Access token acquisition attempt %s/3", attempt + 1)
             try:
-                access_token = self._login()
+                new_token = self._login()  # rebind-ok: loop variable
                 try:
+                    self._ensure_token_dir()
                     with open(self.access_token_file, "w") as f:
-                        f.write(access_token)
+                        f.write(new_token)
                 except OSError:
                     verbose_logger.error("Error saving access token to file")
-                return access_token
+                return new_token
             except (GetDeviceCodeError, GetAccessTokenError, RefreshAPIKeyError) as e:
                 verbose_logger.warning("Failed attempt %s: %s", attempt + 1, e)
                 continue
@@ -76,9 +84,12 @@ class Authenticator:
             status_code=401,
         )
 
-    def get_api_key(self) -> str:
+    def get_api_key(self, access_token: str | None = None) -> str:
         """
         Get the API key, refreshing if necessary.
+
+        Args:
+            access_token: Optional GitHub access token passed via config/request params.
 
         Returns:
             str: The GitHub Copilot API key.
@@ -86,11 +97,39 @@ class Authenticator:
         Raises:
             GetAPIKeyError: If unable to obtain an API key.
         """
+        # When an explicit access_token is provided, isolate in memory to prevent sharing a cached key across callers
+        if access_token:
+            cached_info: Final = self._session_cache.get(access_token)
+            if cached_info and cached_info.get("expires_at", 0) > time.time():
+                cached_token: Final = cached_info.get("token")
+                if isinstance(cached_token, str):
+                    return cached_token
+
+            try:
+                session_key_info: Final = self._refresh_api_key(access_token)
+                self._session_cache[access_token] = session_key_info
+                refreshed_token: Final = session_key_info.get("token")
+                if isinstance(refreshed_token, str):
+                    return refreshed_token
+                else:
+                    raise GetAPIKeyError(
+                        message="API key response missing token",
+                        status_code=401,
+                    )
+            except RefreshAPIKeyError as e:
+                raise GetAPIKeyError(
+                    message=f"Failed to refresh API key: {e}",
+                    status_code=401,
+                )
+
+        # Fallback to single-user local file storage when no explicit token is passed
         try:
             with open(self.api_key_file, "r") as f:
-                api_key_info = json.load(f)
-                if api_key_info.get("expires_at", 0) > datetime.now().timestamp():
-                    return api_key_info.get("token")
+                file_key_info: Final = json.load(f)
+                if isinstance(file_key_info, dict) and file_key_info.get("expires_at", 0) > datetime.now().timestamp():
+                    file_token: Final = file_key_info.get("token")
+                    if isinstance(file_token, str):
+                        return file_token
                 else:
                     verbose_logger.warning("API key expired, refreshing")
                     raise APIKeyExpiredError(
@@ -105,23 +144,21 @@ class Authenticator:
             pass  # Already logged in the try block
 
         try:
-            api_key_info = self._refresh_api_key()
-            with open(self.api_key_file, "w") as f:
-                json.dump(api_key_info, f)
-            token: Final = api_key_info.get("token")
-            if token:
-                return token
+            refreshed_key_info: Final = self._refresh_api_key()
+            try:
+                self._ensure_token_dir()
+                with open(self.api_key_file, "w") as f:
+                    json.dump(refreshed_key_info, f)
+            except OSError as e:
+                verbose_logger.warning("Error saving API key to file (continuing with in-memory token): %s", e)
+            new_key_token: Final = refreshed_key_info.get("token")
+            if isinstance(new_key_token, str):
+                return new_key_token
             else:
                 raise GetAPIKeyError(
                     message="API key response missing token",
                     status_code=401,
                 )
-        except OSError as e:
-            verbose_logger.error("Error saving API key to file: %s", e)
-            raise GetAPIKeyError(
-                message=f"Failed to save API key: {e}",
-                status_code=500,
-            )
         except RefreshAPIKeyError as e:
             raise GetAPIKeyError(
                 message=f"Failed to refresh API key: {e}",
@@ -138,16 +175,23 @@ class Authenticator:
         try:
             with open(self.api_key_file, "r") as f:
                 api_key_info: Final = json.load(f)
-                endpoints: Final = api_key_info.get("endpoints", {})
-                api_endpoint: Final = endpoints.get("api")
-                return api_endpoint
+                if isinstance(api_key_info, dict):
+                    endpoints: Final = api_key_info.get("endpoints", {})
+                    if isinstance(endpoints, dict):
+                        api_endpoint: Final = endpoints.get("api")
+                        if isinstance(api_endpoint, str):
+                            return api_endpoint
+                return None
         except (OSError, json.JSONDecodeError, KeyError) as e:
             verbose_logger.warning("Error reading API endpoint from file: %s", e)
             return None
 
-    def _refresh_api_key(self) -> dict[str, Any]:
+    def _refresh_api_key(self, access_token: str | None = None) -> dict[str, Any]:
         """
         Refresh the API key using the access token.
+
+        Args:
+            access_token: Optional access token. If not provided, will call get_access_token().
 
         Returns:
             Dict[str, Any]: The API key information including token and expiration.
@@ -155,20 +199,20 @@ class Authenticator:
         Raises:
             RefreshAPIKeyError: If unable to refresh the API key.
         """
-        access_token: Final = self.get_access_token()
-        headers: Final = self._get_github_headers(access_token)
+        resolved_token: Final = access_token or self.get_access_token()
+        headers: Final = self._get_github_headers(resolved_token)
         api_key_url: Final = os.getenv("GITHUB_COPILOT_API_KEY_URL", DEFAULT_GITHUB_API_KEY_URL)
 
         max_retries: Final = 3
         for attempt in range(max_retries):
             try:
-                sync_client = _get_httpx_client()
-                response = sync_client.get(api_key_url, headers=headers)
+                sync_client = _get_httpx_client()  # rebind-ok: loop variable
+                response = sync_client.get(api_key_url, headers=headers)  # rebind-ok: loop variable
                 response.raise_for_status()
 
-                response_json = response.json()
+                response_json = response.json()  # rebind-ok: loop variable
 
-                if "token" in response_json:
+                if isinstance(response_json, dict) and "token" in response_json:
                     return response_json
                 else:
                     verbose_logger.warning("API key response missing token: %s", response_json)
@@ -183,9 +227,28 @@ class Authenticator:
         )
 
     def _ensure_token_dir(self) -> None:
-        """Ensure the token directory exists."""
-        if not os.path.exists(self.token_dir):
-            os.makedirs(self.token_dir, exist_ok=True)
+        """Ensure the token directory exists, falling back to secure user-isolated temp directory on permission errors."""
+        try:
+            if not os.path.exists(self.token_dir):
+                os.makedirs(self.token_dir, mode=0o700, exist_ok=True)
+        except (PermissionError, OSError) as e:
+            verbose_logger.warning(
+                "Cannot create token directory at %s (%s). Falling back to temp directory.",
+                self.token_dir,
+                e,
+            )
+            try:
+                self.token_dir = tempfile.mkdtemp(prefix="litellm_copilot_")
+            except OSError:
+                pass
+            self.access_token_file = os.path.join(
+                self.token_dir,
+                os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token"),
+            )
+            self.api_key_file = os.path.join(
+                self.token_dir,
+                os.getenv("GITHUB_COPILOT_API_KEY_FILE", "api-key.json"),
+            )
 
     def _get_github_headers(self, access_token: str | None = None) -> dict[str, str]:
         """
