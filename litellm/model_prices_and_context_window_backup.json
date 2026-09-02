@@ -35226,16 +35226,16 @@
         "source": "https://nebius.com/prices"
     },
     "nebius/google/gemma-3-27b-it": {
-        "max_tokens": 128000,
-        "max_input_tokens": 128000,
-        "max_output_tokens": 128000,
-        "input_cost_per_token": 6e-08,
-        "output_cost_per_token": 2e-07,
+        "max_tokens": 110000,
+        "max_input_tokens": 110000,
+        "max_output_tokens": 110000,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 3e-07,
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "source": "https://nebius.com/prices"
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/google%2Fgemma-3-27b-it"
     },
     "nebius/meta-llama/Llama-3.3-70B-Instruct": {
         "max_tokens": 128000,
@@ -35347,15 +35347,15 @@
         "source": "https://nebius.com/prices"
     },
     "nebius/Qwen/Qwen3-32B": {
-        "max_tokens": 32768,
-        "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
+        "max_tokens": 40960,
+        "max_input_tokens": 40960,
+        "max_output_tokens": 40960,
         "input_cost_per_token": 1e-07,
         "output_cost_per_token": 3e-07,
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
-        "source": "https://nebius.com/prices"
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/Qwen%2FQwen3-32B"
     },
     "nebius/Qwen/Qwen3-30B-A3B": {
         "max_tokens": 32768,
@@ -35436,16 +35436,16 @@
         "source": "https://nebius.com/prices"
     },
     "nebius/Qwen/Qwen2.5-VL-72B-Instruct": {
-        "max_tokens": 131072,
-        "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
-        "input_cost_per_token": 1.3e-07,
-        "output_cost_per_token": 4e-07,
+        "max_tokens": 32000,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 32000,
+        "input_cost_per_token": 2.5e-07,
+        "output_cost_per_token": 7.5e-07,
         "litellm_provider": "nebius",
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "source": "https://nebius.com/prices"
+        "source": "https://tokenfactory.nebius.com/models/catalog/image2text/Qwen%2FQwen2.5-VL-72B-Instruct"
     },
     "nebius/Qwen/Qwen2-VL-72B-Instruct": {
         "max_tokens": 131072,
@@ -35469,6 +35469,320 @@
         "mode": "chat",
         "supports_vision": true,
         "source": "https://nebius.com/prices"
+    },
+    "nebius/deepseek-ai/DeepSeek-V4-Flash": {
+        "max_tokens": 1048576,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "input_cost_per_token": 1.4e-07,
+        "output_cost_per_token": 2.8e-07,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/deepseek-ai%2FDeepSeek-V4-Flash"
+    },
+    "nebius/deepseek-ai/DeepSeek-V4-Flash-0731": {
+        "max_tokens": 1024000,
+        "max_input_tokens": 1024000,
+        "max_output_tokens": 1024000,
+        "input_cost_per_token": 1.4e-07,
+        "output_cost_per_token": 2.8e-07,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/deepseek-ai%2FDeepSeek-V4-Flash-0731"
+    },
+    "nebius/deepseek-ai/DeepSeek-V4-Pro": {
+        "max_tokens": 1048576,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "input_cost_per_token": 1.75e-06,
+        "output_cost_per_token": 3.5e-06,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/deepseek-ai%2FDeepSeek-V4-Pro"
+    },
+    "nebius/MiniMaxAI/MiniMax-M2.5": {
+        "max_tokens": 196608,
+        "max_input_tokens": 196608,
+        "max_output_tokens": 196608,
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/MiniMaxAI%2FMiniMax-M2.5"
+    },
+    "nebius/MiniMaxAI/MiniMax-M3": {
+        "max_tokens": 1048576,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/MiniMaxAI%2FMiniMax-M3"
+    },
+    "nebius/moonshotai/Kimi-K2.6": {
+        "max_tokens": 262144,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "input_cost_per_token": 9.5e-07,
+        "output_cost_per_token": 4e-06,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/image2text/moonshotai%2FKimi-K2.6"
+    },
+    "nebius/moonshotai/Kimi-K2.7-Code": {
+        "max_tokens": 262144,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "input_cost_per_token": 9.5e-07,
+        "output_cost_per_token": 4e-06,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/moonshotai%2FKimi-K2.7-Code"
+    },
+    "nebius/moonshotai/Kimi-K3": {
+        "max_tokens": 1048576,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "input_cost_per_token": 3e-06,
+        "output_cost_per_token": 1.5e-05,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/image2text/moonshotai%2FKimi-K3"
+    },
+    "nebius/NousResearch/Hermes-4-405B": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 3e-06,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/NousResearch%2FHermes-4-405B"
+    },
+    "nebius/NousResearch/Hermes-4-70B": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 1.3e-07,
+        "output_cost_per_token": 4e-07,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/NousResearch%2FHermes-4-70B"
+    },
+    "nebius/nvidia/Cosmos3-Super-Reasoner": {
+        "max_tokens": 262144,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 3e-07,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/image2text/nvidia%2FCosmos3-Super-Reasoner"
+    },
+    "nebius/nvidia/Llama-3_1-Nemotron-Ultra-253B-v1": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 1.8e-06,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_reasoning": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/nvidia%2FLlama-3_1-Nemotron-Ultra-253B-v1"
+    },
+    "nebius/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B": {
+        "max_tokens": 262144,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "input_cost_per_token": 6e-08,
+        "output_cost_per_token": 2.4e-07,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/nvidia%2FNVIDIA-Nemotron-3-Nano-30B-A3B"
+    },
+    "nebius/nvidia/Nemotron-3-Nano-Omni": {
+        "max_tokens": 262144,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "input_cost_per_token": 6e-08,
+        "output_cost_per_token": 2.4e-07,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/nvidia%2FNemotron-3-Nano-Omni"
+    },
+    "nebius/nvidia/nemotron-3-super-120b-a12b": {
+        "max_tokens": 262144,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 9e-07,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/nvidia%2Fnemotron-3-super-120b-a12b"
+    },
+    "nebius/nvidia/Nemotron-3-Ultra-550b-a55b": {
+        "max_tokens": 1048576,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 3e-06,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/nvidia%2FNemotron-3-Ultra-550b-a55b"
+    },
+    "nebius/nvidia/Nemotron-3_5-Lightning": {
+        "max_tokens": 1048576,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "input_cost_per_token": 6e-08,
+        "output_cost_per_token": 2.4e-07,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/nvidia%2FNemotron-3_5-Lightning"
+    },
+    "nebius/openai/gpt-oss-120b": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 6e-07,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/openai%2Fgpt-oss-120b"
+    },
+    "nebius/openbmb/MiniCPM-V-4_5": {
+        "max_tokens": 32000,
+        "max_input_tokens": 32000,
+        "max_output_tokens": 32000,
+        "input_cost_per_token": 6.58e-07,
+        "output_cost_per_token": 1.11e-06,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_vision": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/image2text/openbmb%2FMiniCPM-V-4_5"
+    },
+    "nebius/Qwen/Qwen3-235B-A22B-Instruct-2507": {
+        "max_tokens": 262144,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "input_cost_per_token": 2e-07,
+        "output_cost_per_token": 6e-07,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/Qwen%2FQwen3-235B-A22B-Instruct-2507"
+    },
+    "nebius/Qwen/Qwen3-30B-A3B-Instruct-2507": {
+        "max_tokens": 262144,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 3e-07,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/Qwen%2FQwen3-30B-A3B-Instruct-2507"
+    },
+    "nebius/Qwen/Qwen3-Next-80B-A3B-Thinking": {
+        "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 1.2e-06,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/Qwen%2FQwen3-Next-80B-A3B-Thinking"
+    },
+    "nebius/Qwen/Qwen3.5-397B-A17B": {
+        "max_tokens": 262144,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 3.6e-06,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/Qwen%2FQwen3.5-397B-A17B"
+    },
+    "nebius/zai-org/GLM-5.1": {
+        "max_tokens": 202752,
+        "max_input_tokens": 202752,
+        "max_output_tokens": 202752,
+        "input_cost_per_token": 1.4e-06,
+        "output_cost_per_token": 4.4e-06,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/zai-org%2FGLM-5.1"
+    },
+    "nebius/zai-org/GLM-5.2": {
+        "max_tokens": 1048576,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "input_cost_per_token": 1.4e-06,
+        "output_cost_per_token": 4.4e-06,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/zai-org%2FGLM-5.2"
+    },
+    "nebius/zai-org/GLM-5.3-Flash": {
+        "max_tokens": 1024000,
+        "max_input_tokens": 1024000,
+        "max_output_tokens": 1024000,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 5e-07,
+        "litellm_provider": "nebius",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "source": "https://tokenfactory.nebius.com/models/catalog/text2text/zai-org%2FGLM-5.3-Flash"
     },
     "nebius/BAAI/bge-en-icl": {
         "max_tokens": 32768,
@@ -35496,6 +35810,15 @@
         "litellm_provider": "nebius",
         "mode": "embedding",
         "source": "https://nebius.com/prices"
+    },
+    "nebius/Qwen/Qwen3-Embedding-8B": {
+        "max_tokens": 40960,
+        "max_input_tokens": 40960,
+        "input_cost_per_token": 1e-08,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "nebius",
+        "mode": "embedding",
+        "source": "https://tokenfactory.nebius.com/models/catalog/embedding/Qwen%2FQwen3-Embedding-8B"
     },
     "nvidia.nemotron-nano-12b-v2": {
         "input_cost_per_token": 2e-07,
@@ -46551,16 +46874,30 @@
         "supports_vision": false
     },
     "watsonx/bigscience/mt0-xxl-13b": {
-        "max_tokens": 8192,
-        "max_input_tokens": 8192,
-        "max_output_tokens": 8192,
-        "input_cost_per_token": 0.0005,
-        "output_cost_per_token": 0.002,
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 1.908e-06,
+        "output_cost_per_token": 1.908e-06,
         "litellm_provider": "watsonx",
         "mode": "chat",
         "supports_function_calling": false,
         "supports_parallel_function_calling": false,
-        "supports_vision": false
+        "supports_vision": false,
+        "source": "https://dataplatform.cloud.ibm.com/docs/content/wsj/analyze-data/fm-models.html?context=wx"
+    },
+    "watsonx/bigscience/mt0-xxl": {
+        "max_tokens": 4096,
+        "max_input_tokens": 4096,
+        "max_output_tokens": 4096,
+        "input_cost_per_token": 1.908e-06,
+        "output_cost_per_token": 1.908e-06,
+        "litellm_provider": "watsonx",
+        "mode": "chat",
+        "supports_function_calling": false,
+        "supports_parallel_function_calling": false,
+        "supports_vision": false,
+        "source": "https://dataplatform.cloud.ibm.com/docs/content/wsj/analyze-data/fm-models.html?context=wx"
     },
     "watsonx/core42/jais-13b-chat": {
         "max_tokens": 8192,
@@ -46623,16 +46960,17 @@
         "supports_vision": false
     },
     "watsonx/ibm/granite-4-h-small": {
-        "max_tokens": 20480,
-        "max_input_tokens": 20480,
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
         "max_output_tokens": 20480,
-        "input_cost_per_token": 6e-08,
-        "output_cost_per_token": 2.5e-07,
+        "input_cost_per_token": 6.36e-08,
+        "output_cost_per_token": 2.65e-07,
         "litellm_provider": "watsonx",
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "source": "https://dataplatform.cloud.ibm.com/docs/content/wsj/analyze-data/fm-models.html?context=wx"
     },
     "watsonx/ibm/granite-guardian-3-2-2b": {
         "max_tokens": 8192,
@@ -46755,28 +47093,43 @@
         "supports_vision": true
     },
     "watsonx/meta-llama/llama-3-3-70b-instruct": {
-        "max_tokens": 128000,
-        "max_input_tokens": 128000,
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
         "max_output_tokens": 128000,
-        "input_cost_per_token": 7.1e-07,
-        "output_cost_per_token": 7.1e-07,
+        "input_cost_per_token": 7.526e-07,
+        "output_cost_per_token": 7.526e-07,
         "litellm_provider": "watsonx",
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "source": "https://dataplatform.cloud.ibm.com/docs/content/wsj/analyze-data/fm-models.html?context=wx"
     },
     "watsonx/meta-llama/llama-4-maverick-17b": {
-        "max_tokens": 128000,
-        "max_input_tokens": 128000,
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
         "max_output_tokens": 128000,
-        "input_cost_per_token": 3.5e-07,
-        "output_cost_per_token": 1.4e-06,
+        "input_cost_per_token": 3.71e-07,
+        "output_cost_per_token": 1.484e-06,
         "litellm_provider": "watsonx",
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "source": "https://dataplatform.cloud.ibm.com/docs/content/wsj/analyze-data/fm-models.html?context=wx"
+    },
+    "watsonx/meta-llama/llama-4-maverick-17b-128e-instruct-fp8": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 128000,
+        "input_cost_per_token": 3.71e-07,
+        "output_cost_per_token": 1.484e-06,
+        "litellm_provider": "watsonx",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_vision": false,
+        "source": "https://dataplatform.cloud.ibm.com/docs/content/wsj/analyze-data/fm-models.html?context=wx"
     },
     "watsonx/meta-llama/llama-guard-3-11b-vision": {
         "max_tokens": 128000,
@@ -46815,16 +47168,17 @@
         "supports_vision": false
     },
     "watsonx/mistralai/mistral-small-3-1-24b-instruct-2503": {
-        "max_tokens": 32000,
-        "max_input_tokens": 32000,
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
         "max_output_tokens": 32000,
-        "input_cost_per_token": 1e-07,
-        "output_cost_per_token": 3e-07,
+        "input_cost_per_token": 1.06e-07,
+        "output_cost_per_token": 3.18e-07,
         "litellm_provider": "watsonx",
         "mode": "chat",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": false
+        "supports_vision": false,
+        "source": "https://dataplatform.cloud.ibm.com/docs/content/wsj/analyze-data/fm-models.html?context=wx"
     },
     "watsonx/mistralai/pixtral-12b-2409": {
         "max_tokens": 128000,
@@ -46839,16 +47193,17 @@
         "supports_vision": true
     },
     "watsonx/openai/gpt-oss-120b": {
-        "max_tokens": 8192,
-        "max_input_tokens": 8192,
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
         "max_output_tokens": 8192,
-        "input_cost_per_token": 1.5e-07,
-        "output_cost_per_token": 6e-07,
+        "input_cost_per_token": 1.59e-07,
+        "output_cost_per_token": 6.36e-07,
         "litellm_provider": "watsonx",
         "mode": "chat",
         "supports_function_calling": false,
         "supports_parallel_function_calling": false,
-        "supports_vision": false
+        "supports_vision": false,
+        "source": "https://dataplatform.cloud.ibm.com/docs/content/wsj/analyze-data/fm-models.html?context=wx"
     },
     "watsonx/sdaia/allam-1-13b-instruct": {
         "max_tokens": 8192,
@@ -53519,6 +53874,32 @@
                 ]
             }
         ]
+    },
+    "volcengine/doubao-seed-2-1-pro-260628": {
+        "litellm_provider": "volcengine",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "max_tokens": 256000,
+        "mode": "chat",
+        "source": "https://www.volcengine.com/docs/82379/1330310",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": false,
+        "supports_vision": true
+    },
+    "volcengine/doubao-seed-2-1-turbo-260628": {
+        "litellm_provider": "volcengine",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "max_tokens": 256000,
+        "mode": "chat",
+        "source": "https://www.volcengine.com/docs/82379/1330310",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": false,
+        "supports_vision": true
     },
     "bedrock/us-east-1/zai.glm-5": {
         "input_cost_per_token": 1e-06,
