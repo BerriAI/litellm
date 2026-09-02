@@ -24,7 +24,6 @@ seen the red and accepted it.
 Usage:
     python scripts/budget_ratchet_check.py [--base REF] [budget.json ...]
 
-Stdlib only.
 """
 
 from __future__ import annotations
@@ -33,10 +32,14 @@ import argparse
 import json
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 from types import MappingProxyType
 from typing import NamedTuple
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BASE = "origin/litellm_internal_staging"

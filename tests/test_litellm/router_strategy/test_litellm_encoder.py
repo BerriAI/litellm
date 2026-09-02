@@ -1,5 +1,6 @@
 """Tests for litellm/router_strategy/auto_router/litellm_encoder.py"""
 
+import sys
 from typing import Any, Final
 
 import pytest
@@ -7,6 +8,9 @@ import pytest
 
 import litellm
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
+if sys.version_info >= (3, 14):
+    pytest.skip("The semantic-router extra excludes Python 3.14", allow_module_level=True)
+
 from litellm.router_strategy.auto_router.litellm_encoder import LiteLLMRouterEncoder
 
 

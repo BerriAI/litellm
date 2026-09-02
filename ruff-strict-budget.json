@@ -9,7 +9,7 @@
     "limit": 809
   },
   "ANN201": {
-    "limit": 2001
+    "limit": 2000
   },
   "ANN202": {
     "limit": 835
@@ -87,7 +87,7 @@
     "limit": 2
   },
   "DTZ003": {
-    "limit": 26
+    "limit": 25
   },
   "DTZ005": {
     "limit": 233

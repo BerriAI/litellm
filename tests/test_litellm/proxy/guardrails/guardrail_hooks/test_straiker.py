@@ -109,7 +109,7 @@ def test_supported_hooks_limited_to_pre_and_post():
 
 
 def test_during_call_mode_rejected_at_init():
-    with pytest.raises(ValueError, match='Event hook GuardrailEventHooks\\.during_call is not in the'):
+    with pytest.raises(ValueError, match="during_call is not in the supported event hooks"):
         StraikerGuardrail(api_key="k", event_hook="during_call")
 
 
