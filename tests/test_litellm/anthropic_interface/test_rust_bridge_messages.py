@@ -10,7 +10,7 @@ import pytest
 import litellm
 from litellm.exceptions import APIError
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.rust_bridge import configuration
+from litellm.rust_bridge import bindings, configuration
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -160,11 +160,7 @@ def test_load_rust_amessages_returns_injected_impl():
 
 
 def test_messages_wrapper_returns_none_when_bridge_absent(monkeypatch):
-    monkeypatch.setattr(
-        importlib.import_module("litellm.rust_bridge"),
-        "get_native_bridge",
-        lambda: None,
-    )
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: None)
     litellm.use_litellm_rust(True)
     assert rust_messages.load_rust_messages() is None
     result = rust_messages.messages(
@@ -448,11 +444,7 @@ async def test_fake_stream_wraps_rust_response_as_anthropic_sse():
 
 @pytest.mark.asyncio
 async def test_gate_falls_back_when_bridge_unavailable(monkeypatch):
-    monkeypatch.setattr(
-        importlib.import_module("litellm.rust_bridge"),
-        "get_native_bridge",
-        lambda: None,
-    )
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: None)
     litellm.use_litellm_rust(True)
 
     response = await _gate()

@@ -7,11 +7,11 @@ from litellm.rust_bridge.loader import get_native_bridge
 BindingT = TypeVar("BindingT")
 
 
-class _Unset:
+class Unset:
     pass
 
 
-_UNSET: Final = _Unset()
+UNSET: Final = Unset()
 
 
 class NativeBinding(Generic[BindingT]):
@@ -19,10 +19,10 @@ class NativeBinding(Generic[BindingT]):
 
     def __init__(self, attribute: str) -> None:
         self._attribute: Final = attribute
-        self._override: BindingT | None | _Unset = _UNSET
+        self._override: BindingT | None | Unset = UNSET
 
     def load(self) -> BindingT | None:
-        if not isinstance(self._override, _Unset):
+        if not isinstance(self._override, Unset):
             return self._override
         native: Final = get_native_bridge()
         if native is None:
@@ -33,7 +33,15 @@ class NativeBinding(Generic[BindingT]):
         self._override = value
 
     def reset(self) -> None:
-        self._override = _UNSET
+        self._override = UNSET
+
+    def update(self, value: BindingT | None | Unset) -> None:
+        if isinstance(value, Unset):
+            return
+        if value is None:
+            self.reset()
+        else:
+            self.override(value)
 
 
 def native_exception_types() -> tuple[type[BaseException], type[BaseException]] | None:

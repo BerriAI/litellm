@@ -10,7 +10,9 @@ import pytest
 
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.rust_bridge import configuration
+from litellm.rust_bridge import bindings, configuration
+from litellm.rust_bridge.bindings import UNSET, Unset
+from litellm.rust_bridge.ocr import RustAocr, RustOcr
 
 # `litellm/__init__.py` does `from .ocr.main import *`, which binds the `ocr`
 # function onto `litellm.ocr` and shadows the submodule, so import the modules
@@ -32,6 +34,16 @@ FAKE_OCR_RESPONSE: dict[str, object] = {
     "usage_info": {"pages_processed": 1},
     "object": "ocr",
 }
+
+
+def _use_test_rust(
+    enabled: bool = True,
+    *,
+    ocr: RustOcr | None | Unset = UNSET,
+    aocr: RustAocr | None | Unset = UNSET,
+) -> None:
+    rust_bridge.set_rust_ocr(ocr=ocr, aocr=aocr)
+    litellm.use_litellm_rust(enabled)
 
 
 class CapturedException(Exception):
@@ -228,7 +240,8 @@ def _reset_rust_flag():
 def fake_bridge():
     """Enable the Rust path with an injected recording bridge (no native wheel)."""
     bridge = RecordingBridge()
-    litellm.use_litellm_rust(True, ocr=bridge)
+    rust_bridge.set_rust_ocr(ocr=bridge)
+    litellm.use_litellm_rust(True)
     return bridge
 
 
@@ -236,7 +249,8 @@ def fake_bridge():
 def fake_async_bridge():
     """Enable the async Rust path with an injected recording bridge."""
     bridge = RecordingAsyncBridge()
-    litellm.use_litellm_rust(True, aocr=bridge)
+    rust_bridge.set_rust_ocr(aocr=bridge)
+    litellm.use_litellm_rust(True)
     return bridge
 
 
@@ -248,21 +262,16 @@ def test_use_litellm_rust_toggles_flag():
     assert rust_bridge.rust_ocr_enabled() is False
 
 
-def test_env_var_enables_rust_ocr(monkeypatch):
-    monkeypatch.setenv("LITELLM_USE_RUST_OCR", "1")
-    with pytest.warns(DeprecationWarning, match="LITELLM_USE_RUST_OCR is deprecated"):
-        assert rust_bridge.rust_ocr_enabled() is True
-
-
-def test_explicit_false_overrides_process_enable():
+def test_explicit_false_overrides_the_process_switch():
     litellm.use_litellm_rust(True)
+    prepared = build_prepared_request(litellm_params={"rust": False})
 
-    assert ocr_main._rust_ocr_enabled(build_prepared_request(litellm_params={"rust": False})) is False
+    assert ocr_main._rust_ocr_enabled(prepared) is False
 
 
 def test_load_rust_ocr_returns_injected_impl():
     bridge = RecordingBridge()
-    litellm.use_litellm_rust(True, ocr=bridge)
+    _use_test_rust(True, ocr=bridge)
     assert rust_bridge.load_rust_ocr() is bridge
 
 
@@ -306,40 +315,21 @@ def test_native_bridge_available_reflects_loader(monkeypatch):
 
 def test_load_rust_aocr_returns_injected_impl():
     bridge = RecordingAsyncBridge()
-    litellm.use_litellm_rust(True, aocr=bridge)
+    _use_test_rust(True, aocr=bridge)
     assert rust_bridge.load_rust_aocr() is bridge
-
-
-def test_toggle_without_ocr_arg_preserves_injected_impl():
-    """Regression: routine enable/disable calls must not clobber a prior injection.
-
-    Earlier, ``use_litellm_rust()`` unconditionally assigned the keyword default
-    of ``None`` to ``_rust_ocr_impl``, silently dropping a custom bridge whenever
-    a caller toggled the flag without re-passing ``ocr=``.
-    """
-    bridge = RecordingBridge()
-    async_bridge = RecordingAsyncBridge()
-    litellm.use_litellm_rust(True, ocr=bridge, aocr=async_bridge)
-
-    litellm.use_litellm_rust(False)
-    assert rust_bridge.load_rust_ocr() is bridge
-    assert rust_bridge.load_rust_aocr() is async_bridge
-    litellm.use_litellm_rust(True)
-    assert rust_bridge.load_rust_ocr() is bridge
-    assert rust_bridge.load_rust_aocr() is async_bridge
 
 
 def test_explicit_ocr_none_clears_injected_impl(monkeypatch):
     monkeypatch.setattr(
-        importlib.import_module("litellm.rust_bridge"),
+        bindings,
         "get_native_bridge",
         lambda: None,
     )
     bridge = RecordingBridge()
     async_bridge = RecordingAsyncBridge()
-    litellm.use_litellm_rust(True, ocr=bridge, aocr=async_bridge)
+    rust_bridge.set_rust_ocr(ocr=bridge, aocr=async_bridge)
 
-    litellm.use_litellm_rust(True, ocr=None, aocr=None)
+    rust_bridge.set_rust_ocr(ocr=None, aocr=None)
     assert rust_bridge.load_rust_ocr() is None
     assert rust_bridge.load_rust_aocr() is None
 
@@ -348,7 +338,7 @@ def test_load_rust_ocr_none_when_extension_absent(monkeypatch):
     """With no injected impl and no compiled wheel, the loader returns None so the
     caller degrades to the Python path instead of raising ImportError."""
     monkeypatch.setattr(
-        importlib.import_module("litellm.rust_bridge"),
+        bindings,
         "get_native_bridge",
         lambda: None,
     )
@@ -365,7 +355,7 @@ def test_load_rust_ocr_uses_compiled_extension(monkeypatch):
     fake_module.ocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
     fake_module.aocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
     monkeypatch.setattr(
-        importlib.import_module("litellm.rust_bridge"),
+        bindings,
         "get_native_bridge",
         lambda: fake_module,
     )
@@ -384,7 +374,7 @@ def test_timeout_to_seconds_handles_float_timeout_and_none():
 def test_bridge_wrapper_forwards_prepared_args_and_wraps_response():
     bridge = RecordingBridge()
 
-    litellm.use_litellm_rust(True, ocr=bridge)
+    _use_test_rust(True, ocr=bridge)
     response = rust_bridge.ocr(
         model="mistral-ocr-latest",
         document=DOCUMENT,
@@ -417,7 +407,7 @@ def test_bridge_wrapper_forwards_prepared_args_and_wraps_response():
 async def test_bridge_wrapper_forwards_prepared_async_args_and_wraps_response():
     bridge = RecordingAsyncBridge()
 
-    litellm.use_litellm_rust(True, aocr=bridge)
+    _use_test_rust(True, aocr=bridge)
     response = await rust_bridge.aocr(
         model="mistral-ocr-maas",
         document=DOCUMENT,
@@ -445,7 +435,7 @@ async def test_bridge_wrapper_forwards_prepared_async_args_and_wraps_response():
 def test_run_rust_ocr_prepares_request_and_wraps_response():
     bridge = RecordingBridge()
     logging_obj = RecordingLogging()
-    litellm.use_litellm_rust(True, ocr=bridge)
+    _use_test_rust(True, ocr=bridge)
 
     response = ocr_main._run_rust_ocr(
         prepared_request=build_prepared_request(
@@ -477,7 +467,7 @@ def test_run_rust_ocr_prepares_request_and_wraps_response():
 
 def test_run_rust_ocr_resolves_key_via_secret_manager_when_missing():
     bridge = RecordingBridge()
-    litellm.use_litellm_rust(True, ocr=bridge)
+    _use_test_rust(True, ocr=bridge)
 
     ocr_main._run_rust_ocr(
         prepared_request=build_prepared_request(api_key=None, timeout=None),
@@ -489,7 +479,7 @@ def test_run_rust_ocr_resolves_key_via_secret_manager_when_missing():
 
 def test_run_rust_ocr_prefers_explicit_key_over_resolver():
     bridge = RecordingBridge()
-    litellm.use_litellm_rust(True, ocr=bridge)
+    _use_test_rust(True, ocr=bridge)
 
     def _resolver(name: str) -> str | None:
         raise AssertionError(f"resolver should not be called for {name}")
@@ -508,7 +498,7 @@ def test_run_rust_ocr_prefers_explicit_key_over_resolver():
 def test_run_rust_ocr_uses_provider_api_key_env_var():
     bridge = RecordingBridge()
     resolver_calls = []
-    litellm.use_litellm_rust(True, ocr=bridge)
+    _use_test_rust(True, ocr=bridge)
 
     def _resolver(name):
         resolver_calls.append(name)
@@ -530,7 +520,7 @@ def test_run_rust_ocr_uses_provider_api_key_env_var():
 
 def test_prepare_rust_ocr_call_forwards_vertex_routing_metadata():
     bridge = RecordingBridge()
-    litellm.use_litellm_rust(True, ocr=bridge)
+    _use_test_rust(True, ocr=bridge)
 
     ocr_main._run_rust_ocr(
         prepared_request=build_prepared_request(
@@ -556,7 +546,7 @@ def test_prepare_rust_ocr_call_forwards_vertex_routing_metadata():
 
 def test_prepare_rust_ocr_call_resolves_vertex_routing_metadata_from_secret_manager():
     bridge = RecordingBridge()
-    litellm.use_litellm_rust(True, ocr=bridge)
+    _use_test_rust(True, ocr=bridge)
 
     def _resolver(name: str) -> str | None:
         return {
@@ -579,7 +569,7 @@ def test_prepare_rust_ocr_call_resolves_vertex_routing_metadata_from_secret_mana
 
 def test_prepare_rust_ocr_call_resolves_azure_ai_api_base_from_secret_manager():
     bridge = RecordingBridge()
-    litellm.use_litellm_rust(True, ocr=bridge)
+    _use_test_rust(True, ocr=bridge)
 
     ocr_main._run_rust_ocr(
         prepared_request=build_prepared_request(
@@ -596,7 +586,7 @@ def test_prepare_rust_ocr_call_resolves_azure_ai_api_base_from_secret_manager():
 
 def test_prepare_rust_ocr_call_resolves_document_intelligence_endpoint():
     bridge = RecordingBridge()
-    litellm.use_litellm_rust(True, ocr=bridge)
+    _use_test_rust(True, ocr=bridge)
 
     ocr_main._run_rust_ocr(
         prepared_request=build_prepared_request(
@@ -616,7 +606,7 @@ def test_prepare_rust_ocr_call_resolves_document_intelligence_endpoint():
 def test_run_rust_ocr_runs_pre_call_logging():
     logging_obj = RecordingLogging()
     bridge = RecordingBridge()
-    litellm.use_litellm_rust(True, ocr=bridge)
+    _use_test_rust(True, ocr=bridge)
 
     ocr_main._run_rust_ocr(
         prepared_request=build_prepared_request(
@@ -703,7 +693,7 @@ def test_ocr_exception_type_uses_resolved_provider_context(
         return CapturedException("wrapped")
 
     monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
-    litellm.use_litellm_rust(True, ocr=RaisingBridge())
+    _use_test_rust(True, ocr=RaisingBridge())
 
     with pytest.raises(CapturedException):
         litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
@@ -748,7 +738,7 @@ async def test_aocr_exception_type_uses_resolved_provider_context(
         return CapturedException("wrapped")
 
     monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
-    litellm.use_litellm_rust(True, aocr=RaisingAsyncBridge())
+    _use_test_rust(True, aocr=RaisingAsyncBridge())
 
     with pytest.raises(CapturedException):
         await litellm.aocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
@@ -776,7 +766,7 @@ def test_ocr_passes_default_request_timeout_to_rust(fake_bridge):
 def test_ocr_does_not_route_to_rust_when_disabled():
     """With the flag off, the bridge must not be consulted even if an impl exists."""
     bridge = RecordingBridge()
-    litellm.use_litellm_rust(False, ocr=bridge)
+    _use_test_rust(False, ocr=bridge)
 
     assert rust_bridge.rust_ocr_enabled() is False
     # The impl stays available for injection, but the disabled flag gates usage,
@@ -802,6 +792,25 @@ def test_ocr_falls_back_to_python_when_bridge_unavailable(monkeypatch):
 
     assert captured.get("called") is True  # Python path was used
     assert isinstance(response, OCRResponse)
+
+
+def test_ocr_unsupported_provider_skips_rust(monkeypatch):
+    bridge = RecordingBridge()
+    _use_test_rust(True, ocr=bridge)
+
+    def fake_handler_ocr(**kwargs):
+        return OCRResponse(pages=[], model="parse-v3", object="ocr")
+
+    monkeypatch.setattr(ocr_main.base_llm_http_handler, "ocr", fake_handler_ocr)
+
+    response = litellm.ocr(
+        model="reducto/parse-v3",
+        document={"type": "document_url", "document_url": "reducto://document-id"},
+        api_key="test-key",
+    )
+
+    assert isinstance(response, OCRResponse)
+    assert bridge.calls == []
 
 
 def test_ocr_provider_configs_expose_api_key_env_vars():

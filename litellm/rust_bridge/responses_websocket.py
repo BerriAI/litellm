@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Final, Protocol
 
 import httpx
 from websockets.exceptions import ConnectionClosedOK
 
-from litellm.rust_bridge.loader import get_native_bridge
+from litellm.rust_bridge.bindings import UNSET, NativeBinding, Unset
+from litellm.rust_bridge.runtime import (
+    BridgeErrorContext,
+    FallbackMode,
+    acall,
+    ainvoke,
+    async_none,
+)
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
 
@@ -30,56 +36,46 @@ class RustResponsesWebSocketConnection(Protocol):
     ) -> RustResponsesWebSocket: ...
 
 
-class _Unset:
-    pass
-
-
-_UNSET: Final[_Unset] = _Unset()
-
-
-@dataclass(slots=True)
-class _RustResponsesWebSocketState:
-    connection: RustResponsesWebSocketConnection | None = None
-
-
-_STATE: Final[_RustResponsesWebSocketState] = _RustResponsesWebSocketState()
+_CONNECTION: Final = NativeBinding[type[RustResponsesWebSocketConnection]](
+    "ResponsesWebSocketConnection"
+)
 
 
 def set_rust_responses_websocket(
     *,
-    connection: RustResponsesWebSocketConnection | None | _Unset = _UNSET,
+    connection: type[RustResponsesWebSocketConnection] | None | Unset = UNSET,
 ) -> None:
-    if not isinstance(connection, _Unset):
-        _STATE.connection = connection
+    _CONNECTION.update(connection)
 
 
-def load_rust_responses_websocket() -> RustResponsesWebSocketConnection | None:
-    if _STATE.connection is not None:
-        return _STATE.connection
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    connection_type: Final[RustResponsesWebSocketConnection | None] = getattr(
-        native_bridge, "ResponsesWebSocketConnection", None
-    )
-    return connection_type
+def load_rust_responses_websocket() -> type[RustResponsesWebSocketConnection] | None:
+    return _CONNECTION.load()
 
 
 class _ConnectionAdapter:
     def __init__(self, connection: RustResponsesWebSocket):
-        self._connection: Final[RustResponsesWebSocket] = connection
+        self._connection: Final = connection
 
     async def send(self, text: str) -> None:
-        await self._connection.send_text(text)
+        await acall(
+            lambda: self._connection.send_text(text),
+            BridgeErrorContext(route="responses websocket", provider="openai", model=""),
+        )
 
     async def recv(self) -> str:
-        message: Final = await self._connection.recv_text()
+        message: Final = await acall(
+            self._connection.recv_text,
+            BridgeErrorContext(route="responses websocket", provider="openai", model=""),
+        )
         if message is None:
             raise ConnectionClosedOK(None, None)
         return message
 
     async def close(self) -> None:
-        await self._connection.close()
+        await acall(
+            self._connection.close,
+            BridgeErrorContext(route="responses websocket", provider="openai", model=""),
+        )
 
 
 async def connect(
@@ -89,14 +85,19 @@ async def connect(
     timeout: float | httpx.Timeout | None,
 ) -> _ConnectionAdapter | None:
     connection_type: Final = load_rust_responses_websocket()
-    if connection_type is None:
-        return None
-    try:
-        connection: Final = await connection_type.connect(
+    native_call: Final = (
+        None
+        if connection_type is None
+        else lambda: connection_type.connect(
             url=url,
             headers=headers,
             timeout_seconds=timeout_to_seconds(timeout),
         )
-    except Exception:  # noqa: BLE001  # bridge failures must fall back to Python
-        return None
-    return _ConnectionAdapter(connection)
+    )
+    return await ainvoke(
+        native_call=native_call,
+        fallback=async_none,
+        adapt=_ConnectionAdapter,
+        mode=FallbackMode.PYTHON,
+        context=BridgeErrorContext(route="responses websocket", provider="openai", model=""),
+    )
