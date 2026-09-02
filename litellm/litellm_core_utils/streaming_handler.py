@@ -1669,7 +1669,16 @@ class CustomStreamWrapper:
                 if not isinstance(usage_from_chunk, Usage) and hasattr(
                     usage_from_chunk, "model_dump"
                 ):
-                    usage_from_chunk = Usage(**usage_from_chunk.model_dump())
+                    usage_fields = usage_from_chunk.model_dump()
+                    # Do NOT adopt a provider-reported cost. `cost` IS a declared
+                    # field on litellm Usage and cost tracking bills it as the
+                    # response cost, but providers report it in their own unit --
+                    # one gateway sends an integer that is neither dollars nor
+                    # cents, and adopting it recorded 555533 for a request that
+                    # costs 0.008. Only the token fields are coerced here.
+                    usage_fields.pop("cost", None)
+                    usage_fields.pop("cost_details", None)
+                    usage_from_chunk = Usage(**usage_fields)
                 model_response.usage = usage_from_chunk
 
             ## RETURN ARG
