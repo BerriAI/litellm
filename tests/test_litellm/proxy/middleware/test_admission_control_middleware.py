@@ -12,6 +12,7 @@ from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlSettings,
     AdmissionControlState,
     AdmissionControlStats,
+    create_prometheus_admission_metrics,
     get_admission_control_settings,
 )
 
@@ -152,8 +153,30 @@ async def test_exempt_path_passes_through_when_saturated(
     assert health[0]["status"] == 200
     blocked: Final = await _call(middleware, "/proxy/v1/chat/completions", root_path)
     assert blocked[0]["status"] == 503
+    lookalike: Final = await _call(middleware, "/proxyhealth/liveliness", "/proxy")
+    assert lookalike[0]["status"] == 503
     release.set()
     await first
+
+
+@pytest.mark.asyncio
+async def test_non_http_scope_passes_through_when_saturated(state: AdmissionControlState) -> None:
+    seen: Final[list[str]] = []
+
+    async def handler(scope: Scope, receive: Receive, send: Send) -> None:
+        seen.append(scope["type"])
+
+    middleware: Final = AdmissionControlMiddleware(handler, lambda: AdmissionControlSettings(1, 0, 1.0), state)
+    state.record_admission()
+
+    async def receive() -> Message:
+        return {"type": "lifespan.startup"}
+
+    async def send(message: Message) -> None:
+        return None
+
+    await middleware({"type": "lifespan"}, receive, send)
+    assert seen == ["lifespan"]
 
 
 @pytest.mark.asyncio
@@ -281,6 +304,22 @@ async def test_metrics_track_admitted_queued_and_rejected() -> None:
     release.set()
     await first
     assert (admitted.value, queued.value) == (0.0, 0.0)
+
+
+def test_create_prometheus_admission_metrics_registers_named_metrics() -> None:
+    from prometheus_client import REGISTRY
+
+    metrics: Final = create_prometheus_admission_metrics()
+    if metrics is not None:
+        metrics.admitted_gauge.inc()
+        metrics.queued_gauge.inc()
+        metrics.rejected_counter.labels(reason="queue_full").inc()
+        assert REGISTRY.get_sample_value("litellm_admission_admitted_requests") == 1.0
+        assert REGISTRY.get_sample_value("litellm_admission_queued_requests") == 1.0
+    assert (
+        REGISTRY.get_sample_value("litellm_admission_rejected_requests_total", {"reason": "queue_full"}) is not None
+    )
+    assert create_prometheus_admission_metrics() is None
 
 
 @pytest.mark.parametrize(
