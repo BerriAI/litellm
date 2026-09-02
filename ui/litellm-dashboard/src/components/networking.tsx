@@ -6239,6 +6239,7 @@ export const patchAgentCall = async (
     agent_name?: string;
     litellm_params?: Record<string, any>;
     agent_card_params?: Record<string, any>;
+    object_permission?: Record<string, any>;
     tpm_limit?: number | null;
     rpm_limit?: number | null;
     session_tpm_limit?: number | null;

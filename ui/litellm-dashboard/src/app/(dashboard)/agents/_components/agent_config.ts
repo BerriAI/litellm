@@ -314,6 +314,28 @@ export const buildAgentDataFromForm = (values: any, existingAgent?: any) => {
 };
 
 /**
+ * Parse MCP grants from an agent's object_permission into the shared MCP form fields
+ */
+export const parseMcpPermissionsForForm = (agent: any) => ({
+  allowed_mcp_servers_and_groups: {
+    servers: agent.object_permission?.mcp_servers ?? [],
+    accessGroups: agent.object_permission?.mcp_access_groups ?? [],
+  },
+  mcp_tool_permissions: agent.object_permission?.mcp_tool_permissions ?? {},
+});
+
+/**
+ * Build the object_permission payload from the shared MCP form fields.
+ * Always includes the MCP keys (empty when cleared) so removals persist;
+ * the proxy merges per key, leaving non-MCP grants untouched.
+ */
+export const buildMcpObjectPermission = (values: any) => ({
+  mcp_servers: values.allowed_mcp_servers_and_groups?.servers ?? [],
+  mcp_access_groups: values.allowed_mcp_servers_and_groups?.accessGroups ?? [],
+  mcp_tool_permissions: values.mcp_tool_permissions ?? {},
+});
+
+/**
  * Parse agent data for form fields
  */
 export const parseAgentForForm = (agent: any) => {
@@ -356,5 +378,6 @@ export const parseAgentForForm = (agent: any) => {
       : [],
     // extra_headers: already an array of strings
     extra_headers: agent.extra_headers ?? [],
+    ...parseMcpPermissionsForForm(agent),
   };
 };

@@ -15,16 +15,27 @@ import { getAgentInfo, patchAgentCall, getAgentCreateMetadata, AgentCreateInfo }
 import { Agent } from "@/components/agents/types";
 import { KeyResponse } from "@/components/key_team_helpers/key_list";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import KeyInfoView from "@/components/templates/key_info_view";
+import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
+import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
 import AgentVirtualKeys from "./agent_virtual_keys";
 import AgentFormFields, { unmountedA2AFieldNames } from "./agent_form_fields";
 import DynamicAgentFormFields, { buildDynamicAgentData, unmountedDynamicFieldNames } from "./dynamic_agent_form_fields";
-import { AGENT_FORM_CONFIG, buildAgentDataFromForm, parseAgentForForm } from "./agent_config";
+import {
+  AGENT_FORM_CONFIG,
+  buildAgentDataFromForm,
+  buildMcpObjectPermission,
+  parseAgentForForm,
+  parseMcpPermissionsForForm,
+} from "./agent_config";
 import {
   AgentFormField,
   AgentFormValues,
   AgentNumberInput,
   AgentRequestPayload,
+  McpServerSelection,
+  labelWithHint,
   omitFieldValues,
   useCollapsiblePanels,
 } from "./AgentFormKit";
@@ -111,7 +122,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
       } else {
         const typeInfo = agentTypeMetadata.find((t) => t.agent_type === agentType);
         if (typeInfo) {
-          form.reset(parseDynamicAgentForForm(data, typeInfo));
+          form.reset({ ...parseDynamicAgentForForm(data, typeInfo), ...parseMcpPermissionsForForm(data) });
         } else {
           form.reset(parseAgentForForm(data));
         }
@@ -131,7 +142,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
       if (agentType !== "a2a") {
         const typeInfo = agentTypeMetadata.find((t) => t.agent_type === agentType);
         if (typeInfo) {
-          form.reset(parseDynamicAgentForForm(agent, typeInfo));
+          form.reset({ ...parseDynamicAgentForForm(agent, typeInfo), ...parseMcpPermissionsForForm(agent) });
         }
       }
     }
@@ -139,6 +150,14 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
 
   const selectedAgentTypeInfo = agentTypeMetadata.find((t) => t.agent_type === detectedAgentType);
   const watchedFormValues = useWatch({ control: form.control });
+  const mcpSelection = useWatch({ control: form.control, name: "allowed_mcp_servers_and_groups" });
+  const mcpToolPermissions = useWatch({ control: form.control, name: "mcp_tool_permissions" });
+  const { data: mcpServers = [] } = useMCPServers();
+
+  const mcpServerLabel = (serverId: string) => {
+    const server = mcpServers.find((s) => s.server_id === serverId);
+    return server?.server_name ? `${server.server_name} (${serverId})` : serverId;
+  };
 
   const discoveryRequest = useMemo(
     () => buildDiscoveryRequest(detectedAgentType, watchedFormValues || {}, selectedAgentTypeInfo),
@@ -199,7 +218,10 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
         ? overlayDiscoveredCardParams(built, appliedDiscoveredSelection.selected_card)
         : built;
 
-      await patchAgentCall(accessToken, agentId, updateData);
+      await patchAgentCall(accessToken, agentId, {
+        ...updateData,
+        object_permission: buildMcpObjectPermission(values),
+      });
       toast.success("Agent updated successfully");
       setIsEditing(false);
       fetchAgentInfo();
@@ -343,7 +365,13 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                   <h3 className="text-lg font-medium">MCP Tool Permissions</h3>
                   <DetailList className="mt-4">
                     {agent.object_permission.mcp_servers && agent.object_permission.mcp_servers.length > 0 && (
-                      <DetailItem label="MCP Servers">{agent.object_permission.mcp_servers.join(", ")}</DetailItem>
+                      <DetailItem label="MCP Servers">
+                        <div className="space-y-1">
+                          {agent.object_permission.mcp_servers.map((serverId) => (
+                            <div key={serverId}>{mcpServerLabel(serverId)}</div>
+                          ))}
+                        </div>
+                      </DetailItem>
                     )}
                     {agent.object_permission.mcp_access_groups &&
                       agent.object_permission.mcp_access_groups.length > 0 && (
@@ -357,7 +385,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                           <div className="space-y-1">
                             {Object.entries(agent.object_permission.mcp_tool_permissions).map(([serverId, tools]) => (
                               <div key={serverId}>
-                                <span className="font-medium">{serverId}:</span>{" "}
+                                <span className="font-medium">{mcpServerLabel(serverId)}:</span>{" "}
                                 {Array.isArray(tools) ? tools.join(", ") : String(tools)}
                               </div>
                             ))}
@@ -455,6 +483,40 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                         <div className="mt-4 grid grid-cols-2 gap-4">
                           {rateLimitField("session_tpm_limit", "Session TPM Limit")}
                           {rateLimitField("session_rpm_limit", "Session RPM Limit")}
+                        </div>
+
+                        <Separator className="my-6" />
+                        <h3 className="text-lg font-medium mb-4">MCP Servers</h3>
+                        <FieldGroup>
+                          <AgentFormField
+                            name="allowed_mcp_servers_and_groups"
+                            label={labelWithHint(
+                              "Allowed MCP Servers",
+                              "Select which MCP servers or access groups this agent can access. Keys bound to this agent can only reach servers granted here.",
+                            )}
+                          >
+                            {({ value, onChange }) => (
+                              <MCPServerSelector
+                                onChange={onChange}
+                                value={{
+                                  servers: (value as McpServerSelection | undefined)?.servers ?? [],
+                                  accessGroups: (value as McpServerSelection | undefined)?.accessGroups ?? [],
+                                }}
+                                accessToken={accessToken ?? ""}
+                                placeholder="Select MCP servers or access groups (optional)"
+                              />
+                            )}
+                          </AgentFormField>
+                        </FieldGroup>
+                        <div className="mt-4">
+                          <MCPToolPermissions
+                            accessToken={accessToken ?? ""}
+                            selectedServers={mcpSelection?.servers ?? []}
+                            toolPermissions={mcpToolPermissions ?? {}}
+                            onChange={(toolPerms: Record<string, string[]>) =>
+                              form.setValue("mcp_tool_permissions", toolPerms)
+                            }
+                          />
                         </div>
 
                         <div className="mt-6 flex justify-end gap-2">

@@ -23,6 +23,7 @@ from pydantic import AnyUrl, ConfigDict
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import JSONResponse
 from starlette.types import Message, Receive, Scope, Send
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
@@ -816,6 +817,15 @@ if MCP_AVAILABLE:
                 }
             }
             return ListToolsResult.model_validate({"tools": listing.tools, "_meta": outcome_meta})
+        except HTTPException as e:
+            from mcp.shared.exceptions import McpError
+            from mcp.types import INVALID_REQUEST, ErrorData
+
+            detail: Final = e.detail
+            message: Final = (
+                str(detail.get("error")) if isinstance(detail, dict) and detail.get("error") else str(detail)
+            )
+            raise McpError(ErrorData(code=INVALID_REQUEST, message=message)) from e
         except Exception as e:
             verbose_logger.exception("Error in list_tools endpoint: %s", e)
             # Return empty list instead of failing completely
@@ -1440,6 +1450,45 @@ if MCP_AVAILABLE:
 
         return allowed_mcp_servers
 
+    class _McpDeniedDetail(TypedDict):
+        error: ReadOnly[str]
+
+    async def _raise_denied_scoped_mcp_access(
+        requested_names: Sequence[str],
+        user_api_key_auth: UserAPIKeyAuth | None,
+        client_ip: str | None = None,
+    ) -> None:
+        """A scoped request (``/mcp/<name>`` path or ``x-mcp-servers`` header) resolved to zero
+        allowed servers. When a requested name IS a registered server visible to this client IP,
+        the denial is a permission outcome and must be loud: a silent 200 with no tools reads as
+        a healthy server with no tools. Names matching no registered server stay fail-closed
+        empty so scoping cannot probe for server existence."""
+        known_targets: Final = tuple(
+            (name, server)
+            for name in requested_names
+            if (server := global_mcp_server_manager.get_mcp_server_by_name(name, client_ip=client_ip)) is not None
+        )
+        if not known_targets:
+            return
+        denied_name, denied_server = known_targets[0]
+        agent_id: Final = user_api_key_auth.agent_id if user_api_key_auth else None
+        if user_api_key_auth is not None and agent_id:
+            allowed_without_agent: Final = await global_mcp_server_manager.get_allowed_mcp_servers(
+                user_api_key_auth.model_copy(update=types.MappingProxyType({"agent_id": None}))
+            )
+            if denied_server.server_id in allowed_without_agent:
+                agent_denial: Final[_McpDeniedDetail] = {
+                    "error": (
+                        f"MCP server '{denied_name}' is not available to this key: the key is bound to "
+                        f"agent '{agent_id}', whose MCP grants do not include this server. Add the server "
+                        f"to the agent's object_permission.mcp_servers (edit the agent in the Admin UI or "
+                        f"PATCH /v1/agents/{agent_id}), or use a key that is not bound to the agent."
+                    )
+                }
+                raise HTTPException(status_code=403, detail=agent_denial)
+        key_denial: Final[_McpDeniedDetail] = {"error": f"The key is not allowed to access server {denied_name}"}
+        raise HTTPException(status_code=403, detail=key_denial)
+
     def _tool_name_matches(tool_name: str, filter_list: list[str], mcp_server: MCPServer) -> bool:
         """
         Check if a tool name matches any name in the filter list.
@@ -1964,6 +2013,12 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
                 client_ip=client_ip,
             )
+            if mcp_servers is not None and not allowed_mcp_servers:
+                await _raise_denied_scoped_mcp_access(
+                    requested_names=mcp_servers,
+                    user_api_key_auth=user_api_key_auth,
+                    client_ip=client_ip,
+                )
 
             # Pre-fetch OAuth credentials only when at least one server uses OAuth2,
             # to avoid an unnecessary DB round-trip on requests with no OAuth2 MCP servers.
@@ -2388,6 +2443,8 @@ if MCP_AVAILABLE:
             )
             verbose_logger.debug("Successfully fetched %s tools from managed MCP servers", len(listing.tools))
             return listing
+        except HTTPException:
+            raise
         except Exception as e:
             verbose_logger.exception("Error getting tools from managed MCP servers: %s", e)
             # Continue with an empty listing instead of failing completely

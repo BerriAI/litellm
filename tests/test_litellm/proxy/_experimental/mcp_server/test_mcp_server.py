@@ -1329,6 +1329,191 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
             mock_logger.info.assert_any_call("Successfully fetched %s tools total from all MCP servers", 0)
 
 
+def _denied_scope_manager(known_server_names_to_ids: dict[str, str], allowed_without_agent: list[str]) -> MagicMock:
+    """A manager whose get_mcp_server_by_name knows the given names and whose
+    get_allowed_mcp_servers answers the agent-stripped permission rerun."""
+    servers = {name: MagicMock(server_id=server_id) for name, server_id in known_server_names_to_ids.items()}
+    manager = MagicMock()
+    manager.get_mcp_server_by_name = lambda name, client_ip=None: servers.get(name)
+    manager.get_allowed_mcp_servers = AsyncMock(return_value=allowed_without_agent)
+    return manager
+
+
+@pytest.mark.asyncio
+async def test_scoped_list_denied_by_agent_binding_raises_403_naming_agent():
+    """A scoped tools/list that resolves to zero servers because the key's bound agent lacks the
+    grant must raise a 403 naming the agent, never return a silent 200 with no tools."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import _get_tools_from_mcp_servers
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user", agent_id="agent-123")
+    mock_manager = _denied_scope_manager({"github": "srv-github"}, allowed_without_agent=["srv-github"])
+
+    with (
+        patch(  # test-quality-ok: the permission resolver is a module-level function; the suite's only seam
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            AsyncMock(return_value=[]),
+        ),
+        patch(  # test-quality-ok: the server registry is a module-level singleton; the suite's only seam
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+            mock_manager,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await _get_tools_from_mcp_servers(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=None,
+                mcp_servers=["github"],
+            )
+
+    assert exc_info.value.status_code == 403
+    message = exc_info.value.detail["error"]
+    assert "github" in message
+    assert "agent 'agent-123'" in message
+    rerun_auth = mock_manager.get_allowed_mcp_servers.await_args.args[0]
+    assert rerun_auth.agent_id is None
+    assert rerun_auth.user_id == "test_user"
+
+
+@pytest.mark.asyncio
+async def test_scoped_list_denied_for_non_agent_key_raises_generic_403():
+    """A scoped tools/list denied for a key with no agent binding raises the generic 403 and
+    never runs the agent-stripped permission rerun."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import _get_tools_from_mcp_servers
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+    mock_manager = _denied_scope_manager({"github": "srv-github"}, allowed_without_agent=["srv-github"])
+
+    with (
+        patch(  # test-quality-ok: the permission resolver is a module-level function; the suite's only seam
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            AsyncMock(return_value=[]),
+        ),
+        patch(  # test-quality-ok: the server registry is a module-level singleton; the suite's only seam
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+            mock_manager,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await _get_tools_from_mcp_servers(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=None,
+                mcp_servers=["github"],
+            )
+
+    assert exc_info.value.status_code == 403
+    message = exc_info.value.detail["error"]
+    assert "github" in message
+    assert "agent" not in message
+    mock_manager.get_allowed_mcp_servers.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scoped_list_unknown_server_name_stays_silent_empty():
+    """A scoped request naming no registered server stays fail-closed empty (200, no tools), so
+    scoping cannot probe for server existence."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import _get_tools_from_mcp_servers
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user", agent_id="agent-123")
+    mock_manager = _denied_scope_manager({}, allowed_without_agent=["srv-github"])
+
+    with (
+        patch(  # test-quality-ok: the permission resolver is a module-level function; the suite's only seam
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            AsyncMock(return_value=[]),
+        ),
+        patch(  # test-quality-ok: the server registry is a module-level singleton; the suite's only seam
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+            mock_manager,
+        ),
+    ):
+        result = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=["doesnotexist"],
+        )
+
+    assert result.tools == []
+    assert result.outcomes == {}
+    mock_manager.get_allowed_mcp_servers.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scoped_list_agent_key_denied_by_key_grants_raises_generic_403():
+    """When the agent-stripped rerun still denies the server, the denial is not the agent's doing,
+    so the 403 stays generic instead of blaming the agent binding."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import _get_tools_from_mcp_servers
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user", agent_id="agent-123")
+    mock_manager = _denied_scope_manager({"github": "srv-github"}, allowed_without_agent=[])
+
+    with (
+        patch(  # test-quality-ok: the permission resolver is a module-level function; the suite's only seam
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            AsyncMock(return_value=[]),
+        ),
+        patch(  # test-quality-ok: the server registry is a module-level singleton; the suite's only seam
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+            mock_manager,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await _get_tools_from_mcp_servers(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=None,
+                mcp_servers=["github"],
+            )
+
+    assert exc_info.value.status_code == 403
+    message = exc_info.value.detail["error"]
+    assert "github" in message
+    assert "agent" not in message
+    mock_manager.get_allowed_mcp_servers.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_handle_list_tools_converts_permission_httpexception_to_mcp_error():
+    """The MCP protocol handler surfaces a permission HTTPException as a clean JSON-RPC error
+    (McpError, INVALID_REQUEST) carrying the denial message, instead of a raw 500."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import handle_list_tools
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    from mcp.shared.exceptions import McpError
+    from mcp.types import INVALID_REQUEST
+
+    denial_message = "MCP server 'github' is not available to this key: the key is bound to agent 'agent-123'"
+    denial = HTTPException(status_code=403, detail={"error": denial_message})
+
+    with (
+        patch(  # test-quality-ok: the protocol handler reads auth from module context; no injection seam
+            "litellm.proxy._experimental.mcp_server.server.get_or_extract_auth_context",
+            new=AsyncMock(return_value=(None, None, None, None, None, None, None)),
+        ),
+        patch(  # test-quality-ok: the listing helper is the handler's only collaborator; the suite's seam
+            "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
+            new=AsyncMock(side_effect=denial),
+        ),
+    ):
+        with pytest.raises(McpError) as exc_info:
+            await handle_list_tools()
+
+    assert exc_info.value.error.code == INVALID_REQUEST
+    assert exc_info.value.error.message == denial_message
+
+
 @pytest.mark.asyncio
 async def test_mcp_server_tool_call_body_with_none_arguments():
     """Test that proxy_server_request body handles None arguments correctly"""
