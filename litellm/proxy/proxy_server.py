@@ -39,7 +39,7 @@ from typing import (
 import anyio
 import websockets
 import websockets.exceptions
-from pydantic import BaseModel, Json, JsonValue
+from pydantic import BaseModel, Json, JsonValue, ValidationError
 from typing_extensions import NotRequired, ReadOnly, assert_never
 
 from litellm._uuid import uuid
@@ -253,6 +253,7 @@ from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
+    USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
 )
 from litellm.exceptions import RejectedRequestError
@@ -351,7 +352,10 @@ from litellm.proxy.common_utils.load_config_utils import (
     get_file_contents_from_s3,
 )
 from litellm.proxy.common_utils.model_deprecation import collect_model_deprecations
-from litellm.proxy.common_utils.model_listing_utils import TeamModelNameTranslator
+from litellm.proxy.common_utils.model_listing_utils import (
+    TeamModelNameTranslator,
+    configured_display_names,
+)
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     remove_sensitive_info_from_deployment,
 )
@@ -9866,6 +9870,35 @@ class ProxyStartupEvent:
                 replace_existing=True,
             )
 
+            slack_alerting_args: Final = proxy_logging_obj.slack_alerting_instance.alerting_args
+            user_spend_check_interval: Final = (
+                slack_alerting_args.user_spend_check_interval
+                if isinstance(slack_alerting_args, SlackAlertingArgs)  # pyright: ignore[reportUnnecessaryIsInstance]  # tests inject a mock slack_alerting_instance
+                else SlackAlertingArgs().user_spend_check_interval
+            )
+
+            async def _scheduled_user_spend_alerts() -> None:
+                if (
+                    await pod_lock_manager.acquire_lock(
+                        cronjob_id=USER_SPEND_ALERTS_JOB_ID,
+                        ttl=max(user_spend_check_interval - 60, 60),
+                        allow_reentrant=False,
+                    )
+                    is False
+                ):
+                    return
+                await proxy_logging_obj.slack_alerting_instance.send_user_spend_alerts()
+
+            scheduler.add_job(
+                _scheduled_user_spend_alerts,
+                "interval",
+                seconds=user_spend_check_interval,
+                next_run_time=datetime.now(timezone.utc) + timedelta(seconds=10 + random.randint(0, 60)),
+                id=USER_SPEND_ALERTS_JOB_ID,
+                replace_existing=True,
+                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            )
+
             if os.getenv("PROMETHEUS_URL"):
                 from zoneinfo import ZoneInfo
 
@@ -10193,7 +10226,8 @@ async def model_list(
         # The internal routing key drives the metadata/fallback lookup, while the
         # public name is what the client sees as the model id.
         model_data = []
-        for response_id, lookup_id in TeamModelNameTranslator.listing_entries(all_models, llm_router, settings):
+        admin_entries: Final = TeamModelNameTranslator.listing_entries(all_models, llm_router, settings)
+        for response_id, lookup_id in admin_entries:
             model_info = create_model_info_response(
                 model_id=lookup_id,
                 provider="openai",
@@ -10206,7 +10240,10 @@ async def model_list(
 
         if wants_anthropic_format:
             admin_listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
-            return create_anthropic_model_list_response(admin_listing)
+            return create_anthropic_model_list_response(
+                admin_listing,
+                display_names=configured_display_names(admin_entries, llm_router),
+            )
 
         return dict(
             data=model_data,
@@ -10237,7 +10274,8 @@ async def model_list(
     # The internal routing key drives the metadata/fallback lookup, while the
     # public name is what the client sees as the model id.
     model_data = []
-    for response_id, lookup_id in TeamModelNameTranslator.listing_entries(all_models, llm_router, settings):
+    entries: Final = TeamModelNameTranslator.listing_entries(all_models, llm_router, settings)
+    for response_id, lookup_id in entries:
         model_info = create_model_info_response(
             model_id=lookup_id,
             provider="openai",
@@ -10250,7 +10288,10 @@ async def model_list(
 
     if wants_anthropic_format:
         listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
-        return create_anthropic_model_list_response(listing)
+        return create_anthropic_model_list_response(
+            listing,
+            display_names=configured_display_names(entries, llm_router),
+        )
 
     return dict(
         data=model_data,
@@ -12481,11 +12522,21 @@ async def supported_openai_params(model: str):
         --header 'Authorization: Bearer sk-1234'
     ```
     """
+    from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+
+    global llm_router
     try:
-        model, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+        resolved_models: Final = llm_router.resolved_litellm_models(model) if llm_router is not None else ()
+        target_model: Final = resolved_models[0] if resolved_models else model
+        declared_provider: Final = declared_authenticating_provider(target_model)
+        litellm_model, custom_llm_provider = (
+            (target_model.removeprefix(f"{declared_provider}/"), declared_provider)
+            if declared_provider is not None
+            else litellm.get_llm_provider(model=target_model)[:2]
+        )
         return {
             "supported_openai_params": litellm.get_supported_openai_params(
-                model=model, custom_llm_provider=custom_llm_provider
+                model=litellm_model, custom_llm_provider=custom_llm_provider
             )
         }
     except Exception:
@@ -14962,17 +15013,25 @@ async def alerting_settings(
         alerting_args_dict = {}
         alerting_values = None
 
-    allowed_args: Final = {
-        "slack_alerting": {"type": "Boolean"},
-        "daily_report_frequency": {"type": "Integer"},
-        "report_check_interval": {"type": "Integer"},
-        "budget_alert_ttl": {"type": "Integer"},
-        "outage_alert_ttl": {"type": "Integer"},
-        "region_outage_alert_ttl": {"type": "Integer"},
-        "minor_outage_alert_threshold": {"type": "Integer"},
-        "major_outage_alert_threshold": {"type": "Integer"},
-        "max_outage_alert_list_size": {"type": "Integer"},
-    }
+    allowed_args: Final = MappingProxyType(
+        {
+            "slack_alerting": "Boolean",
+            "daily_report_frequency": "Integer",
+            "report_check_interval": "Integer",
+            "budget_alert_ttl": "Integer",
+            "outage_alert_ttl": "Integer",
+            "region_outage_alert_ttl": "Integer",
+            "minor_outage_alert_threshold": "Integer",
+            "major_outage_alert_threshold": "Integer",
+            "max_outage_alert_list_size": "Integer",
+            "daily_spend_per_user_threshold": "Float",
+            "monthly_spend_per_user_threshold": "Float",
+            "spend_anomaly_multiplier": "Float",
+            "spend_anomaly_baseline_days": "Integer",
+            "spend_anomaly_min_spend": "Float",
+            "user_spend_check_interval": "Integer",
+        }
+    )
 
     _slack_alerting: Final[SlackAlerting] = proxy_logging_obj.slack_alerting_instance
     _slack_alerting_args_dict: Final = _slack_alerting.alerting_args.model_dump()
@@ -14987,7 +15046,7 @@ async def alerting_settings(
 
     _response_obj = ConfigList(
         field_name="slack_alerting",
-        field_type=allowed_args["slack_alerting"]["type"],
+        field_type=allowed_args["slack_alerting"],
         field_description="Enable slack alerting for monitoring proxy in production: llm outages, budgets, spend tracking failures.",
         field_value=is_slack_enabled,
         stored_in_db=True if alerting_values is not None else False,
@@ -15006,7 +15065,7 @@ async def alerting_settings(
 
             _response_obj = ConfigList(
                 field_name=field_name,
-                field_type=allowed_args[field_name]["type"],
+                field_type=allowed_args[field_name],
                 field_description=field_info.description or "",
                 field_value=_slack_alerting_args_dict.get(field_name, None),
                 stored_in_db=_stored_in_db,
@@ -16433,6 +16492,16 @@ async def update_config_general_settings(
             status_code=400,
             detail={"error": f"Invalid type of field value={type(data.field_value)} passed in."},
         )
+
+    if data.field_name == "alerting_args":
+        try:
+            SlackAlertingArgs.model_validate(data.field_value)
+        except ValidationError as e:
+            errors: Final = "; ".join(f"{'.'.join(str(loc) for loc in err['loc'])}: {err['msg']}" for err in e.errors())
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"Invalid alerting_args: {errors}"},
+            )
 
     ## get general settings from db
     db_general_settings: Final = await _config_param_table(prisma_client).find_first(

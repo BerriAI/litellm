@@ -1005,6 +1005,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "gemini_native_audio": {"type": "boolean"},
                 "gemini_audio_only_live": {"type": "boolean"},
                 "supports_embedding_image_input": {"type": "boolean"},
+                "supports_forced_tool_use": {"type": "boolean"},
                 "supports_function_calling": {"type": "boolean"},
                 "supports_image_input": {"type": "boolean"},
                 "supports_nova_canvas_image_edit": {"type": "boolean"},
@@ -4654,6 +4655,7 @@ GEMINI_4096_CACHE_MIN_MODELS: Final = tuple(
         "gemini-3.5-flash",
         "gemini-3.6-flash",
         "gemini-3.7-flash",
+        "gemini-3.8-flash",
         "gemini-3.1-pro-preview",
         "gemini-3.1-pro-preview-customtools",
     )
