@@ -53,6 +53,7 @@ pub fn complete_url(api_base: Option<&str>) -> String {
 /// Note: the env fallback only reads the process environment. Secret-manager
 /// backends (AWS/Azure/GCP/Vault) are resolved on the Python side and passed in
 /// via `api_key`; this fallback is a last resort for direct/standalone use.
+// rust-only: Python resolves the key inside validate_environment
 pub fn resolve_api_key(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
