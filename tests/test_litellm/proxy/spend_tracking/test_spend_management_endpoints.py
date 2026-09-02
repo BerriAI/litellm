@@ -3616,7 +3616,6 @@ async def test_view_spend_logs_with_date_range_summarized(client, monkeypatch):
     """
     from datetime import datetime, timedelta, timezone
 
-    # This simulates the summarized data returned by the raw SQL query.
     mock_summarized_response = [
         {
             "api_key": "sk-test-key",
@@ -3627,13 +3626,8 @@ async def test_view_spend_logs_with_date_range_summarized(client, monkeypatch):
         }
     ]
 
-    # This mock class will replace the real Prisma client.
     class MockDB:
-        def __init__(self):
-            self.captured_params = None
-
         async def query_raw(self, sql_query, *params):
-            self.captured_params = params
             assert isinstance(params[0], str)
             assert isinstance(params[1], str)
             assert "T" in params[0]
@@ -3644,10 +3638,8 @@ async def test_view_spend_logs_with_date_range_summarized(client, monkeypatch):
         def __init__(self):
             self.db = MockDB()
 
-    # Apply the monkeypatch to replace the real prisma_client with our mock.
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
 
-    # Define a date range for the test.
     start_date = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
     end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -3655,8 +3647,6 @@ async def test_view_spend_logs_with_date_range_summarized(client, monkeypatch):
         user_role=LitellmUserRoles.PROXY_ADMIN
     )
     try:
-        # Call the endpoint with both start and end dates.
-        # We don't need `summarize=true` as it's the default.
         response = client.get(
             "/spend/logs",
             params={
@@ -3666,11 +3656,9 @@ async def test_view_spend_logs_with_date_range_summarized(client, monkeypatch):
             headers={"Authorization": "Bearer sk-test"},
         )
 
-        # ASSERTIONS
         assert response.status_code == 200
         data = response.json()
 
-        # Check that the response is not empty and has the summarized structure.
         assert isinstance(data, list)
         assert len(data) > 0
         assert "startTime" in data[0]
@@ -3683,7 +3671,6 @@ async def test_view_spend_logs_with_date_range_summarized(client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_view_spend_logs_summarize_groups_by_day_in_sql(client, monkeypatch):
-    captured_query: dict[str, object] = {}
     mock_rows = [
         {
             "day": "2024-01-01",
@@ -3702,9 +3689,13 @@ async def test_view_spend_logs_summarize_groups_by_day_in_sql(client, monkeypatc
     ]
 
     class MockDB:
+        def __init__(self):
+            self.captured_sql = None
+            self.captured_params = None
+
         async def query_raw(self, sql_query, *params):
-            captured_query["sql"] = sql_query
-            captured_query["params"] = params
+            self.captured_sql = sql_query
+            self.captured_params = params
             return mock_rows
 
     class MockPrismaClient:
@@ -3733,12 +3724,12 @@ async def test_view_spend_logs_summarize_groups_by_day_in_sql(client, monkeypatc
 
         assert response.status_code == 200
         data = response.json()
-        sql = captured_query["sql"]
+        sql = mock_prisma_client.db.captured_sql
         assert "date_trunc('day'" in sql
         assert "GROUP BY" in sql
         assert "find_many" not in sql
         assert not hasattr(mock_prisma_client.db, "group_by")
-        assert captured_query["params"] == (
+        assert mock_prisma_client.db.captured_params == (
             "2024-01-01T00:00:00+00:00",
             "2024-01-03T00:00:00+00:00",
             "hashed::sk-abc",

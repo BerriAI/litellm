@@ -237,7 +237,7 @@ SELECT
     model,
     SUM(spend) AS spend
 FROM "LiteLLM_SpendLogs"
-WHERE "startTime" >= $1::timestamptz AND "startTime" <= $2::timestamptz
+WHERE "startTime" >= ($1::timestamptz AT TIME ZONE 'UTC') AND "startTime" <= ($2::timestamptz AT TIME ZONE 'UTC')
 {filter_sql}
 GROUP BY 1, 2, 3, 4
 ORDER BY 1
