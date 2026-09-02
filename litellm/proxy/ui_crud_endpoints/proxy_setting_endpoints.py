@@ -1594,13 +1594,22 @@ async def update_ui_settings(
     tags=["UI Theme Settings"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def upload_logo(file: UploadFile = File(...)):
+async def upload_logo(
+    file: UploadFile = File(...),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Upload a custom logo for the admin UI.
     Accepts image files (PNG, JPG, JPEG, SVG) and stores them for use in the UI.
     """
     import os
     from pathlib import Path
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can upload a UI logo.",
+        )
 
     # Validate file type
     allowed_extensions: Final = {".png", ".jpg", ".jpeg", ".svg"}
@@ -1612,9 +1621,11 @@ async def upload_logo(file: UploadFile = File(...)):
             detail=f"Invalid file type. Allowed types: {', '.join(allowed_extensions)}",
         )
 
-    # Validate file size (max 5MB)
-    file_content: Final = await file.read()
-    if len(file_content) > 5 * 1024 * 1024:  # 5MB
+    # Read bounded to one byte past the limit, so an oversized upload is never
+    # fully buffered in memory before being rejected.
+    max_logo_size_bytes: Final = 5 * 1024 * 1024
+    file_content: Final = await file.read(max_logo_size_bytes + 1)
+    if len(file_content) > max_logo_size_bytes:
         raise HTTPException(status_code=400, detail="File size too large. Maximum size is 5MB.")
 
     # Create uploads directory if it doesn't exist
