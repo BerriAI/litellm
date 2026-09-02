@@ -622,6 +622,15 @@ def test_meta_omits_tool_definitions_when_no_tools_were_offered(logger: DataDogL
     assert "tool_definitions" not in build(logger)["meta"]
 
 
+def test_a_ddtrace_integer_parent_id_is_forwarded_as_its_string(logger: DataDogLLMObsLogger) -> None:
+    """ddtrace hands span ids as ints; dropping them detaches the span from its APM trace."""
+    kwargs = build_payload()
+    kwargs["litellm_params"]["metadata"]["parent_id"] = 8675309
+    start = datetime(2026, 9, 1, 12, 0, 0)
+    span = json.loads(safe_dumps(logger.create_llm_obs_payload(kwargs, start, start + timedelta(seconds=2))))
+    assert span["parent_id"] == "8675309"
+
+
 def test_unparseable_tool_arguments_are_preserved_rather_than_dropped(logger: DataDogLLMObsLogger) -> None:
     """A truncated argument string is still the only record of what the model tried to call."""
     payload = build(

@@ -535,7 +535,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         error_info: Final = self._assemble_error_info(standard_logging_payload)
 
         raw_parent_id: Final = metadata.get("parent_id")
-        metadata_parent_id: Final[str | None] = raw_parent_id if isinstance(raw_parent_id, str) else None
+        metadata_parent_id: Final[str | None] = str(raw_parent_id) if raw_parent_id else None
 
         tool_definitions: Final = (
             () if redact_payload else _to_dd_tool_definitions(standard_logging_payload.get("model_parameters"))
