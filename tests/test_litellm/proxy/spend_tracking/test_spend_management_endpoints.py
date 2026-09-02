@@ -451,6 +451,77 @@ def test_ui_view_request_response_forbids_non_admin_without_db(client, monkeypat
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
+def test_ui_view_request_response_forbids_missing_ownership_row(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_spendlogs.find_unique = AsyncMock(return_value=None)
+    payload_logger = MagicMock()
+    payload_logger.get_request_response_payload = AsyncMock(
+        return_value={"response": "private response"}
+    )
+    get_custom_loggers = MagicMock(return_value=[payload_logger])
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_active_additional_logging_utils_from_custom_logger",
+        get_custom_loggers,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user_1",
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui/missing-request",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 403
+        get_custom_loggers.assert_not_called()
+        payload_logger.get_request_response_payload.assert_not_awaited()
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_ui_view_request_response_forbids_different_user(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spend_log_row = MagicMock()
+    spend_log_row.user = "user_2"
+    spend_log_row.team_id = None
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_spendlogs.find_unique = AsyncMock(return_value=spend_log_row)
+    payload_logger = MagicMock()
+    payload_logger.get_request_response_payload = AsyncMock(
+        return_value={"response": "private response"}
+    )
+    get_custom_loggers = MagicMock(return_value=[payload_logger])
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_active_additional_logging_utils_from_custom_logger",
+        get_custom_loggers,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user_1",
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui/other-user-request",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 403
+        get_custom_loggers.assert_not_called()
+        payload_logger.get_request_response_payload.assert_not_awaited()
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
 ignored_keys = [
     "request_id",
     "metadata.litellm_call_id",
