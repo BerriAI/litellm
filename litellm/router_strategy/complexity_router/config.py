@@ -14,6 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field, SkipValidation, field_seriali
 
 from litellm.types.router import AdaptiveRouterWeights, ClassifierPlugin, RoutingPlugin
 
+from .tier_predictor import TrainedTierArtifact
+
 
 class ComplexityTier(str, Enum):
     """Complexity tiers for routing decisions."""
@@ -625,12 +627,19 @@ class ComplexityRouterConfig(BaseModel):
     )
 
     # Classifier strategy
-    classifier_type: Literal["heuristic", "llm", "custom", "heuristic_first"] = Field(
+    classifier_type: Literal["heuristic", "trained_heuristic", "llm", "custom", "heuristic_first"] = Field(
         default="heuristic",
         description=(
-            "Classification strategy: local regex/keyword scoring, an LLM call, a custom classifier "
-            "plugin, or 'heuristic_first', which scores locally and only pays for the LLM classifier "
-            "when the local scorer does not confidently land a cheap tier"
+            "Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, "
+            "an LLM call, a custom classifier plugin, or 'heuristic_first', which scores locally and only pays "
+            "for the LLM classifier when the local scorer does not confidently land a cheap tier"
+        ),
+    )
+    trained_heuristic_artifact: TrainedTierArtifact | Literal["ultrafeedback"] = Field(
+        default="ultrafeedback",
+        description=(
+            "Success-probability artifact used by classifier_type 'trained_heuristic'. The bundled "
+            "UltraFeedback artifact is selected by default; an inline trained artifact may replace it"
         ),
     )
     classifier_llm_config: ClassifierLLMConfig | None = Field(
@@ -1248,10 +1257,10 @@ class ComplexityRouterConfig(BaseModel):
         )
         if duplicated:
             raise ValueError(f"tier_definitions names must be unique (case-insensitive): {', '.join(duplicated)}")
-        if self.classifier_type in ("heuristic", "heuristic_first"):
+        if self.classifier_type in ("heuristic", "trained_heuristic", "heuristic_first"):
             raise ValueError(
                 "tier_definitions requires classifier_type 'llm' or 'custom': the heuristic scorer only "
-                "produces the built-in tiers"
+                "produces the four built-in tiers, as does trained_heuristic"
             )
         conflicts: Final = self._tier_definition_conflicts()
         if conflicts:
