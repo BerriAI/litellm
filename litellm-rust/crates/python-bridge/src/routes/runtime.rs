@@ -65,6 +65,71 @@ where
     })
 }
 
+struct AttachedConversion<T, C> {
+    value: T,
+    convert: C,
+}
+
+impl<'py, T, C> IntoPyObject<'py> for AttachedConversion<T, C>
+where
+    C: FnOnce(Python<'py>, T) -> PyResult<Py<PyAny>>,
+{
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
+        std::panic::catch_unwind(AssertUnwindSafe(|| (self.convert)(py, self.value)))
+            .map_err(panic_to_pyerr)?
+            .map(|value| value.into_bound(py))
+    }
+}
+
+pub(super) fn run_sync_with<T, F, C>(
+    py: Python<'_>,
+    future: F,
+    map_error: fn(Error) -> PyErr,
+    convert: C,
+) -> PyResult<Py<PyAny>>
+where
+    T: Send + 'static,
+    F: Future<Output = Result<T, Error>> + Send + 'static,
+    C: FnOnce(Python<'_>, T) -> PyResult<Py<PyAny>>,
+{
+    if Handle::try_current().is_ok() {
+        return Err(PyRuntimeError::new_err(
+            "synchronous native routes cannot run from a Tokio context; use the async route",
+        ));
+    }
+
+    let result = release_gil(py, move || {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(wait_for_sync_result(future))
+    })?;
+    let result = map_core_result(result, map_error)?;
+    std::panic::catch_unwind(AssertUnwindSafe(|| convert(py, result))).map_err(panic_to_pyerr)?
+}
+
+pub(super) fn run_async_with<T, F, C>(
+    py: Python<'_>,
+    future: F,
+    map_error: fn(Error) -> PyErr,
+    convert: C,
+) -> PyResult<Bound<'_, PyAny>>
+where
+    T: Send + 'static,
+    F: Future<Output = Result<T, Error>> + Send + 'static,
+    C: for<'py> FnOnce(Python<'py>, T) -> PyResult<Py<PyAny>> + Send + 'static,
+{
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let result = catch_route_panic(future).await?;
+        let result = map_core_result(result, map_error)?;
+        Ok(AttachedConversion {
+            value: result,
+            convert,
+        })
+    })
+}
+
 fn map_core_result<T>(result: Result<T, Error>, map_error: fn(Error) -> PyErr) -> PyResult<T> {
     match result {
         Ok(value) => Ok(value),
@@ -157,6 +222,13 @@ mod tests {
             },
             runtime_error,
         )
+    }
+
+    #[pyfunction]
+    fn async_custom_mapping(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        run_async_with(py, async { Ok("mapped") }, runtime_error, |py, value| {
+            Ok(value.into_pyobject(py)?.unbind().into_any())
+        })
     }
 
     #[pyfunction]
@@ -418,6 +490,34 @@ asyncio.run(exercise())
             .expect("Python source should not contain null bytes");
             py.run(&code, Some(&locals), Some(&locals))
                 .expect("result delivery should leave Tokio workers responsive");
+        });
+    }
+
+    #[test]
+    fn async_custom_mapping_runs_during_attached_result_delivery() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "runtime").expect("module should be created");
+            module
+                .add_function(wrap_pyfunction!(async_custom_mapping, &module).expect("function"))
+                .expect("function should register");
+            let locals = PyDict::new(py);
+            locals
+                .set_item("runtime", &module)
+                .expect("module should enter Python locals");
+            let code = CString::new(
+                r#"
+import asyncio
+
+async def exercise():
+    assert await runtime.async_custom_mapping() == "mapped"
+
+asyncio.run(exercise())
+"#,
+            )
+            .expect("Python source should not contain null bytes");
+            py.run(&code, Some(&locals), Some(&locals))
+                .expect("custom mapping should reach the Python awaiter");
         });
     }
 }
