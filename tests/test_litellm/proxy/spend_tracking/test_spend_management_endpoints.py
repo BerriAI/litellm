@@ -4074,6 +4074,59 @@ async def test_build_ui_spend_logs_response_key_split_session_gets_per_key_aggre
 
 
 @pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_empty_api_key_keeps_session_aggregates():
+    """
+    The spend-log schema defaults api_key to an empty string, which is a real
+    group value and not a missing one: a multi-call session logged under an
+    empty key must keep its count and spend instead of degrading to a plain
+    single-call row.
+    """
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _build_ui_spend_logs_response,
+    )
+
+    session_id = "sess-keyless"
+    dict_rows = [
+        {"request_id": "req-1", "session_id": session_id, "call_type": "completion", "api_key": ""},
+    ]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            {
+                "session_id": session_id,
+                "api_key": "",
+                "session_total_count": 3,
+                "session_total_spend": 0.09,
+                "mcp_tool_call_count": 0,
+                "mcp_tool_call_spend": 0.0,
+                "session_cache_hit_count": 0,
+                "session_llm_count": 3,
+                "session_agent_count": 0,
+            }
+        ]
+    )
+
+    result = await _build_ui_spend_logs_response(
+        prisma_client=mock_prisma,
+        data=dict_rows,
+        total_records=1,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    row = result["data"][0]
+    assert row["session_total_count"] == 3
+    assert row["session_total_spend"] == 0.09
+
+    # The empty key must reach the aggregate's authorized-keys filter too.
+    _, call_args, _ = mock_prisma.db.query_raw.mock_calls[0]
+    assert call_args[2] == [""]
+
+
+@pytest.mark.asyncio
 async def test_build_ui_spend_logs_response_sums_multi_round_session_spend():
     """
     Regression test for LIT-4342: for a multi-round session the UI must show the

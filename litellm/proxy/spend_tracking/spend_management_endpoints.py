@@ -4126,7 +4126,7 @@ async def _build_ui_spend_logs_response(
                 {
                     (row.get("api_key") if isinstance(row, dict) else getattr(row, "api_key", None))
                     for row in data
-                    if (row.get("api_key") if isinstance(row, dict) else getattr(row, "api_key", None))
+                    if (row.get("api_key") if isinstance(row, dict) else getattr(row, "api_key", None)) is not None
                 }
             )
             rows: Final[Sequence[_SessionSpendRow]] = await _query_raw(
@@ -4165,7 +4165,7 @@ async def _build_ui_spend_logs_response(
                     "session_agent_count": int(row.get("session_agent_count") or 0),
                 }
                 for row in rows
-                if row.get("session_id") and row.get("api_key")
+                if row.get("session_id") and row.get("api_key") is not None
             }
         except PrismaError:
             verbose_proxy_logger.debug(
@@ -4179,7 +4179,7 @@ async def _build_ui_spend_logs_response(
             row_dict = dict(row) if isinstance(row, dict) else row.model_dump()
             sid = row_dict.get("session_id")
             row_api_key = row_dict.get("api_key")
-            session_stats = session_spend_map.get((sid, row_api_key)) if sid and row_api_key else None
+            session_stats = session_spend_map.get((sid, row_api_key)) if sid and row_api_key is not None else None
             row_dict["session_total_count"] = int(session_stats["session_total_count"]) if session_stats else 1
             if session_stats:
                 row_dict["session_total_spend"] = session_stats["session_total_spend"]
