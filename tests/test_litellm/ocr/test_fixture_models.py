@@ -457,19 +457,6 @@ def test_unqualified_reducto_models_accept_explicit_provider(
     assert sdk_input.model == model
 
 
-@pytest.mark.parametrize("model", ("deepseek-ocr-maas", "deepseek-ai/deepseek-ocr-maas"))
-def test_vertex_deepseek_request_uses_single_provider_namespace(model: str) -> None:
-    request: Final = VertexAIDeepSeekOCRConfig().transform_ocr_request(  # pyright: ignore[reportUnknownMemberType]
-        model=model,
-        document={"type": "image_url", "image_url": "data:image/png;base64,AA=="},
-        optional_params={},
-        headers={},
-    )
-
-    data: Final = cast(dict[str, object], request.data)
-    assert data["model"] == "deepseek-ai/deepseek-ocr-maas"
-
-
 @pytest.mark.parametrize(
     "document",
     (

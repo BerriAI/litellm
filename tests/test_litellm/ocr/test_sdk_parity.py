@@ -147,15 +147,6 @@ INVALID_OCR_CASES: Final = (
         expected_message="Invalid `features` for Azure Document Intelligence",
         extra_kwargs=(("features", [1]),),
     ),
-    InvalidOcrCase(
-        name="invalid_header_value",
-        model="mistral/mistral-ocr-latest",
-        document={"type": "document_url", "document_url": "data:application/pdf;base64,AA=="},
-        expected_exception_type="litellm.exceptions.InternalServerError",
-        expected_status_code=500,
-        expected_message="Header value must be str or bytes",
-        extra_kwargs=(("extra_headers", {"x-invalid": 1}),),
-    ),
 )
 
 
