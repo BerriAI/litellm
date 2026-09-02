@@ -12,7 +12,13 @@ from typing import Final
 import httpx
 
 import litellm
-from litellm.constants import request_timeout
+from litellm.constants import (
+    CONSUMED_REQUEST_TAGS_METADATA_KEY,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+    SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+    request_timeout,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -32,6 +38,9 @@ from litellm.types.llms.openai_evals import (
     Run,
     RunDeleteResponse,
     UpdateEvalRequest,
+)
+from litellm.types.integrations.anthropic_cache_control_hook import (
+    GATEWAY_INJECTED_CACHE_METADATA_KEY,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
@@ -63,6 +72,35 @@ INTERNAL_METADATA_KEYS: Final = frozenset(
         "spend_logs_metadata",
         "proxy_server_request",
         "standard_logging_object",
+        # Guardrail, policy and routing control fields the proxy writes into
+        # `metadata`. Kept in step with `_UNTRUSTED_METADATA_CONTROL_FIELDS` in
+        # `litellm/proxy/litellm_pre_call_utils.py`, which cannot be imported here
+        # because `litellm.evals` must not depend on the proxy package.
+        "disable_global_guardrails",
+        "disable_global_guardrail",
+        "opted_out_global_guardrails",
+        "applied_guardrails",
+        "applied_policies",
+        "policy_sources",
+        "guardrail_scan_ids",
+        "routing_decision",
+        "secret_fields",
+        "client_disconnected",
+        "error_information",
+        "_guardrail_pipelines",
+        "_pipeline_managed_guardrails",
+        "pillar_response_headers",
+        "_pillar_response_headers_trusted",
+        "pillar_flagged",
+        "pillar_scanners",
+        "pillar_evidence",
+        "pillar_evidence_truncated",
+        "pillar_session_id_response",
+        GATEWAY_INJECTED_CACHE_METADATA_KEY,
+        SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
+        CONSUMED_REQUEST_TAGS_METADATA_KEY,
+        INTERNAL_CALL_ORIGIN_METADATA_KEY,
+        PRE_CALL_EXECUTED_GUARDRAILS_KEY,
     }
 )
 
