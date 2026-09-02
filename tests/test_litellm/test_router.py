@@ -8383,18 +8383,21 @@ class TestConsumedRequestTagsStamp:
 
 class TestClaudeCodeSubagentSessionRouterBinding:
     class _RewriteStrategy:
+        def __init__(self, routed_model: str = "cheap-model") -> None:
+            self.routed_model = routed_model
+
         async def async_pre_routing_hook(
             self, model, request_kwargs, messages=None, input=None, specific_deployment=False
         ):
             from litellm.types.router import PreRoutingHookResponse
 
             return PreRoutingHookResponse(
-                model="cheap-model",
+                model=self.routed_model,
                 messages=messages,
                 routing_decision={
                     "router_model_name": "smart-router",
                     "router_type": "complexity",
-                    "routed_model": "cheap-model",
+                    "routed_model": self.routed_model,
                     "cause": "heuristic_scorer",
                 },
             )
@@ -8422,7 +8425,8 @@ class TestClaudeCodeSubagentSessionRouterBinding:
             num_retries=0,
         )
         router.complexity_routers = {
-            "smart-router": [TaggedPreRoutingStrategy(tags=(), strategy=cls._RewriteStrategy())]
+            "smart-router": (TaggedPreRoutingStrategy(tags=(), strategy=cls._RewriteStrategy()),),
+            "premium-router": (TaggedPreRoutingStrategy(tags=(), strategy=cls._RewriteStrategy("expensive-model")),),
         }
         return router
 
@@ -8467,7 +8471,7 @@ class TestClaudeCodeSubagentSessionRouterBinding:
         assert subagent_kwargs["metadata"]["routing_decision"]["router_model_name"] == "smart-router"
 
     @pytest.mark.asyncio
-    async def test_main_direct_model_clears_the_session_router(self):
+    async def test_main_thread_side_calls_to_a_plain_model_keep_the_session_router(self):
         router = self._router()
 
         await router.async_pre_routing_hook(model="smart-router", request_kwargs=self._request_kwargs())
@@ -8478,33 +8482,67 @@ class TestClaudeCodeSubagentSessionRouterBinding:
             request_kwargs=self._request_kwargs(agent_id="agent-1234"),
         )
 
-        assert response is None
+        assert response is not None
+        assert response.model == "cheap-model"
 
     @pytest.mark.asyncio
-    async def test_redis_cleanup_failure_does_not_reject_a_direct_model_request(self):
+    async def test_redis_cleanup_failure_does_not_reject_a_subagent_request(self):
         from litellm.caching.caching import RedisCache
 
         router = self._router()
+        del router.complexity_routers["smart-router"]
         redis_cache = MagicMock(spec=RedisCache)
+        redis_cache.async_get_cache = AsyncMock(return_value="smart-router")
         redis_cache.async_delete_cache = AsyncMock(side_effect=ConnectionError("redis unavailable"))
-
-        await router.async_pre_routing_hook(model="smart-router", request_kwargs=self._request_kwargs())
         router._update_redis_cache(cache=redis_cache)
 
         response = await router.async_pre_routing_hook(
             model="expensive-model",
-            request_kwargs=self._request_kwargs(),
+            request_kwargs=self._request_kwargs(agent_id="agent-1234"),
         )
 
         assert response is None
         redis_cache.async_delete_cache.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_subagents_follow_the_main_threads_latest_router_across_workers(self):
+        from types import SimpleNamespace
+
+        from litellm.caching.caching import RedisCache
+
+        shared_binding = SimpleNamespace(value=None)
+        shared_redis = MagicMock(spec=RedisCache)
+        shared_redis.async_get_cache = AsyncMock(side_effect=lambda key, **_: shared_binding.value)
+        shared_redis.async_set_cache = AsyncMock(
+            side_effect=lambda key, value, **_: setattr(shared_binding, "value", value)
+        )
+        main_worker, subagent_worker = self._router(), self._router()
+        main_worker._update_redis_cache(cache=shared_redis)
+        subagent_worker._update_redis_cache(cache=shared_redis)
+
+        await main_worker.async_pre_routing_hook(model="smart-router", request_kwargs=self._request_kwargs())
+        first = await subagent_worker.async_pre_routing_hook(
+            model="expensive-model",
+            request_kwargs=self._request_kwargs(agent_id="agent-1234"),
+        )
+        await main_worker.async_pre_routing_hook(model="premium-router", request_kwargs=self._request_kwargs())
+        second = await subagent_worker.async_pre_routing_hook(
+            model="expensive-model",
+            request_kwargs=self._request_kwargs(agent_id="agent-1234"),
+        )
+
+        assert first is not None
+        assert first.model == "cheap-model"
+        assert second is not None
+        assert second.model == "expensive-model"
+        assert shared_binding.value == "premium-router"
+
+    @pytest.mark.asyncio
     async def test_no_pre_routing_strategies_means_no_session_cache_traffic(self):
         from litellm.caching.caching import RedisCache
 
         router = self._router()
-        router.complexity_routers = {}
+        router.complexity_routers.clear()
         redis_cache = MagicMock(spec=RedisCache)
         redis_cache.async_get_cache = AsyncMock(return_value=None)
         redis_cache.async_set_cache = AsyncMock()
