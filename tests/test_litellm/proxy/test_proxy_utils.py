@@ -886,6 +886,7 @@ from typing import cast
 
 import litellm
 from litellm.proxy.utils import create_model_info_response
+from litellm.types.router import DeploymentModelListingInfo
 from litellm.types.utils import ModelInfo
 
 
@@ -913,7 +914,7 @@ def test_create_model_info_response_includes_max_tokens_from_lookup():
 
 def test_create_model_info_response_does_not_call_router_group_info():
     router = MagicMock()
-    router.get_configured_token_limits.return_value = (None, None)
+    router.get_model_listing_info.return_value = None
 
     response = create_model_info_response(
         model_id="some-model",
@@ -928,7 +929,9 @@ def test_create_model_info_response_does_not_call_router_group_info():
 
 def test_create_model_info_response_uses_deployment_limits_when_not_in_cost_map():
     router = MagicMock()
-    router.get_configured_token_limits.return_value = (32000, 8000)
+    router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+        cost_map_key="my-custom-deployment", max_input_tokens=32000, max_output_tokens=8000
+    )
 
     response = create_model_info_response(
         model_id="my-custom-deployment",
@@ -944,7 +947,9 @@ def test_create_model_info_response_uses_deployment_limits_when_not_in_cost_map(
 
 def test_create_model_info_response_deployment_limits_override_cost_map():
     router = MagicMock()
-    router.get_configured_token_limits.return_value = (200000, None)
+    router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+        cost_map_key="gpt-4o", max_input_tokens=200000, max_output_tokens=None
+    )
 
     response = create_model_info_response(
         model_id="gpt-4o",
@@ -1878,3 +1883,119 @@ async def test_proxy_only_error_5xx_keeps_traceback_and_runs_sync_callbacks(monk
         Logging.failure_handler = orig_sync_failure
 
     assert "test_proxy_utils" in captured["async_traceback"]
+
+
+def test_create_model_info_response_resolves_alias_to_deployment_model():
+    """A public model name that is not itself a cost-map key must not be resolved through
+    the fallback-generalization rules: `bedrock-claude-opus-5` matches the generic
+    claude-family baseline (200k/64k) by substring, while the deployment it fronts really
+    accepts 1M/128k. Regression for the /v1/models alias resolution introduced in v1.94.0."""
+    from litellm import Router
+
+    saved_model_cost = dict(litellm.model_cost)
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "bedrock-claude-opus-5",
+                    "litellm_params": {
+                        "custom_llm_provider": "bedrock",
+                        "model": "bedrock/eu.anthropic.claude-opus-5",
+                    },
+                    "model_info": {"base_model": "eu.anthropic.claude-opus-5"},
+                }
+            ]
+        )
+
+        response = create_model_info_response(
+            model_id="bedrock-claude-opus-5", provider="openai", llm_router=router
+        )
+    finally:
+        litellm.model_cost.clear()
+        litellm.model_cost.update(saved_model_cost)
+
+    assert response["max_input_tokens"] == 1000000
+    assert response["max_output_tokens"] == 128000
+
+
+def test_create_model_info_response_keeps_exact_alias_over_generalized_deployment_model():
+    """Mirror of the alias bug: when the deployment points at a custom backend name that
+    only matches a generalization rule, the listed name's exact cost-map entry is the
+    better answer and must win."""
+    from litellm import Router
+
+    saved_model_cost = dict(litellm.model_cost)
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "claude-opus-5",
+                    "litellm_params": {
+                        "custom_llm_provider": "bedrock",
+                        "model": "bedrock/my-claude-opus-5-provisioned",
+                    },
+                }
+            ]
+        )
+
+        response = create_model_info_response(
+            model_id="claude-opus-5", provider="openai", llm_router=router
+        )
+    finally:
+        litellm.model_cost.clear()
+        litellm.model_cost.update(saved_model_cost)
+
+    assert response["max_input_tokens"] == 1000000
+
+
+def test_create_model_info_response_falls_back_to_alias_for_opaque_deployment_name():
+    """An Azure deployment named after the resource rather than the model has no cost-map
+    entry; the listed name still does, and must keep answering."""
+    from litellm import Router
+
+    saved_model_cost = dict(litellm.model_cost)
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {"model": "azure/my-gpt4o-deployment"},
+                }
+            ]
+        )
+
+        response = create_model_info_response(
+            model_id="gpt-4o", provider="openai", llm_router=router
+        )
+    finally:
+        litellm.model_cost.clear()
+        litellm.model_cost.update(saved_model_cost)
+
+    assert response["max_input_tokens"] == 128000
+    assert response["max_output_tokens"] == 16384
+
+
+def test_create_model_info_response_resolves_mode_through_deployment_model():
+    """`mode` is derived from the same lookup, so an aliased embedding deployment
+    currently reports no mode at all; it must report `embedding`."""
+    from litellm import Router
+
+    saved_model_cost = dict(litellm.model_cost)
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "my-embeddings",
+                    "litellm_params": {"model": "openai/text-embedding-3-small"},
+                }
+            ]
+        )
+
+        response = create_model_info_response(
+            model_id="my-embeddings", provider="openai", llm_router=router
+        )
+    finally:
+        litellm.model_cost.clear()
+        litellm.model_cost.update(saved_model_cost)
+
+    assert response["mode"] == "embedding"

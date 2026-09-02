@@ -7271,6 +7271,105 @@ def test_get_configured_token_limits_coerces_numeric_strings():
     assert router.get_configured_token_limits("quoted-limits-model") == (32000, 8000)
 
 
+def test_get_model_listing_info_prefers_base_model_over_litellm_params_model():
+    """The cost-map key comes from base_model when set, so a deployment pointing at an
+    opaque backend name still resolves the real catalog entry."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude-opus-5",
+                "litellm_params": {"model": "bedrock/eu.anthropic.claude-opus-5"},
+                "model_info": {"base_model": "eu.anthropic.claude-opus-5"},
+            }
+        ]
+    )
+
+    info = router.get_model_listing_info("bedrock-claude-opus-5")
+    assert info is not None
+    assert info.cost_map_key == "eu.anthropic.claude-opus-5"
+
+
+def test_get_model_listing_info_falls_back_to_litellm_params_model():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude-opus-5",
+                "litellm_params": {"model": "bedrock/eu.anthropic.claude-opus-5"},
+            }
+        ]
+    )
+
+    info = router.get_model_listing_info("bedrock-claude-opus-5")
+    assert info is not None
+    assert info.cost_map_key == "bedrock/eu.anthropic.claude-opus-5"
+
+
+def test_get_model_listing_info_ignores_blank_base_model():
+    """A base_model set to an empty string is absent, not a cost-map key."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude-opus-5",
+                "litellm_params": {"model": "bedrock/eu.anthropic.claude-opus-5"},
+                "model_info": {"base_model": ""},
+            }
+        ]
+    )
+
+    info = router.get_model_listing_info("bedrock-claude-opus-5")
+    assert info is not None
+    assert info.cost_map_key == "bedrock/eu.anthropic.claude-opus-5"
+
+
+def test_get_model_listing_info_returns_none_for_unknown_name():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "no-limits-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+            }
+        ]
+    )
+
+    assert router.get_model_listing_info("not-a-real-model") is None
+
+
+def test_get_model_listing_info_carries_configured_limits():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-custom-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"max_input_tokens": 32000, "max_output_tokens": 8000},
+            }
+        ]
+    )
+
+    info = router.get_model_listing_info("my-custom-model")
+    assert info is not None
+    assert (info.max_input_tokens, info.max_output_tokens) == (32000, 8000)
+
+
+def test_get_model_listing_info_skips_wildcard_pattern_matching():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*"},
+                "model_info": {"max_input_tokens": 12345},
+            }
+        ]
+    )
+
+    with patch.object(
+        router.pattern_router, "route", side_effect=AssertionError("pattern route called")
+    ):
+        assert (
+            router.get_model_listing_info("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0")
+            is None
+        )
+
+
 @pytest.mark.asyncio
 async def test_acreate_batch_disable_fallbacks_surfaces_owning_provider_error():
     router = litellm.Router(

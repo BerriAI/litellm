@@ -575,6 +575,23 @@ class Deployment(BaseModel):
         setattr(self, key, value)
 
 
+@dataclass(frozen=True, slots=True)
+class DeploymentModelListingInfo:
+    """What a concrete deployment contributes to its OpenAI-compatible listing entry.
+
+    ``cost_map_key`` is the name the deployment's underlying model is known by in
+    ``litellm.model_cost`` (``model_info.base_model`` when set, else
+    ``litellm_params.model``), which is what the request actually reaches; the public
+    model name it is listed under is an arbitrary alias and often absent from the cost
+    map. The token limits are the ones explicitly set in ``model_info``, which outrank
+    anything the cost map says.
+    """
+
+    cost_map_key: str
+    max_input_tokens: int | None
+    max_output_tokens: int | None
+
+
 class RouterErrors(enum.Enum):
     """
     Enum for router specific errors with common codes
