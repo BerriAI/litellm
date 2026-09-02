@@ -138,8 +138,10 @@ async def test_key_update_missing_key_is_404(proxy_client, world):
 
 # A denied /key/update must not partially apply: the budget/limit columns are
 # left untouched. Each scenario is a denial cell from the matrix above.
+# Note: a key owner (key.user_id == caller) is now allowed to change their own
+# budget — see test_key_update_owner_can_change_own_budget below — so only
+# cross-user denials are pinned here.
 _DENIED_BUDGET = [
-    ("team_admin/self", Actor.TEAM_ADMIN, "self", 403),
     ("internal_user/owner", Actor.INTERNAL_USER, "owner", 403),
     ("cross_org_user/cross_org", Actor.CROSS_ORG_USER, "cross_org", 401),
 ]
@@ -182,3 +184,33 @@ async def test_key_update_denied_does_not_touch_budget_counters(
     assert row.max_budget is None, "denied but max_budget applied"
     assert row.tpm_limit is None, "denied but tpm_limit applied"
     assert row.rpm_limit is None, "denied but rpm_limit applied"
+
+
+@pytest.mark.parametrize("actor", [Actor.INTERNAL_USER, Actor.OWNER, Actor.TEAM_ADMIN])
+async def test_key_update_owner_can_change_own_budget(
+    actor: Actor,
+    proxy_client,
+    prisma,
+    scratch,
+    world,
+):
+    """A key owner (key.user_id == caller) can update their own key's
+    max_budget, even when the key was seeded by the proxy admin. The
+    user-level budget is enforced independently at request time."""
+    caller = world.keys[actor]
+    seeder = world.keys[Actor.PROXY_ADMIN].cleartext
+    target = await _seed_shape(proxy_client, seeder, scratch.prefix, world, "self", caller)
+    target_hashed = hash_token(target)
+
+    resp = await proxy_client.post(
+        "/key/update",
+        headers={"Authorization": f"Bearer {caller.cleartext}"},
+        json={"key": target, "max_budget": 999.0},
+    )
+    assert resp.status_code == 200, f"{actor.value}: {resp.status_code} {resp.text}"
+
+    row = await prisma.db.litellm_verificationtoken.find_unique(
+        where={"token": target_hashed}
+    )
+    assert row is not None
+    assert row.max_budget == 999.0, "allowed but max_budget not applied"

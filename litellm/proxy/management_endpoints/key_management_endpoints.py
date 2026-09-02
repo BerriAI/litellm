@@ -2535,8 +2535,12 @@ async def _validate_update_key_data(
     # long as they avoided budget/spend.
     #
     # Policy:
-    # - Key owner (same user_id): may update non-budget fields on their
-    #   own key without the admin check.
+    # - Key owner (key.user_id == caller): may update the key's own budget
+    #   (max_budget / budget_limits) without the admin check. Their
+    #   user-level budget is enforced independently by max_budget_limiter,
+    #   so a raised key budget cannot exceed the user cap.
+    # - Key creator (created_by == caller AND still owns it): may update
+    #   non-budget fields without the admin check.
     # - Team member with /key/update grant (on a team key): may update
     #   non-budget fields. Team membership + permission is already
     #   enforced by can_team_member_execute_key_management_endpoint
@@ -2549,21 +2553,21 @@ async def _validate_update_key_data(
     # - Anyone else (non-PROXY_ADMIN, not the owner, not a team member
     #   on a team key): must pass _check_key_admin_access (PROXY_ADMIN
     #   / key-owner / team-admin / org-admin of the key).
-    # - max_budget / spend / budget_limits: always require the admin
-    #   check, even for the key owner or a team member (matches the
-    #   existing admin-only budget semantics).  budget_limits uses
-    #   model_fields_set because an explicit null/[] clears the field
-    #   and must gate the same as setting or changing it.
-    # - spend gates on presence alone (not a value diff): the DB spend
-    #   lags the live cross-pod counter, so letting an "unchanged" spend
-    #   through the non-admin path would let a key owner / team member
+    # - max_budget / budget_limits: a key owner may adjust these on their
+    #   own key (see above); everyone else still requires the admin
+    #   check. budget_limits uses model_fields_set because an explicit
+    #   null/[] clears the field and must gate the same as setting or
+    #   changing it.
+    # - spend stays admin-only for everyone, including the key owner: the
+    #   DB spend lags the live cross-pod counter, so letting an
+    #   "unchanged" spend through the non-admin path would let the owner
     #   overwrite the live counter below real usage and silently weaken
-    #   enforcement.
+    #   enforcement. spend gates on presence alone (not a value diff).
     _is_budget_change: Final = (
         (data.max_budget is not None and data.max_budget != existing_key_row.max_budget)
-        or data.spend is not None
         or "budget_limits" in data.model_fields_set
     )
+    _is_spend_change: Final = data.spend is not None
 
     _existing_metadata: Final = getattr(existing_key_row, "metadata", None)
     _existing_throttle: Final = (
@@ -2588,14 +2592,22 @@ async def _validate_update_key_data(
         entity="key",
     )
 
-    # Personal-key bypass: the caller both created the key AND still owns it
-    # (user_id == caller).  Checking only created_by would let a demoted admin
-    # who originally created a key for another user continue editing it without
-    # admin authorization after the key was reassigned.
-    caller_is_creator: Final = (
+    # Personal-key bypass separates "owner" from "creator":
+    # - owner: the key's user_id == caller. Budget fields (max_budget /
+    #   budget_limits) are safe for the owner to change because the
+    #   user-level budget is enforced independently by max_budget_limiter.
+    # - creator: created_by == caller AND still owns it (user_id == caller).
+    #   Non-budget fields (models, alias, allowed_routes, ...) can escalate
+    #   privilege, so they stay gated to the creator — checking only
+    #   created_by would let a demoted admin who created a key for another
+    #   user keep editing it after the key was reassigned.
+    caller_is_owner: Final = (
         user_api_key_dict.user_id is not None
-        and getattr(existing_key_row, "created_by", None) == user_api_key_dict.user_id
         and getattr(existing_key_row, "user_id", None) == user_api_key_dict.user_id
+    )
+    caller_is_creator: Final = (
+        caller_is_owner
+        and getattr(existing_key_row, "created_by", None) == user_api_key_dict.user_id
     )
     # Team keys: can_team_member_execute_key_management_endpoint (called above)
     # already validated team membership + /key/update permission and would have
@@ -2603,7 +2615,11 @@ async def _validate_update_key_data(
     # non-budget change means the caller was authorized — skip the redundant
     # _check_key_admin_access that would otherwise require team/org admin status.
     _key_is_team_key: Final = getattr(existing_key_row, "team_id", None) is not None
-    can_skip_admin_check: Final = (caller_is_creator or _key_is_team_key) and not _is_budget_change
+    can_skip_admin_check: Final = (
+        (caller_is_owner and _is_budget_change and not _is_spend_change)
+        or (caller_is_creator and not _is_budget_change and not _is_spend_change)
+        or (_key_is_team_key and not _is_budget_change and not _is_spend_change)
+    )
     if (not _is_proxy_admin) and prisma_client is not None and not can_skip_admin_check:
         hashed_key: Final = existing_key_row.token
         await _check_key_admin_access(
@@ -2611,7 +2627,7 @@ async def _validate_update_key_data(
             hashed_token=hashed_key,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
-            route=("/key/update (max_budget/spend)" if _is_budget_change else "/key/update"),
+            route=("/key/update (max_budget/spend)" if (_is_budget_change or _is_spend_change) else "/key/update"),
         )
 
     # Check team limits if key has a team_id (from request or existing key)
