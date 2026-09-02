@@ -95,8 +95,25 @@ def test_config_update_rejects_unknown_router_setting(client, auth_as, mock_pris
         )
 
     assert response.status_code == 400
-    assert "optional_precall_checks" in response.json()["detail"]["error"]
+    assert "optional_precall_checks" in response.json()["error"]["message"]
     table.upsert.assert_not_called()
+
+
+def test_config_update_unknown_router_setting_non_admin_forbidden(client, auth_as, mock_prisma, monkeypatch):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with auth_as(LitellmUserRoles.INTERNAL_USER):
+        response = client.post(
+            "/config/update",
+            json={"router_settings": {"optional_precall_checks": ["prompt_caching"]}},
+        )
+
+    assert response.status_code == 403
+    assert "admin" in response.json()["error"]["message"].lower()
 
 
 def test_config_update_non_admin_forbidden(client, auth_as, mock_prisma, monkeypatch):

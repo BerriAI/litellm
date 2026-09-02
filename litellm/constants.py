@@ -9,6 +9,28 @@ DEFAULT_HEALTH_CHECK_PROMPT: Final = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT"
 AZURE_DEFAULT_RESPONSES_API_VERSION: Final = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
 ROUTER_MAX_FALLBACKS: Final = int(os.getenv("ROUTER_MAX_FALLBACKS", 5))
 ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS: Final = 2000
+RUNTIME_UPDATABLE_ROUTER_SETTINGS: Final[frozenset[str]] = frozenset(
+    {
+        "routing_strategy_args",
+        "routing_strategy",
+        "routing_groups",
+        "allowed_fails",
+        "cooldown_time",
+        "num_retries",
+        "timeout",
+        "max_retries",
+        "retry_after",
+        "fallbacks",
+        "context_window_fallbacks",
+        "retry_policy",
+        "model_group_retry_policy",
+        "model_group_alias",
+        "enable_weighted_failover",
+        "enable_tag_filtering",
+        "tag_routing_prefix",
+        "optional_pre_call_checks",
+    }
+)
 DEFAULT_BATCH_SIZE: Final = int(os.getenv("DEFAULT_BATCH_SIZE", 512))
 DEFAULT_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_FLUSH_INTERVAL_SECONDS", 5))
 DEFAULT_S3_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10))
@@ -38,28 +60,6 @@ DEFAULT_MAX_TOKENS: Final = int(os.getenv("DEFAULT_MAX_TOKENS", 4096))
 DEFAULT_ALLOWED_FAILS: Final = int(os.getenv("DEFAULT_ALLOWED_FAILS", 3))
 DEFAULT_REDIS_SYNC_INTERVAL: Final = int(os.getenv("DEFAULT_REDIS_SYNC_INTERVAL", 1))
 DEFAULT_COOLDOWN_TIME_SECONDS: Final = int(os.getenv("DEFAULT_COOLDOWN_TIME_SECONDS", 5))
-RUNTIME_UPDATABLE_ROUTER_SETTINGS: Final[frozenset[str]] = frozenset(
-    {
-        "routing_strategy_args",
-        "routing_strategy",
-        "routing_groups",
-        "allowed_fails",
-        "cooldown_time",
-        "num_retries",
-        "timeout",
-        "max_retries",
-        "retry_after",
-        "fallbacks",
-        "context_window_fallbacks",
-        "retry_policy",
-        "model_group_retry_policy",
-        "model_group_alias",
-        "enable_weighted_failover",
-        "enable_tag_filtering",
-        "tag_routing_prefix",
-        "optional_pre_call_checks",
-    }
-)
 DEFAULT_REPLICATE_POLLING_RETRIES: Final = int(os.getenv("DEFAULT_REPLICATE_POLLING_RETRIES", 5))
 DEFAULT_REPLICATE_POLLING_DELAY_SECONDS: Final = int(os.getenv("DEFAULT_REPLICATE_POLLING_DELAY_SECONDS", 1))
 DEFAULT_IMAGE_TOKEN_COUNT: Final = int(os.getenv("DEFAULT_IMAGE_TOKEN_COUNT", 250))

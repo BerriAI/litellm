@@ -16220,26 +16220,26 @@ async def update_config(
     a side effect of an unrelated update.
     """
     global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key, prisma_client
-    request_body: Final[Mapping[str, JsonValue]] = TypeAdapter(Mapping[str, JsonValue]).validate_python(
-        await request.json()
-    )
-    raw_router_settings: Final = request_body.get("router_settings")
-    if isinstance(raw_router_settings, dict):
-        unsupported_router_settings: Final = sorted(set(raw_router_settings) - RUNTIME_UPDATABLE_ROUTER_SETTINGS)
-        if unsupported_router_settings:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": (
-                        f"Unsupported router settings: {', '.join(unsupported_router_settings)} "
-                        "are not runtime-updatable router settings"
-                    )
-                },
-            )
-
     try:
         if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
             raise HTTPException(status_code=403, detail="Only proxy admins can update config")
+
+        request_body: Final[Mapping[str, JsonValue]] = TypeAdapter(Mapping[str, JsonValue]).validate_python(
+            await request.json()
+        )
+        raw_router_settings: Final = request_body.get("router_settings")
+        if isinstance(raw_router_settings, dict):
+            unsupported_router_settings: Final = sorted(set(raw_router_settings) - RUNTIME_UPDATABLE_ROUTER_SETTINGS)
+            if unsupported_router_settings:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": (
+                            f"Unsupported router settings: {', '.join(unsupported_router_settings)} "
+                            "are not runtime-updatable router settings"
+                        )
+                    },
+                )
 
         if prisma_client is None:
             raise Exception("No DB Connected")
