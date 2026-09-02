@@ -158,7 +158,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     visible_strategies = tuple(
         strategy for strategy in strategies if strategy.id in selected_strategy_ids
     )
-    dashboard = make_dashboard(visible_strategies, plain=args.plain)
+    dashboard = make_dashboard(
+        visible_strategies,
+        plain=args.plain,
+        confidence_strategies=strategies,
+    )
     pytest_args = [*args.pytest_arg]
     if args.coverage:
         pytest_args.extend(_coverage_pytest_args())

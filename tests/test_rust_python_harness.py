@@ -22,6 +22,7 @@ HarnessCase = models.HarnessCase
 HarnessRun = models.HarnessRun
 RunStatus = models.RunStatus
 SDK_FUNCTIONS = models.SDK_FUNCTIONS
+section_confidence = models.section_confidence
 run_pytest = runner.run_pytest
 runnable_selectors = runner.runnable_selectors
 selector_matches_node = runner.selector_matches_node
@@ -213,3 +214,23 @@ def test_should_build_python_coverage_reports_below_the_target_directory(
     assert f"--cov-report=json:{tmp_path / 'python.json'}" in args
     assert f"--cov-report=xml:{tmp_path / 'python.xml'}" in args
     assert f"--cov-report=html:{tmp_path / 'python-html'}" in args
+
+
+def test_should_report_confidence_for_each_sdk_section() -> None:
+    strategies = load_catalog()
+    cases = tuple(case for strategy in strategies for case in strategy.cases)
+    run = HarnessRun.from_cases(cases)
+    passing = run.results["e2e_fuzz_tests:responses"]
+    passing.collected.add("tests/test_parity.py::test_one")
+    passing.record("tests/test_parity.py::test_one", RunStatus.PASSED)
+
+    scores = {
+        score.sdk_function: score for score in section_confidence(run, strategies)
+    }
+
+    assert scores["responses"].verified_strategies == 1
+    assert scores["responses"].required_strategies == 3
+    assert scores["responses"].percentage == 33
+    assert scores["responses"].level.value == "MEDIUM"
+    assert scores["count_tokens"].percentage == 0
+    assert scores["count_tokens"].level.value == "LOW"

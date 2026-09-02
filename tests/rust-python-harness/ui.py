@@ -8,7 +8,14 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
 
-from .models import Coverage, HarnessRun, RunStatus, SDK_FUNCTIONS, Strategy
+from .models import (
+    Coverage,
+    HarnessRun,
+    RunStatus,
+    SDK_FUNCTIONS,
+    Strategy,
+    section_confidence,
+)
 
 STATUS_GLYPHS = {
     RunStatus.NOT_RUN: "·",
@@ -74,11 +81,16 @@ def _cell_text(run: HarnessRun, strategy_id: str, sdk_function: str) -> tuple[st
 
 
 class RichDashboard(AbstractContextManager["RichDashboard"]):
-    def __init__(self, strategies: Sequence[Strategy]) -> None:
+    def __init__(
+        self,
+        strategies: Sequence[Strategy],
+        confidence_strategies: Sequence[Strategy],
+    ) -> None:
         from rich.console import Console
         from rich.live import Live
 
         self.strategies = strategies
+        self.confidence_strategies = confidence_strategies
         self.console = Console()
         self.live: Any = Live(
             console=self.console, refresh_per_second=12, transient=False
@@ -176,6 +188,29 @@ class RichDashboard(AbstractContextManager["RichDashboard"]):
                     for nodeid, duration in slow
                 )
             )
+        from rich import box
+        from rich.table import Table
+
+        confidence_table = Table(
+            title="Port confidence by SDK section", box=box.ROUNDED, expand=True
+        )
+        confidence_table.add_column("SDK section")
+        confidence_table.add_column("Score", justify="right")
+        confidence_table.add_column("Confidence")
+        confidence_table.add_column("Strategy evidence", ratio=4)
+        confidence_styles = {"HIGH": "green", "MEDIUM": "yellow", "LOW": "red"}
+        for score in section_confidence(run, self.confidence_strategies):
+            confidence_table.add_row(
+                score.sdk_function,
+                f"{score.verified_strategies}/{score.required_strategies}  {score.percentage}%",
+                f"[{confidence_styles[score.level.value]}]{score.level.value}[/]",
+                "  ".join(score.details),
+            )
+        self.console.print(confidence_table)
+        self.console.print(
+            "[dim]Score = required strategies with passing evidence. "
+            "LOC coverage remains a separate report.[/dim]"
+        )
         style = "green" if exit_code == 0 else "red"
         self.console.print(
             f"[{style}]Harness finished in {_format_duration(run.duration)} "
@@ -184,8 +219,13 @@ class RichDashboard(AbstractContextManager["RichDashboard"]):
 
 
 class PlainDashboard(AbstractContextManager["PlainDashboard"]):
-    def __init__(self, strategies: Sequence[Strategy]) -> None:
+    def __init__(
+        self,
+        strategies: Sequence[Strategy],
+        confidence_strategies: Sequence[Strategy],
+    ) -> None:
         self.strategies = strategies
+        self.confidence_strategies = confidence_strategies
         self._seen: dict[str, tuple[RunStatus, int]] = {}
 
     def __enter__(self) -> "PlainDashboard":
@@ -218,12 +258,28 @@ class PlainDashboard(AbstractContextManager["PlainDashboard"]):
         )
         for nodeid, _ in run.failures[:5]:
             print(f"Rerun: {_rerun_command(nodeid)}", flush=True)
+        print("Port confidence by SDK section", flush=True)
+        for score in section_confidence(run, self.confidence_strategies):
+            print(
+                f"  {score.sdk_function:12} "
+                f"{score.verified_strategies}/{score.required_strategies} "
+                f"{score.percentage:3}% {score.level.value:6}  "
+                f"{' | '.join(score.details)}",
+                flush=True,
+            )
+        print(
+            "  Score = required strategies with passing evidence; LOC is reported separately.",
+            flush=True,
+        )
         print(f"Harness finished with exit code {exit_code}", flush=True)
 
 
 def make_dashboard(
-    strategies: Sequence[Strategy], plain: bool = False
+    strategies: Sequence[Strategy],
+    plain: bool = False,
+    confidence_strategies: Sequence[Strategy] | None = None,
 ) -> RichDashboard | PlainDashboard:
+    confidence_strategies = confidence_strategies or strategies
     interactive_terminal = (
         sys.stdout.isatty()
         and not os.environ.get("CI")
@@ -233,7 +289,7 @@ def make_dashboard(
         try:
             import rich  # noqa: F401
 
-            return RichDashboard(strategies)
+            return RichDashboard(strategies, confidence_strategies)
         except ImportError:
             pass
-    return PlainDashboard(strategies)
+    return PlainDashboard(strategies, confidence_strategies)

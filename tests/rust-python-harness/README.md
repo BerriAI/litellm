@@ -64,6 +64,11 @@ and prints the three slowest tests when the run ends. Each failure includes a fo
 `poetry run pytest ... -q` command. Redirected output and CI automatically use the
 line-oriented plain renderer; `--plain` lets you opt into it locally.
 
+The final screen includes a confidence score for every SDK section. It is the direct
+ratio of required strategy rows with passing evidence, such as `1/3 = 33%`; High means
+all required strategies passed, Medium means some passed, and Low means none passed.
+This behavioral score is intentionally shown separately from Python and Rust LOC.
+
 Coverage reports are written outside the three strategy folders at
 `target/rust-python-harness/`. Open `python-html/index.html` to inspect executed and
 missing Python lines; `python.json` and `python.xml` are available for automation.

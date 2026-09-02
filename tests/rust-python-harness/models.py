@@ -27,6 +27,12 @@ class RunStatus(str, Enum):
     NOT_APPLICABLE = "not_applicable"
 
 
+class ConfidenceLevel(str, Enum):
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
+
 SDK_FUNCTIONS = ("ocr", "messages", "responses", "count_tokens")
 
 
@@ -140,3 +146,74 @@ class HarnessRun:
         for result in results.values():
             result.set_initial_status()
         return cls(results=results)
+
+
+@dataclass(frozen=True)
+class SectionConfidence:
+    sdk_function: str
+    verified_strategies: int
+    required_strategies: int
+    level: ConfidenceLevel
+    details: tuple[str, ...]
+
+    @property
+    def percentage(self) -> int:
+        if not self.required_strategies:
+            return 0
+        return round(100 * self.verified_strategies / self.required_strategies)
+
+
+def section_confidence(
+    run: HarnessRun, strategies: Iterable[Strategy]
+) -> tuple[SectionConfidence, ...]:
+    strategy_list = tuple(strategies)
+    scores: list[SectionConfidence] = []
+    for sdk_function in SDK_FUNCTIONS:
+        cases = tuple(
+            case
+            for strategy in strategy_list
+            for case in strategy.cases
+            if case.sdk_function == sdk_function
+            and case.coverage is not Coverage.NOT_APPLICABLE
+        )
+        verified = 0
+        details: list[str] = []
+        for case in cases:
+            result = run.results.get(case.key)
+            status = result.status if result is not None else RunStatus.NOT_RUN
+            if status is RunStatus.PASSED:
+                verified += 1
+            details.append(
+                f"{STATUS_LABELS[status]} {case.strategy_id} ({case.coverage.value})"
+            )
+        required = len(cases)
+        if required and verified == required:
+            level = ConfidenceLevel.HIGH
+        elif verified:
+            level = ConfidenceLevel.MEDIUM
+        else:
+            level = ConfidenceLevel.LOW
+        scores.append(
+            SectionConfidence(
+                sdk_function=sdk_function,
+                verified_strategies=verified,
+                required_strategies=required,
+                level=level,
+                details=tuple(details),
+            )
+        )
+    return tuple(scores)
+
+
+STATUS_LABELS = {
+    RunStatus.NOT_RUN: "·",
+    RunStatus.QUEUED: "○",
+    RunStatus.RUNNING: "◉",
+    RunStatus.PASSED: "✓",
+    RunStatus.FAILED: "✗",
+    RunStatus.SKIPPED: "↷",
+    RunStatus.ERROR: "!",
+    RunStatus.MISSING: "?",
+    RunStatus.PLANNED: "—",
+    RunStatus.NOT_APPLICABLE: "n/a",
+}
