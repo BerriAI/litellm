@@ -9,6 +9,7 @@ import base64
 import hashlib
 import re
 import uuid
+from collections.abc import Mapping
 from typing import Final
 
 from litellm._logging import verbose_logger
@@ -16,12 +17,10 @@ from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
 )
+from litellm.llms.gigachat.utils import get_api_base
 from litellm.types.utils import LlmProviders
 
 from .authenticator import get_access_token, get_access_token_async
-
-# GigaChat API endpoint
-GIGACHAT_BASE_URL: Final = "https://gigachat.devices.sberbank.ru/api/v1"
 
 # Simple in-memory cache for file IDs
 _file_cache: Final[dict[str, str]] = {}
@@ -82,6 +81,7 @@ def upload_file_sync(
     image_url: str,
     credentials: str | None = None,
     api_base: str | None = None,
+    litellm_params: Mapping[str, object] | None = None,
 ) -> str | None:
     """
     Upload file to GigaChat and return file_id (sync).
@@ -114,10 +114,10 @@ def upload_file_sync(
         filename: Final = f"{uuid.uuid4()}.{ext}"
 
         # Get access token
-        access_token: Final = get_access_token(credentials)
+        access_token: Final = get_access_token(credentials=credentials, litellm_params=litellm_params)
 
         # Upload to GigaChat
-        base_url: Final = api_base or GIGACHAT_BASE_URL
+        base_url: Final = get_api_base(api_base)
         upload_url: Final = f"{base_url}/files"
 
         client: Final = _get_httpx_client(params={"ssl_verify": False})
@@ -147,6 +147,7 @@ async def upload_file_async(
     image_url: str,
     credentials: str | None = None,
     api_base: str | None = None,
+    litellm_params: Mapping[str, object] | None = None,
 ) -> str | None:
     """
     Upload file to GigaChat and return file_id (async).
@@ -179,10 +180,10 @@ async def upload_file_async(
         filename: Final = f"{uuid.uuid4()}.{ext}"
 
         # Get access token
-        access_token: Final = await get_access_token_async(credentials)
+        access_token: Final = await get_access_token_async(credentials=credentials, litellm_params=litellm_params)
 
         # Upload to GigaChat
-        base_url: Final = api_base or GIGACHAT_BASE_URL
+        base_url: Final = get_api_base(api_base)
         upload_url: Final = f"{base_url}/files"
 
         client: Final = get_async_httpx_client(

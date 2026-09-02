@@ -120,7 +120,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         raw_response: httpx.Response,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj,
     ) -> ImageResponse:
         model_response: Final = ImageResponse()
         try:

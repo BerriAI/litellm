@@ -48,6 +48,8 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolCallChunk,
     ChatCompletionToolParam,
+    ErrorEvent,
+    ErrorEventError,
     OpenAIMcpServerTool,
     ResponsesAPIStreamEvents,
 )
@@ -59,6 +61,8 @@ from litellm.types.responses.main import (
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
+    from fastapi import HTTPException
+
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
@@ -78,6 +82,18 @@ class ResponsesStreamChunk(TypedDict, total=False):
 
     type: ReadOnly[str]
     text: ReadOnly[str]
+    delta: ReadOnly[str]
+    item_id: ReadOnly[str]
+    output_index: ReadOnly[int]
+    content_index: ReadOnly[int]
+
+
+def _next_stream_sequence_number(responses_so_far: Sequence[Any] | None) -> int:
+    sequence_numbers: Final = (
+        item.get("sequence_number") if isinstance(item, dict) else getattr(item, "sequence_number", None)
+        for item in reversed(responses_so_far or ())
+    )
+    return next((n + 1 for n in sequence_numbers if isinstance(n, int)), 0)
 
 
 class OpenAIResponsesHandler(BaseTranslation):
@@ -620,11 +636,58 @@ class OpenAIResponsesHandler(BaseTranslation):
         }
         return responses_so_far[-1].get("type") in terminal_types
 
+    def build_stream_error_items(
+        self,
+        exc: "HTTPException",
+        responses_so_far: Sequence[Any] | None = None,
+    ) -> Sequence[Any] | None:
+        from litellm.proxy.common_request_processing import (
+            serialize_http_exception_detail,
+        )
+
+        message, _ = serialize_http_exception_detail(exc.detail)
+        return (
+            ErrorEvent(
+                type=ResponsesAPIStreamEvents.ERROR,
+                sequence_number=_next_stream_sequence_number(responses_so_far),
+                error=ErrorEventError(
+                    type="guardrail_error",
+                    code=str(exc.status_code),
+                    message=message,
+                    param=None,
+                ),
+            ),
+        )
+
     def get_streaming_string_so_far(self, responses_so_far: Sequence[ResponsesStreamChunk]) -> str:
         """
         Get the string so far from the responses so far.
+
+        ``response.output_text.done`` events carry the whole part in ``text``, while
+        ``response.output_text.delta`` events carry fragments in ``delta``. A stream
+        that dies before its done event (``response.failed`` / ``response.incomplete``)
+        has text only in deltas, so per content part the done text wins when present
+        and the joined deltas fill in otherwise, never both.
         """
-        return "".join([response.get("text", "") for response in responses_so_far])
+        keyed_events: Final = tuple(
+            (
+                (event.get("item_id"), event.get("output_index"), event.get("content_index")),
+                event.get("text"),
+                event.get("delta"),
+            )
+            for event in responses_so_far
+            if isinstance(event.get("text"), str) or isinstance(event.get("delta"), str)
+        )
+
+        def part_text(part_key: tuple[object, object, object]) -> str:
+            done_texts: Final = tuple(
+                text for key, text, _ in keyed_events if key == part_key and isinstance(text, str)
+            )
+            if done_texts:
+                return done_texts[-1]
+            return "".join(delta for key, _, delta in keyed_events if key == part_key and isinstance(delta, str))
+
+        return "".join(part_text(key) for key in dict.fromkeys(key for key, _, _ in keyed_events))
 
     def _has_text_content(self, response: "ResponsesAPIResponse") -> bool:
         """

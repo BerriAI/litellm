@@ -5,6 +5,7 @@ PR checklist requires at least one test in tests/test_litellm/.
 Additional tests live in tests/guardrails_tests/test_lakera_v2.py.
 """
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -537,6 +538,220 @@ class TestPiiMaskingSafetyGuard:
             )
         assert result["messages"][0] == SYSTEM_MSG
         assert "[MASKED" in result["messages"][1]["content"]
+
+    async def test_monitor_mode_masks_responses_input_when_instructions_present(self):
+        """
+        Regression: #34940 added `instructions` to the mask-in-place safety guard,
+        which skips the mask branch for every Responses-API body carrying one. In
+        on_flagged="monitor" that dropped through to "allow", so PII in `input`
+        that was masked before the PR now reached the model unredacted. Monitor
+        means "don't block", not "don't redact" -- the input is still writable, so
+        it must still be masked.
+        """
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="monitor")
+        data = {
+            "instructions": "be nice",
+            "input": "a@b.com",
+            "model": "gpt-3.5-turbo",
+            "metadata": {},
+        }
+        lakera_response = {
+            "flagged": True,
+            "breakdown": [{"detector_type": "pii/email", "detected": True, "message_id": 1}],
+            "payload": [{"detector_type": "pii/email", "start": 0, "end": 7, "message_id": 1}],
+        }
+        with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+            mock_call.return_value = (lakera_response, {})
+            result = await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                cache=MagicMock(),
+                data=data,
+                call_type="responses",
+            )
+        assert result["input"] == "[MASKED EMAIL]"
+        assert result["instructions"] == "be nice"
+
+    async def test_monitor_mode_masks_pii_carried_in_responses_instructions(self):
+        """
+        Regression: `instructions` is inspected as a synthetic leading system
+        message but apply_redacted_messages_back has no path to rewrite it, so
+        monitor mode forwarded the flagged instructions text verbatim. The
+        redacted instructions must be written straight back into
+        data["instructions"], and must not be folded into data["input"].
+        """
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="monitor")
+        data = {
+            "instructions": "a@b.com is the contact",
+            "input": "hi",
+            "model": "gpt-3.5-turbo",
+            "metadata": {},
+        }
+        lakera_response = {
+            "flagged": True,
+            "breakdown": [{"detector_type": "pii/email", "detected": True, "message_id": 0}],
+            "payload": [{"detector_type": "pii/email", "start": 0, "end": 7, "message_id": 0}],
+        }
+        with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+            mock_call.return_value = (lakera_response, {})
+            result = await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                cache=MagicMock(),
+                data=data,
+                call_type="responses",
+            )
+        assert result["instructions"] == "[MASKED EMAIL] is the contact"
+        assert "a@b.com" not in result["instructions"]
+        assert result["input"] == "hi"
+
+    async def test_monitor_mode_masks_messages_when_instructions_present(self):
+        """
+        Regression: a chat body that also carries `instructions` hit the same
+        guard. The messages list has a write-back path, so it must still be
+        masked in monitor mode, with the untouched instructions preserved.
+        """
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="monitor")
+        data = {
+            "instructions": "be nice",
+            "messages": [{"role": "user", "content": "a@b.com", "name": "u1"}],
+            "model": "gpt-3.5-turbo",
+            "metadata": {},
+        }
+        lakera_response = {
+            "flagged": True,
+            "breakdown": [{"detector_type": "pii/email", "detected": True, "message_id": 1}],
+            "payload": [{"detector_type": "pii/email", "start": 0, "end": 7, "message_id": 1}],
+        }
+        with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
+            mock_call.return_value = (lakera_response, {})
+            result = await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                cache=MagicMock(),
+                data=data,
+                call_type="completion",
+            )
+        assert result["messages"][0]["content"] == "[MASKED EMAIL]"
+        assert result["messages"][0]["name"] == "u1"
+        assert result["instructions"] == "be nice"
+
+    async def _monitor_unmasked(self, guardrail, data, lakera_response, caplog, call_type="completion"):
+        """Drive the monitor path and hand back the result plus the ERROR records it logged."""
+        with (
+            patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call,
+            caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
+        ):
+            mock_call.return_value = (lakera_response, {})
+            result = await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                cache=MagicMock(),
+                data=data,
+                call_type=call_type,
+            )
+        return result, [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+
+    async def test_monitor_mode_leaves_combined_messages_and_input_unmasked(self, caplog):
+        """
+        The combined messages+input shape stays unmasked in monitor mode on
+        purpose: build_inspection_messages flattens both into one list, so
+        writing the redacted result back is positionally ambiguous (Greptile P1
+        on #34940, see
+        test_pii_only_violation_with_combined_messages_and_input_blocks_instead_of_masking).
+        Monitor still must not block, so the request goes through untouched and
+        the guardrail logs an error naming that reason.
+        """
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="monitor")
+        data = {
+            "messages": [{"role": "user", "content": ""}, {"role": "user", "content": "a@b.com"}],
+            "input": "responses-api content",
+            "model": "gpt-3.5-turbo",
+            "metadata": {},
+        }
+        result, errors = await self._monitor_unmasked(guardrail, data, PII_ONLY_LAKERA_RESPONSE, caplog)
+        assert result["messages"][1]["content"] == "a@b.com"
+        assert result["input"] == "responses-api content"
+        assert any("messages and input are both present" in e for e in errors)
+
+    async def test_monitor_mode_multimodal_logs_the_multimodal_reason(self, caplog):
+        """The multimodal shape was already unmasked before this branch existed;
+        it must stay that way and say which obstacle it hit, not a generic one."""
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="monitor")
+        data = {
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "a@b.com"}]}],
+            "model": "gpt-3.5-turbo",
+            "metadata": {},
+        }
+        result, errors = await self._monitor_unmasked(guardrail, data, PII_ONLY_LAKERA_RESPONSE, caplog)
+        assert result["messages"][0]["content"] == [{"type": "text", "text": "a@b.com"}]
+        assert any("multimodal content" in e for e in errors)
+
+    async def test_monitor_mode_does_not_claim_masking_when_lakera_sent_no_locations(self, caplog):
+        """
+        payload=false is a supported config for block/monitor, and it makes
+        Lakera report the violation without the offsets masking needs. Masking
+        must not silently no-op and report success -- the request goes out
+        unredacted, so it has to be logged as unredacted.
+        """
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="monitor", payload=False)
+        data = {
+            "instructions": "be nice",
+            "input": "a@b.com",
+            "model": "gpt-3.5-turbo",
+            "metadata": {},
+        }
+        lakera_response = {
+            "flagged": True,
+            "breakdown": [{"detector_type": "pii/email", "detected": True, "message_id": 1}],
+        }
+        result, errors = await self._monitor_unmasked(guardrail, data, lakera_response, caplog, call_type="responses")
+        assert result["input"] == "a@b.com"
+        assert any("no locations to redact" in e for e in errors)
+
+    async def test_monitor_mode_does_not_invent_a_messages_list(self, caplog):
+        """
+        A Responses body carrying a falsy non-list `messages` key must not come
+        out of the guardrail with a fabricated chat messages list -- the shared
+        write-back helper keys off `"messages" in data`, not off it being a list.
+        """
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="monitor")
+        data = {
+            "instructions": "be nice",
+            "input": "a@b.com",
+            "messages": None,
+            "model": "gpt-3.5-turbo",
+            "metadata": {},
+        }
+        lakera_response = {
+            "flagged": True,
+            "breakdown": [{"detector_type": "pii/email", "detected": True, "message_id": 1}],
+            "payload": [{"detector_type": "pii/email", "start": 0, "end": 7, "message_id": 1}],
+        }
+        result, errors = await self._monitor_unmasked(guardrail, data, lakera_response, caplog, call_type="responses")
+        assert result["messages"] is None
+        assert result["input"] == "a@b.com"
+        assert any("isn't a list" in e for e in errors)
+
+    async def test_monitor_mode_mixed_violation_is_not_logged_as_an_error(self, caplog):
+        """
+        A PII-plus-prompt-injection violation on an ordinary chat body behaves
+        exactly as it did before this branch existed, so it must keep logging at
+        warning level rather than adding error volume to every mixed detection.
+        """
+        guardrail = LakeraAIGuardrail(api_key="test_key", on_flagged="monitor")
+        data = {
+            "messages": [{"role": "user", "content": "a@b.com"}],
+            "model": "gpt-3.5-turbo",
+            "metadata": {},
+        }
+        lakera_response = {
+            "flagged": True,
+            "breakdown": [
+                {"detector_type": "pii/email", "detected": True, "message_id": 0},
+                {"detector_type": "prompt_attack", "detected": True, "message_id": 0},
+            ],
+            "payload": [{"detector_type": "pii/email", "start": 0, "end": 7, "message_id": 0}],
+        }
+        result, errors = await self._monitor_unmasked(guardrail, data, lakera_response, caplog)
+        assert result["messages"][0]["content"] == "a@b.com"
+        assert errors == []
 
     async def test_pii_only_violation_with_uppercase_skipped_role_masks_without_raising(self):
         """
