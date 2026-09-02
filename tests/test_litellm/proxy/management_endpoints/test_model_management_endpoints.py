@@ -1944,7 +1944,7 @@ class TestModelInfoEndpoint:
         ):
             mock_router.get_fully_blocked_model_names.return_value = set()
             mock_router.get_model_list.return_value = []
-            mock_router.get_configured_token_limits.return_value = (None, None)
+            mock_router.get_model_listing_info.return_value = None
             mock_router.get_deployment_by_model_group_name.return_value = Deployment(
                 model_name="gpt-4",
                 litellm_params=LiteLLM_Params(model="openai/gpt-4"),
@@ -2021,7 +2021,7 @@ class TestModelInfoEndpoint:
         ):
             mock_router.get_fully_blocked_model_names.return_value = set()
             mock_router.get_model_list.return_value = []
-            mock_router.get_configured_token_limits.return_value = (None, None)
+            mock_router.get_model_listing_info.return_value = None
             mock_router.get_deployment_by_model_group_name.return_value = Deployment(
                 model_name="team-model-1",
                 litellm_params=LiteLLM_Params(model="custom/team-model-1"),

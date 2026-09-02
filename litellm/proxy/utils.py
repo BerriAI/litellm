@@ -7481,6 +7481,88 @@ async def get_available_models_for_user(
     return all_models
 
 
+def _safe_get_model_info(model: str, get_model_info: Callable[[str], ModelInfo]) -> ModelInfo | None:
+    try:
+        return get_model_info(model)
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "create_model_info_response: cost map lookup failed for %s: %s",
+            model,
+            e,
+        )
+        return None
+
+
+def _resolve_listing_model_info(
+    deployment_model: str | None,
+    listed_model: str,
+    listed_info: ModelInfo | None,
+    get_model_info: Callable[[str], ModelInfo],
+) -> tuple[ModelInfo, ...]:
+    """
+    Cost-map entries describing one deployment behind a listed model, best source first.
+
+    The name a model is listed under is an arbitrary public alias, so it often misses the
+    cost map and lands on a fallback-generalization rule that answers with a conservative
+    family baseline instead of the real model's limits; the deployment's underlying model
+    is what the request actually reaches. Both names are kept because either can
+    generalize, and because a deployment's own model is registered into the cost map as a
+    stub that carries no limits of its own. Exact entries are consulted before generalized
+    ones, and each field is then taken from the first entry that has it.
+
+    ``listed_info`` is resolved once by the caller, since a group with several distinct
+    underlying models resolves the same alias for each of them.
+    """
+    # Fast path, and the only one a wildcard-expanded name takes: with a single name
+    # there is nothing to order, so skip the generalization test entirely. This keeps
+    # the per-model cost of the listing on the hot path #33721 exists to protect.
+    if deployment_model is None or deployment_model == listed_model:
+        return () if listed_info is None else (listed_info,)
+
+    deployment_info: Final = _safe_get_model_info(deployment_model, get_model_info)
+    if deployment_info is None:
+        return () if listed_info is None else (listed_info,)
+    if listed_info is None:
+        return (deployment_info,)
+
+    from litellm.utils import is_generalized_model_info
+
+    # Both names resolved: the deployment's model leads unless it only generalized
+    # while the listed name is an exact cost-map entry.
+    if is_generalized_model_info(deployment_info) and not is_generalized_model_info(listed_info):
+        return (listed_info, deployment_info)
+    return (deployment_info, listed_info)
+
+
+def _first_token_limit(candidates: tuple[ModelInfo, ...], field: str) -> int | None:
+    return next(
+        (limit for limit in (coerce_token_limit(info.get(field)) for info in candidates) if limit is not None),
+        None,
+    )
+
+
+def _group_token_limit(candidate_sets: tuple[tuple[ModelInfo, ...], ...], field: str) -> int | None:
+    """The widest limit any deployment behind the listed name declares for ``field``.
+
+    A model group is normally one model behind several interchangeable deployments, so
+    there is a single value to report and the choice of aggregate does not arise.
+
+    When a group genuinely mixes models no single number is right, and the widest is the
+    deliberate pick over the narrowest for two reasons. It is what ``/model_group/info``
+    has long reported to the Admin UI, so the two surfaces agree; disagreeing is the very
+    complaint this resolution path exists to fix. And of the two ways to be wrong,
+    under-advertising is worse: a client that trusts a narrowed window silently refuses
+    prompts the group would have served, while an over-long prompt that reaches a smaller
+    deployment comes back as a legible context-length error -- and does not reach one at
+    all when ``enable_pre_call_checks`` is set, which filters deployments the prompt does
+    not fit.
+    """
+    limits: Final = tuple(
+        limit for limit in (_first_token_limit(candidates, field) for candidates in candidate_sets) if limit is not None
+    )
+    return max(limits) if limits else None
+
+
 def create_model_info_response(
     model_id: str,
     provider: str,
@@ -7505,31 +7587,46 @@ def create_model_info_response(
         "owned_by": provider,
     }
 
-    try:
-        model_cost_info: ModelInfo | None = get_model_info(model_id)
-    except Exception as e:
-        verbose_proxy_logger.debug(
-            "create_model_info_response: cost map lookup failed for %s: %s",
-            model_id,
-            e,
+    listing_info: Final = llm_router.get_model_listing_info(model_id) if llm_router is not None else None
+
+    # One entry per distinct model behind the listed name; (None,) when the router knows
+    # nothing about it, so the listed name is resolved on its own as before.
+    deployment_models: Final[tuple[str | None, ...]] = (
+        listing_info.cost_map_keys if listing_info is not None and listing_info.cost_map_keys else (None,)
+    )
+    listed_info: Final = _safe_get_model_info(model_id, get_model_info)
+    candidate_sets: Final = tuple(
+        _resolve_listing_model_info(
+            deployment_model=deployment_model,
+            listed_model=model_id,
+            listed_info=listed_info,
+            get_model_info=get_model_info,
         )
-        model_cost_info = None
+        for deployment_model in deployment_models
+    )
 
-    max_input_tokens: int | None = None
-    max_output_tokens: int | None = None
-    if model_cost_info is not None:
-        max_input_tokens = coerce_token_limit(model_cost_info.get("max_input_tokens"))
-        max_output_tokens = coerce_token_limit(model_cost_info.get("max_output_tokens"))
-        mode: Final = model_cost_info.get("mode")
-        if isinstance(mode, str):
-            base["mode"] = mode
+    max_input_tokens: int | None = _group_token_limit(candidate_sets, "max_input_tokens")
+    max_output_tokens: int | None = _group_token_limit(candidate_sets, "max_output_tokens")
+    mode: Final = next(
+        (
+            m
+            for m in (
+                cast("Mapping[str, object]", info).get("mode")  # cast-ok: an entry need not carry "mode"
+                for candidates in candidate_sets
+                for info in candidates
+            )
+            if isinstance(m, str)
+        ),
+        None,
+    )
+    if mode is not None:
+        base["mode"] = mode
 
-    if llm_router is not None:
-        configured_input, configured_output = llm_router.get_configured_token_limits(model_id)
-        if configured_input is not None:
-            max_input_tokens = configured_input
-        if configured_output is not None:
-            max_output_tokens = configured_output
+    if listing_info is not None:
+        if listing_info.max_input_tokens is not None:
+            max_input_tokens = listing_info.max_input_tokens
+        if listing_info.max_output_tokens is not None:
+            max_output_tokens = listing_info.max_output_tokens
 
     if max_input_tokens is not None:
         base["max_input_tokens"] = max_input_tokens

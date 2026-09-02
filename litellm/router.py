@@ -200,6 +200,7 @@ from litellm.types.router import (
     CredentialLiteLLMParams,
     CustomRoutingStrategyBase,
     Deployment,
+    DeploymentModelListingInfo,
     DeploymentTypedDict,
     FallbackAccessCheck,
     GuardrailTypedDict,
@@ -9726,15 +9727,71 @@ class Router:
             return None
         return Deployment(**first_usable) if isinstance(first_usable, dict) else first_usable
 
+    def get_model_listing_info(self, model_name: str) -> DeploymentModelListingInfo | None:
+        """
+        Return what the concrete deployments behind model_name contribute to its
+        /v1/models entry: the cost-map keys for their underlying models, plus the widest
+        token limits explicitly configured in their model_info. Resolved via O(1) index
+        lookup.
+
+        Returns None for wildcard-expanded or unknown names, where the listed name is the
+        real model name and no deployment-specific information exists, and treats a
+        malformed configured limit as absent rather than failing the listing.
+
+        The whole group is read rather than just its first deployment, so a group that
+        mixes models does not advertise a window that depends on config order; the widest
+        one is reported, which is what get_model_group_info already shows the Admin UI.
+        Keys are deduplicated, so the ordinary group of interchangeable deployments of one
+        model still costs the caller a single cost-map lookup. Unlike get_model_group_info,
+        this never triggers pattern matching or deep copies, so it is safe to call per
+        listed model on the /v1/models hot path.
+        """
+        indices: Final = self.model_name_to_deployment_indices.get(model_name)
+        if not indices:
+            return None
+
+        deployments: Final = tuple(self.model_list[index] for index in indices)
+        model_infos: Final = tuple(deployment.get("model_info") or MappingProxyType({}) for deployment in deployments)
+        params: Final = tuple(deployment.get("litellm_params") or MappingProxyType({}) for deployment in deployments)
+        # base_model resolution mirrors get_router_model_info: unset or blank means the
+        # deployment's own model name is the cost-map key.
+        cost_map_keys: Final = tuple(
+            dict.fromkeys(  # deduplicates while preserving config order
+                key
+                for key in (
+                    model_info.get("base_model") or litellm_params.get("base_model") or litellm_params.get("model")
+                    for model_info, litellm_params in zip(model_infos, params)
+                )
+                if isinstance(key, str) and key
+            )
+        )
+        return DeploymentModelListingInfo(
+            cost_map_keys=cost_map_keys,
+            max_input_tokens=self._widest_configured_limit(model_infos, "max_input_tokens"),
+            max_output_tokens=self._widest_configured_limit(model_infos, "max_output_tokens"),
+        )
+
+    @staticmethod
+    def _widest_configured_limit(model_infos: Sequence[Mapping[str, Any]], field: str) -> int | None:
+        """The largest usable value of ``field`` across a group's configured model_info blocks."""
+        limits: Final = tuple(
+            limit
+            for limit in (coerce_token_limit(model_info.get(field)) for model_info in model_infos)
+            if limit is not None
+        )
+        return max(limits) if limits else None
+
     def get_configured_token_limits(self, model_name: str) -> "tuple[int | None, int | None]":
         """
         Return (max_input_tokens, max_output_tokens) explicitly configured in a concrete
         deployment's model_info for model_name, via O(1) index lookup.
 
         Returns (None, None) for wildcard-expanded or unknown names, and treats a
-        malformed configured value as absent rather than failing the listing. Unlike
-        get_model_group_info, this never triggers pattern matching or deep copies, so it
-        is safe to call per listed model on the /v1/models hot path.
+        malformed configured value as absent rather than failing the caller.
+
+        Deliberately reads one deployment rather than aggregating the group the way
+        get_model_listing_info does: its caller truncates an embedding input to this
+        value, so the widest window in a mixed group would be the wrong answer there.
         """
         deployment: Final = self.get_deployment_by_model_group_name(model_group_name=model_name)
         if deployment is None:

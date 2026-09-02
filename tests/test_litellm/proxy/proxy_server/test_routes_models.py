@@ -17,6 +17,7 @@ import litellm
 from litellm.proxy import proxy_server
 from litellm.proxy import utils as proxy_utils
 from litellm.proxy.utils import create_model_info_response
+from litellm.types.router import DeploymentModelListingInfo
 
 from .conftest import normalize  # type: ignore[import-not-found]
 
@@ -165,13 +166,16 @@ def test_anthropic_format_carries_router_configured_token_limits(client, auth_as
     built from another entry's lookup shows up as the wrong numbers."""
 
     def _configured(model_name):
-        return (300000, 32000) if model_name == "gpt-4" else (500000, 4096)
+        max_input, max_output = (300000, 32000) if model_name == "gpt-4" else (500000, 4096)
+        return DeploymentModelListingInfo(
+            cost_map_keys=(model_name,), max_input_tokens=max_input, max_output_tokens=max_output
+        )
 
     def _cost_map_lookup(model_id):
         max_input, max_output = (200000, 64000) if model_id == "gpt-4" else (100000, 8000)
         return {"max_input_tokens": max_input, "max_output_tokens": max_output, "mode": "chat"}
 
-    patched_models.get_configured_token_limits = MagicMock(side_effect=_configured)
+    patched_models.get_model_listing_info = MagicMock(side_effect=_configured)
 
     def _resolved(**kwargs):
         return create_model_info_response(**kwargs, get_model_info=_cost_map_lookup)

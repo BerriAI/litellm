@@ -2948,24 +2948,33 @@ def _resolve_builtin_model_cost_entry(key: str, provider: str) -> dict[str, obje
     return None
 
 
+def is_generalized_model_info(model_info: ModelInfo) -> bool:
+    """Whether ``model_info`` came from a fallback-generalization capability rule.
+
+    Detected as the resolved key missing ``litellm.model_cost`` while matching a
+    capability rule. A rule-derived entry carries no pricing and only a conservative
+    family-baseline context window, so callers holding a second candidate name should
+    prefer an exact cost-map entry from that name over this one.
+    """
+    key: Final = cast("Mapping[str, object]", model_info).get("key")  # cast-ok: partial dicts may omit "key"
+    if not isinstance(key, str):
+        return False
+    return key not in litellm.model_cost and match_capability_generalizations(key) is not None
+
+
 def _get_builtin_model_info_for_registration(model: str) -> ModelInfo | None:
     """Resolve ``model`` to its built-in cost-map entry for registration merging.
 
     Returns ``None`` when the lookup raises or when it resolved via a
-    fallback-generalization capability rule, detected as the resolved key missing
-    ``litellm.model_cost`` while matching a capability rule. A rule-derived entry
-    carries no pricing, so treating it as a hit would skip the built-in
-    cache-pricing inheritance for prefix-mangled keys.
+    fallback-generalization capability rule. A rule-derived entry carries no
+    pricing, so treating it as a hit would skip the built-in cache-pricing
+    inheritance for prefix-mangled keys.
     """
     try:
         info: Final = get_model_info(model=model)
     except Exception:
         return None
-    if info["key"] in litellm.model_cost:
-        return info
-    if match_capability_generalizations(info["key"]) is None:
-        return info
-    return None
+    return None if is_generalized_model_info(info) else info
 
 
 _runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
