@@ -268,6 +268,15 @@ class MuseRealtimeAdapter:
         if not isinstance(audio_value, str):
             await self._reject("invalid_request_error", "invalid_audio", "Audio must be a base64 string")
             return
+        max_backlog_bytes: Final = config.bytes_per_second * _MAX_AUDIO_BACKLOG_SECONDS
+        max_encoded_bytes: Final = 4 * ((max_backlog_bytes + 2) // 3)
+        if len(audio_value) > max_encoded_bytes:
+            await self._reject(
+                "invalid_request_error",
+                "audio_backlog_exceeded",
+                "Audio append exceeds the four-second backlog limit",
+            )
+            return
         try:
             audio: Final = base64.b64decode(audio_value, validate=True)
         except (binascii.Error, ValueError):
@@ -278,7 +287,6 @@ class MuseRealtimeAdapter:
             return
         if not audio:
             return
-        max_backlog_bytes: Final = config.bytes_per_second * _MAX_AUDIO_BACKLOG_SECONDS
         if len(audio) > max_backlog_bytes:
             await self._reject(
                 "invalid_request_error",
