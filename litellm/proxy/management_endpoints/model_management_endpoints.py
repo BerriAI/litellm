@@ -309,7 +309,34 @@ async def _raise_if_heuristic_v2_slot_taken(
     if not uses_heuristic_v2(effective_config):
         return
     rows: Final = await _proxy_model_table(prisma_client).find_many(where={})
-    for row in rows:
+    violation: Final = _heuristic_v2_slot_violation(
+        persisted_rows=rows,
+        incoming_params=incoming_params,
+        existing_params=existing_params,
+        current_model_id=current_model_id,
+    )
+    if violation is None:
+        return
+    raise ProxyException(
+        message=violation,
+        type=ProxyErrorTypes.validation_error.value,
+        code=status.HTTP_400_BAD_REQUEST,
+        param="litellm_params.complexity_router_config.classifier_type",
+    )
+
+
+def _heuristic_v2_slot_violation(
+    *,
+    persisted_rows: Sequence[_ProxyModelRow],
+    incoming_params: GenericLiteLLMParams | None,
+    existing_params: GenericLiteLLMParams | None,
+    current_model_id: str | None = None,
+) -> str | None:
+    """Return the singleton-slot violation for the effective post-write config."""
+    effective_config: Final = _effective_complexity_router_config(incoming_params, existing_params)
+    if not uses_heuristic_v2(effective_config):
+        return None
+    for row in persisted_rows:
         if current_model_id is not None and row.model_id == current_model_id:
             continue
         if uses_heuristic_v2(
@@ -319,16 +346,12 @@ async def _raise_if_heuristic_v2_slot_taken(
             )
             else None
         ):
-            raise ProxyException(
-                message=(
-                    "Only one complexity router can use classifier_type='heuristic_v2' per proxy. "
-                    "Use classifier_type='heuristic' for this router, or change or delete the existing "
-                    "heuristic_v2 router first."
-                ),
-                type=ProxyErrorTypes.validation_error.value,
-                code=status.HTTP_400_BAD_REQUEST,
-                param="litellm_params.complexity_router_config.classifier_type",
+            return (
+                "Only one complexity router can use classifier_type='heuristic_v2' per proxy. "
+                "Use classifier_type='heuristic' for this router, or change or delete the existing "
+                "heuristic_v2 router first."
             )
+    return None
 
 
 ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING: Final = "enforce_rpm_tpm_on_model_add"
