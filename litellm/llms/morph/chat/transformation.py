@@ -25,9 +25,7 @@ class MorphChatConfig(OpenAILikeChatConfig):
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
         api_base = (
-            api_base
-            or get_secret_str("MORPH_API_BASE")
-            or "https://api.morphllm.com/v1"  # default api base
+            api_base or get_secret_str("MORPH_API_BASE") or "https://api.morphllm.com/v1"  # default api base
         )
         dynamic_api_key: Final = api_key or get_secret_str("MORPH_API_KEY")
         return api_base, dynamic_api_key
