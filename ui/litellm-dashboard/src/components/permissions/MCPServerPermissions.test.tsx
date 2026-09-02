@@ -106,8 +106,7 @@ describe("MCPServerPermissions", () => {
     expect(screen.queryByText("ask_question")).not.toBeInTheDocument();
 
     // Click the server row to expand
-    const serverRow = screen.getByText(/DW_MCP/).closest("div");
-    await userEvent.click(serverRow!);
+    await userEvent.click(screen.getByText(/DW_MCP/));
 
     // Now tools should be visible
     await waitFor(() => {
@@ -117,7 +116,7 @@ describe("MCPServerPermissions", () => {
     });
 
     // Click the server row again to collapse
-    await userEvent.click(serverRow!);
+    await userEvent.click(screen.getByText(/DW_MCP/));
 
     // Tools should be hidden again
     await waitFor(() => {
@@ -297,11 +296,8 @@ describe("MCPServerPermissions", () => {
     expect(toolLabels.length).toBeGreaterThan(0);
 
     // Expand both servers by clicking their rows
-    const server1Row = screen.getByText(/DW_MCP/).closest("div");
-    const server2Row = screen.getByText(/Test Server/).closest("div");
-
-    await userEvent.click(server1Row!); // Expand server 1
-    await userEvent.click(server2Row!); // Expand server 2
+    await userEvent.click(screen.getByText(/DW_MCP/)); // Expand server 1
+    await userEvent.click(screen.getByText(/Test Server/)); // Expand server 2
 
     // Verify server 1 tools are now visible
     await waitFor(() => {
@@ -411,7 +407,7 @@ describe("MCPServerPermissions", () => {
     expect(screen.getByText("2")).toBeInTheDocument();
     expect(screen.getByText("tools")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByText(/GitHub/).closest("div")!);
+    await userEvent.click(screen.getByText(/GitHub/));
 
     await waitFor(() => {
       expect(screen.getByText("list_issues")).toBeInTheDocument();
