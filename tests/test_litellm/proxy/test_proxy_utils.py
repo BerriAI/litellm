@@ -930,7 +930,7 @@ def test_create_model_info_response_does_not_call_router_group_info():
 def test_create_model_info_response_uses_deployment_limits_when_not_in_cost_map():
     router = MagicMock()
     router.get_model_listing_info.return_value = DeploymentModelListingInfo(
-        cost_map_key="my-custom-deployment", max_input_tokens=32000, max_output_tokens=8000
+        cost_map_keys=("my-custom-deployment",), max_input_tokens=32000, max_output_tokens=8000
     )
 
     response = create_model_info_response(
@@ -948,7 +948,7 @@ def test_create_model_info_response_uses_deployment_limits_when_not_in_cost_map(
 def test_create_model_info_response_deployment_limits_override_cost_map():
     router = MagicMock()
     router.get_model_listing_info.return_value = DeploymentModelListingInfo(
-        cost_map_key="gpt-4o", max_input_tokens=200000, max_output_tokens=None
+        cost_map_keys=("gpt-4o",), max_input_tokens=200000, max_output_tokens=None
     )
 
     response = create_model_info_response(
@@ -960,6 +960,54 @@ def test_create_model_info_response_deployment_limits_override_cost_map():
 
     assert response["max_input_tokens"] == 200000
     assert response["max_output_tokens"] == 16384
+
+
+def test_create_model_info_response_reports_widest_window_in_a_mixed_group():
+    """A group mixing models advertises the widest window, not whichever is listed first."""
+    limits = {
+        "small-model": _fake_model_info(max_input_tokens=200000, max_output_tokens=4096, mode="chat"),
+        "large-model": _fake_model_info(max_input_tokens=1000000, max_output_tokens=128000, mode="chat"),
+    }
+
+    for keys in (("small-model", "large-model"), ("large-model", "small-model")):
+        router = MagicMock()
+        router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+            cost_map_keys=keys, max_input_tokens=None, max_output_tokens=None
+        )
+
+        response = create_model_info_response(
+            model_id="house-claude",
+            provider="openai",
+            llm_router=router,
+            get_model_info=lambda model: limits[model],
+        )
+
+        assert response["max_input_tokens"] == 1000000, keys
+        assert response["max_output_tokens"] == 128000, keys
+
+
+def test_create_model_info_response_resolves_alias_once_per_listing():
+    """The alias is the same for every deployment in the group, so it is looked up once."""
+    seen: list[str] = []
+
+    def _tracking_get_model_info(model: str) -> ModelInfo:
+        seen.append(model)
+        return _fake_model_info(max_input_tokens=128000)
+
+    router = MagicMock()
+    router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+        cost_map_keys=("model-a", "model-b"), max_input_tokens=None, max_output_tokens=None
+    )
+
+    create_model_info_response(
+        model_id="house-model",
+        provider="openai",
+        llm_router=router,
+        get_model_info=_tracking_get_model_info,
+    )
+
+    assert seen.count("house-model") == 1
+    assert sorted(seen) == ["house-model", "model-a", "model-b"]
 
 
 def test_create_model_info_response_survives_malformed_configured_limits():

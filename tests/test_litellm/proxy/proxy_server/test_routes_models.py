@@ -168,7 +168,7 @@ def test_anthropic_format_carries_router_configured_token_limits(client, auth_as
     def _configured(model_name):
         max_input, max_output = (300000, 32000) if model_name == "gpt-4" else (500000, 4096)
         return DeploymentModelListingInfo(
-            cost_map_key=model_name, max_input_tokens=max_input, max_output_tokens=max_output
+            cost_map_keys=(model_name,), max_input_tokens=max_input, max_output_tokens=max_output
         )
 
     def _cost_map_lookup(model_id):

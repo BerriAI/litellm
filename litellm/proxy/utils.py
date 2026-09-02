@@ -7496,10 +7496,11 @@ def _safe_get_model_info(model: str, get_model_info: Callable[[str], ModelInfo])
 def _resolve_listing_model_info(
     deployment_model: str | None,
     listed_model: str,
+    listed_info: ModelInfo | None,
     get_model_info: Callable[[str], ModelInfo],
 ) -> tuple[ModelInfo, ...]:
     """
-    Cost-map entries describing a listed model, best source first.
+    Cost-map entries describing one deployment behind a listed model, best source first.
 
     The name a model is listed under is an arbitrary public alias, so it often misses the
     cost map and lands on a fallback-generalization rule that answers with a conservative
@@ -7508,9 +7509,10 @@ def _resolve_listing_model_info(
     generalize, and because a deployment's own model is registered into the cost map as a
     stub that carries no limits of its own. Exact entries are consulted before generalized
     ones, and each field is then taken from the first entry that has it.
-    """
-    listed_info: Final = _safe_get_model_info(listed_model, get_model_info)
 
+    ``listed_info`` is resolved once by the caller, since a group with several distinct
+    underlying models resolves the same alias for each of them.
+    """
     # Fast path, and the only one a wildcard-expanded name takes: with a single name
     # there is nothing to order, so skip the generalization test entirely. This keeps
     # the per-model cost of the listing on the hot path #33721 exists to protect.
@@ -7539,6 +7541,20 @@ def _first_token_limit(candidates: tuple[ModelInfo, ...], field: str) -> int | N
     )
 
 
+def _group_token_limit(candidate_sets: tuple[tuple[ModelInfo, ...], ...], field: str) -> int | None:
+    """The widest limit any deployment behind the listed name declares for ``field``.
+
+    A model group is normally one model behind several interchangeable deployments, so
+    there is a single value to report. When a group genuinely mixes models, reporting the
+    widest window keeps the listing independent of config order and agreeing with
+    ``/model_group/info``, which aggregates the same way for the Admin UI.
+    """
+    limits: Final = tuple(
+        limit for limit in (_first_token_limit(candidates, field) for candidates in candidate_sets) if limit is not None
+    )
+    return max(limits) if limits else None
+
+
 def create_model_info_response(
     model_id: str,
     provider: str,
@@ -7565,19 +7581,30 @@ def create_model_info_response(
 
     listing_info: Final = llm_router.get_model_listing_info(model_id) if llm_router is not None else None
 
-    candidates: Final = _resolve_listing_model_info(
-        deployment_model=listing_info.cost_map_key if listing_info is not None else None,
-        listed_model=model_id,
-        get_model_info=get_model_info,
+    # One entry per distinct model behind the listed name; (None,) when the router knows
+    # nothing about it, so the listed name is resolved on its own as before.
+    deployment_models: Final[tuple[str | None, ...]] = (
+        listing_info.cost_map_keys if listing_info is not None and listing_info.cost_map_keys else (None,)
+    )
+    listed_info: Final = _safe_get_model_info(model_id, get_model_info)
+    candidate_sets: Final = tuple(
+        _resolve_listing_model_info(
+            deployment_model=deployment_model,
+            listed_model=model_id,
+            listed_info=listed_info,
+            get_model_info=get_model_info,
+        )
+        for deployment_model in deployment_models
     )
 
-    max_input_tokens: int | None = _first_token_limit(candidates, "max_input_tokens")
-    max_output_tokens: int | None = _first_token_limit(candidates, "max_output_tokens")
+    max_input_tokens: int | None = _group_token_limit(candidate_sets, "max_input_tokens")
+    max_output_tokens: int | None = _group_token_limit(candidate_sets, "max_output_tokens")
     mode: Final = next(
         (
             m
             for m in (
                 cast("Mapping[str, object]", info).get("mode")  # cast-ok: an entry need not carry "mode"
+                for candidates in candidate_sets
                 for info in candidates
             )
             if isinstance(m, str)

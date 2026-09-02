@@ -7286,7 +7286,7 @@ def test_get_model_listing_info_prefers_base_model_over_litellm_params_model():
 
     info = router.get_model_listing_info("bedrock-claude-opus-5")
     assert info is not None
-    assert info.cost_map_key == "eu.anthropic.claude-opus-5"
+    assert info.cost_map_keys == ("eu.anthropic.claude-opus-5",)
 
 
 def test_get_model_listing_info_falls_back_to_litellm_params_model():
@@ -7301,7 +7301,7 @@ def test_get_model_listing_info_falls_back_to_litellm_params_model():
 
     info = router.get_model_listing_info("bedrock-claude-opus-5")
     assert info is not None
-    assert info.cost_map_key == "bedrock/eu.anthropic.claude-opus-5"
+    assert info.cost_map_keys == ("bedrock/eu.anthropic.claude-opus-5",)
 
 
 def test_get_model_listing_info_ignores_blank_base_model():
@@ -7318,7 +7318,7 @@ def test_get_model_listing_info_ignores_blank_base_model():
 
     info = router.get_model_listing_info("bedrock-claude-opus-5")
     assert info is not None
-    assert info.cost_map_key == "bedrock/eu.anthropic.claude-opus-5"
+    assert info.cost_map_keys == ("bedrock/eu.anthropic.claude-opus-5",)
 
 
 def test_get_model_listing_info_returns_none_for_unknown_name():
@@ -7348,6 +7348,91 @@ def test_get_model_listing_info_carries_configured_limits():
     info = router.get_model_listing_info("my-custom-model")
     assert info is not None
     assert (info.max_input_tokens, info.max_output_tokens) == (32000, 8000)
+
+
+def test_get_model_listing_info_dedupes_interchangeable_deployments():
+    """The ordinary group is N deployments of one model, so it yields exactly one key."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-a"},
+            },
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-b"},
+            },
+        ]
+    )
+
+    info = router.get_model_listing_info("gpt-4o")
+    assert info is not None
+    assert info.cost_map_keys == ("openai/gpt-4o",)
+
+
+def test_get_model_listing_info_collects_every_model_in_a_mixed_group():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "house-claude",
+                "litellm_params": {"model": "anthropic/claude-3-haiku-20240307"},
+            },
+            {
+                "model_name": "house-claude",
+                "litellm_params": {"model": "bedrock/eu.anthropic.claude-opus-5"},
+            },
+        ]
+    )
+
+    info = router.get_model_listing_info("house-claude")
+    assert info is not None
+    assert info.cost_map_keys == (
+        "anthropic/claude-3-haiku-20240307",
+        "bedrock/eu.anthropic.claude-opus-5",
+    )
+
+
+def test_get_model_listing_info_reports_widest_configured_limits_in_a_mixed_group():
+    """Matches how get_model_group_info aggregates for the Admin UI, so the two agree."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "house-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"max_input_tokens": 32000, "max_output_tokens": 4096},
+            },
+            {
+                "model_name": "house-model",
+                "litellm_params": {"model": "openai/another-unmapped-model"},
+                "model_info": {"max_input_tokens": 128000, "max_output_tokens": 16384},
+            },
+        ]
+    )
+
+    info = router.get_model_listing_info("house-model")
+    assert info is not None
+    assert (info.max_input_tokens, info.max_output_tokens) == (128000, 16384)
+
+
+def test_get_model_listing_info_reads_base_model_from_litellm_params():
+    """base_model resolution mirrors get_router_model_info, which also accepts it there."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "azure-deployment",
+                "litellm_params": {
+                    "model": "azure/my-azure-deployment-name",
+                    "base_model": "azure/gpt-4o",
+                    "api_key": "sk-a",
+                    "api_base": "https://example.openai.azure.com",
+                },
+            }
+        ]
+    )
+
+    info = router.get_model_listing_info("azure-deployment")
+    assert info is not None
+    assert info.cost_map_keys == ("azure/gpt-4o",)
 
 
 def test_get_model_listing_info_skips_wildcard_pattern_matching():
