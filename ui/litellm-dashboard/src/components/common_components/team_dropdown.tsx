@@ -5,7 +5,7 @@ import { Team } from "../key_team_helpers/key_list";
 
 interface TeamDropdownProps {
   value?: string;
-  onChange?: (value: string) => void;
+  onChange?: (value: string | null) => void;
   /** Callback with the full Team object (or null on clear). */
   onTeamSelect?: (team: Team | null) => void;
   disabled?: boolean;
@@ -47,7 +47,7 @@ const TeamDropdown: React.FC<TeamDropdownProps> = ({
   }, [data]);
 
   const handleChange = (teamId: string) => {
-    onChange?.(teamId);
+    onChange?.(teamId || null);
     if (onTeamSelect) {
       onTeamSelect(teamId ? teams.find((t) => t.team_id === teamId) ?? null : null);
     }

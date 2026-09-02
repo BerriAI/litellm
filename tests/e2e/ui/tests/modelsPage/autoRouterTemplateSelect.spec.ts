@@ -17,49 +17,54 @@ async function openTemplateSelect(page: PlaywrightPage) {
   return trigger;
 }
 
-function pollPixelsBelowTrigger(trigger: Locator, popup: Locator) {
+async function boxes(trigger: Locator, options: Locator) {
+  const triggerBox = await trigger.boundingBox();
+  const optionsBox = await options.boundingBox();
+  return triggerBox && optionsBox ? { triggerBox, optionsBox } : null;
+}
+
+const clippedPopup = (page: PlaywrightPage) => page.locator('[data-slot="select-content"]');
+
+function pollOptionsOpenBelowTrigger(trigger: Locator, options: Locator) {
   return expect.poll(async () => {
-    const triggerBox = await trigger.boundingBox();
-    const popupBox = await popup.boundingBox();
-    if (!triggerBox || !popupBox) return null;
-    return popupBox.y - (triggerBox.y + triggerBox.height);
+    const box = await boxes(trigger, options);
+    return box && box.optionsBox.y >= box.triggerBox.y + box.triggerBox.height;
   });
 }
 
-function pollPopupOverlapsTrigger(trigger: Locator, popup: Locator) {
+function pollOptionsCoverTrigger(trigger: Locator, options: Locator) {
   return expect.poll(async () => {
-    const triggerBox = await trigger.boundingBox();
-    const popupBox = await popup.boundingBox();
-    if (!triggerBox || !popupBox) return null;
-    return popupBox.y < triggerBox.y + triggerBox.height && popupBox.y + popupBox.height > triggerBox.y;
+    const box = await boxes(trigger, options);
+    return (
+      box &&
+      box.optionsBox.y < box.triggerBox.y + box.triggerBox.height &&
+      box.optionsBox.y + box.optionsBox.height > box.triggerBox.y
+    );
   });
 }
 
 test.describe("Auto Router template select anchoring", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
-  test("opens the options below the trigger rather than over it", async ({ page }) => {
+  test("opens the options below the trigger when there is room below it", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 });
     const trigger = await openTemplateSelect(page);
+    await trigger.scrollIntoViewIfNeeded();
 
     await trigger.click();
-    const popup = page.locator('[data-slot="select-content"]');
-    await expect(popup).toBeVisible();
+    await expect(page.getByRole("listbox")).toBeVisible();
 
-    // Item-aligned mode reports "none" and puts the active item over the trigger.
-    await expect(popup).toHaveAttribute("data-side", "bottom");
-    await pollPixelsBelowTrigger(trigger, popup).toBeGreaterThanOrEqual(0);
+    await pollOptionsOpenBelowTrigger(trigger, clippedPopup(page)).toBe(true);
   });
 
-  test("flips above the trigger instead of covering it when there is no room below", async ({ page }) => {
+  test("keeps the trigger uncovered when the options open with no room below it", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 560 });
     const trigger = await openTemplateSelect(page);
     await trigger.scrollIntoViewIfNeeded();
 
     await trigger.click();
-    const popup = page.locator('[data-slot="select-content"]');
-    await expect(popup).toBeVisible();
+    await expect(page.getByRole("listbox")).toBeVisible();
 
-    await pollPopupOverlapsTrigger(trigger, popup).toBe(false);
+    await pollOptionsCoverTrigger(trigger, clippedPopup(page)).toBe(false);
   });
 });

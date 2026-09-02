@@ -9,11 +9,14 @@ import pytest
 from fastapi import HTTPException
 
 import litellm
+from litellm.caching.caching import DualCache
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import CallTypesLiteral
 
 
 def _load(module: str, name: str):
@@ -473,7 +476,13 @@ class _RedactingGuardrail(CustomGuardrail):
         kwargs.setdefault("event_hook", GuardrailEventHooks.pre_call)
         super().__init__(guardrail_name="redactor", **kwargs)
 
-    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):  # type: ignore[override]
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict,
+        call_type: CallTypesLiteral,
+    ) -> dict | None:
         for msg in data.get("messages", []):
             if "SECRET" in msg.get("content", ""):
                 msg["content"] = msg["content"].replace("SECRET", "[REDACTED]")
@@ -488,7 +497,13 @@ class _BlockOnSecretGuardrail(CustomGuardrail):
         kwargs.setdefault("event_hook", GuardrailEventHooks.pre_call)
         super().__init__(guardrail_name="blocker", **kwargs)
 
-    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):  # type: ignore[override]
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict,
+        call_type: CallTypesLiteral,
+    ) -> dict | None:
         if any("SECRET" in msg.get("content", "") for msg in data.get("messages", [])):
             raise HTTPException(status_code=400, detail="blocked: SECRET detected")
         return None
@@ -560,7 +575,13 @@ async def test_scan_raw_request_guardrail_does_not_undo_later_masking(
     separate marker (PII_TOKEN) that only the redactor reacts to."""
 
     class _PiiRedactor(_RedactingGuardrail):
-        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):  # type: ignore[override]
+        async def async_pre_call_hook(
+            self,
+            user_api_key_dict: UserAPIKeyAuth,
+            cache: DualCache,
+            data: dict,
+            call_type: CallTypesLiteral,
+        ) -> dict | None:
             for msg in data.get("messages", []):
                 if "PII_TOKEN" in msg.get("content", ""):
                     msg["content"] = msg["content"].replace("PII_TOKEN", "[REDACTED]")
@@ -692,7 +713,13 @@ async def test_scan_raw_request_warns_when_guardrail_mutation_discarded(
             super().__init__(**kwargs)
             self.scan_raw_request = True
 
-        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):  # type: ignore[override]
+        async def async_pre_call_hook(
+            self,
+            user_api_key_dict: UserAPIKeyAuth,
+            cache: DualCache,
+            data: dict,
+            call_type: CallTypesLiteral,
+        ) -> dict | None:
             for msg in data.get("messages", []):
                 msg["content"] = msg["content"].replace("SECRET", "[REDACTED]")
             return data

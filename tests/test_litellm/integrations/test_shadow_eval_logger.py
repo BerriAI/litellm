@@ -58,12 +58,14 @@ def _prisma(jobs=(), attempt_counts=(), attempt_costs=()) -> MagicMock:
     return prisma
 
 
-def _job_record(job: ActiveShadowEvalJob, api_key_id="key-hash") -> MagicMock:
+def _job_record(job: ActiveShadowEvalJob, target_type="key", target_id="key-hash") -> MagicMock:
     record = MagicMock()
     for field, value in dict(
         id=job.id,
-        api_key_id=api_key_id,
+        target_type=target_type,
+        target_id=target_id,
         router_name=job.router_name,
+        router_names=job.router_names,
         direction=job.direction,
         baseline_model=job.baseline_model,
         shadow_percentage=job.shadow_percentage,
@@ -80,6 +82,7 @@ def _router(
     shadow_text="shadow answer",
     judge_json='{"preference": "A", "confidence": 0.9, "reasoning": "x"}',
     classifier_cost=None,
+    sibling_router_texts=None,
 ):
     """One mock router serving the shadow call first, the judge call second, told apart by
     the internal-origin stamp rather than the model, since a reverse job's shadow arm names
@@ -99,6 +102,15 @@ def _router(
                 decision["classifier_cost"] = classifier_cost
             kwargs["metadata"]["routing_decision"] = decision
             return {"choices": [{"message": {"content": shadow_text}}], "usage": {"completion_tokens": 5}}
+        if sibling_router_texts and kwargs["model"] in sibling_router_texts:
+            kwargs["metadata"]["routing_decision"] = {
+                "tier_label": "MEDIUM",
+                "routed_model": f"{kwargs['model']}-pick",
+            }
+            return {
+                "choices": [{"message": {"content": sibling_router_texts[kwargs["model"]]}}],
+                "usage": {"completion_tokens": 5},
+            }
         return ModelResponse(
             model=kwargs["model"],
             choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": shadow_text}}],
@@ -123,7 +135,7 @@ def _spend_counter(store=None):
     return counter, read, write
 
 
-def _logger(router=None, prisma=None, jobs=(), counter_store=None) -> ShadowEvalLogger:
+def _logger(router=None, prisma=None, jobs=(), counter_store=None, jobs_by_target=None) -> ShadowEvalLogger:
     cache = InMemoryCache(max_size_in_memory=4, default_ttl=60)
     counter, read, write = _spend_counter(counter_store)
     funnel_events = []
@@ -137,8 +149,9 @@ def _logger(router=None, prisma=None, jobs=(), counter_store=None) -> ShadowEval
     )
     logger._test_counter = counter
     logger._test_funnel = funnel_events
-    if jobs:
-        cache.set_cache("shadow_eval:active_jobs", {"key-hash": tuple(jobs)})
+    seeded = jobs_by_target if jobs_by_target is not None else ({("key", "key-hash"): tuple(jobs)} if jobs else None)
+    if seeded is not None:
+        cache.set_cache("shadow_eval:active_jobs", seeded)
     return logger
 
 
@@ -837,6 +850,86 @@ class TestSuccessHookSkipChain:
         prisma.db.litellm_shadowevalattempt.create.assert_not_called()
 
 
+JWT_IDENTITY = {"user_api_key_hash": None, "user_api_key_team_id": "team-eng", "user_api_key_user_id": "dev-alice"}
+
+
+@pytest.mark.asyncio
+class TestTargetMatching:
+    """A request qualifies for a job through ANY of its resolved identities: key hash,
+    team id, or user id. Team and user jobs must therefore sample JWT-authenticated
+    traffic, which carries no key hash at all."""
+
+    @pytest.mark.parametrize(
+        "target,sampled",
+        [
+            (("team", "team-eng"), True),
+            (("user", "dev-alice"), True),
+            (("key", "some-key"), False),
+        ],
+        ids=["team-job-samples-jwt-traffic", "user-job-samples-jwt-traffic", "key-jobs-never-match-keyless-traffic"],
+    )
+    async def test_jwt_shaped_traffic_matches_team_and_user_jobs_but_no_key_job(self, target, sampled):
+        prisma = _prisma()
+        router = _router()
+        logger = _logger(router=router, prisma=prisma, jobs_by_target={target: (_job(),)})
+        hook_kwargs = _success_kwargs()
+        hook_kwargs["standard_logging_object"]["metadata"] = dict(JWT_IDENTITY)
+
+        await logger.async_log_success_event(hook_kwargs, RESPONSE, None, None)
+        await _drain(logger)
+
+        if sampled:
+            prisma.db.litellm_shadowevalattempt.create.assert_awaited_once()
+            assert prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]["job_id"] == "job-1"
+        else:
+            router.acompletion.assert_not_called()
+            prisma.db.litellm_shadowevalattempt.create.assert_not_called()
+
+    async def test_an_event_with_no_identity_early_returns_without_a_cache_read(self):
+        prisma = _prisma()
+        router = _router()
+        cache = MagicMock(spec=InMemoryCache)
+        cache.async_get_cache = AsyncMock()
+        logger = ShadowEvalLogger(
+            router_provider=lambda: router,
+            prisma_provider=lambda: prisma,
+            jobs_cache=cache,
+        )
+        hook_kwargs = _success_kwargs()
+        hook_kwargs["standard_logging_object"]["metadata"] = {}
+
+        await logger.async_log_success_event(hook_kwargs, RESPONSE, None, None)
+
+        cache.async_get_cache.assert_not_awaited()
+        router.acompletion.assert_not_called()
+        prisma.db.litellm_shadowevalattempt.create.assert_not_called()
+
+    async def test_an_event_matching_a_key_job_and_a_team_job_fires_both(self):
+        """A request's key and its team can each hold a job; the two are separately
+        budgeted experiments, so both fire and each counts its own start."""
+        prisma = _prisma()
+        logger = _logger(
+            router=_router(),
+            prisma=prisma,
+            jobs_by_target={
+                ("key", "key-hash"): (_job(id="key-job"),),
+                ("team", "team-eng"): (_job(id="team-job"),),
+            },
+        )
+        hook_kwargs = _success_kwargs()
+        hook_kwargs["standard_logging_object"]["metadata"] = {
+            "user_api_key_hash": "key-hash",
+            "user_api_key_team_id": "team-eng",
+        }
+
+        await logger.async_log_success_event(hook_kwargs, RESPONSE, None, None)
+        await _drain(logger)
+
+        rows = [call.kwargs["data"] for call in prisma.db.litellm_shadowevalattempt.create.call_args_list]
+        assert sorted(row["job_id"] for row in rows) == ["key-job", "team-job"]
+        assert logger._job_starts == {"key-job": 1, "team-job": 1}
+
+
 @pytest.mark.asyncio
 class TestActiveJobsCache:
     async def test_cache_miss_reads_db_once_then_serves_from_cache(self):
@@ -851,8 +944,8 @@ class TestActiveJobsCache:
         first = await logger._active_jobs()
         second = await logger._active_jobs()
 
-        assert [job.id for job in first["key-hash"]] == ["job-1"]
-        assert second["key-hash"][0].attempts == 7
+        assert [job.id for job in first[("key", "key-hash")]] == ["job-1"]
+        assert second[("key", "key-hash")][0].attempts == 7
         assert prisma.db.litellm_shadowevaljob.find_many.await_count == 1
         where = prisma.db.litellm_shadowevaljob.find_many.call_args.kwargs["where"]
         assert where["stopped_at"] is None
@@ -899,8 +992,8 @@ class TestActiveJobsCache:
         jobs = await logger._active_jobs()
 
         assert logger._job_starts == {}
-        assert jobs["key-hash"][0].attempts == 7
-        assert jobs["key-hash"][0].spend == 0.05
+        assert jobs[("key", "key-hash")][0].attempts == 7
+        assert jobs[("key", "key-hash")][0].spend == 0.05
 
 
 @pytest.mark.asyncio
@@ -1128,29 +1221,36 @@ class TestJobValidation:
             {"direction": "reverse"},
             {"baseline_model": "baseline-model"},
             {"direction": "sideways", "baseline_model": "baseline-model"},
+            {"direction": "reverse", "baseline_model": "baseline-model", "router_names": ("a", "b")},
         ],
-        ids=["reverse-without-baseline", "forward-with-baseline", "unknown-direction"],
+        ids=["reverse-without-baseline", "forward-with-baseline", "unknown-direction", "reverse-with-router-set"],
     )
     def test_unsamplable_shapes_are_rejected(self, overrides):
         with pytest.raises(ValidationError):
             _job(**overrides)
 
-    def test_shadow_target_follows_direction(self):
-        assert _job().shadow_target == "my-router"
-        assert _reverse_job().shadow_target == "baseline-model"
+    def test_arm_target_follows_direction(self):
+        assert _job().arm_target("my-router") == "my-router"
+        assert _reverse_job().arm_target("my-router") == "baseline-model"
+
+    def test_rows_from_before_router_names_carry_their_set_in_router_name(self):
+        assert _job().arm_router_names == ("my-router",)
+        assert _job(router_names=("my-router", "alt-router")).arm_router_names == ("my-router", "alt-router")
 
 
 @pytest.mark.asyncio
 class TestDirection:
     @pytest.mark.parametrize(
-        "job,routed_by,sampled",
+        "job,routed_by,attempt_rows",
         [
-            (_job(), None, True),
-            (_job(), "my-router", False),
-            (_job(), "other-router", True),
-            (_reverse_job(), "my-router", True),
-            (_reverse_job(), None, False),
-            (_reverse_job(), "other-router", False),
+            (_job(), None, 1),
+            (_job(), "my-router", 0),
+            (_job(), "other-router", 1),
+            (_reverse_job(), "my-router", 1),
+            (_reverse_job(), None, 0),
+            (_reverse_job(), "other-router", 0),
+            (_job(router_names=("my-router", "alt-router")), "alt-router", 0),
+            (_job(router_names=("my-router", "alt-router")), "other-router", 2),
         ],
         ids=[
             "forward-samples-unrouted",
@@ -1159,20 +1259,24 @@ class TestDirection:
             "reverse-samples-its-own-router",
             "reverse-skips-unrouted",
             "reverse-skips-another-router",
+            "forward-skips-any-candidates-own-traffic",
+            "forward-multi-samples-once-per-arm",
         ],
     )
-    async def test_direction_decides_which_traffic_is_sampled(self, job, routed_by, sampled):
+    async def test_direction_decides_which_traffic_is_sampled(self, job, routed_by, attempt_rows):
         """The two directions partition the key's traffic: whatever one samples, the other
-        skips, so a key running both never judges the same turn twice for the same reason."""
+        skips, so a key running both never judges the same turn twice for the same reason.
+        A multi-router job extends the forward skip to every candidate: a request one
+        candidate served must not be judged as the incumbent against another candidate."""
         prisma = _prisma()
-        logger = _logger(router=_router(), prisma=prisma, jobs=(job,))
+        logger = _logger(router=_router(sibling_router_texts={"alt-router": "alt answer"}), prisma=prisma, jobs=(job,))
 
         await logger.async_log_success_event(
             _success_kwargs(request_metadata=_routed_by(routed_by) if routed_by else {}), RESPONSE, None, None
         )
         await _drain(logger)
 
-        assert prisma.db.litellm_shadowevalattempt.create.await_count == int(sampled)
+        assert prisma.db.litellm_shadowevalattempt.create.await_count == attempt_rows
 
     async def test_reverse_duplicates_against_the_baseline_model(self):
         prisma = _prisma()
@@ -1235,6 +1339,134 @@ class TestDirection:
 
 
 @pytest.mark.asyncio
+class TestMultiRouterArms:
+    async def test_every_arm_judges_the_same_request_and_stamps_its_own_row(self):
+        """One sampled request, one row per candidate router, both judged against the same
+        real response: the paired comparison that makes multi-router win rates comparable."""
+        prisma = _prisma()
+        router = _router(sibling_router_texts={"alt-router": "alt answer"})
+        logger = _logger(router=router, prisma=prisma)
+
+        await logger._run_shadow_eval(
+            job=_job(router_names=("my-router", "alt-router")),
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            real_text="real answer",
+            real_model="claude-opus",
+            real_cost=0.001,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
+            control_tier=None,
+            shadow_params={},
+            parent_metadata={},
+        )
+
+        rows = [call.kwargs["data"] for call in prisma.db.litellm_shadowevalattempt.create.await_args_list]
+        assert [row["router_name"] for row in rows] == ["my-router", "alt-router"]
+        assert {row["request_id"] for row in rows} == {"req-1"}
+        assert [row["shadow_model"] for row in rows] == ["cheap-model", "alt-router-pick"]
+        assert all(row["outcome"] in ("real", "shadow", "tie") for row in rows)
+        assert all(row["real_cost"] == 0.001 for row in rows)
+
+    async def test_a_single_router_job_stamps_its_router_on_the_row(self):
+        prisma = _prisma()
+        logger = _logger(router=_router(), prisma=prisma)
+
+        await logger._run_shadow_eval(
+            job=_job(),
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            real_text="real answer",
+            real_model="claude-opus",
+            real_cost=0.0,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
+            control_tier=None,
+            shadow_params={},
+            parent_metadata={},
+        )
+
+        row = prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]
+        assert row["router_name"] == "my-router"
+
+    async def test_one_arms_failure_never_silences_the_sibling(self):
+        prisma = _prisma()
+        router = _router(sibling_router_texts={"alt-router": "alt answer"})
+        healthy = router.acompletion.side_effect
+
+        async def first_arm_explodes(**kwargs):
+            if kwargs["model"] == "my-router":
+                raise RuntimeError("provider exploded")
+            return await healthy(**kwargs)
+
+        router.acompletion.side_effect = first_arm_explodes
+        logger = _logger(router=router, prisma=prisma)
+
+        await logger._run_shadow_eval(
+            job=_job(router_names=("my-router", "alt-router")),
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            real_text="real answer",
+            real_model="claude-opus",
+            real_cost=0.0,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
+            control_tier=None,
+            shadow_params={},
+            parent_metadata={},
+        )
+
+        rows = [call.kwargs["data"] for call in prisma.db.litellm_shadowevalattempt.create.await_args_list]
+        assert [row["router_name"] for row in rows] == ["my-router", "alt-router"]
+        assert rows[0]["outcome"] == "error"
+        assert "provider exploded" in rows[0]["error"]
+        assert rows[1]["outcome"] in ("real", "shadow", "tie")
+
+    async def test_the_turn_valve_counts_every_arm_a_start_will_write(self):
+        """max_turns is a row ceiling and one sampled request writes one row per arm, so
+        admission pre-counts the arms: a two-arm job with two turns of budget admits one
+        request, not two."""
+        prisma = _prisma()
+        router = _router(sibling_router_texts={"alt-router": "alt answer"})
+        logger = _logger(
+            router=router, prisma=prisma, jobs=(_job(router_names=("my-router", "alt-router"), max_turns=2),)
+        )
+
+        await logger.async_log_success_event(_success_kwargs(request_id="req-1"), RESPONSE, None, None)
+        await logger.async_log_success_event(_success_kwargs(request_id="req-2"), RESPONSE, None, None)
+        await _drain(logger)
+
+        rows = [call.kwargs["data"] for call in prisma.db.litellm_shadowevalattempt.create.await_args_list]
+        assert {row["request_id"] for row in rows} == {"req-1"}
+        assert len(rows) == 2
+
+    async def test_a_withheld_request_runs_no_arm_and_counts_once(self):
+        """The budget gates run once per sampled request, before any arm: funnel counters
+        stay per-request, so coverage math is arm-count independent."""
+        prisma = _prisma()
+        router = _router(sibling_router_texts={"alt-router": "alt answer"})
+        logger = _logger(router=router, prisma=prisma)
+
+        await logger._run_shadow_eval(
+            job=_job(router_names=("my-router", "alt-router"), max_budget=1.0, spend=2.0),
+            request_id="req-1",
+            messages=({"role": "user", "content": "hi"},),
+            real_text="real answer",
+            real_model="claude-opus",
+            real_cost=0.0,
+            real_classifier_cost=0.0,
+            real_cache_hit=False,
+            control_tier=None,
+            shadow_params={},
+            parent_metadata={},
+        )
+
+        router.acompletion.assert_not_called()
+        prisma.db.litellm_shadowevalattempt.create.assert_not_called()
+        assert logger._test_funnel == [("job-1", "withheld")]
+
+
+@pytest.mark.asyncio
 class TestActiveJobsFailClosed:
     async def test_a_row_the_sampler_cannot_read_is_dropped_not_guessed(self):
         """A reverse row with no baseline model has no second arm to call, so it is skipped
@@ -1249,13 +1481,14 @@ class TestActiveJobsFailClosed:
             jobs_cache=InMemoryCache(max_size_in_memory=4, default_ttl=60),
         )
 
-        assert [job.id for job in (await logger._active_jobs())["key-hash"]] == ["job-ok"]
+        assert [job.id for job in (await logger._active_jobs())[("key", "key-hash")]] == ["job-ok"]
 
-    async def test_both_of_a_key_s_jobs_survive_the_lookup(self):
+    async def test_every_targets_jobs_survive_the_lookup_keyed_by_type_and_id(self):
         records = [
             _job_record(_job(id="job-forward")),
             _job_record(_reverse_job(id="job-reverse")),
-            _job_record(_job(id="job-other"), api_key_id="other-key"),
+            _job_record(_job(id="job-other"), target_id="other-key"),
+            _job_record(_job(id="job-team"), target_type="team", target_id="team-eng"),
         ]
         prisma = _prisma(jobs=records, attempt_counts=[("job-reverse", 3)])
         logger = ShadowEvalLogger(
@@ -1266,9 +1499,11 @@ class TestActiveJobsFailClosed:
 
         jobs = await logger._active_jobs()
 
-        assert sorted(job.id for job in jobs["key-hash"]) == ["job-forward", "job-reverse"]
-        assert [job.id for job in jobs["other-key"]] == ["job-other"]
-        assert {job.id: job.attempts for job in jobs["key-hash"]}["job-reverse"] == 3
+        assert sorted(job.id for job in jobs[("key", "key-hash")]) == ["job-forward", "job-reverse"]
+        assert [job.id for job in jobs[("key", "other-key")]] == ["job-other"]
+        assert [job.id for job in jobs[("team", "team-eng")]] == ["job-team"]
+        assert ("team-eng",) not in jobs and "team-eng" not in jobs
+        assert {job.id: job.attempts for job in jobs[("key", "key-hash")]}["job-reverse"] == 3
 
 
 def _failing_router():
