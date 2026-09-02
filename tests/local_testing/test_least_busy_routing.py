@@ -33,8 +33,8 @@ def test_model_added():
         }
     }
     least_busy_logger.log_pre_api_call(model="test", messages=[], kwargs=kwargs)
-    request_count_api_key = f"gpt-3.5-turbo_request_count"
-    assert test_cache.get_cache(key=request_count_api_key) is not None
+    request_count_api_key = "gpt-3.5-turbo_request_count:1234"
+    assert test_cache.get_cache(key=request_count_api_key) == 1
 
 
 def test_get_available_deployments():
@@ -52,8 +52,8 @@ def test_get_available_deployments():
         }
     }
     least_busy_logger.log_pre_api_call(model="test", messages=[], kwargs=kwargs)
-    request_count_api_key = f"{model_group}_request_count"
-    assert test_cache.get_cache(key=request_count_api_key) is not None
+    request_count_api_key = f"{model_group}_request_count:1234"
+    assert test_cache.get_cache(key=request_count_api_key) == 1
 
 
 # test_get_available_deployments()
@@ -105,14 +105,16 @@ async def test_router_get_available_deployments(async_test):
 
     model_group = "azure-model"
     request_count_dict = {"1": 10, "2": 54, "3": 100}
-    cache_key = f"{model_group}_request_count"
+    cache_keys = {f"{model_group}_request_count:{deployment_id}": count for deployment_id, count in request_count_dict.items()}
     if async_test is True:
-        await router.cache.async_set_cache(key=cache_key, value=request_count_dict)
+        for cache_key, count in cache_keys.items():
+            await router.cache.async_set_cache(key=cache_key, value=count)
         deployment = await router.async_get_available_deployment(
             model=model_group, messages=None, request_kwargs={}
         )
     else:
-        router.cache.set_cache(key=cache_key, value=request_count_dict)
+        for cache_key, count in cache_keys.items():
+            router.cache.set_cache(key=cache_key, value=count)
         deployment = router.get_available_deployment(model=model_group, messages=None)
     print(f"deployment: {deployment}")
     assert deployment["model_info"]["id"] == "1"
@@ -124,15 +126,11 @@ async def test_router_get_available_deployments(async_test):
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
     )
 
-    return_dict = router.cache.get_cache(key=cache_key)
-
     # wait 2 seconds
     time.sleep(2)
 
     assert router.leastbusy_logger.logged_success == 1
-    assert return_dict["1"] == 10
-    assert return_dict["2"] == 54
-    assert return_dict["3"] == 100
+    assert {cache_key: router.cache.get_cache(key=cache_key) for cache_key in cache_keys} == cache_keys
 
 
 ## Test with Real calls ##
