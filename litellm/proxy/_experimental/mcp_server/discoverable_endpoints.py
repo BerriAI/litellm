@@ -1048,13 +1048,13 @@ async def exchange_token_with_server(
         refresh_request_scope = scope or bridge_upstream_scope
         if refresh_request_scope:
             token_data["scope"] = refresh_request_scope
-        refresh_ownership = (
+        refresh_ownership = (  # rebind-ok: grant-specific branches assign one ownership value
             RefreshOwnershipProven()
             if bridge_upstream_refresh is not None
             else RefreshTokenPresented(upstream_refresh_token)
         )
     else:
-        refresh_ownership = None
+        refresh_ownership = None  # rebind-ok: grant-specific branches assign one ownership value
         if not code:
             raise HTTPException(
                 status_code=400,

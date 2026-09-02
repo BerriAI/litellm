@@ -8,12 +8,13 @@ claim is compared to the caller's trusted LiteLLM identity. Mismatches fail clos
 and are logged in audit mode.
 """
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
 import jwt
 from fastapi import HTTPException
+from jwt.types import Options
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
@@ -36,11 +37,20 @@ _ALLOWED_ID_TOKEN_ALGORITHMS: Final = (
 _JWKS_CACHE_TTL_SECONDS: Final = 3600
 _jwks_cache: Final = InMemoryCache(default_ttl=_JWKS_CACHE_TTL_SECONDS)
 
-JwksFetcher = Callable[[MCPOAuthIdentityBinding], Awaitable[list[Mapping[str, object]]]]
-CallerPrincipalLoader = Callable[[str, MCPOAuthIdentityBinding], Awaitable[str | None]]
-StoredRefreshTokenLoader = Callable[[str, str], Awaitable[str | None]]
+JwksFetcher: TypeAlias = Callable[
+    [MCPOAuthIdentityBinding],  # mutable-ok: Callable parameter syntax requires a list
+    Awaitable[Sequence[Mapping[str, object]]],
+]
+CallerPrincipalLoader: TypeAlias = Callable[
+    [str, MCPOAuthIdentityBinding],  # mutable-ok: Callable parameter syntax requires a list
+    Awaitable[str | None],
+]
+StoredRefreshTokenLoader: TypeAlias = Callable[
+    [str, str],  # mutable-ok: Callable parameter syntax requires a list
+    Awaitable[str | None],
+]
 
-_RejectionCode = Literal["oauth_principal_mismatch", "oauth_identity_binding_failed"]
+_RejectionCode: TypeAlias = Literal["oauth_principal_mismatch", "oauth_identity_binding_failed"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,10 +69,10 @@ class RefreshTokenPresented:
     refresh_token: str
 
 
-RefreshOwnership = RefreshOwnershipProven | RefreshTokenPresented | None
+RefreshOwnership: TypeAlias = RefreshOwnershipProven | RefreshTokenPresented | None
 
 
-async def _fetch_issuer_jwks(binding: MCPOAuthIdentityBinding) -> list[Mapping[str, object]]:
+async def _fetch_issuer_jwks(binding: MCPOAuthIdentityBinding) -> Sequence[Mapping[str, object]]:
     jwks_url: Final[str] = binding.jwks_url or await _discover_jwks_url(binding.issuer)
     cached: Final = await _jwks_cache.async_get_cache(jwks_url)
     if isinstance(cached, list):
@@ -90,12 +100,12 @@ async def _discover_jwks_url(issuer: str) -> str:
     return jwks_uri
 
 
-def _select_signing_key(id_token: str, keys: list[Mapping[str, object]]) -> "jwt.PyJWK | _BindingRejection":
+def _select_signing_key(id_token: str, keys: Sequence[Mapping[str, object]]) -> "jwt.PyJWK | _BindingRejection":
     header: Final = jwt.get_unverified_header(id_token)
     kid: Final = header.get("kid")
     for key in keys:
         if kid is None or key.get("kid") == kid:
-            return jwt.PyJWK(dict(key))
+            return jwt.PyJWK(dict(key))  # mutable-ok: PyJWT requires a concrete JWK dictionary
     return _BindingRejection(
         code="oauth_identity_binding_failed",
         description=f"id_token signing key (kid={kid!r}) not found in the issuer's JWKS",
@@ -108,13 +118,14 @@ def _decode_id_token(
     signing_key: "jwt.PyJWK",
 ) -> "Mapping[str, object] | _BindingRejection":
     try:
+        decode_options: Final[Options] = {"require": ("iss", "exp")}
         return jwt.decode(
             id_token,
             signing_key.key,
-            algorithms=list(_ALLOWED_ID_TOKEN_ALGORITHMS),
+            algorithms=_ALLOWED_ID_TOKEN_ALGORITHMS,
             issuer=binding.issuer,
             audience=binding.audiences,
-            options={"require": ["iss", "exp"]},
+            options=decode_options,
         )
     except jwt.InvalidTokenError as exc:
         return _BindingRejection(
@@ -160,10 +171,10 @@ async def _load_caller_principal(litellm_user_id: str, binding: MCPOAuthIdentity
 
 async def _load_stored_refresh_token(litellm_user_id: str, server_id: str) -> str | None:
     try:
-        from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
+        from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415  # keep database imports lazy
             get_user_oauth_credential,
         )
-        from litellm.proxy.utils import get_prisma_client_or_throw  # noqa: PLC0415
+        from litellm.proxy.utils import get_prisma_client_or_throw  # noqa: PLC0415  # keep database imports lazy
 
         prisma_client: Final = get_prisma_client_or_throw(
             "Database not connected. Cannot verify OAuth refresh token ownership."

@@ -52,7 +52,7 @@ class MCPOAuthIdentityBinding(BaseModel):
     mode: Literal["disabled", "audit", "enforce"] = "disabled"
     issuer: str
     jwks_url: str | None = None
-    audiences: list[str] = Field(min_length=1)
+    audiences: list[str] = Field(min_length=1)  # mutable-ok: public Pydantic schema requires list values
     principal_claim: str = "email"
     caller_field: Literal["user_email", "user_id"] = "user_email"
     require_email_verified: bool = True

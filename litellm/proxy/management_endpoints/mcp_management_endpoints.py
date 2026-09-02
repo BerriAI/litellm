@@ -259,7 +259,7 @@ if MCP_AVAILABLE:
         if normalize_upstream_header_name(raw) is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
+                detail={  # mutable-ok: FastAPI exception detail requires a JSON-serializable dictionary
                     "error": (
                         f"Invalid upstream_token_header {raw!r}: must be a valid HTTP header name "
                         "(RFC 7230 token, e.g. 'esb-oauth')"
@@ -2256,7 +2256,7 @@ if MCP_AVAILABLE:
         """Persist the OAuth2 access token obtained by the calling user."""
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
         await _authorize_and_fetch_mcp_server(prisma_client, user_api_key_dict, server_id)
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # keep manager import lazy
             global_mcp_server_manager as _manager,
         )
 
@@ -2267,7 +2267,7 @@ if MCP_AVAILABLE:
         if binding is not None and binding.mode == "enforce":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={
+                detail={  # mutable-ok: FastAPI exception detail requires a JSON-serializable dictionary
                     "error": "oauth_identity_binding_enforced",
                     "error_description": (
                         "Direct credential storage is disabled for this server: its OAuth identity "
