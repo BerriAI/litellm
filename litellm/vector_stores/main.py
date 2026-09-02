@@ -16,7 +16,7 @@ from litellm.constants import request_timeout
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.vector_store.transformation import (
-    LiteLLMVectorStoreEmbeddingExecutor,
+    BaseQueryEmbeddingVectorStoreConfig,
     VectorStoreEmbeddingExecutor,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -42,12 +42,10 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
 
 
-def _direct_vector_store_embedding_executor(value: object) -> VectorStoreEmbeddingExecutor:
-    if value is None:
-        return LiteLLMVectorStoreEmbeddingExecutor()
-    if isinstance(value, VectorStoreEmbeddingExecutor):
-        return value
-    raise TypeError("Invalid direct vector store embedding executor")
+def _direct_vector_store_embedding_executor(value: object, router: "Router | None") -> VectorStoreEmbeddingExecutor:
+    if value is not None and not isinstance(value, VectorStoreEmbeddingExecutor):
+        raise TypeError("Invalid direct vector store embedding executor")
+    return BaseQueryEmbeddingVectorStoreConfig.query_embedding_executor(value, router)
 
 
 def mock_vector_store_search_response(
@@ -302,7 +300,7 @@ async def asearch(
     Async: Search a vector store for relevant chunks based on a query and file attributes filter.
     """
     embedding_executor: Final = _direct_vector_store_embedding_executor(
-        kwargs.pop("_direct_vector_store_embedding_executor", None)
+        kwargs.pop("_direct_vector_store_embedding_executor", None), router
     )
     local_vars: Final = {  # mutable-ok: exception logging requires a sanitized mutable snapshot
         key: value for key, value in locals().items() if key != "embedding_executor"
@@ -388,7 +386,7 @@ def search(
         VectorStoreSearchResponse containing the search results.
     """
     embedding_executor: Final = _direct_vector_store_embedding_executor(
-        kwargs.pop("_direct_vector_store_embedding_executor", None)
+        kwargs.pop("_direct_vector_store_embedding_executor", None), router
     )
     local_vars: Final = {  # mutable-ok: exception logging requires a sanitized mutable snapshot
         key: value for key, value in locals().items() if key != "embedding_executor"
