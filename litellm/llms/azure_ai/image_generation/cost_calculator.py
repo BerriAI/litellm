@@ -3,20 +3,23 @@ from typing import Any, Final
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_image_response_cost_from_usage,
+    resolve_image_model_info,
 )
-from litellm.types.utils import ImageResponse
+from litellm.types.utils import ImageResponse, ModelInfo
 
 
 def cost_calculator(
     model: str,
     image_response: Any,
+    model_info: ModelInfo | None = None,
 ) -> float:
     """
     Azure AI image generation cost calculator
     """
-    _model_info: Final = litellm.get_model_info(
+    _model_info: Final = resolve_image_model_info(
         model=model,
         custom_llm_provider=litellm.LlmProviders.AZURE_AI.value,
+        model_info=model_info,
     )
 
     if isinstance(image_response, ImageResponse):
@@ -24,6 +27,7 @@ def cost_calculator(
             model=model,
             image_response=image_response,
             custom_llm_provider=litellm.LlmProviders.AZURE_AI.value,
+            model_info=_model_info,
         )
         if token_based_cost is not None:
             return token_based_cost

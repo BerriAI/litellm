@@ -26,9 +26,11 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     CostCalculatorUtils,
     _generic_cost_per_character,
+    _get_cost_per_unit,
     _get_regional_uplift_multiplier,
     _get_service_tier_cost_key,
     calculate_cost_component,
+    deployment_pricing,
     generic_cost_per_token,
     get_billable_input_tokens,
     get_token_type_cost_breakdown,
@@ -1164,6 +1166,41 @@ def _store_cost_breakdown_in_logging_obj(
         # Don't fail the main cost calculation if breakdown storage fails
 
 
+def _stamped_model_info(litellm_params: Mapping[str, object], metadata_key: str) -> Mapping[str, object] | None:
+    metadata: Final = litellm_params.get(metadata_key)
+    if not isinstance(metadata, Mapping):
+        return None
+    model_info: Final = metadata.get("model_info")
+    return model_info if isinstance(model_info, Mapping) else None
+
+
+def _deployment_model_info(
+    litellm_logging_obj: LitellmLoggingObject | None,
+    custom_pricing: bool | None,
+    router_model_id: str | None,
+) -> ModelInfo | None:
+    """The deployment's own price table, when it set one.
+
+    The router registers every deployment under its id in ``litellm.model_cost`` with the prices from
+    both ``model_info`` and ``litellm_params`` folded in. Off the router, custom pricing arrives as the
+    ``model_info`` stamped on the request, where the router's ``litellm_metadata`` outranks
+    client-supplied ``metadata``. A model_info without a single valid price is not a price source.
+    """
+    registered: Final = litellm.model_cost.get(router_model_id) if router_model_id is not None else None
+    litellm_params: Final = getattr(litellm_logging_obj, "litellm_params", None) if custom_pricing else None
+    stamped: Final = (
+        tuple(_stamped_model_info(litellm_params, key) for key in ("litellm_metadata", "metadata"))
+        if isinstance(litellm_params, Mapping)
+        else ()
+    )
+    candidates: Final = tuple(
+        cast(ModelInfo, candidate)  # cast-ok: cost-map and request-metadata entries are untyped dicts of ModelInfo keys
+        for candidate in (registered, *stamped)
+        if candidate is not None
+    )
+    return next((candidate for candidate in candidates if deployment_pricing(candidate) is not None), None)
+
+
 def completion_cost(
     completion_response: object | None = None,
     model: str | None = None,
@@ -1405,23 +1442,13 @@ def completion_cost(
                         size=size,
                         optional_params=optional_params,
                         call_type=call_type,
+                        model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
-                    # Extract custom model_info for deployment-specific pricing
-                    _video_model_info: ModelInfo | None = None
-                    if custom_pricing and litellm_logging_obj is not None:
-                        _litellm_params = getattr(litellm_logging_obj, "litellm_params", None)
-                        if _litellm_params is not None:
-                            _video_model_info = next(
-                                (
-                                    model_info
-                                    for _metadata_key in ("metadata", "litellm_metadata")
-                                    if (model_info := (_litellm_params.get(_metadata_key) or {}).get("model_info"))
-                                    is not None
-                                ),
-                                None,
-                            )
+                    _video_model_info: Final = _deployment_model_info(
+                        litellm_logging_obj, custom_pricing, router_model_id
+                    )
 
                     usage_obj = getattr(completion_response, "usage", None)
                     duration_seconds: float | None = None
@@ -2028,6 +2055,7 @@ def default_image_cost_calculator(
     n: int | None = 1,  # Default to 1 image
     size: str | None = "1024-x-1024",  # OpenAI default
     optional_params: dict | None = None,
+    model_info: ModelInfo | None = None,
 ) -> float:
     """
     Default image cost calculator for image generation
@@ -2038,6 +2066,7 @@ def default_image_cost_calculator(
         quality (Optional[str]): Image quality setting
         n (Optional[int]): Number of images generated
         size (Optional[str]): Image size (e.g. "1024x1024" or "1024-x-1024")
+        model_info (Optional[ModelInfo]): The deployment's own prices, consulted before the cost map
 
     Returns:
         float: Cost in USD for the image generation
@@ -2068,9 +2097,7 @@ def default_image_cost_calculator(
     model_without_provider: Final = f"{size_str}/{model.split('/')[-1]}"
     model_with_quality_without_provider = f"{quality}/{model_without_provider}" if quality else model_without_provider
 
-    # Try model with quality first, fall back to base model name
-    cost_info: dict | None = None
-    models_to_check: Final[list[str | None]] = [
+    models_to_check: Final = (
         model_name_with_quality,
         base_model_name,
         model_name_with_v2_quality,
@@ -2078,22 +2105,32 @@ def default_image_cost_calculator(
         model_without_provider,
         model,
         model_name_without_custom_llm_provider,
-    ]
-    for _model in models_to_check:
-        if _model is not None and _model in litellm.model_cost:
-            cost_info = litellm.model_cost[_model]
-            break
-    if cost_info is None:
+    )
+    matched_model: Final = next(
+        (_model for _model in models_to_check if _model is not None and _model in litellm.model_cost), None
+    )
+    if matched_model is None and model_info is None:
         raise Exception(f"Model not found in cost map. Tried checking {models_to_check}")
 
-    # Priority 1: Use per-image pricing if available (for gpt-image-1 and similar models)
-    if "input_cost_per_image" in cost_info and cost_info["input_cost_per_image"] is not None:
-        return cost_info["input_cost_per_image"] * n
-    # Priority 2: Fall back to per-pixel pricing for backward compatibility
-    elif "input_cost_per_pixel" in cost_info and cost_info["input_cost_per_pixel"] is not None:
-        return cost_info["input_cost_per_pixel"] * height * width * n
-    else:
+    shared_cost_info: Final = litellm.model_cost[matched_model] if matched_model is not None else None
+    price_tables: Final = tuple(table for table in (model_info, shared_cost_info) if table is not None)
+    unit_counts: Final = (
+        ("input_cost_per_image", n),
+        ("output_cost_per_image", n),
+        ("input_cost_per_pixel", height * width * n),
+    )
+    cost: Final = next(
+        (
+            price * units
+            for price_table in price_tables
+            for cost_key, units in unit_counts
+            if (price := _get_cost_per_unit(price_table, cost_key, default_value=None)) is not None
+        ),
+        None,
+    )
+    if cost is None:
         raise Exception(f"No pricing information found for model {model}. Tried checking {models_to_check}")
+    return cost
 
 
 def default_video_cost_calculator(
