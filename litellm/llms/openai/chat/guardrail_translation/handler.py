@@ -14,8 +14,13 @@ Pattern Overview:
 This pattern can be replicated for other message formats (e.g., Anthropic).
 """
 
+import json
+import time
+import uuid
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, Union, cast
+
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -24,6 +29,7 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
     StreamTransformSink,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
+    blocked_chat_stream_usage,
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
@@ -32,6 +38,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     openai_tool_name,
     role_out_of_guardrail_scope,
     scoped_structured_message_indices,
+    stream_item_field,
 )
 from litellm.main import stream_chunk_builder
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -49,8 +56,12 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from fastapi import HTTPException
 
-    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.integrations.custom_guardrail import (
+        CustomGuardrail,
+        ModifyResponseException,
+    )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy._types import UserAPIKeyAuth
 
 
 class OpenAIChatCompletionsHandler(BaseTranslation):
@@ -82,7 +93,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-    ) -> Any:
+    ) -> dict:
         """
         Process input messages by applying guardrails to text content.
         """
@@ -331,9 +342,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         response: "ModelResponse",
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-        user_api_key_dict: Any | None = None,
+        user_api_key_dict: "UserAPIKeyAuth | None" = None,
         request_data: dict | None = None,
-    ) -> Any:
+    ) -> ModelResponse:
         """
         Process output response by applying guardrails to text content.
 
@@ -438,7 +449,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         responses_so_far: list["ModelResponseStream"],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-        user_api_key_dict: Any | None = None,
+        user_api_key_dict: "UserAPIKeyAuth | None" = None,
         request_data: dict | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
         deliver_ended_stream_rewrites: bool = False,
@@ -494,7 +505,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         responses_so_far: list["ModelResponseStream"],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
-        user_api_key_dict: Any | None,
+        user_api_key_dict: "UserAPIKeyAuth | None",
         request_data: dict | None,
         deliver_ended_stream_rewrites: bool = False,
     ) -> list["ModelResponseStream"]:
@@ -596,7 +607,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         responses_so_far: list["ModelResponseStream"],  # mutable-ok: rewrites the caller's buffered chunks in place
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
-        user_api_key_dict: object,
+        user_api_key_dict: "UserAPIKeyAuth | None",
         request_data: dict[str, object] | None,  # mutable-ok: same request-payload shape the hooks take
         deliver_ended_stream_rewrites: bool,
     ) -> None:
@@ -626,8 +637,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     def build_stream_error_items(
         self,
         exc: "HTTPException",
-        responses_so_far: Sequence[Any] | None = None,
-    ) -> Sequence[Any] | None:
+        responses_so_far: Sequence[object] | None = None,
+    ) -> Sequence[bytes] | None:
         import json
 
         from litellm.proxy.common_request_processing import sse_error_payload
@@ -667,7 +678,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         responses_so_far: list["ModelResponseStream"],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
-        user_api_key_dict: Any | None,
+        user_api_key_dict: "UserAPIKeyAuth | None",
         request_data: dict | None,
         sink: StreamTransformSink,
     ) -> None:
@@ -831,7 +842,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         # Determine content source and tool calls based on choice type
         content = None
-        tool_calls: list[Any] | None = None
+        tool_calls: Sequence[object] | None = None
         if isinstance(choice, litellm.Choices):
             content = choice.message.content
             tool_calls = choice.message.tool_calls
@@ -1089,3 +1100,129 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                                 else:
                                     # Subsequent chunks - clear the text
                                     content_item["text"] = ""
+
+    def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:
+        """
+        True once any relayed chunk carries a non-null ``finish_reason``.
+
+        The unified guardrail's ``end_of_stream_only`` streaming path probes
+        this via ``hasattr`` to withhold the terminal chunks until
+        end-of-stream moderation runs, so a block can replace the finish
+        instead of trailing after a ``finish_reason`` the client already saw.
+        """
+        return any(
+            stream_item_field(choice, "finish_reason") is not None
+            for item in responses_so_far
+            for choice in _stream_chunk_choices(item)
+        )
+
+    def build_block_sse_chunks(
+        self,
+        exc: "ModifyResponseException",
+        stream_started: bool = False,
+        responses_so_far: Sequence[object] | None = None,
+    ) -> Sequence[bytes]:
+        """
+        Build OpenAI chat-completions SSE chunks that deliver the guardrail
+        block message and terminate the stream cleanly, mirroring the
+        non-streaming block response: ``finish_reason`` ``content_filter`` plus
+        the real usage the upstream call consumed.
+
+        - ``stream_started`` False (buffered / pre-stream): nothing has been
+          sent, so open a standalone completion with a ``role`` delta.
+        - ``stream_started`` True (sampling / mid-stream): chunks already
+          reached the client, so continue the in-progress completion (reuse its
+          id/created/model, content-only delta).
+
+        The proxy's data generator appends ``data: [DONE]`` itself.
+        """
+        chunk_id, created, model = _blocked_stream_identity(exc, responses_so_far or ())
+        prompt_tokens, completion_tokens = blocked_chat_stream_usage(exc.original_response)
+        continuation_delta: Final[_BlockedChunkDelta] = {"content": exc.message}
+        standalone_delta: Final[_BlockedChunkDelta] = {"role": "assistant", "content": exc.message}
+        message_chunk: Final[_BlockedChunk] = {
+            "id": chunk_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": (
+                {
+                    "index": 0,
+                    "delta": continuation_delta if stream_started else standalone_delta,
+                    "finish_reason": None,
+                },
+            ),
+        }
+        final_chunk: Final[_BlockedChunk] = {
+            "id": chunk_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": ({"index": 0, "delta": {}, "finish_reason": "content_filter"},),
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            },
+        }
+        return _chat_sse_chunk(message_chunk), _chat_sse_chunk(final_chunk)
+
+
+class _BlockedChunkDelta(TypedDict, total=False):
+    role: ReadOnly[str]
+    content: ReadOnly[str]
+
+
+class _BlockedChunkChoice(TypedDict):
+    index: ReadOnly[int]
+    delta: ReadOnly[_BlockedChunkDelta]
+    finish_reason: ReadOnly[str | None]
+
+
+class _BlockedChunkUsage(TypedDict):
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+
+
+class _BlockedChunk(TypedDict):
+    id: ReadOnly[str]
+    object: ReadOnly[str]
+    created: ReadOnly[int]
+    model: ReadOnly[str]
+    choices: ReadOnly[tuple[_BlockedChunkChoice, ...]]
+    usage: NotRequired[ReadOnly[_BlockedChunkUsage]]
+
+
+def _chat_sse_chunk(payload: _BlockedChunk) -> bytes:
+    return f"data: {json.dumps(payload)}\n\n".encode()
+
+
+def _stream_chunk_choices(item: object) -> Sequence[object]:
+    choices: Final = stream_item_field(item, "choices")
+    if isinstance(choices, Sequence) and not isinstance(choices, (str, bytes)):
+        return choices
+    return ()
+
+
+def _blocked_stream_identity(
+    exc: "ModifyResponseException", responses_so_far: Sequence[object]
+) -> tuple[str, int, str]:
+    identified: Final = next(
+        (
+            (chunk_id, item)
+            for item in responses_so_far
+            if isinstance(chunk_id := stream_item_field(item, "id"), str) and chunk_id
+        ),
+        None,
+    )
+    if identified is None:
+        return f"chatcmpl-{uuid.uuid4()}", int(time.time()), exc.model
+    chunk_id, source = identified
+    created: Final = stream_item_field(source, "created")
+    model: Final = stream_item_field(source, "model")
+    return (
+        chunk_id,
+        created if isinstance(created, int) else int(time.time()),
+        model if isinstance(model, str) and model else exc.model,
+    )
