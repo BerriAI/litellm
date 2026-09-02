@@ -570,6 +570,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
       <SidebarMenuItem key={item.key}>
         <SidebarMenuButton
           isActive={active}
+          aria-expanded={open}
           onClick={() => toggleGroup(item.key)}
           title={collapsed ? labelText(item) : undefined}
         >

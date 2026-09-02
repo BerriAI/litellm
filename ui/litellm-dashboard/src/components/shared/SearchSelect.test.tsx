@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { SearchSelect } from "./SearchSelect";
+import { chooseSelectOption } from "../../../tests/test-utils";
 
 const OPTIONS = [
   { label: "Acme Prod", value: "team-1" },
@@ -71,8 +72,7 @@ describe("SearchSelect", () => {
     const onValueChange = vi.fn();
     const user = userEvent.setup();
     render(<SearchSelect options={OPTIONS} onValueChange={onValueChange} />);
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByText("Growth"));
+    await chooseSelectOption(user, screen.getByRole("combobox"), "Growth");
     expect(onValueChange).toHaveBeenCalledWith("team-2");
   });
 

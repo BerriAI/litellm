@@ -295,8 +295,7 @@ describe("EditAutoRouterModal classifier context window", () => {
     renderLlmModal();
 
     await user.click(await screen.findByText("Advanced: Classification Method"));
-    const windowSizeSection = (await screen.findByText("Context Window Size")).closest("div") as HTMLElement;
-    const input = within(windowSizeSection).getByRole("spinbutton");
+    const input = await screen.findByLabelText("Context Window Size");
     fireEvent.change(input, { target: { value: "8" } });
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
@@ -365,7 +364,7 @@ describe("EditAutoRouterModal assistant turns", () => {
   });
 });
 
-describe("EditAutoRouterModal session affinity", () => {
+describe("EditAutoRouterModal classification frequency", () => {
   beforeEach(() => {
     modelPatchUpdateCall.mockClear();
   });
@@ -382,15 +381,15 @@ describe("EditAutoRouterModal session affinity", () => {
       />,
     );
 
-  // A stored config with no session_affinity key now runs with affinity OFF, because the backend
-  // field defaults to False. The toggle has to render what the router actually does, and an
-  // untouched save must not flip it.
-  it("shows a stored config with no session_affinity key as off", async () => {
+  // A stored config with neither key now runs with affinity OFF, because both backend fields
+  // default that way. The picker has to render what the router actually does, and an untouched
+  // save must not flip it.
+  it("shows a stored config with neither key as every request", async () => {
     const user = userEvent.setup();
     renderWithStoredConfig(STORED_CONFIG);
 
-    await user.click(await screen.findByText("Advanced: Affinity"));
-    expect(await screen.findByRole("switch", { name: "Pin a session to its first model" })).not.toBeChecked();
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    expect(await screen.findByRole("radio", { name: /Every request/ })).toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -398,12 +397,12 @@ describe("EditAutoRouterModal session affinity", () => {
     expect(savedConfig().session_affinity).toBe(false);
   });
 
-  it("shows a stored session_affinity=true as on and preserves it through an untouched save", async () => {
+  it("shows a stored session_affinity=true as once per session and preserves it through an untouched save", async () => {
     const user = userEvent.setup();
     renderWithStoredConfig({ ...STORED_CONFIG, session_affinity: true });
 
-    await user.click(await screen.findByText("Advanced: Affinity"));
-    expect(await screen.findByRole("switch", { name: "Pin a session to its first model" })).toBeChecked();
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    expect(await screen.findByRole("radio", { name: /Once per session/ })).toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -411,12 +410,12 @@ describe("EditAutoRouterModal session affinity", () => {
     expect(savedConfig().session_affinity).toBe(true);
   });
 
-  it("persists turning session affinity on", async () => {
+  it("persists picking once per session", async () => {
     const user = userEvent.setup();
     renderWithStoredConfig(STORED_CONFIG);
 
-    await user.click(await screen.findByText("Advanced: Affinity"));
-    await user.click(await screen.findByRole("switch", { name: "Pin a session to its first model" }));
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await user.click(await screen.findByRole("radio", { name: /Once per session/ }));
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -424,17 +423,70 @@ describe("EditAutoRouterModal session affinity", () => {
     expect(savedConfig().session_affinity).toBe(true);
   });
 
-  it("persists turning session affinity back off", async () => {
+  it("persists picking every request back over a stored session pin", async () => {
     const user = userEvent.setup();
     renderWithStoredConfig({ ...STORED_CONFIG, session_affinity: true });
 
-    await user.click(await screen.findByText("Advanced: Affinity"));
-    await user.click(await screen.findByRole("switch", { name: "Pin a session to its first model" }));
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await user.click(await screen.findByRole("radio", { name: /Every request/ }));
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
     expect(savedConfig().session_affinity).toBe(false);
+  });
+
+  it("clears a stored session pin when the operator moves to every new user message", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, session_affinity: true });
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await user.click(await screen.findByRole("radio", { name: /Every new user message/ }));
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().session_affinity).toBe(false);
+    expect(savedConfig().classification_mode).toBe("user_turn");
+  });
+
+  it("shows a stored user_turn as selected and preserves it through an untouched save", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, classification_mode: "user_turn" });
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    expect(await screen.findByRole("radio", { name: /Every new user message/ })).toBeChecked();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().classification_mode).toBe("user_turn");
+  });
+
+  it("persists switching a stored config to every new user message", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig(STORED_CONFIG);
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await user.click(await screen.findByRole("radio", { name: /Every new user message/ }));
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().classification_mode).toBe("user_turn");
+  });
+
+  it("rewrites the stored mode to every_request when the operator picks it back", async () => {
+    const user = userEvent.setup();
+    renderWithStoredConfig({ ...STORED_CONFIG, classification_mode: "user_turn" });
+
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await user.click(await screen.findByRole("radio", { name: /Every request/ }));
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(savedConfig().classification_mode).toBe("every_request");
   });
 });
 
