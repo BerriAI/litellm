@@ -60,6 +60,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import TokenCountResponse
 
 from litellm.constants import (
+    AZURE_OPENAI_AUDIO_PROVIDERS,
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
 )
@@ -7770,7 +7771,7 @@ def transcription(
         provider=LlmProviders(custom_llm_provider),
     )
 
-    if custom_llm_provider == "azure" and provider_config is None:
+    if custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS and provider_config is None:
         # azure configs
         api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
 
@@ -8057,7 +8058,10 @@ def speech(
         custom_llm_provider=custom_llm_provider,
     )
     response: HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent] | None = None
-    if custom_llm_provider == "openai" or custom_llm_provider in litellm.openai_compatible_providers:
+    if custom_llm_provider == "openai" or (
+        custom_llm_provider in litellm.openai_compatible_providers
+        and custom_llm_provider not in AZURE_OPENAI_AUDIO_PROVIDERS
+    ):
         if voice is None or not (isinstance(voice, str)):
             raise litellm.BadRequestError(
                 message="'voice' is required to be passed as a string for OpenAI TTS",
@@ -8111,7 +8115,7 @@ def speech(
             aspeech=aspeech,
             shared_session=shared_session,
         )
-    elif custom_llm_provider == "azure":
+    elif custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS:
         # Check if this is Azure Speech Service (Cognitive Services TTS)
         if model.startswith("speech/"):
             from litellm.llms.azure.text_to_speech.transformation import (
