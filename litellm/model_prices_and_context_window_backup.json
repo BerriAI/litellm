@@ -10305,6 +10305,24 @@
         "supports_vision": true,
         "supports_web_search": true
     },
+    "azure_ai/grok-4.6": {
+        "cache_read_input_token_cost": 5e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 6e-06,
+        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/grok-4-6-comes-to-microsoft-foundry-models-built-for-long-horizon-reasoning-and-/4547578",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
     "azure_ai/grok-4-fast-non-reasoning": {
         "deprecation_date": "2026-05-01",
         "input_cost_per_token": 2e-07,
