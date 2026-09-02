@@ -841,7 +841,7 @@ def test_build_synthetic_response_events_covers_annotations_function_calls_and_r
     )
 
     try:
-        events = streaming_module._build_synthetic_response_events(
+        events = streaming_module.build_synthetic_response_events(
             transformed=transformed,
             logging_obj=logging_obj,
             chunk_size=5,
