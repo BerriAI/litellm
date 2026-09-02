@@ -127,6 +127,44 @@ class FusionCandidate:
         }
 
 
+def _serialized_prompt_value(value: Mapping[str, object]) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
+def _bounded_candidate_prompt_value(candidate: FusionCandidate, max_candidate_chars: int) -> Mapping[str, object]:
+    """Bound the complete candidate payload, including advisory tool arguments."""
+    prompt_value: Final = candidate.as_prompt_value()
+    if len(_serialized_prompt_value(prompt_value)) <= max_candidate_chars:
+        return prompt_value
+
+    advisory_json: Final = _serialized_prompt_value(
+        {
+            "content": candidate.content,
+            "tool_proposals": candidate.tool_proposals,
+        }
+    )
+    marker: Final = "Truncated candidate advisory JSON: "
+
+    def truncated_value(prefix_length: int) -> Mapping[str, object]:
+        return {
+            "candidate": candidate.label,
+            "content": f"{marker}{advisory_json[:prefix_length]}",
+            "tool_proposals": (),
+            "finish_reason": candidate.finish_reason,
+            "truncated": True,
+        }
+
+    low = 0
+    high = len(advisory_json)
+    while low < high:
+        midpoint = (low + high + 1) // 2
+        if len(_serialized_prompt_value(truncated_value(midpoint))) <= max_candidate_chars:
+            low = midpoint
+        else:
+            high = midpoint - 1
+    return truncated_value(low)
+
+
 @dataclass(frozen=True, slots=True)
 class FusionPanelSuccess:
     candidate: FusionCandidate
@@ -231,18 +269,17 @@ def _candidate_from_response(label: str, response: ModelResponse, max_candidate_
     proposals: Final = _tool_proposals(response)
     if not content and not proposals:
         return None
-    bounded_content: Final = content[:max_candidate_chars] if content is not None else None
     return FusionCandidate(
         label=label,
-        content=bounded_content,
+        content=content,
         tool_proposals=proposals,
         finish_reason=choice.finish_reason,
     )
 
 
-def _aggregator_instruction(candidates: tuple[FusionCandidate, ...]) -> str:
+def _aggregator_instruction(candidates: tuple[FusionCandidate, ...], max_candidate_chars: int) -> str:
     candidate_json: Final = json.dumps(
-        tuple(candidate.as_prompt_value() for candidate in candidates),
+        tuple(_bounded_candidate_prompt_value(candidate, max_candidate_chars) for candidate in candidates),
         ensure_ascii=False,
         separators=(",", ":"),
     )
@@ -262,6 +299,7 @@ def _aggregator_instruction(candidates: tuple[FusionCandidate, ...]) -> str:
 def _aggregator_messages(
     messages: list[AllMessageValues],  # mutable-ok: Router completion requires its public message-list shape
     candidates: tuple[FusionCandidate, ...],
+    max_candidate_chars: int,
 ) -> list[AllMessageValues]:  # mutable-ok: Router completion requires its public message-list shape
     prefix_length: Final = next(
         (index for index, message in enumerate(messages) if message["role"] not in ("system", "developer")),
@@ -269,7 +307,7 @@ def _aggregator_messages(
     )
     instruction: Final[AllMessageValues] = {
         "role": "developer",
-        "content": _aggregator_instruction(candidates),
+        "content": _aggregator_instruction(candidates, max_candidate_chars),
     }
     return [  # mutable-ok: Router completion requires its public message-list shape
         *messages[:prefix_length],
@@ -420,7 +458,9 @@ class FusionRouter:
                 model=self.model_name,
                 llm_provider="",
             )
-        aggregator_messages: Final = _aggregator_messages(messages, candidates) if quorum_met else messages
+        aggregator_messages: Final = (
+            _aggregator_messages(messages, candidates, self.config.max_candidate_chars) if quorum_met else messages
+        )
         aggregator_kwargs: Final = {  # mutable-ok: aggregator kwargs require a native mapping for keyword expansion
             key: value
             for key, value in request_kwargs.items()

@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 from collections.abc import Mapping
 from typing import Final, cast
@@ -220,7 +221,57 @@ async def test_quorum_failure_modes_and_candidate_bound() -> None:
     await bounded_router.acompletion(messages=[{"role": "user", "content": "Answer"}], stream=False, request_kwargs={})
     instruction = str(bounded_completion.calls[-1]["messages"][0]["content"])
     payload = json.loads(instruction.split("Candidate responses:\n", 1)[1])
-    assert len(payload[0]["content"]) == 1000
+    assert len(json.dumps(payload[0], ensure_ascii=False, separators=(",", ":"))) <= 1000
+    assert payload[0]["truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_candidate_bound_includes_function_and_custom_tool_payloads() -> None:
+    oversized_arguments = json.dumps({"patch": "x" * 4000})
+    completion = RecordingCompletion(
+        {
+            "panel-a": _response(
+                None,
+                [
+                    {
+                        "id": "function-call",
+                        "type": "function",
+                        "function": {"name": "apply_patch", "arguments": oversized_arguments},
+                    }
+                ],
+            ),
+            "panel-b": _response(
+                None,
+                [
+                    {
+                        "id": "custom-call",
+                        "type": "custom",
+                        "custom": {"name": "research", "input": "漢" * 4000},
+                    }
+                ],
+            ),
+            "aggregator": _response("bounded"),
+        }
+    )
+    router = build_fusion_router(
+        model_name="fusion/bounded-tools",
+        raw_config={
+            "panel_models": ["panel-a", "panel-b"],
+            "aggregator_model": "aggregator",
+            "max_candidate_chars": 1000,
+        },
+        completion=completion,
+    )
+
+    await router.acompletion(messages=[{"role": "user", "content": "Act"}], stream=False, request_kwargs={})
+
+    instruction = str(completion.calls[-1]["messages"][0]["content"])
+    payload = json.loads(instruction.split("Candidate responses:\n", 1)[1])
+    assert len(payload) == 2
+    for candidate in payload:
+        assert len(json.dumps(candidate, ensure_ascii=False, separators=(",", ":"))) <= 1000
+        assert candidate["truncated"] is True
+        assert candidate["tool_proposals"] == []
 
 
 @pytest.mark.asyncio
@@ -364,6 +415,9 @@ async def test_router_responses_api_bridges_through_the_same_fusion_model() -> N
 @pytest.mark.asyncio
 async def test_router_anthropic_messages_bridges_through_the_same_fusion_model() -> None:
     router = Router(model_list=_router_model_list())
+
+    assert inspect.iscoroutinefunction(router.aanthropic_messages)
+    assert inspect.iscoroutinefunction(router.anthropic_messages)
 
     response = await router.aanthropic_messages(
         model="fusion/test",

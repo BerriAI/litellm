@@ -1646,6 +1646,8 @@ class Router:
         self._base_aanthropic_messages = self.factory_function(
             litellm.anthropic_messages, call_type="anthropic_messages"
         )
+        # Both public names are intentionally async. Before Fusion, factory_function already
+        # returned async_wrapper for "anthropic_messages" and assigned it to both aliases.
         self.aanthropic_messages = self._fusion_aware_aanthropic_messages
         self.anthropic_messages = self._fusion_aware_aanthropic_messages
         self.agenerate_content = self.factory_function(litellm.agenerate_content, call_type="agenerate_content")

@@ -39,6 +39,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS,
     _approximate_input_size,
     _get_model_access_group_budget_counters,
+    estimate_request_input_cost,
     estimate_request_max_cost,
     get_budget_window_start,
     invalidate_budget_reservation_counters,
@@ -1089,11 +1090,65 @@ def test_fusion_reservation_sums_panels_and_candidate_inflated_aggregator() -> N
             return 3.0
         return {"panel-a": 1.0, "panel-b": 2.0}[model]
 
-    with patch(
+    with patch(  # test-quality-ok: isolates child pricing so this test measures Fusion aggregation, not registry prices
         "litellm.proxy.spend_tracking.budget_reservation._estimate_request_max_cost_for_model",
         side_effect=child_estimate,
     ):
         estimated = estimate_request_max_cost(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=router,
+        )
+
+    assert estimated == pytest.approx(6.0)
+
+
+def test_fusion_cancel_floor_sums_child_input_costs() -> None:
+    router = Router(
+        model_list=[
+            {
+                "model_name": "panel-a",
+                "litellm_params": {"model": "openai/panel-a", "api_key": "fake"},
+            },
+            {
+                "model_name": "panel-b",
+                "litellm_params": {"model": "openai/panel-b", "api_key": "fake"},
+            },
+            {
+                "model_name": "aggregator",
+                "litellm_params": {"model": "openai/aggregator", "api_key": "fake"},
+            },
+            {
+                "model_name": "fusion/test",
+                "litellm_params": {
+                    "model": "fusion_router",
+                    "fusion_router_config": {
+                        "panel_models": ["panel-a", "panel-b"],
+                        "aggregator_model": "aggregator",
+                        "max_candidate_chars": 1000,
+                    },
+                },
+            },
+        ]
+    )
+    request_body = {
+        "model": "fusion/test",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 10,
+    }
+
+    def child_input_estimate(*, model: str, input_tokens: int | None = None, **_: object) -> float:
+        if model == "aggregator":
+            assert input_tokens is not None
+            assert input_tokens >= 9000
+            return 3.0
+        return {"panel-a": 1.0, "panel-b": 2.0}[model]
+
+    with patch(  # test-quality-ok: isolates child pricing so this test measures Fusion aggregation, not registry prices
+        "litellm.proxy.spend_tracking.budget_reservation._estimate_request_input_cost_for_model",
+        side_effect=child_input_estimate,
+    ):
+        estimated = estimate_request_input_cost(
             request_body=request_body,
             route="/chat/completions",
             llm_router=router,
