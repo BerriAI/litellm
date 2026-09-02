@@ -1033,3 +1033,29 @@ def test_load_credentials_assumes_role_with_external_id(monkeypatch):
     assert credentials.token == "assumed-session-token"
     assert aws_region_name == "us-east-1"
     assert "aws_external_id" not in optional_params
+
+
+def test_bedrock_embedding_bearer_token_never_runs_the_sigv4_credential_chain(monkeypatch):
+    """The deployment's AWS profile does not exist, so resolving SigV4 credentials
+    raises; a bearer-token deployment must still serve the request, since the
+    bearer token alone signs it."""
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer-token-12345")
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(titan_embedding_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model="bedrock/amazon.titan-embed-text-v1",
+            input=test_input,
+            client=client,
+            aws_region_name="us-west-2",
+            aws_profile_name="litellm-no-such-aws-profile",
+        )
+
+    assert response.data[0]["embedding"] == titan_embedding_response["embedding"]
+    assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer env-bearer-token-12345"
