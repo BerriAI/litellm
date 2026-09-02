@@ -32,7 +32,19 @@ def effective_boundary(candidate: CapabilityRouterCandidate, score: CapabilityCa
     return boundaries.get(score.primary_rule, "unmatched")
 
 
-def calibrated_probability(candidate: CapabilityRouterCandidate, raw_probability: float) -> float:
+def calibrated_probability(
+    candidate: CapabilityRouterCandidate, raw_probability: float, primary_rule: str = "none"
+) -> float:
+    rule_probability: Final = next(
+        (
+            rule.observed_success_probability
+            for rule_id, rule in indexed_rules(candidate)
+            if rule_id == primary_rule and rule.observed_success_probability is not None
+        ),
+        None,
+    )
+    if rule_probability is not None:
+        return rule_probability
     return next(
         (bucket.probability for bucket in candidate.probability_calibration if raw_probability <= bucket.upper_bound),
         raw_probability,
@@ -90,12 +102,12 @@ def select_capability_model(
         CapabilityCandidateAssessment(
             model=model,
             raw_p_solve=scores[model].p_solve,
-            p_solve=calibrated_probability(configured[model], scores[model].p_solve),
+            p_solve=calibrated_probability(configured[model], scores[model].p_solve, scores[model].primary_rule),
             reason=scores[model].reason,
             primary_rule=scores[model].primary_rule,
             capability_boundary=boundaries[model],
             estimated_cost=estimated_costs.get(model),
-            qualified=calibrated_probability(configured[model], scores[model].p_solve)
+            qualified=calibrated_probability(configured[model], scores[model].p_solve, scores[model].primary_rule)
             > round(
                 config.probability_threshold + BOUNDARY_THRESHOLD_STEPS[boundaries[model]] * config.threshold_step,
                 9,
