@@ -1,26 +1,33 @@
 from __future__ import annotations
 
+import importlib
 import json
 from pathlib import Path
 
 import pytest
 
-from tests.rust_python_harness.catalog import load_catalog
-from tests.rust_python_harness.cli import _pick_values, _select
-from tests.rust_python_harness.models import (
-    CaseResult,
-    Coverage,
-    HarnessCase,
-    HarnessRun,
-    RunStatus,
-    SDK_FUNCTIONS,
-)
-from tests.rust_python_harness.runner import (
-    run_pytest,
-    runnable_selectors,
-    selector_matches_node,
-)
-from tests.rust_python_harness.ui import _format_duration, _rerun_command, _summary
+catalog = importlib.import_module("tests.rust-python-harness.catalog")
+cli = importlib.import_module("tests.rust-python-harness.cli")
+models = importlib.import_module("tests.rust-python-harness.models")
+runner = importlib.import_module("tests.rust-python-harness.runner")
+ui = importlib.import_module("tests.rust-python-harness.ui")
+
+load_catalog = catalog.load_catalog
+_pick_values = cli._pick_values
+_coverage_pytest_args = cli._coverage_pytest_args
+_select = cli._select
+CaseResult = models.CaseResult
+Coverage = models.Coverage
+HarnessCase = models.HarnessCase
+HarnessRun = models.HarnessRun
+RunStatus = models.RunStatus
+SDK_FUNCTIONS = models.SDK_FUNCTIONS
+run_pytest = runner.run_pytest
+runnable_selectors = runner.runnable_selectors
+selector_matches_node = runner.selector_matches_node
+_format_duration = ui._format_duration
+_rerun_command = ui._rerun_command
+_summary = ui._summary
 
 
 def _case(
@@ -48,19 +55,13 @@ def _manifest() -> dict[str, object]:
     }
 
 
-def test_should_load_every_tdd_strategy_in_order() -> None:
+def test_should_load_the_three_harness_strategies_in_order() -> None:
     strategies = load_catalog()
 
     assert [strategy.id for strategy in strategies] == [
-        "end_to_end",
-        "transform_request",
-        "transform_response",
-        "transform_stream",
-        "cassettes",
-        "callbacks",
-        "manifest_coverage",
-        "dual_build_suite",
-        "shadow_mode",
+        "e2e_fuzz_tests",
+        "unit_tests_rust",
+        "validate_sub_methods",
     ]
     assert all(
         tuple(case.sdk_function for case in strategy.cases) == SDK_FUNCTIONS
@@ -162,10 +163,10 @@ def test_should_replace_a_pass_with_a_teardown_error() -> None:
 def test_should_filter_the_catalog_by_strategy_and_sdk_function() -> None:
     strategies = load_catalog()
 
-    cases = _select(strategies, {"end_to_end"}, {"messages"})
+    cases = _select(strategies, {"e2e_fuzz_tests"}, {"messages"})
 
     assert len(cases) == 1
-    assert cases[0].key == "end_to_end:messages"
+    assert cases[0].key == "e2e_fuzz_tests:messages"
 
 
 def test_should_reject_an_unknown_strategy() -> None:
@@ -199,3 +200,16 @@ def test_should_format_developer_facing_run_context() -> None:
     assert _rerun_command("tests/test_parity.py::test_one[value with spaces]") == (
         "poetry run pytest 'tests/test_parity.py::test_one[value with spaces]' -q"
     )
+
+
+def test_should_build_python_coverage_reports_below_the_target_directory(
+    tmp_path: Path,
+) -> None:
+    args = _coverage_pytest_args(tmp_path)
+
+    assert tmp_path.is_dir()
+    assert "--cov=litellm" in args
+    assert "--cov-context=test" in args
+    assert f"--cov-report=json:{tmp_path / 'python.json'}" in args
+    assert f"--cov-report=xml:{tmp_path / 'python.xml'}" in args
+    assert f"--cov-report=html:{tmp_path / 'python-html'}" in args

@@ -6,7 +6,7 @@ from typing import Any
 
 from .models import Coverage, HarnessCase, SDK_FUNCTIONS, Strategy
 
-STRATEGIES_ROOT = Path(__file__).parent / "strategies"
+STRATEGIES_ROOT = Path(__file__).parent
 
 
 def _require_string(value: Any, field: str, source: Path) -> str:

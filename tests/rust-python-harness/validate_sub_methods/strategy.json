@@ -1,8 +1,8 @@
 {
-  "order": 80,
-  "id": "dual_build_suite",
-  "label": "6a · Existing suite under both builds",
-  "description": "Compare pass, fail, and skip outcomes from the established suite under both flags.",
+  "order": 30,
+  "id": "validate_sub_methods",
+  "label": "Validate sub-methods",
+  "description": "Compare isolated transforms and verify Python-to-Rust helper coverage.",
   "functions": {
     "ocr": {"coverage": "planned", "selectors": []},
     "messages": {"coverage": "planned", "selectors": []},

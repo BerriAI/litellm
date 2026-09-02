@@ -1,8 +1,8 @@
 {
-  "order": 50,
-  "id": "cassettes",
-  "label": "3 · Recorded provider cassettes",
-  "description": "Validate checked-in provider-byte recordings used by both implementations.",
+  "order": 20,
+  "id": "unit_tests_rust",
+  "label": "Rust unit tests",
+  "description": "Exercise Rust-owned behavior directly with focused unit tests.",
   "functions": {
     "ocr": {"coverage": "planned", "selectors": []},
     "messages": {"coverage": "planned", "selectors": []},

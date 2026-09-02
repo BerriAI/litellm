@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from .runner import run_pytest
 from .ui import make_dashboard
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+COVERAGE_ROOT = REPO_ROOT / "target" / "rust-python-harness"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -47,6 +49,11 @@ def _parser() -> argparse.ArgumentParser:
         help="disable the interactive terminal dashboard",
     )
     parser.add_argument(
+        "--coverage",
+        action="store_true",
+        help="write Python reference LOC reports (HTML, JSON, and XML)",
+    )
+    parser.add_argument(
         "--pytest-arg",
         action="append",
         default=[],
@@ -54,6 +61,17 @@ def _parser() -> argparse.ArgumentParser:
         help="append an argument to pytest (repeatable, for example --pytest-arg=-x)",
     )
     return parser
+
+
+def _coverage_pytest_args(output_root: Path = COVERAGE_ROOT) -> tuple[str, ...]:
+    output_root.mkdir(parents=True, exist_ok=True)
+    return (
+        "--cov=litellm",
+        "--cov-context=test",
+        f"--cov-report=json:{output_root / 'python.json'}",
+        f"--cov-report=xml:{output_root / 'python.xml'}",
+        f"--cov-report=html:{output_root / 'python-html'}",
+    )
 
 
 def _pick_values(
@@ -115,6 +133,11 @@ def _print_catalog(strategies: Sequence[Strategy]) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.coverage and importlib.util.find_spec("pytest_cov") is None:
+        _parser().error(
+            "--coverage requires the project's pytest-cov dependency; run with "
+            "`poetry run python -m tests.rust-python-harness --coverage`"
+        )
     strategies = load_catalog()
     if args.list:
         _print_catalog(strategies)
@@ -136,12 +159,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         strategy for strategy in strategies if strategy.id in selected_strategy_ids
     )
     dashboard = make_dashboard(visible_strategies, plain=args.plain)
+    pytest_args = [*args.pytest_arg]
+    if args.coverage:
+        pytest_args.extend(_coverage_pytest_args())
     with dashboard:
         exit_code, run = run_pytest(
             cases=cases,
             repo_root=REPO_ROOT,
             on_update=dashboard.update,
-            pytest_args=args.pytest_arg,
+            pytest_args=pytest_args,
         )
         dashboard.finish(run, exit_code)
+    if args.coverage and (COVERAGE_ROOT / "python.json").exists():
+        print(f"Python LOC heatmap: {COVERAGE_ROOT / 'python-html' / 'index.html'}")
+        print(f"Machine-readable coverage: {COVERAGE_ROOT / 'python.json'}")
     return exit_code

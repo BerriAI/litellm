@@ -9,34 +9,28 @@ The matrix always has these SDK columns:
 - `responses / aresponses`
 - `count_tokens`
 
-Each numbered section in the parity TDD owns one folder below [`strategies/`](strategies/):
+The harness has three deliberately broad test-strategy folders:
 
-| TDD section | Strategy folder |
+| Strategy | Folder |
 | --- | --- |
-| 1 | `end_to_end/` |
-| 2a | `transform_request/` |
-| 2b | `transform_response/` |
-| 2c | `transform_stream/` |
-| 3 | `cassettes/` |
-| 4 | `callbacks/` |
-| 5 | `manifest_coverage/` |
-| 6a | `dual_build_suite/` |
-| 6b | `shadow_mode/` |
+| Public SDK parity over generated and recorded inputs | [`e2e_fuzz_tests/`](e2e_fuzz_tests/) |
+| Focused tests of Rust-owned behavior | [`unit_tests_rust/`](unit_tests_rust/) |
+| Isolated transform and Python-to-Rust helper coverage | [`validate_sub_methods/`](validate_sub_methods/) |
 
 ## Run it
 
 From the repository root:
 
 ```bash
-poetry run python -m tests.rust_python_harness
+poetry run python -m tests.rust-python-harness
 ```
 
 The default runs every configured test once and updates all matching cells in real time. Narrow a run by strategy, SDK function, or both:
 
 ```bash
-poetry run python -m tests.rust_python_harness --strategy end_to_end
-poetry run python -m tests.rust_python_harness --function messages
-poetry run python -m tests.rust_python_harness --strategy end_to_end --function ocr
+poetry run python -m tests.rust-python-harness --strategy e2e_fuzz_tests
+poetry run python -m tests.rust-python-harness --function messages
+poetry run python -m tests.rust-python-harness --strategy validate_sub_methods --function ocr
 ```
 
 For a guided run, use the interactive picker. It asks which strategy rows and SDK
@@ -44,20 +38,23 @@ function columns to include, then hands the terminal to the live dashboard. It n
 captures keys while tests are running, so Ctrl-C and pytest debugging remain safe.
 
 ```bash
-poetry run python -m tests.rust_python_harness --interactive
+poetry run python -m tests.rust-python-harness --interactive
 ```
 
 Useful operator options:
 
 ```bash
 # Inspect coverage and pytest selectors without running anything.
-poetry run python -m tests.rust_python_harness --list
+poetry run python -m tests.rust-python-harness --list
 
 # Stable line-oriented output for CI logs or redirected output.
-poetry run python -m tests.rust_python_harness --plain
+poetry run python -m tests.rust-python-harness --plain
+
+# Measure Python reference lines exercised by this parity run and build an HTML heatmap.
+poetry run python -m tests.rust-python-harness --coverage
 
 # Forward pytest options. Use the equals form when the value begins with a dash.
-poetry run python -m tests.rust_python_harness --pytest-arg=-x
+poetry run python -m tests.rust-python-harness --pytest-arg=-x
 ```
 
 The process returns pytest's exit code. A configured selector that collects no test is also a failure. A planned cell has no selector yet and does not fail the run.
@@ -66,6 +63,32 @@ The dashboard adapts to narrow terminals, shows elapsed time and unique-test pro
 and prints the three slowest tests when the run ends. Each failure includes a focused
 `poetry run pytest ... -q` command. Redirected output and CI automatically use the
 line-oriented plain renderer; `--plain` lets you opt into it locally.
+
+Coverage reports are written outside the three strategy folders at
+`target/rust-python-harness/`. Open `python-html/index.html` to inspect executed and
+missing Python lines; `python.json` and `python.xml` are available for automation.
+Coverage is finalized after pytest exits, because worker processes must flush their
+data first.
+
+## Port coverage and confidence
+
+Treat these as separate signals instead of one ambiguous coverage percentage:
+
+| Signal | Tool | What it proves |
+| --- | --- | --- |
+| Python reference LOC | `coverage.py` / `pytest-cov` via `--coverage` | The mapped Python behavior ran |
+| Rust port LOC | `cargo-llvm-cov` | The mapped Rust implementation ran |
+| Parity contracts | This harness matrix | Python and Rust had the same observable behavior |
+
+`validate_sub_methods/` owns the future source-section inventory that maps a stable
+Python qualified symbol to its Rust symbol. That inventory is the denominator for
+per-function rollups; raw coverage for the entire LiteLLM repository would obscure
+the port's real gaps. `unit_tests_rust/` owns direct `cargo-llvm-cov` runs, while
+`e2e_fuzz_tests/` owns behavioral parity and fuzz-case counts. Keep Python, Rust, and
+parity percentages visible side by side and label section confidence High only when
+the mapped implementation exists, every required strategy passes, and both sides meet
+their LOC thresholds. Generated Rust LCOV/HTML and the combined index also belong in
+`target/rust-python-harness/`, not in a fourth strategy folder.
 
 ## Read the matrix
 
@@ -84,13 +107,13 @@ The initial end-to-end entries deliberately show `◐`: the repository has Rust 
 
 ## Attach parity tests
 
-Every strategy folder contains a `strategy.json`. Add a pytest file or node ID to the appropriate SDK function's `selectors` list:
+Each of the three folders contains a concise `README.md` and a `strategy.json`. Add a pytest file or node ID to the appropriate SDK function's `selectors` list:
 
 ```json
 {
   "coverage": "complete",
   "selectors": [
-    "tests/rust_python_harness/strategies/transform_request/test_messages.py"
+    "tests/rust-python-harness/validate_sub_methods/test_messages.py"
   ]
 }
 ```
