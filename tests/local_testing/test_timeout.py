@@ -211,13 +211,14 @@ def test_hanging_request_openai():
 # test_timeout()
 
 
-def test_timeout_streaming():
+def test_timeout_streaming(unroutable_api_base):
     # this Will Raise a timeout
     litellm.set_verbose = False
     try:
         response = litellm.completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "hello, write a 20 pg essay"}],
+            api_base=unroutable_api_base,
             timeout=0.0001,
             stream=True,
         )

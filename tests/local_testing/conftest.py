@@ -259,6 +259,11 @@ def setup_and_teardown():
     yield
 
 
+@pytest.fixture
+def unroutable_api_base():
+    return "http://192.0.2.1"
+
+
 def pytest_collection_modifyitems(config, items):
     apply_vcr_auto_marker_to_items(
         items,
