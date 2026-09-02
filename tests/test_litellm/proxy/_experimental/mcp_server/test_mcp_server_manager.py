@@ -11006,3 +11006,61 @@ class TestOpenApiHandlerRelaysUpstreamAuth:
 
         assert result.isError is True
         assert "upstream returned HTTP 503" in result.content[0].text
+
+
+class TestKeyAttachedGuardrailsReachTheMCPPreCallHook:
+    """MCP tool calls build their own synthetic request instead of going through
+    ``add_litellm_data_to_request``, so guardrails attached to the key/team/project
+    have to be moved into that request's metadata here. Without it,
+    ``CustomGuardrail.should_run_guardrail`` sees no requested guardrails and skips
+    everything that is not ``default_on``, i.e. the guardrail a key was explicitly
+    granted never runs on the MCP path.
+    """
+
+    def _server(self) -> MCPServer:
+        return MCPServer(
+            server_id="guardrail-metadata-server",
+            name="guardrail_metadata_server",
+            server_name="guardrail_metadata_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+
+    async def _synthetic_request_metadata(self, key_metadata: dict[str, Any]) -> dict[str, Any]:
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=MagicMock())
+        seen: Final[dict[str, Any]] = {}
+
+        async def capture_pre_call_hook(*, user_api_key_dict, data, call_type):
+            seen.update(data)
+            return None
+
+        with (
+            patch(  # test-quality-ok: enterprise licensing is orthogonal to the metadata propagation under test
+                "litellm.proxy.utils._premium_user_check"
+            ),
+            patch.object(proxy_logging_obj, "pre_call_hook", side_effect=capture_pre_call_hook),
+        ):
+            await MCPServerManager().pre_call_tool_check(
+                name="echo",
+                arguments={"text": "hi"},
+                server_name="guardrail_metadata_server",
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", metadata=key_metadata),
+                proxy_logging_obj=proxy_logging_obj,
+                server=self._server(),
+            )
+
+        return seen["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_key_guardrails_are_moved_into_the_synthetic_request_metadata(self):
+        metadata = await self._synthetic_request_metadata({"guardrails": ["model-armor-guard"]})
+        assert metadata["guardrails"] == ["model-armor-guard"]
+
+    @pytest.mark.asyncio
+    async def test_key_without_guardrails_stays_untouched(self):
+        metadata = await self._synthetic_request_metadata({})
+        assert "guardrails" not in metadata

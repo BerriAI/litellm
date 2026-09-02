@@ -5082,6 +5082,18 @@ class MCPServerManager:
         synthetic_llm_data: Final = proxy_logging_obj._convert_mcp_to_llm_format(mcp_request_obj, pre_hook_kwargs)
         synthetic_llm_data["litellm_logging_obj"] = litellm_logging_obj
 
+        # The synthetic request never went through ``add_litellm_data_to_request``, so without this
+        # a guardrail attached to the key/team/project (rather than ``default_on``) is invisible to
+        # ``CustomGuardrail.should_run_guardrail`` and silently skipped on the MCP path.
+        if user_api_key_auth is not None:
+            from litellm.proxy.litellm_pre_call_utils import move_guardrails_to_metadata
+
+            await move_guardrails_to_metadata(
+                data=synthetic_llm_data,
+                _metadata_variable_name="metadata",
+                user_api_key_dict=user_api_key_auth,
+            )
+
         try:
             # Use standard pre_call_hook
             modified_data: Final = await proxy_logging_obj.pre_call_hook(
