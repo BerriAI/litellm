@@ -9,6 +9,8 @@ serialization trap).
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import litellm.vector_stores.main as vector_stores_main
 from litellm.vector_stores.main import search
 
@@ -19,7 +21,8 @@ MOCK_SEARCH_RESPONSE = {
 }
 
 
-def test_search_threads_router_to_handler():
+@pytest.mark.parametrize("query", ["q", ["q", "another question"]])
+def test_search_threads_router_to_handler(query: str | list[str]):
     """search() must pass its router param through to the HTTP handler"""
     mock_router = MagicMock()
     logger = MagicMock()
@@ -37,7 +40,7 @@ def test_search_threads_router_to_handler():
     ):
         response = search(
             vector_store_id="bkt:idx",
-            query="q",
+            query=query,
             custom_llm_provider="s3_vectors",
             router=mock_router,
             litellm_logging_obj=logger,
@@ -46,6 +49,7 @@ def test_search_threads_router_to_handler():
     assert response == MOCK_SEARCH_RESPONSE
     mock_handler.assert_called_once()
     assert mock_handler.call_args.kwargs["router"] is mock_router
+    assert mock_handler.call_args.kwargs["query"] == query
 
 
 def test_search_router_not_in_litellm_params():
