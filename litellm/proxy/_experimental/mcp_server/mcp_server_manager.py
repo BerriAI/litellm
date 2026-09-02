@@ -4218,7 +4218,14 @@ class MCPServerManager:
                 llm_provider=httpxSpecialProvider.MCP,
                 params={"timeout": MCP_METADATA_TIMEOUT},  # mutable-ok: HTTP client factory requires a dict
             )
-            response: Final = await client.get(server_url)
+            # The MCP resource URL is allowed to answer GET with an open
+            # server-to-client SSE stream, which a buffered read would wait on
+            # forever: MCP_METADATA_TIMEOUT is httpx's per-read timeout, and a
+            # keepalive arriving inside it resets the clock indefinitely. Only
+            # the status line and any WWW-Authenticate header matter here, and
+            # both are in before the body, so close it unread.
+            response: Final = await client.get(server_url, stream=True)
+            await response.aclose()
             response.raise_for_status()
             (
                 authorization_servers,

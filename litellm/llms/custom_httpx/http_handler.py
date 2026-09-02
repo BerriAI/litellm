@@ -635,12 +635,25 @@ class AsyncHTTPHandler:
         headers: dict | None = None,
         follow_redirects: bool | None = None,
         timeout: float | httpx.Timeout | None = None,
+        stream: bool = False,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
 
         params = params or {}
         params.update(HTTPHandler.extract_query_params(url))
+
+        if stream:
+            # Same shape as post/put/patch/delete: return once the status and
+            # headers are in, leaving the body for the caller to read or close.
+            req: Final = self.client.build_request(
+                "GET",
+                url,
+                params=params,
+                headers=headers,
+                timeout=timeout,
+            )
+            return await self.client.send(req, stream=True, follow_redirects=_follow_redirects)
 
         response: Final = await self.client.get(
             url,

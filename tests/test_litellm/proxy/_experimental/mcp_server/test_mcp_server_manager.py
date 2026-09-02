@@ -3492,6 +3492,8 @@ class TestMCPServerManager:
 
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
+        # The resource GET is streamed now, so discovery closes the body it did not read.
+        mock_response.aclose = AsyncMock()
 
         mock_client = MagicMock()
         mock_client.get = AsyncMock(return_value=mock_response)
@@ -3549,6 +3551,8 @@ class TestMCPServerManager:
 
         mock_response = MagicMock()
         mock_response.raise_for_status = MagicMock()
+        # The resource GET is streamed now, so discovery closes the body it did not read.
+        mock_response.aclose = AsyncMock()
         mock_client = MagicMock()
         mock_client.get = AsyncMock(return_value=mock_response)
 
@@ -11006,3 +11010,122 @@ class TestOpenApiHandlerRelaysUpstreamAuth:
 
         assert result.isError is True
         assert "upstream returned HTTP 503" in result.content[0].text
+
+
+class _EndlessEventStream(httpx.AsyncByteStream):
+    """A server-to-client SSE body that keeps sending keepalives and never ends."""
+
+    def __init__(self, gap: float):
+        self._gap = gap
+
+    async def __aiter__(self):
+        while True:
+            await asyncio.sleep(self._gap)
+            yield b": keepalive\n\n"
+
+
+class _StreamableHttpMCPTransport(httpx.AsyncBaseTransport):
+    """GET on the MCP resource opens an event stream; well-known lookups 404.
+
+    Both are ordinary Streamable HTTP behaviour: a server may answer GET with the
+    optional server-to-client stream, and one without RFC 9728 metadata 404s.
+    """
+
+    def __init__(self, gap: float):
+        self.gap = gap
+        self.resource_gets = 0
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if ".well-known" in request.url.path:
+            return httpx.Response(404, content=b"", request=request)
+        self.resource_gets += 1
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=_EndlessEventStream(self.gap),
+            request=request,
+        )
+
+
+class TestOAuthDiscoveryAgainstAnOpenEventStream:
+    """Discovery must not wait on an MCP resource GET that never ends (issue #37499).
+
+    MCP_METADATA_TIMEOUT is httpx's per-read timeout, not a deadline for the whole
+    request, so a keepalive arriving inside it resets the clock forever. Only the
+    status line and any WWW-Authenticate header matter here, and both land before
+    the body does.
+    """
+
+    @staticmethod
+    def _handler(gap: float, timeout: float):
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+        transport = _StreamableHttpMCPTransport(gap)
+        handler = AsyncHTTPHandler(timeout=timeout)
+        handler.client = httpx.AsyncClient(transport=transport, timeout=timeout)
+        return handler, transport
+
+    @pytest.mark.asyncio
+    async def test_discovery_completes_without_consuming_the_stream(self):
+        manager = MCPServerManager()
+        timeout = 0.2
+        handler, transport = self._handler(gap=timeout / 4, timeout=timeout)
+
+        with (
+            patch(  # test-quality-ok: the fake IS the HTTP boundary, a real httpx.AsyncClient over MockTransport; _discover_metadata_recording_attempts builds its own client with no injection seam, and the other discovery tests in this file substitute it the same way
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+                return_value=handler,
+            ),
+            patch(  # test-quality-ok: a module constant, not wiring; shortened so the read-timeout assertion does not take the production timeout to run
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCP_METADATA_TIMEOUT",
+                timeout,
+            ),
+        ):
+            metadata, attempts = await asyncio.wait_for(
+                manager._discover_metadata_recording_attempts(
+                    "https://stream.example.com/mcp",
+                    allow_origin_fallback=False,
+                ),
+                # Ten keepalives' worth. A buffered read never gets here.
+                timeout=timeout * 10,
+            )
+
+        assert transport.resource_gets == 1
+        # 200 with no RFC 9728 challenge, so discovery falls through to the
+        # well-known lookup and reports that it found nothing.
+        assert metadata is None
+        assert any("HTTP 200 (no RFC 9728 challenge)" in attempt for attempt in attempts)
+
+    @pytest.mark.asyncio
+    async def test_streamed_get_returns_status_and_headers_without_reading_the_body(self):
+        """The AsyncHTTPHandler half, on its own."""
+        timeout = 0.2
+        handler, _ = self._handler(gap=timeout / 4, timeout=timeout)
+
+        response = await asyncio.wait_for(
+            handler.get("https://stream.example.com/mcp", stream=True),
+            timeout=timeout * 10,
+        )
+
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "text/event-stream"
+        assert response.is_stream_consumed is False
+        await response.aclose()
+
+    @pytest.mark.asyncio
+    async def test_buffered_get_is_still_the_default(self):
+        """Control: without stream=True the body is read as before."""
+        handler = None
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+        class _Json(httpx.AsyncBaseTransport):
+            async def handle_async_request(self, request):
+                return httpx.Response(200, json={"ok": True}, request=request)
+
+        handler = AsyncHTTPHandler(timeout=1.0)
+        handler.client = httpx.AsyncClient(transport=_Json(), timeout=1.0)
+
+        response = await handler.get("https://plain.example.com/thing")
+
+        assert response.json() == {"ok": True}
+        assert response.is_stream_consumed is True
