@@ -1,9 +1,9 @@
 import json
 import os
 import time
-from unittest.mock import patch
 
 import pytest
+import responses
 from click.testing import CliRunner
 
 from litellm.proxy.client.cli import cli
@@ -52,32 +52,32 @@ FAILED_ROW = {
 }
 
 
-def _fake_http(rows, payloads):
-    calls = []
+PROXY = "http://localhost:4000"
 
-    class FakeHTTP:
-        def __init__(self, *_args, **_kwargs):
-            pass
 
-        def request(self, method, uri, **kwargs):
-            calls.append(uri)
-            if uri == "/spend/logs/session/ui":
-                assert kwargs["params"]["session_id"] == SESSION
-                return {"data": rows, "total": len(rows), "page": 1, "page_size": 100, "total_pages": 1}
-            request_id = uri.rsplit("/", 1)[1]
-            return payloads.get(request_id)
+def _mock_proxy(rows, payloads):
+    responses.get(
+        f"{PROXY}/spend/logs/session/ui",
+        json={"data": rows, "total": len(rows), "page": 1, "page_size": 100, "total_pages": 1},
+        match=[responses.matchers.query_param_matcher({"session_id": SESSION}, strict_match=False)],
+    )
+    for request_id, payload in payloads.items():
+        responses.get(f"{PROXY}/spend/logs/ui/{request_id}", json=payload)
 
-    return FakeHTTP, calls
+
+def _called_paths():
+    return [c.request.path_url.split("?")[0] for c in responses.calls]
 
 
 @pytest.fixture(autouse=True)
 def env(monkeypatch, tmp_path):
-    monkeypatch.setenv("LITELLM_PROXY_URL", "http://localhost:4000")
+    monkeypatch.setenv("LITELLM_PROXY_URL", PROXY)
     monkeypatch.setenv("LITELLM_PROXY_API_KEY", "sk-test")
     monkeypatch.setattr(debug_module, "REPORT_DIR", tmp_path / "reports")
     monkeypatch.setattr(debug_module, "CLAUDE_DIR", tmp_path / "claude")
 
 
+@responses.activate
 def test_report_includes_spend_error_and_bodies_for_failed_turn(tmp_path):
     payloads = {
         "req-failed": {
@@ -86,9 +86,8 @@ def test_report_includes_spend_error_and_bodies_for_failed_turn(tmp_path):
         },
         "req-ok": {"proxy_server_request": {"body": {"model": "claude-opus-4-1"}}, "response": {"id": "msg_1"}},
     }
-    FakeHTTP, calls = _fake_http([FAILED_ROW, OK_ROW], payloads)
-    with patch.object(debug_module, "HTTPClient", FakeHTTP):
-        result = CliRunner().invoke(cli, ["debug", "claude", "--session-id", SESSION, "--recent-bodies", "0"])
+    _mock_proxy([FAILED_ROW, OK_ROW], payloads)
+    result = CliRunner().invoke(cli, ["debug", "claude", "--session-id", SESSION, "--recent-bodies", "0"])
 
     assert result.exit_code == 0, result.output
     assert "turns: 2, failed: 1" in result.output
@@ -99,40 +98,38 @@ def test_report_includes_spend_error_and_bodies_for_failed_turn(tmp_path):
     assert "`prompt` is required when `stop` is not true." in result.output
     assert '"messages"' in result.output
     assert "msg_1" not in result.output
-    assert calls == ["/spend/logs/session/ui", "/spend/logs/ui/req-failed"]
+    assert _called_paths() == ["/spend/logs/session/ui", "/spend/logs/ui/req-failed"]
     saved = tmp_path / "reports" / f"claude-{SESSION}.md"
     assert result.stdout.startswith(saved.read_text())
     assert "### 2. FAILED" in saved.read_text()
 
 
+@responses.activate
 def test_recent_bodies_fetches_latest_turns_even_when_successful():
-    payloads = {"req-ok": {"proxy_server_request": {"body": {"x": 1}}, "response": {"id": "msg_1"}}}
-    FakeHTTP, calls = _fake_http([OK_ROW], payloads)
-    with patch.object(debug_module, "HTTPClient", FakeHTTP):
-        result = CliRunner().invoke(cli, ["debug", "claude", "--session-id", SESSION, "--no-save"])
+    _mock_proxy([OK_ROW], {"req-ok": {"proxy_server_request": {"body": {"x": 1}}, "response": {"id": "msg_1"}}})
+    result = CliRunner().invoke(cli, ["debug", "claude", "--session-id", SESSION, "--no-save"])
 
     assert result.exit_code == 0, result.output
     assert "msg_1" in result.output
-    assert calls == ["/spend/logs/session/ui", "/spend/logs/ui/req-ok"]
+    assert _called_paths() == ["/spend/logs/session/ui", "/spend/logs/ui/req-ok"]
 
 
+@responses.activate
 def test_bodies_are_truncated_to_max_chars():
-    payloads = {"req-ok": {"proxy_server_request": {"body": "a" * 5000}, "response": None}}
-    FakeHTTP, _ = _fake_http([OK_ROW], payloads)
-    with patch.object(debug_module, "HTTPClient", FakeHTTP):
-        result = CliRunner().invoke(
-            cli, ["debug", "claude", "--session-id", SESSION, "--no-save", "--max-body-chars", "200"]
-        )
+    _mock_proxy([OK_ROW], {"req-ok": {"proxy_server_request": {"body": "a" * 5000}, "response": None}})
+    result = CliRunner().invoke(
+        cli, ["debug", "claude", "--session-id", SESSION, "--no-save", "--max-body-chars", "200"]
+    )
 
     assert result.exit_code == 0, result.output
     assert "truncated" in result.output
     assert "a" * 300 not in result.output
 
 
+@responses.activate
 def test_no_rows_is_a_clear_error():
-    FakeHTTP, _ = _fake_http([], {})
-    with patch.object(debug_module, "HTTPClient", FakeHTTP):
-        result = CliRunner().invoke(cli, ["debug", "claude", "--session-id", SESSION])
+    _mock_proxy([], {})
+    result = CliRunner().invoke(cli, ["debug", "claude", "--session-id", SESSION])
 
     assert result.exit_code != 0
     assert "No spend logs found for session" in result.output
