@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import ExitStack
 from typing import Final
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -23,8 +24,10 @@ def test_mock_provider_preserves_error_response() -> None:
 @pytest.mark.parametrize("request_count", [0, 2])
 def test_mock_provider_rejects_missing_or_duplicate_requests(request_count: int) -> None:
     response: Final = MockProviderResponse(200, (), b"{}")
-    with pytest.raises(AssertionError, match=f"expected one provider request, received {request_count}"):
-        with mock_provider(response) as api_base:
-            for _ in range(request_count):
-                with urlopen(Request(api_base, data=b"{}"), timeout=5) as received:
-                    assert received.read() == response.body
+    with ExitStack() as stack:
+        api_base: Final = stack.enter_context(mock_provider(response))
+        for _ in range(request_count):
+            with urlopen(Request(api_base, data=b"{}"), timeout=5) as received:
+                assert received.read() == response.body
+        with pytest.raises(AssertionError, match=f"expected one provider request, received {request_count}"):
+            stack.close()

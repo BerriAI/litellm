@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, cast
+from unittest.mock import patch
 
 from pydantic import BaseModel, ConfigDict
 
@@ -33,17 +34,12 @@ def _python_engine() -> Generator[None]:
     from litellm.rust_bridge import ocr as ocr_bridge
 
     previous_ocr: Final = ocr_bridge.rust_ocr_enabled()
-    previous_rust: Final = os.environ.get("LITELLM_RUST")
-    os.environ["LITELLM_RUST"] = "false"
-    ocr_bridge.use_litellm_rust(False)
-    try:
-        yield
-    finally:
-        ocr_bridge.use_litellm_rust(previous_ocr)
-        if previous_rust is None:
-            os.environ.pop("LITELLM_RUST", None)
-        else:
-            os.environ["LITELLM_RUST"] = previous_rust
+    with patch.dict(os.environ, {"LITELLM_RUST": "false"}):
+        ocr_bridge.use_litellm_rust(False)
+        try:
+            yield
+        finally:
+            ocr_bridge.use_litellm_rust(previous_ocr)
 
 
 def _invoke(case: Invocation, api_base: str, *, asynchronous: bool) -> object:

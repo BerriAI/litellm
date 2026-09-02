@@ -3,11 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from pathlib import Path
 from typing import Final
-
-if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from tests.sdk_function_trace.fixtures import ROUTES
 from tests.sdk_function_trace.report import compare, render

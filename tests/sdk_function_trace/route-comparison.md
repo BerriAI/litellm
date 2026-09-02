@@ -3,7 +3,7 @@
 Run the four native HTTP route families in both modes from the repository root:
 
 ```bash
-uv run tests/sdk_function_trace/compare.py --route all --both --check
+uv run python -m tests.sdk_function_trace.compare --route all --both --check
 ```
 
 The local fixture matrix on 2026-09-02 completed 15 successful engine invocations and one expected skip. Every successful invocation issued exactly one local HTTP request. All five comparable route/mode pairs have identical canonical steps in the same order, with no Python-only or Rust-only steps
