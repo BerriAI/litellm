@@ -58117,5 +58117,25 @@
         "max_tokens": 8191,
         "mode": "embedding",
         "output_cost_per_token": 0.0
+    },
+    "cloudflare/@cf/openai/whisper": {
+        "input_cost_per_second": 7.5e-06,
+        "litellm_provider": "cloudflare",
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://developers.cloudflare.com/workers-ai/models/whisper/",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
+    "cloudflare/@cf/openai/whisper-large-v3-turbo": {
+        "input_cost_per_second": 8.5e-06,
+        "litellm_provider": "cloudflare",
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://developers.cloudflare.com/workers-ai/models/whisper-large-v3-turbo/",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
     }
 }
