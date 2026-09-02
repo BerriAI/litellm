@@ -21,6 +21,7 @@ This file pins both halves of the fix.
 
 import json
 from dataclasses import dataclass
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -32,6 +33,14 @@ from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import PromptCachingDeploymentCheck
 from litellm.types.router import RetryPolicy, UpdateRouterConfig
+
+
+@pytest.fixture(autouse=True)
+def isolate_litellm_callbacks():
+    callbacks_before: Final = litellm.callbacks.copy()
+    yield
+    litellm.callbacks = callbacks_before
+
 
 # ---------------------------------------------------------------------------
 # UpdateRouterConfig schema membership (LIT-3152 part 1)
