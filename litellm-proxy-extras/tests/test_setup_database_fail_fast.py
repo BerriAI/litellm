@@ -432,3 +432,31 @@ def test_v2_bare_deadlock_stderr_retries(monkeypatch, tmp_path):
 
     ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
     assert ok is True
+
+
+_P1002_ADVISORY_LOCK_STDERR = (
+    "Error: P1002\n\n"
+    "The database server at `127.0.0.1`:`45743` was reached but timed out.\n\n"
+    "Context: Timed out trying to acquire a postgres advisory lock "
+    "(SELECT pg_advisory_lock(72707369)). Elapsed: 10000ms."
+)
+
+
+def test_v2_advisory_lock_timeout_retries(monkeypatch, tmp_path):
+    """v2: the advisory-lock waiter that times out while a peer's retry holds
+    the lock retries instead of dying."""
+    _stub_v2_env(monkeypatch, tmp_path)
+    monkeypatch.setattr("subprocess.run", _succeed_after(2, _P1002_ADVISORY_LOCK_STDERR))
+
+    ok = ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
+    assert ok is True
+
+
+def test_v2_p1002_without_advisory_lock_context_still_raises(monkeypatch, tmp_path):
+    """v2: a plain P1002 (database unreachable) stays fatal."""
+    _stub_v2_env(monkeypatch, tmp_path)
+    stderr = "Error: P1002\n\nThe database server at `db`:`5432` was reached but timed out."
+    monkeypatch.setattr("subprocess.run", _succeed_after(1, stderr))
+
+    with pytest.raises(RuntimeError, match="cannot be auto-recovered"):
+        ProxyExtrasDBManager.setup_database(use_migrate=True, use_v2_resolver=True)
