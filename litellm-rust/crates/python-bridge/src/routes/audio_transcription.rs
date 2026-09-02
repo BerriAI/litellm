@@ -5,10 +5,11 @@ use litellm_python_interop::{from_py, release_gil, to_py};
 use pyo3::prelude::*;
 
 use crate::errors::core_error_to_pyerr;
+use crate::function_trace::trace_call;
 use crate::marshal::{optional_object_to_map, optional_timeout};
 
 #[pyfunction]
-#[pyo3(signature = (model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
+#[pyo3(signature = (model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None, trace=false))]
 #[allow(clippy::too_many_arguments)]
 fn transcription(
     py: Python<'_>,
@@ -20,6 +21,7 @@ fn transcription(
     extra_headers: Option<Py<PyAny>>,
     optional_params: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
+    trace: bool,
 ) -> PyResult<Py<PyAny>> {
     let audio = from_py(audio.bind(py))?;
     let extra_headers = match extra_headers {
@@ -29,8 +31,8 @@ fn transcription(
     let optional_params = optional_object_to_map(py, "optional_params", optional_params)?;
     let timeout = optional_timeout(timeout_seconds);
     let result = release_gil(py, || {
-        pyo3_async_runtimes::tokio::get_runtime().block_on(run_audio_transcription(
-            AudioTranscriptionRequest {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(trace_call(
+            run_audio_transcription(AudioTranscriptionRequest {
                 model: &model,
                 audio,
                 api_key: api_key.as_deref(),
@@ -39,7 +41,8 @@ fn transcription(
                 extra_headers,
                 optional_params,
                 timeout,
-            },
+            }),
+            trace,
         ))
     });
     match result {
@@ -49,7 +52,7 @@ fn transcription(
 }
 
 #[pyfunction]
-#[pyo3(signature = (model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None))]
+#[pyo3(signature = (model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None, trace=false))]
 #[allow(clippy::too_many_arguments)]
 fn atranscription(
     py: Python<'_>,
@@ -61,6 +64,7 @@ fn atranscription(
     extra_headers: Option<Py<PyAny>>,
     optional_params: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
+    trace: bool,
 ) -> PyResult<Bound<'_, PyAny>> {
     let audio = from_py(audio.bind(py))?;
     let extra_headers = match extra_headers {
@@ -70,16 +74,19 @@ fn atranscription(
     let optional_params = optional_object_to_map(py, "optional_params", optional_params)?;
     let timeout = optional_timeout(timeout_seconds);
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let value = run_audio_transcription(AudioTranscriptionRequest {
-            model: &model,
-            audio,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            optional_params,
-            timeout,
-        })
+        let value = trace_call(
+            run_audio_transcription(AudioTranscriptionRequest {
+                model: &model,
+                audio,
+                api_key: api_key.as_deref(),
+                api_base: api_base.as_deref(),
+                custom_llm_provider: custom_llm_provider.as_deref(),
+                extra_headers,
+                optional_params,
+                timeout,
+            }),
+            trace,
+        )
         .await
         .map_err(core_error_to_pyerr)?;
         Python::attach(|py| to_py(py, &value))

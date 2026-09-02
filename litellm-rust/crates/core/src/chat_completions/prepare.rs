@@ -34,6 +34,7 @@ pub(super) fn parse_messages(messages: Value) -> Result<Vec<ChatMessage>, Error>
         .map_err(|err| Error::InvalidRequest(format!("invalid chat completions messages: {err}")))
 }
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) fn prepare_chat_completions_call(
     request: ChatCompletionsRequest<'_>,
 ) -> Result<ProviderChatCompletionsRequest, Error> {

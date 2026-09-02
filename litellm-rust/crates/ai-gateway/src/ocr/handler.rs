@@ -6,6 +6,7 @@ use super::common_utils::{poll_document_intelligence, truncate_error_body};
 use super::types::ProviderOcrRequest;
 use crate::client::http_client;
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(crate) async fn execute_ocr_provider_call(request: ProviderOcrRequest) -> Result<Value, Error> {
     let mut request_builder = http_client().post(&request.url).json(&request.body);
     for (key, value) in &request.upstream_headers {

@@ -10,11 +10,12 @@ use pyo3::prelude::*;
 use serde_json::{Map, Value};
 
 use crate::errors::chat_completions_error_to_pyerr;
+use crate::function_trace::{TraceResponse, trace_call};
 use crate::marshal::{optional_object_to_map, optional_timeout};
 
 fn chat_completions_response_to_py(
     py: Python<'_>,
-    response: ChatCompletionsResponse,
+    response: TraceResponse<ChatCompletionsResponse>,
 ) -> PyResult<Py<PyAny>> {
     to_py(py, &response)
 }
@@ -74,7 +75,7 @@ fn chat_completions_decline(
 }
 
 #[pyfunction]
-#[pyo3(signature = (model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
+#[pyo3(signature = (model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None, trace=false))]
 #[allow(clippy::too_many_arguments)]
 fn chat_completions(
     py: Python<'_>,
@@ -86,6 +87,7 @@ fn chat_completions(
     custom_llm_provider: Option<String>,
     extra_headers: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
+    trace: bool,
 ) -> PyResult<Py<PyAny>> {
     let (messages, optional_params, extra_headers, timeout) = marshal_chat_completions_inputs(
         py,
@@ -96,8 +98,8 @@ fn chat_completions(
     )?;
 
     let result = release_gil(py, || {
-        pyo3_async_runtimes::tokio::get_runtime().block_on(run_chat_completions(
-            ChatCompletionsRequest {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(trace_call(
+            run_chat_completions(ChatCompletionsRequest {
                 model: &model,
                 messages,
                 optional_params,
@@ -106,7 +108,8 @@ fn chat_completions(
                 custom_llm_provider: custom_llm_provider.as_deref(),
                 extra_headers,
                 timeout,
-            },
+            }),
+            trace,
         ))
     });
 
@@ -117,7 +120,7 @@ fn chat_completions(
 }
 
 #[pyfunction]
-#[pyo3(signature = (model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
+#[pyo3(signature = (model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None, trace=false))]
 #[allow(clippy::too_many_arguments)]
 fn achat_completions(
     py: Python<'_>,
@@ -129,6 +132,7 @@ fn achat_completions(
     custom_llm_provider: Option<String>,
     extra_headers: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
+    trace: bool,
 ) -> PyResult<Bound<'_, PyAny>> {
     let (messages, optional_params, extra_headers, timeout) = marshal_chat_completions_inputs(
         py,
@@ -139,16 +143,19 @@ fn achat_completions(
     )?;
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let response = run_chat_completions(ChatCompletionsRequest {
-            model: &model,
-            messages,
-            optional_params,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            timeout,
-        })
+        let response = trace_call(
+            run_chat_completions(ChatCompletionsRequest {
+                model: &model,
+                messages,
+                optional_params,
+                api_key: api_key.as_deref(),
+                api_base: api_base.as_deref(),
+                custom_llm_provider: custom_llm_provider.as_deref(),
+                extra_headers,
+                timeout,
+            }),
+            trace,
+        )
         .await
         .map_err(chat_completions_error_to_pyerr)?;
 

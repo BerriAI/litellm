@@ -19,6 +19,7 @@ use handler::{execute_messages_provider_call, execute_messages_provider_stream};
 use prepare::prepare_messages_call;
 use types::{AnthropicMessagesResponse, MessagesRequest};
 
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn messages(request: MessagesRequest<'_>) -> Result<AnthropicMessagesResponse, Error> {
     execute_messages_provider_call(prepare_messages_call(request)?).await
 }

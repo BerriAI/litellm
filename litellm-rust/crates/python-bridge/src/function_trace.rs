@@ -1,6 +1,8 @@
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
+use tracing::instrument::WithSubscriber;
 use tracing::span::{Attributes, Id};
 use tracing::{Dispatch, Level, Subscriber};
 use tracing_subscriber::filter::{LevelFilter, filter_fn};
@@ -10,6 +12,31 @@ use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{Layer, Registry};
 
 use crate::constants::FUNCTION_TRACE_TARGET;
+
+#[derive(Serialize)]
+#[serde(untagged)]
+pub(crate) enum TraceResponse<T> {
+    Plain(T),
+    Traced {
+        response: T,
+        trace: Vec<FunctionTraceEvent>,
+    },
+}
+
+pub(crate) async fn trace_call<T, E>(
+    future: impl Future<Output = Result<T, E>>,
+    enabled: bool,
+) -> Result<TraceResponse<T>, E> {
+    if !enabled {
+        return future.await.map(TraceResponse::Plain);
+    }
+    let trace = FunctionTrace::default();
+    let response = future.with_subscriber(trace.dispatcher()).await?;
+    Ok(TraceResponse::Traced {
+        response,
+        trace: trace.events(),
+    })
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct FunctionTraceEvent {
