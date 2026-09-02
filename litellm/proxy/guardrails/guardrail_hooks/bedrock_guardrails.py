@@ -32,6 +32,7 @@ from litellm.caching import DualCache
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.exceptions import ModifyResponseException
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
 from litellm.litellm_core_utils.litellm_logging import (
     _get_masked_values,  # pyright: ignore[reportPrivateUsage]  # the shared header-masking helper has no public name
@@ -296,6 +297,16 @@ def _redact_assessment_match_fields(assessments: list[dict]) -> list[dict]:
     """
     redacted: Final = redact_nested_match_and_regex_keys(assessments)
     return redacted if isinstance(redacted, list) else assessments
+
+
+_RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
+
+
+def _is_responses_api_route(request_route: str | None) -> bool:
+    if request_route is None:
+        return False
+    call_types: Final = get_call_types_for_route(request_route)
+    return call_types is not None and any(call_type in _RESPONSES_API_CALL_TYPES for call_type in call_types)
 
 
 class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
@@ -3101,6 +3112,24 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 buffer_until_moderated_default=False,
             ):
                 yield streamed_chunk
+            return
+
+        # Responses-API events are neither chat-completions chunks nor raw
+        # Anthropic SSE, so the assembly below cannot scan them; the unified
+        # guardrail's translation layer can, with buffering semantics kept.
+        if _is_responses_api_route(user_api_key_dict.request_route):
+            from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+                UnifiedLLMGuardrails,
+            )
+
+            async for translated_chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_data=request_data,
+                guardrail_to_apply=self,
+                buffer_until_moderated_default=True,
+            ):
+                yield translated_chunk
             return
 
         # Import here to avoid circular imports

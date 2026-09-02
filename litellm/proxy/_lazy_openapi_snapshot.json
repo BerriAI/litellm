@@ -32012,6 +32012,62 @@
           "title": "SCIMPatchOperation",
           "type": "object"
         },
+        "SCIMPlaceholder": {
+          "description": "A user row keyed by a value that names another account by SSO identity or email.",
+          "properties": {
+            "placeholder_user_id": {
+              "title": "Placeholder User Id",
+              "type": "string"
+            },
+            "resolved_user_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Resolved User Ids",
+              "type": "array"
+            },
+            "team_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Team Ids",
+              "type": "array"
+            }
+          },
+          "required": [
+            "placeholder_user_id",
+            "resolved_user_ids",
+            "team_ids"
+          ],
+          "title": "SCIMPlaceholder",
+          "type": "object"
+        },
+        "SCIMPlaceholderMergeResult": {
+          "properties": {
+            "merged_into_user_id": {
+              "title": "Merged Into User Id",
+              "type": "string"
+            },
+            "placeholder_user_id": {
+              "title": "Placeholder User Id",
+              "type": "string"
+            },
+            "team_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Team Ids",
+              "type": "array"
+            }
+          },
+          "required": [
+            "placeholder_user_id",
+            "merged_into_user_id",
+            "team_ids"
+          ],
+          "title": "SCIMPlaceholderMergeResult",
+          "type": "object"
+        },
         "SCIMServiceProviderConfig": {
           "properties": {
             "authenticationSchemes": {
@@ -33647,6 +33703,129 @@
             }
           ],
           "summary": "Update User",
+          "tags": [
+            "scim"
+          ]
+        }
+      },
+      "/scim/v2/placeholders": {
+        "get": {
+          "description": "List user rows whose id is another account's SSO identity or email.\n\nAn earlier release provisioned a group member it could not match as a user keyed\nby the raw member value, and that row now shadows the account the value really\nnames, so every push of that member is refused. This lists those rows so an\noperator can fold each one into the account it shadows with\n``POST /scim/v2/placeholders/{user_id}/merge``. A row that has an SSO identity of\nits own or owns virtual keys is left out: someone uses that account.",
+          "operationId": "list_placeholders_scim_v2_placeholders_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "feature",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Feature"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "$ref": "#/components/schemas/SCIMPlaceholder"
+                    },
+                    "title": "Response List Placeholders Scim V2 Placeholders Get",
+                    "type": "array"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Placeholders",
+          "tags": [
+            "scim"
+          ]
+        }
+      },
+      "/scim/v2/placeholders/{user_id}/merge": {
+        "post": {
+          "description": "Fold a placeholder user into the one account its id names by SSO identity or email.\n\nThe account is added to every team the placeholder is on, then the placeholder is\ndeleted the way ``DELETE /scim/v2/Users/{id}`` deletes a user, so the next group\npush resolves the member value to the real account. Refused with 409 when the row\nhas an SSO identity of its own, owns virtual keys, or names no account or several.",
+          "operationId": "merge_placeholder_scim_v2_placeholders__user_id__merge_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "user_id",
+              "required": true,
+              "schema": {
+                "title": "User ID",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "feature",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Feature"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SCIMPlaceholderMergeResult"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Merge Placeholder",
           "tags": [
             "scim"
           ]
