@@ -4,11 +4,9 @@ from collections.abc import AsyncIterable, Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from typing import Final, Literal, TypeAlias
 
-from pydantic import BaseModel
-
-from tests.route_parity.compare import public_model_copy
+from tests.route_parity.compare import assert_value_parity
 from tests.route_parity.models import (
-    SDKChunk,
+    SDKError,
     SDKReport,
     SDKStreamCompleted,
     SDKStreamFailed,
@@ -27,9 +25,7 @@ class StreamCompleted:
 class StreamFailed:
     phase: Literal["creation", "iteration"]
     exception_type: type[BaseException]
-    status_code: int | None
-    llm_provider: str | None
-    model: str | None
+    error: SDKError
     kind: Literal["failed"] = "failed"
 
 
@@ -60,51 +56,34 @@ async def drain_async_stream(stream: AsyncIterable[object]) -> None:
 
 
 def capture_sync_stream(create: Callable[[], Iterable[object]]) -> SDKReport:
-    try:
-        stream: Final = create()
-    except Exception as error:
-        return sdk_error_report(error)
-
-    chunks: list[SDKChunk] = []  # mutable-ok: partial chunks must survive an iteration failure
-    try:
-        for chunk in stream:
-            chunks.append(sdk_chunk(chunk))
-    except Exception as error:
-        return SDKStreamReport(chunks=tuple(chunks), terminal=SDKStreamFailed(error=sdk_error_report(error)))
-    return SDKStreamReport(chunks=tuple(chunks), terminal=SDKStreamCompleted())
+    return _stream_report(consume_sync_stream(create))
 
 
 async def capture_async_stream(create: Callable[[], Awaitable[AsyncIterable[object]]]) -> SDKReport:
-    try:
-        stream: Final = await create()
-    except Exception as error:
-        return sdk_error_report(error)
-
-    chunks: list[SDKChunk] = []  # mutable-ok: partial chunks must survive an iteration failure
-    try:
-        async for chunk in stream:
-            chunks.append(sdk_chunk(chunk))
-    except Exception as error:
-        return SDKStreamReport(chunks=tuple(chunks), terminal=SDKStreamFailed(error=sdk_error_report(error)))
-    return SDKStreamReport(chunks=tuple(chunks), terminal=SDKStreamCompleted())
+    return _stream_report(await consume_async_stream(create))
 
 
-def _failed(phase: Literal["creation", "iteration"], error: BaseException) -> StreamFailed:
-    status_code: Final = getattr(error, "status_code", None)
-    llm_provider: Final = getattr(error, "llm_provider", None)
-    model: Final = getattr(error, "model", None)
+def _stream_report(outcome: StreamOutcome) -> SDKReport:
+    terminal: Final = outcome.terminal
+    if isinstance(terminal, StreamFailed) and terminal.phase == "creation":
+        return terminal.error
+    return SDKStreamReport(
+        chunks=tuple(sdk_chunk(chunk) for chunk in outcome.chunks),
+        terminal=SDKStreamFailed(error=terminal.error) if isinstance(terminal, StreamFailed) else SDKStreamCompleted(),
+    )
+
+
+def _failed(phase: Literal["creation", "iteration"], error: Exception) -> StreamFailed:
     return StreamFailed(
         phase=phase,
         exception_type=type(error),
-        status_code=status_code if isinstance(status_code, int) else None,
-        llm_provider=llm_provider if isinstance(llm_provider, str) else None,
-        model=model if isinstance(model, str) else None,
+        error=sdk_error_report(error),
     )
 
 
 def consume_sync_stream(create: Callable[[], Iterable[object]]) -> StreamOutcome:
     try:
-        stream = create()
+        stream: Final = create()
     except Exception as error:
         return StreamOutcome(
             wrapper_type=None,
@@ -142,7 +121,7 @@ def consume_sync_stream(create: Callable[[], Iterable[object]]) -> StreamOutcome
 
 async def consume_async_stream(create: Callable[[], Awaitable[AsyncIterable[object]]]) -> StreamOutcome:
     try:
-        stream = await create()
+        stream: Final = await create()
     except Exception as error:
         return StreamOutcome(
             wrapper_type=None,
@@ -179,8 +158,6 @@ async def consume_async_stream(create: Callable[[], Awaitable[AsyncIterable[obje
 
 
 def normalize_chunk(chunk: object) -> object:
-    if isinstance(chunk, BaseModel):
-        return public_model_copy(chunk)
     return chunk
 
 
@@ -195,6 +172,6 @@ def assert_stream_parity(
     assert baseline.supports_async_iteration is candidate.supports_async_iteration
     assert baseline.chunk_types == candidate.chunk_types
     assert len(baseline.chunks) == len(candidate.chunks)
-    for baseline_chunk, candidate_chunk in zip(baseline.chunks, candidate.chunks, strict=True):
-        assert normalize(baseline_chunk) == normalize(candidate_chunk)
+    for index, (baseline_chunk, candidate_chunk) in enumerate(zip(baseline.chunks, candidate.chunks, strict=True)):
+        assert_value_parity(normalize(baseline_chunk), normalize(candidate_chunk), path=f"$.chunks[{index}]")
     assert baseline.terminal == candidate.terminal

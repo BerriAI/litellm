@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Final, TypeVar, cast
+from typing import Final, cast
 
 from pydantic import BaseModel
 
 from tests.route_parity.models import CapturedRequest, Execution
-
-ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
 def validate_harness(baseline: Execution, candidate: Execution, baseline_user_agent: str) -> None:
@@ -29,31 +27,35 @@ def _request_after_transformation(request: CapturedRequest) -> CapturedRequest:
 def assert_request_parity(baseline: tuple[CapturedRequest, ...], candidate: tuple[CapturedRequest, ...]) -> None:
     baseline_requests: Final = tuple(_request_after_transformation(request) for request in baseline)
     candidate_requests: Final = tuple(_request_after_transformation(request) for request in candidate)
-    assert baseline_requests == candidate_requests
+    assert_value_parity(baseline_requests, candidate_requests)
 
 
-def public_model_copy(model: ModelT) -> ModelT:
-    copied: Final = model.model_copy(deep=True)
-    object.__setattr__(copied, "__pydantic_private__", None)
-    return copied
+def _public_model_values(model: BaseModel) -> dict[str, object]:
+    fields: Final = (*type(model).model_fields, *type(model).model_computed_fields)
+    extras: Final = cast(Mapping[str, object], model.model_extra or {})
+    return {
+        **{name: cast(object, getattr(model, name)) for name in fields if not name.startswith("_")},
+        **{name: value for name, value in extras.items() if not name.startswith("_")},
+    }
 
 
 def assert_model_parity(baseline: BaseModel, candidate: BaseModel) -> None:
-    assert type(baseline) is type(candidate)
-    _assert_value_parity(
-        public_model_copy(baseline).model_dump(mode="python"),
-        public_model_copy(candidate).model_dump(mode="python"),
-        path="$",
-    )
+    assert_value_parity(baseline, candidate)
 
 
-def _assert_value_parity(baseline: object, candidate: object, *, path: str) -> None:
+def assert_value_parity(baseline: object, candidate: object, *, path: str = "$") -> None:
+    assert type(baseline) is type(candidate), f"type mismatch at {path}: {type(baseline)} != {type(candidate)}"
+    if isinstance(baseline, BaseModel) and isinstance(candidate, BaseModel):
+        assert_value_parity(_public_model_values(baseline), _public_model_values(candidate), path=path)
+        return
     if isinstance(baseline, Mapping) and isinstance(candidate, Mapping):
         baseline_mapping: Final = cast(Mapping[object, object], baseline)
         candidate_mapping: Final = cast(Mapping[object, object], candidate)
-        assert baseline_mapping.keys() == candidate_mapping.keys(), f"mapping keys differ at {path}"
+        assert frozenset((type(key), key) for key in baseline_mapping) == frozenset(
+            (type(key), key) for key in candidate_mapping
+        ), f"mapping keys differ at {path}"
         for key in baseline_mapping:
-            _assert_value_parity(baseline_mapping[key], candidate_mapping[key], path=f"{path}.{key}")
+            assert_value_parity(baseline_mapping[key], candidate_mapping[key], path=f"{path}.{key}")
         return
     if (
         isinstance(baseline, Sequence)
@@ -64,8 +66,10 @@ def _assert_value_parity(baseline: object, candidate: object, *, path: str) -> N
         baseline_sequence: Final = cast(Sequence[object], baseline)
         candidate_sequence: Final = cast(Sequence[object], candidate)
         assert len(baseline_sequence) == len(candidate_sequence), f"sequence lengths differ at {path}"
-        for index, (baseline_item, candidate_item) in enumerate(zip(baseline_sequence, candidate_sequence)):
-            _assert_value_parity(baseline_item, candidate_item, path=f"{path}[{index}]")
+        for index, (baseline_item, candidate_item) in enumerate(
+            zip(baseline_sequence, candidate_sequence, strict=True)
+        ):
+            assert_value_parity(baseline_item, candidate_item, path=f"{path}[{index}]")
         return
     assert baseline == candidate, f"value mismatch at {path}: {baseline!r} != {candidate!r}"
 
@@ -73,4 +77,4 @@ def _assert_value_parity(baseline: object, candidate: object, *, path: str) -> N
 def assert_parity(baseline: Execution, candidate: Execution, baseline_user_agent: str) -> None:
     validate_harness(baseline, candidate, baseline_user_agent)
     assert_request_parity(baseline.requests, candidate.requests)
-    assert baseline.report == candidate.report
+    assert_value_parity(baseline.report, candidate.report)

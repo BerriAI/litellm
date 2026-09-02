@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import Final, Generic, TypeVar
 
 from tests.route_parity.models import CapturedRequest
 from tests.route_parity.recorded_http import RecordedResponse
@@ -25,7 +25,22 @@ def run_in_process(
     for recorded_response in recorded_responses:
         provider.enqueue_response(recorded_response)
     try:
-        response = call(provider.url)
+        response: Final = call(provider.url)
+        return InProcessExecution(requests=provider.take_requests(len(recorded_responses)), response=response)
+    except Exception:
+        provider.reset()
+        raise
+
+
+async def run_in_process_async(
+    provider: ReplayServer,
+    recorded_responses: tuple[RecordedResponse, ...],
+    call: Callable[[str], Awaitable[ResponseT]],
+) -> InProcessExecution[ResponseT]:
+    for recorded_response in recorded_responses:
+        provider.enqueue_response(recorded_response)
+    try:
+        response: Final = await call(provider.url)
         return InProcessExecution(requests=provider.take_requests(len(recorded_responses)), response=response)
     except Exception:
         provider.reset()

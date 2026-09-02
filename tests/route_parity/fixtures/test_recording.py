@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+import asyncio
+import queue
 import threading
-from collections.abc import Callable, Generator
+from collections.abc import AsyncIterator, Callable, Generator, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 import pytest
 from hypothesis import strategies as st
+from openai._streaming import SSEDecoder
 from pydantic import BaseModel, ConfigDict
 
+from tests.route_parity.compare import assert_request_parity
 from tests.route_parity.fixtures.pipeline import RecordingTarget, record_fixtures
 from tests.route_parity.fixtures.recording import (
     UpstreamEndpoint,
@@ -22,21 +26,100 @@ from tests.route_parity.fixtures.recording import (
 from tests.route_parity.fixtures.store import (
     FIXTURE_SCHEMA_VERSION,
     fixture_path,
+    load_fixture,
     recorded_fixtures,
 )
+from tests.route_parity.inprocess import InProcessExecution, run_in_process, run_in_process_async
 from tests.route_parity.recorded_http import (
     HttpHeader,
     RecordedHttpStreamResponse,
     RecordedResponse,
     RecordedStreamChunk,
 )
-from tests.route_parity.replay import replay_server
+from tests.route_parity.replay import ReplayServer, replay_server
+from tests.route_parity.stream import (
+    StreamCompleted,
+    StreamFailed,
+    StreamOutcome,
+    assert_stream_parity,
+    consume_async_stream,
+    consume_sync_stream,
+)
 
 _SSE_CHUNKS: Final = (
     b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n',
     b'data: {"choices":[{"delta":{"content":" world"}}]}\n\n',
     b"data: [DONE]\n\n",
 )
+
+
+class _StreamEvent(BaseModel):
+    kind: Literal["delta", "done", "error"]
+    value: str
+
+
+class _StreamApplicationError(Exception):
+    status_code: Final = 400
+    code: Final = "invalid_input"
+    type: Final = "validation_error"
+    param: Final = "input"
+    model: Final = "fixture-model"
+    llm_provider: Final = "fixture-provider"
+
+
+def _stream_event(data: str) -> _StreamEvent:
+    event: Final = _StreamEvent.model_validate_json(data)
+    if event.kind == "error":
+        raise _StreamApplicationError(event.value)
+    return event
+
+
+def _event_chunks(failed: bool) -> tuple[bytes, ...]:
+    terminal: Final = (
+        b'event: error\r\ndata: {"kind":"error","value":"invalid input"}\r\n\r\n'
+        if failed
+        else b'event: done\r\ndata: {"kind":"done","value":""}\r\n\r\n'
+    )
+    return (
+        b'event: delta\r\ndata: {"kind":"delta",\r\ndata: "value":"caf\xc3',
+        b'\xa9"}\r\n',
+        b'\r\nevent: delta\r\ndata: {"kind":"delta","value":"second"}\r\n\r\n' + terminal,
+    )
+
+
+def _sync_events(api_base: str, case_input: _FixtureInput) -> Iterator[_StreamEvent]:
+    with httpx.stream("POST", f"{api_base}/stream", json={"id": case_input.identifier}, timeout=5) as response:
+        response.raise_for_status()
+        for event in SSEDecoder().iter_bytes(response.iter_bytes()):
+            yield _stream_event(event.data)
+
+
+async def _async_events(api_base: str, case_input: _FixtureInput) -> AsyncIterator[_StreamEvent]:
+    async with httpx.AsyncClient(timeout=5) as client:
+        async with client.stream("POST", f"{api_base}/stream", json={"id": case_input.identifier}) as response:
+            response.raise_for_status()
+            async for event in SSEDecoder().aiter_bytes(response.aiter_bytes()):
+                yield _stream_event(event.data)
+
+
+async def _consume_async_events(api_base: str, case_input: _FixtureInput) -> StreamOutcome:
+    async def create() -> AsyncIterator[_StreamEvent]:
+        return _async_events(api_base, case_input)
+
+    return await consume_async_stream(create)
+
+
+async def _replay_events(
+    mode: Literal["sync", "async"],
+    provider: ReplayServer,
+    response: RecordedHttpStreamResponse,
+    case_input: _FixtureInput,
+) -> InProcessExecution[StreamOutcome]:
+    if mode == "sync":
+        return run_in_process(
+            provider, (response,), lambda url: consume_sync_stream(lambda: _sync_events(url, case_input))
+        )
+    return await run_in_process_async(provider, (response,), lambda url: _consume_async_events(url, case_input))
 
 
 class _FixtureInput(BaseModel):
@@ -66,8 +149,9 @@ class _Invocation:
 class _ControlledUpstream(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self) -> None:
+    def __init__(self, stream_chunks: tuple[bytes, ...]) -> None:
         super().__init__(("127.0.0.1", 0), _ControlledUpstreamHandler)
+        self.stream_chunks: Final = stream_chunks
         self.lock: Final = threading.Lock()
         self.two_requests_started: Final = threading.Event()
         self.active_requests: int = 0
@@ -116,14 +200,14 @@ class _ControlledUpstreamHandler(BaseHTTPRequestHandler):
             self.send_header("content-length", "0")
             self.end_headers()
             return
-        if self.path == "/v1/chat/completions":
+        if self.path in {"/v1/chat/completions", "/stream"}:
             with upstream.lock:
                 upstream.request_count += 1
             self.send_response(200)
             self.send_header("content-type", "text/event-stream")
             self.send_header("transfer-encoding", "chunked")
             self.end_headers()
-            for chunk in _SSE_CHUNKS:
+            for chunk in upstream.stream_chunks:
                 self.wfile.write(f"{len(chunk):X}\r\n".encode("ascii"))
                 self.wfile.write(chunk)
                 self.wfile.write(b"\r\n")
@@ -173,8 +257,8 @@ class _ControlledUpstreamHandler(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def _controlled_upstream() -> Generator[_ControlledUpstream]:
-    server: Final = _ControlledUpstream()
+def _controlled_upstream(stream_chunks: tuple[bytes, ...] = _SSE_CHUNKS) -> Generator[_ControlledUpstream]:
+    server: Final = _ControlledUpstream(stream_chunks)
     thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -430,3 +514,61 @@ def test_multiple_provider_calls_record_and_replay_in_order(
         requests: Final = provider.take_requests(2)
 
     assert len(requests) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("sync", "async"))
+@pytest.mark.parametrize("failed", (False, True), ids=("completed", "application-error"))
+async def test_typed_stream_recording_cassette_replay_parity(
+    tmp_path: Path, mode: Literal["sync", "async"], failed: bool
+) -> None:
+    case_input: Final = _case("typed-stream")
+    outcomes: Final[queue.SimpleQueue[StreamOutcome]] = queue.SimpleQueue()
+
+    def record(api_base: str, sdk_input: _FixtureInput) -> None:
+        outcome: Final = (
+            consume_sync_stream(lambda: _sync_events(api_base, sdk_input))
+            if mode == "sync"
+            else asyncio.run(_consume_async_events(api_base, sdk_input))
+        )
+        outcomes.put(outcome)
+
+    with _controlled_upstream(_event_chunks(failed)) as upstream:
+        target: Final = RecordingTarget(
+            name="stream",
+            upstream=UpstreamEndpoint(upstream.url),
+            strategy=st.just(case_input),
+            invocation=_Invocation(record),
+        )
+        summary: Final = record_fixtures((target,), tmp_path, 1, 1, _ParityCase)
+
+    assert summary.failed == ()
+    assert len(summary.recorded) == 1
+    recorded: Final = outcomes.get_nowait()
+    loaded: Final = load_fixture(tmp_path / "stream", case_input, _ParityCase)
+    assert loaded is not None
+    response: Final = loaded.provider_responses[0]
+    assert isinstance(response, RecordedHttpStreamResponse)
+    assert response.status_code == 200
+    wire_bytes: Final = b"".join(chunk.data_bytes() for chunk in response.chunks)
+    assert wire_bytes == b"".join(_event_chunks(failed))
+    coalesced: Final = response.model_copy(update={"chunks": (RecordedStreamChunk.from_bytes(wire_bytes),)})
+
+    with replay_server() as provider:
+        first: Final = await _replay_events(mode, provider, response, case_input)
+        second: Final = await _replay_events(mode, provider, coalesced, case_input)
+    assert_request_parity(first.requests, second.requests)
+    assert len(first.requests) == 1
+    assert first.requests[0].body == {"id": case_input.identifier}
+    assert_stream_parity(recorded, first.response)
+    assert_stream_parity(first.response, second.response)
+    expected: Final = (_StreamEvent(kind="delta", value="café"), _StreamEvent(kind="delta", value="second"))
+    assert first.response.chunks == (expected if failed else (*expected, _StreamEvent(kind="done", value="")))
+    if failed:
+        assert isinstance(first.response.terminal, StreamFailed)
+        assert first.response.terminal.phase == "iteration"
+        assert first.response.terminal.exception_type is _StreamApplicationError
+        assert first.response.terminal.error.code == "invalid_input"
+        assert first.response.terminal.error.message == "invalid input"
+    else:
+        assert first.response.terminal == StreamCompleted()

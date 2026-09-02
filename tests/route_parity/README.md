@@ -21,6 +21,30 @@
 - Every test saves and restores the original bridge state
 - A small subprocess smoke test verifies environment-based startup configuration and detects fallback to the Python HTTP implementation
 
+## Streaming execution
+
+The invocation callback passed to `run_in_process` must consume the stream before returning its `StreamOutcome`.
+Use `consume_sync_stream` inside that callback, or await `consume_async_stream` inside the callback passed to
+`run_in_process_async`. Provider requests are collected only after the callback completes. Streaming is explicit:
+an iterable return value alone does not select stream consumption
+
+The consumers retain the wrapper type, iteration capabilities, chunk types and order, and any partial output before
+an error. Errors retain their creation or iteration phase and the full public `SDKError` fields, with traceback text
+removed. `capture_sync_stream` and `capture_async_stream` consume through the same helpers and then serialize the
+outcome for subprocess reports. A serialization failure raises as a harness failure rather than becoming an SDK error
+
+Response models and stream chunks share a recursive comparator. It compares concrete model, container, and scalar
+types, public fields and extras, and exact values while ignoring Pydantic private attributes at every nesting level.
+An API may supply an explicit chunk normalizer for its public contract
+
+Shared tests exercise a local SSE provider through recording, VCR cassette storage, replay, and typed event comparison
+in sync and async modes. They cover fragmented events, split UTF-8 characters, CRLF framing, coalesced events, and
+application errors within a normally completed HTTP stream. HTTP byte boundaries and decoded SDK event boundaries
+are checked separately
+
+OCR remains the only integrated LiteLLM route. These tests validate shared streaming machinery, not another route's
+SDK parity. Connection interruption, early cancellation, and lifecycle timeout enforcement remain outside this coverage
+
 ## Hypothesis and property-based testing
 
 - Hypothesis is a Python library for property-based testing

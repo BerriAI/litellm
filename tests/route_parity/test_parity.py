@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from types import MappingProxyType
 from typing import Final
 
 import pytest
-from pydantic import BaseModel, JsonValue, PrivateAttr
+from pydantic import BaseModel, ConfigDict, JsonValue, PrivateAttr
 
 from tests.route_parity.compare import assert_model_parity, assert_parity
 from tests.route_parity.models import CapturedRequest, Execution, SDKError, SDKSuccess, sdk_error_report
@@ -25,6 +26,12 @@ class _DifferentResponse(BaseModel):
 
 class _FloatResponse(BaseModel):
     values: list[float]
+
+
+class _PublicValue(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    value: object
 
 
 class _PublicError(ValueError):
@@ -135,4 +142,49 @@ def test_model_parity_rejects_meaningful_float_difference() -> None:
         assert_model_parity(
             _FloatResponse(values=[0.22590550796036835]),
             _FloatResponse(values=[0.2259]),
+        )
+
+
+@pytest.mark.parametrize(
+    ("baseline", "candidate"),
+    (
+        (_ComparableResponse(value="same"), {"value": "same"}),
+        (_ComparableResponse(value="same"), _DifferentResponse(value="same")),
+        (True, 1),
+        (1, 1.0),
+        (["same"], ("same",)),
+        ({"value": "same"}, MappingProxyType({"value": "same"})),
+        ({True: "same"}, {1: "same"}),
+    ),
+    ids=("model-dict", "model-class", "bool-int", "int-float", "list-tuple", "mapping-class", "key-type"),
+)
+def test_model_parity_rejects_nested_type_changes(baseline: object, candidate: object) -> None:
+    with pytest.raises(AssertionError, match=r"\$\.value\[0\]"):
+        assert_model_parity(_PublicValue(value=[baseline]), _PublicValue(value=[candidate]))
+
+
+def test_model_parity_ignores_nested_private_attributes() -> None:
+    baseline: Final = _ComparableResponse(value="same")
+    candidate: Final = _ComparableResponse(value="same")
+    baseline.set_hidden_param("request_id", "baseline")
+    candidate.set_hidden_param("request_id", "candidate")
+
+    assert_model_parity(_PublicValue(value={"nested": [baseline]}), _PublicValue(value={"nested": [candidate]}))
+
+
+@pytest.mark.parametrize("extras", ({"provider_value": "changed"}, {}, {"provider_value": {"value": "same"}}))
+def test_model_parity_compares_public_extras(extras: dict[str, object]) -> None:
+    baseline: Final = _PublicValue.model_validate({"value": None, "provider_value": _ComparableResponse(value="same")})
+    candidate: Final = _PublicValue.model_validate({"value": None, **extras})
+
+    with pytest.raises(AssertionError):
+        assert_model_parity(baseline, candidate)
+
+
+def test_serialized_parity_rejects_boolean_integer_substitution() -> None:
+    with pytest.raises(AssertionError, match="type mismatch"):
+        assert_parity(
+            _execution(body={"enabled": True}, user_agent=SENTINEL),
+            _execution(body={"enabled": 1}, user_agent="candidate"),
+            SENTINEL,
         )
