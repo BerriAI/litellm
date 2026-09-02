@@ -1,4 +1,5 @@
 use litellm_core::error::Error;
+use litellm_core::http_utils::http_request;
 use litellm_core::ocr::transformation::OcrResponseHandling;
 use serde_json::Value;
 
@@ -16,8 +17,7 @@ pub(crate) async fn execute_ocr_provider_call(request: ProviderOcrRequest) -> Re
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = request_builder
-        .send()
+    let response = http_request(request_builder)
         .await
         .map_err(|err| Error::Network(err.to_string()))?;
 

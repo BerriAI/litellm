@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from tests.sdk_function_trace.mock_provider import MockProviderResponse, mock_provider
 from tests.sdk_function_trace.profiler import FunctionTraceEvent, profile_python
-from tests.sdk_function_trace.steps import pipeline_steps
+from tests.sdk_function_trace.steps import Engine, pipeline_issues, pipeline_steps
 
 ROUTES: Final = ("chat_completions", "audio_transcription", "messages", "ocr")
 ANTHROPIC_MODEL: Final = "claude-sonnet-5"
@@ -208,6 +208,29 @@ class TraceDiff:
     shared_order_matches: bool
 
 
+@dataclass(frozen=True, slots=True)
+class TraceRun:
+    events: tuple[FunctionTraceEvent, ...] = ()
+    error: str | None = None
+    skipped: bool = False
+
+
+def attempt_trace(route: str, *, engine: Engine, asynchronous: bool) -> TraceRun:
+    try:
+        return TraceRun(events=run_trace(route, rust=engine == "rust", asynchronous=asynchronous))
+    except Exception as error:
+        return TraceRun(
+            error=f"{type(error).__name__}: {error}",
+            skipped=(
+                route == "messages"
+                and engine == "python"
+                and not asynchronous
+                and isinstance(error, ValueError)
+                and str(error) == "anthropic_messages_handler is not implemented for sync calls"
+            ),
+        )
+
+
 def trace_diff(python: tuple[FunctionTraceEvent, ...], rust: tuple[FunctionTraceEvent, ...]) -> TraceDiff:
     python_names: Final = {event.function for event in python}
     rust_names: Final = {event.function for event in rust}
@@ -216,7 +239,7 @@ def trace_diff(python: tuple[FunctionTraceEvent, ...], rust: tuple[FunctionTrace
     return TraceDiff(
         python_only=tuple(event.function for event in python if event.function not in rust_names),
         rust_only=tuple(event.function for event in rust if event.function not in python_names),
-        shared_order_matches=shared_python == shared_rust,
+        shared_order_matches=bool(shared_python) and shared_python == shared_rust,
     )
 
 
@@ -233,36 +256,56 @@ def _print_tree(
         sys.stdout.write(f"{color}{line}{_RESET}\n" if colorize and event.function in only else f"{line}\n")
 
 
-def report(route: str, *, asynchronous: bool, full: bool) -> None:
+def report(route: str, *, asynchronous: bool, full: bool) -> bool:
     case: Final = invocation(route, rust=False, asynchronous=asynchronous)
-    python_events: Final = run_trace(route, rust=False, asynchronous=asynchronous)
-    rust_events: Final = run_trace(route, rust=True, asynchronous=asynchronous)
-    python_steps: Final = python_events if full else pipeline_steps(route, "python", python_events)
-    rust_steps: Final = rust_events if full else pipeline_steps(route, "rust", rust_events)
+    python: Final = attempt_trace(route, engine="python", asynchronous=asynchronous)
+    rust: Final = attempt_trace(route, engine="rust", asynchronous=asynchronous)
+    python_steps: Final = pipeline_steps(route, "python", python.events)
+    rust_steps: Final = pipeline_steps(route, "rust", rust.events)
     diff: Final = trace_diff(python_steps, rust_steps)
     sys.stdout.write(f"route: {route}    provider: {case.label}    mode: {'async' if asynchronous else 'sync'}\n\n")
     colorize: Final = sys.stdout.isatty() and "NO_COLOR" not in os.environ
-    sys.stdout.write(f"python ({len(python_steps)} steps)\n\n")
-    _print_tree(
-        python_steps,
-        frozenset() if full else frozenset(diff.python_only),
-        "<- python only",
-        _PYTHON_ONLY_COLOR,
-        colorize=colorize,
+    cases: Final[tuple[tuple[Engine, TraceRun, tuple[FunctionTraceEvent, ...]], ...]] = (
+        ("python", python, python_steps),
+        ("rust", rust, rust_steps),
     )
-    sys.stdout.write(f"\nrust ({len(rust_steps)} steps)\n\n")
-    _print_tree(
-        rust_steps,
-        frozenset() if full else frozenset(diff.rust_only),
-        "<- rust only",
-        _RUST_ONLY_COLOR,
-        colorize=colorize,
+    issues: Final = tuple(
+        (engine, () if result.error else pipeline_issues(route, engine, steps)) for engine, result, steps in cases
     )
-    order: Final = "the same" if diff.shared_order_matches else "a different"
-    sys.stdout.write("\ndiff\n\n")
-    sys.stdout.write(f"shared steps appear in {order} order\n")
-    sys.stdout.write(f"python-only: {', '.join(diff.python_only) or 'none'}\n")
-    sys.stdout.write(f"rust-only: {', '.join(diff.rust_only) or 'none'}\n\n")
+    for engine, result, shown, only, color in (
+        ("python", python, python.events if full else python_steps, diff.python_only, _PYTHON_ONLY_COLOR),
+        ("rust", rust, rust.events if full else rust_steps, diff.rust_only, _RUST_ONLY_COLOR),
+    ):
+        if result.error:
+            sys.stdout.write(f"{engine}: {'SKIP' if result.skipped else 'FAIL'} ({result.error})\n\n")
+            continue
+        sys.stdout.write(f"{engine} ({len(shown)} steps)\n\n")
+        _print_tree(
+            shown,
+            frozenset() if full or python.error or rust.error else frozenset(only),
+            f"<- {engine} only",
+            color,
+            colorize=colorize,
+        )
+        sys.stdout.write("\n")
+    if not python.error and not rust.error:
+        order: Final = "the same" if diff.shared_order_matches else "a different"
+        sys.stdout.write("diff\n\n")
+        sys.stdout.write(f"shared steps appear in {order} order\n")
+        sys.stdout.write(f"python-only: {', '.join(diff.python_only) or 'none'}\n")
+        sys.stdout.write(f"rust-only: {', '.join(diff.rust_only) or 'none'}\n\n")
+    for (checked_engine, checked_result, _), (_, problems) in zip(cases, issues):
+        if checked_result.error:
+            continue
+        sys.stdout.write(
+            f"{checked_engine} "
+            f"{'SDK dispatch only' if route == 'audio_transcription' and checked_engine == 'python' else 'pipeline'}: "
+            f"{'FAIL: ' + '; '.join(problems) if problems else 'PASS'}\n"
+        )
+    sys.stdout.write("Each successful invocation issued exactly one local provider request\n\n")
+    return not any(problems for _, problems in issues) and all(
+        result.error is None or result.skipped for result in (python, rust)
+    )
 
 
 def main() -> None:
@@ -271,6 +314,8 @@ def main() -> None:
     mode: Final = parser.add_mutually_exclusive_group()
     mode.add_argument("--async", dest="asynchronous", action="store_true", default=True)
     mode.add_argument("--sync", dest="asynchronous", action="store_false")
+    mode.add_argument("--both", action="store_true", help="run async and sync for every selected route")
+    parser.add_argument("--check", action="store_true", help="exit nonzero for missing or misordered pipeline steps")
     parser.add_argument(
         "--full", action="store_true", help="print every captured runtime event instead of pipeline steps"
     )
@@ -278,7 +323,14 @@ def main() -> None:
     route: Final = TypeAdapter(str).validate_python(vars(args)["route"], strict=True)
     asynchronous: Final = TypeAdapter(bool).validate_python(vars(args)["asynchronous"], strict=True)
     full: Final = TypeAdapter(bool).validate_python(vars(args)["full"], strict=True)
+    both: Final = TypeAdapter(bool).validate_python(vars(args)["both"], strict=True)
+    check: Final = TypeAdapter(bool).validate_python(vars(args)["check"], strict=True)
     os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    for selected in ROUTES:
-        if route in ("all", selected):
-            report(selected, asynchronous=asynchronous, full=full)
+    results: Final = tuple(
+        report(selected, asynchronous=selected_mode, full=full)
+        for selected in ROUTES
+        if route in ("all", selected)
+        for selected_mode in ((True, False) if both else (asynchronous,))
+    )
+    if check and not all(results):
+        raise SystemExit(1)

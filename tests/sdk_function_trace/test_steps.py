@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from typing import Final
 
+import pytest
+
 from tests.sdk_function_trace.profiler import FunctionTraceEvent
 from tests.sdk_function_trace.runtime import trace_diff
-from tests.sdk_function_trace.steps import pipeline_steps
+from tests.sdk_function_trace.steps import pipeline_issues, pipeline_steps
 
 
 def test_python_ocr_projection_keeps_pipeline_and_drops_noise() -> None:
@@ -39,7 +41,7 @@ def test_python_ocr_projection_keeps_pipeline_and_drops_noise() -> None:
         FunctionTraceEvent("complete_url", 2),
         FunctionTraceEvent("transform_ocr_request", 3),
         FunctionTraceEvent("http_request", 3),
-        FunctionTraceEvent("transform_ocr_response", 3),
+        FunctionTraceEvent("transform_ocr_response", 2),
     )
 
 
@@ -92,6 +94,15 @@ def test_projection_resets_depth_on_thread_root() -> None:
     )
 
 
+@pytest.mark.parametrize("function", ("completion", "completion_function", "acompletion_function"))
+def test_chat_projection_includes_sync_and_async_handlers(function: str) -> None:
+    events: Final = (FunctionTraceEvent(f"llms/anthropic/chat/handler.py:100 AnthropicChatCompletion.{function}", 0),)
+
+    assert pipeline_steps("chat_completions", "python", events) == (
+        FunctionTraceEvent("execute_chat_completions_provider_call", 0),
+    )
+
+
 def test_trace_diff_reports_no_difference_for_identical_steps() -> None:
     steps: Final = (
         FunctionTraceEvent("ocr", 0),
@@ -124,3 +135,96 @@ def test_trace_diff_reports_exclusive_steps_and_reordered_shared_steps() -> None
     assert diff.python_only == ("http_request",)
     assert diff.rust_only == ("transform_ocr_response",)
     assert not diff.shared_order_matches
+
+
+def test_trace_diff_does_not_claim_empty_or_disjoint_traces_match() -> None:
+    assert not trace_diff((), ()).shared_order_matches
+    assert not trace_diff((FunctionTraceEvent("ocr", 0),), (FunctionTraceEvent("messages", 0),)).shared_order_matches
+
+
+def test_projection_uses_actual_ancestors_after_coroutine_resumption() -> None:
+    entrypoint: Final = "main.py:387 acompletion"
+    handler: Final = "llms/anthropic/chat/handler.py:255 AnthropicChatCompletion.acompletion_function"
+    events: Final = (
+        FunctionTraceEvent(entrypoint, 0, ()),
+        FunctionTraceEvent(handler, 1, (entrypoint,)),
+        FunctionTraceEvent("utils.py:100 unrelated_worker", 0, ()),
+        FunctionTraceEvent("llms/anthropic/chat/transformation.py:100 transform_response", 1, (handler,)),
+    )
+
+    assert pipeline_steps("chat_completions", "python", events) == (
+        FunctionTraceEvent("chat_completions", 0),
+        FunctionTraceEvent("execute_chat_completions_provider_call", 1),
+        FunctionTraceEvent("transform_response", 2),
+    )
+
+
+def test_projection_does_not_nest_siblings_under_a_returned_config_lookup() -> None:
+    events: Final = (
+        FunctionTraceEvent("main.py:387 completion", 0),
+        FunctionTraceEvent("utils.py:100 ProviderConfigManager.get_provider_chat_config", 1),
+        FunctionTraceEvent("utils.py:200 unrelated_helper", 1),
+        FunctionTraceEvent("llms/anthropic/chat/transformation.py:100 transform_request", 2),
+    )
+
+    assert pipeline_steps("chat_completions", "python", events) == (
+        FunctionTraceEvent("chat_completions", 0),
+        FunctionTraceEvent("get_provider_chat_config", 1),
+        FunctionTraceEvent("transform_request", 1),
+    )
+
+
+CHAT_RUST_STEPS: Final = (
+    "chat_completions",
+    "prepare_chat_completions_call",
+    "get_provider_chat_config",
+    "transform_request",
+    "execute_chat_completions_provider_call",
+    "http_request",
+    "transform_response",
+)
+
+
+@pytest.mark.parametrize("missing", CHAT_RUST_STEPS)
+def test_pipeline_check_rejects_missing_stages(missing: str) -> None:
+    steps: Final = tuple(FunctionTraceEvent(name, 0) for name in CHAT_RUST_STEPS if name != missing)
+
+    assert f"missing {missing}" in pipeline_issues("chat_completions", "rust", steps)
+
+
+def test_pipeline_check_rejects_http_before_request_transformation() -> None:
+    steps: Final = tuple(
+        FunctionTraceEvent(name, 0)
+        for name in (
+            "chat_completions",
+            "prepare_chat_completions_call",
+            "get_provider_chat_config",
+            "execute_chat_completions_provider_call",
+            "http_request",
+            "transform_request",
+            "transform_response",
+        )
+    )
+
+    assert "transform_request must precede http_request" in pipeline_issues("chat_completions", "rust", steps)
+
+
+def test_pipeline_check_accepts_different_handler_boundaries() -> None:
+    rust: Final = tuple(FunctionTraceEvent(name, 0) for name in CHAT_RUST_STEPS)
+    python: Final = tuple(
+        FunctionTraceEvent(name, 0)
+        for name in (
+            "chat_completions",
+            "get_provider_chat_config",
+            "supported_openai_params",
+            "execute_chat_completions_provider_call",
+            "validate_environment",
+            "transform_request",
+            "http_request",
+            "transform_response",
+        )
+    )
+
+    assert not trace_diff(python, rust).shared_order_matches
+    assert pipeline_issues("chat_completions", "python", python) == ()
+    assert pipeline_issues("chat_completions", "rust", rust) == ()
