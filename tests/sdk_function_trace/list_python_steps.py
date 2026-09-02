@@ -83,6 +83,10 @@ ROUTES: Final = MappingProxyType(
             ),
             Source(f"{BASE_CONFIG}/ocr/transformation.py"),
             Source("litellm/llms/mistral/ocr/transformation.py"),
+            Source("litellm/llms/azure_ai/ocr/transformation.py"),
+            Source("litellm/llms/azure_ai/ocr/document_intelligence/transformation.py"),
+            Source("litellm/llms/vertex_ai/ocr/transformation.py"),
+            Source("litellm/llms/vertex_ai/ocr/deepseek_transformation.py"),
         ),
     }
 )
