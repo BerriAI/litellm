@@ -46960,9 +46960,9 @@
         "supports_vision": false
     },
     "watsonx/ibm/granite-4-h-small": {
-        "max_tokens": 20480,
+        "max_tokens": 131072,
         "max_input_tokens": 131072,
-        "max_output_tokens": 20480,
+        "max_output_tokens": 131072,
         "input_cost_per_token": 6.36e-08,
         "output_cost_per_token": 2.65e-07,
         "litellm_provider": "watsonx",
@@ -47093,9 +47093,9 @@
         "supports_vision": true
     },
     "watsonx/meta-llama/llama-3-3-70b-instruct": {
-        "max_tokens": 128000,
+        "max_tokens": 131072,
         "max_input_tokens": 131072,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 131072,
         "input_cost_per_token": 7.526e-07,
         "output_cost_per_token": 7.526e-07,
         "litellm_provider": "watsonx",
@@ -47106,9 +47106,9 @@
         "source": "https://dataplatform.cloud.ibm.com/docs/content/wsj/analyze-data/fm-models.html?context=wx"
     },
     "watsonx/meta-llama/llama-4-maverick-17b": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 131072,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 8192,
         "input_cost_per_token": 3.71e-07,
         "output_cost_per_token": 1.484e-06,
         "litellm_provider": "watsonx",
@@ -47119,9 +47119,9 @@
         "source": "https://dataplatform.cloud.ibm.com/docs/content/wsj/analyze-data/fm-models.html?context=wx"
     },
     "watsonx/meta-llama/llama-4-maverick-17b-128e-instruct-fp8": {
-        "max_tokens": 128000,
+        "max_tokens": 8192,
         "max_input_tokens": 131072,
-        "max_output_tokens": 128000,
+        "max_output_tokens": 8192,
         "input_cost_per_token": 3.71e-07,
         "output_cost_per_token": 1.484e-06,
         "litellm_provider": "watsonx",
@@ -47168,9 +47168,9 @@
         "supports_vision": false
     },
     "watsonx/mistralai/mistral-small-3-1-24b-instruct-2503": {
-        "max_tokens": 32000,
+        "max_tokens": 16384,
         "max_input_tokens": 131072,
-        "max_output_tokens": 32000,
+        "max_output_tokens": 16384,
         "input_cost_per_token": 1.06e-07,
         "output_cost_per_token": 3.18e-07,
         "litellm_provider": "watsonx",
@@ -47193,9 +47193,9 @@
         "supports_vision": true
     },
     "watsonx/openai/gpt-oss-120b": {
-        "max_tokens": 8192,
+        "max_tokens": 131072,
         "max_input_tokens": 131072,
-        "max_output_tokens": 8192,
+        "max_output_tokens": 131072,
         "input_cost_per_token": 1.59e-07,
         "output_cost_per_token": 6.36e-07,
         "litellm_provider": "watsonx",
