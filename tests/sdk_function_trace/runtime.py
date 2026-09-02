@@ -11,12 +11,13 @@ import wave
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Literal, Protocol, cast
+from typing import Final, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from tests.sdk_function_trace.mock_provider import MockProviderResponse, mock_provider
 from tests.sdk_function_trace.profiler import FunctionTraceEvent, profile_python
+from tests.sdk_function_trace.steps import pipeline_steps
 
 ROUTES: Final = ("chat_completions", "audio_transcription", "messages", "ocr")
 ANTHROPIC_MODEL: Final = "claude-sonnet-5"
@@ -200,25 +201,63 @@ def run_trace(route: str, *, rust: bool, asynchronous: bool = False) -> tuple[Fu
             os.environ["LITELLM_RUST"] = previous_rust
 
 
-def print_trace(route: str, engine: Literal["python", "rust"], asynchronous: bool) -> None:
-    case: Final = invocation(route, rust=engine == "rust", asynchronous=asynchronous)
-    events: Final = run_trace(route, rust=engine == "rust", asynchronous=asynchronous)
-    sys.stdout.write(f"{engine} {route} | {case.label} | {'async' if asynchronous else 'sync'}\n")
+@dataclass(frozen=True, slots=True)
+class TraceDiff:
+    python_only: tuple[str, ...]
+    rust_only: tuple[str, ...]
+    shared_order_matches: bool
+
+
+def trace_diff(python: tuple[FunctionTraceEvent, ...], rust: tuple[FunctionTraceEvent, ...]) -> TraceDiff:
+    python_names: Final = {event.function for event in python}
+    rust_names: Final = {event.function for event in rust}
+    shared_python: Final = tuple(event.function for event in python if event.function in rust_names)
+    shared_rust: Final = tuple(event.function for event in rust if event.function in python_names)
+    return TraceDiff(
+        python_only=tuple(event.function for event in python if event.function not in rust_names),
+        rust_only=tuple(event.function for event in rust if event.function not in python_names),
+        shared_order_matches=shared_python == shared_rust,
+    )
+
+
+def _print_tree(events: tuple[FunctionTraceEvent, ...]) -> None:
     for event in events:
         sys.stdout.write(f"{'  ' * event.depth}{event.function}\n")
-    sys.stdout.write(f"{len(events)} runtime events; one local provider HTTP request\n\n")
 
 
-def main(engine: Literal["python", "rust"]) -> None:
-    parser: Final = argparse.ArgumentParser(description=f"Execute SDK calls and print {engine} runtime function events")
+def main() -> None:
+    parser: Final = argparse.ArgumentParser(description="Compare Python and Rust SDK pipeline steps per route")
     parser.add_argument("--route", choices=("all", *ROUTES), default="all")
     mode: Final = parser.add_mutually_exclusive_group()
     mode.add_argument("--async", dest="asynchronous", action="store_true", default=True)
     mode.add_argument("--sync", dest="asynchronous", action="store_false")
+    parser.add_argument(
+        "--full", action="store_true", help="print every captured runtime event instead of pipeline steps"
+    )
     args: Final = parser.parse_args()
     route: Final = TypeAdapter(str).validate_python(vars(args)["route"], strict=True)
     asynchronous: Final = TypeAdapter(bool).validate_python(vars(args)["asynchronous"], strict=True)
+    full: Final = TypeAdapter(bool).validate_python(vars(args)["full"], strict=True)
     os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     for selected in ROUTES:
         if route in ("all", selected):
-            print_trace(selected, engine, asynchronous)
+            report(selected, asynchronous=asynchronous, full=full)
+
+
+def report(route: str, *, asynchronous: bool, full: bool) -> None:
+    case: Final = invocation(route, rust=False, asynchronous=asynchronous)
+    python_events: Final = run_trace(route, rust=False, asynchronous=asynchronous)
+    rust_events: Final = run_trace(route, rust=True, asynchronous=asynchronous)
+    python_steps: Final = python_events if full else pipeline_steps(route, "python", python_events)
+    rust_steps: Final = rust_events if full else pipeline_steps(route, "rust", rust_events)
+    sys.stdout.write(f"{route} | {case.label} | {'async' if asynchronous else 'sync'}\n")
+    sys.stdout.write(f"python ({len(python_steps)} steps)\n")
+    _print_tree(python_steps)
+    sys.stdout.write(f"rust ({len(rust_steps)} steps)\n")
+    _print_tree(rust_steps)
+    diff: Final = trace_diff(python_steps, rust_steps)
+    sys.stdout.write(
+        f"shared order: {'same' if diff.shared_order_matches else 'differs'};"
+        f" python-only: {', '.join(diff.python_only) or 'none'};"
+        f" rust-only: {', '.join(diff.rust_only) or 'none'}\n\n"
+    )
