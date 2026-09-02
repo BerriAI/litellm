@@ -1,26 +1,29 @@
 import ast
 import asyncio
 import json
+import logging
 import re
 import sys
+import time
 from pathlib import Path
 from typing import List
 
 import pytest
 
-import logging
-
 import litellm
 from litellm._logging import (
     _COLOR_LOG_FORMAT,
+    _MAX_SCRUBBED_ACCESS_ARG,
     _PLAIN_LOG_FORMAT,
     ALL_LOGGERS,
+    AccessLogRedactionFilter,
     CorrelationContextFilter,
     CorrelationPlainFormatter,
     JsonFormatter,
     LevelRoutingStreamHandler,
     SecretRedactionFilter,
     StdoutLogTruncationFilter,
+    _get_uvicorn_json_log_config,
     _initialize_loggers_with_handler,
     _parse_json_logs_env,
     _plain_log_format,
@@ -968,3 +971,148 @@ def test_plain_log_format_survives_none_streams():
     """sys.stdout/sys.stderr can be None in embedded interpreters; import must not crash."""
     assert _plain_log_format(None, None) == _PLAIN_LOG_FORMAT
     assert _plain_log_format(_FakeStream(True), None) == _PLAIN_LOG_FORMAT
+
+
+# ---------------------------------------------------------------------------
+# Access-log redaction (LIT-5909)
+# ---------------------------------------------------------------------------
+
+_LEAKED_KEY = "sk-mx5ous1o9Iezz5fj3pkLuA"
+
+
+def _access_record(full_path: str) -> logging.LogRecord:
+    """A record shaped exactly like the one uvicorn.access emits per request."""
+    return logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=("127.0.0.1:1", "GET", full_path, "1.1", 200),
+        exc_info=None,
+    )
+
+
+@pytest.mark.parametrize(
+    "full_path",
+    [
+        f"/key/info?key={_LEAKED_KEY}",
+        f"/global/spend/report?api_key={_LEAKED_KEY}&start_date=2026-08-01",
+        f"/key/spend/report?api_key={_LEAKED_KEY}",
+        f"/spend/logs?api_key={_LEAKED_KEY}",
+        f"/user/daily/activity?api_key={_LEAKED_KEY}",
+        f"/gemini/v1beta/models/gemini-2.0-flash:generateContent?key={_LEAKED_KEY}",
+    ],
+)
+def test_access_log_filter_redacts_a_credential_query_parameter(full_path):
+    record = _access_record(full_path)
+    assert AccessLogRedactionFilter().filter(record) is True
+    assert _LEAKED_KEY not in record.getMessage()
+    assert "REDACTED" in record.getMessage()
+
+
+def test_access_log_filter_keeps_the_record_formattable_by_uvicorn():
+    """uvicorn's AccessFormatter unpacks record.args, so the filter must scrub the
+    args in place rather than collapse them the way SecretRedactionFilter does."""
+    from uvicorn.logging import AccessFormatter
+
+    record = _access_record(f"/key/info?key={_LEAKED_KEY}")
+    AccessLogRedactionFilter().filter(record)
+    assert isinstance(record.args, tuple)
+    assert len(record.args) == 5
+
+    formatted = AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False).format(record)
+    assert _LEAKED_KEY not in formatted
+    assert "GET" in formatted
+    assert "200 OK" in formatted
+
+
+@pytest.mark.parametrize(
+    "full_path, want",
+    [
+        # The delimiter must survive so the logged request line stays well formed.
+        (f"/key/info?key={_LEAKED_KEY}&page=2", "/key/info?REDACTED&page=2"),
+        ("/download?sig=AbCd1234%2Fxy&page=2", "/download?REDACTED&page=2"),
+        (
+            f"/global/spend/report?api_key={_LEAKED_KEY}&start_date=2026-01-01",
+            "/global/spend/report?REDACTED&start_date=2026-01-01",
+        ),
+        ("/sso/callback?client_secret=abcdefgh12345&state=xyz", "/sso/callback?REDACTED&state=xyz"),
+        (f"/v1/models?token={_LEAKED_KEY}&page=2", "/v1/models?REDACTED&page=2"),
+    ],
+)
+def test_access_log_filter_keeps_the_query_delimiter(full_path, want):
+    record = _access_record(full_path)
+    AccessLogRedactionFilter().filter(record)
+    assert record.args[2] == want
+
+
+def test_access_log_filter_caps_how_much_of_a_request_target_it_scans():
+    """The request target is the only input to the secret regex an unauthenticated
+    caller controls end to end, so it is bounded before it is scanned, and the
+    dropped tail must not reach the log either."""
+    record = _access_record("/v1/models?u=" + "a://" * 8192 + f"&key={_LEAKED_KEY}")
+
+    started = time.perf_counter()
+    AccessLogRedactionFilter().filter(record)
+    elapsed = time.perf_counter() - started
+
+    scrubbed = record.args[2]
+    assert _LEAKED_KEY not in scrubbed
+    assert len(scrubbed) < 1024
+    assert elapsed < 1.0, f"scrubbing one access line took {elapsed:.2f}s"
+
+
+@pytest.mark.parametrize("chars_before_the_cut", range(1, 12))
+def test_access_log_filter_never_logs_a_half_scanned_credential(chars_before_the_cut):
+    """Cutting mid-value would leave a prefix too short for the key= pattern to match,
+    and that prefix would then be logged raw, so the cut lands on a param boundary."""
+    prefix = "/v1/models?u="
+    padding = _MAX_SCRUBBED_ACCESS_ARG - len(prefix) - len("&key=") - chars_before_the_cut
+    record = _access_record(f"{prefix}{'a' * padding}&key={_LEAKED_KEY}")
+
+    AccessLogRedactionFilter().filter(record)
+
+    assert f"key={_LEAKED_KEY[:chars_before_the_cut]}" not in record.args[2]
+
+
+def test_access_log_filter_leaves_a_credential_free_request_line_intact():
+    record = _access_record("/v1/chat/completions")
+    AccessLogRedactionFilter().filter(record)
+    assert record.getMessage() == '127.0.0.1:1 - "GET /v1/chat/completions HTTP/1.1" 200'
+
+
+def test_access_log_filter_redacts_a_record_that_carries_no_positional_args():
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg=f'127.0.0.1:1 - "GET /key/info?key={_LEAKED_KEY} HTTP/1.1" 200',
+        args=None,
+        exc_info=None,
+    )
+    assert AccessLogRedactionFilter().filter(record) is True
+    assert _LEAKED_KEY not in record.getMessage()
+
+
+def test_uvicorn_access_logger_carries_the_access_log_filter():
+    """Registration happens at litellm import; without it the filter never runs."""
+    assert any(isinstance(f, AccessLogRedactionFilter) for f in logging.getLogger("uvicorn.access").filters)
+
+
+def test_access_log_filter_survives_uvicorn_json_log_config():
+    """litellm hands uvicorn a dictConfig when json_logs is on. dictConfig clears a
+    logger's handlers but not its filters, so redaction has to still be attached."""
+    import logging.config
+
+    names = ("uvicorn", "uvicorn.error", "uvicorn.access")
+    saved = tuple((logging.getLogger(n), logging.getLogger(n).handlers[:], logging.getLogger(n).level) for n in names)
+    try:
+        logging.config.dictConfig(_get_uvicorn_json_log_config())
+        assert any(isinstance(f, AccessLogRedactionFilter) for f in logging.getLogger("uvicorn.access").filters)
+    finally:
+        for lg, handlers, level in saved:
+            lg.handlers[:] = handlers
+            lg.setLevel(level)
+            lg.propagate = True

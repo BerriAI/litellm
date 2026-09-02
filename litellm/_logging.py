@@ -146,6 +146,47 @@ class SecretRedactionFilter(logging.Filter):
 _secret_filter: Final = SecretRedactionFilter()
 
 
+_MAX_SCRUBBED_ACCESS_ARG: Final = 512
+
+
+def _scrub_access_arg(value: str) -> str:
+    """Redact one access-log positional arg, bounding the scanned length.
+
+    The request target is the only input to the secret regex an unauthenticated
+    caller controls end to end, so it is cut back to a whole query parameter
+    before it is scanned; a half-parameter would be too short to match its
+    pattern and would then be logged raw.
+    """
+    if len(value) <= _MAX_SCRUBBED_ACCESS_ARG:
+        return _redact_string(value)
+    head: Final = value[:_MAX_SCRUBBED_ACCESS_ARG]
+    kept: Final = head[: max(head.rfind("?"), head.rfind("&"))] if "?" in head else head
+    return f"{_redact_string(kept)}... ({len(value) - len(kept)} more chars truncated) ..."
+
+
+class AccessLogRedactionFilter(logging.Filter):
+    """Scrubs known secret/credential patterns from HTTP access-log records.
+
+    uvicorn's AccessFormatter unpacks ``record.args`` as a five-element tuple at
+    emit time, so SecretRedactionFilter cannot be reused here: it collapses the
+    record into ``record.msg`` and clears the args, and the formatter then raises.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not _ENABLE_SECRET_REDACTION:
+            return True
+        if isinstance(record.args, tuple) and record.args:
+            record.args = tuple(  # rebind-ok: a Filter scrubs records in place
+                _scrub_access_arg(arg) if isinstance(arg, str) else arg for arg in record.args
+            )
+            return True
+        # No positional args means everything is in msg, where collapsing is correct.
+        return _secret_filter.filter(record)
+
+
+_access_log_filter: Final = AccessLogRedactionFilter()
+
+
 def _get_max_string_length_stdout_log() -> int:
     """Read the limit per record so a value loaded later via proxy config
     environment_variables is honored."""
@@ -553,6 +594,14 @@ _REDACTED_THIRD_PARTY_LOGGERS: Final[tuple[str, ...]] = (
     "uvicorn.error",
 )
 
+# Access loggers, which emit the full request target, so a credential passed as a
+# query parameter (e.g. `/key/info?key=`) lands on stdout verbatim. uvicorn.access
+# covers uvicorn.run, --run_gunicorn (its worker_class is UvicornWorker, so the
+# access line is still uvicorn's) and an embedding host app. --run_hypercorn and
+# --run_granian log through their own loggers in their own record shapes, and
+# both ship with access logging off.
+_REDACTED_ACCESS_LOGGERS: Final[tuple[str, ...]] = ("uvicorn.access",)
+
 
 def _redact_third_party_loggers() -> None:
     """Extend secret redaction to records litellm does not emit directly.
@@ -575,6 +624,8 @@ def _redact_third_party_loggers() -> None:
     """
     for name in _REDACTED_THIRD_PARTY_LOGGERS:
         logging.getLogger(name).addFilter(_secret_filter)
+    for name in _REDACTED_ACCESS_LOGGERS:
+        logging.getLogger(name).addFilter(_access_log_filter)
 
 
 # Call the suppression function

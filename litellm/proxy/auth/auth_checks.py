@@ -4705,6 +4705,10 @@ async def is_valid_fallback_model(
     return True
 
 
+# The shape abbreviate_api_key writes into LiteLLM_VerificationToken.key_name.
+_MASKED_KEY_NAME_RE: Final = re.compile(r"sk-\.\.\.(?:[A-Za-z0-9\-_]{4})?")
+
+
 def _apply_budget_exceeded_throttle(valid_token: UserAPIKeyAuth) -> bool:
     """
     Throttle an over-budget key instead of blocking it, when the key opted in
@@ -4785,10 +4789,15 @@ async def _virtual_key_max_budget_check(
         if math.isfinite(valid_token.max_budget) and spend >= valid_token.max_budget:
             if _apply_budget_exceeded_throttle(valid_token):
                 return
-            # name the key in the error so operators don't have to reverse-map
-            # spend back to a key; key_name is the masked form (last 4 chars)
+            # This message is returned to the caller, and key_name has no enforced
+            # shape (a direct DB write bypasses abbreviate_api_key), so echo it only
+            # when it still looks masked and fall back to the alias otherwise.
             key_label: Final = valid_token.key_alias or "key"
-            key_descriptor: Final = f"{key_label} ({valid_token.key_name})" if valid_token.key_name else key_label
+            key_descriptor: Final = (
+                f"{key_label} ({valid_token.key_name})"
+                if valid_token.key_name and _MASKED_KEY_NAME_RE.fullmatch(valid_token.key_name)
+                else key_label
+            )
             raise litellm.BudgetExceededError(
                 current_cost=spend,
                 max_budget=valid_token.max_budget,
