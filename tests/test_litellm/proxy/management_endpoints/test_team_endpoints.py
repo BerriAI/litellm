@@ -8479,7 +8479,7 @@ async def test_team_member_delete_persists_deleted_keys(monkeypatch):
     mock_delete_keys.assert_called_once()
 
 
-def _team_key(token: str, metadata: dict, blocked: bool = False):
+def _team_key(token: str, metadata: dict, blocked: bool | None = None):
     from litellm.proxy.management_endpoints.key_management_endpoints import LiteLLM_VerificationToken
 
     return LiteLLM_VerificationToken(
@@ -8537,7 +8537,7 @@ async def test_team_member_delete_blocks_keys_instead_of_deleting_when_configure
     mock_create_many_deleted.assert_not_awaited()
     mock_update_key.assert_awaited_once()
     update_kwargs = mock_update_key.call_args.kwargs
-    assert update_kwargs["where"] == {"token": "hashed-token-1", "OR": [{"blocked": False}, {"blocked": None}]}
+    assert update_kwargs["where"] == {"token": "hashed-token-1", "blocked": None}
     assert update_kwargs["data"]["blocked"] is True
     assert json.loads(update_kwargs["data"]["metadata"]) == {"tags": ["a"], "blocked_by_team_member_removal": True}
     assert cache.get_cache(key="hashed-token-1") is None

@@ -175,6 +175,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
 if TYPE_CHECKING:
     from prisma import Prisma
     from prisma import models as prisma_models
+    from prisma import types as prisma_types
 
 router: Final = APIRouter()
 
@@ -298,6 +299,11 @@ class _TeamIdInFilter(TypedDict, total=False):
 
 class _DeletedTeamsResult(TypedDict):
     deleted_teams: ReadOnly[Sequence[str]]
+
+
+class _KeyBlockedUpdate(TypedDict):
+    blocked: ReadOnly[bool]
+    metadata: ReadOnly[str]
 
 
 class _ErrorDetail(TypedDict):
@@ -1202,14 +1208,12 @@ async def _set_member_removal_block(
     metadata: Final = _key_metadata(key_row.metadata)
     unmarked: Final = {k: v for k, v in metadata.items() if k != marker}  # mutable-ok: safe_dumps needs a dict
     new_metadata: Final = {**unmarked, marker: True} if blocked else unmarked  # mutable-ok: safe_dumps needs a dict
-    await tokens_db.update_many(
-        where=(
-            {"token": key_row.token, "OR": [{"blocked": False}, {"blocked": None}]}
-            if blocked
-            else {"token": key_row.token, "blocked": True}
-        ),
-        data={"blocked": blocked, "metadata": safe_dumps(new_metadata)},
-    )
+    where: Final[prisma_types.LiteLLM_VerificationTokenWhereInput] = {
+        "token": key_row.token,
+        "blocked": key_row.blocked,
+    }
+    data: Final[_KeyBlockedUpdate] = {"blocked": blocked, "metadata": safe_dumps(new_metadata)}
+    await tokens_db.update_many(where=where, data=data)
 
 
 async def _block_team_keys_of_removed_members(
@@ -1231,9 +1235,12 @@ async def _unblock_team_keys_of_readded_members(
     if not user_ids:
         return
     tokens_db: Final = _tokens_db(prisma_client)
-    blocked_keys: Final = await tokens_db.find_many(
-        where={"user_id": {"in": sorted(user_ids)}, "team_id": team_id, "blocked": True}
-    )
+    where: Final[prisma_types.LiteLLM_VerificationTokenWhereInput] = {
+        "user_id": {"in": sorted(user_ids)},
+        "team_id": team_id,
+        "blocked": True,
+    }
+    blocked_keys: Final = await tokens_db.find_many(where=where)
     keys_to_unblock: Final = tuple(k for k in blocked_keys or () if _was_blocked_by_member_removal(k.metadata))
     for key_row in keys_to_unblock:
         await _set_member_removal_block(key_row=key_row, blocked=False, tokens_db=tokens_db)
