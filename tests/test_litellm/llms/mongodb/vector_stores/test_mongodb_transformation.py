@@ -30,17 +30,26 @@ BASE_PARAMS = {
 }
 
 
+READY_INDEX = [{"name": INDEX, "status": "READY", "queryable": True}]
+
+
 class FakeCollection:
-    def __init__(self, documents, error=None):
+    def __init__(self, documents, error=None, search_indexes=None):
         self.documents = documents
         self.error = error
+        self.search_indexes = READY_INDEX if search_indexes is None else search_indexes
         self.pipeline = None
+        self.listed_indexes = []
 
     def aggregate(self, pipeline):
         self.pipeline = pipeline
         if self.error is not None:
             raise self.error
         return iter(self.documents)
+
+    def list_search_indexes(self, name):
+        self.listed_indexes.append(name)
+        return iter(self.search_indexes)
 
 
 class FakeAsyncCollection(FakeCollection):
@@ -52,6 +61,15 @@ class FakeAsyncCollection(FakeCollection):
         async def cursor():
             for document in self.documents:
                 yield document
+
+        return cursor()
+
+    async def list_search_indexes(self, name):
+        self.listed_indexes.append(name)
+
+        async def cursor():
+            for entry in self.search_indexes:
+                yield entry
 
         return cursor()
 
@@ -92,8 +110,8 @@ class FakeAsyncEmbeddingFn(FakeEmbeddingFn):
         return SimpleNamespace(data=[{"embedding": self.embedding}] if self.embedding is not None else [])
 
 
-def _config(documents=(), embedding=(0.1, 0.2, 0.3), error=None):
-    collection = FakeCollection(list(documents), error)
+def _config(documents=(), embedding=(0.1, 0.2, 0.3), error=None, search_indexes=None):
+    collection = FakeCollection(list(documents), error, search_indexes)
     client = FakeClient(collection)
     config = MongoDBVectorStoreConfig(
         embedding_fn=FakeEmbeddingFn(list(embedding) if embedding is not None else None),
@@ -102,8 +120,8 @@ def _config(documents=(), embedding=(0.1, 0.2, 0.3), error=None):
     return config, client, collection
 
 
-def _async_config(documents=(), embedding=(0.1, 0.2, 0.3), error=None):
-    collection = FakeAsyncCollection(list(documents), error)
+def _async_config(documents=(), embedding=(0.1, 0.2, 0.3), error=None, search_indexes=None):
+    collection = FakeAsyncCollection(list(documents), error, search_indexes)
     client = FakeClient(collection)
     config = MongoDBVectorStoreConfig(
         aembedding_fn=FakeAsyncEmbeddingFn(list(embedding) if embedding is not None else None),
@@ -642,3 +660,128 @@ class TestMissingDriver:
 
         with patch.dict(sys.modules, {"pymongo.errors": None}):
             assert translate_mongo_error(original, INDEX, "db", "col") is original
+
+
+class TestEmptyResultsAreDisambiguated:
+    """$vectorSearch returns zero documents for a missing database, collection or index just as it
+    does for a query that matched nothing, so an empty result set is checked against the index
+    catalogue before it is reported as 'no matches'."""
+
+    def test_a_missing_index_becomes_an_error_rather_than_an_empty_page(self):
+        config, _, collection = _config(documents=[], search_indexes=[])
+
+        with pytest.raises(ValueError, match="No queryable Atlas Vector Search index"):
+            _search(config)
+
+        assert collection.listed_indexes == [INDEX]
+
+    def test_the_missing_index_error_explains_why_mongodb_reported_no_results(self):
+        config, _, _ = _config(documents=[], search_indexes=[])
+
+        with pytest.raises(ValueError, match="returns no results rather than an error"):
+            _search(config)
+
+    def test_an_index_still_building_becomes_an_error_naming_its_status(self):
+        config, _, _ = _config(
+            documents=[], search_indexes=[{"name": INDEX, "status": "PENDING", "queryable": False}]
+        )
+
+        with pytest.raises(ValueError, match="not queryable yet; its status is PENDING"):
+            _search(config)
+
+    def test_a_genuine_no_match_against_a_ready_index_returns_an_empty_page(self):
+        config, _, collection = _config(documents=[])
+
+        response = _search(config)
+
+        assert response["data"] == []
+        assert response["object"] == "vector_store.search_results.page"
+        assert collection.listed_indexes == [INDEX]
+
+    def test_the_catalogue_is_not_consulted_when_the_search_returned_hits(self):
+        config, _, collection = _config(documents=[{"_id": 1, "text": "hit", "score": 0.9}])
+
+        _search(config)
+
+        assert collection.listed_indexes == []
+
+    @pytest.mark.asyncio
+    async def test_async_missing_index_becomes_an_error_rather_than_an_empty_page(self):
+        config, _, collection = _async_config(documents=[], search_indexes=[])
+
+        with pytest.raises(ValueError, match="No queryable Atlas Vector Search index"):
+            await _asearch(config)
+
+        assert collection.listed_indexes == [INDEX]
+
+    @pytest.mark.asyncio
+    async def test_async_index_still_building_becomes_an_error_naming_its_status(self):
+        config, _, _ = _async_config(
+            documents=[], search_indexes=[{"name": INDEX, "status": "PENDING", "queryable": False}]
+        )
+
+        with pytest.raises(ValueError, match="not queryable yet; its status is PENDING"):
+            await _asearch(config)
+
+    @pytest.mark.asyncio
+    async def test_async_genuine_no_match_returns_an_empty_page(self):
+        config, _, _ = _async_config(documents=[])
+
+        response = await _asearch(config)
+
+        assert response["data"] == []
+
+    @pytest.mark.asyncio
+    async def test_async_catalogue_is_not_consulted_when_the_search_returned_hits(self):
+        config, _, collection = _async_config(documents=[{"_id": 1, "text": "hit", "score": 0.9}])
+
+        await _asearch(config)
+
+        assert collection.listed_indexes == []
+
+    def test_a_failure_while_checking_the_catalogue_is_translated_too(self):
+        from pymongo.errors import OperationFailure
+
+        class ExplodingCollection(FakeCollection):
+            def list_search_indexes(self, name):
+                raise OperationFailure("not authorized", code=13)
+
+        collection = ExplodingCollection([], None, [])
+        config = MongoDBVectorStoreConfig(
+            embedding_fn=FakeEmbeddingFn([0.1]),
+            sync_client_factory=lambda key: FakeClient(collection),
+        )
+
+        with pytest.raises(ValueError, match="lacks read access"):
+            _search(config)
+
+
+class TestAtlasPlanExecutorErrors:
+    """Atlas reports a wrong vector path and a dimension mismatch through the same error code, so
+    each one has to be told apart by its message or both come back as a generic index failure."""
+
+    def _translate(self, message):
+        from pymongo.errors import OperationFailure
+
+        return translate_mongo_error(
+            OperationFailure(message, code=8),
+            index_name=INDEX,
+            database="sample_mflix",
+            collection="embedded_movies",
+        )
+
+    def test_a_wrong_vector_path_points_at_the_embedding_field_setting(self):
+        translated = self._translate(
+            "PlanExecutor error during aggregation :: caused by :: nope is not indexed as vector"
+        )
+
+        assert "mongodb_embedding_field names a field" in str(translated)
+
+    def test_a_dimension_mismatch_is_not_reported_as_a_wrong_path(self):
+        translated = self._translate(
+            "PlanExecutor error during aggregation :: caused by :: vector field is indexed with "
+            "1536 dimensions but queried with 3072"
+        )
+
+        assert "does not match the vector dimensions" in str(translated)
+        assert "mongodb_embedding_field" not in str(translated)
