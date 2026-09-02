@@ -19,7 +19,6 @@ import litellm.types.utils
 from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
-from litellm.exceptions import APIError
 from litellm.litellm_core_utils.agentic_loop_settings import (
     DEFAULT_MAX_AGENTIC_LOOPS,
     validated_max_agentic_loops,
@@ -89,6 +88,7 @@ from litellm.responses.streaming_iterator import (
     ResponsesWebSocketStreaming,
     SyncResponsesAPIStreamingIterator,
 )
+from litellm.rust_bridge.runtime import CoreEngine, execution_additional_headers, execution_hidden_params
 from litellm.types.containers.main import (
     ContainerFileListResponse,
     ContainerListResponse,
@@ -164,6 +164,18 @@ def _rust_responses_websocket_enabled(
     raw_request_override: Final = litellm_params.get("rust")
     request_override: Final = raw_request_override if isinstance(raw_request_override, bool) else None
     return custom_llm_provider == "openai" and rust_enabled(request_override=request_override)
+
+
+def _anthropic_messages_with_core_engine(
+    response: AnthropicMessagesResponse,
+    source: CoreEngine,
+) -> AnthropicMessagesResponse:
+    existing_hidden_params: Final = response.get("_hidden_params")
+    response["_hidden_params"] = execution_hidden_params(
+        existing_hidden_params if isinstance(existing_hidden_params, dict) else None,
+        source,
+    )
+    return response
 
 
 from .http_handler import get_shared_realtime_ssl_context
@@ -2361,8 +2373,21 @@ class BaseLLMHTTPHandler:
             kwargs=kwargs_for_agentic,
         )
 
+        selected_response: Final = final_response if final_response is not None else initial_response
+        if not isinstance(selected_response, dict):
+            return self._maybe_wrap_in_fake_stream(
+                selected_response,
+                logging_obj,
+                "anthropic_messages",
+            )
+        typed_response: Final = cast(AnthropicMessagesResponse, selected_response)
+        existing_hidden_params: Final = typed_response.get("_hidden_params")
+        existing_source: Final = (
+            existing_hidden_params.get("core_engine") if isinstance(existing_hidden_params, dict) else None
+        )
+        source: Final = CoreEngine.RUST if existing_source == CoreEngine.RUST.value else CoreEngine.PYTHON
         return self._maybe_wrap_in_fake_stream(
-            final_response if final_response is not None else initial_response,
+            _anthropic_messages_with_core_engine(typed_response, source),
             logging_obj,
             "anthropic_messages",
         )
@@ -2407,7 +2432,7 @@ class BaseLLMHTTPHandler:
             return None
 
         response_obj: Final = cast(AnthropicMessagesResponse, dict(rust_response))
-        return response_obj
+        return _anthropic_messages_with_core_engine(response_obj, CoreEngine.RUST)
 
     @staticmethod
     def _rust_anthropic_messages_fake_stream(
@@ -2422,7 +2447,10 @@ class BaseLLMHTTPHandler:
         )
 
         completion_stream = cast(AsyncIterator[bytes], FakeAnthropicMessagesStreamIterator(response=rust_response))
-        hidden_params: Final = AnthropicMessagesStreamHiddenParams(additional_headers={})
+        hidden_params: Final = AnthropicMessagesStreamHiddenParams(
+            additional_headers=execution_additional_headers(None, CoreEngine.RUST),
+            core_engine=CoreEngine.RUST.value,
+        )
         return AnthropicMessagesStreamingResponse(
             completion_stream=completion_stream,
             hidden_params=hidden_params,
@@ -6483,11 +6511,12 @@ class BaseLLMHTTPHandler:
                 if _rust_responses_websocket_enabled(custom_llm_provider, litellm_params):
                     from litellm.rust_bridge import responses_websocket as rust_responses_websocket
 
-                    rust_backend: Final = await rust_responses_websocket.connect(
+                    rust_execution: Final = await rust_responses_websocket.connect(
                         url=ws_url,
                         headers={str(key): str(value) for key, value in headers.items()},
                         timeout=timeout,
                     )
+                    rust_backend: Final = rust_execution.value
                     if rust_backend is not None:
                         yield rust_backend
                         return

@@ -450,6 +450,11 @@ def test_run_rust_ocr_prepares_request_and_wraps_response():
 
     assert isinstance(response, OCRResponse)
     assert response.pages[0].markdown == "hello world"
+    assert response._hidden_params["core_engine"] == "rust"
+    assert response._hidden_params["additional_headers"] == {
+        "x-litellm-core": "rust",
+        "x-litellm-rust": "true",
+    }
     assert bridge.calls[0] == {
         "model": "mistral-ocr-latest",
         "document": DOCUMENT,
@@ -643,6 +648,7 @@ def test_ocr_routes_to_rust_when_enabled(fake_bridge):
 
     assert isinstance(response, OCRResponse)
     assert response.pages[0].markdown == "hello world"
+    assert response._hidden_params["core_engine"] == "rust"
     assert len(fake_bridge.calls) == 1
     call = fake_bridge.calls[0]
     assert call["model"] == "mistral-ocr-latest"
@@ -792,6 +798,8 @@ def test_ocr_falls_back_to_python_when_bridge_unavailable(monkeypatch):
 
     assert captured.get("called") is True  # Python path was used
     assert isinstance(response, OCRResponse)
+    assert response._hidden_params["core_engine"] == "python"
+    assert response._hidden_params["additional_headers"] == {"x-litellm-core": "python"}
 
 
 def test_ocr_unsupported_provider_skips_rust(monkeypatch):
@@ -810,6 +818,7 @@ def test_ocr_unsupported_provider_skips_rust(monkeypatch):
     )
 
     assert isinstance(response, OCRResponse)
+    assert response._hidden_params["core_engine"] == "python"
     assert bridge.calls == []
 
 

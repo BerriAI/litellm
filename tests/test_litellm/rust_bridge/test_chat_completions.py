@@ -264,6 +264,11 @@ class TestSyncCall:
         assert result.usage.completion_tokens == 4
         assert result.usage.total_tokens == 15
         assert result.id == original_id, "the rust path must keep the chatcmpl id litellm already minted"
+        assert result._hidden_params["core_engine"] == "rust"
+        assert result._hidden_params["additional_headers"] == {
+            "x-litellm-core": "rust",
+            "x-litellm-rust": "true",
+        }
 
     def test_passes_the_timeout_through_as_seconds(self):
         native = _RecordingCall()
@@ -291,6 +296,8 @@ class TestSyncCall:
         )
 
         assert result is fallback_response
+        assert result._hidden_params["core_engine"] == "python"
+        assert result._hidden_params["additional_headers"] == {"x-litellm-core": "python"}
 
 
 class TestAsyncCall:
@@ -300,6 +307,7 @@ class TestAsyncCall:
         result = await bridge.achat_completions_or_fallback(**_async_call_kwargs(ModelResponse()))
         assert result is not None
         assert result.choices[0].message.content == "hello from rust"
+        assert result._hidden_params["core_engine"] == "rust"
 
     @pytest.mark.asyncio
     async def test_falls_back_when_the_bridge_is_unavailable(self, monkeypatch):

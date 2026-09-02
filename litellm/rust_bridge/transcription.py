@@ -102,7 +102,7 @@ def transcription(
         adapt=identity,
         mode=FallbackMode.RUST_REQUIRED,
         context=BridgeErrorContext(route="audio transcription", provider=custom_llm_provider or "", model=model),
-    )
+    ).value
 
 
 async def atranscription(
@@ -131,10 +131,12 @@ async def atranscription(
             timeout_seconds=timeout_to_seconds(timeout),
         )
     )
-    return await ainvoke(
-        native_call=native_call,
-        fallback=async_none,
-        adapt=identity,
-        mode=FallbackMode.RUST_REQUIRED,
-        context=BridgeErrorContext(route="audio transcription", provider=custom_llm_provider or "", model=model),
-    )
+    return (
+        await ainvoke(
+            native_call=native_call,
+            fallback=async_none,
+            adapt=identity,
+            mode=FallbackMode.RUST_REQUIRED,
+            context=BridgeErrorContext(route="audio transcription", provider=custom_llm_provider or "", model=model),
+        )
+    ).value
