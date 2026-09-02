@@ -200,6 +200,7 @@ from litellm.types.router import (
     CredentialLiteLLMParams,
     CustomRoutingStrategyBase,
     Deployment,
+    DeploymentModelListingInfo,
     DeploymentTypedDict,
     FallbackAccessCheck,
     GuardrailTypedDict,
@@ -9726,25 +9727,44 @@ class Router:
             return None
         return Deployment(**first_usable) if isinstance(first_usable, dict) else first_usable
 
+    def get_model_listing_info(self, model_name: str) -> DeploymentModelListingInfo | None:
+        """
+        Return what the concrete deployment behind model_name contributes to its
+        /v1/models entry: the cost-map key for its underlying model, plus any token
+        limits explicitly configured in its model_info. Resolved via O(1) index lookup.
+
+        Returns None for wildcard-expanded or unknown names, where the listed name is
+        the real model name and no deployment-specific information exists, and treats a
+        malformed configured limit as absent rather than failing the listing. Unlike
+        get_model_group_info, this never triggers pattern matching or deep copies, so it
+        is safe to call per listed model on the /v1/models hot path.
+        """
+        deployment: Final = self.get_deployment_by_model_group_name(model_group_name=model_name)
+        if deployment is None:
+            return None
+
+        model_info: Final = deployment.model_info
+        # base_model is a declared field, so read it as one: an unset or blank value
+        # means the deployment's own model name is the cost-map key.
+        base_model: Final = model_info.base_model
+        return DeploymentModelListingInfo(
+            cost_map_key=base_model or deployment.litellm_params.model,
+            max_input_tokens=coerce_token_limit(model_info.get("max_input_tokens")),
+            max_output_tokens=coerce_token_limit(model_info.get("max_output_tokens")),
+        )
+
     def get_configured_token_limits(self, model_name: str) -> "tuple[int | None, int | None]":
         """
         Return (max_input_tokens, max_output_tokens) explicitly configured in a concrete
         deployment's model_info for model_name, via O(1) index lookup.
 
         Returns (None, None) for wildcard-expanded or unknown names, and treats a
-        malformed configured value as absent rather than failing the listing. Unlike
-        get_model_group_info, this never triggers pattern matching or deep copies, so it
-        is safe to call per listed model on the /v1/models hot path.
+        malformed configured value as absent rather than failing the caller.
         """
-        deployment: Final = self.get_deployment_by_model_group_name(model_group_name=model_name)
-        if deployment is None:
+        listing_info: Final = self.get_model_listing_info(model_name=model_name)
+        if listing_info is None:
             return (None, None)
-
-        model_info: Final = deployment.model_info
-        return (
-            coerce_token_limit(model_info.get("max_input_tokens")),
-            coerce_token_limit(model_info.get("max_output_tokens")),
-        )
+        return (listing_info.max_input_tokens, listing_info.max_output_tokens)
 
     def get_deployment_credentials_with_provider(
         self, model_id: str, team_id: str | None = None
