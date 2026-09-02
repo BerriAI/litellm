@@ -330,6 +330,10 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     ) -> dict:
         is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params)
         mapped_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        if "claude" in model:
+            AnthropicConfig.translate_legacy_thinking_for_adaptive_model(
+                model=model, optional_params=mapped_params, custom_llm_provider="databricks"
+            )
         if "tools" in mapped_params:
             mapped_params["tools"] = self._map_openai_to_dbrx_tool(model=model, tools=mapped_params["tools"])
         if "max_completion_tokens" in non_default_params and replace_max_completion_tokens_with_max_tokens:
