@@ -6,6 +6,7 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from jwt.utils import base64url_decode, base64url_encode
 from pydantic import SecretStr, ValidationError
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
@@ -64,6 +65,12 @@ def _mint_refresh() -> str:
     minted = mint_session_refresh_token(PRINCIPAL, KEYS, NOW)
     assert isinstance(minted, MintedSessionToken)
     return minted.token.get_secret_value()
+
+
+def _corrupt_signature(token: str) -> str:
+    unsigned, signature = token.rsplit(".", 1)
+    raw = base64url_decode(signature)
+    return f"{unsigned}.{base64url_encode(bytes((raw[0] ^ 0x01,)) + raw[1:]).decode()}"
 
 
 def _sign_claims(payload: dict, prefix: str = SESSION_TOKEN_PREFIX, keys: SessionKeys = KEYS) -> str:
@@ -138,8 +145,7 @@ def test_still_valid_one_second_before_expiry():
 
 def test_tampered_signature_is_bad_signature():
     token = _mint_access()
-    tampered = token[:-2] + ("aa" if not token.endswith("aa") else "bb")
-    assert isinstance(open_session_token(tampered, KEYS, NOW), SessionBadSignature)
+    assert isinstance(open_session_token(_corrupt_signature(token), KEYS, NOW), SessionBadSignature)
 
 
 def test_key_rotation_invalidates_outstanding_tokens():
@@ -329,8 +335,7 @@ def test_rs256_tampered_signature_is_bad_signature():
     minted = mint_session_token(PRINCIPAL, RSA_KEYS, NOW)
     assert isinstance(minted, MintedSessionToken)
     token = minted.token.get_secret_value()
-    tampered = token[:-2] + ("aa" if not token.endswith("aa") else "bb")
-    assert isinstance(open_session_token(tampered, RSA_KEYS, NOW), SessionBadSignature)
+    assert isinstance(open_session_token(_corrupt_signature(token), RSA_KEYS, NOW), SessionBadSignature)
 
 
 def test_rs256_expired_token_is_expired():
@@ -413,8 +418,7 @@ def test_rotation_window_still_enforces_expiry_and_tamper_on_the_previous_key():
     )
     after = NOW + timedelta(seconds=SESSION_TTL_SECONDS + 1)
     assert isinstance(open_session_token(token, rotated, after), SessionExpired)
-    tampered = token[:-2] + ("aa" if not token.endswith("aa") else "bb")
-    assert isinstance(open_session_token(tampered, rotated, NOW), SessionBadSignature)
+    assert isinstance(open_session_token(_corrupt_signature(token), rotated, NOW), SessionBadSignature)
 
 
 def test_weak_or_garbage_private_key_pem_rejected_at_construction():
