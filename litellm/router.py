@@ -12630,6 +12630,12 @@ class Router:
                 e,
             )
 
+    async def _get_claude_code_session_router_binding(self, cache_key: str) -> object:
+        session_cache: Final = self._claude_code_session_router_cache
+        if session_cache.redis_cache is None:
+            return await session_cache.async_get_cache(key=cache_key)
+        return await session_cache.redis_cache.async_get_cache(key=cache_key)
+
     async def _resolve_claude_code_session_router(
         self,
         model: str,
@@ -12646,7 +12652,7 @@ class Router:
 
         agent_id: Final = self._request_header(request_kwargs, "x-claude-code-agent-id")
         if agent_id is not None:
-            bound_model: Final = await self._claude_code_session_router_cache.async_get_cache(key=cache_key)
+            bound_model: Final = await self._get_claude_code_session_router_binding(cache_key)
             if not isinstance(bound_model, str):
                 return registered_model_name
             bound_registered_model: Final = self._get_model_from_alias(model=bound_model) or bound_model
@@ -12664,7 +12670,6 @@ class Router:
         if self._request_header(request_kwargs, "x-app") != "cli":
             return registered_model_name
         if self._select_pre_routing_strategy(registered_model_name, request_kwargs) is None:
-            await self._delete_claude_code_session_router_binding(cache_key)
             return registered_model_name
         await self._claude_code_session_router_cache.async_set_cache(
             key=cache_key,

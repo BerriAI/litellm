@@ -86,6 +86,7 @@ ignored_function_names = [
     "_claude_code_session_router_cache_key",  # Tested through Claude Code session routing in test_router.py
     "_delete_claude_code_session_router_binding",  # Tested through Redis cleanup failure in test_router.py
     "_resolve_claude_code_session_router",  # Tested through Claude Code session routing in test_router.py
+    "_get_claude_code_session_router_binding",  # Tested through the two-worker session routing test in test_router.py
 ]
 
 
