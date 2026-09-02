@@ -1212,6 +1212,77 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
                 deliver_ended_stream_rewrites=True,
             )
 
+    @staticmethod
+    def _recording_guardrail() -> "tuple[CustomGuardrail, List[List[str]]]":
+        seen: List[List[str]] = []
+
+        class Recorder(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[Any] = None,
+            ) -> GenericGuardrailAPIInputs:
+                seen.append(list(inputs.get("texts", [])))
+                return inputs
+
+        return Recorder(guardrail_name="recorder"), seen
+
+    @pytest.mark.asyncio
+    async def test_fallback_delta_only_rewrite_with_delivery_expected_fails_closed(self):
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        handler = OpenAIResponsesHandler()
+        events = [
+            {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "hello "},
+            {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "world"},
+        ]
+
+        with pytest.raises(UndeliverableStreamRewrite):
+            await handler.process_output_streaming_response(
+                responses_so_far=events,
+                guardrail_to_apply=self._masking_guardrail(),
+                litellm_logging_obj=None,
+                deliver_ended_stream_rewrites=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_fallback_scans_delta_text_when_delivery_expected(self):
+        handler = OpenAIResponsesHandler()
+        guardrail, seen = self._recording_guardrail()
+        events = [
+            {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "hello "},
+            {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "there"},
+        ]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is events
+        assert seen == [["hello there"]]
+
+    @pytest.mark.asyncio
+    async def test_fallback_ignores_delta_text_without_delivery_expected(self):
+        handler = OpenAIResponsesHandler()
+        guardrail, seen = self._recording_guardrail()
+        events = [
+            {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "hello world"},
+        ]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        assert result is events
+        assert seen == []
+
     @pytest.mark.asyncio
     async def test_fallback_rewrite_without_delivery_expected_does_not_raise(self):
         handler = OpenAIResponsesHandler()

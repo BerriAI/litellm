@@ -634,14 +634,20 @@ class OpenAIResponsesHandler(BaseTranslation):
             return responses_so_far
 
         # ------------------------------------------------------------------ #
-        # Fallback: apply guardrail to the accumulated text string.           #
-        # No structured write-back is possible here; guardrails that only     #
-        # need to block/flag (not rewrite) still work correctly, and a        #
-        # rewrite a caller expects delivered fails closed instead.            #
+        # Fallback: apply guardrail to the accumulated text string. When a    #
+        # caller expects rewrites delivered and only output_text.delta events #
+        # carried the text (a stream cut off before any .done or terminal     #
+        # envelope), the delta text is scanned instead so nothing escapes     #
+        # unchecked. No structured write-back is possible here; guardrails    #
+        # that only need to block/flag (not rewrite) still work correctly,    #
+        # and a rewrite a caller expects delivered fails closed instead.      #
         # ------------------------------------------------------------------ #
         string_so_far: Final = self.get_streaming_string_so_far(responses_so_far)
-        if string_so_far:
-            fallback_inputs: Final = GenericGuardrailAPIInputs(texts=[string_so_far])
+        text_to_check: Final = string_so_far or (
+            self._delta_text_so_far(responses_so_far) if deliver_ended_stream_rewrites else ""
+        )
+        if text_to_check:
+            fallback_inputs: Final = GenericGuardrailAPIInputs(texts=[text_to_check])
             response_model = (
                 final_chunk.get("response", {}).get("model") if isinstance(final_chunk.get("response"), dict) else None
             )
@@ -654,7 +660,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 logging_obj=litellm_logging_obj,
             )
             fallback_texts: Final = fallback_outputs.get("texts")
-            if deliver_ended_stream_rewrites and fallback_texts and tuple(fallback_texts) != (string_so_far,):
+            if deliver_ended_stream_rewrites and fallback_texts and tuple(fallback_texts) != (text_to_check,):
                 from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
                 raise UndeliverableStreamRewrite(guardrail_to_apply.guardrail_name or "unknown")
@@ -753,6 +759,17 @@ class OpenAIResponsesHandler(BaseTranslation):
         Get the string so far from the responses so far.
         """
         return "".join([response.get("text", "") for response in responses_so_far])
+
+    @staticmethod
+    def _delta_text_so_far(responses_so_far: Sequence[ResponsesStreamChunk]) -> str:
+        """Accumulate the text carried by ``response.output_text.delta`` events,
+        for buffers where no ``.done`` event or terminal envelope repeats it."""
+        deltas: Final = (
+            response.get("delta")
+            for response in responses_so_far
+            if response.get("type") == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA.value
+        )
+        return "".join(delta for delta in deltas if isinstance(delta, str))
 
     def _has_text_content(self, response: "ResponsesAPIResponse") -> bool:
         """
