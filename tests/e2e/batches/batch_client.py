@@ -40,8 +40,26 @@ class FileObject(BaseModel):
 
 
 class FileList(BaseModel):
+    """GET /v1/files page. The cursors are modelled because they are part of the
+    page's isolation contract: they must address rows in `data`, never rows the
+    caller was not allowed to see."""
+
     object: str | None = None
     data: list[FileObject] = []
+    first_id: str | None = None
+    last_id: str | None = None
+    has_more: bool | None = None
+
+
+class BatchErrorItem(BaseModel):
+    code: str | None = None
+    line: int | None = None
+    message: str | None = None
+
+
+class BatchErrorList(BaseModel):
+    object: str | None = None
+    data: list[BatchErrorItem] = []
 
 
 class BatchObject(BaseModel):
@@ -51,6 +69,9 @@ class BatchObject(BaseModel):
     endpoint: str | None = None
     input_file_id: str | None = None
     output_file_id: str | None = None
+    error_file_id: str | None = None
+    errors: BatchErrorList | None = None
+    metadata: dict[str, str] | None = None
     completion_window: str | None = None
     created_at: int | None = None
     model: str | None = None
@@ -72,10 +93,16 @@ class BatchCreateBody(BaseModel):
     endpoint: str = "/v1/chat/completions"
     completion_window: str = "24h"
     model: str | None = None
+    metadata: dict[str, str] | None = None
 
 
 class ModelQuery(BaseModel):
     model: str | None = None
+
+
+class BatchListQuery(BaseModel):
+    model: str | None = None
+    limit: int | None = None
 
 
 def is_model_access_denied(resp: StreamingResponse) -> bool:
@@ -168,12 +195,17 @@ class BatchClient:
         )
 
     def list_batches(
-        self, *, key: str, provider: str | None = None
+        self,
+        *,
+        key: str,
+        provider: str | None = None,
+        model: str | None = None,
+        limit: int | None = None,
     ) -> Result[BatchList]:
         return self.proxy.transport.get(
             _batches_path(provider),
             headers=self.proxy.transport.bearer(key),
-            params=NoBody(),
+            params=BatchListQuery(model=model, limit=limit),
             response_type=BatchList,
         )
 

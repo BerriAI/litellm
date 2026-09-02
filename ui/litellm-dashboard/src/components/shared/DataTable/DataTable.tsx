@@ -105,14 +105,14 @@ function buildRowModels<TData>(
   };
 }
 
-function stickyZIndex(isPinned: boolean, isHeader: boolean): number {
+function stickyLayer(isPinned: boolean, isHeader: boolean): string {
   if (isPinned && isHeader) {
-    return 30;
+    return "z-sticky-pinned";
   }
   if (isHeader) {
-    return 20;
+    return "z-sticky";
   }
-  return 10;
+  return "z-raised";
 }
 
 function pinnedShadow(pinned: false | ColumnPinnedSide): string {
@@ -141,13 +141,15 @@ function computeStickyStyle<TData, TValue>(
 
   const style: React.CSSProperties = {
     position: "sticky",
-    zIndex: stickyZIndex(pinned !== false, isHeader),
     ...(stickyTop ? { top: 0 } : {}),
     ...(left !== undefined ? { left } : {}),
     ...(right !== undefined ? { right } : {}),
   };
 
-  return { style, className: cn(pinned ? "bg-background" : "", pinnedShadow(pinned)) };
+  return {
+    style,
+    className: cn(stickyLayer(pinned !== false, isHeader), pinned ? "bg-background" : "", pinnedShadow(pinned)),
+  };
 }
 
 function widthStyle<TData, TValue>(
@@ -193,8 +195,7 @@ function DataTableHeadCell<TData>({ header, size, stickyHeader, enableColumnResi
       )}
       {canResize && (
         <div
-          data-resizer
-          data-header-id={header.id}
+          data-testid={`column-resizer-${header.id}`}
           onMouseDown={header.getResizeHandler()}
           onTouchStart={header.getResizeHandler()}
           onDoubleClick={() => column.resetSize()}
@@ -303,7 +304,10 @@ function DataTableBodyRow<TData>({
 function MessageRow({ colSpan, children }: { colSpan: number; children: React.ReactNode }) {
   return (
     <TableRow className="hover:bg-transparent">
-      <TableCell colSpan={colSpan} className="h-24 text-center align-middle text-sm text-muted-foreground">
+      <TableCell
+        colSpan={colSpan}
+        className="h-24 text-center align-middle text-sm whitespace-normal text-muted-foreground"
+      >
         {children}
       </TableCell>
     </TableRow>
@@ -584,17 +588,21 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
   const paginationNode = renderPagination();
 
   return (
-    <div className={cn("w-full", fill.outer)}>
-      <div className={cn("overflow-hidden rounded-lg border border-border", fill.frame)}>
+    <div data-testid="data-table-root" className={cn("w-full", fill.outer)}>
+      <div data-testid="data-table-frame" className={cn("overflow-hidden rounded-lg border border-border", fill.frame)}>
         {toolbar !== undefined && <div className="shrink-0 border-b border-border px-4 py-3">{toolbar(table)}</div>}
         <div
+          data-testid="data-table-scroller"
           className={cn(stickyHeader ? "overflow-auto" : "overflow-x-auto", fill.body)}
           style={maxBodyHeight !== undefined ? { maxHeight: maxBodyHeight } : undefined}
         >
           <TableRoot className={enableColumnResizing ? "table-fixed" : ""} style={tableStyle}>
-            <TableHeader className={cn(stickyHeader ? "sticky top-0 z-20" : "", fill.header)}>
+            <TableHeader
+              data-testid="data-table-head"
+              className={cn(stickyHeader ? "sticky top-0 z-sticky" : "", fill.header)}
+            >
               {table.getHeaderGroups().map((headerGroup) => (
-                <TableRow key={headerGroup.id} className="bg-muted/50 hover:bg-muted/50">
+                <TableRow key={headerGroup.id} className="bg-muted/50">
                   {headerGroup.headers.map((header) => (
                     <DataTableHeadCell
                       key={header.id}

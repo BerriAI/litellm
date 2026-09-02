@@ -490,7 +490,7 @@ async def test_create_waits_for_endpoint_resolution(monkeypatch):
 async def test_create_raises_when_endpoint_is_missing():
     client = FakeHTTPClient(endpoint_json={"headers": {"X": "y"}})
 
-    with pytest.raises(TimeoutError, match="execd endpoint.*not ready"):
+    with pytest.raises(TimeoutError, match=r"execd endpoint.*not ready"):
         await OpenSandboxSandboxConfig().acreate_sandbox(
             api_key="", api_base=TEST_API_BASE, ready_timeout=0, client=client
         )

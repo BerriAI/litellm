@@ -4,6 +4,11 @@ Enforced by tests/code_coverage_tests/check_e2e_no_raw_requests.py. Every reques
 body / query / header / response is a pydantic model; outcomes are a tagged union
 (``Result[R]``) so callers ``match`` on them instead of catching exceptions.
 
+``forward`` relays one provider-bound request for the provider edge and buffers
+the whole body; ``forward_stream`` relays the same request but hands back the
+response head plus a lazy iterator over the upstream's own transfer chunks, which
+is what lets a recording keep the split points a streamed response arrived on.
+
 Named e2e_http (not http) so it does not shadow the stdlib ``http`` package that
 requests itself imports.
 """
@@ -12,7 +17,8 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from typing import Generic, Iterator, Literal, NewType, Protocol, TypeVar, cast
+from dataclasses import dataclass
+from typing import Generator, Generic, Iterator, Literal, NewType, Protocol, TypeVar, cast
 
 import pytest
 import requests
@@ -75,6 +81,8 @@ class NetworkError(BaseModel):
 
 class UnauthorizedError(BaseModel):
     kind: Literal["unauthorized"] = "unauthorized"
+    # litellm 401s for key auth, model access, and tag routing alike, so keep the body to tell them apart.
+    body: str = ""
 
 
 class RateLimitedError(BaseModel):
@@ -219,6 +227,17 @@ def require_successful_call(result: StreamingResponse) -> None:
     )
 
 
+def assert_client_error(result: StreamingResponse, context: str) -> None:
+    assert 400 <= result.status_code < 500, (
+        f"{context}: expected 4xx, got {result.status_code}: {result.body[:300]}"
+    )
+
+
+def assert_auth_denied(result: StreamingResponse, context: str) -> None:
+    assert result.status_code in (401, 403), (
+        f"{context}: expected 401/403, got {result.status_code}: {result.body[:300]}"
+    )
+
 def _headers(headers: BaseModel) -> dict[str, str]:
     dumped: dict[str, object] = headers.model_dump(by_alias=True, exclude_none=True)
     return {key: str(value) for key, value in dumped.items()}
@@ -278,7 +297,7 @@ def _classify[R: BaseModel](
     resp: requests.Response, response_type: type[R]
 ) -> Result[R]:
     if resp.status_code == 401:
-        return UnauthorizedError()
+        return UnauthorizedError(body=resp.text)
     if resp.status_code == 429:
         return RateLimitedError(body=resp.text)
     if not resp.ok:
@@ -633,4 +652,123 @@ def download(
         call_id=_hdr(resp, "x-litellm-call-id"),
         content_type=_hdr(resp, "content-type"),
         body=resp.text,
+    )
+
+
+class RawResponse(BaseModel):
+    """A verbatim upstream HTTP response for the provider edge (provider_edge.py):
+    status, lowercased headers, raw bytes. No Result classification because the
+    edge relays provider errors to the proxy untouched."""
+
+    status_code: int
+    headers: dict[str, str]
+    body: bytes
+
+
+def forward(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    body: bytes | None,
+    timeout: float = 60.0,
+) -> RawResponse | NetworkError:
+    """Relay one provider-bound request verbatim for the provider edge's record
+    mode. No retries, no redirects, no schema: the proxy owns retry policy and
+    the recorded bundle must hold exactly what the provider returned."""
+    try:
+        resp = requests.request(
+            method, url, headers=headers, data=body, timeout=timeout, allow_redirects=False
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return RawResponse(
+        status_code=resp.status_code,
+        headers={name.lower(): value for name, value in resp.headers.items()},
+        body=resp.content,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class StreamChunk:
+    """One transfer chunk of a response body, exactly as the upstream framed it."""
+
+    data: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class StreamTruncation:
+    """The body ended without its terminator, i.e. the upstream hung up mid-message.
+    Always the last step, and ``reason`` is the transport's own description of it."""
+
+    reason: str
+
+
+type StreamStep = StreamChunk | StreamTruncation
+
+
+@dataclass(frozen=True, slots=True)
+class StreamHead:
+    """An upstream response whose head has arrived and whose body has not been read.
+
+    A dataclass rather than a BaseModel because it owns a live socket: ``steps`` is
+    consumed once, in order, and closing it closes the underlying response."""
+
+    status_code: int
+    headers: dict[str, str]
+    steps: Generator[StreamStep, None, None]
+
+
+def _stream_steps(resp: requests.Response) -> Generator[StreamStep, None, None]:
+    """The body as the upstream framed it, one step per transfer chunk.
+
+    ``chunk_size=None`` is the whole point: urllib3 then returns exactly one piece
+    per wire chunk, so the provider's split points survive into the recording. Any
+    integer would re-slice the body into fixed-size pieces instead. Empty pieces are
+    dropped because a zero-length chunk is the terminator on the wire, and a failure
+    part way through becomes a final truncation step rather than an exception, since
+    the chunks already delivered are exactly what makes a mid-stream failure
+    different from a request that never streamed at all."""
+    try:
+        for piece in cast("Iterator[bytes]", resp.iter_content(chunk_size=None)):
+            if piece:
+                yield StreamChunk(data=piece)
+    except requests.RequestException as exc:
+        yield StreamTruncation(reason=str(exc))
+    finally:
+        resp.close()
+
+
+def forward_stream(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    body: bytes | None,
+    timeout: float = 60.0,
+) -> StreamHead | NetworkError:
+    """Relay one provider-bound request for the provider edge and return as soon as
+    the response head arrives, with the body left unread behind ``StreamHead.steps``.
+
+    Same contract as ``forward`` otherwise: no retries, no redirects, no schema. A
+    failure before the head arrives is still a ``NetworkError``; one raised while the
+    body streams arrives as the last step. With ``stream=True`` the timeout bounds
+    each socket read rather than the whole body, which is the right bound for a
+    stream and strictly more permissive for a long generation."""
+    try:
+        resp = requests.request(
+            method,
+            url,
+            headers=headers,
+            data=body,
+            timeout=timeout,
+            allow_redirects=False,
+            stream=True,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return StreamHead(
+        status_code=resp.status_code,
+        headers={name.lower(): value for name, value in resp.headers.items()},
+        steps=_stream_steps(resp),
     )

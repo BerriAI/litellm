@@ -62,8 +62,17 @@ vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => {
 
 // The redesigned sidebar reads the custom logo from ThemeContext; the test tree
 // has no ThemeProvider, so stub the hook.
+const unbrandedTheme = () => ({
+  logoUrl: null as string | null,
+  logoUrlDark: null as string | null,
+  faviconUrl: null as string | null,
+  setLogoUrl: vi.fn(),
+  setLogoUrlDark: vi.fn(),
+  setFaviconUrl: vi.fn(),
+});
+let mockUseThemeImpl = unbrandedTheme;
 vi.mock("@/contexts/ThemeContext", () => ({
-  useTheme: () => ({ logoUrl: null, faviconUrl: null, setLogoUrl: vi.fn(), setFaviconUrl: vi.fn() }),
+  useTheme: () => mockUseThemeImpl(),
 }));
 
 // Version tag + logout target come from network hooks; keep them inert in unit tests.
@@ -97,12 +106,68 @@ describe("Sidebar (leftnav)", () => {
   afterEach(() => {
     mockUseAuthorized.mockReset();
     mockUseOrganizations.mockReset();
+    mockUseThemeImpl = unbrandedTheme;
   });
 
   it("should link the logo to the UI home route rather than the proxy origin", () => {
     renderWithProviders(<Sidebar {...defaultProps} />);
 
     expect(screen.getByRole("link", { name: /litellm home/i })).toHaveAttribute("href", "/ui");
+  });
+
+  it("pairs the logo with a dark-mode variant that swaps on the dark class", () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    const [light, dark] = Array.from(screen.getByRole("link", { name: /litellm home/i }).querySelectorAll("img"));
+    const classesOf = (el: Element) => new Set(el.className.split(/\s+/));
+
+    const lightSrc = light.getAttribute("src") ?? "";
+    expect(light).toHaveAttribute("src", expect.stringMatching(/\/get_image$/));
+    expect(dark).toHaveAttribute("src", `${lightSrc}?theme=dark`);
+    expect(classesOf(light).has("dark:hidden")).toBe(true);
+    expect(classesOf(light).has("hidden")).toBe(false);
+    expect(classesOf(dark).has("hidden")).toBe(true);
+    expect(classesOf(dark).has("dark:block")).toBe(true);
+  });
+
+  it("prefers a configured dark logo over the light one in dark mode", () => {
+    mockUseThemeImpl = () => ({
+      ...unbrandedTheme(),
+      logoUrl: "https://cdn.example.com/logo.png",
+      logoUrlDark: "https://cdn.example.com/logo-dark.png",
+    });
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    const [light, dark] = Array.from(screen.getByRole("link", { name: /litellm home/i }).querySelectorAll("img"));
+
+    expect(light).toHaveAttribute("src", "https://cdn.example.com/logo.png");
+    expect(dark).toHaveAttribute("src", "https://cdn.example.com/logo-dark.png");
+  });
+
+  it("reuses the light custom logo in dark mode when no dark one is configured", () => {
+    mockUseThemeImpl = () => ({ ...unbrandedTheme(), logoUrl: "https://cdn.example.com/logo.png" });
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    const [light, dark] = Array.from(screen.getByRole("link", { name: /litellm home/i }).querySelectorAll("img"));
+
+    expect(light).toHaveAttribute("src", "https://cdn.example.com/logo.png");
+    expect(dark).toHaveAttribute("src", "https://cdn.example.com/logo.png");
+  });
+
+  it("falls back to the light logo when a configured dark logo fails to load", () => {
+    mockUseThemeImpl = () => ({
+      ...unbrandedTheme(),
+      logoUrl: "https://cdn.example.com/logo.png",
+      logoUrlDark: "https://cdn.example.com/gone.png",
+    });
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    const [, dark] = Array.from(screen.getByRole("link", { name: /litellm home/i }).querySelectorAll("img"));
+    expect(dark).toHaveAttribute("src", "https://cdn.example.com/gone.png");
+
+    fireEvent.error(dark);
+
+    expect(dark).toHaveAttribute("src", "https://cdn.example.com/logo.png");
   });
 
   it("renders all top-level (non-nested) tabs for admin", () => {
@@ -148,6 +213,20 @@ describe("Sidebar (leftnav)", () => {
       expect(screen.getByText("Search Tools")).toBeInTheDocument();
     });
   });
+  it("reports whether a nested tab is expanded", async () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    const toggle = screen.getByText("Tools").closest("button")!;
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    act(() => {
+      fireEvent.click(toggle);
+    });
+    await waitFor(() => {
+      expect(toggle).toHaveAttribute("aria-expanded", "true");
+    });
+  });
+
   it("keeps Router Settings as a single Settings child", () => {
     // Router Settings is admin-only, so getAvailablePages() filters it out entirely and the
     // page_utils duplicate-key guard cannot see it. Walk menuGroups directly, otherwise a
@@ -456,8 +535,8 @@ describe("Sidebar (leftnav)", () => {
 
     const costOptimization = container.querySelector('a[href*="cost-optimization"]');
     expect(costOptimization).not.toBeNull();
-    expect(costOptimization!.textContent).toContain("Cost Optimization");
-    expect(costOptimization!.textContent).toContain("Beta");
+    expect(costOptimization!).toHaveTextContent(/Cost Optimization/);
+    expect(costOptimization!).toHaveTextContent(/Beta/);
 
     expect(container.querySelector('a[href*="projects"]')).toBeNull();
   });

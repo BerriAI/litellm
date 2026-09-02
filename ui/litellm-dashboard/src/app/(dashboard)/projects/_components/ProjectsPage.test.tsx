@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
 import type { UrlUpdateEvent } from "nuqs/adapters/testing";
-import { renderWithProviders, screen, waitFor, within } from "../../../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor, within } from "../../../../../tests/test-utils";
 import { ProjectsPage } from "./ProjectsPage";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 
@@ -82,6 +82,8 @@ describe("ProjectsPage", () => {
     mockUseProjects.mockReturnValue({ data: [], isLoading: false });
     renderWithProviders(<ProjectsPage />);
     expect(screen.getByRole("heading", { name: /projects/i })).toBeInTheDocument();
+    expect(screen.getByText("Manage projects within your teams")).toBeInTheDocument();
+    expect(document.querySelector(".lucide-folder")).not.toBeNull();
   });
 
   it("should show a 'Create Project' button", () => {
@@ -137,7 +139,7 @@ describe("ProjectsPage", () => {
     const user = userEvent.setup();
     mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
     renderWithProviders(<ProjectsPage />);
-    await user.type(screen.getByPlaceholderText(/search projects/i), "Alpha");
+    fireEvent.change(screen.getByPlaceholderText(/search projects/i), { target: { value: "Alpha" } });
     await waitFor(() => {
       expect(screen.getByText("Alpha Project")).toBeInTheDocument();
       expect(screen.queryByText("Beta Project")).not.toBeInTheDocument();
@@ -166,7 +168,7 @@ describe("ProjectsPage", () => {
     const user = userEvent.setup();
     mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
     renderWithProviders(<ProjectsPage />);
-    await user.type(screen.getByPlaceholderText(/search projects/i), "zzz-no-match");
+    fireEvent.change(screen.getByPlaceholderText(/search projects/i), { target: { value: "zzz-no-match" } });
     await waitFor(() => {
       expect(screen.getByText("No matching projects")).toBeInTheDocument();
     });
@@ -199,7 +201,7 @@ describe("ProjectsPage", () => {
     await user.click(screen.getByTestId("pagination-next"));
     expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 2");
 
-    await user.type(screen.getByPlaceholderText(/search projects/i), "Project 01");
+    fireEvent.change(screen.getByPlaceholderText(/search projects/i), { target: { value: "Project 01" } });
     await waitFor(() => {
       expect(screen.getByText("Project 01")).toBeInTheDocument();
       expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 1");

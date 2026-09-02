@@ -3,11 +3,9 @@
  * Used for messages in tree view and last user message
  */
 
-import { Typography } from "antd";
+import { cn } from "@/lib/cva.config";
 import { ToolCall } from "./prettyMessagesTypes";
 import { SimpleToolCallBlock } from "./SimpleToolCallBlock";
-
-const { Text } = Typography;
 
 interface SimpleMessageBlockProps {
   label: string;
@@ -27,30 +25,15 @@ export function SimpleMessageBlock({ label, content, toolCalls, isCompact = fals
   }
 
   return (
-    <div style={{ marginBottom: isCompact ? 8 : 0 }}>
-      <Text
-        type="secondary"
-        style={{
-          fontSize: 10,
-          letterSpacing: "0.5px",
-          textTransform: "uppercase",
-          display: "block",
-          marginBottom: 3,
-        }}
-      >
-        {label}
-      </Text>
+    <div className={cn(isCompact && "mb-2")}>
+      <span className="mb-[3px] block text-[10px] uppercase tracking-[0.5px] text-muted-foreground">{label}</span>
 
       {displayContent && (
         <div
-          style={{
-            fontSize: 13,
-            lineHeight: 1.7,
-            color: "#262626",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            marginBottom: hasToolCalls ? 6 : 0,
-          }}
+          className={cn(
+            "whitespace-pre-wrap break-words text-[13px] leading-[1.7] text-foreground",
+            hasToolCalls && "mb-1.5",
+          )}
         >
           {displayContent}
         </div>

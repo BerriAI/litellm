@@ -2,7 +2,7 @@ from typing import Any, Literal
 
 from openai.types.audio.transcription_create_params import FileTypes
 from pydantic import BaseModel
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 
 class VideoObject(BaseModel):
@@ -76,6 +76,7 @@ class VideoCreateOptionalRequestParams(TypedDict, total=False):
     image: Any | None  # Image for image-to-video; dict with gcsUri/bytesBase64Encoded, or file-like object
     parameters: dict[str, Any] | None  # Provider-specific parameters block passed directly to the API
     model: str | None
+    resolution: ReadOnly[str | None]
     seconds: str | None
     size: str | None
     characters: list[dict[str, str]] | None

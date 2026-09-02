@@ -289,7 +289,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 ### Toast / notifications
 
-**Gap:** `sonner` is not installed. This codebase currently uses `MessageManager` (antd-message-based) for toasts across the chat UI. Don't introduce a second toast mechanism — keep using `MessageManager` until `sonner` is added as a deliberate, separate change (see `AGENTS.md`).
+**Resolved:** `sonner` is installed and mounted from the root layout. Raise toasts through `toast` from `@/lib/toast`; don't introduce a second toast mechanism.
 
 ---
 

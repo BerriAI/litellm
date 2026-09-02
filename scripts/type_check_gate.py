@@ -670,16 +670,19 @@ def main() -> None:
     parser.add_argument("--update", action="store_true")
     parser.add_argument("--emit-counts-dir", type=Path)
     args = parser.parse_args()
-    ensure_typecheck_env()
-    head = count_basedpyright(run_basedpyright())
-    if args.emit_counts_dir is not None:
-        cmd_emit_counts(
-            head, args.emit_counts_dir, _run(["git", "rev-parse", "HEAD"]).strip()
-        )
-    elif args.update:
-        cmd_update(head, args.base)
-    else:
-        cmd_check(head, args.base)
+    from gate_slot_lock import held_slot
+
+    with held_slot():
+        ensure_typecheck_env()
+        head = count_basedpyright(run_basedpyright())
+        if args.emit_counts_dir is not None:
+            cmd_emit_counts(
+                head, args.emit_counts_dir, _run(["git", "rev-parse", "HEAD"]).strip()
+            )
+        elif args.update:
+            cmd_update(head, args.base)
+        else:
+            cmd_check(head, args.base)
 
 
 if __name__ == "__main__":

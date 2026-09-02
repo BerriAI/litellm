@@ -15,7 +15,7 @@ import {
 } from "../networking";
 import { AUTH_TYPE, MCPServer, MCPTool, handleTransport, isUnsupportedOnGatewayConnect } from "../mcp_tools/types";
 import { Logo } from "@/components/molecules/logo/Logo";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { useUserMcpOAuthFlow } from "@/hooks/useUserMcpOAuthFlow";
 
 interface OAuth2ConnectButtonProps {
@@ -249,7 +249,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
     try {
       const result = await listMCPTools(accessToken, server.server_id);
       if (result?.error) {
-        MessageManager.warning(`Could not load tools for ${serverName}`);
+        toast.warning(`Could not load tools for ${serverName}`);
         return;
       }
       if (connectableNow(server.server_id) === undefined) return;
@@ -257,7 +257,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
         onChange([...selectedServersRef.current, serverName]);
       }
     } catch {
-      MessageManager.warning(`Could not load tools for ${serverName}`);
+      toast.warning(`Could not load tools for ${serverName}`);
     } finally {
       setTogglingOn((prev) => {
         const next = new Set(prev);
@@ -276,7 +276,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
     }
     if (server.auth_type === AUTH_TYPE.OAUTH2) {
       if (oauthConnected.has(server.server_id)) {
-        return <CheckCircle className="h-3.5 w-3.5 text-emerald-600 shrink-0" />;
+        return <CheckCircle className="h-3.5 w-3.5 text-success shrink-0" />;
       }
       if (oauthChecking.has(server.server_id)) {
         return <Skeleton className="h-6 w-16 shrink-0 rounded-md" />;
@@ -291,7 +291,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange,
       );
     }
     if (selectedServers.includes(nameOf(server))) {
-      return <span className="w-[7px] h-[7px] rounded-full bg-emerald-600 dark:bg-emerald-400 shrink-0" />;
+      return <span className="w-[7px] h-[7px] rounded-full bg-success shrink-0" />;
     }
     return null;
   };

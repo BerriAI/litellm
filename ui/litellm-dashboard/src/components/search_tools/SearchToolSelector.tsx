@@ -1,5 +1,18 @@
 import React, { useEffect, useState } from "react";
-import { Select } from "antd";
+import {
+  Combobox,
+  ComboboxChip,
+  ComboboxChips,
+  ComboboxChipsInput,
+  ComboboxClear,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxValue,
+  useComboboxAnchor,
+} from "@/components/ui/combobox";
+import { cn } from "@/lib/cva.config";
 import { fetchSearchTools } from "../networking";
 
 export interface SearchToolSelectorProps {
@@ -19,7 +32,8 @@ const SearchToolSelector: React.FC<SearchToolSelectorProps> = ({
   placeholder = "Select search tools (optional)",
   disabled = false,
 }) => {
-  const [options, setOptions] = useState<{ label: string; value: string }[]>([]);
+  const anchor = useComboboxAnchor();
+  const [options, setOptions] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -36,8 +50,7 @@ const SearchToolSelector: React.FC<SearchToolSelectorProps> = ({
         setOptions(
           tools
             .map((tool: { search_tool_name?: string }) => tool?.search_tool_name)
-            .filter((name: unknown): name is string => typeof name === "string" && name.length > 0)
-            .map((name: string) => ({ label: name, value: name })),
+            .filter((name: unknown): name is string => typeof name === "string" && name.length > 0),
         );
       } catch (e) {
         console.error("Failed to load search tools:", e);
@@ -49,20 +62,37 @@ const SearchToolSelector: React.FC<SearchToolSelectorProps> = ({
   }, [accessToken]);
 
   return (
-    <Select
-      mode="multiple"
-      allowClear
-      showSearch
-      optionFilterProp="label"
-      placeholder={placeholder}
-      onChange={onChange}
-      value={value}
-      loading={loading}
-      className={className}
-      options={options}
-      style={{ width: "100%" }}
+    <Combobox
+      multiple
+      items={options}
+      value={value ?? []}
+      onValueChange={(selected: string[]) => onChange(selected)}
       disabled={disabled}
-    />
+    >
+      <ComboboxChips render={<div ref={anchor} />} className={cn("w-full", className)} aria-busy={loading}>
+        <ComboboxValue>
+          {(selected: string[]) =>
+            selected.map((tool) => (
+              <ComboboxChip key={tool} aria-label={tool}>
+                {tool}
+              </ComboboxChip>
+            ))
+          }
+        </ComboboxValue>
+        <ComboboxChipsInput placeholder={placeholder} aria-label={placeholder} disabled={disabled} />
+        {value && value.length > 0 && <ComboboxClear aria-label="Clear all search tools" disabled={disabled} />}
+      </ComboboxChips>
+      <ComboboxContent anchor={anchor}>
+        <ComboboxEmpty>{loading ? "Loading search tools…" : "No search tools found"}</ComboboxEmpty>
+        <ComboboxList>
+          {(tool: string) => (
+            <ComboboxItem key={tool} value={tool}>
+              {tool}
+            </ComboboxItem>
+          )}
+        </ComboboxList>
+      </ComboboxContent>
+    </Combobox>
   );
 };
 

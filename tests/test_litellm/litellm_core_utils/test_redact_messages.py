@@ -5,6 +5,7 @@ Covers the proxy flow where headers arrive in litellm_params["metadata"]["header
 but litellm_params["litellm_metadata"] is None.
 """
 
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -349,7 +350,7 @@ class TestPerformRedaction:
         redacted = perform_redaction({}, result)
 
         message = redacted["choices"][0]["message"]
-        assert message["content"] == "redacted-by-litellm"
+        assert message["content"] is None
         tool_call = message["tool_calls"][0]
         assert tool_call["function"]["arguments"] == "redacted-by-litellm"
         assert tool_call["function"]["name"] == "get_weather"
@@ -490,6 +491,76 @@ class TestPerformRedaction:
         assert redacted["output"][0]["arguments"] == "redacted-by-litellm"
         assert redacted["output"][0]["name"] == "get_weather"
 
+    def test_redacts_every_tool_call_in_multi_element_list(self):
+        result = litellm.ModelResponse(
+            id="resp-multi",
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": '{"city": "a"}'},
+                            },
+                            {
+                                "id": "call_2",
+                                "type": "function",
+                                "function": {"name": "get_time", "arguments": '{"tz": "b"}'},
+                            },
+                        ],
+                    )
+                )
+            ],
+            model="gpt-4o",
+        )
+
+        redacted = perform_redaction({}, result)
+
+        tool_calls = redacted.choices[0].message.tool_calls
+        assert tool_calls[0].function.arguments == "redacted-by-litellm"
+        assert tool_calls[1].function.arguments == "redacted-by-litellm"
+
+    def test_preserves_none_content_on_tool_call_only_message(self):
+        result = litellm.ModelResponse(
+            id="resp-none",
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": '{"city": "a"}'},
+                            }
+                        ],
+                    )
+                )
+            ],
+            model="gpt-4o",
+        )
+
+        redacted = perform_redaction({}, result)
+
+        assert redacted.choices[0].message.content is None
+
+    def test_redacts_responses_api_function_call_arguments_object(self):
+        output_item = SimpleNamespace(
+            type="function_call",
+            name="get_weather",
+            arguments='{"city": "sensitive-city"}',
+            call_id="call_1",
+        )
+
+        _redact_responses_api_output([output_item])
+
+        assert output_item.arguments == "redacted-by-litellm"
+        assert output_item.name == "get_weather"
+
     def test_redacts_response_output_objects_with_top_level_text(self):
         output_items = [
             SimpleNamespace(text="top-level output"),
@@ -500,6 +571,29 @@ class TestPerformRedaction:
 
         assert output_items[0].text == "redacted-by-litellm"
         assert output_items[1] == "non-dict output item"
+
+    def test_preserves_none_text_in_responses_output(self):
+        from litellm.litellm_core_utils.redact_messages import _redact_responses_api_output_dict
+
+        none_item = SimpleNamespace(type="output_text", text=None, content=[SimpleNamespace(text=None)])
+        real_item = SimpleNamespace(type="output_text", text="real answer", content=[SimpleNamespace(text="real part")])
+
+        _redact_responses_api_output([none_item, real_item])
+
+        assert none_item.text is None
+        assert none_item.content[0].text is None
+        assert real_item.text == "redacted-by-litellm"
+        assert real_item.content[0].text == "redacted-by-litellm"
+
+        none_dict = {"type": "output_text", "text": None, "content": [{"text": None}]}
+        real_dict = {"type": "output_text", "text": "real answer", "content": [{"text": "real part"}]}
+
+        _redact_responses_api_output_dict([none_dict, real_dict], "redacted-by-litellm")
+
+        assert none_dict["text"] is None
+        assert none_dict["content"][0]["text"] is None
+        assert real_dict["text"] == "redacted-by-litellm"
+        assert real_dict["content"][0]["text"] == "redacted-by-litellm"
 
     def test_skips_non_dict_response_output_items(self):
         result = {
@@ -681,6 +775,50 @@ class TestPerformRedaction:
         perform_redaction(model_call_details, result=None, redact_streaming_responses=False)
 
         assert response_obj.choices[0].message.content == "secret content"
+
+    def test_unredactable_result_is_not_deepcopied(self):
+        """A result shape no branch can redact must not be deepcopied.
+
+        Binary/HTTP response bodies (batch output, file content, audio) hold an
+        unpicklable ``_thread.lock``. Copying one raises TypeError inside
+        ``Logging.success_handler``, which aborts the handler body at the redaction call so
+        everything after it is skipped. The copy is also pointless: an unrecognized shape
+        returns the placeholder and the copy is discarded.
+
+        The lock is the assertion. If a deepcopy is ever reintroduced ahead of the type
+        check, this raises instead of returning.
+        """
+
+        class _BinaryResponseBody:
+            def __init__(self) -> None:
+                self.text = "batch output bytes"
+                self._client_lock = threading.Lock()
+
+        body = _BinaryResponseBody()
+
+        redacted = perform_redaction({"litellm_params": {}}, body)
+
+        assert redacted == {"text": "redacted-by-litellm"}
+
+    def test_recognized_shapes_still_redact_a_copy(self):
+        """The type gate must not change behaviour for shapes that were already handled."""
+        original = litellm.ModelResponse(
+            choices=[litellm.Choices(message=litellm.Message(content="secret content", role="assistant"))]
+        )
+
+        redacted = perform_redaction({"litellm_params": {}}, original)
+
+        assert redacted.choices[0].message.content == "redacted-by-litellm"
+        assert original.choices[0].message.content == "secret content"
+
+        embedding = litellm.EmbeddingResponse(data=[{"embedding": [1.0, 2.0]}])
+        assert perform_redaction({"litellm_params": {}}, embedding).data == []
+
+        as_dict = {"choices": [{"message": {"role": "assistant", "content": "secret content"}}]}
+        assert (
+            perform_redaction({"litellm_params": {}}, as_dict)["choices"][0]["message"]["content"]
+            == "redacted-by-litellm"
+        )
 
 
 class TestRedactStreamingResponsesForCustomLogger:

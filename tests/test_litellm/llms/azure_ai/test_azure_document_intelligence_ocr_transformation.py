@@ -3,6 +3,8 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
+from litellm.exceptions import UnsupportedParamsError
+
 from litellm.llms.azure_ai.ocr.document_intelligence.transformation import (
     AzureDocumentIntelligenceOCRConfig,
 )
@@ -174,7 +176,101 @@ def test_transform_ocr_response_non_succeeded_status_raises():
 def test_get_supported_ocr_params_includes_features():
     config = AzureDocumentIntelligenceOCRConfig()
 
-    assert config.get_supported_ocr_params("prebuilt-layout") == ["pages", "features"]
+    assert config.get_supported_ocr_params("prebuilt-layout") == ["pages", "features", "req_format"]
+
+
+AZURE_ANALYZE_WITH_NATIVE_ONLY_FIELDS = {
+    **AZURE_ANALYZE_SUCCEEDED,
+    "analyzeResult": {
+        **AZURE_ANALYZE_SUCCEEDED["analyzeResult"],
+        "paragraphs": [{"content": "Invoice", "spans": [{"offset": 0, "length": 7}]}],
+        "pages": [
+            {
+                **AZURE_ANALYZE_SUCCEEDED["analyzeResult"]["pages"][0],
+                "angle": 0.13,
+                "spans": [{"offset": 0, "length": 44}],
+                "words": [{"content": "Invoice", "confidence": 0.994, "polygon": [1, 2, 3, 4]}],
+            }
+        ],
+    },
+}
+
+
+def test_transform_ocr_response_native_format_carries_raw_operation():
+    config = AzureDocumentIntelligenceOCRConfig()
+
+    result = config.transform_ocr_response(
+        model="azure_ai/doc-intelligence/prebuilt-layout",
+        raw_response=_completed_response(AZURE_ANALYZE_WITH_NATIVE_ONLY_FIELDS),
+        logging_obj=MagicMock(),
+        optional_params={"req_format": "native"},
+    )
+
+    assert result.get_provider_native_response() == AZURE_ANALYZE_WITH_NATIVE_ONLY_FIELDS
+    # cost tracking reads usage_info off the normalized response, so it must survive native mode
+    assert result.usage_info is not None
+    assert result.usage_info.pages_processed == 1
+    _assert_native_fields_preserved(result.model_dump())
+
+
+@pytest.mark.asyncio
+async def test_async_transform_ocr_response_native_format_carries_raw_operation():
+    config = AzureDocumentIntelligenceOCRConfig()
+
+    result = await config.async_transform_ocr_response(
+        model="azure_ai/doc-intelligence/prebuilt-layout",
+        raw_response=_completed_response(AZURE_ANALYZE_WITH_NATIVE_ONLY_FIELDS),
+        logging_obj=MagicMock(),
+        optional_params={"req_format": "native"},
+    )
+
+    assert result.get_provider_native_response() == AZURE_ANALYZE_WITH_NATIVE_ONLY_FIELDS
+    assert result.usage_info is not None
+    assert result.usage_info.pages_processed == 1
+
+
+@pytest.mark.parametrize("optional_params", [{}, {"req_format": "litellm"}])
+def test_transform_ocr_response_default_format_omits_raw_operation(optional_params):
+    config = AzureDocumentIntelligenceOCRConfig()
+
+    result = config.transform_ocr_response(
+        model="azure_ai/doc-intelligence/prebuilt-layout",
+        raw_response=_completed_response(AZURE_ANALYZE_WITH_NATIVE_ONLY_FIELDS),
+        logging_obj=MagicMock(),
+        optional_params=optional_params,
+    )
+
+    assert result.get_provider_native_response() is None
+    _assert_native_fields_preserved(result.model_dump())
+
+
+@pytest.mark.parametrize("req_format", ["native", "litellm"])
+def test_map_ocr_params_passes_through_req_format(req_format):
+    config = AzureDocumentIntelligenceOCRConfig()
+
+    assert config.map_ocr_params({"req_format": req_format}, {}, "prebuilt-layout") == {"req_format": req_format}
+
+
+def test_map_ocr_params_rejects_unknown_req_format_as_bad_request():
+    config = AzureDocumentIntelligenceOCRConfig()
+
+    with pytest.raises(UnsupportedParamsError, match="Invalid `req_format`") as exc_info:
+        config.map_ocr_params({"req_format": "azure"}, {}, "prebuilt-layout")
+
+    assert exc_info.value.status_code == 400
+
+
+def test_get_complete_url_omits_req_format_query_param():
+    config = AzureDocumentIntelligenceOCRConfig()
+
+    url = config.get_complete_url(
+        api_base="https://example.cognitiveservices.azure.com",
+        model="prebuilt-layout",
+        optional_params={"req_format": "native"},
+        litellm_params={},
+    )
+
+    assert "req_format" not in url
 
 
 @pytest.mark.parametrize(
@@ -248,3 +344,30 @@ def test_get_complete_url_combines_pages_and_features():
 
     assert "&pages=1,2,3" in url
     assert "&features=keyValuePairs,languages" in url
+
+
+def test_validate_environment_uses_subscription_key(monkeypatch):
+    monkeypatch.delenv("AZURE_DOCUMENT_INTELLIGENCE_API_KEY", raising=False)
+
+    headers = AzureDocumentIntelligenceOCRConfig().validate_environment(
+        headers={},
+        model="prebuilt-layout",
+        api_key="my-key",
+        api_base="https://example.cognitiveservices.azure.com",
+    )
+
+    assert headers["Ocp-Apim-Subscription-Key"] == "my-key"
+
+
+def test_validate_environment_falls_back_to_entra_token(monkeypatch):
+    monkeypatch.delenv("AZURE_DOCUMENT_INTELLIGENCE_API_KEY", raising=False)
+
+    headers = AzureDocumentIntelligenceOCRConfig().validate_environment(
+        headers={},
+        model="prebuilt-layout",
+        api_base="https://example.cognitiveservices.azure.com",
+        litellm_params={"azure_ad_token": "entra-token"},
+    )
+
+    assert headers["Authorization"] == "Bearer entra-token"
+    assert "Ocp-Apim-Subscription-Key" not in headers

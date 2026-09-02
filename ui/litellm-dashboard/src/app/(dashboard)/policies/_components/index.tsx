@@ -3,7 +3,7 @@ import { Alert, AlertDescription, AlertTitle, AlertAction } from "@/components/s
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { Info, TriangleAlert, X } from "lucide-react";
 import { isAdminRole } from "@/utils/roles";
 import PolicyTable from "./PolicyTable";
@@ -126,7 +126,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
       setPoliciesList(response.policies || []);
     } catch (error) {
       console.error("Error fetching policies:", error);
-      MessageManager.error("Failed to fetch policies");
+      toast.error("Failed to fetch policies");
     } finally {
       setIsLoading(false);
     }
@@ -141,7 +141,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
       setAttachmentsList(response.attachments || []);
     } catch (error) {
       console.error("Error fetching attachments:", error);
-      MessageManager.error("Failed to fetch attachments");
+      toast.error("Failed to fetch attachments");
     } finally {
       setIsAttachmentsLoading(false);
     }
@@ -194,11 +194,11 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
     setIsDeleting(true);
     try {
       await deletePolicyCall(accessToken, policyToDelete.policy_id);
-      MessageManager.success(`Policy "${policyToDelete.policy_name}" deleted successfully`);
+      toast.success(`Policy "${policyToDelete.policy_name}" deleted successfully`);
       await fetchPolicies();
     } catch (error) {
       console.error("Error deleting policy:", error);
-      MessageManager.error("Failed to delete policy");
+      toast.error("Failed to delete policy");
     } finally {
       setIsDeleting(false);
       setIsDeleteModalOpen(false);
@@ -243,7 +243,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
 
   const handleUseTemplate = async (template: any) => {
     if (!accessToken) {
-      MessageManager.error("Authentication required");
+      toast.error("Authentication required");
       return;
     }
 
@@ -271,7 +271,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
       setIsGuardrailSelectionModalOpen(true);
     } catch (error) {
       console.error("Error fetching guardrails:", error);
-      MessageManager.error("Failed to load guardrails. Please try again.");
+      toast.error("Failed to load guardrails. Please try again.");
     }
   };
 
@@ -321,7 +321,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
       await proceedWithTemplate(enrichedTemplate);
     } catch (error) {
       console.error("Error enriching template:", error);
-      MessageManager.error("Failed to configure template. Please try again.");
+      toast.error("Failed to configure template. Please try again.");
       setIsEnrichingTemplate(false);
     }
   };
@@ -367,15 +367,15 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
 
       // Show success message
       if (createdGuardrails.length > 0) {
-        MessageManager.success(
+        toast.success(
           `Created ${createdGuardrails.length} guardrail${createdGuardrails.length > 1 ? "s" : ""}! Complete the policy form to save.`,
         );
       } else {
-        MessageManager.success("Template ready! Complete the policy form to save.");
+        toast.success("Template ready! Complete the policy form to save.");
       }
 
       if (failedGuardrails.length > 0) {
-        MessageManager.warning(
+        toast.warning(
           `Failed to create ${failedGuardrails.length} guardrail(s): ${failedGuardrails.join(", ")}. You may need to create them manually.`,
         );
       }
@@ -395,7 +395,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
       setTemplateQueue([]);
       setTemplateQueueProgress(null);
       console.error("Error creating guardrails:", error);
-      MessageManager.error("Failed to create guardrails. Please try again.");
+      toast.error("Failed to create guardrails. Please try again.");
     }
   };
 
@@ -406,25 +406,56 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
     setTemplateQueueProgress(null);
   };
 
+  if (showFlowBuilder) {
+    return (
+      <FlowBuilderPage
+        onBack={() => {
+          setShowFlowBuilder(false);
+          setEditingPolicy(null);
+        }}
+        onSuccess={() => {
+          fetchPolicies();
+          setEditingPolicy(null);
+        }}
+        accessToken={accessToken}
+        editingPolicy={editingPolicy}
+        availableGuardrails={guardrailsList}
+        createPolicy={createPolicyCall}
+        updatePolicy={updatePolicyCall}
+        onVersionCreated={(newPolicy) => {
+          setEditingPolicy(newPolicy);
+          fetchPolicies();
+        }}
+        onSelectVersion={(policy) => {
+          setEditingPolicy(policy);
+        }}
+        onVersionStatusUpdated={(updatedPolicy) => {
+          setEditingPolicy(updatedPolicy);
+          fetchPolicies();
+        }}
+      />
+    );
+  }
+
   return (
     <div className="m-8 mx-auto w-full flex-auto overflow-y-auto p-2">
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="mb-4">
-          <TabsTrigger value="templates" className="flex-none">
+        <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
+          <TabsTrigger value="templates" className="flex-none rounded-none px-4 py-2">
             Templates
           </TabsTrigger>
-          <TabsTrigger value="policies" className="flex-none">
+          <TabsTrigger value="policies" className="flex-none rounded-none px-4 py-2">
             Policies
           </TabsTrigger>
-          <TabsTrigger value="attachments" className="flex-none">
+          <TabsTrigger value="attachments" className="flex-none rounded-none px-4 py-2">
             Attachments
           </TabsTrigger>
-          <TabsTrigger value="simulator" className="flex-none">
+          <TabsTrigger value="simulator" className="flex-none rounded-none px-4 py-2">
             Policy Simulator
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="templates">
+        <TabsContent value="templates" keepMounted>
           <AboutPoliciesAlert />
           <PolicyTemplates
             onUseTemplate={handleUseTemplate}
@@ -434,7 +465,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
           />
         </TabsContent>
 
-        <TabsContent value="policies">
+        <TabsContent value="policies" keepMounted>
           <AboutPoliciesAlert />
 
           <div className="mb-4 flex items-center justify-between">
@@ -503,7 +534,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
           />
         </TabsContent>
 
-        <TabsContent value="attachments">
+        <TabsContent value="attachments" keepMounted>
           <DismissibleAlert title="About Policy Attachments" icon={<Info />}>
             <p className="mb-3">
               Policy attachments control where your policies apply. Policies don&apos;t do anything until you attach
@@ -571,7 +602,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
           />
         </TabsContent>
 
-        <TabsContent value="simulator">
+        <TabsContent value="simulator" keepMounted>
           <PolicyTestPanel accessToken={accessToken} />
         </TabsContent>
       </Tabs>
@@ -628,35 +659,6 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
         accessToken={accessToken}
         allTemplates={loadedTemplates}
       />
-
-      {showFlowBuilder && (
-        <FlowBuilderPage
-          onBack={() => {
-            setShowFlowBuilder(false);
-            setEditingPolicy(null);
-          }}
-          onSuccess={() => {
-            fetchPolicies();
-            setEditingPolicy(null);
-          }}
-          accessToken={accessToken}
-          editingPolicy={editingPolicy}
-          availableGuardrails={guardrailsList}
-          createPolicy={createPolicyCall}
-          updatePolicy={updatePolicyCall}
-          onVersionCreated={(newPolicy) => {
-            setEditingPolicy(newPolicy);
-            fetchPolicies();
-          }}
-          onSelectVersion={(policy) => {
-            setEditingPolicy(policy);
-          }}
-          onVersionStatusUpdated={(updatedPolicy) => {
-            setEditingPolicy(updatedPolicy);
-            fetchPolicies();
-          }}
-        />
-      )}
     </div>
   );
 };

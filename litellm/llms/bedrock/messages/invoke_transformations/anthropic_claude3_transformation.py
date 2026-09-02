@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
@@ -28,14 +29,18 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import (
-    convert_bedrock_invoke_output_format_to_inline_schema,
+    apply_bedrock_invoke_structured_output,
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
     is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
+    normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
-    pop_bedrock_invoke_output_config_format,
-    remove_custom_field_from_tools,
+    strip_unsupported_bedrock_invoke_output_config_keys,
+)
+from litellm.llms.bedrock.request_metadata import (
+    bedrock_request_metadata_headers,
+    merge_bedrock_invoke_headers,
 )
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
@@ -46,7 +51,6 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 from litellm.types.utils import GenericStreamingChunk as GChunk
-from litellm.utils import _supports_factory
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -89,7 +93,8 @@ class AmazonAnthropicClaudeMessagesConfig(
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict, str | None]:
-        return headers, api_base
+        owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
+        return merge_bedrock_invoke_headers(headers, (), metadata_headers, owned_names), api_base
 
     def sign_request(
         self,
@@ -702,58 +707,29 @@ class AmazonAnthropicClaudeMessagesConfig(
         # 4. Remove `ttl` field from cache_control in messages (Bedrock doesn't support it for older models)
         self._remove_ttl_from_cache_control(anthropic_messages_request=anthropic_messages_request, model=model)
 
-        # 5. Convert structured-output params to inline schema.
-        # Bedrock Invoke doesn't support top-level `output_format`; its
-        # accepted `output_config` subset is also narrower than Anthropic's, so
-        # consume the newer `output_config.format` shape here instead of
-        # forwarding it as an unknown nested key.
+        # 5. Route structured-output params (`output_format` /
+        # `output_config.format`) to native enforcement or the inline-schema
+        # fallback, then strip `output_config` keys the model does not accept.
+        # Ref: https://github.com/BerriAI/litellm/issues/22797
         existing_output_config: Final = anthropic_messages_request.get("output_config")
         if isinstance(existing_output_config, dict):
             anthropic_messages_request["output_config"] = dict(existing_output_config)
-        output_format: Final = anthropic_messages_request.pop("output_format", None)
-        output_config_format: Final = pop_bedrock_invoke_output_config_format(anthropic_messages_request)
-        if output_format:
-            convert_bedrock_invoke_output_format_to_inline_schema(
-                output_format=output_format,
-                request_body=anthropic_messages_request,
-            )
-        elif output_config_format:
-            convert_bedrock_invoke_output_format_to_inline_schema(
-                output_format=output_config_format,
-                request_body=anthropic_messages_request,
-            )
+        apply_bedrock_invoke_structured_output(
+            model=model,
+            request_body=anthropic_messages_request,
+        )
         normalize_bedrock_opus_output_config_effort(
             model=model,
             output_config=anthropic_messages_request.get("output_config"),
         )
+        strip_unsupported_bedrock_invoke_output_config_keys(
+            model=model,
+            request_body=anthropic_messages_request,
+        )
 
-        # 5a. Bedrock Invoke supports output_config (effort) for Claude 4.6+ models,
-        # but older models do not — strip it to avoid request rejection.
-        # Ref: https://github.com/BerriAI/litellm/issues/22797
-        if not (
-            _supports_factory(
-                model=model,
-                custom_llm_provider="bedrock",
-                key="supports_output_config",
-            )
-            or AnthropicConfig._model_supports_effort_param(model, "bedrock")
-        ):
-            if anthropic_messages_request.pop("output_config", None) is not None:
-                verbose_logger.warning(
-                    "Bedrock Invoke: stripping unsupported `output_config` for "
-                    "model=%s — neither `supports_output_config` nor any "
-                    "`supports_*_reasoning_effort` flag is set in "
-                    "model_prices_and_context_window.json. Add the capability "
-                    "flag to the model JSON entry if this model accepts "
-                    "`output_config`.",
-                    model,
-                )
-
-        # 5b. Remove `custom` field from tools (Bedrock doesn't support it)
-        # Claude Code sends `custom: {defer_loading: true}` on tool definitions,
-        # which causes Bedrock to reject the request with "Extra inputs are not permitted"
+        # 5b. Hoist `custom.defer_loading` then drop `custom` (Bedrock doesn't support it)
         # Ref: https://github.com/BerriAI/litellm/issues/22847
-        remove_custom_field_from_tools(anthropic_messages_request)
+        normalize_custom_field_on_tools(anthropic_messages_request)
         normalize_tool_input_schema_types_for_bedrock_invoke(anthropic_messages_request)
         ensure_bedrock_anthropic_messages_tool_names(anthropic_messages_request)
 
@@ -770,9 +746,11 @@ class AmazonAnthropicClaudeMessagesConfig(
         if filtered_betas:
             anthropic_messages_request["anthropic_beta"] = filtered_betas
 
+        remaining_output_config: Final = anthropic_messages_request.get("output_config")
         if (
             litellm.drop_params is True
-            and "output_config" in anthropic_messages_request
+            and isinstance(remaining_output_config, dict)
+            and any(key != "format" for key in remaining_output_config)
             and not AnthropicConfig._model_supports_effort_param(model, "bedrock")
         ):
             verbose_logger.warning(
@@ -838,8 +816,15 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         patched_stream: Final = self._promote_message_stop_usage(completion_stream)
 
-        async for chunk in handler.async_sse_wrapper(patched_stream):
-            yield chunk
+        sse_stream: Final = handler.async_sse_wrapper(patched_stream)
+        try:
+            async for chunk in sse_stream:
+                yield chunk
+        finally:
+            # Close the inner generator deterministically so a client disconnect
+            # (GeneratorExit here) reaches async_sse_wrapper's partial-spend logging
+            # now instead of at garbage collection. See LIT-5839.
+            await sse_stream.aclose()
 
     @staticmethod
     def _merge_message_start_cache_into_delta_usage(
@@ -958,13 +943,32 @@ class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
         Bedrock returns usage metrics using camelCase keys. Convert these to
         the Anthropic `/v1/messages` specification so callers receive a
         consistent response shape when streaming.
+
+        Token counts already present in the chunk's own Anthropic usage block
+        win over the invocationMetrics-derived ones, and cache token fields
+        (``cache_read_input_tokens`` / ``cache_creation_input_tokens`` on
+        ``message_stop.usage``, or ``cacheReadInputTokenCount`` /
+        ``cacheWriteInputTokenCount`` inside the invocation metrics) are
+        preserved: ``invocationMetrics.inputTokenCount`` excludes cache reads
+        and writes, so replacing the whole usage block with input/output counts
+        alone drops the cache breakdown, ``_promote_message_stop_usage`` has
+        nothing left to promote, and cache tokens end up billed at $0.
         """
         amazon_bedrock_invocation_metrics: Final = chunk_data.pop("amazon-bedrock-invocationMetrics", {})
         if amazon_bedrock_invocation_metrics:
-            anthropic_usage: Final = {}
-            if "inputTokenCount" in amazon_bedrock_invocation_metrics:
-                anthropic_usage["input_tokens"] = amazon_bedrock_invocation_metrics["inputTokenCount"]
-            if "outputTokenCount" in amazon_bedrock_invocation_metrics:
-                anthropic_usage["output_tokens"] = amazon_bedrock_invocation_metrics["outputTokenCount"]
-            chunk_data["usage"] = anthropic_usage
+            existing_usage: Final = chunk_data.get("usage")
+            preserved_usage: Final = existing_usage if isinstance(existing_usage, dict) else MappingProxyType({})
+            metrics_usage: Final = MappingProxyType(
+                {
+                    anthropic_key: amazon_bedrock_invocation_metrics[metrics_key]
+                    for anthropic_key, metrics_key in (
+                        ("input_tokens", "inputTokenCount"),
+                        ("output_tokens", "outputTokenCount"),
+                        ("cache_read_input_tokens", "cacheReadInputTokenCount"),
+                        ("cache_creation_input_tokens", "cacheWriteInputTokenCount"),
+                    )
+                    if metrics_key in amazon_bedrock_invocation_metrics
+                }
+            )
+            chunk_data["usage"] = {**metrics_usage, **preserved_usage}
         return chunk_data

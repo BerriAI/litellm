@@ -2,14 +2,9 @@
 
 import asyncio
 import importlib
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm  # noqa: E402,F401
 
 from tests._vcr_conftest_common import (  # noqa: E402,F401
@@ -44,11 +39,7 @@ def setup_and_teardown():
     """
     This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
     """
-    sys.path.insert(
-        0, os.path.abspath("../..")
-    )  # Adds the project directory to the system path
 
-    import litellm
 
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
@@ -59,8 +50,6 @@ def setup_and_teardown():
 
     try:
         if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
-            import litellm.proxy.proxy_server
-
             importlib.reload(litellm.proxy.proxy_server)
     except Exception as e:
         print(f"Error reloading litellm.proxy.proxy_server: {e}")

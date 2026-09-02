@@ -1,6 +1,4 @@
-import os
-import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -9,11 +7,11 @@ import pytest
 
 from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
 
-sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from litellm.proxy.management_endpoints.common_daily_activity import (
     _adjust_dates_for_timezone,
     _build_aggregated_sql_query,
+    _build_entity_rollup_sql_query,
     _is_user_agent_tag,
     _record_to_spend_metrics,
     get_api_key_metadata,
@@ -157,6 +155,7 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
         "compression_saved_tokens": 0,
         "compression_savings_spend": 0.0,
         "prompt_caching_savings_spend": 0.0,
+        "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
         "failed_requests": 0,
     }
@@ -487,6 +486,7 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     mock_record_1.compression_saved_tokens = 0
     mock_record_1.compression_savings_spend = 0.0
     mock_record_1.prompt_caching_savings_spend = 0.0
+    mock_record_1.gateway_injected_caching_savings_spend = 0.0
     mock_record_1.autorouter_savings_spend = 0.0
     mock_record_1.api_requests = 10
     mock_record_1.successful_requests = 9
@@ -510,6 +510,7 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     mock_record_2.compression_saved_tokens = 0
     mock_record_2.compression_savings_spend = 0.0
     mock_record_2.prompt_caching_savings_spend = 0.0
+    mock_record_2.gateway_injected_caching_savings_spend = 0.0
     mock_record_2.autorouter_savings_spend = 0.0
     mock_record_2.api_requests = 5
     mock_record_2.successful_requests = 5
@@ -573,6 +574,7 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
         "compression_saved_tokens": 0,
         "compression_savings_spend": 0.0,
         "prompt_caching_savings_spend": 0.0,
+        "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
         "failed_requests": 0,
     }
@@ -659,6 +661,7 @@ def _daily_user_spend_record(*, user_id, api_key, spend, model="gpt-4", model_gr
         compression_saved_tokens=0,
         compression_savings_spend=0.0,
         prompt_caching_savings_spend=0.0,
+        gateway_injected_caching_savings_spend=0.0,
         autorouter_savings_spend=0.0,
         api_requests=1,
         successful_requests=1,
@@ -927,6 +930,33 @@ class TestBuildAggregatedSqlQuery:
         assert "date >= $1" in sql
         assert "date <= $2" in sql
 
+    @pytest.mark.parametrize("build", [_build_aggregated_sql_query, _build_entity_rollup_sql_query])
+    def test_include_current_utc_day_extends_live_end_bound(self, build):
+        """
+        An offset larger than 24h keeps the caller's local date behind UTC at any
+        wall-clock hour, so the live-end extension is deterministic: a range ending
+        on the caller's local today must reach today's UTC bucket (LIT-5818, guards
+        the #36051 behavior on the aggregated path).
+        """
+        offset_minutes: Final = 1500
+        caller_local_today: Final = (datetime.now(timezone.utc) - timedelta(minutes=offset_minutes)).date().isoformat()
+        utc_today: Final = datetime.now(timezone.utc).date().isoformat()
+
+        _sql, params = build(
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id="user-1",
+            start_date="2026-05-01",
+            end_date=caller_local_today,
+            model=None,
+            api_key=None,
+            timezone_offset_minutes=offset_minutes,
+            include_current_utc_day=True,
+        )
+
+        assert params[0] == "2026-05-01"
+        assert params[1] == utc_today
+
     def test_optional_filters_appear_in_params_in_order(self):
         sql, params = _build_aggregated_sql_query(
             table_name="litellm_dailyuserspend",
@@ -982,6 +1012,58 @@ class TestBuildAggregatedSqlQuery:
         assert "COALESCE(model_group, model)" not in normalized
 
 
+class TestAggregatedEmptyEntityFilter:
+    _BUILDERS: Final = (_build_aggregated_sql_query, _build_entity_rollup_sql_query)
+
+    @pytest.mark.parametrize("build", _BUILDERS)
+    def test_empty_entity_list_emits_no_degenerate_in_clause(self, build):
+        sql, params = build(
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=[],
+            start_date="2026-08-01",
+            end_date="2026-08-19",
+            model=None,
+            api_key=None,
+        )
+
+        normalized = " ".join(sql.split())
+        assert "IN ()" not in normalized
+        assert '"team_id" IN' not in normalized
+        assert params == ["2026-08-01", "2026-08-19"]
+
+    @pytest.mark.parametrize("build", _BUILDERS)
+    def test_empty_entity_list_matches_nothing_rather_than_everything(self, build):
+        sql, _ = build(
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=[],
+            start_date="2026-08-01",
+            end_date="2026-08-19",
+            model=None,
+            api_key=None,
+        )
+
+        assert "FALSE" in " ".join(sql.split())
+
+    @pytest.mark.parametrize("build", _BUILDERS)
+    def test_populated_entity_list_still_filters_on_its_ids(self, build):
+        sql, params = build(
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=["team-alpha", "team-beta"],
+            start_date="2026-08-01",
+            end_date="2026-08-19",
+            model=None,
+            api_key=None,
+        )
+
+        normalized = " ".join(sql.split())
+        assert '"team_id" IN ($3, $4)' in normalized
+        assert "FALSE" not in normalized
+        assert params == ["2026-08-01", "2026-08-19", "team-alpha", "team-beta"]
+
+
 @pytest.mark.asyncio
 async def test_get_daily_activity_aggregated_empty_result_set():
     """Regression test for the empty-range 500.
@@ -1012,6 +1094,7 @@ async def test_get_daily_activity_aggregated_empty_result_set():
             "compression_saved_tokens": None,
             "compression_savings_spend": None,
             "prompt_caching_savings_spend": None,
+            "gateway_injected_caching_savings_spend": None,
             "autorouter_savings_spend": None,
             "api_requests": None,
             "successful_requests": None,
@@ -1056,6 +1139,7 @@ def _no_spend_record():
         compression_saved_tokens=None,
         compression_savings_spend=None,
         prompt_caching_savings_spend=None,
+        gateway_injected_caching_savings_spend=None,
         autorouter_savings_spend=None,
         api_requests=None,
         successful_requests=None,
@@ -1165,6 +1249,7 @@ def _spend_record(api_key, *, model="gpt-4o-mini-ptu", spend=0.0, ptu_flat_cost=
         compression_saved_tokens=0,
         compression_savings_spend=0,
         prompt_caching_savings_spend=0,
+        gateway_injected_caching_savings_spend=0,
         autorouter_savings_spend=0,
         total_tokens=0,
         api_requests=0,
@@ -1230,6 +1315,7 @@ def _grouping_row(
         compression_saved_tokens=0,
         compression_savings_spend=0.0,
         prompt_caching_savings_spend=0.0,
+        gateway_injected_caching_savings_spend=0.0,
         autorouter_savings_spend=0.0,
         api_requests=0,
         successful_requests=0,
@@ -1389,6 +1475,7 @@ def test_update_breakdown_metrics_covers_mcp_endpoint_and_entity(ptu_cost_attrib
         compression_saved_tokens=0,
         compression_savings_spend=0,
         prompt_caching_savings_spend=0,
+        gateway_injected_caching_savings_spend=0,
         autorouter_savings_spend=0,
         total_tokens=0,
         api_requests=0,
@@ -1719,3 +1806,157 @@ class TestFlagIsNotReadOnTheHotPath:
 
         reads = self._count_flag_reads([_spend_record(PTU_SENTINEL_API_KEY, spend=0.0, ptu_flat_cost=240.0)])
         assert reads > 0
+
+
+def test_entity_rollup_sql_query_and_api_key_list_filter():
+    """The entity rollup companion query keeps its own two grouping sets keyed
+    by GROUPING(api_key), shares the WHERE builder (list api_key becomes a
+    parameterized IN, an empty list must match nothing), and the main
+    aggregated query stays entity-free."""
+    from litellm.proxy.management_endpoints.common_daily_activity import (
+        _build_entity_rollup_sql_query,
+    )
+
+    sql, params = _build_entity_rollup_sql_query(
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id=None,
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        model=None,
+        api_key=["key-1", "key-2"],
+    )
+    assert '"team_id" AS entity_id' in sql
+    assert "GROUPING(api_key) AS api_key_rolled" in sql
+    assert '(date, "team_id"),' in sql
+    assert '(date, "team_id", api_key)' in sql
+    assert "api_key IN ($3, $4)" in sql
+    assert "SUM(ptu_flat_cost)::float" in sql
+    assert params == ["2024-01-01", "2024-01-31", "key-1", "key-2"]
+
+    plain_sql, _ = _build_aggregated_sql_query(
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id=None,
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        model=None,
+        api_key=None,
+    )
+    assert "entity_id" not in plain_sql
+    assert "GROUPING(date" in plain_sql
+
+    empty_sql, empty_params = _build_aggregated_sql_query(
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id=None,
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        model=None,
+        api_key=[],
+    )
+    assert "FALSE" in empty_sql
+    assert empty_params == ["2024-01-01", "2024-01-31"]
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_aggregated_with_entity_breakdown():
+    """include_entity_breakdown must run the companion entity rollup query and
+    fold breakdown.entities onto the response, without disturbing the main
+    query's rollup dispatch."""
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+
+    base = {
+        "model": None,
+        "model_group": None,
+        "custom_llm_provider": None,
+        "mcp_namespaced_tool_name": None,
+        "endpoint": None,
+        "api_key": None,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "compression_saved_tokens": 0,
+        "compression_savings_spend": 0.0,
+        "prompt_caching_savings_spend": 0.0,
+        "gateway_injected_caching_savings_spend": 0.0,
+        "autorouter_savings_spend": 0.0,
+        "failed_requests": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "api_requests": 0,
+        "successful_requests": 0,
+    }
+    main_rows = [
+        {**base, "date": None, "group_level": 127, "spend": 18.0},
+        {**base, "date": "2024-01-01", "group_level": 63, "spend": 18.0},
+        {**base, "date": "2024-01-01", "model": "gpt-4o", "group_level": 47, "spend": 18.0},
+        {**base, "date": "2024-01-01", "api_key": "key-1", "group_level": 31, "spend": 12.0},
+    ]
+    entity_base = {
+        key: value
+        for key, value in base.items()
+        if key not in ("model", "model_group", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint")
+    }
+    entity_rows = [
+        {**entity_base, "date": "2024-01-01", "entity_id": "team-a", "api_key_rolled": 1, "spend": 12.0},
+        {**entity_base, "date": "2024-01-01", "entity_id": "team-b", "api_key_rolled": 1, "spend": 6.0},
+        {
+            **entity_base,
+            "date": "2024-01-01",
+            "entity_id": "team-a",
+            "api_key": "key-1",
+            "api_key_rolled": 0,
+            "spend": 12.0,
+        },
+        {
+            **entity_base,
+            "date": "2024-01-01",
+            "entity_id": "team-b",
+            "api_key": "key-2",
+            "api_key_rolled": 0,
+            "spend": 6.0,
+        },
+    ]
+
+    mock_prisma.db.query_raw = AsyncMock(side_effect=[main_rows, entity_rows])
+    mock_prisma.db.litellm_verificationtoken = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+    result = await get_daily_activity_aggregated(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id=None,
+        entity_metadata_field={"team-a": {"team_alias": "Alpha"}},
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+        model=None,
+        api_key=None,
+        include_entity_breakdown=True,
+    )
+
+    assert mock_prisma.db.query_raw.call_count == 2
+    main_sql = mock_prisma.db.query_raw.call_args_list[0][0][0]
+    entity_sql = mock_prisma.db.query_raw.call_args_list[1][0][0]
+    assert "entity_id" not in main_sql
+    assert '"team_id" AS entity_id' in entity_sql
+    assert '(date, "team_id"),' in entity_sql
+
+    assert result.metadata.total_spend == 18.0
+    assert len(result.results) == 1
+    daily = result.results[0]
+    assert daily.metrics.spend == 18.0
+
+    entities = daily.breakdown.entities
+    assert set(entities) == {"team-a", "team-b"}
+    assert entities["team-a"].metrics.spend == 12.0
+    assert entities["team-a"].metadata == {"team_alias": "Alpha"}
+    assert entities["team-a"].api_key_breakdown["key-1"].metrics.spend == 12.0
+    assert entities["team-b"].metrics.spend == 6.0
+    assert entities["team-b"].metadata == {}
+    assert entities["team-b"].api_key_breakdown["key-2"].metrics.spend == 6.0
+
+    # Rollups with the entity bit set must still land in their usual buckets
+    assert daily.breakdown.models["gpt-4o"].metrics.spend == 18.0
+    assert daily.breakdown.api_keys["key-1"].metrics.spend == 12.0

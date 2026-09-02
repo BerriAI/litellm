@@ -1,5 +1,5 @@
 from collections.abc import Coroutine
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from openai import AsyncAzureOpenAI, AzureOpenAI
 from pydantic import BaseModel
@@ -16,6 +16,9 @@ from litellm.utils import (
 from .azure import AzureChatCompletion
 from .common_utils import AzureOpenAIError
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
 
 class AzureAudioTranscription(AzureChatCompletion):
     def audio_transcriptions(
@@ -23,7 +26,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         model: str,
         audio_file: FileTypes,
         optional_params: dict,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         model_response: TranscriptionResponse,
         timeout: float,
         max_retries: int,
@@ -112,7 +115,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         data: dict,
         model_response: TranscriptionResponse,
         timeout: float,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         api_version: str | None = None,
         api_key: str | None = None,
         api_base: str | None = None,

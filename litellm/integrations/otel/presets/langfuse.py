@@ -42,9 +42,7 @@ def langfuse_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str,
     public_key: Final = params.get("langfuse_public_key")
     secret_key: Final = params.get("langfuse_secret_key")
     if public_key and secret_key:
-        return {
-            "Authorization": _V1Langfuse._get_langfuse_authorization_header(
-                public_key=public_key, secret_key=secret_key
-            )
-        }
+        return _V1Langfuse._build_langfuse_otel_headers(
+            _V1Langfuse._get_langfuse_authorization_header(public_key=public_key, secret_key=secret_key)
+        )
     return {}

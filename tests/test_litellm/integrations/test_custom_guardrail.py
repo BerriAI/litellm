@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from litellm.integrations.custom_guardrail import (
+    DEFAULT_ADVISORY_MESSAGE,
     CustomGuardrail,
     log_guardrail_information,
 )
@@ -1158,6 +1159,152 @@ class TestCustomGuardrailPassthroughSupport:
         assert result is True
 
 
+class TestInjectAdvisoryMessage:
+    """
+    Tests for CustomGuardrail.inject_advisory_message: the shared, guardrail-agnostic
+    "advisory" flagged-content strategy (append a note, let the LLM decide) that sits
+    alongside raise_passthrough_exception (short-circuit with a canned message).
+    """
+
+    def test_appends_to_empty_messages_list(self):
+        guardrail = CustomGuardrail()
+        data = {"model": "gpt-5-mini"}
+
+        guardrail.inject_advisory_message(data, "This looks suspicious.")
+
+        assert data["messages"] == [{"role": "system", "content": "This looks suspicious."}]
+
+    def test_appends_to_existing_messages_list(self):
+        guardrail = CustomGuardrail()
+        original_messages = [{"role": "user", "content": "Hello"}]
+        data = {"model": "gpt-5-mini", "messages": list(original_messages)}
+
+        guardrail.inject_advisory_message(data, "This looks suspicious.")
+
+        assert data["messages"] == original_messages + [{"role": "system", "content": "This looks suspicious."}]
+
+    def test_does_not_mutate_other_data_keys(self):
+        guardrail = CustomGuardrail()
+        data = {"model": "gpt-5-mini", "metadata": {"user_id": "abc"}, "temperature": 0.5}
+
+        guardrail.inject_advisory_message(data, "Advisory note.")
+
+        assert data["model"] == "gpt-5-mini"
+        assert data["metadata"] == {"user_id": "abc"}
+        assert data["temperature"] == 0.5
+
+    def test_works_on_bare_customguardrail_not_just_lakera(self):
+        """Proves genericity: this is a CustomGuardrail method, not Lakera-specific."""
+
+        class SomeOtherGuardrail(CustomGuardrail):
+            pass
+
+        guardrail = SomeOtherGuardrail(guardrail_name="some_other_guardrail")
+        data = {"messages": [{"role": "user", "content": "hi"}]}
+
+        guardrail.inject_advisory_message(data, DEFAULT_ADVISORY_MESSAGE.format(reason="a content safety concern"))
+
+        assert len(data["messages"]) == 2
+
+    def test_appends_to_responses_api_input_string(self):
+        """
+        The Responses API stores its content in "input", not "messages". Appending
+        only to "messages" would leave the advisory unreachable for that endpoint,
+        since the Responses backend never reads a "messages" key.
+        """
+        guardrail = CustomGuardrail()
+        data = {"model": "gpt-5-mini", "input": "What's the weather today?"}
+
+        guardrail.inject_advisory_message(data, "This looks suspicious.")
+
+        assert data["input"] == "What's the weather today?\n\nThis looks suspicious."
+        assert "messages" not in data
+
+    def test_appends_to_both_messages_and_input_when_both_present(self):
+        guardrail = CustomGuardrail()
+        data = {"messages": [{"role": "user", "content": "hi"}], "input": "hi"}
+
+        guardrail.inject_advisory_message(data, "Advisory note.")
+
+        assert data["messages"][-1] == {"role": "system", "content": "Advisory note."}
+        assert data["input"] == "hi\n\nAdvisory note."
+
+    def test_prefers_instructions_over_input_for_responses_api(self):
+        """
+        Veria-ai finding on BerriAI/litellm#34940: "instructions" is the
+        privileged, developer-set Responses-API field; "input" is caller-
+        controlled and a caller could include text telling the model to
+        disregard a trailing warning appended there instead. The advisory
+        must land in "instructions" whenever it's present, not "input".
+        """
+        guardrail = CustomGuardrail()
+        data = {"instructions": "You are a helpful assistant.", "input": "hi"}
+
+        guardrail.inject_advisory_message(data, "This looks suspicious.")
+
+        assert data["instructions"] == "You are a helpful assistant.\n\nThis looks suspicious."
+        assert data["input"] == "hi"
+
+    def test_prefers_instructions_over_structured_input_for_responses_api(self):
+        guardrail = CustomGuardrail()
+        structured_input = [{"role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+        data = {"instructions": "You are a helpful assistant.", "input": list(structured_input)}
+
+        delivered = guardrail.inject_advisory_message(data, "This looks suspicious.")
+
+        assert delivered is True
+        assert data["instructions"] == "You are a helpful assistant.\n\nThis looks suspicious."
+        assert data["input"] == structured_input
+
+    def test_returns_true_when_delivered_to_messages_or_input(self):
+        guardrail = CustomGuardrail()
+        assert guardrail.inject_advisory_message({"messages": []}, "note") is True
+        assert guardrail.inject_advisory_message({"input": "hi"}, "note") is True
+        assert guardrail.inject_advisory_message({"model": "gpt-5-mini"}, "note") is True
+
+    def test_returns_false_and_does_not_mutate_structured_responses_api_input(self):
+        """
+        A structured Responses-API input (a list of input items, not a plain
+        string) with no "messages" key has no field this helper can safely
+        append into -- adding a "messages" key would be inert, since the
+        Responses backend reads only "input". The caller must be able to tell
+        this happened so it can degrade to blocking instead of silently
+        letting the flagged request through with no advisory delivered.
+        """
+        guardrail = CustomGuardrail()
+        structured_input = [{"role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+        data = {"model": "gpt-5-mini", "input": list(structured_input)}
+
+        delivered = guardrail.inject_advisory_message(data, "This looks suspicious.")
+
+        assert delivered is False
+        assert data["input"] == structured_input
+        assert "messages" not in data
+
+    def test_returns_false_and_does_not_mutate_when_messages_also_present_alongside_structured_input(self):
+        """
+        Bugbot finding on BerriAI/litellm#34940: a request can carry both a
+        "messages" list and a structured Responses-API "input" list at the
+        same time (the raw request body is passed through largely unvalidated).
+        The Responses backend reads only "input" in that shape, so a "messages"
+        list being present too must not make this return True -- appending
+        there is exactly as inert as when "messages" is absent, and previously
+        this returned True (and mutated "messages") purely because a
+        "messages" list happened to exist, silently letting a flagged request
+        through advisory mode believed it had delivered a note the model never saw.
+        """
+        guardrail = CustomGuardrail()
+        structured_input = [{"role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+        original_messages = [{"role": "user", "content": "hi"}]
+        data = {"model": "gpt-5-mini", "messages": list(original_messages), "input": list(structured_input)}
+
+        delivered = guardrail.inject_advisory_message(data, "This looks suspicious.")
+
+        assert delivered is False
+        assert data["input"] == structured_input
+        assert data["messages"] == original_messages
+
+
 class TestEventTypeLogging:
     """Tests for event_type logging in guardrail information."""
 
@@ -2090,3 +2237,202 @@ class TestRecordsOwnGuardrailInformation:
         )
 
         assert _guardrail_entries(request_data) == []
+
+
+class _ApplyOnlyObserver(CustomGuardrail):
+    """Overrides only apply_guardrail, like panw_prisma_airs; inherits async_logging_hook."""
+
+    def __init__(self, block: bool = False):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        super().__init__(guardrail_name="apply-only-observer", event_hook=GuardrailEventHooks.logging_only)
+        self.block = block
+        self.calls: list = []
+
+    @log_guardrail_information
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        from fastapi import HTTPException
+
+        self.calls.append((input_type, list(inputs.get("texts") or [])))
+        if self.block:
+            raise HTTPException(status_code=400, detail={"error": "flagged"})
+        return GenericGuardrailAPIInputs(texts=["[MASKED]" for _ in inputs.get("texts") or []])
+
+
+def _logged_call(messages: list | str) -> tuple[dict, object]:
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    response = ModelResponse(choices=[Choices(message=Message(role="assistant", content="general kenobi"))])
+    kwargs = {
+        "model": "gpt-5.4-mini",
+        "messages": messages,
+        "litellm_call_id": "call-1",
+        "litellm_params": {"metadata": {"user_api_key_user_id": "u1"}},
+        "optional_params": {},
+        "standard_logging_object": {"guardrail_information": None},
+    }
+    return kwargs, response
+
+
+class TestLoggingOnlyApplyGuardrail:
+    """LIT-4876 regression: a guardrail in mode logging_only that implements only
+    apply_guardrail must still run against the logged request and response and
+    record guardrail_information, instead of inheriting the CustomLogger no-op."""
+
+    @pytest.mark.asyncio
+    async def test_runs_apply_guardrail_observe_only_and_records_verdict(self):
+        guardrail = _ApplyOnlyObserver()
+        messages = [{"role": "user", "content": "hello there"}]
+        kwargs, response = _logged_call(messages)
+
+        out_kwargs, out_response = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        assert guardrail.calls == [("request", ["hello there"]), ("response", ["general kenobi"])]
+        assert out_kwargs["messages"] == [{"role": "user", "content": "hello there"}]
+        assert out_response.choices[0].message.content == "general kenobi"
+        entries = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert [e["guardrail_name"] for e in entries] == ["apply-only-observer", "apply-only-observer"]
+        assert {e["guardrail_mode"] for e in entries} == {"logging_only"}
+        assert {e["guardrail_status"] for e in entries} == {"success"}
+        assert "standard_logging_guardrail_information" not in kwargs["litellm_params"]["metadata"]
+        assert kwargs["standard_logging_object"] == {"guardrail_information": None}
+
+    @pytest.mark.asyncio
+    async def test_appends_to_pre_call_verdicts_without_duplicating_them(self):
+        guardrail = _ApplyOnlyObserver()
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+        pre_call_entry = {"guardrail_name": "pii-blocker", "guardrail_mode": "pre_call", "guardrail_status": "success"}
+        kwargs["litellm_params"]["metadata"]["standard_logging_guardrail_information"] = [pre_call_entry]
+        kwargs["standard_logging_object"]["guardrail_information"] = [pre_call_entry]
+
+        out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        entries = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert [e["guardrail_name"] for e in entries] == ["pii-blocker", "apply-only-observer", "apply-only-observer"]
+        assert kwargs["litellm_params"]["metadata"]["standard_logging_guardrail_information"] == [pre_call_entry]
+
+    @pytest.mark.asyncio
+    async def test_request_copy_failure_is_swallowed(self):
+        import threading
+
+        guardrail = _ApplyOnlyObserver()
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there", "lock": threading.Lock()}])
+
+        out_kwargs, out_response = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        assert guardrail.calls == []
+        assert out_kwargs is kwargs
+        assert out_response is response
+
+    @pytest.mark.asyncio
+    async def test_block_verdict_is_recorded_without_raising(self):
+        guardrail = _ApplyOnlyObserver(block=True)
+        kwargs, response = _logged_call([{"role": "user", "content": "flagged content"}])
+
+        out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        assert guardrail.calls == [("request", ["flagged content"])]
+        entries = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert [e["guardrail_status"] for e in entries] == ["guardrail_intervened"]
+
+    @pytest.mark.asyncio
+    async def test_call_type_without_translation_is_skipped(self):
+        guardrail = _ApplyOnlyObserver()
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+
+        out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.amoderation.value)
+
+        assert guardrail.calls == []
+        assert out_kwargs["standard_logging_object"]["guardrail_information"] is None
+
+    @pytest.mark.asyncio
+    async def test_aembedding_scans_logged_input(self):
+        from litellm.types.utils import EmbeddingResponse
+
+        guardrail = _ApplyOnlyObserver()
+        kwargs, _ = _logged_call("hello there")
+        response = EmbeddingResponse(data=[{"embedding": [0.1], "index": 0, "object": "embedding"}])
+
+        out_kwargs, out_response = await guardrail.async_logging_hook(kwargs, response, CallTypes.aembedding.value)
+
+        assert guardrail.calls == [("request", ["hello there"])]
+        assert out_kwargs["messages"] == "hello there"
+        assert out_response is response
+        entries = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert [e["guardrail_status"] for e in entries] == ["success"]
+
+    @pytest.mark.asyncio
+    async def test_native_lifecycle_hook_guardrail_is_left_alone(self):
+        class _NativeHooks(_ApplyOnlyObserver):
+            use_native_lifecycle_hooks = True
+
+        guardrail = _NativeHooks()
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+
+        out_kwargs, out_response = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        assert guardrail.calls == []
+        assert out_kwargs is kwargs
+        assert out_response is response
+
+    @pytest.mark.asyncio
+    async def test_aresponses_scans_logged_messages_when_input_is_cleared(self):
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        guardrail = _ApplyOnlyObserver()
+        kwargs, _ = _logged_call([{"role": "user", "content": "hello there"}])
+        kwargs["input"] = None
+        response = ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            model="gpt-5.4-mini",
+            object="response",
+            status="completed",
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "general kenobi"}],
+                }
+            ],
+        )
+
+        out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.aresponses.value)
+
+        assert guardrail.calls == [("request", ["hello there"]), ("response", ["general kenobi"])]
+        entries = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert [e["guardrail_status"] for e in entries] == ["success", "success"]
+
+    @pytest.mark.asyncio
+    async def test_async_success_handler_records_verdict_in_standard_logging_object(self):
+        import datetime as dt
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
+
+        guardrail = _ApplyOnlyObserver()
+        guardrail.default_on = True
+        messages = [{"role": "user", "content": "hello there"}]
+        _, response = _logged_call(messages)
+        logging_obj = Logging(
+            model="gpt-5.4-mini",
+            messages=messages,
+            stream=False,
+            call_type=CallTypes.acompletion.value,
+            start_time=dt.datetime.now(),
+            litellm_call_id="call-1",
+            function_id="fn-1",
+            dynamic_async_success_callbacks=[guardrail],
+        )
+        logging_obj.update_environment_variables(
+            litellm_params={"metadata": {}}, optional_params={}, model="gpt-5.4-mini", custom_llm_provider="openai"
+        )
+
+        await logging_obj.async_success_handler(
+            result=response, start_time=dt.datetime.now(), end_time=dt.datetime.now()
+        )
+
+        assert guardrail.calls == [("request", ["hello there"]), ("response", ["general kenobi"])]
+        entries = logging_obj.model_call_details["standard_logging_object"]["guardrail_information"]
+        assert [e["guardrail_status"] for e in entries] == ["success", "success"]

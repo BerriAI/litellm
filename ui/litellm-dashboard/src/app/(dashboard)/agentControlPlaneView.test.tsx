@@ -33,7 +33,7 @@ describe("AgentControlPlaneView iframe", () => {
     expect(src).toBe("http://localhost:3300/");
     expect(src).not.toContain("/sessions");
     // title comes from the plugin's display_name, not a hardcoded label
-    expect(iframe!.getAttribute("title")).toBe("Chat UI");
+    expect(iframe!).toHaveAttribute("title", "Chat UI");
   });
 
   it("does not double the slash when the plugin url has a trailing slash", () => {
@@ -43,7 +43,7 @@ describe("AgentControlPlaneView iframe", () => {
       url: "http://localhost:3300/",
     };
     const { container } = render(<AgentControlPlaneView />);
-    expect(container.querySelector("iframe")!.getAttribute("src")).toBe("http://localhost:3300/");
+    expect(container.querySelector("iframe")!).toHaveAttribute("src", "http://localhost:3300/");
     pluginModeValue.activePlugin = {
       name: "litellm-platform-plugin",
       display_name: "Chat UI",

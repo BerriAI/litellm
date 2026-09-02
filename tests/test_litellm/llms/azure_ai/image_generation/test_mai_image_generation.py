@@ -1,11 +1,9 @@
 import os
-import sys
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 import litellm
 from litellm.llms.azure.azure import AzureChatCompletion
@@ -40,8 +38,8 @@ class TestAzureMAIImageGeneration:
         assert not AzureFoundryMAIImageGenerationConfig.is_mai_model("flux.2-pro")
         assert not AzureFoundryMAIImageGenerationConfig.is_mai_model("MAI-DS-R1")
 
-    def test_mai_flash_and_2e_model_pricing_in_cost_map(self):
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    def test_mai_flash_and_2e_model_pricing_in_cost_map(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
         litellm.model_cost = litellm.get_model_cost_map(url="")
 
         flash_info = litellm.get_model_info(
@@ -328,8 +326,8 @@ class TestAzureMAIImageGeneration:
         assert image_response.usage.total_tokens == 1046
         assert image_response.size == "1792x1024"
 
-    def test_mai_image_cost_calculator_token_based(self):
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    def test_mai_image_cost_calculator_token_based(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
         litellm.model_cost = litellm.get_model_cost_map(url="")
         model = "azure_ai/MAI-Image-2.5"
         model_info = litellm.get_model_info(model=model, custom_llm_provider="azure_ai")
@@ -360,8 +358,8 @@ class TestAzureMAIImageGeneration:
         )
         assert round(cost, 10) == round(expected_cost, 10)
 
-    def test_mai_image_cost_calculator_falls_back_to_flat_image_pricing(self):
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    def test_mai_image_cost_calculator_falls_back_to_flat_image_pricing(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
         litellm.model_cost = litellm.get_model_cost_map(url="")
         model = "azure_ai/MAI-Image-2.5"
         model_info = litellm.get_model_info(model=model, custom_llm_provider="azure_ai")

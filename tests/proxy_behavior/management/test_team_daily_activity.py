@@ -5,11 +5,12 @@ from .actors import Actor
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
-# GET /team/daily/activity. A proxy admin (admin view) sees activity for any
-# team. A non-admin is scoped to user_info.teams: a bare query defaults to its
-# own teams (200), and an explicit team_ids filter naming a team it does not
-# belong to is 404 (the VERIA-43 fix). Org admins have no team memberships, so
-# they behave like a non-member for any specific team.
+# GET /team/daily/activity and its /aggregated variant (same shared scope
+# resolver, so the matrix must hold for both). A proxy admin (admin view) sees
+# activity for any team. A non-admin is scoped to user_info.teams: a bare query
+# defaults to its own teams (200), and an explicit team_ids filter naming a
+# team it does not belong to is 404 (the VERIA-43 fix). Org admins have no
+# team memberships, so they behave like a non-member for any specific team.
 _MEMBERS = {
     "alpha": {
         Actor.TEAM_ADMIN,
@@ -41,12 +42,17 @@ _DATES = "start_date=2024-01-01&end_date=2024-12-31"
 
 
 @pytest.mark.parametrize(
+    "endpoint",
+    ("/team/daily/activity", "/team/daily/activity/aggregated"),
+    ids=("paginated", "aggregated"),
+)
+@pytest.mark.parametrize(
     "actor,team,expected_status",
     [(a, t, s) for (_id, a, t, s) in _CASES],
     ids=[c[0] for c in _CASES],
 )
 async def test_team_daily_activity_matrix(
-    actor: Actor, team: str, expected_status: int, proxy_client, world
+    actor: Actor, team: str, expected_status: int, endpoint: str, proxy_client, world
 ):
     query = _DATES
     if team == "alpha":
@@ -55,7 +61,7 @@ async def test_team_daily_activity_matrix(
         query += f"&team_ids={world.team_beta_id}"
 
     resp = await proxy_client.get(
-        f"/team/daily/activity?{query}",
+        f"{endpoint}?{query}",
         headers={"Authorization": f"Bearer {world.keys[actor].cleartext}"},
     )
     assert (

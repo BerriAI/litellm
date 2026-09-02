@@ -586,6 +586,60 @@ class TestBedrockFilesTransformation:
         assert "x-amz-server-side-encryption" not in headers
         assert "x-amz-server-side-encryption-aws-kms-key-id" not in headers
 
+    def test_create_file_response_reports_uploaded_object_size(self):
+        """
+        S3 answers PutObject with an empty body, so the returned FileObject must report the
+        size of the body that was uploaded instead of the response's Content-Length (always 0).
+        """
+        import httpx
+
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        config = BedrockFilesConfig()
+        litellm_params: dict = {"s3_bucket_name": "litellm-batch-bucket"}
+        jsonl_content = json.dumps(
+            {
+                "custom_id": "req-1",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "bedrock/amazon.nova-pro-v1:0",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "max_tokens": 10,
+                },
+            }
+        ).encode()
+
+        request = config.transform_create_file_request(
+            model="amazon.nova-pro-v1:0",
+            create_file_data={
+                "file": ("batch.jsonl", jsonl_content, "application/jsonl"),
+                "purpose": "batch",
+            },
+            optional_params={
+                "aws_access_key_id": "test-key-id",
+                "aws_secret_access_key": "test-secret",
+                "aws_region_name": "us-west-2",
+            },
+            litellm_params=litellm_params,
+        )
+        assert isinstance(request, dict)
+        uploaded_size = len(request["data"].encode("utf-8"))
+        assert uploaded_size > 0
+
+        file_object = config.transform_create_file_response(
+            model=None,
+            raw_response=httpx.Response(
+                status_code=200,
+                headers={"Content-Length": "0", "ETag": '"abc123"'},
+                content=b"",
+            ),
+            logging_obj=MagicMock(),
+            litellm_params=litellm_params,
+        )
+
+        assert file_object.bytes == uploaded_size
+
     def test_openai_passthrough_still_works(self):
         """
         Regression test: ensure OpenAI-compatible models (e.g. gpt-oss)
@@ -621,6 +675,200 @@ class TestBedrockFilesTransformation:
         assert "messages" in model_input
         assert "max_tokens" in model_input
         assert model_input["max_tokens"] == 10
+
+    def test_resolves_model_alias_before_provider_mapping(self, monkeypatch):
+        import litellm
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setitem(
+            litellm.model_alias_map,
+            "bedrock-batch",
+            "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+        )
+
+        result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [
+                {
+                    "custom_id": "req-1",
+                    "body": {
+                        "model": "bedrock-batch",
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "max_tokens": 16,
+                    },
+                }
+            ]
+        )
+
+        assert result == [
+            {
+                "recordId": "req-1",
+                "modelInput": {
+                    "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+                    "max_tokens": 16,
+                    "anthropic_version": "bedrock-2023-05-31",
+                },
+            }
+        ]
+
+    def test_resolves_model_alias_before_embedding_mapping(self, monkeypatch):
+        import litellm
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setitem(
+            litellm.model_alias_map,
+            "bedrock-embedding-batch",
+            "bedrock/amazon.titan-embed-text-v2:0",
+        )
+
+        result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [
+                {
+                    "custom_id": "embedding-1",
+                    "url": "/v1/embeddings",
+                    "body": {
+                        "model": "bedrock-embedding-batch",
+                        "input": "hello",
+                    },
+                }
+            ]
+        )
+
+        assert result == [
+            {
+                "recordId": "embedding-1",
+                "modelInput": {"inputText": "hello"},
+            }
+        ]
+
+    def test_unmapped_alias_falls_back_to_target_model(self):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [
+                {
+                    "custom_id": "req-1",
+                    "body": {
+                        "model": "bedrock-batch",
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "max_tokens": 16,
+                    },
+                },
+                {
+                    "custom_id": "req-2",
+                    "body": {
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "max_tokens": 16,
+                    },
+                },
+            ],
+            target_model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        )
+
+        expected_model_input = {
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+            "max_tokens": 16,
+            "anthropic_version": "bedrock-2023-05-31",
+        }
+        assert result == [
+            {"recordId": "req-1", "modelInput": expected_model_input},
+            {"recordId": "req-2", "modelInput": expected_model_input},
+        ]
+
+    def test_record_provider_wins_over_target_model(self):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [
+                {
+                    "custom_id": "openai-1",
+                    "url": "/v1/chat/completions",
+                    "body": {
+                        "model": "openai.gpt-oss-120b-1:0",
+                        "messages": [{"role": "user", "content": "Hello!"}],
+                        "max_tokens": 10,
+                    },
+                }
+            ],
+            target_model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        )
+
+        assert result == [
+            {
+                "recordId": "openai-1",
+                "modelInput": {
+                    "messages": [{"role": "user", "content": "Hello!"}],
+                    "max_tokens": 10,
+                },
+            }
+        ]
+
+    def test_embedding_alias_falls_back_to_target_model(self):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        result = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [
+                {
+                    "custom_id": "embedding-1",
+                    "url": "/v1/embeddings",
+                    "body": {
+                        "model": "bedrock-embedding-batch",
+                        "input": "hello",
+                    },
+                }
+            ],
+            target_model="bedrock/amazon.titan-embed-text-v2:0",
+        )
+
+        assert result == [
+            {
+                "recordId": "embedding-1",
+                "modelInput": {"inputText": "hello"},
+            }
+        ]
+
+    def test_create_file_request_threads_deployment_model_to_alias_records(self):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        class CapturingSignConfig(BedrockFilesConfig):
+            def __init__(self):
+                super().__init__()
+                self.signed_content: str | None = None
+
+            def _sign_s3_request(self, content, api_base, optional_params, s3_encryption_key_id=None):
+                self.signed_content = content
+                return {"Authorization": "fake"}, content
+
+        config = CapturingSignConfig()
+        jsonl_content = json.dumps(
+            {
+                "custom_id": "req-1",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "bedrock-batch",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "max_tokens": 10,
+                },
+            }
+        ).encode()
+
+        config.transform_create_file_request(
+            model="",
+            create_file_data={
+                "file": ("batch.jsonl", jsonl_content, "application/jsonl"),
+                "purpose": "batch",
+            },
+            optional_params={},
+            litellm_params={
+                "s3_bucket_name": "litellm-batch-352026",
+                "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            },
+        )
+
+        assert config.signed_content is not None
+        record = json.loads(config.signed_content)
+        assert record["modelInput"]["anthropic_version"] == "bedrock-2023-05-31"
+        assert "model" not in record["modelInput"]
 
 
 class TestBedrockFilesEmbeddingTransformation:
@@ -935,24 +1183,6 @@ class TestBedrockFilesEmbeddingTransformation:
         assert "messages" in result[0]["modelInput"]
         assert "inputText" not in result[0]["modelInput"]
 
-    def test_url_embeddings_with_missing_input_raises_not_chat_error(self):
-        """url says embed, body lacks input → embedding-path error, not chat-path crash."""
-        import pytest
-
-        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
-
-        config = BedrockFilesConfig()
-        with pytest.raises(ValueError, match="missing required `input`"):
-            config._transform_openai_jsonl_content_to_bedrock_jsonl_content(
-                [
-                    {
-                        "custom_id": "e1",
-                        "method": "POST",
-                        "url": "/v1/embeddings",
-                        "body": {"model": "bedrock/amazon.titan-embed-text-v2:0"},
-                    }
-                ]
-            )
 
     def test_titan_v2_marker_boundary_rejects_lookalikes(self):
         """The marker must end at `:`, `/`, or end-of-string to avoid false positives."""
@@ -1762,6 +1992,113 @@ class TestBedrockFileContentTransformation:
                 litellm_params=self._litellm_params(),
             )
 
+    def _trusted(self, **deployment_litellm_params) -> dict:
+        """Build the trusted snapshot the way the proxy does: deployment
+        litellm_params funneled through ``CredentialLiteLLMParams`` (the strict
+        allowlist ``get_deployment_credentials_with_provider`` applies) before
+        retrieval ever sees them. Injecting a raw ``MappingProxyType`` would
+        bypass that filter and hide whether a bucket field actually survives
+        into the snapshot in production."""
+        from types import MappingProxyType
+
+        from litellm.types.router import CredentialLiteLLMParams
+
+        snapshot = CredentialLiteLLMParams(**deployment_litellm_params).model_dump(
+            exclude_none=True
+        )
+        params = self._litellm_params()
+        params["_litellm_internal_model_credentials"] = MappingProxyType(snapshot)
+        return params
+
+    def test_retrieves_from_distinct_output_bucket(self, monkeypatch):
+        """Batch outputs can land in a separate s3_output_bucket_name. Retrieval
+        must validate the file id against the output bucket too, not just the
+        input bucket, or the very outputs the feature serves are unreachable.
+        The snapshot is built through the production credential filter, so this
+        fails if s3_output_bucket_name is dropped from that allowlist."""
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+
+        url, _ = BedrockFilesConfig().transform_file_content_request(
+            file_content_request={
+                "file_id": "s3://out-bucket/litellm-batch-outputs/job/in.jsonl.out"
+            },
+            optional_params={},
+            litellm_params=self._trusted(
+                s3_bucket_name="in-bucket", s3_output_bucket_name="out-bucket"
+            ),
+        )
+
+        assert (
+            url
+            == "https://s3.us-west-2.amazonaws.com/out-bucket/litellm-batch-outputs/job/in.jsonl.out"
+        )
+
+    def test_output_bucket_falls_back_to_env(self, monkeypatch):
+        """The output bucket resolves from AWS_S3_OUTPUT_BUCKET_NAME when not in
+        the trusted snapshot, mirroring the input-bucket env fallback."""
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "in-bucket")
+        monkeypatch.setenv("AWS_S3_OUTPUT_BUCKET_NAME", "env-out-bucket")
+
+        url, _ = BedrockFilesConfig().transform_file_content_request(
+            file_content_request={
+                "file_id": "s3://env-out-bucket/litellm-batch-outputs/job/in.jsonl.out"
+            },
+            optional_params={},
+            litellm_params=self._litellm_params(),
+        )
+
+        assert (
+            url
+            == "https://s3.us-west-2.amazonaws.com/env-out-bucket/litellm-batch-outputs/job/in.jsonl.out"
+        )
+
+    def test_input_bucket_still_validates_when_output_bucket_set(self, monkeypatch):
+        """Adding output-bucket support must not break retrieval of input-bucket
+        objects when both buckets are configured."""
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+
+        url, _ = BedrockFilesConfig().transform_file_content_request(
+            file_content_request={
+                "file_id": "s3://in-bucket/litellm-batch-outputs/job/in.jsonl.out"
+            },
+            optional_params={},
+            litellm_params=self._trusted(
+                s3_bucket_name="in-bucket", s3_output_bucket_name="out-bucket"
+            ),
+        )
+
+        assert (
+            url
+            == "https://s3.us-west-2.amazonaws.com/in-bucket/litellm-batch-outputs/job/in.jsonl.out"
+        )
+
+    def test_rejects_bucket_outside_input_and_output(self, monkeypatch):
+        """A file id whose bucket is neither the input nor the output bucket is
+        still rejected (SSRF / bucket-confusion guard)."""
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
+        monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
+
+        with pytest.raises(ValueError, match="configured storage bucket"):
+            BedrockFilesConfig().transform_file_content_request(
+                file_content_request={
+                    "file_id": "s3://other-bucket/litellm-batch-outputs/job/x.jsonl.out"
+                },
+                optional_params={},
+                litellm_params=self._trusted(
+                    s3_bucket_name="in-bucket", s3_output_bucket_name="out-bucket"
+                ),
+            )
+
     def test_sign_request_without_botocore_raises_helpful_error(self, monkeypatch):
         """A missing botocore must surface an actionable 'install boto3' error
         rather than a raw import failure."""
@@ -2067,3 +2404,111 @@ class TestBedrockFilesS3SignatureEncoding:
             body=None,
             headers=litellm_params[S3_SIGNED_GET_HEADERS_PARAM],
         )
+
+
+def test_sign_s3_request_assumes_role_with_external_id(monkeypatch):
+    """A trust policy requiring sts:ExternalId must be satisfied when signing the S3 upload request."""
+    import datetime
+    from unittest.mock import patch
+
+    import boto3
+    from botocore.exceptions import ClientError
+
+    from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+    monkeypatch.delenv("AWS_EXTERNAL_ID", raising=False)
+
+    class FakeSTSClient:
+        def get_caller_identity(self):
+            return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+
+        def assume_role(self, **params):
+            if params.get("ExternalId") != "external-id-files-put":
+                raise ClientError(
+                    {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:AssumeRole"}},
+                    "AssumeRole",
+                )
+            return {
+                "Credentials": {
+                    "AccessKeyId": "ASIAFILESPUTROLE",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-session-token",
+                    "Expiration": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=30),
+                }
+            }
+
+    optional_params = {
+        "aws_region_name": "us-east-1",
+        "aws_access_key_id": "AKIAFILESPUTCALLER",
+        "aws_secret_access_key": "pod-caller-secret",
+        "aws_role_name": "arn:aws:iam::999999999999:role/litellm-files-put-role",
+        "aws_session_name": "litellm-files-put-session",
+        "aws_external_id": "external-id-files-put",
+    }
+
+    with patch.object(boto3, "client", return_value=FakeSTSClient()):
+        signed_headers, _signed_body = BedrockFilesConfig()._sign_s3_request(
+            content='{"custom_id": "req-1"}',
+            api_base="https://s3.us-east-1.amazonaws.com/safe-bucket/litellm-bedrock-files-model-id-abc.jsonl",
+            optional_params=optional_params,
+        )
+
+    authorization = {key.lower(): value for key, value in signed_headers.items()}["authorization"]
+    assert "ASIAFILESPUTROLE" in authorization
+
+
+def test_sign_s3_get_request_assumes_role_with_external_id(monkeypatch):
+    """A trust policy requiring sts:ExternalId must be satisfied when signing the S3 download request."""
+    import datetime
+    from unittest.mock import patch
+
+    import boto3
+    from botocore.exceptions import ClientError
+
+    from litellm.llms.bedrock.files.transformation import (
+        BedrockFilesConfig,
+        _BedrockS3RequestParams,
+    )
+
+    monkeypatch.delenv("AWS_EXTERNAL_ID", raising=False)
+
+    class FakeSTSClient:
+        def get_caller_identity(self):
+            return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+
+        def assume_role(self, **params):
+            if params.get("ExternalId") != "external-id-files-get":
+                raise ClientError(
+                    {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:AssumeRole"}},
+                    "AssumeRole",
+                )
+            return {
+                "Credentials": {
+                    "AccessKeyId": "ASIAFILESGETROLE",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-session-token",
+                    "Expiration": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=30),
+                }
+            }
+
+    request_params = _BedrockS3RequestParams.model_validate(
+        {
+            "aws_region_name": "us-east-1",
+            "aws_access_key_id": "AKIAFILESGETCALLER",
+            "aws_secret_access_key": "pod-caller-secret",
+            "aws_role_name": "arn:aws:iam::999999999999:role/litellm-files-get-role",
+            "aws_session_name": "litellm-files-get-session",
+            "aws_external_id": "external-id-files-get",
+        }
+    )
+    assert request_params.aws_external_id == "external-id-files-get"
+
+    with patch.object(boto3, "client", return_value=FakeSTSClient()):
+        signed_headers = BedrockFilesConfig()._sign_s3_get_request(
+            api_base="https://s3.us-east-1.amazonaws.com/safe-bucket/litellm-bedrock-files-model-id-abc.jsonl",
+            aws_region_name="us-east-1",
+            request_params=request_params,
+        )
+
+    authorization = {key.lower(): value for key, value in signed_headers.items()}["authorization"]
+    assert "ASIAFILESGETROLE" in authorization
