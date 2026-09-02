@@ -748,7 +748,7 @@ class CompresrGuardrail(CustomGuardrail):
             }
 
         try:
-            raw_response: HttpxResponse | None = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler.post is untyped
+            raw_response: HttpxResponse = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler.post is untyped
                 url=url,
                 json=payload,
                 headers=self._request_headers(),
@@ -778,11 +778,11 @@ class CompresrGuardrail(CustomGuardrail):
                 {"detail": str(e)},
             )
             return None
-        if raw_response is None or not 200 <= raw_response.status_code < 300:
+        if not 200 <= raw_response.status_code < 300:
             self._handle_compress_failure(
                 "Compresr compression service returned an error",
                 {
-                    "status_code": getattr(raw_response, "status_code", None),
+                    "status_code": raw_response.status_code,
                     "body": _safe_response_text(raw_response),
                 },
             )
@@ -1071,7 +1071,7 @@ class CompresrGuardrail(CustomGuardrail):
         response: Any,
         anthropic_messages_provider_config: Any,
         anthropic_messages_optional_request_params: dict,
-        logging_obj: Any,
+        logging_obj: LiteLLMLoggingObj | None,
         stream: bool,
         kwargs: dict,
     ) -> AgenticLoopPlan:

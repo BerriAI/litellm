@@ -13,6 +13,12 @@ DEFAULT_BATCH_SIZE: Final = int(os.getenv("DEFAULT_BATCH_SIZE", 512))
 DEFAULT_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_FLUSH_INTERVAL_SECONDS", 5))
 DEFAULT_S3_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_S3_BATCH_SIZE: Final = int(os.getenv("DEFAULT_S3_BATCH_SIZE", 512))
+# https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
+MAX_S3_OBJECT_KEY_BYTES: Final = 1024
+S3_BOUNDED_OBJECT_KEY_HEAD_BYTES: Final = 64
+S3_PREFIX_DIGEST_CHARS: Final = 16
+# s3 allows 2048 bytes of combined metadata headers, which Content-Disposition counts against
+MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = int(os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1))
 DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = int(os.getenv("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1))
@@ -35,6 +41,7 @@ DEFAULT_COOLDOWN_TIME_SECONDS: Final = int(os.getenv("DEFAULT_COOLDOWN_TIME_SECO
 DEFAULT_REPLICATE_POLLING_RETRIES: Final = int(os.getenv("DEFAULT_REPLICATE_POLLING_RETRIES", 5))
 DEFAULT_REPLICATE_POLLING_DELAY_SECONDS: Final = int(os.getenv("DEFAULT_REPLICATE_POLLING_DELAY_SECONDS", 1))
 DEFAULT_IMAGE_TOKEN_COUNT: Final = int(os.getenv("DEFAULT_IMAGE_TOKEN_COUNT", 250))
+HF_CONFIG_FETCH_TIMEOUT_SECONDS: Final = 10.0
 
 # Maximum wall-clock seconds a streaming response is allowed to run.
 # Streams exceeding this duration are terminated with a Timeout error.
@@ -49,6 +56,8 @@ LITELLM_MAX_STREAMING_DURATION_SECONDS: Final = (
 # Set to 0 to disable truncation.
 MAX_BASE64_LENGTH_FOR_LOGGING: Final = int(os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64))
 REDACTED_BY_LITELLM: Final = "redacted-by-litellm"
+# in-memory stand-in handed to provider converters for redacted arguments; never stored
+REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER: Final = "{}"
 
 MAX_STRING_LENGTH_STDOUT_LOG: Final = get_env_int("MAX_STRING_LENGTH_STDOUT_LOG", 4096)
 
@@ -127,6 +136,7 @@ MCP_CLIENT_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_CLIENT_TIMEOUT", "60.0"
 MCP_TOOL_LISTING_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "30.0"))
 MCP_METADATA_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "10.0"))
 MCP_HEALTH_CHECK_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
+MCP_TOOL_LISTING_MAX_PAGES: Final = 1000
 
 # Allowlist of commands permitted for MCP stdio transport.
 # Prevents arbitrary command execution via /mcp-rest/test/* endpoints or server creation.
@@ -286,6 +296,7 @@ REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_org_spend_update
 REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_end_user_spend_update_buffer"
 REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_agent_spend_update_buffer"
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_tag_spend_update_buffer"
+REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_window_spend_update_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT: Final = int(os.getenv("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100))
 # Bounds asyncio.Queue() instances (log queues, spend update queues, etc.) to prevent unbounded memory growth
 LITELLM_ASYNCIO_QUEUE_MAXSIZE: Final = int(os.getenv("LITELLM_ASYNCIO_QUEUE_MAXSIZE", 1000))
@@ -294,6 +305,9 @@ GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS: Final = int(
     os.getenv("GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS", 24 * 60 * 60)
 )
 BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS: Final = 25_000
+DEFAULT_PRESIDIO_ANALYZE_CHUNK_SIZE_BYTES: Final = 500_000
+PRESIDIO_ANALYZE_CHUNK_OVERLAP_CHARS: Final = 4096
+PRESIDIO_ANALYZE_CHUNK_CONCURRENCY: Final = 8
 # Aggregation threshold: default to 80% of the asyncio queue maxsize so the check can always trigger.
 # Must be < LITELLM_ASYNCIO_QUEUE_MAXSIZE; if set higher the aggregation logic will never fire.
 MAX_SIZE_IN_MEMORY_QUEUE: Final = int(os.getenv("MAX_SIZE_IN_MEMORY_QUEUE", int(LITELLM_ASYNCIO_QUEUE_MAXSIZE * 0.8)))
@@ -379,6 +393,7 @@ AZURE_OPERATION_POLLING_TIMEOUT: Final = int(os.getenv("AZURE_OPERATION_POLLING_
 AZURE_DOCUMENT_INTELLIGENCE_API_VERSION: Final = str(os.getenv("AZURE_DOCUMENT_INTELLIGENCE_API_VERSION", "2024-11-30"))
 AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI: Final = int(os.getenv("AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI", 96))
 REDIS_SOCKET_TIMEOUT: Final = float(os.getenv("REDIS_SOCKET_TIMEOUT", 0.1))
+CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS: Final[float] = 5.0
 REDIS_CONNECTION_POOL_TIMEOUT: Final = int(os.getenv("REDIS_CONNECTION_POOL_TIMEOUT", 5))
 REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD: Final = int(os.getenv("REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD", 5))
 REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT: Final = int(os.getenv("REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT", 60))
@@ -462,6 +477,8 @@ CONNECTION_ERROR_PATTERNS: Final[list[str]] = [
 ]
 STREAM_SSE_DONE_STRING: Final[str] = "[DONE]"
 STREAM_SSE_DATA_PREFIX: Final[str] = "data: "
+STREAM_SSE_KEEPALIVE_PING_CHUNK: Final[str] = 'event: ping\ndata: {"type": "ping"}\n\n'
+STREAM_SSE_KEEPALIVE_PING_BYTES: Final[bytes] = STREAM_SSE_KEEPALIVE_PING_CHUNK.encode("utf-8")
 ### SPEND TRACKING ###
 DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND: Final = float(
     os.getenv("DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND", 0.001400)
@@ -474,6 +491,22 @@ FIREWORKS_AI_80_B: Final = int(os.getenv("FIREWORKS_AI_80_B", 80))
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING: Final = "REDACTED_BY_LITELM"
 MAX_LANGFUSE_INITIALIZED_CLIENTS: Final = int(os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50))
+# Backpressure + lifetime bounds for the /v1/messages streaming relay (see
+# BaseAnthropicMessagesStreamingIterator.async_sse_wrapper). The relay queue is
+# bounded so a slow client throttles the upstream pump instead of letting it
+# buffer the whole response in memory; the detached-drain cap bounds how many
+# post-disconnect drains may run concurrently so client behavior can't create
+# unbounded worker state.
+ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE: Final = int(
+    os.getenv("ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", "1024")
+)
+# Setting this to 0 disables detached draining entirely: every post-disconnect
+# pump bills whatever partial output it has already collected and aborts the
+# upstream stream immediately, instead of continuing to drain for the real
+# terminal usage.
+ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS: Final = int(
+    os.getenv("ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", "100")
+)
 LOGGING_WORKER_CONCURRENCY: Final = int(os.getenv("LOGGING_WORKER_CONCURRENCY", 100))  # Must be above 0
 LOGGING_WORKER_MAX_QUEUE_SIZE: Final = int(os.getenv("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000))
 LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = float(os.getenv("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0))
@@ -604,6 +637,8 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "nscale",
     "nebius",
     "dashscope",
+    "qwencloud",
+    "qwen_ai_platform",
     "modelscope",
     "moonshot",
     "publicai",
@@ -620,6 +655,15 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "docker_model_runner",
     "amazon_nova",
 ]
+
+# Resolving these providers runs an OAuth device flow (their provider info IS the login), so any
+# metadata or capability lookup against them can block for minutes waiting on a human.
+PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO: Final = frozenset(
+    {
+        "github_copilot",
+        "chatgpt",
+    }
+)
 
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS: Final = [
     "openai",
@@ -764,6 +808,7 @@ openai_compatible_endpoints: Final[list] = [
     "inference.api.nscale.com/v1",
     "api.studio.nebius.ai/v1",
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "https://api-inference.modelscope.cn/v1",
     "https://api.moonshot.ai/v1",
     "https://api.publicai.co/v1",
@@ -787,6 +832,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.meta.ai/v1",
     "https://api.cognition.ai/v1",
     "https://api.scx.ai/v1",
+    "https://gigachat.devices.sberbank.ru/api/v1",
 ]
 
 
@@ -836,6 +882,8 @@ openai_compatible_providers: Final[list] = [
     "nscale",
     "nebius",
     "dashscope",
+    "qwencloud",
+    "qwen_ai_platform",
     "modelscope",
     "moonshot",
     "v0",
@@ -866,6 +914,8 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "featherless_ai",
     "nebius",
     "dashscope",
+    "qwencloud",
+    "qwen_ai_platform",
     "modelscope",
     "moonshot",
     "publicai",
@@ -1073,7 +1123,7 @@ nebius_models: Final[set] = set(
     ]
 )
 
-dashscope_models: Final[set] = set(
+dashscope_models: Final[frozenset] = frozenset(
     [
         "qwen-turbo",
         "qwen-plus",
@@ -1087,6 +1137,10 @@ dashscope_models: Final[set] = set(
         "qwen3-30b-a3b",
     ]
 )
+
+qwencloud_models: Final[frozenset] = frozenset(dashscope_models)
+
+qwen_ai_platform_models: Final[frozenset] = frozenset(dashscope_models)
 
 nebius_embedding_models: Final[set] = set(
     [
@@ -1204,6 +1258,7 @@ BEDROCK_CONVERSE_MODELS: Final = [
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-fable-5-1",
     "anthropic.claude-fable-5",
     "anthropic.claude-sonnet-5",
     "anthropic.claude-opus-5",
@@ -1359,8 +1414,6 @@ X_LITELLM_DISABLE_CALLBACKS: Final = "x-litellm-disable-callbacks"
 LITELLM_METADATA_FIELD: Final = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD: Final = "metadata"
 RETURN_RAW_MODEL_NAME_METADATA_KEY: Final = "_complexity_router_return_raw_model_name"
-AUTO_ROUTED_REQUEST_METADATA_KEY: Final = "_auto_routed_request"
-ROUTER_MODEL_NAME_RESPONSE_FIELD: Final = "router_model_name"
 SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY: Final = "_session_deployment_affinity_ttl"
 CONSUMED_REQUEST_TAGS_METADATA_KEY: Final = "_consumed_request_tags"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
@@ -1393,6 +1446,12 @@ DEFAULT_SOFT_BUDGET: Final = float(
 )  # by default all litellm proxy keys have a soft budget of 50.0
 # makes it clear this is a rate limit error for a litellm virtual key
 RATE_LIMIT_ERROR_MESSAGE_FOR_VIRTUAL_KEY: Final = "LiteLLM Virtual Key user_api_key_hash"
+# Prefix of the 401 raised when a submitted virtual key is not shaped like one.
+INVALID_VIRTUAL_KEY_ERROR_MESSAGE: Final = "LiteLLM Virtual Key expected"
+# Attribute stamped on that 401 at its raise site so log routing recognises it by
+# provenance. Message text is caller-influenceable on other 401s, so it must not
+# be used to classify.
+INVALID_VIRTUAL_KEY_ERROR_MARKER: Final = "_litellm_invalid_virtual_key_error"
 
 # Python garbage collection threshold configuration
 # Format: "gen0,gen1,gen2" e.g., "1000,50,50"
@@ -1470,6 +1529,12 @@ LITELLM_PROXY_MASTER_KEY_ALIAS: Final = "litellm_proxy_master_key"
 # ``ProxyLogging._handle_logging_proxy_only_error``.
 LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL: Final = "litellm_no_upstream_llm_call"
 
+# Key/team metadata fields naming the OTel Resource ``service.name``, highest
+# precedence first. Shared between the OTel v2 tenant router (which reads them
+# out of ``user_api_key_auth_metadata``) and proxy request setup (which re-applies
+# the key's values after the team metadata merge so a key outranks its team).
+OTEL_SERVICE_NAME_METADATA_KEYS: Final = ("otel_service_name_override", "otel_service_name")
+
 # Key Rotation Constants
 LITELLM_KEY_ROTATION_ENABLED: Final = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")
 LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS: Final = int(
@@ -1525,6 +1590,7 @@ KEY_ROTATION_JOB_NAME: Final = "litellm_key_rotation_job"
 EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME: Final = "litellm_expired_ui_session_key_cleanup_job"
 WEEKLY_SPEND_REPORT_JOB_ID: Final = "weekly_spend_report_job"
 MONTHLY_SPEND_REPORT_JOB_ID: Final = "monthly_spend_report_job"
+USER_SPEND_ALERTS_JOB_ID: Final = "user_spend_alerts_job"
 PROMETHEUS_FALLBACK_STATS_JOB_ID: Final = "prometheus_fallback_stats_job"
 SLACK_DAILY_REPORT_LOCK_ID: Final = "slack_daily_report"
 SLACK_MODEL_DEPRECATION_LOCK_ID: Final = "slack_model_deprecation_warning"
@@ -1643,6 +1709,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "enable_anthropic_prompt_caching",
     "anthropic_prompt_caching_ttl",
     "max_ui_session_budget",
+    "budget_rollover",
 ]
 SPECIAL_LITELLM_AUTH_TOKEN: Final = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60))
@@ -1659,6 +1726,7 @@ DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS: Final = 16
 # Ceilings on the cached auth registries; larger tables fall back to per-row lookups
 # instead of holding an unbounded id set in every worker.
 TAG_REGISTRY_MAX_SIZE: Final = 5000
+MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE: Final = 5000
 END_USER_RESTRICTED_REGISTRY_MAX_SIZE: Final = 5000
 # How long a failed registry load is remembered as "unusable", so a degraded Postgres
 # is not re-scanned on every request on top of the per-id lookups it falls back to.
@@ -1703,6 +1771,7 @@ SENTRY_DENYLIST: Final = [
     "jwt_token",
     "private_key",
     "SLACK_WEBHOOK_URL",
+    "ALERTING_WEBHOOK_URL",
     "webhook_url",
     "LANGFUSE_SECRET_KEY",
     # Email Configuration
@@ -1808,6 +1877,43 @@ BROWSER_SECURITY_HEADERS: Final[frozenset[str]] = frozenset(
 )
 
 UNSAFE_PROXY_RESPONSE_HEADERS: Final[frozenset[str]] = HTTP_FRAMING_HEADERS | BROWSER_SECURITY_HEADERS
+
+# A retrieved response replays the usage of the call that created it, so pricing these
+# read/management routes like inference bills the same tokens twice.
+NON_INFERENCE_CALL_TYPES: Final[frozenset[str]] = frozenset(
+    {
+        "get_responses",
+        "aget_responses",
+        "delete_responses",
+        "adelete_responses",
+        "cancel_responses",
+        "acancel_responses",
+        "list_input_items",
+        "alist_input_items",
+        "vector_store_create",
+        "avector_store_create",
+        "vector_store_retrieve",
+        "avector_store_retrieve",
+        "vector_store_list",
+        "avector_store_list",
+        "vector_store_update",
+        "avector_store_update",
+        "vector_store_delete",
+        "avector_store_delete",
+        "vector_store_file_create",
+        "avector_store_file_create",
+        "vector_store_file_list",
+        "avector_store_file_list",
+        "vector_store_file_retrieve",
+        "avector_store_file_retrieve",
+        "vector_store_file_content",
+        "avector_store_file_content",
+        "vector_store_file_update",
+        "avector_store_file_update",
+        "vector_store_file_delete",
+        "avector_store_file_delete",
+    }
+)
 
 # PTU reservation rollup writes rows to LiteLLM_DailyTeamSpend with this
 # sentinel api_key so PTU flat cost stays distinguishable from real per-request

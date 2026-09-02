@@ -69,9 +69,6 @@ describe("CreateSearchTools submit payload", () => {
       litellm_params: {
         search_provider: "perplexity",
         api_key: "sk-secret",
-        api_base: undefined,
-        timeout: undefined,
-        max_retries: undefined,
       },
       search_tool_info: { description: "finds things" },
     });
