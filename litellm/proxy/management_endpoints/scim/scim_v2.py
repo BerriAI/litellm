@@ -1762,6 +1762,10 @@ async def update_user(
         client_set_active: Final = "active" in user.model_fields_set
         scim_active_for_metadata: Final = user_data["active"] if client_set_active else prev_active
 
+        client_set_groups: Final = "groups" in user.model_fields_set
+        existing_teams: Final = list(existing_user.teams or [])
+        new_teams: Final = user_data["teams"] if client_set_groups else existing_teams
+
         metadata: Final = _build_scim_metadata(
             user_data["given_name"],
             user_data["family_name"],
@@ -1773,20 +1777,20 @@ async def update_user(
 
         await _handle_team_membership_changes(
             user_id=user_id,
-            existing_teams=existing_user.teams or [],
-            new_teams=user_data["teams"],
+            existing_teams=existing_teams,
+            new_teams=new_teams,
         )
 
         update_data: Final = {
             "user_email": user_data["user_email"],
             "user_alias": user_data["user_alias"],
             "sso_user_id": user_data["sso_user_id"],
-            "teams": user_data["teams"],
+            "teams": new_teams,
             "metadata": safe_dumps(metadata),
         }
 
         admin_group: Final = await _get_scim_admin_group()
-        if admin_group is not None:
+        if admin_group is not None and client_set_groups:
             update_data["user_role"] = _resolve_scim_user_role(
                 user.groups or [], admin_group, _default_scim_user_role()
             )

@@ -1177,6 +1177,92 @@ async def test_update_user_success(mocker):
 
 
 @pytest.mark.asyncio
+async def test_update_user_without_groups_preserves_memberships(mocker):
+    """PUT /Users with `groups` omitted must leave team memberships and role untouched.
+
+    Regression: IdPs that sync membership only through /Groups omit `groups` on a
+    profile update, and the empty default was applied as "remove from every team".
+    """
+    existing_user = mocker.MagicMock()
+    existing_user.teams = ["team1", "team2"]
+    existing_user.metadata = {}
+
+    scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        userName="test-user",
+        name=SCIMUserName(familyName="User", givenName="Renamed"),
+        emails=[SCIMUserEmail(value="renamed@example.com")],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value={"user_id": "test-user"})
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
+        AsyncMock(return_value=existing_user),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_scim_admin_group",
+        AsyncMock(return_value="admin-group"),
+    )
+    patch_membership = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership", AsyncMock()
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=scim_user),
+    )
+
+    await update_user(user_id="test-user", user=scim_user)
+
+    patch_membership.assert_not_awaited()
+    update_data = mock_prisma_client.db.litellm_usertable.update.call_args[1]["data"]
+    assert update_data["teams"] == ["team1", "team2"]
+    assert update_data["user_email"] == "renamed@example.com"
+    assert "user_role" not in update_data
+
+
+@pytest.mark.asyncio
+async def test_update_user_with_explicit_empty_groups_removes_memberships(mocker):
+    """PUT /Users with `groups: []` sent explicitly still clears every team."""
+    existing_user = mocker.MagicMock()
+    existing_user.teams = ["team1"]
+
+    scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        userName="test-user",
+        emails=[SCIMUserEmail(value="user@example.com")],
+        groups=[],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value={"user_id": "test-user"})
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
+        AsyncMock(return_value=existing_user),
+    )
+    patch_membership = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership", AsyncMock()
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=scim_user),
+    )
+
+    await update_user(user_id="test-user", user=scim_user)
+
+    assert patch_membership.call_args[1]["teams_ids_to_remove_user_from"] == ["team1"]
+    assert mock_prisma_client.db.litellm_usertable.update.call_args[1]["data"]["teams"] == []
+
+
+@pytest.mark.asyncio
 async def test_update_user_not_found(mocker):
     """Should raise 404 when user doesn't exist"""
     scim_user = SCIMUser(
