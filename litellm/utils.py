@@ -2869,10 +2869,9 @@ def _update_dictionary(existing_dict: dict, new_dict: dict) -> dict:
             elif isinstance(v, dict):
                 existing_nested_dict = existing_dict.get(k)
                 if isinstance(existing_nested_dict, dict):
-                    existing_nested_dict.update(v)
-                    existing_dict[k] = existing_nested_dict
+                    existing_dict[k] = {**existing_nested_dict, **v}  # mutable-ok: copy-on-write merge
                 else:
-                    existing_dict[k] = v
+                    existing_dict[k] = dict(v)  # mutable-ok: detached copy, never the caller's dict by reference
             else:
                 existing_dict[k] = v
 
@@ -4877,11 +4876,7 @@ def _get_deployment_order(deployment: dict | Any) -> int | None:
 
 def _get_order_filtered_deployments(healthy_deployments: list[dict], target_order: int | None = None) -> list:
     if target_order is not None:
-        filtered: Final = [d for d in healthy_deployments if _get_deployment_order(d) == target_order]
-        if filtered:
-            return filtered
-        # target_order doesn't match any deployment (e.g., external fallback model) — return all
-        return healthy_deployments
+        return [d for d in healthy_deployments if _get_deployment_order(d) == target_order]
 
     # Default: pick min order group
     _valid_orders: Final[list[int]] = [
@@ -5860,6 +5855,7 @@ def _get_model_info_helper(
                 cache_creation_input_token_cost_above_1hr=_model_info.get(
                     "cache_creation_input_token_cost_above_1hr", None
                 ),
+                off_peak_pricing=_model_info.get("off_peak_pricing", None),
                 input_cost_per_character=_model_info.get("input_cost_per_character", None),
                 input_cost_per_token_above_128k_tokens=_model_info.get("input_cost_per_token_above_128k_tokens", None),
                 input_cost_per_token_above_200k_tokens=_model_info.get("input_cost_per_token_above_200k_tokens", None),

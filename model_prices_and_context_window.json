@@ -1482,7 +1482,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_native_structured_output": true,
+        "supports_native_structured_output": false,
         "supports_max_reasoning_effort": true,
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
@@ -1557,7 +1557,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_native_structured_output": true,
+        "supports_native_structured_output": false,
         "supports_max_reasoning_effort": true,
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
@@ -1632,7 +1632,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_native_structured_output": true,
+        "supports_native_structured_output": false,
         "supports_max_reasoning_effort": true,
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
@@ -1707,7 +1707,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_native_structured_output": true,
+        "supports_native_structured_output": false,
         "supports_max_reasoning_effort": true,
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh",
@@ -3254,6 +3254,7 @@
         "supports_computer_use": true,
         "supports_forced_tool_use": false,
         "supports_function_calling": true,
+        "supports_native_structured_output": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -38565,12 +38566,22 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models#foundation_models"
     },
     "parallel_ai/search": {
-        "input_cost_per_query": 0.004,
+        "input_cost_per_query": 0.005,
+        "litellm_provider": "parallel_ai",
+        "mode": "search"
+    },
+    "parallel_ai/search-fast": {
+        "input_cost_per_query": 0.001,
         "litellm_provider": "parallel_ai",
         "mode": "search"
     },
     "parallel_ai/search-pro": {
-        "input_cost_per_query": 0.009,
+        "input_cost_per_query": 0.005,
+        "litellm_provider": "parallel_ai",
+        "mode": "search"
+    },
+    "parallel_ai/search-turbo": {
+        "input_cost_per_query": 0.001,
         "litellm_provider": "parallel_ai",
         "mode": "search"
     },
@@ -44142,6 +44153,7 @@
         "supports_computer_use": true,
         "supports_forced_tool_use": false,
         "supports_function_calling": true,
+        "supports_native_structured_output": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -44212,6 +44224,7 @@
         "supports_computer_use": true,
         "supports_forced_tool_use": false,
         "supports_function_calling": true,
+        "supports_native_structured_output": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
