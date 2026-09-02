@@ -5110,6 +5110,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/get/mcp_tool_search_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Mcp Tool Search Settings
+         * @description Get the `litellm_settings.mcp_tool_search` configuration used by the native `mcp_tool_search` virtual tool.
+         */
+        get: operations["get_mcp_tool_search_settings_get_mcp_tool_search_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/get/sso_settings": {
         parameters: {
             query?: never;
@@ -7692,8 +7712,9 @@ export interface paths {
          * @description Retrieve information about a key.
          *
          *     Parameters:
-         *     - key: str | None (query parameter) - The key to look up. Accepts the plaintext key or its hash.
-         *       Defaults to the key in the Authorization header.
+         *     - key: str | None (query parameter) - The key to look up. Accepts the plaintext key or its hash;
+         *       prefer the hash, since a query parameter is recorded verbatim by any HTTP access log in front
+         *       of the proxy. Defaults to the key in the Authorization header.
          *
          *     Returns:
          *     - key: str - The key that was looked up, echoed back as it was passed in
@@ -7725,7 +7746,7 @@ export interface paths {
          *
          *     Example Curl:
          *     ```
-         *     curl -X GET "http://0.0.0.0:4000/key/info?key=sk-test-example-key-123" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:4000/key/info?key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" -H "Authorization: Bearer sk-1234"
          *     ```
          *
          *     Example Curl - if no key is passed, it will use the Key Passed in Authorization Header
@@ -14021,7 +14042,7 @@ export interface paths {
          *
          *     Example Request for specific api_key
          *     ```
-         *     curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=sk-test-example-key-123" -H "Authorization: Bearer sk-1234"
+         *     curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" -H "Authorization: Bearer sk-1234"
          *     ```
          *
          *     Example Request for specific user_id
@@ -16124,6 +16145,27 @@ export interface paths {
          *     Settings will be picked up by all pods within approximately 10 seconds via background polling.
          */
         patch: operations["update_mcp_semantic_filter_settings_update_mcp_semantic_filter_settings_patch"];
+        trace?: never;
+    };
+    "/update/mcp_tool_search_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Mcp Tool Search Settings
+         * @description Update `litellm_settings.mcp_tool_search` in the database.
+         *     Settings will be picked up by all pods within approximately 10 seconds via background polling.
+         */
+        patch: operations["update_mcp_tool_search_settings_update_mcp_tool_search_settings_patch"];
         trace?: never;
     };
     "/update/sso_settings": {
@@ -31114,6 +31156,49 @@ export interface components {
             rejected: number;
             /** Total */
             total: number;
+        };
+        /**
+         * MCPToolSearchSettings
+         * @description `litellm_settings.mcp_tool_search`: how the native `mcp_tool_search` virtual tool ranks the caller's tools.
+         */
+        MCPToolSearchSettings: {
+            /**
+             * Core Tools
+             * @description Tool names always returned first when the caller can access them, e.g. `my_server-get_rates`.
+             * @default []
+             */
+            core_tools: string[];
+            /**
+             * Embedding Model
+             * @description Embedding model from model_list used to rank tools by meaning. Unset keeps keyword matching.
+             */
+            embedding_model?: string | null;
+            /**
+             * Similarity Threshold
+             * @description Lowest cosine similarity a tool needs to appear in semantic results (0.0 = no cutoff).
+             * @default 0
+             */
+            similarity_threshold: number;
+            /**
+             * Top K
+             * @description Most ranked tools a search returns. A smaller top_k in the tool call wins. Core tools do not count.
+             * @default 5
+             */
+            top_k: number;
+        };
+        /**
+         * MCPToolSearchSettingsResponse
+         * @description Response model for native MCP tool search settings
+         */
+        MCPToolSearchSettingsResponse: {
+            /** Field Schema */
+            field_schema: {
+                [key: string]: unknown;
+            };
+            /** Values */
+            values: {
+                [key: string]: unknown;
+            };
         };
         /** MCPToolsetTool */
         MCPToolsetTool: {
@@ -46647,6 +46732,26 @@ export interface operations {
             };
         };
     };
+    get_mcp_tool_search_settings_get_mcp_tool_search_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPToolSearchSettingsResponse"];
+                };
+            };
+        };
+    };
     get_sso_settings_get_sso_settings_get: {
         parameters: {
             query?: never;
@@ -47383,7 +47488,7 @@ export interface operations {
                 end_date?: string | null;
                 /** @description Group spend by internal team or customer or api_key */
                 group_by?: ("team" | "customer" | "api_key") | null;
-                /** @description View spend for a specific api_key. Example api_key='sk-1234 */
+                /** @description View spend for a specific api_key. Pass the key's sha256 hash so the raw key stays out of URLs and access logs. Example api_key='d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa' */
                 api_key?: string | null;
                 /** @description View spend for a specific internal_user_id. Example internal_user_id='1234 */
                 internal_user_id?: string | null;
@@ -49256,7 +49361,7 @@ export interface operations {
     info_key_fn_key_info_get: {
         parameters: {
             query?: {
-                /** @description Key in the request parameters */
+                /** @description Key to look up. Pass the key's sha256 hash so the raw key stays out of URLs and access logs. Example key='d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa' */
                 key?: string | null;
             };
             header?: never;
@@ -49434,7 +49539,7 @@ export interface operations {
                 start_date?: string | null;
                 /** @description Time till which to view spend (YYYY-MM-DD) */
                 end_date?: string | null;
-                /** @description View spend for a specific api_key. Proxy admin only; other callers are scoped to their own key. */
+                /** @description View spend for a specific api_key. Proxy admin only; other callers are scoped to their own key. Pass the key's sha256 hash so the raw key stays out of URLs and access logs. Example api_key='d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa' */
                 api_key?: string | null;
             };
             header?: never;
@@ -58965,6 +59070,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_mcp_tool_search_settings_update_mcp_tool_search_settings_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MCPToolSearchSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
