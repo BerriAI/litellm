@@ -38,12 +38,13 @@ describe("capability router config", () => {
   });
 
   it("hydrates stored values while supplying newly introduced defaults", () => {
-    const hydrated = hydrateCapabilityRouterConfig({
+    const storedConfig = {
       candidates: validConfig().candidates,
       classifier: { model: "classifier" },
       fallback_model: "frontier",
       probability_threshold: 0.8,
-    });
+    };
+    const hydrated = hydrateCapabilityRouterConfig(storedConfig);
 
     expect(hydrated.probability_threshold).toBe(0.8);
     expect(hydrated.classifier.timeout_ms).toBe(3000);

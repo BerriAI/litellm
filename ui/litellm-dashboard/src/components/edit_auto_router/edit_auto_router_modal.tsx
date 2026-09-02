@@ -581,11 +581,12 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         ...modelData.model_info,
         access_groups: values.model_access_group || [],
       };
-      await modelPatchUpdateCall(
-        accessToken,
-        { model_name: values.auto_router_name, litellm_params: updatedLitellmParams, model_info: updatedModelInfo },
-        modelData.model_info.id,
-      );
+      const patchPayload = {
+        model_name: values.auto_router_name,
+        litellm_params: updatedLitellmParams,
+        model_info: updatedModelInfo,
+      };
+      await modelPatchUpdateCall(accessToken, patchPayload, modelData.model_info.id);
       toast.success("Auto router configuration updated successfully");
       onSuccess({
         ...modelData,
@@ -673,11 +674,12 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         access_groups: values.model_access_group || [],
       };
 
-      await modelPatchUpdateCall(
-        accessToken,
-        { model_name: values.auto_router_name, litellm_params: updatedLitellmParams, model_info: updatedModelInfo },
-        modelData.model_info.id,
-      );
+      const patchPayload = {
+        model_name: values.auto_router_name,
+        litellm_params: updatedLitellmParams,
+        model_info: updatedModelInfo,
+      };
+      await modelPatchUpdateCall(accessToken, patchPayload, modelData.model_info.id);
 
       toast.success("Auto router configuration updated successfully");
       onSuccess({

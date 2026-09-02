@@ -473,14 +473,15 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
           toast.fromError(dryRunError);
           return;
         }
+        const capabilityRouterPayload: AddAutoRouterValues = {
+          auto_router_name: name,
+          ...teamScopePayload(requiresTeamScope, form.getValues("team_id")),
+          model_type: "capability_router",
+          capability_router_config: capabilityRouterConfig,
+          model_access_group: form.getValues("model_access_group"),
+        };
         await handleAddAutoRouterSubmit(
-          {
-            auto_router_name: name,
-            ...teamScopePayload(requiresTeamScope, form.getValues("team_id")),
-            model_type: "capability_router",
-            capability_router_config: capabilityRouterConfig,
-            model_access_group: form.getValues("model_access_group"),
-          },
+          capabilityRouterPayload,
           accessToken,
           () => form.reset(EMPTY_FORM_VALUES),
           handleOk,

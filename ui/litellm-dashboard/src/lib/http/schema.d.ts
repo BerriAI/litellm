@@ -1382,6 +1382,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auto_router/validate_capability_router_config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate Capability Router Config
+         * @description Validate a capability-router config without saving it.
+         */
+        post: operations["validate_capability_router_config_auto_router_validate_capability_router_config_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auto_router/validate_complexity_router_config": {
         parameters: {
             query?: never;
@@ -23355,8 +23375,10 @@ export interface components {
          *     validating them against one surface's schema would reject the others.
          */
         AutoRouterRoutingTestRequest: {
-            /** @description The complexity router config to route against, in the shape /model/new accepts */
-            complexity_router_config: components["schemas"]["RequestComplexityRouterConfig"];
+            /** @description The capability router config to route against */
+            capability_router_config?: components["schemas"]["CapabilityRouterConfig"] | null;
+            /** @description The complexity router config to route against */
+            complexity_router_config?: components["schemas"]["RequestComplexityRouterConfig"] | null;
             /**
              * Default Model
              * @description Model to route to when no tier resolves, i.e. complexity_router_default_model
@@ -24559,6 +24581,89 @@ export interface components {
              * @constant
              */
             status: "cancelled";
+        };
+        /**
+         * CapabilityClassifierConfig
+         * @description The model used to estimate each candidate's probability of success.
+         */
+        CapabilityClassifierConfig: {
+            /**
+             * Max Message Chars
+             * @default 2000
+             */
+            max_message_chars: number;
+            /**
+             * Max Output Tokens
+             * @default 1024
+             */
+            max_output_tokens: number;
+            /** Model */
+            model: string;
+            /**
+             * Timeout Ms
+             * @default 3000
+             */
+            timeout_ms: number;
+        };
+        /**
+         * CapabilityRouterCandidate
+         * @description A model group and the operator's description of when it succeeds.
+         */
+        CapabilityRouterCandidate: {
+            /** Description */
+            description: string;
+            /** Model */
+            model: string;
+        };
+        /**
+         * CapabilityRouterConfig
+         * @description Operator configuration for cheapest-qualified model selection.
+         */
+        CapabilityRouterConfig: {
+            /**
+             * Cache Ttl Seconds
+             * @default 3600
+             */
+            cache_ttl_seconds: number;
+            /** Candidates */
+            candidates: components["schemas"]["CapabilityRouterCandidate"][];
+            classifier: components["schemas"]["CapabilityClassifierConfig"];
+            /**
+             * Estimated Output Tokens
+             * @default 1000
+             */
+            estimated_output_tokens: number;
+            /** Fallback Model */
+            fallback_model: string;
+            /**
+             * Probability Threshold
+             * @default 0.7
+             */
+            probability_threshold: number;
+            /**
+             * Threshold Step
+             * @default 0.1
+             */
+            threshold_step: number;
+        };
+        /**
+         * CapabilityRouterConfigValidationRequest
+         * @description A capability-router config to validate without saving.
+         */
+        CapabilityRouterConfigValidationRequest: {
+            /** Capability Router Config */
+            capability_router_config: {
+                [key: string]: unknown;
+            };
+            /** Team Id */
+            team_id?: string | null;
+        };
+        /** CapabilityRouterConfigValidationResponse */
+        CapabilityRouterConfigValidationResponse: {
+            /** Error */
+            error?: string | null;
+            /** Valid */
+            valid: boolean;
         };
         /** ChatCompletionAnnotation */
         ChatCompletionAnnotation: {
@@ -29043,6 +29148,10 @@ export interface components {
             cache_read_input_token_cost_priority?: number | null;
             /** Cache Read Input Token Cost Ultrafast */
             cache_read_input_token_cost_ultrafast?: number | null;
+            /** Capability Router Config */
+            capability_router_config?: {
+                [key: string]: unknown;
+            } | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
             /** Complexity Router Config */
@@ -35720,11 +35829,21 @@ export interface components {
          * @description Per-request provenance for a pre-routing strategy (auto-router) decision.
          */
         StandardLoggingRoutingDecision: {
+            /** Cached */
+            cached?: boolean;
+            /** Candidate Costs */
+            candidate_costs?: {
+                [key: string]: number;
+            };
+            /** Candidate Probabilities */
+            candidate_probabilities?: {
+                [key: string]: number;
+            };
             /**
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "heuristic_scorer" | "reasoning_override" | "llm_classifier" | "heuristic_first_short_circuit" | "classifier_plugin" | "classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit" | "capability_classifier" | "capability_cache" | "capability_fallback";
             /** Classifier Cost */
             classifier_cost?: number;
             /** Classifier Model */
@@ -35739,8 +35858,14 @@ export interface components {
             escalated?: boolean;
             /** Escalation Keyword */
             escalation_keyword?: string;
+            /** Fallback Reason */
+            fallback_reason?: string | null;
             /** Matched Keyword */
             matched_keyword?: string;
+            /** Probability Threshold */
+            probability_threshold?: number;
+            /** Qualified Models */
+            qualified_models?: string[];
             /** Reasoning Override Min Score */
             reasoning_override_min_score?: number;
             /** Request Type */
@@ -35753,7 +35878,7 @@ export interface components {
              * Router Type
              * @enum {string}
              */
-            router_type?: "complexity" | "adaptive" | "quality";
+            router_type?: "complexity" | "adaptive" | "quality" | "capability";
             /** Savings Baseline Deployment Id */
             savings_baseline_deployment_id?: string;
             /** Savings Baseline Model */
@@ -38872,6 +38997,10 @@ export interface components {
             cache_read_input_token_cost_priority?: number | null;
             /** Cache Read Input Token Cost Ultrafast */
             cache_read_input_token_cost_ultrafast?: number | null;
+            /** Capability Router Config */
+            capability_router_config?: {
+                [key: string]: unknown;
+            } | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
             /** Complexity Router Config */
@@ -40968,6 +41097,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AutoRouterRoutingTestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_capability_router_config_auto_router_validate_capability_router_config_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CapabilityRouterConfigValidationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilityRouterConfigValidationResponse"];
                 };
             };
             /** @description Validation Error */
