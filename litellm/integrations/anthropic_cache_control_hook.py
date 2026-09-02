@@ -755,6 +755,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     def record_gateway_injection(
         request_kwargs: Mapping[str, object],
         added: int,
+        injected_for_every_deployment: bool = False,
     ) -> None:
         """Name the deployment whose payload the gateway, not the client, put breakpoints on.
 
@@ -771,7 +772,16 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
         A pass that runs before a deployment is chosen, which is what the proxy does for
         prompt templates, injects into the payload every leg goes on to send, so it marks
-        the request for all of them rather than for one.
+        the request for all of them rather than for one. Such a pass says so with
+        ``injected_for_every_deployment`` instead of relying on the shape of
+        ``request_kwargs``: the router's prompt-management factory stamps a provisional
+        deployment's ``model_info`` into kwargs before the prompt pass runs, and billing
+        the request through any other deployment would silently drop the credit. An
+        every-deployment mark, once written, also never narrows: a later per-leg stamp
+        (the Bedrock converse tool_config one included) describes one leg of a payload
+        every leg sends, so narrowing to it would uncredit whichever leg gets billed
+        after a failover. Both losses are fail-closed under-crediting, which is why the
+        guard only protects the sentinel and per-leg marks still overwrite each other.
 
         Only what this pass actually placed counts. A ``tool_config`` point is placed by
         the Bedrock converse transform, and only when the request carries tools, so the
@@ -801,13 +811,19 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             ),
             None,
         )
-        if bucket is not None:
-            model_info: Final = request_kwargs.get("model_info")
-            bucket[GATEWAY_INJECTED_CACHE_METADATA_KEY] = (
-                model_info.get("id", GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT)
-                if isinstance(model_info, dict)
-                else GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT
-            )
+        if bucket is None:
+            return
+        if bucket.get(GATEWAY_INJECTED_CACHE_METADATA_KEY) == GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT:
+            return
+        if injected_for_every_deployment:
+            bucket[GATEWAY_INJECTED_CACHE_METADATA_KEY] = GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT
+            return
+        model_info: Final = request_kwargs.get("model_info")
+        bucket[GATEWAY_INJECTED_CACHE_METADATA_KEY] = (
+            model_info.get("id", GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT)
+            if isinstance(model_info, dict)
+            else GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT
+        )
 
     @staticmethod
     def maybe_inject_cache_control(
