@@ -50,8 +50,6 @@ import AutoRouterConnectionTest from "./auto_router_connection_test";
 import AutoRouterRoutingTest from "./AutoRouterRoutingTest";
 import { toast } from "@/lib/toast";
 import {
-  getAllPresets,
-  getPresetByKey,
   getMissingModelsInPreset,
   getReferencedModelsError,
   buildEmptyPrefill,
@@ -62,6 +60,7 @@ import {
   PresetPrefill,
   AutoRouterPreset,
 } from "@/lib/autorouter_presets";
+import { useAutoRouterPresets } from "@/app/(dashboard)/hooks/autoRouter/useAutoRouterPresets";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface AddAutoRouterTabProps {
@@ -102,9 +101,7 @@ const presetDisabledHint = (availability: PresetAvailability): string | null => 
 // caller-specific missing-model reason gets the alarming red treatment.
 const isPresetHintAlarming = (availability: PresetAvailability): boolean => availability.kind === "missing_models";
 
-// getAllPresets() already returns a stable, module-level array (see autorouter_presets.ts), so
-// this is resolved once at import time rather than re-called from inside the component every render.
-const presets = getAllPresets();
+const NO_PRESETS: AutoRouterPreset[] = [];
 
 // A one-line summary of what's configured, shown when the detailed section is collapsed so a
 // caller can see the shape of the config without opening it.
@@ -229,6 +226,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   });
   const modelsLoading = groupsLoading || deploymentsLoading;
   const modelInfo = React.useMemo(() => data ?? [], [data]);
+  const {
+    data: presetsData,
+    isPending: presetsPending,
+    isError: presetsError,
+    refetch: refetchPresets,
+  } = useAutoRouterPresets();
+  const presets = presetsData ?? NO_PRESETS;
+  const presetsUnavailable = presetsError && presetsData === undefined;
   // react-query keeps the last successful list around when a later refetch fails, so isError alone
   // can't tell "never loaded" apart from "loaded, then a background refetch errored" - only the
   // former leaves us with nothing trustworthy to verify a preset's models against.
@@ -277,7 +282,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       presets
         .map((preset) => ({ preset, availability: presetAvailability(preset) }))
         .sort((a, b) => Number(b.availability.kind === "available") - Number(a.availability.kind === "available")),
-    [presetAvailability],
+    [presets, presetAvailability],
   );
 
   const templateItems = React.useMemo(
@@ -307,7 +312,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       return;
     }
 
-    const preset = getPresetByKey(presetKey);
+    const preset = presets.find((p) => p.key === presetKey);
     // Refuse to apply a preset whose models are not verified available. The dropdown disables
     // these options, so this is a guard against a stale click resolving after the list changed.
     if (!preset) return;
@@ -533,6 +538,15 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   <div className="text-xs mt-1 text-destructive">
                     Could not load available models.{" "}
                     <button type="button" className="underline" onClick={() => refetchModels()}>
+                      Retry
+                    </button>
+                  </div>
+                )}
+                {presetsPending && <div className="text-xs mt-1 text-muted-foreground">Loading templates...</div>}
+                {presetsUnavailable && (
+                  <div className="text-xs mt-1 text-destructive">
+                    Could not load templates, so only Custom Configuration is shown.{" "}
+                    <button type="button" className="underline" onClick={() => void refetchPresets()}>
                       Retry
                     </button>
                   </div>
