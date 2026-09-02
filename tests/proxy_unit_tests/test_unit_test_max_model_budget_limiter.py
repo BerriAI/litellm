@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 
@@ -5,6 +6,7 @@ import pytest
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import RedisCache
 from datetime import datetime, timezone
 
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
@@ -1332,3 +1334,84 @@ async def test_the_user_scope_has_no_pre_upgrade_counter_to_carry():
         await limiter.is_user_within_model_budget(
             user_id="u1", user_model_max_budget=model_max_budget, model="openai/gpt-4"
         )
+
+
+class _SharedFakeRedis(RedisCache):
+    """Dict-backed stand-in for the one Redis every replica's DualCache is attached to.
+
+    Only the methods the limiter and DualCache call are implemented, and
+    ``super().__init__`` is skipped so no connection is opened.
+    """
+
+    def __init__(self):
+        self._store = {}
+
+    async def async_set_cache(self, key, value, **kwargs):
+        self._store[key] = value
+
+    async def async_get_cache(self, key, **kwargs):
+        return self._store.get(key)
+
+    async def async_batch_get_cache(self, key_list, **kwargs):
+        return {key: self._store.get(key) for key in key_list}
+
+    async def async_increment_pipeline(self, increment_list, **kwargs):
+        for op in increment_list:
+            self._store[op["key"]] = self._store.get(op["key"], 0.0) + op["increment_value"]
+        return [self._store[op["key"]] for op in increment_list]
+
+
+async def _log_spend(limiter, *, key_hash, model_max_budget, response_cost):
+    await limiter.async_log_success_event(
+        _success_kwargs(
+            model_group="gpt-4",
+            response_cost=response_cost,
+            key_hash=key_hash,
+            key_model_max_budget=model_max_budget,
+        ),
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    # The Redis push is scheduled as a task rather than awaited inline.
+    await asyncio.gather(*(t for t in asyncio.all_tasks() if t is not asyncio.current_task()))
+
+
+@pytest.mark.asyncio
+async def test_spend_logged_on_one_replica_is_enforced_and_reported_on_another():
+    """
+    Each replica increments its own in-memory copy of the per-model counter and
+    pushes the increment to the shared Redis, so only Redis holds the window's
+    total. A replica that has served part of the traffic must still enforce and
+    report the total, not its own share.
+
+    Regression: reads went to the in-memory tier first, so a replica whose local
+    copy sat under the cap kept admitting requests and /key/info on it reported
+    that local share, while the shared counter was already over the cap.
+    """
+    shared_redis = _SharedFakeRedis()
+    replica_a = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache(redis_cache=shared_redis))
+    replica_b = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache(redis_cache=shared_redis))
+    key_hash = "vk-shared"
+    model_max_budget = {"gpt-4": {"budget_limit": 1.0, "time_period": "30d"}}
+    user_api_key = UserAPIKeyAuth(token=key_hash, model_max_budget=model_max_budget)
+
+    await _log_spend(replica_b, key_hash=key_hash, model_max_budget=model_max_budget, response_cost=0.25)
+    await _log_spend(replica_a, key_hash=key_hash, model_max_budget=model_max_budget, response_cost=0.5)
+    await _log_spend(replica_a, key_hash=key_hash, model_max_budget=model_max_budget, response_cost=0.5)
+
+    with pytest.raises(litellm.BudgetExceededError):
+        await replica_b.is_key_within_model_budget(user_api_key, "gpt-4")
+
+    usage_on_b = await build_model_max_budget_usage(
+        entity_type=Litellm_EntityType.KEY,
+        entity_id=key_hash,
+        model_max_budget=model_max_budget,
+        cache=replica_b.dual_cache,
+    )
+    assert usage_on_b["gpt-4"]["current_spend"] == 1.25
+
+    # Control: a replica that never served this key reads the same total.
+    replica_c = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache(redis_cache=shared_redis))
+    with pytest.raises(litellm.BudgetExceededError):
+        await replica_c.is_key_within_model_budget(user_api_key, "gpt-4")
