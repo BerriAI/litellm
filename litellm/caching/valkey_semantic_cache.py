@@ -24,7 +24,10 @@ from typing import Any, Final
 from redis import Redis
 from redis.asyncio import Redis as AsyncRedis
 from redis.commands.search.field import TagField, VectorField
-from redis.commands.search.indexDefinition import IndexDefinition, IndexType
+try:  # redis-py >= 5 (module renamed to snake_case)
+    from redis.commands.search.index_definition import IndexDefinition, IndexType
+except ModuleNotFoundError:  # redis-py 4.x (last version with camelCase name)
+    from redis.commands.search.indexDefinition import IndexDefinition, IndexType
 from redis.commands.search.query import Query
 
 from litellm._logging import print_verbose
