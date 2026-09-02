@@ -1,17 +1,24 @@
 import asyncio
 import json
 import time
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Mapping
+from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, cast, get_args
 from uuid import uuid4
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
+from openai.types.responses.response_create_params import ResponseInputParam
 from starlette.websockets import WebSocket, WebSocketDisconnect
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    blocked_responses_api_usage as _blocked_responses_api_usage,
+)
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import (
     UserAPIKeyAuth,
@@ -23,8 +30,13 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_set_request_parsed_body,
 )
-from litellm.types.llms.openai import REASONING_EFFORT, ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.llms.openai import (
+    REASONING_EFFORT,
+    ResponsesAPIOptionalRequestParams,
+    ResponsesAPIResponse,
+)
 from litellm.types.responses.main import DeleteResponseResult
+from litellm.types.utils import TokenCountResponse
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -32,7 +44,7 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 
 _user_api_key_auth_dep: Final = Depends(user_api_key_auth)
-_RESPONSES_TAGS: Final = ["responses"]  # mutable-ok: fastapi's route signature requires List[str] tags
+_RESPONSES_TAGS: Final[list[str | Enum]] = ["responses"]  # mutable-ok: fastapi's route signature requires list tags
 
 _TOOL_PAYLOAD_KEYS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
@@ -40,7 +52,7 @@ _TOOL_PAYLOAD_KEYS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
         "function": ("name", "description", "parameters", "strict"),
     }
 )
-_EMPTY_TOOL_PAYLOAD: Final[Mapping[str, Any]] = MappingProxyType({})
+_EMPTY_TOOL_PAYLOAD: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _convert_tool_payload_value(key: str, value: object, *, to_chat: bool) -> object:
@@ -93,7 +105,7 @@ def _normalize_tool_dialect(
     return {**data, **{key: value for key, value in replaceable if key in data}}  # mutable-ok: plain body dict
 
 
-def _is_chat_completions_body(data: Mapping[str, Any]) -> bool:
+def _is_chat_completions_body(data: Mapping[str, object]) -> bool:
     messages: Final = data.get("messages")
     if isinstance(messages, list) and messages:
         return True
@@ -415,7 +427,7 @@ async def responses_api(
             model=e.model or data.get("model"),
             output=cast(Any, [{"content": [{"type": "text", "text": violation_text}]}]),
             status="completed",
-            usage=ResponseAPIUsage(input_tokens=0, output_tokens=0, total_tokens=0),
+            usage=_blocked_responses_api_usage(e.original_response),
         )
         return response_obj
     except Exception as e:
@@ -1014,6 +1026,152 @@ async def compact_response(
         )
 
 
+class _ResponsesApiErrorDetail(TypedDict):
+    message: ReadOnly[str]
+    type: ReadOnly[str]
+    param: ReadOnly[str | None]
+    code: ReadOnly[str | None]
+
+
+class _ResponsesApiErrorBody(TypedDict):
+    error: ReadOnly[_ResponsesApiErrorDetail]
+
+
+class _ResponsesInputTokensResult(TypedDict):
+    object: ReadOnly[str]
+    input_tokens: ReadOnly[int]
+
+
+class _TokenCountPayload(TypedDict):
+    model: ReadOnly[str]
+    messages: ReadOnly[tuple[Mapping[str, object], ...]]
+    tools: ReadOnly[object]
+
+
+class _TokenCounter(Protocol):
+    def __call__(self, request: TokenCountRequest, call_endpoint: bool) -> Awaitable[TokenCountResponse]: ...
+
+
+def _proxy_token_counter() -> _TokenCounter:
+    from litellm.proxy.proxy_server import token_counter
+
+    return token_counter
+
+
+_token_counter_dep: Final = Depends(_proxy_token_counter)
+
+
+def _responses_invalid_request_response(message: str, param: str | None, code: str | None) -> JSONResponse:
+    body: Final[_ResponsesApiErrorBody] = {
+        "error": {
+            "message": message,
+            "type": "invalid_request_error",
+            "param": param,
+            "code": code,
+        }
+    }
+    return JSONResponse(status_code=400, content=body)
+
+
+def _missing_responses_param_response(param: str) -> JSONResponse:
+    return _responses_invalid_request_response(
+        message=f"Missing required parameter: '{param}'.",
+        param=param,
+        code="missing_required_parameter",
+    )
+
+
+def _responses_input_as_token_count_messages(
+    input_value: str | ResponseInputParam,
+    instructions: str | None,
+) -> tuple[Mapping[str, object], ...]:
+    from litellm.responses.litellm_completion_transformation.transformation import (
+        LiteLLMCompletionResponsesConfig,
+    )
+
+    request_params: Final[ResponsesAPIOptionalRequestParams] = {"instructions": instructions}
+    transformed: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=input_value,
+        responses_api_request=request_params,
+    )
+    return tuple(
+        message if isinstance(message, dict) else message.model_dump(exclude_none=True) for message in transformed
+    )
+
+
+@router.post(
+    "/v1/responses/input_tokens",
+    dependencies=(_user_api_key_auth_dep,),
+    tags=_RESPONSES_TAGS,
+)
+@router.post(
+    "/responses/input_tokens",
+    dependencies=(_user_api_key_auth_dep,),
+    tags=_RESPONSES_TAGS,
+)
+@router.post(
+    "/openai/v1/responses/input_tokens",
+    dependencies=(_user_api_key_auth_dep,),
+    tags=_RESPONSES_TAGS,
+)
+async def responses_input_tokens(
+    request: Request,
+    token_counter: _TokenCounter = _token_counter_dep,
+):
+    """
+    Count the input tokens of a Responses API request without calling the model.
+
+    Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/input-tokens
+
+    ```bash
+    curl -X POST http://localhost:4000/v1/responses/input_tokens \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer sk-1234" \
+    -d '{
+        "model": "gpt-4o",
+        "input": "Hello, how are you?"
+    }'
+    ```
+
+    Returns: `{"object": "response.input_tokens", "input_tokens": <count>}`
+    """
+    data: Final = await _read_request_body(request=request)
+    model_name: Final = data.get("model")
+    input_value: Final = data.get("input")
+    if not isinstance(model_name, str) or not model_name:
+        return _missing_responses_param_response("model")
+    if input_value is None:
+        return _missing_responses_param_response("input")
+    if isinstance(input_value, (str, list)) and not input_value:
+        return _responses_invalid_request_response(
+            message="""One of "input" or "previous_response_id" or 'prompt' or 'conversation' must be provided.""",
+            param=None,
+            code="missing_required_parameter",
+        )
+
+    try:
+        payload: Final[_TokenCountPayload] = {
+            "model": model_name,
+            "messages": _responses_input_as_token_count_messages(
+                input_value=input_value,
+                instructions=data.get("instructions"),
+            ),
+            "tools": data.get("tools"),
+        }
+        token_request: Final = TokenCountRequest.model_validate(payload)
+    except Exception as e:
+        return _responses_invalid_request_response(
+            message=f"Invalid request for token counting: {e}", param=None, code=None
+        )
+
+    token_response: Final = await token_counter(request=token_request, call_endpoint=True)
+    result: Final[_ResponsesInputTokensResult] = {
+        "object": "response.input_tokens",
+        "input_tokens": token_response.total_tokens,
+    }
+    return result
+
+
 @router.post(
     "/v1/responses/{response_id}/cancel",
     dependencies=[Depends(user_api_key_auth)],
@@ -1215,7 +1373,7 @@ async def _enforce_responses_ws_first_frame_model_auth(
     request: Request,
     model: str,
     user_api_key_dict: UserAPIKeyAuth,
-    llm_router: Any | None,
+    llm_router: "Router | None",
 ) -> None:
     from litellm.proxy.auth.user_api_key_auth import (
         _enforce_key_and_fallback_model_access,
@@ -1259,7 +1417,7 @@ async def _enforce_responses_ws_first_frame_model_auth(
 async def responses_websocket_endpoint(
     websocket: WebSocket,
     model: str | None = fastapi.Query(None, description="The model to use for the responses WebSocket session."),
-    user_api_key_dict=Depends(user_api_key_auth_websocket),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
 ):
     """
     Responses API WebSocket mode endpoint.
@@ -1304,7 +1462,7 @@ async def responses_websocket_endpoint(
             return
         model, first_message = result
 
-    data: dict[str, Any] = {
+    data: dict[str, object] = {
         "model": model,
         "websocket": websocket,
     }
@@ -1313,7 +1471,7 @@ async def responses_websocket_endpoint(
 
     # Construct a synthetic Request for pre-call processing
     headers_list: Final = list(websocket.scope.get("headers") or [])
-    scope: Final[dict[str, Any]] = {
+    scope: Final[dict[str, object]] = {
         "type": "http",
         "method": "POST",
         "path": "/v1/responses",

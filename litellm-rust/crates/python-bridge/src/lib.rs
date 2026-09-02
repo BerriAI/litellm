@@ -6,6 +6,10 @@ use litellm_ai_gateway::io::audio_transcription::{
 };
 use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
 use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
+use litellm_core::chat_completions::types::{ChatCompletionsRequest, ChatCompletionsResponse};
+use litellm_core::chat_completions::{
+    chat_completions as run_chat_completions, chat_completions_decline_reason,
+};
 use litellm_core::error::CoreError;
 use litellm_core::messages::messages as run_messages;
 use litellm_core::messages::types::{AnthropicMessagesResponse, MessagesRequest};
@@ -15,6 +19,23 @@ use pyo3::types::{PyAny, PyDict};
 use serde_json::{Map, Value};
 
 mod gil;
+mod marshal;
+
+use marshal::{from_py, to_py};
+
+pyo3::create_exception!(
+    _native,
+    RustBridgeDeclined,
+    pyo3::exceptions::PyException,
+    "The route declined before calling the provider, so the host may retry on its own path."
+);
+
+pyo3::create_exception!(
+    _native,
+    RustUpstreamError,
+    pyo3::exceptions::PyException,
+    "The provider call was already issued and failed. Args are (status, message); status is 0 when there was no HTTP response."
+);
 
 type MarshaledOcrInputs = (
     Value,
@@ -23,26 +44,18 @@ type MarshaledOcrInputs = (
     Option<Duration>,
 );
 
-fn py_to_json(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Value> {
-    let json = py.import("json")?;
-    let encoded: String = json.call_method1("dumps", (value,))?.extract()?;
-    serde_json::from_str(&encoded).map_err(|err| PyValueError::new_err(err.to_string()))
-}
-
-fn json_to_py(py: Python<'_>, value: Value) -> PyResult<Py<PyAny>> {
-    let json = py.import("json")?;
-    let encoded =
-        serde_json::to_string(&value).map_err(|err| PyValueError::new_err(err.to_string()))?;
-    Ok(json.call_method1("loads", (encoded,))?.unbind())
-}
-
 fn messages_response_to_py(
     py: Python<'_>,
     response: AnthropicMessagesResponse,
 ) -> PyResult<Py<PyAny>> {
-    let value =
-        serde_json::to_value(response).map_err(|err| PyValueError::new_err(err.to_string()))?;
-    json_to_py(py, value)
+    to_py(py, &response)
+}
+
+fn chat_completions_response_to_py(
+    py: Python<'_>,
+    response: ChatCompletionsResponse,
+) -> PyResult<Py<PyAny>> {
+    to_py(py, &response)
 }
 
 fn core_error_to_pyerr(err: CoreError) -> PyErr {
@@ -56,13 +69,40 @@ fn core_error_to_pyerr(err: CoreError) -> PyErr {
     }
 }
 
+/// Map a core error for a route whose host keeps a Python implementation.
+///
+/// The distinction the host needs is whether the provider was already called.
+/// Everything raised before the request goes out is safe for the host to retry
+/// on its own path; anything after it is not, because the provider has already
+/// done the work and billed for it.
+fn chat_completions_error_to_pyerr(err: CoreError) -> PyErr {
+    match err {
+        CoreError::Unsupported(_)
+        | CoreError::Auth(_)
+        | CoreError::InvalidProvider(_)
+        | CoreError::InvalidRequest(_)
+        | CoreError::InvalidType { .. }
+        | CoreError::MissingField(_)
+        | CoreError::Routing(_)
+        // Nothing reached the provider, so serving it on Python cannot double
+        // bill and is the only way the caller gets an answer at all.
+        | CoreError::Connect(_) => RustBridgeDeclined::new_err(err.to_string()),
+        CoreError::Http { status, body } => {
+            RustUpstreamError::new_err((status, format!("{status}: {body}")))
+        }
+        CoreError::Network(message) | CoreError::InvalidResponse(message) => {
+            RustUpstreamError::new_err((0u16, message))
+        }
+    }
+}
+
 fn optional_object_to_map(
     py: Python<'_>,
     name: &'static str,
     value: Option<Py<PyAny>>,
 ) -> PyResult<Map<String, Value>> {
     match value {
-        Some(value) => match py_to_json(py, value.bind(py))? {
+        Some(value) => match from_py(value.bind(py))? {
             Value::Object(map) => Ok(map),
             _ => Err(PyValueError::new_err(format!("{name} must be a dict"))),
         },
@@ -85,7 +125,7 @@ fn marshal_headers(
     headers: Option<Py<PyAny>>,
 ) -> PyResult<HashMap<String, String>> {
     let value = match headers {
-        Some(headers) => py_to_json(py, headers.bind(py))?,
+        Some(headers) => from_py(headers.bind(py))?,
         None => Value::Object(Map::new()),
     };
     let Value::Object(headers) = value else {
@@ -157,7 +197,7 @@ fn marshal_inputs(
     optional_params: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
 ) -> PyResult<MarshaledOcrInputs> {
-    let document = py_to_json(py, document.bind(py))?;
+    let document = from_py(document.bind(py))?;
     let extra_headers = match extra_headers {
         Some(headers) => Some(optional_object_to_map(py, "extra_headers", Some(headers))?),
         None => None,
@@ -208,7 +248,7 @@ fn ocr(
     });
 
     match result {
-        Ok(value) => json_to_py(py, value),
+        Ok(value) => to_py(py, &value),
         Err(err) => Err(core_error_to_pyerr(err)),
     }
 }
@@ -253,7 +293,7 @@ fn aocr(
         .await
         .map_err(core_error_to_pyerr)?;
 
-        Python::attach(|py| json_to_py(py, value))
+        Python::attach(|py| to_py(py, &value))
     })
 }
 
@@ -271,7 +311,7 @@ fn transcription(
     optional_params: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
 ) -> PyResult<Py<PyAny>> {
-    let audio = py_to_json(py, audio.bind(py))?;
+    let audio = from_py(audio.bind(py))?;
     let extra_headers = match extra_headers {
         Some(headers) => Some(optional_object_to_map(py, "extra_headers", Some(headers))?),
         None => None,
@@ -297,7 +337,7 @@ fn transcription(
         ))
     });
     match result {
-        Ok(value) => json_to_py(py, value),
+        Ok(value) => to_py(py, &value),
         Err(err) => Err(core_error_to_pyerr(err)),
     }
 }
@@ -316,7 +356,7 @@ fn atranscription(
     optional_params: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
 ) -> PyResult<Bound<'_, PyAny>> {
-    let audio = py_to_json(py, audio.bind(py))?;
+    let audio = from_py(audio.bind(py))?;
     let extra_headers = match extra_headers {
         Some(headers) => Some(optional_object_to_map(py, "extra_headers", Some(headers))?),
         None => None,
@@ -340,7 +380,7 @@ fn atranscription(
         })
         .await
         .map_err(core_error_to_pyerr)?;
-        Python::attach(|py| json_to_py(py, value))
+        Python::attach(|py| to_py(py, &value))
     })
 }
 
@@ -352,7 +392,7 @@ fn marshal_messages_inputs(
     extra_headers: Option<Py<PyAny>>,
     timeout_seconds: Option<f64>,
 ) -> PyResult<MarshaledMessagesInputs> {
-    let body = py_to_json(py, body.bind(py))?;
+    let body: Value = from_py(body.bind(py))?;
     if !body.is_object() {
         return Err(PyValueError::new_err("body must be a dict"));
     }
@@ -430,6 +470,143 @@ fn amessages(
     })
 }
 
+type MarshaledChatCompletionsInputs = (
+    Value,
+    Map<String, Value>,
+    Option<Map<String, Value>>,
+    Option<Duration>,
+);
+
+fn marshal_chat_completions_inputs(
+    py: Python<'_>,
+    messages: Py<PyAny>,
+    optional_params: Option<Py<PyAny>>,
+    extra_headers: Option<Py<PyAny>>,
+    timeout_seconds: Option<f64>,
+) -> PyResult<MarshaledChatCompletionsInputs> {
+    let messages: Value = from_py(messages.bind(py))?;
+    if !messages.is_array() {
+        return Err(PyValueError::new_err("messages must be a list"));
+    }
+    let optional_params = optional_object_to_map(py, "optional_params", optional_params)?;
+    let extra_headers = match extra_headers {
+        Some(headers) => Some(optional_object_to_map(py, "extra_headers", Some(headers))?),
+        None => None,
+    };
+    Ok((
+        messages,
+        optional_params,
+        extra_headers,
+        optional_timeout(timeout_seconds),
+    ))
+}
+
+/// The decline reason for this request, or `None` when the Rust path accepts
+/// it. Resolves no credentials and performs no I/O, so a host can ask before
+/// committing to either path.
+#[pyfunction]
+#[pyo3(signature = (model, messages, optional_params=None, custom_llm_provider=None))]
+fn chat_completions_decline(
+    py: Python<'_>,
+    model: String,
+    messages: Py<PyAny>,
+    optional_params: Option<Py<PyAny>>,
+    custom_llm_provider: Option<String>,
+) -> PyResult<Option<String>> {
+    let messages = from_py(messages.bind(py))?;
+    let optional_params = optional_object_to_map(py, "optional_params", optional_params)?;
+    Ok(chat_completions_decline_reason(
+        &model,
+        custom_llm_provider.as_deref(),
+        messages,
+        &optional_params,
+    )
+    .map(str::to_string))
+}
+
+#[pyfunction]
+#[pyo3(signature = (model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
+#[allow(clippy::too_many_arguments)]
+fn chat_completions(
+    py: Python<'_>,
+    model: String,
+    messages: Py<PyAny>,
+    optional_params: Option<Py<PyAny>>,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    extra_headers: Option<Py<PyAny>>,
+    timeout_seconds: Option<f64>,
+) -> PyResult<Py<PyAny>> {
+    let (messages, optional_params, extra_headers, timeout) = marshal_chat_completions_inputs(
+        py,
+        messages,
+        optional_params,
+        extra_headers,
+        timeout_seconds,
+    )?;
+
+    let result = gil::release_gil(py, || {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(run_chat_completions(
+            ChatCompletionsRequest {
+                model: &model,
+                messages,
+                optional_params,
+                api_key: api_key.as_deref(),
+                api_base: api_base.as_deref(),
+                custom_llm_provider: custom_llm_provider.as_deref(),
+                extra_headers,
+                timeout,
+            },
+        ))
+    });
+
+    match result {
+        Ok(response) => chat_completions_response_to_py(py, response),
+        Err(err) => Err(chat_completions_error_to_pyerr(err)),
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
+#[allow(clippy::too_many_arguments)]
+fn achat_completions(
+    py: Python<'_>,
+    model: String,
+    messages: Py<PyAny>,
+    optional_params: Option<Py<PyAny>>,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    extra_headers: Option<Py<PyAny>>,
+    timeout_seconds: Option<f64>,
+) -> PyResult<Bound<'_, PyAny>> {
+    let (messages, optional_params, extra_headers, timeout) = marshal_chat_completions_inputs(
+        py,
+        messages,
+        optional_params,
+        extra_headers,
+        timeout_seconds,
+    )?;
+
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let response = run_chat_completions(ChatCompletionsRequest {
+            model: &model,
+            messages,
+            optional_params,
+            api_key: api_key.as_deref(),
+            api_base: api_base.as_deref(),
+            custom_llm_provider: custom_llm_provider.as_deref(),
+            extra_headers,
+            timeout,
+        })
+        .await
+        .map_err(chat_completions_error_to_pyerr)?;
+
+        Python::attach(|py| chat_completions_response_to_py(py, response))
+    })
+}
+
 #[pyfunction]
 fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
     let stats = PyDict::new(py);
@@ -439,12 +616,18 @@ fn gil_stats(py: Python<'_>) -> PyResult<Py<PyAny>> {
 
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    let py = module.py();
     module.add_function(wrap_pyfunction!(ocr, module)?)?;
     module.add_function(wrap_pyfunction!(aocr, module)?)?;
     module.add_function(wrap_pyfunction!(transcription, module)?)?;
     module.add_function(wrap_pyfunction!(atranscription, module)?)?;
     module.add_function(wrap_pyfunction!(messages, module)?)?;
     module.add_function(wrap_pyfunction!(amessages, module)?)?;
+    module.add("RustBridgeDeclined", py.get_type::<RustBridgeDeclined>())?;
+    module.add("RustUpstreamError", py.get_type::<RustUpstreamError>())?;
+    module.add_function(wrap_pyfunction!(chat_completions_decline, module)?)?;
+    module.add_function(wrap_pyfunction!(chat_completions, module)?)?;
+    module.add_function(wrap_pyfunction!(achat_completions, module)?)?;
     module.add_class::<ResponsesWebSocketConnection>()?;
     module.add_function(wrap_pyfunction!(gil_stats, module)?)?;
     Ok(())

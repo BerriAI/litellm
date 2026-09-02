@@ -62,6 +62,8 @@ const settingsRow = async (fieldName: string) => {
   return row as HTMLElement;
 };
 
+const numericValueIn = (row: HTMLElement) => Number((within(row).getByRole("spinbutton") as HTMLInputElement).value);
+
 describe("GeneralSettings General tab", () => {
   beforeEach(() => {
     vi.mocked(getGeneralSettingsCall).mockResolvedValue([...SETTINGS_FIXTURE.map((s) => ({ ...s }))]);
@@ -87,7 +89,7 @@ describe("GeneralSettings General tab", () => {
 
     await user.click(screen.getByText("General"));
     const row = await settingsRow("max_ui_session_budget");
-    expect(within(row).getByRole("spinbutton")).toHaveValue("7.50");
+    expect(numericValueIn(row)).toBe(7.5);
 
     const actionCell = row.querySelectorAll("td")[3];
     const resetIcon = actionCell.querySelector("svg");
@@ -95,7 +97,7 @@ describe("GeneralSettings General tab", () => {
     await user.click(resetIcon as unknown as Element);
 
     expect(deleteConfigFieldSetting).toHaveBeenCalledWith("token", "max_ui_session_budget");
-    expect(within(row).getByRole("spinbutton")).toHaveValue("1.00");
+    expect(numericValueIn(row)).toBe(1);
   });
 });
 

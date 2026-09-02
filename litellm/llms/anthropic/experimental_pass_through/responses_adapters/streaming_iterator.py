@@ -3,7 +3,7 @@
 import json
 import traceback
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Any, Final, Protocol, runtime_checkable
 
 from litellm import verbose_logger
@@ -132,6 +132,19 @@ class AnthropicResponsesStreamWrapper:
             "error": {"type": "api_error", "message": message},
         }
 
+    def _open_block(self, item_id: str | None, content_block: Mapping[str, Any]) -> int:
+        block_idx = self._next_block_index()
+        if item_id:
+            self._item_id_to_block_index[item_id] = block_idx
+        self._chunk_queue.append(
+            {
+                "type": "content_block_start",
+                "index": block_idx,
+                "content_block": content_block,
+            }
+        )
+        return block_idx
+
     def _process_event(self, event: Any) -> None:
         """Convert one Responses API event into zero or more Anthropic chunks queued for emission."""
         event_type = getattr(event, "type", None)
@@ -157,47 +170,22 @@ class AnthropicResponsesStreamWrapper:
             item_id = getattr(item, "id", None) or (item.get("id") if isinstance(item, dict) else None)
 
             if item_type == "message":
-                block_idx = self._next_block_index()
-                if item_id:
-                    self._item_id_to_block_index[item_id] = block_idx
-                self._chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": block_idx,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
+                self._open_block(item_id, {"type": "text", "text": ""})
             elif item_type == "function_call":
                 call_id: Final = (
                     getattr(item, "call_id", None) or (item.get("call_id") if isinstance(item, dict) else None) or ""
                 )
                 name = getattr(item, "name", None) or (item.get("name") if isinstance(item, dict) else None) or ""
-                block_idx = self._next_block_index()
                 if item_id:
-                    self._item_id_to_block_index[item_id] = block_idx
                     self._pending_tool_ids[item_id] = call_id
-                self._chunk_queue.append(
+                self._open_block(
+                    item_id,
                     {
-                        "type": "content_block_start",
-                        "index": block_idx,
-                        "content_block": {
-                            "type": "tool_use",
-                            "id": call_id,
-                            "name": name,
-                            "input": {},
-                        },
-                    }
-                )
-            elif item_type == "reasoning":
-                block_idx = self._next_block_index()
-                if item_id:
-                    self._item_id_to_block_index[item_id] = block_idx
-                self._chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": block_idx,
-                        "content_block": {"type": "thinking", "thinking": ""},
-                    }
+                        "type": "tool_use",
+                        "id": call_id,
+                        "name": name,
+                        "input": {},
+                    },
                 )
             return
 
@@ -210,16 +198,7 @@ class AnthropicResponsesStreamWrapper:
                 # Some providers (e.g. LMStudio) skip response.output_item.added,
                 # so no text block is open yet; synthesize content_block_start
                 # instead of emitting a delta with index -1
-                block_idx = self._next_block_index()
-                if item_id:
-                    self._item_id_to_block_index[item_id] = block_idx
-                self._chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": block_idx,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
+                block_idx = self._open_block(item_id, {"type": "text", "text": ""})
             self._chunk_queue.append(
                 {
                     "type": "content_block_delta",
@@ -233,11 +212,14 @@ class AnthropicResponsesStreamWrapper:
         if event_type == "response.reasoning_summary_text.delta":
             item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
             delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
-            block_idx = (
-                self._item_id_to_block_index.get(item_id, self._current_block_index)
-                if item_id
-                else self._current_block_index
-            )
+            block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
+            if block_idx < 0:
+                if not delta:
+                    return
+                block_idx = self._open_block(
+                    item_id,
+                    {"type": "thinking", "thinking": "", "signature": ""},  # mutable-ok: API message payload
+                )
             self._chunk_queue.append(
                 {
                     "type": "content_block_delta",
@@ -271,11 +253,9 @@ class AnthropicResponsesStreamWrapper:
             item_id = (
                 getattr(item, "id", None) or (item.get("id") if isinstance(item, dict) else None) if item else None
             )
-            block_idx = (
-                self._item_id_to_block_index.get(item_id, self._current_block_index)
-                if item_id
-                else self._current_block_index
-            )
+            block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
+            if block_idx < 0:
+                return
             self._chunk_queue.append(
                 {
                     "type": "content_block_stop",

@@ -12,6 +12,8 @@ import os
 import sys
 from pathlib import Path
 
+import requests
+
 _CODE_COVERAGE_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "code_coverage_tests"
 )
@@ -120,6 +122,75 @@ def test_get_license_returns_none_on_request_failure(monkeypatch):
     monkeypatch.setattr(check_licenses.requests, "get", _boom)
     checker = _make_checker()
     assert checker.get_package_license_from_pypi("pkg", "1.0.0") is None
+
+
+def test_get_license_retries_connection_error_then_resolves_license():
+    responses = iter(
+        (
+            requests.ConnectionError("connection reset"),
+            requests.ConnectionError("connection reset"),
+            _FakeResponse({"info": {"license_expression": "MIT"}}),
+        )
+    )
+    calls = []
+    sleeps = []
+
+    def _fake_get(url, timeout=None):
+        calls.append((url, timeout))
+        response = next(responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    checker = check_licenses.LicenseChecker(
+        config_file=_LICCHECK_INI,
+        http_get=_fake_get,
+        sleep=sleeps.append,
+    )
+
+    assert checker.get_package_license_from_pypi("pkg", "1.0.0") == "MIT"
+    assert len(calls) == 3
+    assert len(sleeps) == 2
+
+
+def test_get_license_does_not_retry_not_found_http_error():
+    response = requests.Response()
+    response.status_code = 404
+    calls = []
+    sleeps = []
+
+    def _fake_get(url, timeout=None):
+        calls.append((url, timeout))
+        raise requests.HTTPError("not found", response=response)
+
+    checker = check_licenses.LicenseChecker(
+        config_file=_LICCHECK_INI,
+        http_get=_fake_get,
+        sleep=sleeps.append,
+    )
+
+    assert checker.get_package_license_from_pypi("pkg", "1.0.0") is None
+    assert len(calls) == 1
+    assert sleeps == []
+
+
+def test_get_license_returns_none_after_connection_retry_limit():
+    calls = []
+    sleeps = []
+
+    def _fake_get(url, timeout=None):
+        calls.append((url, timeout))
+        raise requests.ConnectionError("connection reset")
+
+    checker = check_licenses.LicenseChecker(
+        config_file=_LICCHECK_INI,
+        http_get=_fake_get,
+        sleep=sleeps.append,
+    )
+
+    assert checker.get_package_license_from_pypi("pkg", "1.0.0") is None
+    assert len(calls) == 3
+    assert len(sleeps) == 2
 
 
 # --------------------------------------------------------------------------
