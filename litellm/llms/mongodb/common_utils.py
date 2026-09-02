@@ -60,9 +60,7 @@ SyncClientFactory: TypeAlias = Callable[..., "MongoClient"]
 AsyncClientFactory: TypeAlias = Callable[..., "AsyncMongoClient"]
 
 _AsyncClientCacheKey: TypeAlias = tuple[MongoClientKey, int]
-# The entry carries a weak reference to the loop the client was built on: CPython recycles id()
-# aggressively (measured: 200 of 200 fresh loops landed on an id already in this cache), so the
-# id alone would hand a new loop a client bound to a closed one.
+# CPython recycles id() aggressively, so the id alone would hand a new loop a closed loop's client
 _AsyncClientEntry: TypeAlias = tuple["weakref.ref[AbstractEventLoop]", "AsyncMongoClient"]
 
 _sync_clients: Final[dict[MongoClientKey, "MongoClient"]] = {}  # mutable-ok: process-level client cache
@@ -143,8 +141,7 @@ def reset_client_cache() -> None:
 
 _AUTHENTICATION_FAILED_CODE: Final = 18
 _UNAUTHORIZED_CODE: Final = 13
-# Atlas reports a rejected user as code 8000 "AtlasError" rather than 18, so the
-# message is the only reliable signal for a serverless or shared-tier deployment.
+# Atlas reports a rejected user as code 8000 "AtlasError", not 18, so only the message is reliable
 _AUTHENTICATION_MESSAGE_MARKERS: Final = ("bad auth", "authentication failed", "not authorized")
 _RESOLUTION_TIMEOUT_MARKERS: Final = ("resolution lifetime expired", "dns operation timed out")
 _UNKNOWN_HOSTNAME_MARKERS: Final = ("dns query name does not exist", "name or service not known")
