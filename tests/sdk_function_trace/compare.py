@@ -6,6 +6,7 @@ import sys
 from typing import Final
 
 from tests.sdk_function_trace.fixtures import ROUTES
+from tests.sdk_function_trace.proxy_report import render_ocr_proxy_trace
 from tests.sdk_function_trace.report import compare, render
 
 
@@ -28,7 +29,18 @@ def main() -> None:
     parser.add_argument(
         "--full", action="store_true", help="print every captured runtime event instead of pipeline steps"
     )
+    parser.add_argument("--proxy", action="store_true", help="trace OCR from the FastAPI /ocr proxy endpoint")
     args: Final = parser.parse_args()
+    if args.proxy:
+        if args.route != "ocr":
+            parser.error("--proxy requires --route ocr")
+        if args.both or not args.asynchronous:
+            parser.error("the FastAPI proxy trace is async-only")
+        output, passed = render_ocr_proxy_trace(colorize=sys.stdout.isatty() and "NO_COLOR" not in os.environ)
+        sys.stdout.write(output)
+        if args.check and not passed:
+            raise SystemExit(1)
+        return
     os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     colorize: Final = sys.stdout.isatty() and "NO_COLOR" not in os.environ
     results: Final = tuple(

@@ -7,11 +7,14 @@ From the repository root, using the project's Python environment:
 ```bash
 uv run python -m tests.sdk_function_trace.compare
 uv run python -m tests.sdk_function_trace.compare --route ocr
+uv run python -m tests.sdk_function_trace.compare --route ocr --proxy
 uv run python -m tests.sdk_function_trace.compare --route ocr --sync
 uv run python -m tests.sdk_function_trace.compare --route all --both --check
 ```
 
 Calls default to async; use `--sync` for synchronous calls or `--both` for the complete matrix. Python sync Messages raises `not implemented for sync calls`; only that exact failure is marked `SKIP`, and the runner still executes Rust sync Messages and subsequent routes. Bedrock transcription has no independent Python provider implementation: its Python trace covers SDK dispatch into Rust
+
+`--route ocr --proxy` starts at the actual FastAPI `POST /ocr` surface, including authentication, request parsing, common proxy preprocessing, routing, the full Python OCR provider call, and proxy post-processing. It uses ASGI and HTTP mock transports in-process, so it opens no sockets. The Rust proxy column remains empty and parity fails because `ai-gateway` does not yet mount an Axum `/ocr` route
 
 Both engines are projected onto a shared per-route step table (`steps.py`): canonical names such as `transform_ocr_request` map Python functions (`MistralOCRConfig.transform_ocr_request`) and Rust spans (`transform_ocr_request`) to the same label. Only the first occurrence of each step is kept. Python indentation uses each event's actual frame ancestors and the nearest already displayed ancestor, so returned helpers and coroutine resumptions do not create false parents. Rust indentation uses instrumented span ancestry. Unmatched Rust span names pass through unchanged. `--full` prints every captured runtime event; validation still uses projected steps
 
