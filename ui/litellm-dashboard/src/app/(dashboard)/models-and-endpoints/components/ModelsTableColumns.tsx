@@ -3,6 +3,7 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { Copy, Info, Loader2, Pencil, RefreshCw, Trash2 } from "lucide-react";
 
+import { formatPerSecondCost } from "@/app/(dashboard)/models-and-endpoints/utils/modelDataTransformer";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { ModelData } from "@/components/model_dashboard/types";
 import { DataTableSortHeader } from "@/components/shared/DataTable";
@@ -181,30 +182,33 @@ function CreatedByCell({ model }: { model: ModelData }) {
   );
 }
 
-function CostsCell({ model }: { model: ModelData }) {
-  const { input_cost: inputCost, output_cost: outputCost } = model;
+function CostRow({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="flex items-baseline gap-1.5">
+      <span className="text-[10px] font-semibold tracking-wider text-muted-foreground">{label}</span>
+      <span className="text-xs font-medium tabular-nums text-foreground">{value}</span>
+    </span>
+  );
+}
 
-  if (inputCost == null && outputCost == null) {
+function CostsCell({ model }: { model: ModelData }) {
+  const { input_cost: inputCost, output_cost: outputCost, output_cost_per_second: perSecond } = model;
+  const hasPerSecond = perSecond != null;
+  const showInput = inputCost != null && (!hasPerSecond || Number(inputCost) > 0);
+  const showOutput = outputCost != null && (!hasPerSecond || Number(outputCost) > 0);
+
+  if (!showInput && !showOutput && !hasPerSecond) {
     return <span className="text-sm text-muted-foreground">-</span>;
   }
 
   return (
     <CellTooltip
-      content="Cost per 1M tokens"
+      content={hasPerSecond ? "Cost per 1M tokens; /s is cost per second of output" : "Cost per 1M tokens"}
       trigger={
         <div className="flex flex-col gap-0.5 whitespace-nowrap">
-          {inputCost != null && (
-            <span className="flex items-baseline gap-1.5">
-              <span className="text-[10px] font-semibold tracking-wider text-muted-foreground">IN</span>
-              <span className="text-xs font-medium tabular-nums text-foreground">${inputCost}</span>
-            </span>
-          )}
-          {outputCost != null && (
-            <span className="flex items-baseline gap-1.5">
-              <span className="text-[10px] font-semibold tracking-wider text-muted-foreground">OUT</span>
-              <span className="text-xs font-medium tabular-nums text-foreground">${outputCost}</span>
-            </span>
-          )}
+          {showInput && <CostRow label="IN" value={`$${inputCost}`} />}
+          {showOutput && <CostRow label="OUT" value={`$${outputCost}`} />}
+          {hasPerSecond && <CostRow label="OUT" value={formatPerSecondCost(perSecond)} />}
         </div>
       }
     />

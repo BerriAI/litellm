@@ -426,6 +426,37 @@ describe("ModelInfoView", () => {
     });
   });
 
+  it("shows per-second pricing with resolution tiers instead of $0.00 per 1M tokens for a video model", async () => {
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [
+          {
+            ...defaultModelData,
+            model_name: "veo-3.1-fast",
+            litellm_params: { model: "vertex_ai/veo-3.1-fast-generate-001" },
+            model_info: {
+              ...defaultModelData.model_info,
+              input_cost_per_token: 0,
+              output_cost_per_token: 0,
+              output_cost_per_second: 0.1,
+              output_cost_per_second_1080p: 0.12,
+              output_cost_per_second_4k: 0.3,
+            },
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    expect(await screen.findByText("Output: $0.10/s")).toBeInTheDocument();
+    expect(screen.getByText("Output (1080p): $0.12/s")).toBeInTheDocument();
+    expect(screen.getByText("Output (4k): $0.30/s")).toBeInTheDocument();
+    expect(screen.queryByText(/\$0\.00\/1M tokens/)).not.toBeInTheDocument();
+  });
+
   it("should display edit settings button when user can edit model", async () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
     await waitFor(() => {
