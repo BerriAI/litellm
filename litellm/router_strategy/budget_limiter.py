@@ -773,7 +773,7 @@ class RouterBudgetLimiting(CustomLogger):
                     )
                 )
 
-            verbose_router_logger.debug("Initalized Provider budget config: %s", self.provider_budget_config)
+            verbose_router_logger.debug("Initialized Provider budget config: %s", self.provider_budget_config)
 
     def _init_deployment_budgets(
         self,
