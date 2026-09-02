@@ -26,7 +26,6 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     CostCalculatorUtils,
     _generic_cost_per_character,
-    _get_cost_per_unit,
     _get_regional_uplift_multiplier,
     _get_service_tier_cost_key,
     calculate_cost_component,
@@ -1446,7 +1445,7 @@ def completion_cost(
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
-                    _video_model_info: Final = _deployment_model_info(
+                    _video_model_info: ModelInfo | None = _deployment_model_info(
                         litellm_logging_obj, custom_pricing, router_model_id
                     )
 
@@ -2114,17 +2113,18 @@ def default_image_cost_calculator(
 
     shared_cost_info: Final = litellm.model_cost[matched_model] if matched_model is not None else None
     price_tables: Final = tuple(table for table in (model_info, shared_cost_info) if table is not None)
+    image_count: Final = n if n is not None else 1
     unit_counts: Final = (
-        ("input_cost_per_image", n),
-        ("output_cost_per_image", n),
-        ("input_cost_per_pixel", height * width * n),
+        ("input_cost_per_image", image_count),
+        ("output_cost_per_image", image_count),
+        ("input_cost_per_pixel", height * width * image_count),
     )
     cost: Final = next(
         (
             price * units
             for price_table in price_tables
             for cost_key, units in unit_counts
-            if (price := _get_cost_per_unit(price_table, cost_key, default_value=None)) is not None
+            if (price := price_table.get(cost_key)) is not None
         ),
         None,
     )
