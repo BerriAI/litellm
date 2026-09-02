@@ -11012,13 +11012,14 @@ class TestConfigServerIdPinning:
     """config.yaml servers may pin ``server_id`` so permission grants survive connection edits."""
 
     @staticmethod
-    def _config(**overrides: Any) -> Dict[str, Any]:
-        base: Dict[str, Any] = {
-            "url": "https://example.com/mcp",
-            "transport": MCPTransport.http,
+    def _config(**overrides: object) -> dict[str, dict[str, object]]:
+        return {
+            "docs_server": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                **overrides,
+            }
         }
-        base.update(overrides)
-        return {"docs_server": base}
 
     @pytest.mark.asyncio
     async def test_derived_id_churns_when_connection_fields_change(self):
@@ -11308,3 +11309,76 @@ class TestConfigServerIdPinning:
             await self._reload_with_db_server(manager, "docs-prod-1")
 
         assert len([m for m in caplog.messages if "database entry takes precedence" in m]) == 2
+
+    @pytest.mark.asyncio
+    async def test_pinned_id_matching_a_mapped_alias_is_rejected(self):
+        """An alias can also arrive from litellm_settings.mcp_aliases; it is reserved just the same."""
+        manager = MCPServerManager()
+
+        with pytest.raises(ValueError, match="server_name or alias of MCP server 'wiki_server'"):
+            await manager.load_servers_from_config(
+                {
+                    "wiki_server": {"url": "https://wiki.example.com/mcp", "transport": MCPTransport.http},
+                    "docs_server": {
+                        "server_id": "wiki",
+                        "url": "https://example.com/mcp",
+                        "transport": MCPTransport.http,
+                    },
+                },
+                {"wiki": "wiki_server"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_pinning_a_servers_own_mapped_alias_is_allowed(self):
+        manager = MCPServerManager()
+
+        await manager.load_servers_from_config(
+            self._config(server_id="docs"),
+            {"docs": "docs_server"},
+        )
+
+        assert list(manager.config_mcp_servers) == ["docs"]
+
+    @pytest.mark.asyncio
+    async def test_mapped_alias_for_an_unknown_server_reserves_nothing(self):
+        """A dangling mcp_aliases entry is never applied, so it must not fail an unrelated pin."""
+        manager = MCPServerManager()
+
+        await manager.load_servers_from_config(
+            self._config(server_id="wiki"),
+            {"wiki": "a_server_that_does_not_exist"},
+        )
+
+        assert list(manager.config_mcp_servers) == ["wiki"]
+
+    @pytest.mark.asyncio
+    async def test_config_id_that_is_a_db_server_name_warns(self, caplog):
+        """The mirror of the shadow case: here the config entry captures the db server's grants."""
+        manager = MCPServerManager()
+        await manager.load_servers_from_config(self._config(server_id="db_server"))
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "db-uuid-1")
+
+        assert any("db_server" in m and "name or alias of a database-backed" in m for m in caplog.messages)
+
+    @pytest.mark.asyncio
+    async def test_capture_warning_is_not_repeated_on_every_reload(self, caplog):
+        manager = MCPServerManager()
+        await manager.load_servers_from_config(self._config(server_id="db_server"))
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "db-uuid-1")
+            await self._reload_with_db_server(manager, "db-uuid-1")
+
+        assert len([m for m in caplog.messages if "name or alias of a database-backed" in m]) == 1
+
+    @pytest.mark.asyncio
+    async def test_config_id_unrelated_to_db_names_does_not_warn(self, caplog):
+        manager = MCPServerManager()
+        await manager.load_servers_from_config(self._config(server_id="docs-prod-1"))
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await self._reload_with_db_server(manager, "db-uuid-1")
+
+        assert all("name or alias of a database-backed" not in m for m in caplog.messages)

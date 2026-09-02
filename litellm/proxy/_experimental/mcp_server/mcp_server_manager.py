@@ -13,7 +13,16 @@ import json
 import os
 import re
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, MutableMapping, Sequence
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Container,
+    Iterable,
+    Mapping,
+    MutableMapping,
+    Sequence,
+)
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypedDict, cast
@@ -422,13 +431,17 @@ def _pinned_config_server_id(raw_server_id: object, server_name: str) -> str | N
     return raw_server_id.strip()
 
 
-def _config_identifier_owners(mcp_servers_config: Mapping[str, MCPServerConfig]) -> Mapping[str, str]:
-    """Map every server_name and explicit alias in the config to the entry that owns it.
+def _config_identifier_owners(
+    mcp_servers_config: Mapping[str, MCPServerConfig],
+    mcp_aliases: Mapping[str, str] | None,
+) -> Mapping[str, str]:
+    """Map every server_name and alias in the config to the entry that owns it.
 
     ``expand_permission_list`` resolves a grant against the registry keys before it falls back to
     matching alias and server_name, so an id equal to another entry's name or alias captures that
-    entry's grants. Derived ids are hashes and never collide with a name, so this only matters once
-    an id is pinned.
+    entry's grants. Aliases arrive two ways, an ``alias`` on the entry and a ``mcp_aliases`` entry in
+    litellm_settings pointing at it, and both end up on the server, so both are reserved here.
+    Derived ids are hashes and never collide with a name, so this only matters once an id is pinned.
     """
     owners: dict[str, str] = {}  # mutable-ok: per-load identifier index
     for server_name, server_config in mcp_servers_config.items():
@@ -436,7 +449,29 @@ def _config_identifier_owners(mcp_servers_config: Mapping[str, MCPServerConfig])
         alias = server_config.get("alias")
         if alias:
             owners.setdefault(alias, server_name)
+    for alias_name, target_server_name in (mcp_aliases or {}).items():
+        if target_server_name in mcp_servers_config:
+            owners.setdefault(alias_name, target_server_name)
     return owners
+
+
+def _config_ids_capturing_db_identifiers(
+    config_server_ids: Container[str],
+    db_servers: Iterable[MCPServer],
+) -> frozenset[str]:
+    """Config server ids that are a database-backed server's name, server_name or alias.
+
+    ``expand_permission_list`` matches a grant against the registry keys before it matches names, so
+    such an id answers every grant written for the database server, and the database server itself
+    stops being reachable by name. The config load cannot catch this because the database registry
+    is not loaded yet, so it is reported from the reload that does have both halves.
+    """
+    return frozenset(
+        identifier
+        for server in db_servers
+        for identifier in (server.name, server.server_name, server.alias)
+        if identifier and identifier in config_server_ids
+    )
 
 
 def _reject_config_server_id_collision(
@@ -1619,6 +1654,7 @@ class MCPServerManager:
         # runs on the config-reload timer, so this keeps a standing misconfiguration from re-logging
         # the same warning every interval; a change in the set logs again.
         self._warned_shadowed_config_server_ids: frozenset[str] = frozenset()
+        self._warned_capturing_config_server_ids: frozenset[str] = frozenset()
         self._oauth_discovery_on_startup = _mcp_oauth_discovery_on_startup_enabled()
         self._oauth_discovery_generation_counter = 0
         self._oauth_discovery_slots: tuple[_OAuthDiscoverySlot, ...] = ()
@@ -2015,7 +2051,7 @@ class MCPServerManager:
         # server_id -> the config server_name that claimed it, so a pinned id cannot silently
         # overwrite another server's entry in self.config_mcp_servers.
         assigned_server_ids: MutableMapping[str, str] = {}  # mutable-ok: per-load collision index
-        identifier_owners: Final = _config_identifier_owners(mcp_servers_config)
+        identifier_owners: Final = _config_identifier_owners(mcp_servers_config, mcp_aliases)
 
         for server_name, raw_server_config in mcp_servers_config.items():
             server_config: MCPServerConfig = raw_server_config
@@ -6132,6 +6168,20 @@ class MCPServerManager:
                 ", ".join(sorted(shadowed_config_server_ids)),
             )
         self._warned_shadowed_config_server_ids = shadowed_config_server_ids
+
+        # The mirror image of the block above: a config server_id that is a database server's name
+        # answers that server's grants instead, because ids are matched before names.
+        capturing_config_server_ids: Final = _config_ids_capturing_db_identifiers(
+            self.config_mcp_servers.keys(), registered_registry.values()
+        )
+        if capturing_config_server_ids and capturing_config_server_ids != self._warned_capturing_config_server_ids:
+            verbose_logger.warning(
+                "config.yaml MCP server_id(s) %s are the name or alias of a database-backed MCP "
+                "server. Permission entries naming them resolve to the config.yaml server, not the "
+                "database one. Give the config entry a different server_id.",
+                ", ".join(sorted(capturing_config_server_ids)),
+            )
+        self._warned_capturing_config_server_ids = capturing_config_server_ids
 
         await self._hydrate_config_servers_dcr_clients()
 
