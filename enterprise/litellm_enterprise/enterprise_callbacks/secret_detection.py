@@ -522,6 +522,26 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         _masked_entity_count.set({})
         return {**inputs, "texts": [self.redact_text(text) for text in texts]}
 
+    def _redact_prompt(self, data: dict) -> int:
+        """Redact ``data["prompt"]`` (the text-completion shape, which
+        ``walk_user_text`` does not cover) and return how many non-empty
+        strings were inspected."""
+        prompt = data.get("prompt")
+        if isinstance(prompt, str):
+            if not prompt:
+                return 0
+            data["prompt"] = self.redact_text(prompt, source="prompt")
+            return 1
+        if isinstance(prompt, list):
+            data["prompt"] = [  # mutable-ok: data["prompt"] is a list on the wire
+                self.redact_text(item, source="prompt")
+                if isinstance(item, str) and item
+                else item
+                for item in prompt
+            ]
+            return sum(1 for item in prompt if isinstance(item, str) and item)
+        return 0
+
     #### CALL HOOKS - proxy only ####
     @log_guardrail_information
     async def async_pre_call_hook(
@@ -538,15 +558,13 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         _masked_entity_count.set({})
 
         # Covers multimodal list content + Responses-API input.
-        walk_user_text(data, self.redact_text)
+        inspected = walk_user_text(data, self.redact_text) + self._redact_prompt(data)
 
-        if "prompt" in data:
-            if isinstance(data["prompt"], str):
-                data["prompt"] = self.redact_text(data["prompt"], source="prompt")
-            elif isinstance(data["prompt"], list):
-                for idx, item in enumerate(data["prompt"]):
-                    if isinstance(item, str):
-                        data["prompt"][idx] = self.redact_text(item, source="prompt")
+        if inspected == 0:
+            # Image-only, empty-text, and unsupported payloads inspected
+            # nothing, so recording "allow" would count a run that never
+            # looked at any content.
+            _masked_entity_count.set(None)
 
         return
 

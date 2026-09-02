@@ -191,6 +191,68 @@ async def test_apply_guardrail_without_texts_records_nothing():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "data",
+    [
+        pytest.param(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": "https://x/y.png"}}
+                        ],
+                    }
+                ],
+                "metadata": {},
+            },
+            id="image_only",
+        ),
+        pytest.param(
+            {"messages": [{"role": "user", "content": ""}], "metadata": {}},
+            id="empty_message",
+        ),
+        pytest.param({"prompt": "", "metadata": {}}, id="empty_prompt"),
+        pytest.param({"prompt": ["", ""], "metadata": {}}, id="empty_prompt_list"),
+    ],
+)
+async def test_pre_call_hook_without_inspectable_text_records_nothing(data: dict):
+    """A payload the guardrail could not inspect (image-only content, empty
+    strings) must not record an "allow" run: monitoring would count a check
+    that never looked at any text."""
+    guardrail = _guardrail()
+
+    await guardrail.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(),
+        cache=DualCache(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert "standard_logging_guardrail_information" not in data["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_mixed_prompt_list_still_redacts_and_records():
+    """A prompt list mixing empty and real strings is inspected, so the run is
+    recorded and the non-empty entry is still redacted."""
+    guardrail = _guardrail()
+    data = {"prompt": ["", f"key {AWS_KEY}"], "metadata": {}}
+
+    await guardrail.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(),
+        cache=DualCache(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert data["prompt"] == ["", "key [REDACTED]"]
+    recorded = _recorded(data)
+    assert recorded["guardrail_response"] == "mask"
+    assert recorded["masked_entity_count"] == {"AWS Access Key": 1}
+
+
+@pytest.mark.asyncio
 async def test_legacy_nameless_instance_records_nothing():
     """``litellm_settings.callbacks: ["hide_secrets"]`` builds an arg-less
     instance with no guardrail_name. It still redacts, but recording a nameless
