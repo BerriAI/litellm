@@ -30,6 +30,11 @@ def _build_secret_patterns() -> "re.Pattern[str]":
         r"Basic\s+[A-Za-z0-9+/]{10,}={0,2}",
         # OpenAI / Anthropic sk- prefixed keys
         rf"sk-[A-Za-z0-9\-_]{{{MINIMUM_CUSTOM_KEY_LENGTH - len('sk-')},}}",
+        # Credentials passed as URL query params. Terminated by "&" like the key=
+        # and sig= patterns below, so the rest of the request line survives in an
+        # access log. Must precede the generic patterns to win at the same position.
+        r"(?<=[?&])(?:api[_-]?key|\w*(?:token|password|passwd|client_secret|secret_key|_secret))"
+        r"=[^\s&'\"]+",
         # Generic api_key / api-key / apikey (handles 'key': 'value' dict repr)
         r"(?:api[_-]?key)['\"]?\s*[:=]\s*['\"]?[^\s,'\"})\]{}>]{8,}",
         # x-api-key / api-key header values (handles 'key': 'value' dict repr)
@@ -45,8 +50,10 @@ def _build_secret_patterns() -> "re.Pattern[str]":
         # Word boundary prevents O(n^2) backtracking on long word-char runs.
         r"(?:^|(?<=\W))\w*(?:password|passwd|client_secret|secret_key|_secret)"
         r"['\"]?\s*[:=]\s*['\"]?[^\s,'\"})\]{}>]+",
-        # Database connection string credentials (scheme://user:pass@host)
-        r"(?<=://)[^\s'\"]*:[^\s'\"@]+(?=@)",
+        # Database connection string credentials (scheme://user:pass@host).
+        # The user half stops at the ":" separator and both halves are length-capped,
+        # so a long attacker-supplied URL cannot backtrack quadratically.
+        r"(?<=://)[^\s'\":]{0,4096}:[^\s'\"]{1,4096}(?=@)",
         # Databricks personal access tokens
         r"dapi[0-9a-f]{32}",
         # Module-level provider keys logged as litellm.<provider>_key=<value>
@@ -67,8 +74,10 @@ def _build_secret_patterns() -> "re.Pattern[str]":
         r"""['\"]?\s*[:=]\s*['\"]?[^\s,'\"})\]{}>]+""",
         # Raw JWTs (without Bearer prefix)
         r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*",
-        # Azure SAS tokens in URLs
-        r"[?&]sig=[A-Za-z0-9%+/=]+",
+        # Azure SAS tokens in URLs. The delimiter is a lookbehind, like the
+        # `key=` pattern above, so the `?` or `&` survives and the redacted URL
+        # stays well formed (this string is often a request line in a log).
+        r"(?<=[?&])sig=[A-Za-z0-9%+/=]+",
         # Full JSON service-account blobs (single-line and multi-line)
         r'\{[^{}]*"type"\s*:\s*"service_account"[^{}]*(?:\{[^{}]*\}[^{}]*)*\}',
     ]
