@@ -310,6 +310,7 @@ from litellm.proxy.auth.model_checks import (
     get_mcp_server_ids,
     get_team_models,
 )
+from litellm.proxy.auth.password_policy import validate_password_policy
 from litellm.proxy.auth.user_api_key_auth import (
     _fetch_global_spend_with_event_coordination,
     user_api_key_auth,
@@ -2280,7 +2281,7 @@ user_api_key_cache: UserApiKeyCache = UserApiKeyCache(
 )
 spend_counter_cache: Final = DualCache(default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value)
 cli_sso_session_cache: Final = DualCache(default_in_memory_ttl=CLI_SSO_SESSION_TTL_SECONDS)
-model_max_budget_limiter: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=user_api_key_cache)
+model_max_budget_limiter: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=spend_counter_cache)
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
 redis_usage_cache: RedisCache | None = None  # redis cache used for tracking spend, tpm/rpm limits
 polling_via_cache_enabled: Literal["all"] | list[str] | bool = False
@@ -6643,6 +6644,12 @@ class ProxyConfig:
 
         if "max_batch_file_size_mb" not in self._yaml_general_settings_keys:
             general_settings["max_batch_file_size_mb"] = _general_settings.get("max_batch_file_size_mb")
+
+        if "max_file_size_mb" not in self._yaml_general_settings_keys:
+            general_settings["max_file_size_mb"] = _general_settings.get("max_file_size_mb")
+
+        if "blocked_file_extensions" not in self._yaml_general_settings_keys:
+            general_settings["blocked_file_extensions"] = _general_settings.get("blocked_file_extensions")
 
         ## ALERTING ARGS ##
         if "alerting_args" in _general_settings:
@@ -15236,6 +15243,7 @@ async def login(request: Request):
         password=password,
         master_key=master_key,
         prisma_client=prisma_client,
+        general_settings=general_settings,
     )
 
     # Create UI token object
@@ -15310,6 +15318,7 @@ async def login_v2(request: Request):
             password=password,
             master_key=master_key,
             prisma_client=prisma_client,
+            general_settings=general_settings,
         )
 
         returned_ui_token_object: Final = create_ui_token_object(
@@ -15380,6 +15389,7 @@ async def login_v3(request: Request):
             password=password,
             master_key=master_key,
             prisma_client=prisma_client,
+            general_settings=general_settings,
         )
 
         returned_ui_token_object: Final = create_ui_token_object(
@@ -15749,6 +15759,7 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
             detail={"error": "Invalid onboarding session for invitation link."},
         )
 
+    validate_password_policy(data.password, general_settings)
     hashed_pw: Final = hash_password(data.password)
     current_time = litellm.utils.get_utc_datetime()
     async with prisma_client.db.tx() as tx:
@@ -16412,6 +16423,8 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "global_max_parallel_requests": "Integer",
         "max_request_size_mb": "Integer",
         "max_batch_file_size_mb": "Integer",
+        "max_file_size_mb": "Integer",
+        "blocked_file_extensions": "List",
         "max_response_size_mb": "Integer",
         "proxy_config_reload_interval_seconds": "Integer",
         "pass_through_endpoints": "PydanticModel",
