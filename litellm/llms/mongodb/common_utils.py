@@ -109,6 +109,18 @@ def get_sync_client(key: MongoClientKey, client_class: SyncClientFactory | None 
     return client
 
 
+def _purge_dead_loops() -> None:
+    """The cached client holds its loop object alive, so a closed loop's entry would otherwise pin
+    that client and its sockets for the life of the process. Callers that run one loop per search
+    (``asyncio.run`` in a script) reach the cap this way and never release what is behind it."""
+    for stale in tuple(
+        cache_key
+        for cache_key, (loop_ref, _) in _async_clients.items()
+        if (cached_loop := loop_ref()) is None or cached_loop.is_closed()
+    ):
+        del _async_clients[stale]
+
+
 def get_async_client(key: MongoClientKey, client_class: AsyncClientFactory | None = None) -> "AsyncMongoClient":
     """Async clients bind to the loop that created them, so the cache is keyed per loop."""
     loop: Final = asyncio.get_running_loop()
@@ -116,6 +128,7 @@ def get_async_client(key: MongoClientKey, client_class: AsyncClientFactory | Non
     cached: Final = _async_clients.get(loop_key)
     if cached is not None and cached[0]() is loop:
         return cached[1]
+    _purge_dead_loops()
     build: Final = client_class if client_class is not None else import_async_mongo_client()
     client: Final = build(key.connection_string, **_client_kwargs(key))
     if len(_async_clients) < _MAX_CACHED_CLIENTS or loop_key in _async_clients:
