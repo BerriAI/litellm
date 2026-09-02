@@ -2933,6 +2933,22 @@ async def test_block_key_existing_key_succeeds(monkeypatch):
     assert result == mock_updated_record
 
 
+def test_admin_block_update_drops_team_member_removal_marker():
+    """Regression: `/key/block` on a key `/team/member_delete` blocked must clear the removal
+    marker, otherwise re-adding the member to the team would undo the admin's block. Keys
+    without the marker keep their metadata untouched."""
+    import json
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import _admin_block_update
+
+    marked = _admin_block_update({"tags": ["a"], "blocked_by_team_member_removal": True})
+    assert marked["blocked"] is True
+    assert json.loads(str(marked["metadata"])) == {"tags": ["a"]}
+
+    assert dict(_admin_block_update({"tags": ["a"]})) == {"blocked": True}
+    assert dict(_admin_block_update(None)) == {"blocked": True}
+
+
 @pytest.mark.asyncio
 async def test_validate_key_team_change_with_member_permissions():
     """

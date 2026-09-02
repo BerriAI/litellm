@@ -1,6 +1,8 @@
-from typing import Any, Literal
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from litellm.proxy._types import (
     KeyManagementRoutes,
@@ -11,6 +13,16 @@ from litellm.proxy._types import (
 )
 
 TeamIdSearchMatch = Literal["exact", "prefix"]
+
+TEAM_MEMBER_REMOVAL_BLOCKED_METADATA_KEY: Final = "blocked_by_team_member_removal"
+
+_KEY_METADATA: Final = TypeAdapter(Mapping[str, object])
+_NO_KEY_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def key_metadata(metadata: object) -> Mapping[str, object]:
+    """The `LiteLLM_VerificationToken.metadata` JSON column as a typed mapping, empty when unset."""
+    return _KEY_METADATA.validate_python(metadata) if isinstance(metadata, dict) else _NO_KEY_METADATA
 
 
 class GetTeamMemberPermissionsRequest(BaseModel):

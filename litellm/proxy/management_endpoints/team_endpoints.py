@@ -158,6 +158,7 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
 from litellm.types.proxy.management_endpoints.team_endpoints import (
+    TEAM_MEMBER_REMOVAL_BLOCKED_METADATA_KEY,
     BulkTeamMemberAddRequest,
     BulkTeamMemberAddResponse,
     BulkUpdateTeamMemberPermissionsRequest,
@@ -170,6 +171,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamMemberInfoResponse,
     TeamMetadataSchemaResponse,
     UpdateTeamMemberPermissionsRequest,
+    key_metadata,
 )
 
 if TYPE_CHECKING:
@@ -1181,22 +1183,12 @@ def _should_auto_add_team_creator(
     return general_settings.get("disable_auto_add_proxy_admin_to_teams") is not True
 
 
-TEAM_MEMBER_REMOVAL_BLOCKED_METADATA_KEY: Final = "blocked_by_team_member_removal"
-
-
 def _blocks_keys_on_member_removal(general_settings: Mapping[str, object]) -> bool:
     return general_settings.get("block_keys_on_team_member_removal") is True
 
 
-_NO_KEY_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
-
-
-def _key_metadata(metadata: object) -> Mapping[str, object]:
-    return metadata if isinstance(metadata, dict) else _NO_KEY_METADATA
-
-
 def _was_blocked_by_member_removal(metadata: object) -> bool:
-    return _key_metadata(metadata).get(TEAM_MEMBER_REMOVAL_BLOCKED_METADATA_KEY) is True
+    return key_metadata(metadata).get(TEAM_MEMBER_REMOVAL_BLOCKED_METADATA_KEY) is True
 
 
 async def _set_member_removal_block(
@@ -1205,7 +1197,7 @@ async def _set_member_removal_block(
     tokens_db: "TableActions[prisma_models.LiteLLM_VerificationToken]",
 ) -> None:
     marker: Final = TEAM_MEMBER_REMOVAL_BLOCKED_METADATA_KEY
-    metadata: Final = _key_metadata(key_row.metadata)
+    metadata: Final = key_metadata(key_row.metadata)
     unmarked: Final = {k: v for k, v in metadata.items() if k != marker}  # mutable-ok: safe_dumps needs a dict
     new_metadata: Final = {**unmarked, marker: True} if blocked else unmarked  # mutable-ok: safe_dumps needs a dict
     where: Final[prisma_types.LiteLLM_VerificationTokenWhereInput] = {
@@ -1232,9 +1224,32 @@ async def _unblock_team_keys_of_readded_members(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None,
 ) -> None:
+    """Runs under the team's advisory lock and re-reads the roster there, so a member_delete
+    that committed after the caller's add (and already blocked the key) can't be undone here."""
     if not user_ids:
         return
-    tokens_db: Final = _tokens_db(prisma_client)
+    async with prisma_client.tx() as tx:
+        await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
+        members: Final = await TeamRepository(prisma_client).get_members_with_roles_locked(tx, team_id)
+        still_members: Final = user_ids & frozenset(m.user_id for m in members or () if m.user_id is not None)
+        member_tx: Final[_MemberDeleteTx] = tx
+        unblocked_tokens: Final = await _unblock_marked_team_keys(
+            team_id=team_id, user_ids=still_members, tokens_db=member_tx.litellm_verificationtoken
+        )
+    await delete_cache_key_objects(
+        hashed_tokens=unblocked_tokens,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def _unblock_marked_team_keys(
+    team_id: str,
+    user_ids: AbstractSet[str],
+    tokens_db: "TableActions[prisma_models.LiteLLM_VerificationToken]",
+) -> tuple[str, ...]:
+    if not user_ids:
+        return ()
     where: Final[prisma_types.LiteLLM_VerificationTokenWhereInput] = {
         "user_id": {"in": sorted(user_ids)},
         "team_id": team_id,
@@ -1244,11 +1259,7 @@ async def _unblock_team_keys_of_readded_members(
     keys_to_unblock: Final = tuple(k for k in blocked_keys or () if _was_blocked_by_member_removal(k.metadata))
     for key_row in keys_to_unblock:
         await _set_member_removal_block(key_row=key_row, blocked=False, tokens_db=tokens_db)
-    await delete_cache_key_objects(
-        hashed_tokens=tuple(k.token for k in keys_to_unblock),
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
+    return tuple(k.token for k in keys_to_unblock)
 
 
 #### TEAM MANAGEMENT ####
