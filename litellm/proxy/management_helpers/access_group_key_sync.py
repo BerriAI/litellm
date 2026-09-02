@@ -38,6 +38,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import (
     _delete_cache_access_object,  # pyright: ignore[reportPrivateUsage]  # the access-group endpoints reach for this same cache primitive
 )
+from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 from litellm.repositories.table_repositories import AccessGroupRepository
 
 
@@ -72,8 +73,10 @@ _REPOINT_KEY_SQL: Final = (
 
 
 def _raw_executor(prisma_client: object) -> _RawExecutor:
-    """Narrow the untyped Prisma client down to the raw-query call this module makes."""
-    return AccessGroupRepository(prisma_client).prisma_client.db  # pyright: ignore[reportAny]  # untyped Prisma client
+    """Route raw membership writes to the primary database."""
+    db: Final[object] = AccessGroupRepository(prisma_client).prisma_client.db  # pyright: ignore[reportAny]  # untyped Prisma client
+    primary: Final[object] = db.writer if isinstance(db, RoutingPrismaWrapper) else db
+    return primary  # pyright: ignore[reportReturnType]  # untyped Prisma client; query_raw is the only call
 
 
 async def _invalidate_access_group_cache(access_group_id: str) -> None:
