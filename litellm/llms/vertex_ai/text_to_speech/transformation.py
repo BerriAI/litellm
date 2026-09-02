@@ -29,6 +29,7 @@ from litellm.types.llms.vertex_ai_text_to_speech import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 else:
     LiteLLMLoggingObj = Any
@@ -131,19 +132,19 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         model: str,
         input: str,
         voice: str | dict | None,
-        optional_params: dict,
-        litellm_params_dict: dict,
+        optional_params: dict[str, object],
+        litellm_params_dict: dict[str, object],
         logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout,
-        extra_headers: dict[str, Any] | None,
-        base_llm_http_handler: Any,
+        extra_headers: dict[str, object] | None,
+        base_llm_http_handler: "BaseLLMHTTPHandler",
         aspeech: bool,
         api_base: str | None,
         api_key: str | None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> Union[
         "HttpxBinaryResponseContent",
-        Coroutine[Any, Any, "HttpxBinaryResponseContent"],
+        Coroutine[object, object, "HttpxBinaryResponseContent"],
     ]:
         """
         Dispatch method to handle Vertex AI TTS requests
@@ -227,7 +228,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         Returns:
             Tuple of (mapped_voice_str, mapped_params)
         """
-        mapped_params: Final[dict[str, Any]] = {}
+        mapped_params: Final[dict[str, object]] = {}
 
         ##########################################################
         # Map voice using helper
@@ -428,7 +429,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
                 speakingRate=speaking_rate,
             )
 
-        request_body: Final[dict[str, Any]] = {
+        request_body: Final[dict[str, object]] = {
             "input": dict(vertex_input),
             "voice": dict(vertex_voice),
             "audioConfig": dict(vertex_audio_config),

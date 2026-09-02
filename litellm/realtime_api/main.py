@@ -42,6 +42,8 @@ from ..llms.xai.realtime.handler import XAIRealtime
 from ..utils import client as wrapper_client
 
 if TYPE_CHECKING:
+    from fastapi import WebSocket
+
     from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
 
 azure_realtime: Final = AzureOpenAIRealtime()
@@ -332,12 +334,12 @@ async def _resolve_vertex_access_token_bounded(
 @wrapper_client
 async def _arealtime(
     model: str,
-    websocket: Any,  # fastapi websocket
+    websocket: "WebSocket",  # fastapi websocket
     api_base: str | None = None,
     api_key: str | None = None,
     api_version: str | None = None,
     azure_ad_token: str | None = None,
-    client: Any | None = None,
+    client: object | None = None,
     timeout: float | None = None,
     query_params: RealtimeQueryParams | None = None,
     **kwargs,
@@ -574,7 +576,7 @@ _TRANSCRIPTION_QUERY_PARAMS: Final[RealtimeQueryParams] = {"intent": "transcript
 
 
 def _azure_realtime_health_protocol(
-    model: str, realtime_protocol: str | None, model_params: Mapping[str, Any]
+    model: str, realtime_protocol: str | None, model_params: Mapping[str, object]
 ) -> tuple[str, RealtimeQueryParams | None]:
     query_params: Final = _TRANSCRIPTION_QUERY_PARAMS if _is_transcription_only_realtime_model(model, "azure") else None
     configured_raw: Final = (

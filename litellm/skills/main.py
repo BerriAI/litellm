@@ -72,7 +72,7 @@ def _get_litellm_skills_handler():
 async def acreate_skill(
     files: list[Any] | None = None,
     display_title: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     extra_query: Mapping[str, object] | None = None,
     extra_body: dict[str, Any] | None = None,
     timeout: float | httpx.Timeout | None = None,
@@ -135,7 +135,7 @@ async def acreate_skill(
 def create_skill(
     files: list[Any] | None = None,
     display_title: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     extra_query: Mapping[str, object] | None = None,
     extra_body: dict[str, Any] | None = None,
     timeout: float | httpx.Timeout | None = None,
@@ -262,7 +262,7 @@ async def alist_skills(
     limit: int | None = None,
     page: str | None = None,
     source: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     extra_query: dict[str, Any] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
@@ -325,7 +325,7 @@ def list_skills(
     limit: int | None = None,
     page: str | None = None,
     source: str | None = None,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     extra_query: dict[str, Any] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
@@ -443,7 +443,7 @@ def list_skills(
 @client
 async def aget_skill(
     skill_id: str,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
@@ -500,7 +500,7 @@ async def aget_skill(
 @client
 def get_skill(
     skill_id: str,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
@@ -607,7 +607,7 @@ def get_skill(
 @client
 async def adelete_skill(
     skill_id: str,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
@@ -664,7 +664,7 @@ async def adelete_skill(
 @client
 def delete_skill(
     skill_id: str,
-    extra_headers: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
     extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,

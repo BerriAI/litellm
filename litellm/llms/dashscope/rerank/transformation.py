@@ -148,7 +148,7 @@ class DashScopeRerankConfig(BaseRerankConfig):
         if "documents" not in optional_rerank_params:
             raise ValueError("documents is required for DashScope rerank")
 
-        request: Final[dict[str, Any]] = {
+        request: Final[dict[str, object]] = {
             "model": model,
             "query": optional_rerank_params["query"],
             "documents": optional_rerank_params["documents"],
@@ -209,7 +209,7 @@ class DashScopeRerankConfig(BaseRerankConfig):
         # which already matches LiteLLM's RerankResponseDocument shape.
         transformed_results: Final[list[dict]] = []
         for r in results:
-            item: dict[str, Any] = {
+            item: dict[str, object] = {
                 "index": r["index"],
                 "relevance_score": r["relevance_score"],
             }

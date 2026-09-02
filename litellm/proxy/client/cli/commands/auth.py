@@ -1,8 +1,8 @@
 import sys
 import time
 import webbrowser
-from collections.abc import Callable, Mapping
-from typing import Any, Final
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, Final, TypeVar
 from urllib.parse import urlencode
 
 import click
@@ -111,6 +111,8 @@ class CliAuthResult(TypedDict):
     teams: list[str]
     team_id: str | None
 
+
+_TeamMapping: Final = TypeVar("_TeamMapping", bound=Mapping[str, object])
 
 KEYRING_INSTALL_HINT: Final = "pip install 'litellm[cli]'"
 
@@ -353,7 +355,7 @@ def get_key_input():
         return None
 
 
-def display_interactive_team_selection(teams: list[dict[str, Any]], selected_index: int = 0) -> None:
+def display_interactive_team_selection(teams: Sequence[Mapping[str, Any]], selected_index: int = 0) -> None:
     """Display teams with one highlighted for selection"""
     console: Final = Console()
 
@@ -391,7 +393,7 @@ def display_interactive_team_selection(teams: list[dict[str, Any]], selected_ind
             console.print(f"   Budget: [dim]{budget_str}[/dim]\n")
 
 
-def prompt_team_selection(teams: list[dict[str, Any]]) -> dict[str, Any] | None:
+def prompt_team_selection(teams: Sequence[_TeamMapping]) -> _TeamMapping | None:
     """Interactive team selection with arrow keys"""
     if not teams:
         return None
@@ -441,8 +443,8 @@ def prompt_team_selection(teams: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 def prompt_team_selection_fallback(
-    teams: list[dict[str, Any]],
-) -> dict[str, Any] | None:
+    teams: Sequence[_TeamMapping],
+) -> _TeamMapping | None:
     """Fallback team selection for non-interactive environments"""
     if not teams:
         return None

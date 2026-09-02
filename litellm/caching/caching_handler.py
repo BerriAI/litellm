@@ -672,7 +672,7 @@ class LLMCachingHandler:
     def _async_log_cache_hit_on_callbacks(
         self,
         logging_obj: LiteLLMLoggingObj,
-        cached_result: Any,
+        cached_result: object,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
         cache_hit: bool,
@@ -1184,7 +1184,7 @@ class LLMCachingHandler:
         logging_obj: LiteLLMLoggingObj,
         model: str,
         kwargs: dict[str, Any],
-        cached_result: Any,
+        cached_result: object,
         is_async: bool,
         is_embedding: bool = False,
         custom_llm_provider: str | None = None,
