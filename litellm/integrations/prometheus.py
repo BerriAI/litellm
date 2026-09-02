@@ -2809,15 +2809,14 @@ class PrometheusLogger(CustomLogger):
 
             """
             log these labels
-            ["litellm_model_name", "model_id", "api_base", "api_provider"]
+            ["litellm_model_name", "model_id", "api_provider"]
             """
             # Only mark a deployment outage when one was actually picked.
             if deployment_selected:
                 self.set_deployment_partial_outage(
-                    litellm_model_name=litellm_model_name or "",
+                    litellm_model_name=litellm_model_name,
                     model_id=model_id,
-                    api_base=api_base,
-                    api_provider=llm_provider or "",
+                    api_provider=llm_provider or self._extract_api_provider_from_request_data(request_kwargs),
                 )
             _deployment_label_ctx: Final = PrometheusLabelFactoryContext(enum_values)
             if exception is not None:
@@ -3043,13 +3042,12 @@ class PrometheusLogger(CustomLogger):
 
             """
             log these labels
-            ["litellm_model_name", "requested_model", model_id", "api_base", "api_provider"]
+            ["litellm_model_name", "model_id", "api_provider"]
             """
             self.set_deployment_healthy(
-                litellm_model_name=litellm_model_name or "",
-                model_id=model_id or "",
-                api_base=api_base or "",
-                api_provider=llm_provider or "",
+                litellm_model_name=litellm_model_name,
+                model_id=model_id,
+                api_provider=llm_provider or self._extract_api_provider_from_request_data(request_kwargs),
             )
 
             PrometheusLogger._inc_labeled_counter(
@@ -3406,55 +3404,70 @@ class PrometheusLogger(CustomLogger):
             label_context=PrometheusLabelFactoryContext(enum_values),
         )
 
+    def get_deployment_state_labels(
+        self,
+        litellm_model_name: str | None,
+        model_id: str | None,
+        api_provider: str | None,
+    ) -> Mapping[str, str]:
+        """
+        Returns the complete label set for the litellm_deployment_state gauge.
+
+        Every writer of the gauge (success, failure, and cooldown paths) must
+        derive its labels through this helper so a deployment always maps to
+        exactly one time series; a second labelset would leave a stale state
+        value exported forever. Values are coerced to non-empty-or-"" strings
+        so every label is always present.
+        """
+        return prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(metric_name="litellm_deployment_state"),
+            enum_values=UserAPIKeyLabelValues(
+                litellm_model_name=litellm_model_name or "",
+                model_id=model_id or "",
+                api_provider=api_provider or "",
+            ),
+        )
+
     def set_litellm_deployment_state(
         self,
         state: int,
-        litellm_model_name: str,
+        litellm_model_name: str | None,
         model_id: str | None,
-        api_base: str | None,
-        api_provider: str,
+        api_provider: str | None,
     ):
         """
         Set the deployment state.
         """
-        ### get labels
-        _labels: Final = prometheus_label_factory(
-            supported_enum_labels=self.get_labels_for_metric(metric_name="litellm_deployment_state"),
-            enum_values=UserAPIKeyLabelValues(
-                litellm_model_name=litellm_model_name,
-                model_id=model_id,
-                api_base=api_base,
-                api_provider=api_provider,
-            ),
+        _labels: Final = self.get_deployment_state_labels(
+            litellm_model_name=litellm_model_name,
+            model_id=model_id,
+            api_provider=api_provider,
         )
         self.litellm_deployment_state.labels(**_labels).set(state)
 
     def set_deployment_healthy(
         self,
-        litellm_model_name: str,
-        model_id: str,
-        api_base: str,
-        api_provider: str,
+        litellm_model_name: str | None,
+        model_id: str | None,
+        api_provider: str | None,
     ):
-        self.set_litellm_deployment_state(0, litellm_model_name, model_id, api_base, api_provider)
+        self.set_litellm_deployment_state(0, litellm_model_name, model_id, api_provider)
 
     def set_deployment_partial_outage(
         self,
-        litellm_model_name: str,
+        litellm_model_name: str | None,
         model_id: str | None,
-        api_base: str | None,
-        api_provider: str,
+        api_provider: str | None,
     ):
-        self.set_litellm_deployment_state(1, litellm_model_name, model_id, api_base, api_provider)
+        self.set_litellm_deployment_state(1, litellm_model_name, model_id, api_provider)
 
     def set_deployment_complete_outage(
         self,
-        litellm_model_name: str,
+        litellm_model_name: str | None,
         model_id: str | None,
-        api_base: str | None,
-        api_provider: str,
+        api_provider: str | None,
     ):
-        self.set_litellm_deployment_state(2, litellm_model_name, model_id, api_base, api_provider)
+        self.set_litellm_deployment_state(2, litellm_model_name, model_id, api_provider)
 
     def increment_deployment_cooled_down(
         self,
