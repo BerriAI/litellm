@@ -7545,9 +7545,17 @@ def _group_token_limit(candidate_sets: tuple[tuple[ModelInfo, ...], ...], field:
     """The widest limit any deployment behind the listed name declares for ``field``.
 
     A model group is normally one model behind several interchangeable deployments, so
-    there is a single value to report. When a group genuinely mixes models, reporting the
-    widest window keeps the listing independent of config order and agreeing with
-    ``/model_group/info``, which aggregates the same way for the Admin UI.
+    there is a single value to report and the choice of aggregate does not arise.
+
+    When a group genuinely mixes models no single number is right, and the widest is the
+    deliberate pick over the narrowest for two reasons. It is what ``/model_group/info``
+    has long reported to the Admin UI, so the two surfaces agree; disagreeing is the very
+    complaint this resolution path exists to fix. And of the two ways to be wrong,
+    under-advertising is worse: a client that trusts a narrowed window silently refuses
+    prompts the group would have served, while an over-long prompt that reaches a smaller
+    deployment comes back as a legible context-length error -- and does not reach one at
+    all when ``enable_pre_call_checks`` is set, which filters deployments the prompt does
+    not fit.
     """
     limits: Final = tuple(
         limit for limit in (_first_token_limit(candidates, field) for candidates in candidate_sets) if limit is not None

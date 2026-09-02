@@ -7350,6 +7350,20 @@ def test_get_model_listing_info_carries_configured_limits():
     assert (info.max_input_tokens, info.max_output_tokens) == (32000, 8000)
 
 
+def test_widest_configured_limit_ignores_absent_and_malformed_values():
+    model_infos = (
+        {"max_input_tokens": 32000},
+        {},
+        {"max_input_tokens": "not-a-number"},
+        {"max_input_tokens": "128000"},
+        {"max_output_tokens": 4096},
+    )
+
+    assert litellm.Router._widest_configured_limit(model_infos, "max_input_tokens") == 128000
+    assert litellm.Router._widest_configured_limit(model_infos, "max_output_tokens") == 4096
+    assert litellm.Router._widest_configured_limit((), "max_input_tokens") is None
+
+
 def test_get_model_listing_info_dedupes_interchangeable_deployments():
     """The ordinary group is N deployments of one model, so it yields exactly one key."""
     router = litellm.Router(
