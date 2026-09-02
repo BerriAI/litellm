@@ -135,6 +135,26 @@ def test_update_settings_clears_omitted_toggleable_pre_call_checks():
     assert not any(isinstance(callback, PromptCachingDeploymentCheck) for callback in litellm.callbacks)
 
 
+def test_set_optional_pre_call_checks_reconciles_callback_types():
+    router = _build_router()
+
+    router.set_optional_pre_call_checks(["prompt_caching"])
+    router.set_optional_pre_call_checks([])
+
+    assert not any(isinstance(callback, PromptCachingDeploymentCheck) for callback in (router.optional_callbacks or []))
+    assert not any(isinstance(callback, PromptCachingDeploymentCheck) for callback in litellm.callbacks)
+
+
+def test_remove_optional_pre_call_check_removes_local_and_global_callbacks():
+    router = _build_router()
+
+    router.set_optional_pre_call_checks(["prompt_caching"])
+    router._remove_optional_callbacks_of_type(PromptCachingDeploymentCheck)
+
+    assert not any(isinstance(callback, PromptCachingDeploymentCheck) for callback in (router.optional_callbacks or []))
+    assert not any(isinstance(callback, PromptCachingDeploymentCheck) for callback in litellm.callbacks)
+
+
 def test_update_settings_replaces_toggleable_pre_call_checks():
     router = _build_router()
 
