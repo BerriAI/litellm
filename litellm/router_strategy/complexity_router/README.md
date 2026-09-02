@@ -246,12 +246,17 @@ model_list:
         heuristic_first_max_tier: SIMPLE
         classifier_llm_config:
           model: gpt-4o-mini
+          reasoning_effort: low
         tiers:
           SIMPLE: gpt-4o-mini
           MEDIUM: gpt-4o
           COMPLEX: claude-sonnet-4
           REASONING: o1-preview
 ```
+
+`classifier_llm_config.reasoning_effort` applies only to the internal classifier call. Omit it to
+keep the classifier deployment or provider default, or set a supported value such as `none` or
+`low` to override that call.
 
 A request short-circuits, meaning it routes on the scorer's own tier with no classifier call, when
 two things hold: the scorer landed at or below `heuristic_first_max_tier`, and it produced at least

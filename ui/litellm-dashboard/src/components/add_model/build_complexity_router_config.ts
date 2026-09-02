@@ -55,12 +55,18 @@ import {
 export const normalizeClassifierLlmConfig = ({
   model,
   timeout_ms,
+  reasoning_effort,
   classification_rubric,
   system_prompt,
 }: ClassifierLLMConfig): ClassifierLLMConfig =>
   system_prompt?.trim()
-    ? { model, timeout_ms, system_prompt }
-    : { model, timeout_ms, ...(classification_rubric && { classification_rubric }) };
+    ? { model, timeout_ms, ...(reasoning_effort && { reasoning_effort }), system_prompt }
+    : {
+        model,
+        timeout_ms,
+        ...(reasoning_effort && { reasoning_effort }),
+        ...(classification_rubric && { classification_rubric }),
+      };
 
 interface ScorerKnobInputs {
   classifierType: ClassifierType;
@@ -293,11 +299,15 @@ export const customTierWireFields = (
     tier_definitions: tierDefinitionsFromRows(rows),
     ...(fallback && { fallback_tier: activeTierName(fallback) }),
     classifier_type: "llm",
-    // Rebuilt from the two fields an edited tier set allows. The backend rejects system_prompt and
+    // Rebuilt from the fields an edited tier set allows. The backend rejects system_prompt and
     // classification_rubric beside tier_definitions, and both live inside this object rather than at
     // the top level the omit list covers. The opening instructions ride classification_prompt below.
     ...(classifierLlmConfig && {
-      classifier_llm_config: { model: classifierLlmConfig.model, timeout_ms: classifierLlmConfig.timeout_ms },
+      classifier_llm_config: {
+        model: classifierLlmConfig.model,
+        timeout_ms: classifierLlmConfig.timeout_ms,
+        ...(classifierLlmConfig.reasoning_effort && { reasoning_effort: classifierLlmConfig.reasoning_effort }),
+      },
     }),
     session_affinity: false,
     ...(classificationPrompt?.trim() && { classification_prompt: classificationPrompt.trim() }),

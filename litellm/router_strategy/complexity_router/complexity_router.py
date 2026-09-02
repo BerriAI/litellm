@@ -1670,12 +1670,16 @@ class ComplexityRouter(CustomLogger):
             {"role": "user", "content": user_payload},
         ]
         response_format: Final = classifier_response_format
+        classifier_call_params: Final[Mapping[str, str]] = MappingProxyType(
+            {"reasoning_effort": llm_config.reasoning_effort} if llm_config.reasoning_effort is not None else {}
+        )
 
         proxy_server_request: Final = {
             "body": {
                 "model": llm_config.model,
                 "messages": messages_for_call,
                 "response_format": response_format,
+                **classifier_call_params,
             }
         }
 
@@ -1687,6 +1691,7 @@ class ComplexityRouter(CustomLogger):
             metadata=metadata,
             proxy_server_request=proxy_server_request,
             turn_off_message_logging=turn_off_message_logging,
+            **classifier_call_params,
             **_parent_session_kwargs(request_kwargs),
         )
         content: Final = response.choices[0].message.content

@@ -13,6 +13,7 @@ import ClassifierPromptEditor from "./ClassifierPromptEditor";
 import CustomTierPromptEditor from "./CustomTierPromptEditor";
 import { RestrictedSection, restrictedBy } from "./TierRestrictions";
 import HeuristicScoringConfig from "./HeuristicScoringConfig";
+import type { ReasoningEffort } from "./complexity_router_tiers";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
   ClassificationFrequency,
@@ -52,6 +53,7 @@ const CLASSIFIER_TIMEOUT_ID = "classifier-timeout-ms";
 const CLASSIFIER_CONTEXT_WINDOW_SIZE_ID = "classifier-context-window-size";
 const CLASSIFIER_CONTEXT_BUDGET_CHARS_ID = "classifier-context-budget-chars";
 const HYBRID_BOUNDARY_MARGIN_ID = "hybrid-boundary-margin";
+const CLASSIFIER_PROVIDER_DEFAULT = "__classifier_provider_default__";
 
 const CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK =
   "This router classifies with your own prompt, so the tier comes from whatever rubric it states. The four tier " +
@@ -154,6 +156,7 @@ interface ClassificationMethodConfigProps {
   value: ComplexityRouterConfigValue;
   onChange: (value: ComplexityRouterConfigValue) => void;
   modelOptions: { value: string; label: string }[];
+  effortOptionsByModel: Record<string, string[]>;
   customTechnicalKeywords?: string[];
   onCustomTechnicalKeywordsChange?: (keywords: string[]) => void;
   showValidationErrors?: boolean;
@@ -236,6 +239,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   value,
   onChange,
   modelOptions,
+  effortOptionsByModel,
   customTechnicalKeywords,
   onCustomTechnicalKeywordsChange,
   showValidationErrors = false,
@@ -251,6 +255,14 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   const contextBudget = value.classifier_context_budget_chars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS;
   const contextBudgetQuotesNothing = contextBudget > 0 && contextBudget < MIN_QUOTED_CONTEXT_TURN_CHARS;
   const classificationRubric = value.classifier_llm_config?.classification_rubric ?? DEFAULT_CLASSIFICATION_RUBRIC;
+  const classifierModel = value.classifier_llm_config?.model ?? "";
+  const classifierReasoningEffort = value.classifier_llm_config?.reasoning_effort;
+  const classifierReasoningEffortOptions = Array.from(
+    new Set([
+      ...(effortOptionsByModel[classifierModel] ?? []),
+      ...(classifierReasoningEffort ? [classifierReasoningEffort] : []),
+    ]),
+  );
 
   const handleClassifierTypeChange = (classifierType: ClassifierType) => {
     const nextValue: ComplexityRouterConfigValue = {
@@ -299,13 +311,29 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   };
 
   const handleClassifierModelChange = (model: string) => {
+    const { reasoning_effort: _reasoningEffort, ...classifierLlmConfig } = value.classifier_llm_config ?? {
+      model: "",
+      timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS,
+    };
     onChange({
       ...value,
       classifier_llm_config: {
-        ...value.classifier_llm_config,
+        ...classifierLlmConfig,
         model,
-        timeout_ms: value.classifier_llm_config?.timeout_ms ?? DEFAULT_CLASSIFIER_TIMEOUT_MS,
+        timeout_ms: classifierLlmConfig.timeout_ms,
       },
+    });
+  };
+
+  const handleClassifierReasoningEffortChange = (reasoningEffort: ReasoningEffort | undefined) => {
+    if (!value.classifier_llm_config) return;
+    const { reasoning_effort: _reasoningEffort, ...classifierLlmConfig } = value.classifier_llm_config;
+    onChange({
+      ...value,
+      classifier_llm_config:
+        reasoningEffort === undefined
+          ? classifierLlmConfig
+          : { ...classifierLlmConfig, reasoning_effort: reasoningEffort },
     });
   };
 
@@ -493,9 +521,48 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               emptyText="No models found"
               allowClear={false}
               className={classifierModelMissing ? "border-destructive" : undefined}
+              aria-label="Classifier Model"
             />
             {classifierModelMissing && <span className="text-xs text-destructive">A classifier model is required</span>}
           </div>
+          {classifierModel && classifierReasoningEffortOptions.length > 0 && (
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <strong className="font-semibold">Reasoning Effort</strong>
+                <SimpleTooltip content="Sent only to the classifier call. Default leaves the classifier deployment or provider setting unchanged.">
+                  <Info className="size-4 text-muted-foreground" />
+                </SimpleTooltip>
+              </div>
+              <Select
+                items={[
+                  { value: CLASSIFIER_PROVIDER_DEFAULT, label: "Default" },
+                  ...classifierReasoningEffortOptions.map((effort) => ({ value: effort, label: effort })),
+                ]}
+                value={classifierReasoningEffort ?? CLASSIFIER_PROVIDER_DEFAULT}
+                onValueChange={(reasoningEffort: string | null) =>
+                  reasoningEffort &&
+                  handleClassifierReasoningEffortChange(
+                    reasoningEffort === CLASSIFIER_PROVIDER_DEFAULT ? undefined : (reasoningEffort as ReasoningEffort),
+                  )
+                }
+              >
+                <SelectTrigger
+                  aria-label={`Reasoning effort for classifier model ${classifierModel}`}
+                  className="w-full"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={CLASSIFIER_PROVIDER_DEFAULT}>Default</SelectItem>
+                  {classifierReasoningEffortOptions.map((effort) => (
+                    <SelectItem key={effort} value={effort}>
+                      {effort}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <div>
             <Label htmlFor={CLASSIFIER_TIMEOUT_ID} className="block mb-1 font-semibold">
               Timeout (ms)

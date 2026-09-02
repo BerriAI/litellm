@@ -16,7 +16,7 @@ const storedCustomConfig = (overrides: Record<string, unknown> = {}) => ({
   ],
   fallback_tier: "CASUAL",
   classifier_type: "llm",
-  classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+  classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000, reasoning_effort: "low" },
   ...overrides,
 });
 
@@ -111,7 +111,7 @@ describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
 const STORED_LLM = {
   tiers: { SIMPLE: ["gpt-4o-mini"], MEDIUM: [], COMPLEX: [], REASONING: [] },
   classifier_type: "llm",
-  classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+  classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000, reasoning_effort: "low" },
   classifier_context_window_size: 5,
   classifier_context_per_turn_chars: 300,
 };
@@ -498,7 +498,7 @@ describe("managed keys survive an untouched open-and-save", () => {
     tier_labels: { SIMPLE: "Cheap" },
     classifier_type: "heuristic_first",
     heuristic_first_max_tier: "SIMPLE",
-    classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000 },
+    classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000, reasoning_effort: "low" },
     classifier_context_window_size: 5,
     classifier_context_budget_chars: 4000,
     classifier_context_include_assistant_turns: true,

@@ -124,6 +124,7 @@ export const CLASSIFICATION_RUBRIC_KEYS = Object.keys(CLASSIFICATION_RUBRIC_DESC
 export interface ClassifierLLMConfig {
   model: string;
   timeout_ms: number;
+  reasoning_effort?: ReasoningEffort;
   classification_rubric?: ClassificationRubric;
   system_prompt?: string;
 }
@@ -817,6 +818,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 value={value}
                 onChange={onChange}
                 modelOptions={modelOptions}
+                effortOptionsByModel={effortOptionsByModel}
                 customTechnicalKeywords={customTechnicalKeywords}
                 onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
                 showValidationErrors={showValidationErrors}

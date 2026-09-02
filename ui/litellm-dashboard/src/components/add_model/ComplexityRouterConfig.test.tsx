@@ -1086,6 +1086,90 @@ describe("ComplexityRouterConfig per-model reasoning effort", () => {
   });
 });
 
+describe("ComplexityRouterConfig classifier reasoning effort", () => {
+  const llmValue: ComplexityRouterConfigValue = {
+    ...defaultValue,
+    classifier_type: "llm",
+    classifier_llm_config: { model: "gpt-4", timeout_ms: 3000 },
+  };
+
+  const renderClassifier = (value: ComplexityRouterConfigValue = llmValue, onChange = vi.fn()) => {
+    renderWithProviders(<ComplexityRouterConfig {...baseProps} value={value} onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    return onChange;
+  };
+
+  it("defaults to the classifier provider setting and offers only supported efforts", async () => {
+    renderClassifier();
+    const user = userEvent.setup();
+    const select = screen.getByRole("combobox", { name: "Reasoning effort for classifier model gpt-4" });
+    expect(select).toHaveTextContent("Default");
+    await user.click(select);
+    expect((await screen.findAllByRole("option")).map((option) => option.textContent)).toEqual([
+      "Default",
+      "medium",
+      "high",
+      "xhigh",
+    ]);
+  });
+
+  it("stores an explicit effort on the classifier config", async () => {
+    const onChange = renderClassifier();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Reasoning effort for classifier model gpt-4" }));
+    await user.click(await screen.findByRole("option", { name: "high" }));
+    expect(onChange).toHaveBeenCalledWith({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, reasoning_effort: "high" },
+    });
+  });
+
+  it("removes the effort override when Default is selected", async () => {
+    const onChange = renderClassifier({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, reasoning_effort: "high" },
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Reasoning effort for classifier model gpt-4" }));
+    await user.click(await screen.findByRole("option", { name: "Default" }));
+    expect(onChange).toHaveBeenCalledWith(llmValue);
+  });
+
+  it("clears the old effort when the classifier model changes", async () => {
+    const onChange = renderClassifier({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, reasoning_effort: "high" },
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name: "Classifier Model" }));
+    await user.click(await screen.findByRole("option", { name: "gpt-3.5-turbo" }));
+    expect(onChange).toHaveBeenCalledWith({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+    });
+  });
+
+  it("keeps a stored effort visible when capability metadata no longer lists it", () => {
+    renderClassifier({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-4", timeout_ms: 3000, reasoning_effort: "max" },
+    });
+    expect(screen.getByRole("combobox", { name: "Reasoning effort for classifier model gpt-4" })).toHaveTextContent(
+      "max",
+    );
+  });
+
+  it("hides the control for a classifier model without reasoning support", () => {
+    renderClassifier({
+      ...llmValue,
+      classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+    });
+    expect(
+      screen.queryByRole("combobox", { name: "Reasoning effort for classifier model gpt-3.5-turbo" }),
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe("ComplexityRouterConfig reasoning effort gating", () => {
   it("offers no effort select for a model group without reasoning support", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} />);

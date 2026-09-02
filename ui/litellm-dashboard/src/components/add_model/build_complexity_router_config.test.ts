@@ -497,6 +497,19 @@ describe("classifier prompt and fallback", () => {
     expect(buildComplexityRouterConfig(llmParams)).not.toHaveProperty("classifier_fallback");
   });
 
+  it("keeps an explicit classifier reasoning effort", () => {
+    const config = buildComplexityRouterConfig({
+      ...llmParams,
+      classifierLlmConfig: { model: "haiku-classifier", timeout_ms: 400, reasoning_effort: "low" },
+    });
+    expect(config.classifier_llm_config?.reasoning_effort).toBe("low");
+  });
+
+  it("omits classifier reasoning effort when the provider default is selected", () => {
+    const config = buildComplexityRouterConfig(llmParams);
+    expect(config.classifier_llm_config).not.toHaveProperty("reasoning_effort");
+  });
+
   it("sends the chat preset the operator picked", () => {
     const config = buildComplexityRouterConfig({
       ...llmParams,
@@ -531,9 +544,12 @@ describe("classifier prompt and fallback", () => {
   });
 
   it("normalizeClassifierLlmConfig leaves a real prompt untouched and strips an empty one", () => {
-    expect(normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, system_prompt: "x" })).toEqual({
+    expect(
+      normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, reasoning_effort: "none", system_prompt: "x" }),
+    ).toEqual({
       model: "m",
       timeout_ms: 1,
+      reasoning_effort: "none",
       system_prompt: "x",
     });
     expect(normalizeClassifierLlmConfig({ model: "m", timeout_ms: 1, system_prompt: "" })).toEqual({
@@ -935,11 +951,16 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
       classifierLlmConfig: {
         model: "gpt-4o-mini",
         timeout_ms: 3000,
+        reasoning_effort: "low",
         system_prompt: "replace the whole rubric",
         classification_rubric: "agentic",
       },
     });
-    expect(payload.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000 });
+    expect(payload.classifier_llm_config).toEqual({
+      model: "gpt-4o-mini",
+      timeout_ms: 3000,
+      reasoning_effort: "low",
+    });
   });
 
   it.each(
