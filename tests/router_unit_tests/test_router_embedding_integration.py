@@ -5,16 +5,57 @@ These tests simulate real-world scenarios where headers and configuration
 need to be properly propagated through the router to the LLM API.
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
+import litellm
 from litellm import Router
 from litellm.llms.base_llm.vector_store.transformation import (
     LiteLLMVectorStoreEmbeddingExecutor,
     RouterVectorStoreEmbeddingExecutor,
 )
-from litellm.types.utils import EmbeddingResponse
+
+QUERY_VECTOR = [0.5, -0.25, 0.125]
+OPENAI_EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings"
+STORE_EMBEDDINGS_URL = "https://embedding.example/v1/embeddings"
+
+
+def _mock_embedding_route(respx_mock: respx.MockRouter, url: str) -> respx.Route:
+    return respx_mock.post(url).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": QUERY_VECTOR}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 2, "total_tokens": 2},
+            },
+        )
+    )
+
+
+def _sent(route: respx.Route, index: int) -> tuple[str, str, list[str]]:
+    request = route.calls[index].request
+    body = json.loads(request.read())
+    return request.headers["authorization"], body["model"], body["input"]
+
+
+def _alias_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "team-alias",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_key": "deployment-key",
+                },
+            }
+        ]
+    )
 
 
 class TestRouterEmbeddingIntegration:
@@ -70,48 +111,23 @@ class TestRouterEmbeddingIntegration:
         )
 
     @pytest.mark.asyncio
-    async def test_vector_store_embedding_executors_cover_sdk_and_router_paths(self):
-        response = EmbeddingResponse(data=[{"embedding": [0.1], "index": 0, "object": "embedding"}])
+    async def test_vector_store_embedding_executors_cover_sdk_and_router_paths(
+        self, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        openai_route = _mock_embedding_route(respx_mock, OPENAI_EMBEDDINGS_URL)
+        store_route = _mock_embedding_route(respx_mock, STORE_EMBEDDINGS_URL)
         sdk_executor = LiteLLMVectorStoreEmbeddingExecutor()
 
-        with (
-            patch("litellm.embedding", return_value=response) as embedding,
-            patch("litellm.aembedding", new=AsyncMock(return_value=response)) as aembedding,
-        ):
-            assert sdk_executor.embed("openai/model", "sync", {"api_key": "explicit"}) is response
-            assert await sdk_executor.aembed("openai/model", "async", {"api_key": "explicit"}) is response
+        sync_response = sdk_executor.embed("openai/text-embedding-3-small", "sync", {"api_key": "explicit"})
+        async_response = await sdk_executor.aembed("openai/text-embedding-3-small", "async", {"api_key": "explicit"})
 
-        embedding.assert_called_once_with(model="openai/model", input=["sync"], api_key="explicit")
-        aembedding.assert_awaited_once_with(model="openai/model", input=["async"], api_key="explicit")
+        assert sync_response.data[0]["embedding"] == QUERY_VECTOR
+        assert async_response.data[0]["embedding"] == QUERY_VECTOR
+        assert _sent(openai_route, 0) == ("Bearer explicit", "text-embedding-3-small", ["sync"])
+        assert _sent(openai_route, 1) == ("Bearer explicit", "text-embedding-3-small", ["async"])
 
-        mock_router = MagicMock()
-        mock_router.embedding.return_value = response
-        router_executor = RouterVectorStoreEmbeddingExecutor(
-            router=mock_router,
-            metadata={"user_api_key_team_id": "team-a"},
-        )
-        assert router_executor.embed("team-alias", "query", {}) is response
-        mock_router.embedding.assert_called_once_with(
-            model="team-alias",
-            input=["query"],
-            metadata={"user_api_key_team_id": "team-a"},
-        )
-
-        alias_router = Router(
-            model_list=[
-                {
-                    "model_name": "team-alias",
-                    "litellm_params": {
-                        "model": "openai/text-embedding-3-small",
-                        "api_key": "deployment-key",
-                    },
-                }
-            ]
-        )
-        alias_executor = RouterVectorStoreEmbeddingExecutor(
-            router=alias_router,
-            metadata={"user_api_key_team_id": "team-a"},
-        )
         explicit_config = {
             "api_base": "https://embedding.example/v1",
             "api_key": "store-key",
@@ -121,29 +137,66 @@ class TestRouterEmbeddingIntegration:
             },
             "model": "untrusted-model",
         }
+        mock_router = MagicMock()
+        mock_router.embedding.return_value = sync_response
+        router_executor = RouterVectorStoreEmbeddingExecutor(
+            router=mock_router,
+            metadata={"user_api_key_team_id": "team-a"},
+        )
+        assert router_executor.embed("team-alias", "query", explicit_config) is sync_response
+        mock_router.embedding.assert_called_once_with(
+            model="team-alias",
+            input=["query"],
+            api_base="https://embedding.example/v1",
+            api_key="store-key",
+            metadata={"configured": True, "user_api_key_team_id": "team-a"},
+        )
 
-        with (
-            patch("litellm.embedding", return_value=response) as explicit_embedding,
-            patch("litellm.aembedding", new=AsyncMock(return_value=response)) as explicit_aembedding,
-        ):
-            assert alias_executor.embed("team-alias", "sync query", explicit_config) is response
-            assert await alias_executor.aembed("team-alias", "async query", explicit_config) is response
+        alias_executor = RouterVectorStoreEmbeddingExecutor(
+            router=_alias_router(),
+            metadata={"user_api_key_team_id": "team-a"},
+        )
+        sync_alias = alias_executor.embed("team-alias", "sync query", explicit_config)
+        async_alias = await alias_executor.aembed("team-alias", "async query", explicit_config)
 
-        sync_kwargs = explicit_embedding.call_args.kwargs
-        assert sync_kwargs["model"] == "openai/text-embedding-3-small"
-        assert sync_kwargs["input"] == ["sync query"]
-        assert sync_kwargs["api_base"] == "https://embedding.example/v1"
-        assert sync_kwargs["api_key"] == "store-key"
-        assert sync_kwargs["metadata"]["configured"] is True
-        assert sync_kwargs["metadata"]["user_api_key_team_id"] == "team-a"
+        assert sync_alias.data[0]["embedding"] == QUERY_VECTOR
+        assert async_alias.data[0]["embedding"] == QUERY_VECTOR
+        assert openai_route.call_count == 2
+        assert _sent(store_route, 0) == ("Bearer store-key", "text-embedding-3-small", ["sync query"])
+        assert _sent(store_route, 1) == ("Bearer store-key", "text-embedding-3-small", ["async query"])
 
-        async_kwargs = explicit_aembedding.await_args.kwargs
-        assert async_kwargs["model"] == "openai/text-embedding-3-small"
-        assert async_kwargs["input"] == ["async query"]
-        assert async_kwargs["api_base"] == "https://embedding.example/v1"
-        assert async_kwargs["api_key"] == "store-key"
-        assert async_kwargs["metadata"]["configured"] is True
-        assert async_kwargs["metadata"]["user_api_key_team_id"] == "team-a"
+    @pytest.mark.asyncio
+    async def test_router_executor_falls_back_to_sdk_for_models_the_router_does_not_serve(
+        self, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        store_route = _mock_embedding_route(respx_mock, STORE_EMBEDDINGS_URL)
+        executor = RouterVectorStoreEmbeddingExecutor(
+            router=_alias_router(),
+            metadata={"user_api_key_team_id": "team-a"},
+        )
+        inline_config = {"api_base": "https://embedding.example/v1", "api_key": "store-key"}
+
+        sync_response = executor.embed("openai/text-embedding-3-large", "sync query", inline_config)
+        async_response = await executor.aembed("openai/text-embedding-3-large", "async query", inline_config)
+
+        assert sync_response.data[0]["embedding"] == QUERY_VECTOR
+        assert async_response.data[0]["embedding"] == QUERY_VECTOR
+        assert _sent(store_route, 0) == ("Bearer store-key", "text-embedding-3-large", ["sync query"])
+        assert _sent(store_route, 1) == ("Bearer store-key", "text-embedding-3-large", ["async query"])
+
+    def test_router_executor_routes_deployment_model_names_through_the_router(
+        self, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        openai_route = _mock_embedding_route(respx_mock, OPENAI_EMBEDDINGS_URL)
+        executor = RouterVectorStoreEmbeddingExecutor(router=_alias_router(), metadata={})
+
+        response = executor.embed("openai/text-embedding-3-small", "query", {})
+
+        assert response.data[0]["embedding"] == QUERY_VECTOR
+        assert _sent(openai_route, 0) == ("Bearer deployment-key", "text-embedding-3-small", ["query"])
 
     def test_embedding_with_deployment_specific_headers(self):
         """
@@ -251,9 +304,7 @@ class TestRouterEmbeddingIntegration:
 
         router = Router(
             model_list=model_list,
-            default_litellm_params={
-                "metadata": {"environment": "test", "service": "embedding-service"}
-            },
+            default_litellm_params={"metadata": {"environment": "test", "service": "embedding-service"}},
         )
 
         with patch("litellm.embedding") as mock_embedding:
@@ -369,9 +420,7 @@ class TestRouterEmbeddingIntegration:
         # Make multiple calls and verify headers are always present
         for i in range(5):
             with patch("litellm.embedding") as mock_embedding:
-                mock_embedding.return_value = MagicMock(
-                    data=[{"embedding": [0.1, 0.2]}]
-                )
+                mock_embedding.return_value = MagicMock(data=[{"embedding": [0.1, 0.2]}])
 
                 router.embedding(model="shared-embedding-model", input=[f"test {i}"])
 
@@ -456,9 +505,7 @@ class TestRouterEmbeddingIntegration:
 
         router = Router(
             model_list=model_list,
-            default_litellm_params={
-                "headers": {"X-Custom-Azure-Header": "azure-value"}
-            },
+            default_litellm_params={"headers": {"X-Custom-Azure-Header": "azure-value"}},
         )
 
         with patch("litellm.embedding") as mock_embedding:
