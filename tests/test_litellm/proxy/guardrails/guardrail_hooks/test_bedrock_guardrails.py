@@ -6,7 +6,6 @@ import asyncio
 import base64
 import json
 import sys
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx

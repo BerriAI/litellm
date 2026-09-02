@@ -1649,9 +1649,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if not content:
             return (tuple(content),)
 
-        lengths: Final = tuple(
-            len((item.get("text") or BedrockTextContent()).get("text") or "") for item in content
-        )
+        lengths: Final = tuple(len((item.get("text") or BedrockTextContent()).get("text") or "") for item in content)
 
         def assign(carried: tuple[int, int], length: int) -> tuple[int, int]:
             batch_index, used = carried
