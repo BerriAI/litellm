@@ -356,27 +356,14 @@ async def test_async_completion_logs_pre_call_by_default():
     assert logging_obj.pre_call.call_count == 1
 
 
-def _recording_sync_client():
-    """A sync transport that answers with a Converse response and keeps every
-    `post` payload, so a test can assert which headers were sent."""
-    posted: list[dict] = []
-    client = MagicMock()
-
-    def post(**kwargs):
-        posted.append(kwargs)
-        return httpx.Response(
-            200,
-            json=CONVERSE_RESPONSE,
-            request=httpx.Request("POST", "https://bedrock-runtime.us-west-2.amazonaws.com"),
-        )
-
-    client.post = post
-    client.__class__ = HTTPHandler
-    return client, posted
-
-
 def _sync_client_returning_converse_response():
-    client, _ = _recording_sync_client()
+    client = MagicMock()
+    client.post.side_effect = lambda **_kwargs: httpx.Response(
+        200,
+        json=CONVERSE_RESPONSE,
+        request=httpx.Request("POST", "https://bedrock-runtime.us-west-2.amazonaws.com"),
+    )
+    client.__class__ = HTTPHandler
     return client
 
 
@@ -505,12 +492,13 @@ def test_bearer_token_auth_serves_when_boto3_resolves_no_sigv4_credentials(monke
     credentials at all. Preparing the Rust handoff must not dereference that
     None: the bearer token signs the request on its own."""
     monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-bearer-token")
-    client, posted = _recording_sync_client()
+    client = _sync_client_returning_converse_response()
 
     response = _run(credentials=None, litellm_params={}, client=client)
 
     assert response.choices[0].message.content == "hi"
-    assert posted[0]["headers"]["Authorization"] == "Bearer bedrock-bearer-token"
+    sent_headers = client.post.call_args.kwargs["headers"]
+    assert sent_headers["Authorization"] == "Bearer bedrock-bearer-token"
 
 
 def test_the_rust_opt_in_needs_no_sigv4_principal():
