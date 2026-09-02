@@ -300,6 +300,7 @@ def _effective_complexity_router_config(
 async def _raise_if_heuristic_v2_slot_taken(
     *,
     prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
     incoming_params: GenericLiteLLMParams | None,
     existing_params: GenericLiteLLMParams | None,
     current_model_id: str | None = None,
@@ -308,6 +309,17 @@ async def _raise_if_heuristic_v2_slot_taken(
     effective_config: Final = _effective_complexity_router_config(incoming_params, existing_params)
     if not uses_heuristic_v2(effective_config):
         return
+    admin_violation: Final = _heuristic_v2_admin_violation(
+        effective_config=effective_config,
+        user_role=user_api_key_dict.user_role,
+    )
+    if admin_violation is not None:
+        raise ProxyException(
+            message=admin_violation,
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param="litellm_params.complexity_router_config.classifier_type",
+        )
     rows: Final = await _proxy_model_table(prisma_client).find_many(where={})
     violation: Final = _heuristic_v2_slot_violation(
         persisted_rows=rows,
@@ -322,6 +334,16 @@ async def _raise_if_heuristic_v2_slot_taken(
         type=ProxyErrorTypes.validation_error.value,
         code=status.HTTP_400_BAD_REQUEST,
         param="litellm_params.complexity_router_config.classifier_type",
+    )
+
+
+def _heuristic_v2_admin_violation(*, effective_config: Mapping[str, object] | None, user_role: object) -> str | None:
+    """Reserve the proxy-wide v2 classifier slot for proxy administrators."""
+    if not uses_heuristic_v2(effective_config) or user_role == LitellmUserRoles.PROXY_ADMIN:
+        return None
+    return (
+        "Only proxy admins can configure classifier_type='heuristic_v2' because it uses a proxy-wide singleton slot. "
+        "Team admins can use classifier_type='heuristic' or another auto-router type."
     )
 
 
@@ -352,6 +374,31 @@ def _heuristic_v2_slot_violation(
                 "heuristic_v2 router first."
             )
     return None
+
+
+HEURISTIC_V2_SINGLETON_INDEX: Final = "LiteLLM_ProxyModelTable_one_heuristic_v2_router"
+
+
+def _is_heuristic_v2_slot_unique_violation(error: Exception) -> bool:
+    """Recognize the database backstop when two proxy-admin writes race."""
+    return HEURISTIC_V2_SINGLETON_INDEX in str(error)
+
+
+def _heuristic_v2_slot_proxy_exception() -> ProxyException:
+    return ProxyException(
+        message=(
+            "Only one complexity router can use classifier_type='heuristic_v2' per proxy. "
+            "Change or delete the existing heuristic_v2 router first."
+        ),
+        type=ProxyErrorTypes.validation_error.value,
+        code=status.HTTP_400_BAD_REQUEST,
+        param="litellm_params.complexity_router_config.classifier_type",
+    )
+
+
+def _raise_if_heuristic_v2_slot_unique_violation(error: Exception) -> None:
+    if _is_heuristic_v2_slot_unique_violation(error):
+        raise _heuristic_v2_slot_proxy_exception() from error
 
 
 ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING: Final = "enforce_rpm_tpm_on_model_add"
@@ -805,6 +852,7 @@ async def patch_model(
         )
         await _raise_if_heuristic_v2_slot_taken(
             prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
             incoming_params=patch_data.litellm_params,
             existing_params=db_model.litellm_params,
             current_model_id=model_id,
@@ -867,6 +915,7 @@ async def patch_model(
     except Exception as e:
         verbose_proxy_logger.exception("Error in patch_model: %s", e)
 
+        _raise_if_heuristic_v2_slot_unique_violation(e)
         if isinstance(e, (HTTPException, ProxyException)):
             raise e
 
@@ -1927,6 +1976,7 @@ async def add_new_model(
         )
         await _raise_if_heuristic_v2_slot_taken(
             prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
             incoming_params=model_params.litellm_params,
             existing_params=None,
         )
@@ -1979,6 +2029,7 @@ async def add_new_model(
                     )
             except Exception as e:
                 verbose_proxy_logger.exception("Exception in add_new_model: %s", e)
+                _raise_if_heuristic_v2_slot_unique_violation(e)
 
         else:
             raise HTTPException(
@@ -2020,6 +2071,7 @@ async def add_new_model(
 
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.add_new_model(): Exception occured - %s", e)
+        _raise_if_heuristic_v2_slot_unique_violation(e)
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({e})"),
@@ -2110,6 +2162,7 @@ async def update_model(
         )
         await _raise_if_heuristic_v2_slot_taken(
             prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
             incoming_params=model_params.litellm_params,
             existing_params=deployment.litellm_params,
             current_model_id=_model_id,
@@ -2189,6 +2242,7 @@ async def update_model(
             return model_response
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_model(): Exception occured - %s", e)
+        _raise_if_heuristic_v2_slot_unique_violation(e)
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({e})"),
