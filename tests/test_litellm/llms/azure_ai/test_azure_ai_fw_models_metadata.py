@@ -81,6 +81,16 @@ FW_MODELS = {
         "max_input_tokens": 1000000,
         "max_output_tokens": 1000000,
     },
+    "azure_ai/FW-Nemotron-Lightning-3.5-30B-A3B": {
+        "input_cost_per_token": 6e-08,
+        "output_cost_per_token": 2.2e-07,
+        "cache_read_input_token_cost": 1e-08,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "deprecation_date": "2027-08-23",
+        "supports_response_schema": True,
+        "supports_vision": False,
+    },
     "azure_ai/FW-Nemotron-3-Ultra-NVFP4": {
         "input_cost_per_token": 6e-07,
         "output_cost_per_token": 2.4e-06,
@@ -162,8 +172,15 @@ def test_azure_ai_fw_model_info(use_local_model_cost_map, model_key, expected):
     assert model_info["supports_reasoning"] is True
     assert model_info["supports_tool_choice"] is True
     assert model_info["supports_prompt_caching"] is True
-    if expected.get("supports_vision"):
-        assert model_info["supports_vision"] is True
+    if "supports_vision" in expected:
+        assert model_info.get("supports_vision", False) is expected["supports_vision"]
+    if "deprecation_date" in expected:
+        assert (
+            use_local_model_cost_map.model_cost[model_key]["deprecation_date"]
+            == expected["deprecation_date"]
+        )
+    if "supports_response_schema" in expected:
+        assert model_info["supports_response_schema"] is expected["supports_response_schema"]
 
 
 @pytest.mark.parametrize(
@@ -175,6 +192,7 @@ def test_azure_ai_fw_model_info(use_local_model_cost_map, model_key, expected):
         ("FW-Kimi-K3", 3.3, 16.5),
         ("FW-MiniMax-M2.5", 0.33, 1.32),
         ("FW-Inkling", 1.0, 4.05),
+        ("FW-Nemotron-Lightning-3.5-30B-A3B", 0.06, 0.22),
         ("FW-Nemotron-3-Ultra-NVFP4", 0.6, 2.4),
     ],
 )
@@ -194,6 +212,16 @@ def test_azure_ai_fw_cost_per_token(
 
     assert prompt_cost == pytest.approx(expected_prompt)
     assert completion_cost == pytest.approx(expected_completion)
+
+
+def test_azure_ai_fw_nemotron_lightning_supports_tool_choice(use_local_model_cost_map):
+    from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
+
+    supported_params = AzureAIStudioConfig().get_supported_openai_params(
+        "FW-Nemotron-Lightning-3.5-30B-A3B"
+    )
+
+    assert "tool_choice" in supported_params
 
 
 def test_azure_ai_fw_kimi_k26_case_insensitive_lookup(use_local_model_cost_map):
