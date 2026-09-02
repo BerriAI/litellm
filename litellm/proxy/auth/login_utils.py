@@ -24,6 +24,7 @@ from litellm.proxy._types import (
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.login_throttle import LoginThrottle
 from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
@@ -40,6 +41,10 @@ from litellm.proxy.utils import (
 from litellm.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.ui_sso import ReturnedUITokenObject
+
+INVALID_UI_CREDENTIALS_MESSAGE: Final = (
+    "Invalid credentials used to access UI. Check 'UI_USERNAME' and 'UI_PASSWORD', or the password set for your user"
+)
 
 
 async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -> None:
@@ -111,6 +116,7 @@ async def authenticate_user(
     password: str,
     master_key: str | None,
     prisma_client: PrismaClient | None,
+    throttle: LoginThrottle,
 ) -> LoginResult:
     """
     Authenticate a user and generate an API key for UI access.
@@ -141,6 +147,13 @@ async def authenticate_user(
 
     ui_username, ui_password = get_ui_credentials(master_key)
 
+    admin_credentials_match: Final = secrets.compare_digest(
+        username.encode("utf-8"), ui_username.encode("utf-8")
+    ) and secrets.compare_digest(password.encode("utf-8"), ui_password.encode("utf-8"))
+
+    if not admin_credentials_match:
+        await throttle.raise_if_blocked(username)
+
     # Check if we can find the `username` in the db. On the UI, users can enter username=their email
     _user_row: LiteLLM_UserTable | None = None
     user_role: (
@@ -166,9 +179,7 @@ async def authenticate_user(
     - Login with UI_USERNAME and UI_PASSWORD
     - Login with Invite Link `user_email` and `password` combination
     """
-    if secrets.compare_digest(username.encode("utf-8"), ui_username.encode("utf-8")) and secrets.compare_digest(
-        password.encode("utf-8"), ui_password.encode("utf-8")
-    ):
+    if admin_credentials_match:
         # Non SSO -> If user is using UI_USERNAME and UI_PASSWORD they are Proxy admin
         user_role = LitellmUserRoles.PROXY_ADMIN
         user_id = LITELLM_PROXY_ADMIN_NAME
@@ -240,6 +251,8 @@ async def authenticate_user(
 
             key = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(user_info)
 
+        await throttle.clear(username)
+
         return LoginResult(
             user_id=user_id,
             key=key,
@@ -294,6 +307,8 @@ async def authenticate_user(
 
             key = response["token"]
 
+            await throttle.clear(username)
+
             return LoginResult(
                 user_id=user_id,
                 key=key,
@@ -302,15 +317,17 @@ async def authenticate_user(
                 login_method="username_password",
             )
         else:
+            await throttle.delay_for(username, await throttle.record_failure(username))
             raise ProxyException(
-                message=f"Invalid credentials used to access UI.\nNot valid credentials for {username}",
+                message=INVALID_UI_CREDENTIALS_MESSAGE,
                 type=ProxyErrorTypes.auth_error,
                 param="invalid_credentials",
                 code=401,
             )
     else:
+        await throttle.delay_for(username, await throttle.record_failure(username))
         raise ProxyException(
-            message="Invalid credentials used to access UI.\nCheck 'UI_USERNAME', 'UI_PASSWORD' in .env file",
+            message=INVALID_UI_CREDENTIALS_MESSAGE,
             type=ProxyErrorTypes.auth_error,
             param="invalid_credentials",
             code=401,

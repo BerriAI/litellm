@@ -2581,6 +2581,21 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="sends alerts if requests hang for 5min+",
     )
     ui_access_mode: Literal["admin_only", "all"] | None = Field("all", description="Control access to the Proxy UI")
+    max_failed_login_attempts: int | None = Field(
+        None,
+        ge=1,
+        description="Number of failed Admin UI sign-in attempts allowed for one username, from any source address, within `failed_login_window_seconds`, before further attempts for that username are refused with 429. Attempts are answered with a doubling delay well before this ceiling. Set under `general_settings` in config.yaml. Defaults to 50",
+    )
+    max_failed_login_attempts_per_source: int | None = Field(
+        None,
+        ge=1,
+        description="Number of failed Admin UI sign-in attempts allowed from one source address, across every username, within `failed_login_window_seconds`, before further attempts from that address are refused with 429. Counted independently of `max_failed_login_attempts`. Set under `general_settings` in config.yaml. Defaults to 250",
+    )
+    failed_login_window_seconds: int | None = Field(
+        None,
+        ge=1,
+        description="Fixed window in seconds over which failed Admin UI sign-in attempts are counted. The window starts at the first failure and is not extended by later ones. Set under `general_settings` in config.yaml. Defaults to 900",
+    )
     allowed_routes: list | None = Field(None, description="Proxy API Endpoints you want users to be able to access")
     reject_clientside_metadata_tags: bool | None = Field(
         None,
