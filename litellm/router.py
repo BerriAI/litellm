@@ -2099,16 +2099,19 @@ class Router:
         self.add_optional_pre_call_checks(optional_pre_call_checks)
 
     def _remove_optional_callbacks_of_type(self, callback_cls: type[CustomLogger]) -> None:
-        if self.optional_callbacks is None:
+        if self.optional_callbacks is None or not any(type(cb) is callback_cls for cb in self.optional_callbacks):
             return
-        removed: Final = [cb for cb in self.optional_callbacks if isinstance(cb, callback_cls)]
-        if not removed:
+        self.optional_callbacks = [cb for cb in self.optional_callbacks if type(cb) is not callback_cls]
+        if any(
+            router is not self and any(type(cb) is callback_cls for cb in (router.optional_callbacks or []))
+            for router in tuple(_live_routers)
+        ):
             return
-        self.optional_callbacks = [cb for cb in self.optional_callbacks if not isinstance(cb, callback_cls)]
-        for cb in removed:
-            litellm.logging_callback_manager.remove_callback_from_list_by_object(
-                litellm.callbacks, cb, require_self=False
-            )
+        for cb in tuple(litellm.callbacks):
+            if type(cb) is callback_cls:
+                litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                    litellm.callbacks, cb, require_self=False
+                )
 
     def print_deployment(self, deployment: dict):
         """
