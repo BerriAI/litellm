@@ -3994,6 +3994,62 @@ class TestStrategyRouterWriteValidation:
             is None
         )
 
+    @pytest.mark.parametrize(
+        "litellm_params",
+        [
+            {"complexity_router_config": {"classifier_type": "heuristic_v2"}},
+            json.dumps({"complexity_router_config": {"classifier_type": "heuristic_v2"}}),
+        ],
+    )
+    def test_config_yaml_heuristic_v2_router_takes_slot(self, litellm_params):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _heuristic_v2_slot_violation,
+        )
+
+        violation = _heuristic_v2_slot_violation(
+            persisted_rows=(),
+            live_model_list=[
+                {
+                    "model_name": "configured-router",
+                    "litellm_params": litellm_params,
+                    "model_info": {"db_model": False},
+                }
+            ],
+            incoming_params=LiteLLM_Params(
+                model="auto_router/complexity_router",
+                complexity_router_config={"classifier_type": "heuristic_v2"},
+            ),
+            existing_params=None,
+        )
+        assert violation is not None
+        assert "config.yaml" in violation
+
+    def test_db_models_in_live_router_do_not_double_consume_slot(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _heuristic_v2_slot_violation,
+        )
+
+        assert (
+            _heuristic_v2_slot_violation(
+                persisted_rows=(),
+                live_model_list=[
+                    {
+                        "model_name": "db-router",
+                        "litellm_params": {
+                            "complexity_router_config": {"classifier_type": "heuristic_v2"}
+                        },
+                        "model_info": {"db_model": True},
+                    }
+                ],
+                incoming_params=LiteLLM_Params(
+                    model="auto_router/complexity_router",
+                    complexity_router_config={"classifier_type": "heuristic_v2"},
+                ),
+                existing_params=None,
+            )
+            is None
+        )
+
     def test_heuristic_v1_does_not_consume_v2_slot(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             _heuristic_v2_slot_violation,
