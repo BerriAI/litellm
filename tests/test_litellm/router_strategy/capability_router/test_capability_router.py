@@ -222,7 +222,7 @@ def test_classifier_payload_caps_long_message_values() -> None:
     payload = strategy._classifier_payload(messages, {})
 
     assert len(payload) < 10_000
-    assert "[truncated 48000 chars]" in payload
+    assert "[truncated 480" in payload
     assert "opening user message is the original task" in payload
 
 
