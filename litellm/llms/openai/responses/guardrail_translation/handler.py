@@ -32,6 +32,7 @@ import time
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
@@ -110,6 +111,15 @@ class ResponsesStreamChunk(TypedDict, total=False):
     content_index: ReadOnly[int]
 
 
+_TERMINAL_ENVELOPE_EVENT_TYPES: Final = frozenset(
+    {
+        ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value,
+        ResponsesAPIStreamEvents.RESPONSE_FAILED.value,
+        ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE.value,
+    }
+)
+
+
 def _next_stream_sequence_number(responses_so_far: Sequence[Any] | None) -> int:
     sequence_numbers: Final = (
         item.get("sequence_number") if isinstance(item, dict) else getattr(item, "sequence_number", None)
@@ -128,6 +138,8 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     Methods can be overridden to customize behavior for different message formats.
     """
+
+    delivers_ended_stream_text_rewrites = True
 
     def get_structured_messages(self, data: dict) -> list[AllMessageValues] | None:
         """
@@ -520,6 +532,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
         request_data: dict | None = None,
+        deliver_ended_stream_rewrites: bool = False,
     ) -> list[Any]:
         """
         Process output streaming response by applying guardrails to text content.
@@ -528,10 +541,17 @@ class OpenAIResponsesHandler(BaseTranslation):
         chunk, apply the guardrail, then write the result back in-place so the
         caller sees the modified content (e.g. PII tokens replaced).
 
-        For ``response.completed`` events (the normal end-of-stream signal) we
-        use the same per-item extraction + task-mapping approach as
-        ``process_output_response`` so that unmasking / blocking works correctly
-        for every output item.
+        For terminal envelope events (``response.completed``, and equally
+        ``response.incomplete`` / ``response.failed``, whose envelopes carry the
+        partial output) we use the same per-item extraction + task-mapping
+        approach as ``process_output_response`` so that unmasking / blocking
+        works correctly for every output item. With
+        ``deliver_ended_stream_rewrites`` the earlier text-carrying events
+        (``response.output_text.delta`` / ``.done``,
+        ``response.content_part.done``, ``response.output_item.done``) are synced
+        to the rewritten envelope too, so a client reading deltas sees the
+        rewrite instead of the raw model output; a rewrite observed where no
+        write-back is possible fails closed instead of releasing raw output.
         """
         if not responses_so_far:
             return responses_so_far
@@ -543,14 +563,16 @@ class OpenAIResponsesHandler(BaseTranslation):
             return responses_so_far
 
         # ------------------------------------------------------------------ #
-        # Case 1: response.completed — full response is available in the      #
-        # final chunk; iterate output items, apply guardrail, write back.     #
+        # Case 1: terminal envelope events (completed/incomplete/failed).     #
+        # the accumulated response is available in the final chunk; iterate   #
+        # output items, apply guardrail, write back. Falls through to the     #
+        # string fallback when the envelope yields nothing to check.          #
         # ------------------------------------------------------------------ #
-        if final_chunk.get("type") == "response.completed":
+        if final_chunk.get("type") in _TERMINAL_ENVELOPE_EVENT_TYPES:
             response_obj: Final[ResponseOutputEnvelope] = final_chunk.get("response") or {}
-            if not hasattr(response_obj, "get"):
-                return responses_so_far
-            outputs: Final[Sequence[object]] = response_obj.get("output") or []
+            outputs: Final[Sequence[object]] = (
+                (response_obj.get("output") or []) if hasattr(response_obj, "get") else []
+            )
 
             texts_to_check: Final[list[str]] = []
             tool_calls_to_check: Final[list[ChatCompletionToolCallChunk]] = []
@@ -600,11 +622,25 @@ class OpenAIResponsesHandler(BaseTranslation):
                     responses=guardrailed_texts,
                     task_mappings=task_mappings,
                 )
-
-            return responses_so_far
+                if deliver_ended_stream_rewrites:
+                    rewrites_by_position: Final = MappingProxyType(
+                        {
+                            task_mappings[task_idx]: rewritten
+                            for task_idx, rewritten in enumerate(guardrailed_texts)
+                            if task_idx < len(texts_to_check) and rewritten != texts_to_check[task_idx]
+                        }
+                    )
+                    if rewrites_by_position:
+                        self._sync_stream_events_with_rewrites(
+                            stream_events=responses_so_far[:-1],
+                            rewrites_by_position=rewrites_by_position,
+                        )
+                return responses_so_far
 
         # ------------------------------------------------------------------ #
-        # Case 2: response.output_item.done — extract tool calls only.        #
+        # Case 2: response.output_item.done — extract tool calls only, then  #
+        # fall through to the text fallback when a caller expects rewrites   #
+        # delivered, so a buffer truncated here still fails closed on text.  #
         # ------------------------------------------------------------------ #
         if final_chunk.get("type") == "response.output_item.done":
             model_response_stream: Final = (
@@ -622,12 +658,14 @@ class OpenAIResponsesHandler(BaseTranslation):
                     input_type="response",
                     logging_obj=litellm_logging_obj,
                 )
-            return responses_so_far
+            if not deliver_ended_stream_rewrites:
+                return responses_so_far
 
         # ------------------------------------------------------------------ #
         # Fallback: apply guardrail to the accumulated text string.           #
         # No structured write-back is possible here; guardrails that only     #
-        # need to block/flag (not rewrite) still work correctly.             #
+        # need to block/flag (not rewrite) still work correctly, and a        #
+        # rewrite a caller expects delivered fails closed instead.            #
         # ------------------------------------------------------------------ #
         string_so_far: Final = self.get_streaming_string_so_far(responses_so_far)
         if string_so_far:
@@ -637,13 +675,75 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
             if response_model:
                 fallback_inputs["model"] = response_model
-            await guardrail_to_apply.apply_guardrail(
+            fallback_outputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=fallback_inputs,
                 request_data=request_data if request_data is not None else {},
                 input_type="response",
                 logging_obj=litellm_logging_obj,
             )
+            fallback_texts: Final = fallback_outputs.get("texts")
+            if deliver_ended_stream_rewrites and fallback_texts and tuple(fallback_texts) != (string_so_far,):
+                from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+                raise UndeliverableStreamRewrite(guardrail_to_apply.guardrail_name or "unknown")
         return responses_so_far
+
+    @staticmethod
+    def _write_event_field(event: object, field: str, value: str) -> None:
+        if isinstance(event, dict):
+            event[field] = value  # rebind-ok: delivering the rewrite means editing the buffered event in place
+        else:
+            setattr(event, field, value)
+
+    def _sync_stream_events_with_rewrites(
+        self,
+        stream_events: Sequence[Any],
+        rewrites_by_position: Mapping[tuple[int, int], str],
+    ) -> None:
+        """Sync pre-completion stream events with the rewritten completed
+        response, keyed by ``(output_index, content_index)``: the first
+        ``output_text.delta`` for a rewritten item carries the full rewritten
+        text and the rest are blanked, while ``output_text.done``,
+        ``content_part.done``, and ``output_item.done`` events carry the full
+        rewritten text, so every event a client may read agrees with the
+        rewritten ``response.completed`` payload."""
+        delta_replacements: Final = MappingProxyType(
+            {position: chain((rewritten,), repeat("")) for position, rewritten in rewrites_by_position.items()}
+        )
+        for event in stream_events:
+            if not (isinstance(event, dict) or hasattr(event, "get")):
+                continue
+            event_type = event.get("type")
+            output_index = event.get("output_index")
+            content_index = event.get("content_index")
+            if event_type == "response.output_item.done" and isinstance(output_index, int):
+                self._sync_output_item_done_event(event.get("item"), output_index, rewrites_by_position)
+                continue
+            if not isinstance(output_index, int) or not isinstance(content_index, int):
+                continue
+            position = (output_index, content_index)
+            if event_type == "response.output_text.delta" and position in delta_replacements:
+                self._write_event_field(event, "delta", next(delta_replacements[position]))
+            elif event_type == "response.output_text.done" and position in rewrites_by_position:
+                self._write_event_field(event, "text", rewrites_by_position[position])
+            elif event_type == "response.content_part.done" and position in rewrites_by_position:
+                part = event.get("part")
+                if isinstance(part, dict) or hasattr(part, "text"):
+                    self._write_event_field(part, "text", rewrites_by_position[position])
+
+    @staticmethod
+    def _sync_output_item_done_event(
+        item: object,
+        output_index: int,
+        rewrites_by_position: Mapping[tuple[int, int], str],
+    ) -> None:
+        content: Final = item.get("content") if isinstance(item, dict) else getattr(item, "content", None)
+        if not isinstance(content, list):
+            return
+        for (item_idx, content_idx), rewritten in rewrites_by_position.items():
+            if item_idx != output_index or content_idx >= len(content):
+                continue
+            OpenAIResponsesHandler._write_event_field(content[content_idx], "text", rewritten)
 
     def _check_streaming_has_ended(self, responses_so_far: Sequence[ResponsesStreamChunk]) -> bool:
         """
@@ -651,12 +751,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         """
         if not responses_so_far:
             return False
-        terminal_types: Final = {
-            ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value,
-            ResponsesAPIStreamEvents.RESPONSE_FAILED.value,
-            ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE.value,
-        }
-        return responses_so_far[-1].get("type") in terminal_types
+        return responses_so_far[-1].get("type") in _TERMINAL_ENVELOPE_EVENT_TYPES
 
     def build_stream_error_items(
         self,

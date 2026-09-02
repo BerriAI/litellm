@@ -923,6 +923,8 @@ class _TextReturningGuardrail(CustomGuardrail):
 
 
 class _TextTranslation:
+    delivers_ended_stream_text_rewrites = False
+
     def __init__(self):
         self.seen_guardrail_names = []
 

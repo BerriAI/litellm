@@ -13,9 +13,10 @@ Pattern Overview:
 """
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
+from itertools import chain, repeat
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, overload, runtime_checkable
 
 from typing_extensions import ReadOnly, TypedDict, assert_never
@@ -163,6 +164,8 @@ class AnthropicMessagesHandler(BaseTranslation):
     In-sequence system entries are untrusted client input. This handler scans and preserves
     them through guardrail rewrites; downstream provider handling is out of scope.
     """
+
+    delivers_ended_stream_text_rewrites = True
 
     def __init__(self):
         super().__init__()
@@ -1010,11 +1013,15 @@ class AnthropicMessagesHandler(BaseTranslation):
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
         request_data: dict | None = None,
+        deliver_ended_stream_rewrites: bool = False,
     ) -> Sequence[object]:
         """
         Process output streaming response by applying guardrails to text content.
 
         Get the string so far, check the apply guardrail to the string so far, and return the list of responses so far.
+        With ``deliver_ended_stream_rewrites``, an ended stream whose guardrail rewrote the text gets the rewrite
+        written back across the buffered chunks (full rewritten text in the first ``text_delta``, the rest blanked);
+        a rewrite on a stream that never reported a ``stop_reason`` has no write-back and fails closed instead.
         """
         from litellm.integrations.custom_guardrail import ModifyResponseException
 
@@ -1061,6 +1068,15 @@ class AnthropicMessagesHandler(BaseTranslation):
                             responses_so_far, request_data
                         )
                     raise
+                guardrailed_texts: Final = _guardrailed_inputs.get("texts")
+                if (
+                    deliver_ended_stream_rewrites
+                    and isinstance(string_so_far, str)
+                    and string_so_far
+                    and guardrailed_texts
+                    and guardrailed_texts[0] != string_so_far
+                ):
+                    self._write_ended_stream_text_rewrite(responses_so_far, guardrailed_texts[0])
             else:
                 verbose_proxy_logger.debug("Skipping output guardrail - model response has no choices")
             return responses_so_far
@@ -1083,6 +1099,11 @@ class AnthropicMessagesHandler(BaseTranslation):
             if e.original_response is None:
                 e.original_response = self._build_streaming_usage_response(responses_so_far, request_data)
             raise
+        unended_texts: Final = _guardrailed_inputs.get("texts")
+        if deliver_ended_stream_rewrites and unended_texts and tuple(unended_texts) != (string_so_far,):
+            from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+            raise UndeliverableStreamRewrite(guardrail_to_apply.guardrail_name or "unknown")
         return responses_so_far
 
     def _prepare_request_data(
@@ -1175,6 +1196,63 @@ class AnthropicMessagesHandler(BaseTranslation):
         if response_model:
             inputs["model"] = response_model
         return inputs
+
+    @staticmethod
+    def _write_ended_stream_text_rewrite(
+        responses_so_far: list[Any],  # mutable-ok: rewrites the caller's buffered chunks in place
+        rewritten_text: str,
+    ) -> None:
+        """Deliver an ended-stream guardrail text rewrite by rewriting the
+        buffered chunks in place: the first ``text_delta`` carries the full
+        rewritten text and every later one is blanked, leaving the surrounding
+        message and content-block framing untouched. Handles both chunk formats
+        this stream carries (parsed event dicts and raw SSE bytes)."""
+        replacements: Final = chain((rewritten_text,), repeat(""))
+        for idx, item in enumerate(responses_so_far):
+            if isinstance(item, dict):
+                delta = item.get("delta")
+                if item.get("type") == "content_block_delta" and isinstance(delta, dict):
+                    if delta.get("type") == "text_delta":
+                        delta["text"] = next(replacements)
+            elif isinstance(item, (bytes, bytearray)):
+                responses_so_far[idx] = (  # rebind-ok: delivers the rewrite into the caller's buffer
+                    AnthropicMessagesHandler._rewrite_sse_text_deltas(bytes(item), replacements)
+                )
+
+    @staticmethod
+    def _rewrite_sse_text_deltas(sse_bytes: bytes, replacements: "Iterator[str]") -> bytes:
+        """Rewrite every ``text_delta`` data line in one SSE chunk with the next
+        replacement text, leaving all other events and framing byte-identical."""
+        try:
+            decoded: Final = sse_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            return sse_bytes
+        return "\n\n".join(
+            AnthropicMessagesHandler._rewrite_sse_block(block, replacements) for block in decoded.split("\n\n")
+        ).encode("utf-8")
+
+    @staticmethod
+    def _rewrite_sse_block(block: str, replacements: "Iterator[str]") -> str:
+        return "\n".join(AnthropicMessagesHandler._rewrite_sse_line(line, replacements) for line in block.split("\n"))
+
+    @staticmethod
+    def _rewrite_sse_line(line: str, replacements: "Iterator[str]") -> str:
+        if not line.startswith("data:"):
+            return line
+        try:
+            data: Final[str | int | float | bool | None | Sequence[object] | Mapping[str, object]] = json.loads(
+                line[len("data:") :].strip()
+            )
+        except json.JSONDecodeError:
+            return line
+        if not isinstance(data, dict) or data.get("type") != "content_block_delta":
+            return line
+        delta: Final = data.get("delta")
+        if not isinstance(delta, dict) or delta.get("type") != "text_delta":
+            return line
+        return "data: " + json.dumps(
+            {**data, "delta": {**delta, "text": next(replacements)}}  # mutable-ok: json.dumps needs plain dicts
+        )
 
     def get_streaming_string_so_far(self, responses_so_far: Sequence[object]) -> str:
         """

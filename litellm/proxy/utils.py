@@ -518,14 +518,6 @@ def _pipeline_step_supports_unified_streaming(guardrail_name: str) -> bool:
     return callback is not None and PipelineExecutor.supports_unified_execution(callback)
 
 
-def _pipeline_step_rewrites_streamed_content(guardrail_name: str) -> bool:
-    callback: Final = PipelineExecutor.find_guardrail_callback(guardrail_name)
-    if callback is None:
-        return False
-    transform_mode: Final = unified_guardrail.resolve_streaming_flag(callback, "streaming_transform_mode", "block_only")
-    return callback.rewrites_streamed_output() or transform_mode == "incremental_diff"
-
-
 class _PipelineErrorBody(TypedDict):
     message: ReadOnly[str]
     type: ReadOnly[str]
@@ -542,9 +534,10 @@ def _undeliverable_stream_rewrite_error(policy_name: str, guardrail_name: str) -
         "error": {
             "message": (
                 f"Streaming response withheld by policy pipeline '{policy_name}' because guardrail "
-                f"'{guardrail_name}' rewrote the streamed output, and streaming pipelines cannot deliver "
-                "rewrites. Retry with stream=false, or drop it from the pipeline steps so guardrails.add "
-                "applies it to streamed output."
+                f"'{guardrail_name}' rewrote the streamed output in a way this endpoint's streaming "
+                "pipeline cannot deliver (a tool-call rewrite, or a text rewrite on a route without "
+                "stream write-back). Retry with stream=false, or drop it from the pipeline steps so "
+                "guardrails.add applies it to streamed output."
             ),
             "type": "guardrail_pipeline_error",
             "policies": (policy_name,),
@@ -561,13 +554,13 @@ def _raise_for_streaming_post_call_pipelines(data: Mapping[str, object], user_ap
     Background responses skip the post_call hooks entirely, so a pipeline
     governing one would silently never execute. Streaming responses execute
     pipelines against the buffered stream through the endpoint guardrail
-    translation of the request route, releasing the buffered chunks on allow.
-    That needs every step's guardrail to support the unified apply_guardrail
-    interface and to only allow or block (a step that rewrites streamed
-    content, via mask_response_content, a MASK action, or
-    streaming_transform_mode=incremental_diff, would have its rewrite silently
-    dropped), and needs the route to have a translation at all; anything else
-    keeps the 400 rather than letting ungoverned output stream through.
+    translation of the request route, releasing the buffered chunks on allow
+    (rewritten in place when a guardrail rewrote text and the translation
+    delivers ended-stream rewrites; a rewrite the translation cannot deliver
+    fails closed at runtime instead). That needs every step's guardrail to
+    support the unified apply_guardrail interface, and needs the route to have
+    a translation at all; anything else keeps the 400 rather than letting
+    ungoverned output stream through.
     """
     is_stream: Final = data.get("stream") is True
     is_background: Final = data.get("background") is True
@@ -612,25 +605,6 @@ def _raise_for_streaming_post_call_pipelines(data: Mapping[str, object], user_ap
             }
         }
         raise HTTPException(status_code=400, detail=unsupported_detail)
-    rewriting_guardrails: Final = tuple(
-        guardrail for guardrail in step_guardrails if _pipeline_step_rewrites_streamed_content(guardrail)
-    )
-    if rewriting_guardrails:
-        rewriting_detail: Final[_PipelineErrorDetail] = {
-            "error": {
-                "message": (
-                    "Policies with post_call guardrail pipelines cannot govern streaming responses "
-                    "because these pipeline guardrails rewrite streamed content (mask_response_content, "
-                    "a MASK action, or streaming_transform_mode=incremental_diff), which pipeline steps would release "
-                    f"unmodified: {', '.join(rewriting_guardrails)}. Retry with stream=false, or drop "
-                    "them from the pipeline steps so guardrails.add applies them to streamed output."
-                ),
-                "type": "guardrail_pipeline_error",
-                "policies": post_call_policies,
-                "guardrails": rewriting_guardrails,
-            }
-        }
-        raise HTTPException(status_code=400, detail=rewriting_detail)
     route: Final = user_api_key_dict.request_route
     if not route or resolve_endpoint_translation(user_api_key_dict, None) is not None:
         return
@@ -3498,12 +3472,13 @@ class ProxyLogging:
         pipeline allows it), then runs each pipeline's steps against the
         assembled output through the endpoint guardrail translation, the same
         machinery flat post_call guardrails use at end of stream. An allow
-        releases the buffered chunks verbatim; a step whose guardrail rewrote
-        the output withholds the stream with a 400 instead, since no
-        translation rewrites every buffered chunk consistently and some
-        rewrites (Bedrock's ANONYMIZED action, for one) are only decided at
-        runtime; a block or modify_response terminates with the translation's
-        block chunks or the raised error.
+        releases the buffered chunks: verbatim when no guardrail rewrote the
+        output, rewritten in place when one rewrote text and the translation
+        delivers ended-stream rewrites (later steps then re-scan the rewritten
+        chunks, so rewrites chain). A rewrite the translation cannot deliver
+        (a tool-call rewrite, or a text rewrite on a route without write-back)
+        withholds the stream with a 400; a block or modify_response terminates
+        with the translation's block chunks or the raised error.
         """
         buffered: Final[list[object]] = []  # mutable-ok: accumulates the stream before the pipeline verdict
         async for item in response:
