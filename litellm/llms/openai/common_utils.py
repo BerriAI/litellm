@@ -268,6 +268,7 @@ class BaseOpenAILLM:
             "max_retries",
             "organization",
             "api_base",
+            "workload_identity_config",
         )
         openai_client_fields: Final = (
             BaseOpenAILLM.get_openai_client_initialization_param_fields(client_type=client_type)
