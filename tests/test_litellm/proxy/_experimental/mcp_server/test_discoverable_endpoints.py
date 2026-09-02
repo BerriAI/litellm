@@ -35,6 +35,22 @@ def mock_mcp_client_ip():
         yield
 
 
+@pytest.fixture(autouse=True)
+def isolate_global_mcp_registry():
+    """Restore the module-global MCP server registry after each test.
+
+    Tests here register servers on ``global_mcp_server_manager`` directly; without a
+    restore, entries leak into other test modules sharing the same worker and break
+    assertions over the full registry contents.
+    """
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    snapshot = dict(global_mcp_server_manager.registry)
+    yield
+    global_mcp_server_manager.registry.clear()
+    global_mcp_server_manager.registry.update(snapshot)
+
+
 def _mock_callback_request(base_url: str = "http://localhost:3000/"):
     """Return a MagicMock Request for callback/authorize same-origin tests.
 
@@ -10290,3 +10306,82 @@ def test_native_client_authorize_without_the_proxy_resource_keeps_the_mcp_flow(m
         assert 'name="decision"' not in response.text
         assert "team-b" not in response.text
     assert minted == []
+
+
+def test_introspect_route_requires_virtual_key_auth_and_is_advertised():
+    """RFC 7662 section 2.1: introspection must not be anonymous. Pins the route-level
+    user_api_key_auth dependency (structure, so removing it fails here without a proxy),
+    and that the aggregate AS metadata advertises the endpoint for discovery."""
+    from fastapi import FastAPI
+    from fastapi.routing import APIRoute
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    route = next(r for r in router.routes if isinstance(r, APIRoute) and r.path == "/introspect")
+    assert route.methods == {"POST"}
+    assert any(dependency.call is user_api_key_auth for dependency in route.dependant.dependencies)
+
+    from litellm.proxy._types import LiteLLMRoutes
+
+    assert "/introspect" in LiteLLMRoutes.mcp_routes.value
+
+    from litellm.proxy._lazy_features import LAZY_FEATURES
+
+    discoverable = next(feature for feature in LAZY_FEATURES if feature.name == "mcp_discoverable")
+    assert "/introspect" in discoverable.path_prefixes
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    asm = client.get("/.well-known/oauth-authorization-server/mcp")
+    assert asm.json()["introspection_endpoint"] == "http://testserver/introspect"
+
+
+def test_introspect_route_answers_for_authenticated_caller(monkeypatch):
+    """End-to-end over the real route with the auth dependency satisfied: a garbage token
+    is active false, a freshly minted session access token is active true with its claims."""
+    from datetime import datetime, timezone
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
+        session_keys_from_master_key,
+    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
+        SessionPrincipal,
+        mint_session_token,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    introspect_master_key = "sk-introspect-route-test"
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", introspect_master_key, raising=False)
+
+    async def fake_reload(user_id: str):
+        return None
+
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints._reload_active_user_by_id", fake_reload
+    )
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+    client = TestClient(app)
+
+    garbage = client.post("/introspect", data={"token": "llm_session_garbage"})
+    assert garbage.status_code == 200
+    assert garbage.json() == {"active": False}
+
+    minted = mint_session_token(
+        SessionPrincipal(user_id="u1", client_id="llm_dcrc_client"),
+        session_keys_from_master_key(introspect_master_key),
+        datetime.now(timezone.utc),
+    )
+    active = client.post("/introspect", data={"token": minted.token.get_secret_value()})
+    assert active.status_code == 200
+    assert active.json()["active"] is True
+    assert active.json()["sub"] == "u1"

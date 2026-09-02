@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
@@ -46,6 +46,7 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     aggregate_authorize,
     aggregate_token,
     complete_connect_flow,
+    introspect_gateway_token,
     is_gateway_dcr_client_id,
     is_proxy_api_resource,
     native_client_auth_contract,
@@ -70,6 +71,7 @@ from litellm.proxy._experimental.mcp_server.proxy_api_credentials import (
     mint_proxy_credential,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -1097,8 +1099,7 @@ async def exchange_token_with_server(
             headers={"Accept": "application/json", **token_request.headers},
             data=token_data,
         )
-        if response is not None:
-            response.raise_for_status()
+        response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         fault: Final = classify_upstream_token_rejection(
             exc.response,
@@ -1120,11 +1121,6 @@ async def exchange_token_with_server(
             )
             return _bridge_mint_error_response("invalid_refresh")
         return render_token_fault(fault)
-    if response is None:
-        raise HTTPException(
-            status_code=502,
-            detail="MCP upstream token endpoint returned no response",
-        )
     token_response = response.json()
 
     # Validate token response against server-configured rules before any storage.
@@ -1552,16 +1548,10 @@ async def _post_dcr_registration(
             headers=headers,
             json=register_data,
         )
-        if response is not None:
-            response.raise_for_status()
+        response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         status_code, detail = dcr_fault_detail(classify_upstream_dcr_rejection(exc.response, log_context=server_id))
         raise HTTPException(status_code=status_code, detail=detail) from exc
-    if response is None:
-        raise HTTPException(
-            status_code=502,
-            detail="MCP upstream registration endpoint returned no response",
-        )
     return response
 
 
@@ -1967,6 +1957,26 @@ async def revoke_endpoint(request: Request, token: str = Form(...), client_id: s
     )
 
     return await revoke_refresh_token(token=token, client_id=client_id, master_key=master_key, cache=user_api_key_cache)
+
+
+@router.post("/introspect", dependencies=[Depends(user_api_key_auth)])
+async def introspect_endpoint(token: str = Form(...)) -> Response:
+    """RFC 7662 introspection for gateway-issued session tokens (``llm_session_`` /
+    ``llm_srefresh_``), so an external gateway can validate them without the signing
+    secret. The caller authenticates with a LiteLLM virtual key (section 2.1, enforced by
+    the route dependency); any token the gateway cannot vouch for answers
+    ``{"active": false}`` with no further detail."""
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # circular import at module load
+        master_key,
+        user_api_key_cache,
+    )
+
+    return await introspect_gateway_token(
+        token=token,
+        master_key=master_key,
+        reload_user=_reload_active_user_by_id,
+        cache=user_api_key_cache,
+    )
 
 
 @router.get("/.well-known/litellm-cli-auth")
@@ -2474,6 +2484,7 @@ def _build_aggregate_authorization_server_response(request: Request) -> dict:
         "issuer": f"{request_base_url}/mcp",
         "authorization_endpoint": f"{request_base_url}/authorize",
         "token_endpoint": f"{request_base_url}/token",
+        "introspection_endpoint": f"{request_base_url}/introspect",
         "registration_endpoint": f"{request_base_url}/register",
         "response_types_supported": ["code"],
         "scopes_supported": [],

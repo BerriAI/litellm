@@ -96,17 +96,21 @@ export interface StoredComplexityRouterConfig {
   classifier_context_budget_chars?: unknown;
   classifier_context_include_assistant_turns?: unknown;
   classifier_fallback?: unknown;
+  classification_mode?: unknown;
   tier_boundaries?: unknown;
   token_thresholds?: unknown;
   dimension_weights?: unknown;
   reasoning_override_min_score?: unknown;
   session_affinity?: unknown;
+  modality_routing?: unknown;
   deployment_affinity?: unknown;
   adaptive?: boolean;
   adaptive_weights?: AdaptiveRouterWeights;
   tier_distance_penalty?: number;
   adaptive_eligible?: AdaptiveEligible;
   return_raw_model_name?: boolean;
+  enable_context_window_escalation?: unknown;
+  context_window_escalation_buffer?: unknown;
 }
 
 /**
@@ -163,12 +167,17 @@ export const hydrateComplexityRouterConfig = (
       typeof parsedConfig.heuristic_first_max_tier === "string" && parsedConfig.heuristic_first_max_tier.trim() !== ""
         ? parsedConfig.heuristic_first_max_tier
         : undefined,
+    classification_mode:
+      parsedConfig.classification_mode === "user_turn" || parsedConfig.classification_mode === "every_request"
+        ? parsedConfig.classification_mode
+        : undefined,
     tier_boundaries: hydrateTierBoundaries(parsedConfig.tier_boundaries),
     token_thresholds: hydrateTokenThresholds(parsedConfig.token_thresholds),
     dimension_weights: hydrateDimensionWeights(parsedConfig.dimension_weights),
     reasoning_override_min_score: hydrateReasoningOverrideMinScore(parsedConfig.reasoning_override_min_score),
     session_affinity:
       typeof parsedConfig.session_affinity === "boolean" ? parsedConfig.session_affinity : DEFAULT_SESSION_AFFINITY,
+    modality_routing: typeof parsedConfig.modality_routing === "boolean" ? parsedConfig.modality_routing : false,
     deployment_affinity:
       typeof parsedConfig.deployment_affinity === "boolean"
         ? parsedConfig.deployment_affinity
@@ -178,6 +187,14 @@ export const hydrateComplexityRouterConfig = (
     tier_distance_penalty: parsedConfig.tier_distance_penalty,
     adaptive_eligible: parsedConfig.adaptive_eligible || "all",
     return_raw_model_name: parsedConfig.return_raw_model_name || false,
+    enable_context_window_escalation:
+      typeof parsedConfig.enable_context_window_escalation === "boolean"
+        ? parsedConfig.enable_context_window_escalation
+        : undefined,
+    context_window_escalation_buffer:
+      typeof parsedConfig.context_window_escalation_buffer === "number"
+        ? parsedConfig.context_window_escalation_buffer
+        : undefined,
   };
 };
 
@@ -197,7 +214,9 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "classifier_fallback",
   "classification_prompt",
   "heuristic_first_max_tier",
+  "classification_mode",
   "session_affinity",
+  "modality_routing",
   "deployment_affinity",
   "adaptive",
   "adaptive_weights",
@@ -208,6 +227,8 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "token_thresholds",
   "dimension_weights",
   "reasoning_override_min_score",
+  "enable_context_window_escalation",
+  "context_window_escalation_buffer",
 ]);
 
 // Managed only when the caller passes the corresponding state. A caller that does not render
@@ -282,6 +303,7 @@ export const buildUpdatedComplexityRouterConfig = (
     planModeMinTier: value.plan_mode_min_tier,
     classificationPrompt: value.classification_prompt,
     heuristicFirstMaxTier: value.heuristic_first_max_tier,
+    classificationMode: value.classification_mode,
     tierLabels: value.tier_labels,
     classifierType: value.classifier_type,
     classifierLlmConfig: value.classifier_llm_config,
@@ -290,6 +312,7 @@ export const buildUpdatedComplexityRouterConfig = (
     classifierContextIncludeAssistantTurns: value.classifier_context_include_assistant_turns,
     classifierFallback: value.classifier_fallback,
     sessionAffinity: value.session_affinity ?? DEFAULT_SESSION_AFFINITY,
+    modalityRouting: value.modality_routing ?? false,
     deploymentAffinity: value.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY,
     customTechnicalKeywords: customTechnicalKeywords ?? [],
     keywordTierRules: keywordMatching?.keywordTierRules ?? [],
@@ -307,6 +330,8 @@ export const buildUpdatedComplexityRouterConfig = (
     dimensionWeights: value.dimension_weights,
     reasoningOverrideMinScore: value.reasoning_override_min_score,
     tierModelParams: value.tier_model_params,
+    enableContextWindowEscalation: value.enable_context_window_escalation,
+    contextWindowEscalationBuffer: value.context_window_escalation_buffer,
   };
   const built = buildComplexityRouterConfig(builderParams);
 

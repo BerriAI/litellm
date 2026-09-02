@@ -2032,8 +2032,8 @@ def test_router_dynamic_cooldown_correct_retry_after_time():
         raise exception
 
     with patch.object(
-        openai_client.embeddings.with_raw_response,
-        "create",
+        openai_client,
+        "post",
         side_effect=_return_exception,
     ):
         new_retry_after_mock_client = MagicMock(return_value=-1)

@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
@@ -6,6 +8,7 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_tool_reference_parts_from_tool_messages,
     hoist_images_from_tool_messages,
+    tool_with_flattened_parameters,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_azure_openai_messages,
@@ -23,11 +26,26 @@ from ...base_llm.chat.transformation import BaseConfig
 from ..common_utils import AzureOpenAIError
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+
+_NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def flattened_tools_update(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    tools: Final = optional_params.get("tools")
+    if not isinstance(tools, list):
+        return _NO_TOOLS_UPDATE
+    flattened: Final = [  # mutable-ok: request tools are a JSON list
+        tool_with_flattened_parameters(tool) if isinstance(tool, dict) else tool for tool in tools
+    ]
+    return MappingProxyType({"tools": flattened})
 
 
 class AzureOpenAIConfig(BaseConfig):
@@ -259,6 +277,7 @@ class AzureOpenAIConfig(BaseConfig):
             "model": model,
             "messages": azure_messages,
             **optional_params,
+            **flattened_tools_update(optional_params),
         }
 
     def transform_response(
@@ -271,7 +290,7 @@ class AzureOpenAIConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

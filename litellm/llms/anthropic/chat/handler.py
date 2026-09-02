@@ -66,6 +66,10 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.chat.transformation import BaseConfig
 
 
+def _loads_stream_chunk(payload: str) -> dict[str, object]:
+    return json.loads(payload)
+
+
 async def make_call(
     client: AsyncHTTPHandler | None,
     api_base: str,
@@ -78,7 +82,7 @@ async def make_call(
     json_mode: bool,
     speed: str | None = None,
     tool_name_reverse_map: dict[str, str] | None = None,
-) -> tuple[Any, httpx.Headers]:
+) -> tuple["ModelResponseIterator", httpx.Headers]:
     if client is None:
         client = litellm.module_level_aclient
 
@@ -93,7 +97,7 @@ async def make_call(
         )
     except httpx.HTTPStatusError as e:
         error_headers = getattr(e, "headers", None)
-        error_response: Final = getattr(e, "response", None)
+        error_response: Final[object] = getattr(e, "response", None)
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
         raise AnthropicError(
@@ -138,7 +142,7 @@ def make_sync_call(
     json_mode: bool,
     speed: str | None = None,
     tool_name_reverse_map: dict[str, str] | None = None,
-) -> tuple[Any, httpx.Headers]:
+) -> tuple["ModelResponseIterator", httpx.Headers]:
     if client is None:
         client = litellm.module_level_client  # re-use a module level client
 
@@ -153,7 +157,7 @@ def make_sync_call(
         )
     except httpx.HTTPStatusError as e:
         error_headers = getattr(e, "headers", None)
-        error_response: Final = getattr(e, "response", None)
+        error_response: Final[object] = getattr(e, "response", None)
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
         raise AnthropicError(
@@ -292,7 +296,7 @@ class AnthropicChatCompletion(BaseLLM):
             status_code: Final = getattr(e, "status_code", 500)
             error_headers = getattr(e, "headers", None)
             error_text = getattr(e, "text", str(e))
-            error_response: Final = getattr(e, "response", None)
+            error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
             if error_response and hasattr(error_response, "text"):
@@ -593,7 +597,7 @@ class AnthropicChatCompletion(BaseLLM):
                     status_code: Final = getattr(e, "status_code", 500)
                     error_headers = getattr(e, "headers", None)
                     error_text = getattr(e, "text", str(e))
-                    error_response: Final = getattr(e, "response", None)
+                    error_response: Final[object] = getattr(e, "response", None)
                     if error_headers is None and error_response:
                         error_headers = getattr(error_response, "headers", None)
                     if error_response and hasattr(error_response, "text"):
@@ -664,10 +668,10 @@ class ModelResponseIterator:
 
         # Accumulate web_search_tool_result blocks for multi-turn reconstruction
         # See: https://github.com/BerriAI/litellm/issues/17737
-        self.web_search_results: list[dict[str, Any]] = []
+        self.web_search_results: list[dict[str, object]] = []
 
         # Accumulate compaction blocks for multi-turn reconstruction
-        self.compaction_blocks: list[dict[str, Any]] = []
+        self.compaction_blocks: list[dict[str, object]] = []
 
         # Accumulate streamed thinking text so final usage can split reasoning
         # tokens from regular output tokens.
@@ -727,7 +731,7 @@ class ModelResponseIterator:
         str,
         ChatCompletionToolCallChunk | None,
         list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
-        dict[str, Any],
+        dict[str, object],
         str | None,
     ]:
         """
@@ -735,7 +739,7 @@ class ModelResponseIterator:
         """
         text = ""
         tool_use: ChatCompletionToolCallChunk | None = None
-        provider_specific_fields: Final = {}
+        provider_specific_fields: Final[dict[str, object]] = {}
         reasoning_content: str | None = None
         content_block: Final = ContentBlockDelta(**chunk)
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] = []
@@ -809,8 +813,8 @@ class ModelResponseIterator:
     def _handle_redacted_thinking_content(
         self,
         content_block_start: ContentBlockStart,
-        provider_specific_fields: dict[str, Any],
-    ) -> tuple[list[ChatCompletionRedactedThinkingBlock], dict[str, Any]]:
+        provider_specific_fields: dict[str, object],
+    ) -> tuple[list[ChatCompletionRedactedThinkingBlock], dict[str, object]]:
         """
         Handle the redacted thinking content
         """
@@ -878,7 +882,7 @@ class ModelResponseIterator:
             tool_use: ChatCompletionToolCallChunk | None = None
             finish_reason = ""
             usage: Usage | None = None
-            provider_specific_fields: dict[str, Any] = {}
+            provider_specific_fields: dict[str, object] = {}
             reasoning_content: str | None = None
             thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None = None
 
@@ -1212,7 +1216,7 @@ class ModelResponseIterator:
 
         # Try to parse as valid JSON first
         try:
-            data_json: Final = json.loads(data_str)
+            data_json: Final = _loads_stream_chunk(data_str)
             return self.chunk_parser(chunk=data_json)
         except json.JSONDecodeError:
             # Switch to accumulation mode and start accumulating
@@ -1330,7 +1334,7 @@ class ModelResponseIterator:
             str_line = str_line[index:]
 
         if str_line.startswith("data:"):
-            data_json: Final = json.loads(str_line[5:])
+            data_json: Final = _loads_stream_chunk(str_line[5:])
             return self.chunk_parser(chunk=data_json)
         else:
             return ModelResponseStream(id=self.response_id)

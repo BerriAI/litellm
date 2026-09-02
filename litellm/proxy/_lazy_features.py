@@ -161,6 +161,7 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
             "/callback",
             "/register",
             "/revoke",
+            "/introspect",
         ),
         # Catches the /{mcp_server_name}/authorize|token|register variants.
         path_suffixes=("/authorize", "/token", "/register"),

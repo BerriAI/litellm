@@ -1,6 +1,6 @@
 # What is this?
 ## Handler file for calling claude-3 on vertex ai
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -11,6 +11,9 @@ from litellm.types.utils import ModelResponse
 
 from ....anthropic.chat.transformation import AnthropicConfig
 from .output_params_utils import sanitize_vertex_anthropic_output_params
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 class VertexAIError(Exception):
@@ -150,14 +153,17 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         drop_params: bool,
     ) -> dict:
         """
-        Override parent method to ensure VertexAI always uses tool-based structured outputs.
-        VertexAI doesn't support the output_format parameter, so we force all models
-        to use the tool-based approach for structured outputs.
+        Override parent method so VertexAI uses tool-based structured outputs
+        unless the vertex map entry advertises native structured output
+        (``output_format``, which Vertex AI Claude forwards for those models).
         """
-        # Temporarily override model name to force tool-based approach
-        # This ensures Claude Sonnet 4.5 uses tools instead of output_format
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
         original_model: Final = model
-        if "response_format" in non_default_params:
+        native_structured_output: Final = AnthropicModelInfo._get_provider_resolved_capability(
+            model, "supports_native_structured_output", "vertex_ai"
+        )
+        if "response_format" in non_default_params and native_structured_output is not True:
             model = "claude-3-sonnet-20240229"  # Use a model that will use tool-based approach
 
         # Call parent method with potentially modified model name
@@ -183,7 +189,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
