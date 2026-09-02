@@ -535,7 +535,6 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         try:
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
-            from botocore.exceptions import NoCredentialsError
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         optional_params = optional_params or {}
@@ -583,14 +582,10 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             "X-Amz-Target": f"secretsmanager.{action}",
         }
 
-        credentials: Final = boto3_credentials_info.credentials
-        if credentials is None:
-            raise NoCredentialsError()
-
         # Sign request
         request: Final = AWSRequest(method="POST", url=endpoint_url, data=body, headers=headers)
         SigV4Auth(
-            credentials,
+            boto3_credentials_info.credentials,
             "secretsmanager",
             boto3_credentials_info.aws_region_name,
         ).add_auth(request)

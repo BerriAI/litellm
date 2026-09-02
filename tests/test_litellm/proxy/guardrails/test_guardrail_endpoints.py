@@ -771,7 +771,7 @@ async def test_bedrock_guardrail_prepare_request_with_api_key():
 
 
 @pytest.mark.asyncio
-async def test_bedrock_guardrail_prepare_request_without_api_key():
+async def test_bedrock_guardrail_prepare_request_without_api_key(monkeypatch):
     """Test _prepare_request method falls back to SigV4 when no api_key is provided"""
     from unittest.mock import Mock, patch
 
@@ -789,17 +789,12 @@ async def test_bedrock_guardrail_prepare_request_without_api_key():
 
     # Test data without api_key
     test_data = {"source": "INPUT", "content": [{"text": {"text": "test content"}}]}
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
 
     with (
-        patch(
-            "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.get_secret_str"
-        ) as mock_get_secret,
         patch("botocore.auth.SigV4Auth") as mock_sigv4_auth,
         patch("botocore.awsrequest.AWSRequest") as mock_aws_request,
     ):
-
-        # Mock no AWS_BEARER_TOKEN_BEDROCK
-        mock_get_secret.return_value = None
 
         # Mock SigV4Auth
         mock_sigv4_instance = Mock()
@@ -826,7 +821,7 @@ async def test_bedrock_guardrail_prepare_request_without_api_key():
 
 
 @pytest.mark.asyncio
-async def test_bedrock_guardrail_prepare_request_with_bearer_token_env():
+async def test_bedrock_guardrail_prepare_request_with_bearer_token_env(monkeypatch):
     """Test _prepare_request method uses Bearer token from environment when available"""
     from unittest.mock import Mock, patch
 
@@ -844,15 +839,9 @@ async def test_bedrock_guardrail_prepare_request_with_bearer_token_env():
 
     # Test data without api_key
     test_data = {"source": "INPUT", "content": [{"text": {"text": "test content"}}]}
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer-token-456")
 
-    with (
-        patch(
-            "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.get_secret_str"
-        ) as mock_get_secret,
-        patch("botocore.awsrequest.AWSRequest") as mock_aws_request,
-    ):
-
-        mock_get_secret.return_value = "env-bearer-token-456"
+    with patch("botocore.awsrequest.AWSRequest") as mock_aws_request:
         mock_request_instance = Mock()
         mock_request_instance.prepare.return_value = Mock()
         mock_aws_request.return_value = mock_request_instance
