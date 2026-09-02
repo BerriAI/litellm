@@ -68,6 +68,7 @@ from .utils import process_slack_alerting_variables
 
 if TYPE_CHECKING:
     from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+    from litellm.proxy.utils import PrismaClient
     from litellm.router import Router as _Router
 
     Router = _Router
@@ -1943,6 +1944,69 @@ Model Info:
 
         except Exception as e:
             verbose_proxy_logger.exception("Error sending weekly spend report %s", e)
+
+    async def send_user_spend_alerts(self, prisma_client: "PrismaClient | None" = None) -> None:
+        """Check per-user daily/monthly spend thresholds and spend anomalies, alerting once per user per period."""
+        if self.alerting is None or "slack" not in self.alerting:
+            return
+
+        thresholds_enabled: Final = AlertType.user_spend_thresholds in self.alert_types
+        anomalies_enabled: Final = AlertType.user_spend_anomalies in self.alert_types
+        if not thresholds_enabled and not anomalies_enabled:
+            return
+
+        if prisma_client is None:
+            from litellm.proxy.proxy_server import prisma_client as global_prisma_client
+
+            prisma_client = global_prisma_client  # rebind-ok: fall back to the proxy's global client
+        if prisma_client is None:
+            return
+
+        from litellm.integrations.SlackAlerting.user_spend_alerts import (
+            evaluate_user_spend,
+            fetch_user_spend_rows,
+        )
+
+        try:
+            today: Final = datetime.datetime.now(datetime.timezone.utc).date()
+            rows: Final = await fetch_user_spend_rows(
+                prisma_client=prisma_client,
+                today=today,
+                baseline_days=self.alerting_args.spend_anomaly_baseline_days,
+            )
+            all_events: Final = tuple(
+                event
+                for row in rows
+                for event in evaluate_user_spend(
+                    row=row,
+                    args=self.alerting_args,
+                    today=today,
+                    thresholds_enabled=thresholds_enabled,
+                    anomalies_enabled=anomalies_enabled,
+                )
+            )
+            cached_flags: Final = await asyncio.gather(
+                *(self.internal_usage_cache.async_get_cache(key=event.cache_key) for event in all_events)
+            )
+            new_events: Final = tuple(event for event, cached in zip(all_events, cached_flags) if not cached)
+            for alert_type in (AlertType.user_spend_thresholds, AlertType.user_spend_anomalies):
+                typed_events = tuple(event for event in new_events if event.alert_type == alert_type)
+                if not typed_events:
+                    continue
+                await self.send_alert(
+                    message="\n\n".join(event.message for event in typed_events),
+                    level="High",
+                    alert_type=alert_type,
+                    alerting_metadata={},  # mutable-ok: send_alert takes a dict payload
+                )
+                for event in typed_events:
+                    await self.internal_usage_cache.async_set_cache(
+                        key=event.cache_key,
+                        value="SENT",
+                        ttl=event.cache_ttl,
+                    )
+        except Exception as e:  # noqa: BLE001  # background job must not crash the scheduler
+            verbose_proxy_logger.exception("Error sending user spend alerts: %s", e)
 
     async def send_fallback_stats_from_prometheus(self):
         """
