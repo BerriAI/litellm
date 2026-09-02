@@ -10,6 +10,7 @@ import json
 import time
 import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -32,6 +33,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+_EMPTY_FUNCTION: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def is_valid_json(value: str) -> bool:
@@ -213,7 +217,9 @@ class GigaChatConfig(BaseConfig):
                 "parameters": function.get("parameters", {}),
             }
             for function in (
-                tool.get("function", {}) for tool in tools if isinstance(tool, dict) and tool.get("type") == "function"
+                tool.get("function", _EMPTY_FUNCTION)
+                for tool in tools
+                if isinstance(tool, dict) and tool.get("type") == "function"
             )
         ]
 
