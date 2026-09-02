@@ -399,6 +399,46 @@ class TestBedrockMantleChatAuth:
         assert "/eu-west-1/bedrock/aws4_request" in headers["Authorization"]
         assert "/us-west-2/bedrock/aws4_request" not in headers["Authorization"]
 
+    @pytest.mark.parametrize(
+        ("region_params", "env", "expected_region"),
+        [
+            ({"aws_region_name": "us-west-2"}, {}, "us-west-2"),
+            ({}, {"BEDROCK_MANTLE_REGION": "ap-southeast-2"}, "ap-southeast-2"),
+        ],
+    )
+    def test_sigv4_scope_ignores_the_region_segment_of_a_lookalike_host(
+        self, monkeypatch, region_params, env, expected_region
+    ):
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        for var in (
+            "BEDROCK_MANTLE_API_KEY",
+            "AWS_BEARER_TOKEN_BEDROCK",
+            "BEDROCK_MANTLE_REGION",
+            "BEDROCK_MANTLE_API_BASE",
+            "AWS_REGION",
+            "AWS_REGION_NAME",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        for var, value in env.items():
+            monkeypatch.setenv(var, value)
+
+        cfg = BedrockMantleChatConfig(aws_signer=BaseAWSLLM())
+        headers, _ = cfg.sign_request(
+            headers={},
+            optional_params={
+                "aws_access_key_id": "AKIAEXAMPLE",
+                "aws_secret_access_key": "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0",
+                **region_params,
+            },
+            request_data={"input": "hi"},
+            api_base="https://bedrock-mantle.eu-west-1.api.aws.internal.example.com/openai/v1/chat/completions",
+            api_key=None,
+        )
+
+        assert f"/{expected_region}/bedrock/aws4_request" in headers["Authorization"]
+        assert "/eu-west-1/bedrock/aws4_request" not in headers["Authorization"]
+
     def test_no_bearer_and_no_credentials_raises_value_error(self, monkeypatch):
         from unittest.mock import MagicMock
 
