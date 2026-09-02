@@ -804,7 +804,10 @@ def test_completed_snapshot_correlates_function_after_server_tool_replacement():
     assert function_call.arguments == '{"city":"Paris"}'
 
 
-def test_reused_index_with_new_call_id_preserves_first_streamed_identity():
+@pytest.mark.parametrize("include_replacement_metadata", (True, False))
+def test_reused_index_with_new_call_id_preserves_first_streamed_identity(
+    include_replacement_metadata: bool,
+):
     iterator = LiteLLMCompletionStreamingIterator(
         model="test-model",
         litellm_custom_stream_wrapper=AsyncMock(),
@@ -822,15 +825,22 @@ def test_reused_index_with_new_call_id_preserves_first_streamed_identity():
             }
         ]
     )
+    replacement_call = (
+        {
+            "index": 0,
+            "id": "call_b",
+            "type": "function",
+            "function": {"name": "tool_a", "arguments": "1"},
+        }
+        if include_replacement_metadata
+        else {
+            "index": 0,
+            "id": "call_b",
+            "function": {"arguments": "1"},
+        }
+    )
     iterator._queue_tool_call_delta_events(
-        [
-            {
-                "index": 0,
-                "id": "call_b",
-                "type": "function",
-                "function": {"name": "tool_a", "arguments": "1"},
-            }
-        ]
+        [replacement_call]
     )
     iterator._queue_tool_call_delta_events(
         [
@@ -899,6 +909,119 @@ def test_reused_index_with_new_call_id_preserves_first_streamed_identity():
     assert (done_item.id, done_item.call_id) == ("fc_call_a", "call_a")
     completed_call = next(item for item in completed.response.output if item.type == "function_call")
     assert (completed_call.id, completed_call.call_id) == ("fc_call_a", "call_a")
+
+
+@pytest.mark.parametrize(
+    ("replacement_type", "replacement_name"),
+    (("function", "tool_b"), ("custom", "tool_a")),
+)
+def test_reused_index_with_changed_tool_metadata_starts_separate_identity(
+    replacement_type: str,
+    replacement_name: str,
+):
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="Test input",
+        responses_api_request={},
+    )
+
+    iterator._queue_tool_call_delta_events(
+        [
+            {
+                "index": 0,
+                "id": "call_a",
+                "type": "function",
+                "function": {"name": "tool_a", "arguments": '{"safe":'},
+            }
+        ]
+    )
+    iterator._queue_tool_call_delta_events(
+        [
+            {
+                "index": 0,
+                "id": "call_b",
+                "type": "function",
+                "function": {"name": "tool_a", "arguments": ""},
+            }
+        ]
+    )
+    iterator._queue_tool_call_delta_events(
+        [
+            {
+                "index": 0,
+                "id": "call_b",
+                "type": replacement_type,
+                "function": {"name": replacement_name, "arguments": '{"privileged":'},
+            }
+        ]
+    )
+    iterator._queue_tool_call_delta_events(
+        [{"index": 0, "id": "call_b", "function": {"arguments": "true}"}}]
+    )
+    iterator._queue_tool_call_delta_events(
+        [{"index": 0, "function": {"arguments": "ignored"}}]
+    )
+    terminal_response = ModelResponse(
+        id="chatcmpl-terminal",
+        created=123,
+        model="test-model",
+        object="chat.completion",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_b",
+                            "type": "function",
+                            "function": {
+                                "name": replacement_name,
+                                "arguments": '{"privileged":true}',
+                            },
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+    iterator._queue_final_tool_call_done_events(terminal_response)
+    completed = iterator._emit_response_completed_event(terminal_response)
+
+    added_items = [
+        event.item
+        for event in iterator._pending_tool_events
+        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    ]
+    delta_events = [
+        event
+        for event in iterator._pending_tool_events
+        if event.type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA
+    ]
+    done_item = next(
+        event.item
+        for event in iterator._pending_tool_events
+        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+    )
+
+    assert completed is not None
+    assert [(item.id, item.call_id) for item in added_items] == [
+        ("fc_call_a", "call_a"),
+        ("fc_call_b", "call_b"),
+    ]
+    assert "".join(event.delta for event in delta_events if event.item_id == "fc_call_a") == '{"safe":'
+    assert "".join(event.delta for event in delta_events if event.item_id == "fc_call_b") == '{"privileged":true}'
+    assert (done_item.id, done_item.call_id, done_item.name) == ("fc_call_b", "call_b", replacement_name)
+    completed_call = next(item for item in completed.response.output if item.type == "function_call")
+    assert (completed_call.id, completed_call.call_id, completed_call.name) == (
+        "fc_call_b",
+        "call_b",
+        replacement_name,
+    )
 
 
 @pytest.mark.asyncio
