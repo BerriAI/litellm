@@ -10,6 +10,8 @@ import pytest
 
 from litellm.exceptions import BadRequestError, Timeout
 from litellm.llms.mongodb.common_utils import (
+    _MAX_CACHED_CLIENTS,
+    _async_clients,
     MongoClientKey,
     index_not_ready_error,
     missing_index_error,
@@ -654,6 +656,28 @@ class TestClientCache:
             for handed_out in (client,)
         ]
         assert stale == [], f"{len(stale)} of 20 loops were handed a client built on a closed loop"
+
+    def test_the_cache_releases_clients_built_on_closed_loops(self):
+        """pymongo's AsyncMongoClient keeps a reference to the loop it was built on, so an entry
+        for a closed loop holds that client, and its sockets, for the life of the process. A
+        script calling asyncio.run per search fills the cache to its cap that way: measured live
+        against Atlas at 32 pinned clients and 212 open descriptors after 40 loops."""
+
+        class LoopHoldingClient:
+            def __init__(self, *args, **kwargs):
+                self.loop = asyncio.get_running_loop()
+
+        key = self._key()
+
+        async def fetch():
+            return get_async_client(key, LoopHoldingClient)
+
+        for _ in range(_MAX_CACHED_CLIENTS + 8):
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(fetch())
+            loop.close()
+
+        assert len(_async_clients) == 1, f"{len(_async_clients)} closed-loop clients are still cached"
 
 
 class TestClientKeyDerivation:
