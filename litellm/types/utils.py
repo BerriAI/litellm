@@ -2852,6 +2852,7 @@ RoutingDecisionCause = Literal[
     # scorer, and from "classifier_fallback", which is the scorer running because a call failed:
     # only this cause means an LLM classifier was configured, reachable, and deliberately skipped.
     "heuristic_first_short_circuit",
+    "hybrid_short_circuit",
     # The operator's classifier plugin (classifier_type 'custom') decided the tier.
     "classifier_plugin",
     # The LLM classifier or classifier plugin failed on a router with an operator-defined
